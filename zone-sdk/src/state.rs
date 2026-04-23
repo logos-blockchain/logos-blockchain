@@ -19,28 +19,30 @@ pub struct InscriptionInfo {
     pub payload: Vec<u8>,
 }
 
-/// Result of channel update detection.
+/// Result of channel update detection — the linear block-level delta
+/// between two canonical chains.
 ///
-/// - `adopted`: newly canonical inscriptions since the last common message.
-/// - `invalidated`: local pending inscriptions whose parent is no longer
-///   canonical.
-/// - When `invalidated` is empty, this is an extension-only update.
+/// - `orphaned`: inscriptions on blocks of the old canonical chain that are not
+///   on blocks of the new canonical chain. Revert from state.
+/// - `adopted`: inscriptions on blocks of the new canonical chain that are not
+///   on blocks of the old canonical chain. Apply to state.
+/// - When `orphaned` is empty, this is an extension-only update.
 #[derive(Debug)]
 pub struct ChannelUpdateInfo {
-    /// Our pending inscriptions that are now invalid (parent taken).
-    pub invalidated: Vec<InscriptionInfo>,
-    /// New inscriptions that appeared on chain (from LCM to new tip).
+    /// Inscriptions removed from the canonical chain (revert from state).
+    pub orphaned: Vec<InscriptionInfo>,
+    /// Inscriptions added to the canonical chain (apply to state).
     pub adopted: Vec<InscriptionInfo>,
     /// The new channel tip `MsgId`.
     pub new_channel_tip: MsgId,
 }
 
 impl ChannelUpdateInfo {
-    /// Returns true if this update invalidated pending inscriptions,
+    /// Returns true if this update orphaned pending inscriptions,
     /// meaning a competing inscription or L1 reorg broke our pending chain.
     #[must_use]
     pub const fn is_conflict(&self) -> bool {
-        !self.invalidated.is_empty()
+        !self.orphaned.is_empty()
     }
 }
 
@@ -251,10 +253,10 @@ impl TxState {
             .cloned()
             .unwrap_or_else(HashTrieSetSync::new_sync);
 
-        // Derive valid suffix directly from canonical tip — no boolean gate.
-        let channel_tip = self.channel_tip_at(tip);
-        let valid_hashes: std::collections::HashSet<TxHash> = self
-            .collect_pending_suffix(channel_tip)
+        // Resubmit pending inscriptions valid on ANY live branch, excluding
+        // those already on the canonical tip's safe set.
+        let stale: std::collections::HashSet<TxHash> = self
+            .collect_stale_pending()
             .iter()
             .map(|i| i.tx_hash)
             .collect();
@@ -262,7 +264,7 @@ impl TxState {
         let inscriptions = self
             .pending
             .iter()
-            .filter(|(hash, _)| !safe.contains(hash) && valid_hashes.contains(hash))
+            .filter(|(hash, _)| !safe.contains(hash) && !stale.contains(hash))
             .map(|(hash, p)| (*hash, p.signed_tx.clone()));
         let others = self
             .pending_other
@@ -282,6 +284,88 @@ impl TxState {
     #[must_use]
     pub fn has_pending_inscriptions(&self) -> bool {
         !self.pending.is_empty()
+    }
+
+    /// Pending inscriptions valid to be added at the current channel tip:
+    /// inscriptions in `self.pending` that chain transitively from the
+    /// channel tip at `tip`.
+    ///
+    /// Excludes pending inscriptions already included in a block — those are
+    /// reported via `adopted` in [`ChannelUpdateInfo`] instead.
+    #[must_use]
+    pub fn pending_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
+        let channel_tip = self.channel_tip_at(tip);
+        self.collect_pending_suffix(channel_tip)
+    }
+
+    /// Remove pending inscriptions whose lineage does NOT reach the current
+    /// channel tip and that aren't already in a block on this branch.
+    /// Returns the removed entries in **parent-before-child (BFS) order** so
+    /// a consumer that iterates and republishes naturally rebuilds the chain
+    /// in dependency order. Keeps `self.pending` linear.
+    pub fn shed_off_branch_pending(&mut self, tip: HeaderId) -> Vec<InscriptionInfo> {
+        if self.pending.is_empty() {
+            return Vec::new();
+        }
+        let channel_tip = self.channel_tip_at(tip);
+        let on_branch: std::collections::HashSet<TxHash> = self
+            .collect_pending_suffix(channel_tip)
+            .iter()
+            .map(|i| i.tx_hash)
+            .collect();
+        let safe: std::collections::HashSet<TxHash> = self
+            .block_states
+            .get(&tip)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+
+        let eligible: std::collections::HashSet<TxHash> = self
+            .pending
+            .keys()
+            .filter(|h| !on_branch.contains(h) && !safe.contains(h))
+            .copied()
+            .collect();
+        if eligible.is_empty() {
+            return Vec::new();
+        }
+
+        // Find root parents: parent_msg values for eligible entries whose
+        // parent is NOT the `this_msg` of another eligible entry. Sort for
+        // determinism across HashMap iteration order.
+        let eligible_this_msgs: std::collections::HashSet<MsgId> = eligible
+            .iter()
+            .filter_map(|h| self.pending.get(h).map(|p| p.this_msg))
+            .collect();
+        let mut root_parents: Vec<MsgId> = eligible
+            .iter()
+            .filter_map(|h| {
+                let p = self.pending.get(h)?;
+                if eligible_this_msgs.contains(&p.parent_msg) {
+                    None
+                } else {
+                    Some(p.parent_msg)
+                }
+            })
+            .collect();
+        root_parents.sort_by_key(|m| <[u8; 32]>::from(*m));
+        root_parents.dedup();
+
+        // BFS from each root parent via pending_by_parent; collect only
+        // eligible entries in parent-first order.
+        let mut ordered = Vec::with_capacity(eligible.len());
+        let mut seen = std::collections::HashSet::new();
+        for root in root_parents {
+            for inv in self.collect_pending_suffix(root) {
+                if eligible.contains(&inv.tx_hash) && seen.insert(inv.tx_hash) {
+                    ordered.push(inv);
+                }
+            }
+        }
+
+        for inv in &ordered {
+            self.remove_pending(&inv.tx_hash);
+        }
+        ordered
     }
 
     /// Collect pending inscriptions not valid on ANY active branch.
@@ -432,10 +516,11 @@ impl TxState {
 
     /// Detect a channel update between old and new L1 tips.
     ///
-    /// - Extension: channel tip in `new_tip` extends from `old_tip` → report
-    ///   adopted inscriptions, no invalidation
-    /// - Reorg: channel tips diverged → find LCM, orphan entire pending suffix
-    ///   from LCM, report adopted from LCM to new tip
+    /// Returns the linear block-level delta between the two canonical chains:
+    /// - `orphaned`: inscriptions on blocks of the old canonical chain that are
+    ///   not on blocks of the new canonical chain (revert from state).
+    /// - `adopted`: inscriptions on blocks of the new canonical chain that are
+    ///   not on blocks of the old canonical chain (apply to state).
     ///
     /// Returns `None` if no channel state change.
     #[must_use]
@@ -454,74 +539,28 @@ impl TxState {
         let new_branch = self.collect_inscriptions_on_branch(new_tip);
         let old_branch = self.collect_inscriptions_on_branch(old_tip);
 
-        // Build set of msg IDs on the new canonical channel chain.
-        let new_chain: std::collections::HashSet<MsgId> = new_branch
-            .iter()
-            .map(|i| i.this_msg)
-            .chain(std::iter::once(self.finalized_msg))
-            .collect();
+        let new_chain: std::collections::HashSet<MsgId> =
+            new_branch.iter().map(|i| i.this_msg).collect();
+        let old_chain: std::collections::HashSet<MsgId> =
+            old_branch.iter().map(|i| i.this_msg).collect();
 
-        // Extension check: old channel tip is an ancestor of new channel tip.
-        let extends = new_chain.contains(&old_channel_tip);
-
-        // Find LCM — latest msg that exists on both channel chains.
-        let lcm = old_branch
-            .iter()
-            .rev()
-            .find(|i| new_chain.contains(&i.this_msg))
-            .map_or(self.finalized_msg, |i| i.this_msg);
-
-        // Adopted: inscriptions on the new branch after the LCM.
         let adopted: Vec<InscriptionInfo> = new_branch
             .iter()
-            .position(|i| i.parent_msg == lcm)
-            .map_or_else(Vec::new, |start_idx| new_branch[start_idx..].to_vec());
+            .filter(|i| !old_chain.contains(&i.this_msg))
+            .cloned()
+            .collect();
 
-        if extends && adopted.is_empty() {
+        let orphaned: Vec<InscriptionInfo> = old_branch
+            .into_iter()
+            .filter(|i| !new_chain.contains(&i.this_msg))
+            .collect();
+
+        if orphaned.is_empty() && adopted.is_empty() {
             return None;
         }
 
-        // Invalidated: on reorg, the entire pending suffix from LCM is
-        // orphaned. On extension, local pending suffixes can STILL become
-        // stale if a competing inscription consumed the same parent.
-        let invalidated = if extends {
-            // Extension: find pending inscriptions whose parent was consumed
-            // by a COMPETING inscription (not our own). An adopted inscription
-            // that matches one of our pending txs (same tx_hash) is ours —
-            // it doesn't compete with us.
-            let our_pending_hashes: std::collections::HashSet<TxHash> =
-                self.pending.keys().copied().collect();
-            let consumed_parents: std::collections::HashSet<MsgId> = adopted
-                .iter()
-                .filter(|a| !our_pending_hashes.contains(&a.tx_hash))
-                .map(|a| a.parent_msg)
-                .collect();
-            // Collect all stale suffix roots (deterministic order by parent)
-            let mut stale_roots: Vec<MsgId> = self
-                .pending
-                .values()
-                .filter(|p| consumed_parents.contains(&p.parent_msg))
-                .map(|p| p.parent_msg)
-                .collect();
-            stale_roots.sort_by_key(|m| <[u8; 32]>::from(*m));
-            stale_roots.dedup();
-            // Collect all dependent suffixes, dedup by tx_hash
-            let mut all_invalidated = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            for root in stale_roots {
-                for inv in self.collect_pending_suffix(root) {
-                    if seen.insert(inv.tx_hash) {
-                        all_invalidated.push(inv);
-                    }
-                }
-            }
-            all_invalidated
-        } else {
-            self.collect_pending_suffix(lcm)
-        };
-
         Some(ChannelUpdateInfo {
-            invalidated,
+            orphaned,
             adopted,
             new_channel_tip,
         })
@@ -808,16 +847,19 @@ mod tests {
     }
 
     #[test]
-    fn extension_invalidates_stale_local_suffix() {
+    fn extension_with_competing_inscription_does_not_orphan_local_pending() {
         // Scenario: local pending b1→b2→b3 from root.
         // Competing c1 lands on chain consuming root as parent.
-        // Extension — but our suffix is stale.
+        // This is an extension — no blocks removed from canonical.
+        // Under the block-delta semantics, `orphaned` stays empty; the
+        // local pending b1→b2→b3 were never on canonical so they are not
+        // reported. They remain in `self.pending` (invalid on current tip,
+        // eligible for cleanup when their branch falls below LIB).
         let genesis = header_id(0);
         let block1 = header_id(1);
         let block2 = header_id(2);
         let mut state = TxState::new(genesis, MsgId::root());
 
-        // Local pending: b1(parent=root)→b2(parent=b1)→b3(parent=b2)
         let b1_msg = msg_id(10);
         let b2_msg = msg_id(11);
         let b3_msg = msg_id(12);
@@ -826,10 +868,8 @@ mod tests {
         submit_fake_inscription(&mut state, 3, b2_msg, b3_msg);
         assert_eq!(state.pending.len(), 3);
 
-        // Block1: empty, establishes old_tip
         state.process_block(block1, genesis, genesis, vec![], vec![]);
 
-        // Block2: competing c1 lands with parent=root (consuming root)
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
@@ -839,26 +879,22 @@ mod tests {
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
-        // detect_channel_update: extension (root → c1), but our b1 is stale
-        let update = state.detect_channel_update(block1, block2);
-        assert!(update.is_some(), "should detect channel update");
-        let update = update.unwrap();
+        let update = state
+            .detect_channel_update(block1, block2)
+            .expect("should detect channel update");
 
-        // All 3 local pending inscriptions should be invalidated
-        assert_eq!(
-            update.invalidated.len(),
-            3,
-            "entire suffix should be invalidated"
-        );
-        // Adopted should contain c1
+        assert!(update.orphaned.is_empty(), "extension never orphans");
         assert_eq!(update.adopted.len(), 1);
         assert_eq!(update.adopted[0].this_msg, c1_msg);
+        // Local pending is still tracked.
+        assert_eq!(state.pending.len(), 3);
     }
 
     #[test]
-    fn extension_invalidates_multiple_stale_roots() {
+    fn extension_with_competing_inscription_does_not_orphan_multiple_pending_roots() {
         // Two independent pending inscriptions both target root as parent.
-        // Competing c1 lands consuming root. Both should be invalidated.
+        // Competing c1 lands consuming root. Neither is reported as
+        // orphaned under the block-delta semantics; both remain in pending.
         let genesis = header_id(0);
         let block1 = header_id(1);
         let block2 = header_id(2);
@@ -881,8 +917,10 @@ mod tests {
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
         let update = state.detect_channel_update(block1, block2).unwrap();
-        // Both b1 and d1 should be invalidated
-        assert_eq!(update.invalidated.len(), 2);
+        assert!(update.orphaned.is_empty());
+        assert_eq!(update.adopted.len(), 1);
+        assert_eq!(update.adopted[0].this_msg, c1_msg);
+        assert_eq!(state.pending.len(), 2);
     }
 
     #[test]

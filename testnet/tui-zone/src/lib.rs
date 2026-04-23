@@ -99,15 +99,33 @@ async fn handle_event(
     match event {
         Event::Ready => handle_ready(state, ready_tx),
         Event::ChannelUpdate {
-            invalidated,
+            orphaned,
             adopted,
+            pending,
+            invalidated,
             ..
-        } => handle_channel_update(state, handle, &invalidated, &adopted).await,
+        } => {
+            handle_channel_update(state, handle, &orphaned, &adopted, &pending, &invalidated).await;
+        }
         Event::TxsFinalized { inscriptions, .. } => {
             finalize_inscriptions(state, &inscriptions, true);
         }
-        Event::Published { checkpoint, .. } => {
+        Event::Published {
+            payload,
+            checkpoint,
+            ..
+        } => {
             debug!("Inscription published, checkpoint saved");
+            if let Some(msg) = AppMessage::from_bytes(&payload) {
+                // Our own publish — mark as ours and apply optimistically.
+                let owned = AppMessage {
+                    is_ours: true,
+                    ..msg
+                };
+                state.apply(owned);
+                ui::render_state(state);
+                ui::prompt();
+            }
             state.save_checkpoint(checkpoint);
         }
         Event::FinalizedInscriptions { inscriptions } => {
@@ -136,20 +154,24 @@ fn handle_ready(
 async fn handle_channel_update(
     state: &mut InMemoryZoneState,
     handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
-    invalidated: &[lb_zone_sdk::state::InscriptionInfo],
+    orphaned: &[lb_zone_sdk::state::InscriptionInfo],
     adopted: &[lb_zone_sdk::state::InscriptionInfo],
+    pending: &[lb_zone_sdk::state::InscriptionInfo],
+    invalidated: &[lb_zone_sdk::state::InscriptionInfo],
 ) {
-    if invalidated.is_empty() && adopted.is_empty() {
+    if orphaned.is_empty() && adopted.is_empty() && invalidated.is_empty() {
         return;
     }
 
     debug!(
-        invalidated = invalidated.len(),
+        orphaned = orphaned.len(),
         adopted = adopted.len(),
+        pending = pending.len(),
+        invalidated = invalidated.len(),
         "Channel update"
     );
 
-    let to_republish = resolve_conflicts(state, invalidated, adopted);
+    let to_republish = resolve_conflicts(state, orphaned, adopted, pending, invalidated);
     republish(handle, to_republish).await;
 
     ui::render_state(state);

@@ -1,4 +1,4 @@
-use std::{pin::Pin, time::Duration};
+use std::time::Duration;
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
@@ -91,16 +91,18 @@ pub enum Event {
     },
     /// Channel state changed.
     ///
-    /// When `invalidated` is empty, this is a simple extension — new
-    /// inscriptions appeared without conflicting with our pending chain.
-    /// When `invalidated` is non-empty, a competing inscription or L1 reorg
-    /// invalidated some of our pending inscriptions.
+    /// Consumer pattern:
+    /// 1. Apply `orphaned` and `adopted` to state (revert / add).
+    /// 2. For each entry in `invalidated`, decide whether to republish.
     ChannelUpdate {
-        /// Our pending inscriptions that are now invalid (parent taken).
-        invalidated: Vec<InscriptionInfo>,
-        /// New inscriptions that appeared on chain since the last common
-        /// message.
+        /// Removed from the canonical branch (revert from state).
+        orphaned: Vec<InscriptionInfo>,
+        /// Added to the canonical branch (apply to state).
         adopted: Vec<InscriptionInfo>,
+        /// Pending tx on this branch.
+        pending: Vec<InscriptionInfo>,
+        /// Submitted tx that is not valid on this branch anymore.
+        invalidated: Vec<InscriptionInfo>,
         /// The new channel tip `MsgId`.
         new_channel_tip: MsgId,
     },
@@ -112,6 +114,7 @@ pub enum Event {
     /// An inscription was created and submitted to the network.
     Published {
         inscription_id: InscriptionId,
+        payload: Vec<u8>,
         checkpoint: SequencerCheckpoint,
     },
 }
@@ -170,24 +173,6 @@ impl<Node> SequencerHandle<Node>
 where
     Node: adapter::Node + Sync,
 {
-    /// Subscribe to sequencer events.
-    ///
-    /// Use this with [`spawn`](ZoneSequencer::spawn) to react to events
-    /// without driving the event loop manually:
-    ///
-    /// ```ignore
-    /// let (sequencer, handle) = ZoneSequencer::init(channel_id, key, url, None, None);
-    /// sequencer.spawn();
-    /// let mut events = handle.subscribe();
-    /// while let Ok(event) = events.recv().await {
-    ///     // handle event
-    /// }
-    /// ```
-    #[must_use]
-    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.event_tx.subscribe()
-    }
-
     /// Wait until the sequencer is connected and ready to accept requests.
     pub async fn wait_ready(&mut self) {
         while !*self.ready_rx.borrow_and_update() {
@@ -398,7 +383,7 @@ pub struct ZoneSequencer<Node> {
     last_msg_id: MsgId,
 
     // Block stream
-    blocks_stream: Option<Pin<Box<dyn futures::Stream<Item = ProcessedBlockEvent> + Send>>>,
+    blocks_stream: Option<adapter::BoxStream<ProcessedBlockEvent>>,
 
     // Resubmission
     resubmit_interval: tokio::time::Interval,
@@ -428,9 +413,6 @@ where
     ///
     /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
     /// and a handle (for submitting requests from other tasks).
-    ///
-    /// For a simpler API that spawns the sequencer automatically, see
-    /// [`spawn`](Self::spawn).
     #[must_use]
     pub fn init(
         channel_id: ChannelId,
@@ -448,6 +430,9 @@ where
     }
 
     /// Create a new sequencer with custom configuration.
+    ///
+    /// Returns immediately. The sequencer emits [`Event::Ready`] once it has
+    /// connected and completed backfill.
     ///
     /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
     /// and a handle (for submitting requests from other tasks).
@@ -545,24 +530,6 @@ where
             .map(|s| build_checkpoint(s, self.last_msg_id, self.lib_slot))
     }
 
-    /// Spawn the event loop in a background task, consuming the sequencer.
-    ///
-    /// Use after [`init`](Self::init) or
-    /// [`init_with_config`](Self::init_with_config):
-    ///
-    /// ```ignore
-    /// let (sequencer, handle) = ZoneSequencer::init(channel_id, key, url, None, None);
-    /// sequencer.spawn();
-    /// handle.publish(b"hello".to_vec()).await?;
-    /// ```
-    pub fn spawn(mut self) -> tokio::task::JoinHandle<()> {
-        tokio::spawn(async move {
-            loop {
-                self.next_event().await;
-            }
-        })
-    }
-
     /// Drive the sequencer and return the next event.
     ///
     /// This processes block events, resubmission, and pending requests.
@@ -589,8 +556,7 @@ where
 
         tokio::select! {
             Some(request) = self.request_rx.recv() => {
-                self.handle_request(request).await;
-                None
+                self.handle_request(request).await
             }
             maybe_event = stream.next() => {
                 self.handle_stream_item(maybe_event).await
@@ -729,7 +695,11 @@ where
 
         debug!("ensure_connected: connecting...");
 
-        // Initialize state from consensus info if needed
+        // Initialize state from consensus info if needed.
+        // `current_tip` stays None on cold start so the first live block
+        // event takes the no-old-canonical branch and emits everything from
+        // LIB up to the new tip as `adopted`. On reconnect this block is
+        // skipped (state is already Some), so `current_tip` is preserved.
         if self.state.is_none() {
             match self.node.consensus_info().await {
                 Ok(info) => {
@@ -738,7 +708,6 @@ where
                         info.tip, info.lib
                     );
                     self.state = Some(TxState::new(info.lib, MsgId::root()));
-                    self.current_tip = Some(info.tip);
                 }
                 Err(e) => {
                     warn!("Failed to fetch consensus info: {e}");
@@ -752,7 +721,7 @@ where
         match self.node.block_stream().await {
             Ok(stream) => {
                 debug!("ensure_connected: blocks stream connected");
-                self.blocks_stream = Some(Box::pin(stream));
+                self.blocks_stream = Some(stream);
             }
             Err(e) => {
                 warn!("Failed to connect to blocks stream: {e}");
@@ -789,41 +758,18 @@ where
     /// Process a `BlockEventResult`: apply channel updates to local state
     /// and emit events. Returns at most one event; a second is buffered.
     fn apply_block_result(&mut self, result: BlockEventResult) -> Option<Event> {
-        // Apply channel update to local publish head
-        if let Some(ref update) = result.channel_update {
-            debug!(
-                "ChannelUpdate: invalidated={}, adopted={}, new_tip={:?}",
-                update.invalidated.len(),
-                update.adopted.len(),
-                update.new_channel_tip,
-            );
+        if let Some(update) = result.channel_update.as_ref() {
+            Self::log_channel_update(update);
             let has_pending = self
                 .state
                 .as_ref()
                 .is_some_and(TxState::has_pending_inscriptions);
-
-            if !update.invalidated.is_empty() {
-                self.last_msg_id = update.new_channel_tip;
-                if let Some(s) = self.state.as_mut() {
-                    for inv in &update.invalidated {
-                        debug!(
-                            "Invalidated: payload={:?}",
-                            String::from_utf8_lossy(&inv.payload)
-                        );
-                        s.remove_pending(&inv.tx_hash);
-                    }
-                }
-            } else if !has_pending {
+            if !update.orphaned.is_empty() || !has_pending {
                 self.last_msg_id = update.new_channel_tip;
             }
         }
 
-        // Build events
-        let channel_event = result.channel_update.map(|u| Event::ChannelUpdate {
-            invalidated: u.invalidated,
-            adopted: u.adopted,
-            new_channel_tip: u.new_channel_tip,
-        });
+        let channel_event = result.channel_update.map(|u| self.build_channel_event(u));
         let finalized_event = (!result.finalized_tx_hashes.is_empty()
             || !result.finalized_inscriptions.is_empty())
         .then_some(Event::TxsFinalized {
@@ -831,7 +777,6 @@ where
             inscriptions: result.finalized_inscriptions,
         });
 
-        // Emit one event now, buffer the other if both exist
         match (channel_event, finalized_event) {
             (Some(ce), Some(fe)) => {
                 self.buffered_event = Some(fe);
@@ -846,14 +791,88 @@ where
         }
     }
 
-    async fn handle_request(&mut self, request: ActorRequest) {
+    fn log_channel_update(update: &crate::state::ChannelUpdateInfo) {
+        debug!(
+            "ChannelUpdate: orphaned={}, adopted={}, new_tip={:?}",
+            update.orphaned.len(),
+            update.adopted.len(),
+            update.new_channel_tip,
+        );
+        for inv in &update.orphaned {
+            debug!(
+                "  orphaned: payload={:?}, tx={:?}, msg_id={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+            );
+        }
+        for inv in &update.adopted {
+            debug!(
+                "  adopted: payload={:?}, tx={:?}, msg_id={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+            );
+        }
+    }
+
+    /// Build the `ChannelUpdate` event. `invalidated` = orphaned blocks ∪
+    /// pending shed because lineage no longer reaches the new channel tip.
+    /// Shedding keeps `self.pending` linear so `publish_parent` stays
+    /// unambiguous.
+    fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
+        let shed = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
+            _ => Vec::new(),
+        };
+        let pending = match (self.state.as_ref(), self.current_tip) {
+            (Some(s), Some(tip)) => s.pending_on_branch(tip),
+            _ => Vec::new(),
+        };
+
+        let orphaned_hashes: std::collections::HashSet<TxHash> =
+            u.orphaned.iter().map(|i| i.tx_hash).collect();
+        let mut invalidated = u.orphaned.clone();
+        invalidated.extend(
+            shed.into_iter()
+                .filter(|i| !orphaned_hashes.contains(&i.tx_hash)),
+        );
+
+        for inv in &pending {
+            debug!(
+                "  pending: payload={:?}, tx={:?}, msg_id={:?}, parent={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+                inv.parent_msg,
+            );
+        }
+        for inv in &invalidated {
+            debug!(
+                "  invalidated: payload={:?}, tx={:?}, msg_id={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+            );
+        }
+
+        Event::ChannelUpdate {
+            orphaned: u.orphaned,
+            adopted: u.adopted,
+            pending,
+            invalidated,
+            new_channel_tip: u.new_channel_tip,
+        }
+    }
+
+    async fn handle_request(&mut self, request: ActorRequest) -> Option<Event> {
         if !self.is_ready() {
             reject_not_ready(request);
-            return;
+            return None;
         }
 
         match request {
-            ActorRequest::PublishMessage { data } => self.handle_publish(data).await,
+            ActorRequest::PublishMessage { data } => Some(self.handle_publish(data).await),
             ActorRequest::PrepareTx { ops, msg, reply } => {
                 let result = prepare_tx(
                     ops,
@@ -864,16 +883,19 @@ where
                 );
                 // do not update last_msg_id since tx is not submitted yet
                 drop(reply.send(Ok(result)));
+                None
             }
             ActorRequest::SignTx { tx_hash, reply } => {
                 let signature = sign_tx(tx_hash, &self.signing_key);
                 drop(reply.send(Ok(signature)));
+                None
             }
             ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
                 let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
                 drop(reply.send(Ok(result)));
+                None
             }
             ActorRequest::SetKeys { keys, reply } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
@@ -886,11 +908,12 @@ where
                     checkpoint,
                 };
                 drop(reply.send(Ok((signed_tx, result))));
+                None
             }
         }
     }
 
-    async fn handle_publish(&mut self, data: Vec<u8>) {
+    async fn handle_publish(&mut self, data: Vec<u8>) -> Event {
         // Safe to unwrap — handle_request checks is_ready() first
         let s = self.state.as_mut().unwrap();
 
@@ -901,15 +924,17 @@ where
         } else {
             self.last_msg_id
         };
-        debug!(" Publishing with parent={parent:?}");
         let (signed_tx, new_msg_id) =
             create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
         let id = signed_tx.mantle_tx.hash();
 
-        s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
-        self.last_msg_id = new_msg_id;
+        debug!(
+            "Publishing: payload={:?}, parent={parent:?}, msg_id={new_msg_id:?}, tx={id:?}",
+            String::from_utf8_lossy(&data),
+        );
 
-        info!("Created inscription {id:?}");
+        s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data.clone());
+        self.last_msg_id = new_msg_id;
 
         // Post to network (best effort, resubmit timer retries if needed)
         if let Err(e) = self.node.post_transaction(signed_tx).await {
@@ -917,10 +942,13 @@ where
         }
 
         let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
-        drop(self.event_tx.send(Event::Published {
+        let event = Event::Published {
             inscription_id: id,
+            payload: data,
             checkpoint,
-        }));
+        };
+        drop(self.event_tx.send(event.clone()));
+        event
     }
 }
 
@@ -1066,33 +1094,31 @@ where
     // On first event (old_tip is None), check for existing inscriptions on
     // the channel — this handles clean start on an existing channel.
     // On subsequent events, detect channel update if tip changed.
-    let mut channel_update = match old_tip {
+    let channel_update = match old_tip {
         Some(old) if old != tip => s.detect_channel_update(old, tip),
         None => {
-            // First event — check if the channel already has inscriptions.
-            // Treat as a reorg from root: the LCM is finalized_msg, and
-            // any pending inscriptions chaining from it are orphaned.
+            // First event — no old canonical exists yet, so nothing can be
+            // orphaned. Report any inscriptions on the initial tip as adopted.
             let channel_tip = s.channel_tip_at(tip);
             if channel_tip == MsgId::root() {
                 None
             } else {
                 let adopted = s.collect_inscriptions_on_branch(tip);
-                let invalidated = s.collect_pending_suffix(s.finalized_msg());
-                (!adopted.is_empty() || !invalidated.is_empty()).then_some(
-                    crate::state::ChannelUpdateInfo {
-                        invalidated,
-                        adopted,
-                        new_channel_tip: channel_tip,
-                    },
-                )
+                (!adopted.is_empty()).then_some(crate::state::ChannelUpdateInfo {
+                    orphaned: Vec::new(),
+                    adopted,
+                    new_channel_tip: channel_tip,
+                })
             }
         }
         _ => None, // tip unchanged
     };
 
-    // On LIB advance, catch stale pending not valid on any branch.
+    // On LIB advance, silently drop pending txs that can no longer be
+    // included anywhere (dead branches below LIB). Not reported in the
+    // channel update — user reconciles via intent tracking.
     if !lib_finalized.is_empty() {
-        merge_stale_pending(s, tip, &mut channel_update);
+        prune_stale_pending(s);
     }
 
     BlockEventResult {
@@ -1102,27 +1128,9 @@ where
     }
 }
 
-fn merge_stale_pending(
-    s: &TxState,
-    tip: HeaderId,
-    channel_update: &mut Option<crate::state::ChannelUpdateInfo>,
-) {
-    let stale = s.collect_stale_pending();
-    if stale.is_empty() {
-        return;
-    }
-    if let Some(update) = channel_update {
-        let existing: std::collections::HashSet<TxHash> =
-            update.invalidated.iter().map(|i| i.tx_hash).collect();
-        update
-            .invalidated
-            .extend(stale.into_iter().filter(|i| !existing.contains(&i.tx_hash)));
-    } else {
-        *channel_update = Some(crate::state::ChannelUpdateInfo {
-            invalidated: stale,
-            adopted: Vec::new(),
-            new_channel_tip: s.channel_tip_at(tip),
-        });
+fn prune_stale_pending(s: &mut TxState) {
+    for inv in s.collect_stale_pending() {
+        s.remove_pending(&inv.tx_hash);
     }
 }
 
@@ -1277,6 +1285,22 @@ fn enqueue_resubmit<Node>(
 
     if pending.is_empty() {
         return;
+    }
+
+    for (id, tx) in &pending {
+        let payloads: Vec<String> = tx
+            .mantle_tx
+            .ops
+            .iter()
+            .filter_map(|op| {
+                if let Op::ChannelInscribe(ins) = op {
+                    Some(String::from_utf8_lossy(&ins.inscription).to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        debug!("  resubmit: tx={id:?}, payloads={payloads:?}");
     }
 
     debug!("Resubmitting {} pending inscription(s)", pending.len());
@@ -1451,7 +1475,6 @@ fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use futures::Stream;
     use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
     use lb_core::{
         header::ContentId,
@@ -1473,9 +1496,14 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let (node, mut posted_txs) = MockNode::new();
-        let (sequencer, mut handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
-        let _join_handle = sequencer.spawn();
-        handle.wait_ready().await;
+        let (mut sequencer, handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+
+        // Drive sequencer until ready
+        loop {
+            if matches!(sequencer.next_event().await, Some(Event::Ready)) {
+                break;
+            }
+        }
 
         // Prepare a deposit op and a transfer op using a depositer's key.
         // The transfer op burns the same amount of tokens as the deposit amount.
@@ -1499,25 +1527,27 @@ mod tests {
             )],
         };
 
-        // Prepare a `MantleTx` with two operations prepared and a inscribe op
-        // that presents the zone state transition corresponding to the operations.
-        let (tx, msg_id, inscription_sig) = handle
-            .prepare_tx(
-                vec![
-                    Op::ChannelDeposit(deposit_op.clone()),
-                    Op::Transfer(transfer_op.clone()),
-                ],
-                "Mint 10 to Alice".into(),
-            )
-            .await
-            .unwrap();
+        // Prepare a `MantleTx` — drive sequencer concurrently to process the request
+        let prepare_fut = handle.prepare_tx(
+            vec![
+                Op::ChannelDeposit(deposit_op.clone()),
+                Op::Transfer(transfer_op.clone()),
+            ],
+            "Mint 10 to Alice".into(),
+        );
+        tokio::pin!(prepare_fut);
+        let (tx, msg_id, inscription_sig) = loop {
+            tokio::select! {
+                result = &mut prepare_fut => break result.unwrap(),
+                _ = sequencer.next_event() => {}
+            }
+        };
         assert_eq!(tx.ops.len(), 3);
         assert_eq!(&tx.ops[0], &Op::ChannelDeposit(deposit_op));
         assert_eq!(&tx.ops[1], &Op::Transfer(transfer_op));
         assert!(matches!(&tx.ops[2], &Op::ChannelInscribe(_)));
 
-        // Sign the `MantleTx` with the depositer's key, and put the signature in the
-        // 2nd position of proofs since the transfer op is the 2nd op.
+        // Sign the `MantleTx` with the depositer's key
         let transfer_sig = depositer_key.sign_payload(tx.hash().as_ref()).unwrap();
         let signed_tx = SignedMantleTx::new(
             tx,
@@ -1529,11 +1559,15 @@ mod tests {
         )
         .unwrap();
 
-        // Submit the signed tx
-        let result = handle
-            .submit_signed_tx(signed_tx.clone(), msg_id)
-            .await
-            .unwrap();
+        // Submit the signed tx — drive sequencer concurrently to process
+        let submit_fut = handle.submit_signed_tx(signed_tx.clone(), msg_id);
+        tokio::pin!(submit_fut);
+        let result = loop {
+            tokio::select! {
+                result = &mut submit_fut => break result.unwrap(),
+                _ = sequencer.next_event() => {}
+            }
+        };
         assert_eq!(result.inscription_id, signed_tx.mantle_tx.hash());
         assert_eq!(result.checkpoint.last_msg_id, msg_id);
         assert_eq!(posted_txs.recv().await.unwrap(), signed_tx);
@@ -1571,35 +1605,34 @@ mod tests {
 
         async fn block_stream(
             &self,
-        ) -> Result<
-            impl Stream<Item = ProcessedBlockEvent> + Send + 'static,
-            lb_common_http_client::Error,
-        > {
-            Ok(futures::stream::once(async {
-                ProcessedBlockEvent {
-                    block: ApiBlock {
-                        header: ApiHeader {
-                            id: HeaderId::from([1; 32]),
-                            parent_block: HeaderId::from([0; 32]),
-                            slot: 1.into(),
-                            block_root: ContentId::from([0; 32]),
-                            proof_of_leadership: Groth16LeaderProof::genesis(),
+        ) -> Result<adapter::BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            Ok(Box::pin(
+                futures::stream::once(async {
+                    ProcessedBlockEvent {
+                        block: ApiBlock {
+                            header: ApiHeader {
+                                id: HeaderId::from([1; 32]),
+                                parent_block: HeaderId::from([0; 32]),
+                                slot: 1.into(),
+                                block_root: ContentId::from([0; 32]),
+                                proof_of_leadership: Groth16LeaderProof::genesis(),
+                            },
+                            transactions: Vec::new(),
                         },
-                        transactions: Vec::new(),
-                    },
-                    tip: HeaderId::from([1; 32]),
-                    tip_slot: 1.into(),
-                    lib: HeaderId::from([0; 32]),
-                    lib_slot: Slot::genesis(),
-                }
-            })
-            .chain(futures::stream::pending()))
+                        tip: HeaderId::from([1; 32]),
+                        tip_slot: 1.into(),
+                        lib: HeaderId::from([0; 32]),
+                        lib_slot: Slot::genesis(),
+                    }
+                })
+                .chain(futures::stream::pending()),
+            ))
         }
 
         async fn lib_stream(
             &self,
-        ) -> Result<impl Stream<Item = BlockInfo> + Send, lb_common_http_client::Error> {
-            Ok(futures::stream::pending())
+        ) -> Result<adapter::BoxStream<BlockInfo>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::pending()))
         }
 
         async fn block(
@@ -1621,8 +1654,8 @@ mod tests {
             &self,
             _id: HeaderId,
             _channel_id: ChannelId,
-        ) -> Result<impl Stream<Item = ZoneMessage>, lb_common_http_client::Error> {
-            Ok(futures::stream::pending())
+        ) -> Result<adapter::BoxStream<ZoneMessage>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::pending()))
         }
 
         async fn zone_messages_in_blocks(
@@ -1630,8 +1663,8 @@ mod tests {
             _slot_from: Slot,
             _slot_to: Slot,
             _channel_id: ChannelId,
-        ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            Ok(futures::stream::pending())
+        ) -> Result<adapter::BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::pending()))
         }
 
         async fn post_transaction(

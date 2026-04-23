@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 use async_trait::async_trait;
 use futures::{Stream, stream};
 use lb_common_http_client::{
@@ -11,15 +13,16 @@ use reqwest::Url;
 
 use crate::{Deposit, Withdraw, ZoneBlock, ZoneMessage};
 
+/// A boxed, pinned, Send stream.
+pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
+
 #[async_trait]
 pub trait Node {
     async fn consensus_info(&self) -> Result<CryptarchiaInfo, Error>;
 
-    async fn block_stream(
-        &self,
-    ) -> Result<impl Stream<Item = ProcessedBlockEvent> + Send + 'static, Error>;
+    async fn block_stream(&self) -> Result<BoxStream<ProcessedBlockEvent>, Error>;
 
-    async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo> + Send, Error>;
+    async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error>;
 
     async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, Error>;
 
@@ -29,14 +32,14 @@ pub trait Node {
         &self,
         id: HeaderId,
         channel_id: ChannelId,
-    ) -> Result<impl Stream<Item = ZoneMessage>, Error>;
+    ) -> Result<BoxStream<ZoneMessage>, Error>;
 
     async fn zone_messages_in_blocks(
         &self,
         slot_from: Slot,
         slot_to: Slot,
         channel_id: ChannelId,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, Error>;
+    ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
 
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
 }
@@ -60,14 +63,14 @@ impl Node for NodeHttpClient {
         self.client.consensus_info(self.base_url.clone()).await
     }
 
-    async fn block_stream(
-        &self,
-    ) -> Result<impl Stream<Item = ProcessedBlockEvent> + Send + 'static, Error> {
-        self.client.get_blocks_stream(self.base_url.clone()).await
+    async fn block_stream(&self) -> Result<BoxStream<ProcessedBlockEvent>, Error> {
+        let stream = self.client.get_blocks_stream(self.base_url.clone()).await?;
+        Ok(Box::pin(stream))
     }
 
-    async fn lib_stream(&self) -> Result<impl Stream<Item = BlockInfo> + Send, Error> {
-        self.client.get_lib_stream(self.base_url.clone()).await
+    async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error> {
+        let stream = self.client.get_lib_stream(self.base_url.clone()).await?;
+        Ok(Box::pin(stream))
     }
 
     async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, Error> {
@@ -88,19 +91,19 @@ impl Node for NodeHttpClient {
         &self,
         id: HeaderId,
         channel_id: ChannelId,
-    ) -> Result<impl Stream<Item = ZoneMessage>, Error> {
+    ) -> Result<BoxStream<ZoneMessage>, Error> {
         let transactions = self
             .client
             .get_block_by_id(self.base_url.clone(), id)
             .await?
             .map_or_else(|| Vec::with_capacity(0), |block| block.transactions);
 
-        Ok(stream::iter(
+        Ok(Box::pin(stream::iter(
             transactions
                 .into_iter()
                 .flat_map(|tx| tx.mantle_tx.ops)
                 .filter_map(move |op| op_to_zone_message(&op, channel_id)),
-        ))
+        )))
     }
 
     async fn zone_messages_in_blocks(
@@ -108,7 +111,7 @@ impl Node for NodeHttpClient {
         slot_from: Slot,
         slot_to: Slot,
         channel_id: ChannelId,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, Error> {
+    ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error> {
         let blocks = self
             .client
             .get_blocks(
@@ -118,15 +121,17 @@ impl Node for NodeHttpClient {
             )
             .await?;
 
-        Ok(stream::iter(blocks.into_iter().flat_map(move |block| {
-            let slot = block.header.slot;
-            block
-                .transactions
-                .into_iter()
-                .flat_map(|tx| tx.mantle_tx.ops)
-                .filter_map(move |op| op_to_zone_message(&op, channel_id))
-                .map(move |msg| (msg, slot))
-        })))
+        Ok(Box::pin(stream::iter(blocks.into_iter().flat_map(
+            move |block| {
+                let slot = block.header.slot;
+                block
+                    .transactions
+                    .into_iter()
+                    .flat_map(|tx| tx.mantle_tx.ops)
+                    .filter_map(move |op| op_to_zone_message(&op, channel_id))
+                    .map(move |msg| (msg, slot))
+            },
+        ))))
     }
 
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error> {
