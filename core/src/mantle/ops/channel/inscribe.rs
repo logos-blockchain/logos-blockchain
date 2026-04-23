@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use lb_key_management_system_keys::keys::Ed25519Signature;
+use lb_utils::serde::serde_bytes_vec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};

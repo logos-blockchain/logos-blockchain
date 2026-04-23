@@ -5,8 +5,8 @@ use std::{
     time::Duration,
 };
 
-use lb_core::block::genesis::GenesisBlock;
 use lb_config::GeneralConfig;
+use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},

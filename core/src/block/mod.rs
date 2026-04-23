@@ -1,5 +1,5 @@
+mod deser;
 pub mod genesis;
-mod serde;
 
 use core::fmt::Debug;
 
