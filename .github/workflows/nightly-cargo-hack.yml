@@ -4,7 +4,7 @@ on:
       - master
   workflow_dispatch: # Allow manual triggering
 
-name: Cargo Hack on Push
+name: Cargo Hack
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -86,7 +86,7 @@ jobs:
           See details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           
           if [ -z "$EXISTING_ISSUE" ]; then
-            gh issue create --title "$TITLE" --body "$BODY" --label "bug" --label "automated-issue"
+            gh issue create --title "$TITLE" --body "$BODY" --label "bug" --label "automated-issue" --assignee "danielsanchezq,ntn-x2"
           else
             gh issue comment "$EXISTING_ISSUE" --body "Another failure occurred: $BODY"
           fi
