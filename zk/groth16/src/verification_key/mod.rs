@@ -1,15 +1,10 @@
-#[cfg(feature = "deser")]
 pub mod deserialize;
 use ark_ec::pairing::Pairing;
 use ark_serialize::CanonicalSerialize as _;
-#[cfg(feature = "deser")]
 pub use deserialize::VerificationKeyJsonDeser;
 
-#[cfg(feature = "deser")]
 use crate::from_json_error::FromJsonError;
-#[cfg(feature = "deser")]
 use crate::protocol::Protocol;
-#[cfg(feature = "deser")]
 use crate::utils::{StringifiedG1, StringifiedG2};
 
 #[derive(Eq, PartialEq)]
@@ -20,7 +15,6 @@ pub struct VerificationKey<E: Pairing> {
     pub delta_2: E::G2Affine,
     pub ic: Vec<E::G1Affine>,
 }
-#[cfg(feature = "deser")]
 impl TryFrom<VerificationKeyJsonDeser> for VerificationKey<ark_bn254::Bn254> {
     type Error = FromJsonError;
     fn try_from(value: VerificationKeyJsonDeser) -> Result<Self, Self::Error> {

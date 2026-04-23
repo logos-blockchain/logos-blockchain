@@ -1192,17 +1192,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
-name = "cfg_eval"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45565fc9416b9896014f5732ac776f810ee53a66730c17e4020c3ec064a8f88f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "cfgsync-adapter"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
@@ -4646,7 +4635,6 @@ dependencies = [
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.1.2"
 dependencies = [
- "cfg_eval",
  "logos-blockchain-pol",
  "logos-blockchain-utils",
  "serde",
@@ -5179,7 +5167,6 @@ name = "logos-blockchain-time-service"
 version = "0.1.2"
 dependencies = [
  "async-trait",
- "cfg_eval",
  "futures",
  "log",
  "logos-blockchain-cryptarchia-engine",

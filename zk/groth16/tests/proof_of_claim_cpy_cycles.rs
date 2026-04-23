@@ -1,15 +1,15 @@
-#[cfg(all(target_arch = "x86_64", feature = "deser"))]
+#[cfg(target_arch = "x86_64")]
 use std::{hint::black_box, ops::Deref as _, sync::LazyLock};
 
-#[cfg(all(target_arch = "x86_64", feature = "deser"))]
+#[cfg(target_arch = "x86_64")]
 use logos_blockchain_groth16::{
     Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser, Groth16VerificationKey,
     Groth16VerificationKeyJsonDeser, groth16_verify,
 };
-#[cfg(all(target_arch = "x86_64", feature = "deser"))]
+#[cfg(target_arch = "x86_64")]
 use serde_json::{Value, json};
 
-#[cfg(all(target_arch = "x86_64", feature = "deser"))]
+#[cfg(target_arch = "x86_64")]
 static VK: LazyLock<Value> = LazyLock::new(|| {
     json!({
      "protocol": "groth16",
@@ -117,7 +117,7 @@ static VK: LazyLock<Value> = LazyLock::new(|| {
     })
 });
 
-#[cfg(all(target_arch = "x86_64", feature = "deser"))]
+#[cfg(target_arch = "x86_64")]
 static PROOF: LazyLock<Value> = LazyLock::new(|| {
     json!({
       "pi_a": [
@@ -149,7 +149,7 @@ static PROOF: LazyLock<Value> = LazyLock::new(|| {
     })
 });
 
-#[cfg(all(target_arch = "x86_64", feature = "deser"))]
+#[cfg(target_arch = "x86_64")]
 static PI: LazyLock<Value> = LazyLock::new(|| {
     json!([
         "18876773715140569969879940706526502898783381664583962060409399199413543299784",
@@ -159,7 +159,7 @@ static PI: LazyLock<Value> = LazyLock::new(|| {
 });
 
 // TODO: Remove this when we have the proper benches in the proofs
-#[cfg(all(target_arch = "x86_64", feature = "deser"))]
+#[cfg(target_arch = "x86_64")]
 #[expect(
     clippy::undocumented_unsafe_blocks,
     reason = "This test is is just to measure cpu and should be run manually"

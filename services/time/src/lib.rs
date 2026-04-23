@@ -1,9 +1,3 @@
-#![allow(
-    clippy::disallowed_script_idents,
-    reason = "The crate `cfg_eval` contains Sinhala script identifiers. \
-    Using the `expect` or `allow` macro on top of their usage does not remove the warning"
-)]
-
 use core::num::NonZero;
 use std::{
     fmt::{Debug, Display, Formatter},
@@ -54,7 +48,7 @@ impl Debug for TimeServiceMessage {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Debug)]
 pub struct TimeServiceSettings<BackendSettings> {
     /// Slot settings in order to compute proper slot times

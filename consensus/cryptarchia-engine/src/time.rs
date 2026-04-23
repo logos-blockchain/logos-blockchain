@@ -1,16 +1,15 @@
 use std::{num::NonZero, ops::Add, time::Duration};
 
-#[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
 #[cfg(feature = "tokio")]
 use tokio::time::{Interval, MissedTickBehavior};
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Debug, Default, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
 pub struct Slot(u64);
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
 pub struct Epoch(u32);
 
@@ -132,7 +131,7 @@ impl Add<u32> for Epoch {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
@@ -184,11 +183,11 @@ pub const fn epoch_length(
     .saturating_mul(base_period_length.get())
 }
 
-#[cfg_attr(feature = "serde", cfg_eval::cfg_eval, serde_with::serde_as)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[serde_with::serde_as]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Copy, Clone, Debug)]
 pub struct SlotConfig {
-    #[cfg_attr(feature = "serde", serde_as(as = "MinimalBoundedDuration<1, SECOND>"))]
+    #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
     /// Start of the first epoch
     pub chain_start_time: OffsetDateTime,

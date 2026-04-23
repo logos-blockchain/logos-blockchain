@@ -4,7 +4,7 @@ use lb_cryptarchia_engine::{Epoch, Slot};
 
 use crate::Config;
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone)]
 pub struct BlockDensity {
     period_range: RangeInclusive<Slot>,

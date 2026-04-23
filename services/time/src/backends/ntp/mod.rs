@@ -9,7 +9,6 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
-#[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
 use time::OffsetDateTime;
@@ -25,8 +24,8 @@ use crate::{
     },
 };
 
-#[cfg_attr(feature = "serde", cfg_eval::cfg_eval, serde_with::serde_as)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[serde_with::serde_as]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Debug)]
 pub struct NtpTimeBackendSettings {
     /// Ntp server address
@@ -34,7 +33,7 @@ pub struct NtpTimeBackendSettings {
     /// Ntp server settings
     pub ntp_client_settings: NTPClientSettings,
     /// Interval for the backend to contact the ntp server and update its time
-    #[cfg_attr(feature = "serde", serde_as(as = "MinimalBoundedDuration<1, NANO>"))]
+    #[serde_as(as = "MinimalBoundedDuration<1, NANO>")]
     pub update_interval: Duration,
 }
 

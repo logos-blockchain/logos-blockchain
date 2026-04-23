@@ -35,7 +35,7 @@ const LOG_TARGET: &str = "ledger::mantle::rewards::blend";
 
 /// Tracks Blend rewards based on activity proofs submitted by providers.
 /// Activity proofs for the session `s-1` must be submitted during session `s`.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Debug, PartialEq)]
 pub enum Rewards<ProofsVerifier> {
     /// State before the first target session is finalized, or if the target
@@ -252,7 +252,7 @@ where
     }
 }
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RewardsParameters {
     pub rounds_per_session: NonZeroU64,
