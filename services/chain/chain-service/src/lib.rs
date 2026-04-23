@@ -103,6 +103,8 @@ pub enum Error {
     Mempool(String),
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
+    #[error("Parent header ID not found for child={0}")]
+    ParentIdNotFound(HeaderId),
     #[error("Service session not found: {0:?}")]
     ServiceSessionNotFound(ServiceType),
 }
@@ -1085,10 +1087,19 @@ where
         let mut current = from_descendant;
         while let Some(branch) = branches.get(&current) {
             in_memory.push(Ok(branch.id()));
+
             if branch.id() == to_ancestor {
                 // All blocks are found in memory. Return immediately
                 return Box::pin(stream::iter(in_memory));
             }
+            if current == branch.parent() {
+                debug!(target: LOG_TARGET, ?to_ancestor, "reached genesis while looking for ancestor from memory");
+                // Return collected blocks and an error since we couldn't reach `to_ancestor`.
+                return Box::pin(stream::iter(in_memory).chain(stream::once(async move {
+                    Err(Error::ParentIdNotFound(current))
+                })));
+            }
+
             current = branch.parent();
         }
 
@@ -1110,34 +1121,34 @@ where
         to_ancestor: HeaderId,
         storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) -> impl Stream<Item = Result<HeaderId, Error>> {
-        stream::try_unfold(
-            (Some(from_descendant), storage),
+        // Yield `from_descendant` first since we already know it,
+        // and yield subsequent parents by loading them from storage lazily.
+        stream::once(async move { Ok(from_descendant) }).chain(stream::try_unfold(
+            (from_descendant, storage),
             move |(current, storage)| async move {
-                let Some(current) = current else {
-                    return Ok(None);
-                };
-
-                // If we've reached ancestor, yield it and
-                // set stream to be terminated on the next iteration.
                 if current == to_ancestor {
-                    return Ok(Some((current, (None, storage))));
+                    // Reached `to_ancestor`. Terminate the stream
+                    return Ok(None);
                 }
 
                 let parent = storage
                     .get_block_parent(&current)
                     .await
-                    .ok_or(Error::HeaderIdNotFound(current))?;
+                    .ok_or(Error::ParentIdNotFound(current))?;
+
+                if parent == current {
+                    debug!(target: LOG_TARGET, ?to_ancestor, "reached genesis while looking for ancestor from storage");
+                    // Terminate the stream with an error since we couldn't reach `to_ancestor`.
+                    return Err(Error::ParentIdNotFound(current));
+                }
 
                 debug!(
-                    target: LOG_TARGET,
-                    id = ?current,
-                    parent = ?parent,
+                    target: LOG_TARGET, ?current, ?parent,
                     "loaded block parent from storage",
                 );
-
-                Ok(Some((current, (Some(parent), storage))))
+                Ok(Some((parent, (parent, storage))))
             },
-        )
+        ))
     }
 
     /// Initialize cryptarchia
