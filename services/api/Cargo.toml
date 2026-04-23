@@ -15,11 +15,6 @@ workspace = true
 [package.metadata.cargo-machete]
 ignored = ["serde_json"]
 
-[features]
-axum            = ["dep:axum", "dep:hyper", "utoipa-swagger-ui/axum"]
-default         = ["axum"]
-instrumentation = []
-
 [dependencies]
 async-trait                = "0.1"
 bytes                      = { workspace = true }
@@ -42,16 +37,6 @@ serde_json                 = { workspace = true }
 tokio                      = { features = ["net"], workspace = true }
 tokio-stream               = { workspace = true }
 tracing                    = { default-features = false, version = "0.1" }
-
-# axum related dependencies
-axum = { default-features = false, features = [
-  "http1",
-  "http2",
-  "json",
-  "query",
-  "tokio",
-], optional = true, version = "0.7.5" }
-hyper = { default-features = false, optional = true, version = "1.0" }
 
 # openapi related dependencies
 utoipa = { workspace = true }
