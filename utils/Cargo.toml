@@ -30,7 +30,6 @@ tokio       = { optional = true, workspace = true }
 rng   = ["dep:blake2"]
 time  = ["dep:humantime", "dep:serde_with", "dep:time"]
 tokio = ["dep:futures", "dep:tokio"]
-types = []
 
 [dev-dependencies]
 nistrs      = "0.1.2"
