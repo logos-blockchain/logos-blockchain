@@ -246,6 +246,11 @@ impl TxState {
     /// part of the local suffix reachable from canonical channel tip.
     /// Stale suffix txs are excluded — they need invalidation and
     /// rebuild, not blind resubmission.
+    ///
+    /// Inscriptions are returned in parent-before-child order (BFS from
+    /// channel tip via `pending_by_parent`) so the node's mempool sees the
+    /// parent before any child — matters on checkpoint resume, where
+    /// HashMap iteration order is arbitrary.
     pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx)> {
         let safe = self
             .block_states
@@ -253,19 +258,22 @@ impl TxState {
             .cloned()
             .unwrap_or_else(HashTrieSetSync::new_sync);
 
-        // Resubmit pending inscriptions valid on ANY live branch, excluding
-        // those already on the canonical tip's safe set.
         let stale: std::collections::HashSet<TxHash> = self
             .collect_stale_pending()
             .iter()
             .map(|i| i.tx_hash)
             .collect();
 
+        let channel_tip = self.channel_tip_at(tip);
         let inscriptions = self
-            .pending
-            .iter()
-            .filter(|(hash, _)| !safe.contains(hash) && !stale.contains(hash))
-            .map(|(hash, p)| (*hash, p.signed_tx.clone()));
+            .collect_pending_suffix(channel_tip)
+            .into_iter()
+            .filter(|inv| !safe.contains(&inv.tx_hash) && !stale.contains(&inv.tx_hash))
+            .filter_map(|inv| {
+                self.pending
+                    .get(&inv.tx_hash)
+                    .map(|p| (inv.tx_hash, p.signed_tx.clone()))
+            });
         let others = self
             .pending_other
             .iter()
