@@ -348,7 +348,7 @@ fn build_dynamic_node_config(
         topology,
         index,
         peer_ports_by_name,
-        &options.peers,
+        options.peers.as_ref(),
         peer_ports,
     )?;
     let mut config =
@@ -376,7 +376,7 @@ fn plan_local_node_config(
     descriptors: &DeploymentPlan,
     index: usize,
     peer_ports_by_name: &HashMap<String, u16>,
-    peer_selection: &PeerSelection,
+    peer_selection: Option<&PeerSelection>,
     peer_ports: &[u16],
 ) -> Result<PlannedLocalNodeConfig, DynError> {
     let base_node = descriptors
@@ -634,13 +634,13 @@ fn build_cryptarchia_user_config(
 
 fn resolve_initial_peers(
     peer_ports_by_name: &HashMap<String, u16>,
-    peer_selection: &PeerSelection,
+    peer_selection: Option<&PeerSelection>,
     default_peers: &[Multiaddr],
     descriptors: &DeploymentPlan,
     peer_ports: &[u16],
 ) -> Result<Vec<Multiaddr>, DynError> {
     match peer_selection {
-        PeerSelection::Named(names) => {
+        Some(PeerSelection::Named(names)) => {
             let mut peers = Vec::with_capacity(names.len());
             for name in names {
                 let port = peer_ports_by_name
@@ -651,7 +651,7 @@ fn resolve_initial_peers(
 
             Ok(peers)
         }
-        PeerSelection::DefaultLayout => {
+        None | Some(PeerSelection::DefaultLayout) => {
             if default_peers.is_empty() {
                 let topology: &TopologyConfig = descriptors.config();
                 Ok(initial_peers_for_dynamic_node(
@@ -662,7 +662,7 @@ fn resolve_initial_peers(
                 Ok(default_peers.to_vec())
             }
         }
-        PeerSelection::None => Ok(Vec::new()),
+        Some(PeerSelection::None) => Ok(Vec::new()),
     }
 }
 
