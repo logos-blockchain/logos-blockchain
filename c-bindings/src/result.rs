@@ -1,18 +1,23 @@
+use crate::OperationStatus;
+
 /// Simple wrapper around a value or an error.
 ///
 /// Value is not guaranteed. You should check the error field before accessing
 /// the value.
 #[repr(C)]
-pub struct ValueResult<Type, Error> {
-    pub value: Type,
+pub struct FfiResult<Value, Error> {
+    pub value: Value,
     pub error: Error,
 }
 
-impl<Type, Error> ValueResult<Type, Error>
+pub type StatusResult<Value> = Result<Value, OperationStatus>;
+pub type FfiStatusResult<Value> = FfiResult<Value, OperationStatus>;
+
+impl<Value, Error> FfiResult<Value, Error>
 where
     Error: Default,
 {
-    pub fn from_value(value: Type) -> Self {
+    pub fn ok(value: Value) -> Self {
         Self {
             value,
             error: Error::default(),
@@ -20,60 +25,49 @@ where
     }
 }
 
-impl<Type, Error> ValueResult<Type, Error>
+impl<Value, Error> FfiResult<Value, Error>
 where
-    Type: Default,
+    Value: Default,
 {
-    pub fn from_error(error: Error) -> Self {
+    pub fn err(error: Error) -> Self {
         Self {
-            value: Type::default(),
+            value: Value::default(),
             error,
         }
     }
 }
 
-impl<Type, Error> From<Result<Type, Error>> for ValueResult<Type, Error>
+impl<Value> FfiResult<Value, OperationStatus> {
+    pub fn is_ok(&self) -> bool {
+        self.error.is_ok()
+    }
+
+    pub fn is_err(&self) -> bool {
+        self.error.is_error()
+    }
+}
+
+impl<Value, Error> From<Result<Value, Error>> for FfiResult<Value, Error>
 where
-    Type: Default,
+    Value: Default,
     Error: Default,
 {
-    fn from(result: Result<Type, Error>) -> Self {
+    fn from(result: Result<Value, Error>) -> Self {
         match result {
-            Ok(value) => Self::from_value(value),
-            Err(error) => Self::from_error(error),
+            Ok(value) => Self::ok(value),
+            Err(error) => Self::err(error),
         }
     }
 }
 
-/// Simple wrapper around a pointer to a value or an error.
-///
-/// Pointer is not guaranteed. You should check the error field before
-/// dereferencing the pointer.
-#[repr(C)]
-pub struct PointerResult<Type, Error> {
-    pub value: *mut Type,
-    pub error: Error,
-}
-
-impl<Type, Error> PointerResult<Type, Error>
+impl<Value, Error> FfiResult<*mut Value, Error>
 where
     Error: Default,
 {
-    pub fn from_pointer(pointer: *mut Type) -> Self {
+    pub fn from_value(value: Value) -> Self {
         Self {
-            value: pointer,
+            value: Box::into_raw(Box::new(value)),
             error: Error::default(),
-        }
-    }
-
-    pub fn from_value(value: Type) -> Self {
-        Self::from_pointer(Box::into_raw(Box::new(value)))
-    }
-
-    pub const fn from_error(error: Error) -> Self {
-        Self {
-            value: std::ptr::null_mut(),
-            error,
         }
     }
 }

@@ -101,6 +101,13 @@ enum ActorRequest {
         msg: Vec<u8>,
         reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
     },
+    /// Sign a tx using the sequencer's key
+    ///
+    /// Useful when signing tx built by other sequencers (e.g. withdraw).
+    SignTx {
+        tx_hash: TxHash,
+        reply: tokio::sync::oneshot::Sender<Result<Ed25519Signature, Error>>,
+    },
     /// Submit a signed tx associated with a msg ID
     SubmitSignedTx {
         tx: SignedMantleTx,
@@ -202,6 +209,30 @@ where
         reply_rx.await.map_err(|_| Error::Unavailable {
             reason: "actor dropped reply",
         })?
+    }
+
+    /// Sign a [`MantleTx`] using the sequencer's key.
+    ///
+    /// Useful when signing tx built by other sequencers (e.g. withdraw).
+    pub async fn sign_tx(&self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        let request = ActorRequest::SignTx {
+            tx_hash: tx.hash(),
+            reply: reply_tx,
+        };
+
+        self.request_tx
+            .send(request)
+            .await
+            .map_err(|_| Error::Unavailable {
+                reason: "actor channel closed",
+            })?;
+
+        let result = reply_rx.await.map_err(|_| Error::Unavailable {
+            reason: "actor dropped reply",
+        })??;
+
+        Ok(result)
     }
 
     /// Submit a [`SignedMantleTx`] that is associated with a [`MsgId`]
@@ -604,6 +635,11 @@ where
                         reason: "sequencer not yet ready",
                     })));
                 }
+                ActorRequest::SignTx { reply, .. } => {
+                    drop(reply.send(Err(Error::Unavailable {
+                        reason: "sequencer not yet ready",
+                    })));
+                }
                 ActorRequest::SubmitSignedTx { reply, .. } => {
                     drop(reply.send(Err(Error::Unavailable {
                         reason: "sequencer not yet ready",
@@ -639,6 +675,10 @@ where
                 );
                 // do not update last_msg_id since tx is not submitted yet
                 drop(reply.send(Ok(result)));
+            }
+            ActorRequest::SignTx { tx_hash, reply } => {
+                let signature = sign_tx(tx_hash, &self.signing_key);
+                drop(reply.send(Ok(signature)));
             }
             ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
                 let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
@@ -869,7 +909,7 @@ async fn backfill_canonical<Node>(
     while !state.has_block(&current) && current != lib {
         match node.block(current).await {
             Ok(Some(block)) => {
-                let parent = block.header().parent_block();
+                let parent = block.header.parent_block;
                 blocks_to_process.push(block);
                 current = parent;
             }
@@ -890,11 +930,12 @@ async fn backfill_canonical<Node>(
     // Process blocks in forward order (oldest first)
     blocks_to_process.reverse();
     for block in blocks_to_process {
-        let block_id = block.header().id();
-        let parent_id = block.header().parent_block();
+        let block_id = block.header.id;
+        let parent_id = block.header.parent_block;
 
         let our_txs: Vec<TxHash> = block
-            .transactions()
+            .transactions
+            .iter()
             .filter(|tx| matches_channel(tx, channel_id))
             .map(|tx| tx.mantle_tx.hash())
             .collect();
@@ -988,7 +1029,7 @@ fn create_inscribe_tx(
     };
 
     let tx_hash = inscribe_tx.hash();
-    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let signature = sign_tx(tx_hash, signing_key);
 
     let signed_tx = SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
@@ -1016,7 +1057,7 @@ fn create_set_keys_tx(
     };
 
     let tx_hash = set_keys_tx.hash();
-    let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
+    let signature = sign_tx(tx_hash, signing_key);
 
     SignedMantleTx {
         ops_proofs: vec![OpProof::Ed25519Sig(signature)],
@@ -1047,9 +1088,13 @@ fn prepare_tx(
         execution_gas_price: 0.into(),
     };
 
-    let inscription_sig = signing_key.sign_payload(tx.hash().as_signing_bytes().as_ref());
+    let inscription_sig = sign_tx(tx.hash(), signing_key);
 
     (tx, msg_id, inscription_sig)
+}
+
+fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
+    signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref())
 }
 
 #[cfg(test)]
@@ -1058,7 +1103,6 @@ mod tests {
     use futures::Stream;
     use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
     use lb_core::{
-        block::Block,
         header::ContentId,
         mantle::{
             Note, Utxo,
@@ -1210,7 +1254,7 @@ mod tests {
         async fn block(
             &self,
             _id: HeaderId,
-        ) -> Result<Option<Block<SignedMantleTx>>, lb_common_http_client::Error> {
+        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
             unimplemented!()
         }
 

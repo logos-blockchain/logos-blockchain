@@ -49,7 +49,7 @@ pub(super) fn build_node_descriptor(
     NodeDescriptor::with_loopback_ports(
         node_identifier(index),
         image.to_owned(),
-        NODE_ENTRYPOINT,
+        vec![NODE_ENTRYPOINT.to_owned()],
         base_volumes(),
         default_extra_hosts(),
         vec![api_port, testing_port],

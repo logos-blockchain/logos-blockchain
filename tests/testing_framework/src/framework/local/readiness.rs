@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::framework::LbcEnv;
 
-const READINESS_STABILIZATION_TIMEOUT: Duration = Duration::from_secs(60);
+const READINESS_STABILIZATION_TIMEOUT: Duration = Duration::from_mins(1);
 const READINESS_STABILIZATION_POLL: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Error)]

@@ -27,11 +27,11 @@ pub struct OfflineGracePeriodConfig {
 }
 
 const fn default_offline_grace_period() -> Duration {
-    Duration::from_secs(20 * 60)
+    Duration::from_mins(20)
 }
 
 const fn default_state_recording_interval() -> Duration {
-    Duration::from_secs(60)
+    Duration::from_mins(1)
 }
 
 impl Default for OfflineGracePeriodConfig {

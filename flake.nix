@@ -5,7 +5,7 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     rust-overlay = {
-      url = "github:oxalica/rust-overlay/629bbb7f9d02787a54e28398b411da849246253b";
+      url = "github:oxalica/rust-overlay/8087ff1f47fff983a1fba70fa88b759f2fd8ae97";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
@@ -40,20 +40,22 @@
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
         };
+
+      rustVersion = "1.95.0";
     in
     {
       packages = forAll (
         system:
         let
           pkgs = mkPkgs system;
-          rustToolchain = pkgs.rust-bin.stable.latest.default;
+          rustToolchain = pkgs.rust-bin.stable.${rustVersion}.default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
           src = craneLib.cleanCargoSource ./.;
 
           commonArgs = {
             pname = "logos-blockchain-c";
             cargoExtraArgs = "-p logos-blockchain-c";
-            version = "0.2.1";
+            version = "0.1.2";
 
             inherit src;
 
@@ -108,7 +110,7 @@
             name = "research";
             buildInputs = [
               pkgs.pkg-config
-              pkgs.rust-bin.stable.latest.default
+              pkgs.rust-bin.stable.${rustVersion}.default
               pkgs.clang
               pkgs.llvmPackages.libclang
               pkgs.openssl.dev

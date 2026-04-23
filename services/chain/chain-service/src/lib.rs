@@ -556,7 +556,7 @@ where
 
         wait_until_services_are_ready!(
             &self.service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             BlockBroadcastService<_>,
             StorageService<_, _>,
             TimeService<_, _>
@@ -1309,7 +1309,7 @@ where
             } => {
                 let known_blocks = vec![local_tip, latest_immutable_block]
                     .into_iter()
-                    .chain(additional_blocks.into_iter())
+                    .chain(additional_blocks)
                     .collect::<HashSet<_>>();
 
                 sync_blocks_provider

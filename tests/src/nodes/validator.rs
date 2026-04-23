@@ -11,13 +11,14 @@ use futures::Stream;
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::CryptarchiaInfo;
 use lb_common_http_client::CommonHttpClient;
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     block::Block,
     mantle::{SignedMantleTx, Transaction as _, TxHash},
     sdp::Declaration,
 };
 use lb_http_api_common::paths::{
-    CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO, STORAGE_BLOCK,
+    BLOCKS_DETAIL, CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO,
 };
 use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_network_service::backends::libp2p::Libp2pInfo;
@@ -40,8 +41,8 @@ use tokio::time::error::Elapsed;
 
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
-    IS_DEBUG_TRACING, common::kms::key_id_for_preload_backend, get_reserved_available_tcp_port,
-    nodes::LOGS_PREFIX, topology::configs::GeneralConfig,
+    IS_DEBUG_TRACING, get_reserved_available_tcp_port, nodes::LOGS_PREFIX,
+    topology::configs::GeneralConfig,
 };
 
 pub enum Pool {
@@ -278,10 +279,9 @@ impl Validator {
     }
 
     pub async fn get_block(&self, id: HeaderId) -> Option<Block<SignedMantleTx>> {
+        let path = BLOCKS_DETAIL.replace(":id", &id.to_string());
         CLIENT
-            .post(format!("http://{}{}", self.addr, STORAGE_BLOCK))
-            .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&id).unwrap())
+            .get(format!("http://{}{}", self.addr, path))
             .send()
             .await
             .unwrap()

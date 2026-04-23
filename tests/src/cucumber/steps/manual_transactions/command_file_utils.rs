@@ -50,9 +50,10 @@ use crate::cucumber::{
             },
         },
         manual_transactions::{
+            best_node::get_best_node_info,
             command_file_parsing::{ManualCommand, take_next_command},
             utils,
-            utils::WalletStateType,
+            utils::{BestNodeInfo, WalletStateType},
         },
     },
     world::{CucumberWorld, WalletInfo},
@@ -91,22 +92,22 @@ async fn execute_non_stop_manual_command(
             wallet,
             outputs,
             value,
-        } => execute_coin_split(world, step, wallet, *outputs, *value).await,
+        } => execute_coin_split(world, step, wallet, *outputs, *value, None).await,
         ManualCommand::Verify { .. } => handle_verify_command(world, step, command).await,
         ManualCommand::WalletBalance { wallet_name } => {
             utils::update_wallet_balance(world, step, wallet_name).await?;
             Ok(())
         }
         ManualCommand::WalletBalanceAllUserWallets => {
-            utils::update_wallet_balance_all_user_wallets(world, step).await?;
+            utils::update_wallet_balance_all_user_wallets(world, step, None).await?;
             Ok(())
         }
         ManualCommand::WalletBalanceAllFundingWallets => {
-            utils::update_wallet_balance_all_funding_wallets(world, step).await?;
+            utils::update_wallet_balance_all_funding_wallets(world, step, None).await?;
             Ok(())
         }
         ManualCommand::WalletBalanceAllWallets => {
-            utils::update_wallet_balance_all_wallets(world, step).await?;
+            utils::update_wallet_balance_all_wallets(world, step, None).await?;
             Ok(())
         }
         ManualCommand::ClearEncumbrances { wallet_name } => {
@@ -120,15 +121,8 @@ async fn execute_non_stop_manual_command(
             value,
             from,
             to,
-        } => execute_send(world, step, *transactions, *value, from, to).await,
+        } => execute_send(world, step, *transactions, *value, from, to, None).await,
         ManualCommand::ContinuousUserWallets {
-            coin_split_outputs,
-            coin_split_value,
-            transactions,
-            value,
-            cycles,
-        }
-        | ManualCommand::ContinuousFundingWallets {
             coin_split_outputs,
             coin_split_value,
             transactions,
@@ -276,11 +270,13 @@ async fn execute_coin_split(
     wallet_name: &str,
     outputs: usize,
     value: u64,
+    best_node_info: Option<&BestNodeInfo>,
 ) -> Result<(), StepError> {
     let wallet = world.resolve_wallet(wallet_name)?;
     let self_pk = wallet.public_key()?;
     let receivers = vec![(self_pk, value); outputs];
-    utils::create_and_submit_transaction(world, step, wallet_name, &receivers).await?;
+    utils::create_and_submit_transaction(world, step, wallet_name, &receivers, best_node_info)
+        .await?;
     Ok(())
 }
 
@@ -291,11 +287,19 @@ async fn execute_send(
     value: u64,
     from: &str,
     to: &str,
+    best_node_info: Option<&BestNodeInfo>,
 ) -> Result<(), StepError> {
     let receiver_wallet = world.resolve_wallet(to)?;
     let receiver_pk = receiver_wallet.public_key()?;
     for _ in 0..transactions {
-        utils::create_and_submit_transaction(world, step, from, &[(receiver_pk, value)]).await?;
+        utils::create_and_submit_transaction(
+            world,
+            step,
+            from,
+            &[(receiver_pk, value)],
+            best_node_info,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -306,6 +310,10 @@ async fn execute_send(
 )]
 #[expect(
     clippy::cognitive_complexity,
+    reason = "This function has multiple steps that are logically distinct."
+)]
+#[expect(
+    clippy::too_many_lines,
     reason = "This function has multiple steps that are logically distinct."
 )]
 async fn execute_continuous(
@@ -321,11 +329,6 @@ async fn execute_continuous(
     let mut wallet_names = match command {
         ManualCommand::ContinuousUserWallets { .. } => world
             .all_user_wallets()
-            .iter()
-            .map(|w| w.wallet_name.clone())
-            .collect(),
-        ManualCommand::ContinuousFundingWallets { .. } => world
-            .all_funding_wallets()
             .iter()
             .map(|w| w.wallet_name.clone())
             .collect(),
@@ -352,8 +355,16 @@ async fn execute_continuous(
         }
         info!(target: TARGET, "CONTINUOUS cycle {} B: Perform coin splits all wallets", cycle + 1);
         for sender in &wallet_names {
-            if let Err(e) =
-                execute_coin_split(world, step, sender, coin_split_outputs, coin_split_value).await
+            let best_node_info = get_best_node_info(world, sender).await?;
+            if let Err(e) = execute_coin_split(
+                world,
+                step,
+                sender,
+                coin_split_outputs,
+                coin_split_value,
+                Some(&best_node_info),
+            )
+            .await
             {
                 warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
             }
@@ -386,9 +397,18 @@ async fn execute_continuous(
             cycle + 1
         );
         for sender in &wallet_names {
+            let best_node_info = get_best_node_info(world, sender).await?;
             let recipients = recipient_wallets(&wallet_names, sender)?;
-            if let Err(e) =
-                send_round_robin(world, step, sender, &recipients, transactions, value).await
+            if let Err(e) = send_round_robin(
+                world,
+                step,
+                sender,
+                &recipients,
+                transactions,
+                value,
+                Some(&best_node_info),
+            )
+            .await
             {
                 warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
             }
@@ -442,12 +462,20 @@ async fn send_round_robin(
     recipients: &[String],
     transactions: usize,
     value: u64,
+    best_node_info: Option<&BestNodeInfo>,
 ) -> Result<(), StepError> {
     for i in 0..transactions {
         let receiver_name = &recipients[i % recipients.len()];
         let receiver_wallet = world.resolve_wallet(receiver_name)?;
         let receiver_pk = receiver_wallet.public_key()?;
-        utils::create_and_submit_transaction(world, step, sender, &[(receiver_pk, value)]).await?;
+        utils::create_and_submit_transaction(
+            world,
+            step,
+            sender,
+            &[(receiver_pk, value)],
+            best_node_info,
+        )
+        .await?;
     }
     Ok(())
 }

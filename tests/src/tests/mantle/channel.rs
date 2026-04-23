@@ -1,82 +1,75 @@
 use std::{num::NonZero, time::Duration};
 
-use futures::future::join_all;
 use lb_core::mantle::{
     GenesisTx as _,
     gas::GasCost,
     ops::channel::{ChannelId, deposit::DepositOp},
 };
 use lb_http_api_common::bodies::channel::ChannelDepositRequestBody;
+use lb_node::config::RunConfig;
+use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
-use logos_blockchain_tests::{
-    common::{sync::wait_for_validators_mode_and_height, time::max_block_propagation_time},
-    nodes::{create_validator_config, validator::Validator},
-    topology::configs::{
-        create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
-    },
+use logos_blockchain_tests::common::manual_cluster::{
+    ManualNodeLayout, api_url, get_wallet_balance, start_local_manual_cluster_with_layout,
+    wait_for_nodes_height,
 };
 use serial_test::serial;
+use testing_framework_core::scenario::DynError;
 use tokio::time::sleep;
 
 /// End-to-end test for the channel deposit flow:
 ///
-/// 1. Spawn one validators that produce blocks.
-/// 2. Call the POST `/channel/deposit` HTTP endpoint on the validator.
-/// 4. Verify the API call succeeds (the endpoint returns 200).
-/// 5. Wait for the transaction to be included in a block.
-/// 6. Verify the funding key's wallet balanceting has decreased due to the
-///    deposit.
+/// 1. Spawn validators that produce blocks.
+/// 2. Call the POST `/channel/deposit` HTTP endpoint on one validator.
+/// 3. Verify the API call succeeds.
+/// 4. Wait for the deposit transaction to be included in a block.
+/// 5. Verify the funding key's wallet balance decreases.
+/// 6. Verify the channel balance increases.
 #[tokio::test]
 #[serial]
 async fn channel_deposit() {
-    // Spwan a validator
-    let (configs, genesis_tx) = create_general_configs(1, None);
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx.clone());
-    let configs: Vec<_> = configs
-        .into_iter()
-        .map(|c| {
-            let mut config = create_validator_config(c, deployment_settings.clone());
-            config.deployment.time.slot_duration = Duration::from_secs(1);
-            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
-            config.deployment.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
-            config
-        })
-        .collect();
-
-    let validators: Vec<Validator> = join_all(configs.into_iter().map(Validator::spawn))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("Failed to spawn validators");
-    let validator = &validators[0];
-
-    let target_height = 3;
-    wait_for_validators_mode_and_height(
-        &validators,
-        lb_cryptarchia_engine::State::Online,
-        target_height,
-        max_block_propagation_time(
-            target_height as u32,
-            validators.len() as u64,
-            &validator.config().deployment,
-            3.0,
+    let (base, nodes) = start_local_manual_cluster_with_layout(
+        "channel-deposit",
+        "mantle-channel",
+        DeploymentBuilder::new(
+            TfTopologyConfig::with_node_numbers(2)
+                .with_test_context(Some("channel_deposit".to_owned())),
         ),
+        2,
+        ManualNodeLayout::SelectNodeSeed(0),
+        |config| Ok::<_, DynError>(channel_test_config(config)),
     )
     .await;
 
-    // Record the funding key's balance before deposit
-    let funding_pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
-    let balance_before = get_wallet_balance(validator, funding_pk).await;
-    println!("Wallet balance before deposit: {balance_before}");
+    let validator = &nodes[0];
+    let funding_pk = base.deployment.nodes()[0]
+        .general
+        .consensus_config
+        .funding_pk;
 
-    // Also, record the channel balance before deposit
-    // We use the channel created by the genesis inscription for simplicity.
-    let channel_id = genesis_tx.genesis_inscription().channel_id;
-    let channel_balance_before = get_channel_balance(validator, channel_id).await;
-    println!("Channel balance before deposit: {channel_balance_before}");
+    wait_for_nodes_height(
+        nodes
+            .iter()
+            .map(|node| &node.client)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        3,
+        Duration::from_mins(5),
+    )
+    .await;
 
-    // Trigger deposit via the HTTP API.
+    let balance_before = get_wallet_balance(&validator.client, funding_pk).await;
+
+    let channel_id = base
+        .deployment
+        .config
+        .genesis_tx
+        .clone()
+        .expect("manual-cluster deployment should include genesis tx")
+        .genesis_inscription()
+        .channel_id;
+    let channel_balance_before = get_channel_balance(&validator.client, channel_id).await;
+
     let deposit_amount = 1;
     let body = ChannelDepositRequestBody {
         tip: None,
@@ -89,109 +82,71 @@ async fn channel_deposit() {
         funding_public_keys: vec![funding_pk],
         max_tx_fee: GasCost::new(10),
     };
-    let resp = reqwest::Client::new()
-        .post(format!(
-            "http://{}/channel/deposit",
-            validators[0].config().user.api.backend.listen_address
-        ))
+    let response = reqwest::Client::new()
+        .post(api_url(&validator.client, "channel/deposit"))
         .json(&body)
         .send()
         .await
         .expect("request should not fail");
 
     assert!(
-        resp.status().is_success(),
+        response.status().is_success(),
         "request should succeed, got status: {} body: {}",
-        resp.status(),
-        resp.text().await.unwrap_or_default(),
+        response.status(),
+        response.text().await.unwrap_or_default(),
     );
 
-    // Wait for the deposit tx to be included (a few more blocks)
-    let new_target_height = target_height + 5;
-    wait_for_validators_mode_and_height(
-        &validators,
-        lb_cryptarchia_engine::State::Online,
-        new_target_height,
-        max_block_propagation_time(
-            (new_target_height - target_height) as u32,
-            validators.len() as u64,
-            &validator.config().deployment,
-            3.0,
-        ),
+    wait_for_nodes_height(
+        nodes
+            .iter()
+            .map(|node| &node.client)
+            .collect::<Vec<_>>()
+            .as_slice(),
+        8,
+        Duration::from_mins(5),
     )
     .await;
 
-    // Check the funding key's balance has decreased
-    let balance_after = get_wallet_balance(validator, funding_pk).await;
-    println!("Wallet balance after deposit: {balance_after}");
+    let balance_after = get_wallet_balance(&validator.client, funding_pk).await;
     assert_eq!(
         balance_after,
         balance_before - deposit_amount,
         "wallet balance should decrease after deposit: before={balance_before}, after={balance_after}, deposit_amount={deposit_amount}",
     );
 
-    // Check the channel balance has increased
-    let channel_balance_after = get_channel_balance(validator, channel_id).await;
-    println!("Channel balance after deposit: {channel_balance_after}");
+    let channel_balance_after = get_channel_balance(&validator.client, channel_id).await;
     assert_eq!(
         channel_balance_after,
         channel_balance_before + deposit_amount,
-        "channel balance should decrease after deposit: before={balance_before}, after={balance_after}, deposit_amount={deposit_amount}",
+        "channel balance should increase after deposit: before={channel_balance_before}, after={channel_balance_after}, deposit_amount={deposit_amount}",
     );
 }
 
-async fn get_wallet_balance(
-    validator: &Validator,
-    pk: lb_key_management_system_service::keys::ZkPublicKey,
-) -> u64 {
-    let pk_hex = hex::encode(lb_groth16::fr_to_bytes(&pk.into()));
-    let url = format!(
-        "http://{}/wallet/{}/balance",
-        validator.config().user.api.backend.listen_address,
-        pk_hex,
-    );
-
-    // Retry a few times - the wallet might not have processed the latest block yet
-    for _ in 0..5 {
-        let resp = reqwest::Client::new()
-            .get(&url)
-            .send()
-            .await
-            .expect("balance request should not fail");
-
-        if resp.status().is_success() {
-            let body: serde_json::Value = resp.json().await.unwrap();
-            return body["balance"].as_u64().unwrap_or(0);
-        }
-
-        sleep(Duration::from_millis(500)).await;
-    }
-
-    panic!("Failed to get wallet balance after retries");
+fn channel_test_config(mut config: RunConfig) -> RunConfig {
+    config.deployment.time.slot_duration = Duration::from_secs(1);
+    config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+    config.deployment.cryptarchia.slot_activation_coeff =
+        NonNegativeRatio::new(1, 2.try_into().unwrap());
+    config
 }
 
-async fn get_channel_balance(validator: &Validator, channel_id: ChannelId) -> u64 {
-    let url = format!(
-        "http://{}/channel/{}",
-        validator.config().user.api.backend.listen_address,
-        channel_id,
-    );
+async fn get_channel_balance(node: &NodeHttpClient, channel_id: ChannelId) -> u64 {
+    let url = api_url(node, &format!("channel/{channel_id}"));
 
-    // Retry a few times until the channel is created
     for _ in 0..5 {
-        let resp = reqwest::Client::new()
-            .get(&url)
+        let response = reqwest::Client::new()
+            .get(url.clone())
             .send()
             .await
             .expect("channel request should not fail");
 
-        if resp.status().is_success() {
-            let body: serde_json::Value = resp.json().await.unwrap();
+        if response.status().is_success() {
+            let body: serde_json::Value = response.json().await.unwrap();
             return body["balance"].as_u64().unwrap_or(0);
         }
 
         sleep(Duration::from_millis(500)).await;
     }
 
-    panic!("Failed to get channel state after retries");
+    panic!("failed to get channel state after retries");
 }

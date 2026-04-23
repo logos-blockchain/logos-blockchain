@@ -41,12 +41,9 @@ where
             target = LOG_TARGET,
             "Waiting until service {service_id:} is ready"
         );
-        if let Err(e) = wait_until_services_are_ready!(
-            &overwatch_handle,
-            Some(Duration::from_secs(60)),
-            Service
-        )
-        .await
+        if let Err(e) =
+            wait_until_services_are_ready!(&overwatch_handle, Some(Duration::from_mins(1)), Service)
+                .await
         {
             debug!(target: LOG_TARGET, "Service took too long to start. Shutting it down again...");
             kill_service(&overwatch_handle).await;

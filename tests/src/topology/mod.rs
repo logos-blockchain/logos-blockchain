@@ -1,4 +1,3 @@
-pub mod configs;
 use std::{collections::HashSet, time::Duration};
 
 use configs::{
@@ -7,6 +6,8 @@ use configs::{
     network::{NetworkParams, create_network_configs},
     tracing::create_tracing_configs,
 };
+pub use lb_config as configs;
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     mantle::{GenesisTx as _, Note, NoteId, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
@@ -18,7 +19,6 @@ use lb_testing_framework::get_reserved_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
 use crate::{
-    common::kms::key_id_for_preload_backend,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         api::create_api_configs,
@@ -32,6 +32,7 @@ use crate::{
 
 pub struct TopologyConfig {
     pub n_validators: usize,
+    pub blend_core_nodes: usize,
     pub network_params: NetworkParams,
     pub extra_genesis_notes: Vec<GenesisNoteSpec>,
     /// Override the SDP `lock_period` for this test topology.
@@ -44,6 +45,7 @@ impl TopologyConfig {
     pub fn one_validator() -> Self {
         Self {
             n_validators: 1,
+            blend_core_nodes: 1,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
@@ -54,6 +56,7 @@ impl TopologyConfig {
     pub fn two_validators() -> Self {
         Self {
             n_validators: 2,
+            blend_core_nodes: 2,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
@@ -64,6 +67,7 @@ impl TopologyConfig {
     pub fn n_validators(n_validators: usize) -> Self {
         Self {
             n_validators,
+            blend_core_nodes: n_validators,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
             lock_period_override: None,
@@ -80,6 +84,21 @@ impl TopologyConfig {
     pub const fn with_lock_period(mut self, lock_period: u64) -> Self {
         self.lock_period_override = Some(lock_period);
         self
+    }
+
+    #[must_use]
+    pub fn n_validators_with_m_blend_node(n: usize, m: usize) -> Self {
+        assert!(
+            m <= n,
+            "Number of Blend core nodes `m` must be less than or equal to total number of validators `n`."
+        );
+        Self {
+            n_validators: n,
+            blend_core_nodes: m,
+            network_params: NetworkParams::default(),
+            extra_genesis_notes: Vec::new(),
+            lock_period_override: None,
+        }
     }
 }
 
@@ -307,7 +326,7 @@ trait ReadinessCheck<'a> {
     fn timeout_message(&self, data: Self::Data) -> String;
 
     async fn wait(&'a self) {
-        let timeout = tokio::time::timeout(Duration::from_secs(60), async {
+        let timeout = tokio::time::timeout(Duration::from_mins(1), async {
             loop {
                 let data = self.collect().await;
                 if self.is_ready(&data) {

@@ -157,3 +157,130 @@ impl ProofsVerifier for RealProofsVerifier {
         proof.verify(inputs).map_err(Error::ProofOfSelection)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
+    use lb_core::crypto::ZkHash;
+    use lb_groth16::{Field as _, Fr};
+
+    use crate::{
+        crypto::proofs::{PoQVerificationInputsMinusSigningKey, RealProofsVerifier},
+        encap::ProofsVerifier as _,
+    };
+
+    fn epoch_1_leader() -> LeaderInputs {
+        LeaderInputs {
+            pol_ledger_aged: ZkHash::ONE,
+            pol_epoch_nonce: ZkHash::ONE,
+            message_quota: 2,
+            lottery_0: Fr::ONE,
+            lottery_1: Fr::ONE,
+        }
+    }
+
+    #[test]
+    fn new_verifier_has_no_previous_epoch() {
+        let verifier = RealProofsVerifier::new(PoQVerificationInputsMinusSigningKey::default());
+        assert!(verifier.previous_epoch_inputs.is_none());
+        assert_eq!(
+            verifier.current_inputs.leader,
+            PoQVerificationInputsMinusSigningKey::default().leader
+        );
+    }
+
+    #[test]
+    fn start_epoch_transition_stores_previous_epoch() {
+        let initial = PoQVerificationInputsMinusSigningKey::default();
+        let mut verifier = RealProofsVerifier::new(initial);
+        let new_leader = epoch_1_leader();
+
+        verifier.start_epoch_transition(new_leader);
+
+        // Current should be updated to new epoch.
+        assert_eq!(verifier.current_inputs.leader, new_leader);
+        // Previous should hold the old epoch's leader inputs.
+        assert_eq!(verifier.previous_epoch_inputs, Some(initial.leader));
+    }
+
+    #[test]
+    fn complete_epoch_transition_clears_previous_epoch() {
+        let mut verifier = RealProofsVerifier::new(PoQVerificationInputsMinusSigningKey::default());
+        verifier.start_epoch_transition(epoch_1_leader());
+
+        assert!(verifier.previous_epoch_inputs.is_some());
+
+        verifier.complete_epoch_transition();
+
+        assert!(
+            verifier.previous_epoch_inputs.is_none(),
+            "Previous epoch inputs must be cleared after completing transition"
+        );
+        assert_eq!(verifier.current_inputs.leader, epoch_1_leader());
+    }
+
+    #[test]
+    fn consecutive_epoch_transitions_replace_previous() {
+        let initial = PoQVerificationInputsMinusSigningKey::default();
+        let mut verifier = RealProofsVerifier::new(initial);
+
+        let leader_1 = epoch_1_leader();
+        verifier.start_epoch_transition(leader_1);
+        assert_eq!(verifier.previous_epoch_inputs, Some(initial.leader));
+
+        // Start another transition without completing the first.
+        let leader_2 = LeaderInputs {
+            pol_ledger_aged: ZkHash::ZERO,
+            pol_epoch_nonce: ZkHash::ONE,
+            message_quota: 3,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ONE,
+        };
+        verifier.start_epoch_transition(leader_2);
+
+        // Previous should now be epoch 1 (not initial epoch 0).
+        assert_eq!(verifier.current_inputs.leader, leader_2);
+        assert_eq!(verifier.previous_epoch_inputs, Some(leader_1));
+    }
+
+    #[test]
+    fn complete_then_new_epoch_transition() {
+        let initial = PoQVerificationInputsMinusSigningKey::default();
+        let mut verifier = RealProofsVerifier::new(initial);
+
+        // Epoch 0 → 1
+        let leader_1 = epoch_1_leader();
+        verifier.start_epoch_transition(leader_1);
+        verifier.complete_epoch_transition();
+        assert!(verifier.previous_epoch_inputs.is_none());
+        assert_eq!(verifier.current_inputs.leader, leader_1);
+
+        // Epoch 1 → 2
+        let leader_2 = LeaderInputs {
+            pol_ledger_aged: ZkHash::ZERO,
+            pol_epoch_nonce: ZkHash::ONE,
+            message_quota: 3,
+            lottery_0: Fr::ZERO,
+            lottery_1: Fr::ONE,
+        };
+        verifier.start_epoch_transition(leader_2);
+        assert_eq!(verifier.current_inputs.leader, leader_2);
+        assert_eq!(
+            verifier.previous_epoch_inputs,
+            Some(leader_1),
+            "After new transition, previous must be the completed epoch 1"
+        );
+    }
+
+    #[test]
+    fn session_and_core_inputs_preserved_across_epoch_transitions() {
+        let initial = PoQVerificationInputsMinusSigningKey::default();
+        let mut verifier = RealProofsVerifier::new(initial);
+
+        verifier.start_epoch_transition(epoch_1_leader());
+
+        // Session and core inputs should not change during epoch transitions.
+        assert_eq!(verifier.current_inputs.session, initial.session);
+        assert_eq!(verifier.current_inputs.core, initial.core);
+    }
+}

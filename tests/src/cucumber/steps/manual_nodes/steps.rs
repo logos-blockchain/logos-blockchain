@@ -2,31 +2,43 @@ use std::{collections::HashMap, time::Duration};
 
 use cucumber::{gherkin::Step, given, then, when};
 use lb_libp2p::{Multiaddr, PeerId};
-use lb_testing_framework::{DeploymentBuilder, LbcLocalDeployer, TopologyConfig};
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::{
-        TARGET,
-        manual_cluster::{build_manual_cluster_deployment, stop_active_manual_cluster},
-        manual_nodes::{
-            config_override::set_user_config_override,
-            snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
-            utils::{
-                NodesToStartUnordered, create_snapshots_all_nodes, get_cryptarchia_info_all_nodes,
-                nodes_converged, parse_genesis_wallet_tokens_row, parse_url,
-                parse_wallet_resources_table_row, poll_all_nodes_and_update_consensus_cache,
-                restart_node, start_node, start_nodes_order_respecting_dependencies,
-                verify_genesis_wallet_resources_table_indexes,
-                verify_node_wallet_resources_table_indexes,
-                wait_for_all_nodes_to_be_synced_to_chain,
+use crate::{
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::{
+            TARGET,
+            manual_cluster::{
+                assert_manual_node_has_peers, connect_manual_node_to_node,
+                install_local_manual_cluster, rebuild_pending_local_manual_cluster,
+                stop_active_manual_cluster,
+            },
+            manual_nodes::{
+                config_override::set_user_config_override,
+                snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
+                utils::{
+                    NodesToStartUnordered, create_snapshots_all_nodes,
+                    ensure_all_nodes_agree_on_lib,
+                    ensure_fee_sponsorship_and_fork_groups_are_not_mixed,
+                    get_cryptarchia_info_all_nodes, nodes_converged,
+                    parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
+                    poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
+                    start_nodes_order_respecting_dependencies,
+                    verify_genesis_wallet_resources_table_indexes,
+                    verify_node_wallet_resources_table_indexes,
+                    wait_for_all_nodes_to_be_synced_to_chain,
+                },
             },
         },
+        utils::resolve_literal_or_env,
+        world::{
+            CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec, NodeSnapshot,
+            PublicCryptarchiaEndpointPeer,
+        },
     },
-    utils::resolve_literal_or_env,
-    world::{CucumberWorld, GenesisTokens, NodeSnapshot, PublicCryptarchiaEndpointPeer},
+    non_zero,
 };
 
 const PUBLIC_CRYPTARCHIA_ENDPOINT: &str = "public_cryptarchia_endpoint";
@@ -36,14 +48,16 @@ const PUBLIC_CRYPTARCHIA_ENDPOINT_PASSWORD: &str = "password";
 #[given(expr = "I have a cluster with capacity of {int} nodes")]
 #[when(expr = "I have a cluster with capacity of {int} nodes")]
 fn step_manual_cluster(world: &mut CucumberWorld, step: &Step, nodes_count: usize) -> StepResult {
-    let deployment = build_manual_cluster_deployment(world, nodes_count).inspect_err(|e| {
+    install_local_manual_cluster(
+        world,
+        ManualClusterSpec {
+            kind: ManualClusterKind::Generated,
+            capacity: nodes_count,
+        },
+    )
+    .inspect_err(|e| {
         warn!(target: TARGET, "Step '{step}' error: {e}");
-    })?;
-    let deployer = LbcLocalDeployer::new();
-    let cluster = deployer.manual_cluster_from_descriptors(deployment);
-    world.local_cluster = Some(cluster);
-
-    Ok(())
+    })
 }
 
 #[given(expr = "I have a devnet cluster with capacity of {int} nodes")]
@@ -53,38 +67,16 @@ fn step_manual_devnet_cluster(
     step: &Step,
     nodes_count: usize,
 ) -> StepResult {
-    // For devnet runs we do NOT allocate genesis tokens/accounts here.
-    // Wallet keys are derived later (compile_wallet_in_map), and the node RunConfig
-    // is switched to Devnet via `join_external_network` inside
-    // `prepare_config_patch`.
-
-    world.genesis_block_utxos.clear();
-    world.wallet_accounts.clear();
-
-    let config = TopologyConfig::with_node_numbers(nodes_count)
-        .with_allow_multiple_genesis_tokens(true)
-        .with_allow_zero_value_genesis_tokens(true)
-        .with_test_context(world.test_context.clone());
-
-    let deployment = match DeploymentBuilder::new(config).build() {
-        Ok(deployment) => deployment,
-        Err(e) => {
-            warn!(target: TARGET, "Step '{step}' error: {e}");
-            return Err(StepError::LogicalError {
-                message: format!("failed to build devnet manual cluster: {e}"),
-            });
-        }
-    };
-
-    // NOTE: We intentionally do NOT call `genesis_block_utxos(&genesis_tx)` here.
-    // In devnet mode the node will switch deployment settings at start, and local
-    // generated genesis outputs are not meaningful for wallet tracking.
-
-    let deployer = LbcLocalDeployer::new();
-    let cluster = deployer.manual_cluster_from_descriptors(deployment);
-    world.local_cluster = Some(cluster);
-
-    Ok(())
+    install_local_manual_cluster(
+        world,
+        ManualClusterSpec {
+            kind: ManualClusterKind::Devnet,
+            capacity: nodes_count,
+        },
+    )
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step '{step}' error: {e}");
+    })
 }
 
 #[given("the genesis block has the following wallet resources:")]
@@ -111,6 +103,25 @@ fn step_cluster_has_wallet_resources(world: &mut CucumberWorld, step: &Step) -> 
         });
     }
 
+    Ok(())
+}
+
+#[given(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
+#[when(expr = "we have a sponsored genesis fee account with {int} tokens of {int} value each")]
+fn step_sponsored_genesis_fee_account(
+    world: &mut CucumberWorld,
+    step: &Step,
+    token_count: usize,
+    token_value: u64,
+) -> StepResult {
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, step.value.as_str())?;
+
+    let token_count = non_zero!("genesis fee token count", token_count)?;
+    let token_value = non_zero!("genesis fee token value", token_value)?;
+
+    world
+        .fee_state
+        .set_sponsored_genesis_account(token_count, token_value);
     Ok(())
 }
 
@@ -173,6 +184,33 @@ async fn step_start_manual_stand_alone_node(
     start_node(world, &step.value, &node_name, &Vec::new(), &Vec::new()).await
 }
 
+#[when(expr = "I connect node {string} to node {string} at runtime")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_connect_nodes_at_runtime(
+    world: &mut CucumberWorld,
+    source_node_name: String,
+    target_node_name: String,
+) -> StepResult {
+    connect_manual_node_to_node(world, &source_node_name, &target_node_name).await
+}
+
+#[then(expr = "node {string} has at least {int} peers within {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_node_has_peers(
+    world: &mut CucumberWorld,
+    node_name: String,
+    min_peers: usize,
+    timeout_secs: u64,
+) -> StepResult {
+    assert_manual_node_has_peers(world, &node_name, min_peers, timeout_secs).await
+}
+
 #[when(expr = "I restart node {string}")]
 #[expect(
     clippy::needless_pass_by_ref_mut,
@@ -198,6 +236,59 @@ const fn step_we_join_external_network(world: &mut CucumberWorld) {
     world.join_external_network = Some(true);
 }
 
+#[given(expr = "we will have distinct node groups to query wallet balances:")]
+#[when(expr = "we will have distinct node groups to query wallet balances:")]
+fn step_define_node_groups(world: &mut CucumberWorld, step: &Step) -> Result<(), StepError> {
+    ensure_fee_sponsorship_and_fork_groups_are_not_mixed(world, &step.value)?;
+
+    let table = step.table.as_ref().ok_or(StepError::LogicalError {
+        message: "Expected a data table".to_owned(),
+    })?;
+
+    if table.rows.is_empty() || table.rows[0].len() != 2 {
+        return Err(StepError::LogicalError {
+            message: "Expected table columns: | group_name | node_name |".to_owned(),
+        });
+    }
+
+    if table.rows[0][0].trim() != "group_name" || table.rows[0][1].trim() != "node_name" {
+        return Err(StepError::LogicalError {
+            message: "Expected table columns: | group_name | node_name |".to_owned(),
+        });
+    }
+
+    world.node_groups.clear();
+    world.node_to_group.clear();
+
+    for row in table.rows.iter().skip(1) {
+        if row.len() != 2 {
+            return Err(StepError::LogicalError {
+                message: "Each node-group row must have exactly two columns".to_owned(),
+            });
+        }
+
+        let group_name = row[0].trim().to_owned();
+        let node_name = row[1].trim().to_owned();
+
+        if let Some(existing_group) = world.node_to_group.get(&node_name) {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Node `{node_name}` appears in both group `{existing_group}` and `{group_name}`"
+                ),
+            });
+        }
+
+        world
+            .node_groups
+            .entry(group_name.clone())
+            .or_default()
+            .insert(node_name.clone());
+        world.node_to_group.insert(node_name, group_name);
+    }
+
+    Ok(())
+}
+
 #[given(expr = "I have user config setting {string} as {string}")]
 #[when(expr = "I have user config setting {string} as {string}")]
 #[expect(
@@ -211,6 +302,20 @@ fn step_set_user_config_setting(
     setting_value: String,
 ) -> StepResult {
     set_user_config_override(world, &step.value, &setting_path, &setting_value)
+}
+
+#[given(expr = "the first {int} nodes are declared as blend providers")]
+#[when(expr = "the first {int} nodes are declared as blend providers")]
+fn step_blend_provider_count(world: &mut CucumberWorld, provider_count: usize) -> StepResult {
+    world.blend_core_nodes = Some(provider_count);
+    rebuild_pending_local_manual_cluster(world)
+}
+
+#[given(expr = "no nodes are declared as blend providers")]
+#[when(expr = "no nodes are declared as blend providers")]
+fn step_no_blend_providers(world: &mut CucumberWorld) -> StepResult {
+    world.blend_core_nodes = Some(0);
+    rebuild_pending_local_manual_cluster(world)
 }
 
 #[given(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
@@ -591,6 +696,20 @@ async fn step_all_nodes_reached_min_height_and_converged(
         time_out_seconds,
     )
     .await
+}
+
+#[when(expr = "all nodes agree on LIB in {int} seconds")]
+#[then(expr = "all nodes agree on LIB in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_all_nodes_agree_on_lib(
+    world: &mut CucumberWorld,
+    step: &Step,
+    time_out_seconds: u64,
+) -> StepResult {
+    ensure_all_nodes_agree_on_lib(world, &step.value, time_out_seconds).await
 }
 
 #[when("I wait for all nodes to be synced to the chain")]
