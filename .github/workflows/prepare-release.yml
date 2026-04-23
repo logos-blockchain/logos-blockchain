@@ -158,30 +158,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Prepare release body
+      - name: Prepare release body by injecting release candidate-specific disclaimers
         env:
           IS_PRERELEASE: ${{ needs.configure-version.outputs.is_prerelease }}
         run: |
-          cp .github/release/release-content.md .github/release/release-content.generated.md
+          set -euo pipefail
+
+          TEMPLATE=.github/release/release-content.md
+          DISCLAIMER_FILE=.github/release/release-content-rc-disclaimer.md
+          OUTPUT=.github/release/release-content.generated.md
+
+          cp "$TEMPLATE" "$OUTPUT"
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then
-            DISCLAIMER_FILE=.github/release/release-content-rc-disclaimer.md
-
-            # Insert the release candidate disclaimer after the main title only for release candidate notes.
-            awk -v disclaimer_file="$DISCLAIMER_FILE" '
-              {
-                print
-                if (!inserted && $0 == "## 🚀 Quick Start") {
-                  while ((getline line < disclaimer_file) > 0) {
-                    print line
-                  }
-                  close(disclaimer_file)
-                  inserted = 1
-                }
-              }
-            ' .github/release/release-content.generated.md > .github/release/release-content.generated.tmp
-
-            mv .github/release/release-content.generated.tmp .github/release/release-content.generated.md
+            cat "$DISCLAIMER_FILE" "$OUTPUT" > "${OUTPUT}.tmp"
+            mv "${OUTPUT}.tmp" "$OUTPUT"
           fi
 
       - name: Create Draft Release
