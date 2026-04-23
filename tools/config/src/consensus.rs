@@ -4,8 +4,9 @@ use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, OpProof, Utxo,
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTx},
+        ledger::{Inputs, Outputs},
         ops::{
-            Op,
+            Op, OpId as _,
             channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
             transfer::TransferOp,
         },
@@ -13,7 +14,9 @@ use lb_core::{
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
 use lb_groth16::CompressedGroth16Proof;
-use lb_key_management_system_service::keys::{Ed25519Key, ZkKey, ZkPublicKey, ZkSignature};
+use lb_key_management_system_service::keys::{
+    Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
+};
 use lb_node::{SignedMantleTx, Transaction as _};
 use num_bigint::BigUint;
 
@@ -55,6 +58,8 @@ impl ProviderInfo {
     }
 }
 
+/// General consensus configuration for a chosen participant, that later could
+/// be converted into a specific service or services configuration.
 #[derive(Clone, Debug)]
 pub struct GeneralConsensusConfig {
     pub known_key: ZkKey,
@@ -96,7 +101,9 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
 pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisTx {
     let inscription = inscription_for_current_test(test_context);
     let outputs: Vec<Note> = utxos.iter().map(|u| u.note).collect();
-    let transfer_op = TransferOp::new(vec![], outputs);
+
+    // Create the mantle transaction
+    let transfer_op = TransferOp::new(Inputs::new(vec![]), Outputs::new(outputs));
     let mantle_tx = MantleTx {
         ops: vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)],
         execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
@@ -108,7 +115,7 @@ pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisT
             OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
                 &EMPTY_GROTH16_PROOF_BYTES,
             ))),
-            OpProof::NoProof,
+            OpProof::Ed25519Sig(Ed25519Signature::zero()),
         ],
     };
 
@@ -195,7 +202,7 @@ fn create_utxos(
         regular_note_keys.push(sk);
         utxos.push(Utxo {
             note: Note::new(REGULAR_NOTE_VALUE, pk),
-            transfer_hash: BigUint::from(0u8).into(),
+            op_id: [0u8; 32],
             output_index: 0,
         });
         output_index += 1;
@@ -206,7 +213,7 @@ fn create_utxos(
         let note_blend = Note::new(BLEND_NOTE_VALUE, pk_blend);
         let utxo = Utxo {
             note: note_blend,
-            transfer_hash: BigUint::from(0u8).into(),
+            op_id: [0u8; 32],
             output_index: 0,
         };
         blend_notes.push(ServiceNote {
@@ -225,7 +232,7 @@ fn create_utxos(
         let note_sdp = Note::new(SDP_NOTE_VALUE, pk_sdp);
         let utxo = Utxo {
             note: note_sdp,
-            transfer_hash: BigUint::from(0u8).into(),
+            op_id: [0u8; 32],
             output_index,
         };
         sdp_notes.push(ServiceNote {
@@ -249,13 +256,13 @@ pub fn create_genesis_tx_with_declarations(
     test_context: Option<&str>,
 ) -> GenesisTx {
     let inscription = inscription_for_current_test(test_context);
-    let transfer_hash = transfer_op.hash();
+    let transfer_id = transfer_op.op_id();
 
     let mut ops = vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
 
     for provider in &providers {
         let utxo = Utxo {
-            transfer_hash,
+            op_id: transfer_id,
             output_index: provider.note.output_index,
             note: provider.note.note,
         };
@@ -280,7 +287,7 @@ pub fn create_genesis_tx_with_declarations(
         OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
             &EMPTY_GROTH16_PROOF_BYTES,
         ))),
-        OpProof::NoProof,
+        OpProof::Ed25519Sig(Ed25519Signature::zero()),
     ];
 
     for provider in providers {

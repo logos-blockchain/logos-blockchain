@@ -397,7 +397,15 @@ async fn start_sdp_manual_cluster(
         .clone()
         .expect("manual-cluster deployment should include genesis tx")
         .genesis_transfer()
-        .utxos()
+        .outputs
+        .utxos(
+            base.deployment
+                .config
+                .genesis_tx
+                .clone()
+                .expect("manual-cluster deployment should include genesis tx")
+                .genesis_transfer(),
+        )
         .collect();
 
     let spare_note_id =

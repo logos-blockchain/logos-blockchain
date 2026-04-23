@@ -2,8 +2,8 @@
 
 FROM rust:1.94.0-slim-bookworm AS builder
 
-WORKDIR /nomos-testing
-COPY --from=nomos_testing . /nomos-testing
+WORKDIR /logos-blockchain-testing
+COPY --from=logos_blockchain_testing . /logos-blockchain-testing
 
 RUN apt-get update && apt-get install -yq \
     git gcc g++ clang libssl-dev pkg-config ca-certificates curl \
@@ -19,7 +19,7 @@ RUN apt-get update && apt-get install -yq \
     libstdc++6 libssl3 ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /nomos-testing/target/release/cfgsync-server /usr/bin/cfgsync-server
-COPY --from=builder /nomos-testing/target/release/cfgsync-client /usr/bin/cfgsync-client
+COPY --from=builder /logos-blockchain-testing/target/release/cfgsync-server /usr/bin/cfgsync-server
+COPY --from=builder /logos-blockchain-testing/target/release/cfgsync-client /usr/bin/cfgsync-client
 
 ENTRYPOINT ["/usr/bin/cfgsync-server"]

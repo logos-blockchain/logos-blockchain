@@ -35,7 +35,7 @@ pub fn max_block_propagation_time(
 /// Calculates the maximum time for a block to be fully blended.
 /// This ignores the gossiping latency in the blend network.
 fn max_blend_latency_per_block(network_size: u64, deployment: &DeploymentSettings) -> Duration {
-    if network_size < deployment.blend.common.minimum_network_size.get() {
+    if network_size < deployment.blend.common.minimum_network_size.into_inner() {
         return Duration::ZERO;
     }
 

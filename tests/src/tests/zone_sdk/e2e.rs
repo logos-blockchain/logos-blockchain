@@ -5,6 +5,7 @@ use lb_common_http_client::CommonHttpClient;
 use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, Op, OpProof, Value,
+        ledger::{Inputs, Outputs},
         ops::{
             channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
@@ -615,9 +616,13 @@ async fn test_subscribe_to_finalized_deposit() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Now, submit a deposit directly to Bedrock
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let (note_id, _) = get_note(validator, pk, 1u64)
+        .await
+        .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        amount: 1,
+        inputs: Inputs::new(vec![note_id]),
         metadata: b"Mint 1 to Alice in Zone".to_vec(),
     };
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
@@ -686,23 +691,32 @@ async fn test_atomic_deposit_inscription() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Now, prepare a tx for deposit (from user) + inscription (from sequencer)
-    let deposit = DepositOp {
-        channel_id,
-        amount: 1,
-        metadata: b"Mint 1 to Alice in Zone".to_vec(),
-    };
+    let deposit_amount = 1u64;
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
-    let (note_id, note_value) = get_note(validator, pk, deposit.amount)
+    let deposit_note = Note::new(deposit_amount, pk);
+    let (note_id, note_value) = get_note(validator, pk, deposit_amount)
         .await
         .expect("should find a note with sufficient balance for deposit");
-    let change = note_value.checked_sub(deposit.amount).unwrap();
+
+    let change = note_value.checked_sub(deposit_amount).unwrap();
     let transfer = TransferOp {
-        inputs: vec![note_id],
+        inputs: Inputs::new(vec![note_id]),
         outputs: if change > 0 {
-            vec![Note::new(change, pk)]
+            Outputs::new(vec![deposit_note, Note::new(change, pk)])
         } else {
-            vec![]
+            Outputs::new(vec![deposit_note])
         },
+    };
+    let deposit = DepositOp {
+        channel_id,
+        inputs: Inputs::new(vec![
+            transfer
+                .outputs
+                .utxo_by_index(0, &transfer)
+                .expect("the first note of the transfer is the deposit_note")
+                .id(),
+        ]),
+        metadata: b"Mint 1 to Alice in Zone".to_vec(),
     };
     let inscription_data = b"Mint 1 to Alice".to_vec();
     let (tx, msg_id, sequencer_sig) = handle
@@ -720,7 +734,7 @@ async fn test_atomic_deposit_inscription() {
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
-            OpProof::NoProof,
+            OpProof::ZkSig(user_transfer_sig.clone()),
             OpProof::ZkSig(user_transfer_sig),
             OpProof::Ed25519Sig(sequencer_sig),
         ],
@@ -794,12 +808,15 @@ async fn test_subscribe_to_finalized_withdraw() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Deposit 3 into the channel
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let (deposit_note_id, _) = get_note(validator, pk, 3)
+        .await
+        .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        amount: 3,
+        inputs: Inputs::new(vec![deposit_note_id]),
         metadata: b"Mint 3 to Alice in Zone".to_vec(),
     };
-    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
     submit_deposit(validator, deposit.clone(), pk).await;
 
     // Wait for the deposit to be finalized and detected by the ZoneIndexer
@@ -808,33 +825,20 @@ async fn test_subscribe_to_finalized_withdraw() {
     // Withdraw 1 from the channel
     let withdraw = ChannelWithdrawOp {
         channel_id,
-        amount: 2,
-    };
-    // Prepare a transfer op to send the withdrawn fund to a certain note.
-    // `inputs` is not required actually, but signing tx with 0 key is not support.
-    // So, we're setting a input note. It'll be necessary anyway once we set
-    // non-zero gas price.
-    let (note_id, note_value) = get_note(validator, pk, 1)
-        .await
-        .expect("should find a note with sufficient balance for deposit");
-    let transfer = TransferOp {
-        inputs: vec![note_id],
-        outputs: vec![Note::new(note_value, pk), Note::new(withdraw.amount, pk)],
+        outputs: Outputs::new(vec![Note::new(2, pk)]),
+        withdraw_nonce: 0,
     };
     let inscription_data = b"Burn 2".to_vec();
     let (tx, msg_id, inscription_proof) = handle
         .prepare_tx(
-            vec![
-                Op::ChannelWithdraw(withdraw.clone()),
-                Op::Transfer(transfer),
-            ],
+            vec![Op::ChannelWithdraw(withdraw.clone())],
             inscription_data.clone(),
         )
         .await
         .unwrap();
 
     // For this channel, a single sequencer signature is sufficient for withdraw,
-    // because withdraw_threhold is 1.
+    // because withdraw_threshold is 1.
     // We can actually reuse `inscription_proof`, but here we use
     // `SequencerHandle::sign_tx` to show how to sign tx built by other sequencers.
     let withdraw_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
@@ -843,15 +847,11 @@ async fn test_subscribe_to_finalized_withdraw() {
     )])
     .unwrap();
 
-    // Sign tx for transfer op
-    let transfer_proof = sign_tx_zk(validator, &tx, vec![pk]).await;
-
     // Build a signed tx using signatures from user and sequencer
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
             OpProof::ChannelWithdrawProof(withdraw_proof),
-            OpProof::ZkSig(transfer_proof),
             OpProof::Ed25519Sig(inscription_proof),
         ],
     )
@@ -947,12 +947,12 @@ async fn wait_for_deposit(
                         last_zone_block = Some((block.id, slot));
                     }
                     ZoneMessage::Deposit(deposit) => {
-                        if deposit.amount == expected.amount
+                        if deposit.inputs == expected.inputs
                             && deposit.metadata == expected.metadata
                         {
                             println!(
-                                "Found expected deposit in indexer: amount={} metadata={:?}",
-                                deposit.amount, deposit.metadata
+                                "Found expected deposit in indexer: amount={:?} metadata={:?}",
+                                deposit.inputs, deposit.metadata
                             );
                             return;
                         }
@@ -985,10 +985,10 @@ async fn wait_for_withdraw(
                         last_zone_block = Some((block.id, slot));
                     }
                     ZoneMessage::Withdraw(withdraw) => {
-                        if withdraw.amount == expected.amount {
+                        if withdraw.outputs == expected.outputs {
                             println!(
-                                "Found expected withdraw in indexer: amount={}",
-                                withdraw.amount,
+                                "Found expected withdraw in indexer: amount={:?}",
+                                withdraw.outputs,
                             );
                             return;
                         }

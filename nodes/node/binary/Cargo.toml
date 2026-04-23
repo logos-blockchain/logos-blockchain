@@ -57,6 +57,7 @@ lb-wallet-service                = { workspace = true }
 libp2p                           = { features = ["autonat", "gossipsub", "identify", "kad", "macros"], workspace = true }
 logos-blockchain-tui-zone        = { path = "../../../testnet/tui-zone" }
 num-bigint                       = { default-features = false, version = "0.4" }
+nutype                           = { features = ["serde"], workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }

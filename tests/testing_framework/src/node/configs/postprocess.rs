@@ -72,7 +72,7 @@ pub fn apply_wallet_genesis_overrides(
     }
 
     let mut transfer_op = genesis_tx.genesis_transfer().clone();
-    for output in &mut transfer_op.outputs {
+    for output in &mut *transfer_op.outputs {
         if leader_keys.contains(&output.pk) {
             output.value = leader_stake;
         }

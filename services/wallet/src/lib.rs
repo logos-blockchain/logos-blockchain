@@ -15,7 +15,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
+        AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
         gas::MainnetGasConstants,
         ops::{
             channel::{ChannelId, inscribe::InscriptionOp, set_keys::SetKeysOp},
@@ -93,7 +93,7 @@ pub enum WalletServiceError {
     MissingDeclaration(lb_core::sdp::DeclarationId),
 
     #[error("Locked note {0:?} is missing in ledger")]
-    MissingLockedNote(lb_core::mantle::NoteId),
+    MissingLockedNote(NoteId),
 
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
@@ -574,6 +574,23 @@ where
         Ok(OpProof::Ed25519Sig(ed25519_sig))
     }
 
+    async fn sign_channel_deposit(
+        tx_hash: TxHash,
+        note_ids: Vec<NoteId>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        tx_builder: MantleTxBuilder,
+    ) -> Result<OpProof, WalletServiceError> {
+        let input_pks: Vec<ZkPublicKey> = tx_builder
+            .ledger_inputs()
+            .iter()
+            .filter(|&utxo| note_ids.contains(&utxo.id()))
+            .map(|utxo| utxo.note.pk)
+            .collect();
+
+        let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
+        Ok(OpProof::ZkSig(zk_sig))
+    }
+
     async fn sign_channel_set_key(
         tx_hash: TxHash,
         set_keys_op: &SetKeysOp,
@@ -710,9 +727,17 @@ where
 
     async fn sign_transfer(
         tx_hash: TxHash,
-        input_pks: Vec<ZkPublicKey>,
+        note_ids: Vec<NoteId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        tx_builder: MantleTxBuilder,
     ) -> Result<OpProof, WalletServiceError> {
+        let input_pks: Vec<ZkPublicKey> = tx_builder
+            .ledger_inputs()
+            .iter()
+            .filter(|&utxo| note_ids.contains(&utxo.id()))
+            .map(|utxo| utxo.note.pk)
+            .collect();
+
         let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
         Ok(OpProof::ZkSig(zk_sig))
     }
@@ -724,14 +749,8 @@ where
         wallet: &Wallet,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
-        let input_pks: Vec<ZkPublicKey> = tx_builder
-            .ledger_inputs()
-            .iter()
-            .map(|utxo| utxo.note.pk)
-            .collect();
-
         let mut channel_withdraw_proofs = tx_builder.channel_withdraw_proofs().clone();
-        let mantle_tx = tx_builder.build();
+        let mantle_tx = tx_builder.clone().build();
         let tx_hash = mantle_tx.hash();
 
         let mut ops_proofs = Vec::new();
@@ -743,7 +762,15 @@ where
                 Op::ChannelSetKeys(set_keys_op) => {
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &ledger, kms).await?
                 }
-                Op::ChannelDeposit(_deposit_op) => OpProof::NoProof,
+                Op::ChannelDeposit(deposit_op) => {
+                    Self::sign_channel_deposit(
+                        tx_hash,
+                        deposit_op.inputs.to_vec(),
+                        kms,
+                        tx_builder.clone(),
+                    )
+                    .await?
+                }
                 Op::ChannelWithdraw(_channel_withdraw_op) => {
                     let proof = channel_withdraw_proofs
                         .remove(&i)
@@ -762,7 +789,15 @@ where
                 Op::LeaderClaim(claim_op) => {
                     Self::sign_leader_claim(tx_hash, claim_op, &ledger, wallet, kms).await?
                 }
-                Op::Transfer(_) => Self::sign_transfer(tx_hash, input_pks.clone(), kms).await?,
+                Op::Transfer(transfer_op) => {
+                    Self::sign_transfer(
+                        tx_hash,
+                        transfer_op.inputs.to_vec(),
+                        kms,
+                        tx_builder.clone(),
+                    )
+                    .await?
+                }
             };
             ops_proofs.push(proof);
         }

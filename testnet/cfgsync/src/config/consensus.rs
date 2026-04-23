@@ -72,7 +72,7 @@ fn create_utxos(
         let output_index = utxos.len();
         utxos.push(Utxo {
             note: Note::new(faucet_value, faucet_pk),
-            transfer_hash: BigUint::from(0u8).into(),
+            op_id: [0u8; 32],
             output_index,
         });
         FaucetInfo {

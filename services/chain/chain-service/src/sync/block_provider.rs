@@ -589,7 +589,6 @@ mod tests {
     };
     use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
-    use num_bigint::BigUint;
     use overwatch::{derive_services, overwatch::OverwatchRunner};
     use tempfile::TempDir;
     use tokio::{runtime::Handle, sync::mpsc};
@@ -975,7 +974,7 @@ mod tests {
         ) -> lb_core::proofs::leader_proof::Groth16LeaderProof {
             let leader_sk = UnsecuredZkKey::zero();
             let utxo = Utxo {
-                transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+                op_id: [1u8; 32],
                 output_index: 0,
                 note: Note::new(1000, leader_sk.to_public_key()),
             };

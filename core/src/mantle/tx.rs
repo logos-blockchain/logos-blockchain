@@ -615,11 +615,11 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
 
     use super::*;
     use crate::{
-        mantle::ops::channel::inscribe::InscriptionOp,
+        mantle::{Note, ledger::Outputs, ops::channel::inscribe::InscriptionOp},
         proofs::channel_withdraw_proof::WithdrawSignature,
     };
 
@@ -685,9 +685,14 @@ mod tests {
     }
 
     fn create_withdraw_tx(channel_id: ChannelId, signing_keys: &[&Ed25519Key]) -> SignedMantleTx {
+        let withdraw_note = Note {
+            value: 5,
+            pk: ZkPublicKey::from(Fr::from(BigUint::from(0u32))),
+        };
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
-            amount: 5,
+            outputs: Outputs::new(vec![withdraw_note]),
+            withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();
         let signatures = signing_keys

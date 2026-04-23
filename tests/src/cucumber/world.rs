@@ -133,7 +133,7 @@ pub struct PublicCryptarchiaEndpointPeer {
 }
 
 #[derive(Debug, Clone)]
-pub struct UserConfigOverride {
+pub struct ConfigOverride {
     /// Dot-separated user config path, e.g.
     /// `network.backend.swarm.gossipsub.retain_scores`.
     pub path: String,
@@ -256,7 +256,9 @@ pub struct CucumberWorld {
     /// `/cryptarchia/info` for external chain sync reference.
     pub public_cryptarchia_endpoint_peers: Option<Vec<PublicCryptarchiaEndpointPeer>>,
     /// Manual: Dynamic user-config overrides applied on node startup.
-    pub user_config_overrides: Vec<UserConfigOverride>,
+    pub user_config_overrides: Vec<ConfigOverride>,
+    /// Manual: Dynamic deployment-config overrides applied on node startup.
+    pub deployment_config_overrides: Vec<ConfigOverride>,
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
@@ -414,6 +416,10 @@ impl Debug for CucumberWorld {
                 &user_config_overrides_display(&self.user_config_overrides),
             )
             .field(
+                "deployment_config_overrides",
+                &user_config_overrides_display(&self.deployment_config_overrides),
+            )
+            .field(
                 "deployment_config_override_path",
                 &deployment_config_override_path_display(
                     self.deployment_config_override_path.as_ref(),
@@ -523,6 +529,9 @@ pub struct NodeInfo {
     /// The node's runtime directory where all its runtime artifacts will be
     /// collected
     pub runtime_dir: PathBuf,
+    /// Whether this node is only expected to be network ready after startup and
+    /// not `Mode::OnLine`
+    pub immediate_start: bool,
 }
 
 impl NodeInfo {
@@ -809,6 +818,8 @@ impl CucumberWorld {
             .clone())
     }
 
+    /// Helper to resolve a wallet name to the actual node name that the wallet
+    /// is associated with.
     pub fn resolve_wallet_node_name(&self, wallet_name: &str) -> Result<String, StepError> {
         Ok(self
             .wallet_info
@@ -818,6 +829,14 @@ impl CucumberWorld {
             })?
             .node_name
             .clone())
+    }
+
+    /// Helper to check if a node is configured for immediate start (not
+    /// awaiting network readiness)
+    pub fn network_immediate_start(&self, node_name: &str) -> bool {
+        self.nodes_info
+            .get(node_name)
+            .is_some_and(|info| info.immediate_start)
     }
 
     /// Helper to resolve a list of node names to a `PeerSelection::Named` with
@@ -1366,7 +1385,7 @@ fn deployment_config_override_path_display(
     )
 }
 
-fn user_config_overrides_display(overrides: &[UserConfigOverride]) -> String {
+fn user_config_overrides_display(overrides: &[ConfigOverride]) -> String {
     if overrides.is_empty() {
         return "[]".to_owned();
     }

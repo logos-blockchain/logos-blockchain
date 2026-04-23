@@ -1,11 +1,32 @@
 Feature: Cryptarchia
 
   @cryptarchia_ci
+  Scenario: One node happy path
+    Given I have a cluster with capacity of 1 nodes
+    And I start node "NODE_1"
+    Then all nodes have at least 5 blocks and converged to within 1 blocks in 300 seconds
+    Then I stop all nodes
+
+  @cryptarchia_ci
   Scenario: Two nodes happy path
     Given I have a cluster with capacity of 2 nodes
     And I start node "NODE_1"
     And I start peer node "NODE_2" connected to node "NODE_1"
     Then all nodes have at least 5 blocks and converged to within 1 blocks in 300 seconds
+    Then I stop all nodes
+
+  @cryptarchia_ci
+  Scenario: Nodes with delayed genesis start joins network
+    Given I have a cluster with capacity of 3 nodes
+    And I have deployment config override "time.chain_start_time" as "now_plus_seconds(60)"
+    And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
+    And I immediate start node "NODE_1"
+    And I immediate start peer node "NODE_2" connected to node "NODE_1"
+    And I immediate start peer node "NODE_3" connected to node "NODE_2"
+    # TODO: Activate these steps when states before blockchain start are implemented and we can check that nodes are in
+    # TODO: waiting for genesis state
+#    When I wait for all nodes to be responsive in 45 seconds
+#    When all nodes have at least 3 blocks and converged to within 1 blocks in 300 seconds
     Then I stop all nodes
 
   @cryptarchia_ci

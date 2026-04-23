@@ -18,7 +18,6 @@ use lb_ledger::{
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
 use lb_utils::math::NonNegativeRatio;
-use num_bigint::BigUint;
 use rand::{RngCore as _, thread_rng};
 
 use crate::Cryptarchia;
@@ -186,10 +185,11 @@ fn try_build_block(
 }
 
 fn utxo() -> (ZkKey, Utxo) {
-    let tx_hash: Fr = BigUint::from(thread_rng().next_u64()).into();
+    let mut op_id = [0u8; 32];
+    thread_rng().fill_bytes(&mut op_id);
     let zk_sk = ZkKey::from(Fr::ZERO);
     let utxo = Utxo {
-        transfer_hash: tx_hash.into(),
+        op_id,
         output_index: 0,
         note: Note::new(10000, zk_sk.to_public_key()),
     };

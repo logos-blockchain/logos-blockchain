@@ -97,6 +97,10 @@ where
         Ok((Self { merkle, items }, item.clone()))
     }
 
+    pub fn get(&self, key: &Key) -> Option<Item> {
+        self.items.get(key).map(|(item, _)| item.clone())
+    }
+
     #[must_use]
     pub fn root(&self) -> Fr {
         self.merkle.root()

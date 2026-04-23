@@ -168,7 +168,8 @@ impl Topology {
             create_genesis_tx_with_declarations(transfer_op, providers, test_context);
         let updated_transfer_op = genesis_tx_with_declarations.genesis_transfer().clone();
         let injected_utxos: Vec<_> = updated_transfer_op
-            .utxos()
+            .outputs
+            .utxos(&updated_transfer_op)
             .skip(base_outputs)
             .collect::<Vec<_>>();
 

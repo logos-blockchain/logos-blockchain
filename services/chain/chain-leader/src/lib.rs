@@ -708,12 +708,15 @@ where
             .response
             .ok_or(Error::NoClaimableVoucher)?
             .nullifier;
+        let pks = wallet.get_known_addresses().await?;
 
+        // TODO: let the user chose where to receive the rewards
         let reward_amount = ledger_state.mantle_ledger().leader_reward_amount();
         let signed_tx = fund_and_sign_leader_claim_tx(
             LeaderClaimOp {
                 rewards_root: ledger_state.mantle_ledger().claimable_vouchers_root(),
                 voucher_nullifier,
+                pk: pks[0],
             },
             reward_amount,
             tip,

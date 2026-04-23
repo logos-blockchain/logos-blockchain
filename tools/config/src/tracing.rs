@@ -24,6 +24,7 @@ impl GeneralTracingConfig {
                     otlp: Some(tracing::logger::OtlpConfig {
                         endpoint: LOKI_ENDPOINT.try_into().unwrap(),
                         service_name: host_identifier.clone(),
+                        authorization_header: None,
                     }),
                     stdout: true,
                     file: None,
@@ -35,6 +36,7 @@ impl GeneralTracingConfig {
                     endpoint: OTLP_TRACING_ENDPOINT.try_into().unwrap(),
                     sample_ratio: DEBUG_TRACING_SAMPLE_RATIO,
                     service_name: host_identifier.clone(),
+                    authorization_header: None,
                 }),
                 filter: tracing::filter::Layer::Env(tracing::filter::EnvConfig {
                     filters: HashMap::from([
@@ -45,6 +47,7 @@ impl GeneralTracingConfig {
                 metrics: tracing::metrics::Layer::Otlp(tracing::metrics::OtlpConfig {
                     endpoint: OTLP_METRICS_ENDPOINT.try_into().unwrap(),
                     host_identifier,
+                    authorization_header: None,
                 }),
                 console: tracing::console::Layer::None,
                 level: tracing::Level::DEBUG,

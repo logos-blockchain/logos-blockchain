@@ -25,12 +25,6 @@ use crate::{
 
 pub(super) mod conn_maintenance;
 
-// Metrics
-const VALUE_FULLY_NEGOTIATED_INBOUND: &str = "fully_negotiated_inbound";
-const VALUE_FULLY_NEGOTIATED_OUTBOUND: &str = "fully_negotiated_outbound";
-const VALUE_DIAL_UPGRADE_ERROR: &str = "dial_upgrade_error";
-const VALUE_IGNORED: &str = "ignored";
-
 const LOG_TARGET: &str = "blend::network::core::core::conn::handler";
 
 pub struct ConnectionHandler<ConnectionWindowClock> {
@@ -42,6 +36,13 @@ pub struct ConnectionHandler<ConnectionWindowClock> {
     protocol_name: StreamProtocol,
     waker: Option<Waker>,
     connection_details: (PeerId, ConnectionId),
+    /// Whether the behaviour has already been notified of a successful upgrade
+    /// for this connection. Both inbound and outbound substreams must be
+    /// negotiated, but the behaviour only needs to hear about it once. Once
+    /// set, it stays set for the lifetime of the handler so that after
+    /// [`Self::close_substreams`], a late-arriving upgrade event does not
+    /// cause a second notification.
+    upgrade_notified: bool,
 }
 
 type MsgSendFuture = BoxFuture<'static, Result<Stream, io::Error>>;
@@ -81,6 +82,19 @@ impl<ConnectionWindowClock> ConnectionHandler<ConnectionWindowClock> {
             protocol_name,
             waker: None,
             connection_details,
+            upgrade_notified: false,
+        }
+    }
+
+    /// Emit a [`ToBehaviour::FullyNegotiated`] event if one has not already
+    /// been emitted for this connection. Both inbound and outbound substreams
+    /// need to be negotiated before the connection is usable, but the
+    /// behaviour only needs to hear about the upgrade once, so we dedupe here.
+    fn check_and_notify_about_upgrade(&mut self) {
+        if !self.upgrade_notified {
+            self.pending_events_to_behaviour
+                .push_back(ToBehaviour::FullyNegotiated);
+            self.upgrade_notified = true;
         }
     }
 
@@ -119,12 +133,10 @@ pub enum FromBehaviour {
 
 #[derive(Debug)]
 pub enum ToBehaviour {
-    /// An inbound substream has been successfully upgraded for the blend
-    /// protocol.
-    FullyNegotiatedInbound,
-    /// An outbound substream has been successfully upgraded for the blend
-    /// protocol.
-    FullyNegotiatedOutbound,
+    /// The connection has been successfully upgraded for the blend protocol.
+    /// Emitted at most once per connection, on the first successful upgrade
+    /// of either the inbound or outbound substream.
+    FullyNegotiated,
     /// An outbound substream was failed to be upgraded for the blend protocol.
     DialUpgradeError(DialUpgradeError<(), ReadyUpgrade<StreamProtocol>>),
     /// A message has been received from the connection.
@@ -170,11 +182,6 @@ where
     ) -> Poll<
         ConnectionHandlerEvent<Self::OutboundProtocol, Self::OutboundOpenInfo, Self::ToBehaviour>,
     > {
-        tracing::trace!(gauge.pending_outbound_messages = self.outbound_msgs.len() as u64,);
-        tracing::trace!(
-            gauge.pending_events_to_behaviour = self.pending_events_to_behaviour.len() as u64,
-        );
-
         // Short-circuit so that we do not poll the connection monitor anymore in case
         // either of the two substreams has been dropped.
         if matches!(self.inbound_substream, Some(InboundSubstreamState::Dropped))
@@ -359,42 +366,53 @@ where
             Self::OutboundOpenInfo,
         >,
     ) {
-        let event_name = match event {
+        match event {
             ConnectionEvent::FullyNegotiatedInbound(FullyNegotiatedInbound {
                 protocol: stream,
                 ..
             }) => {
-                tracing::trace!(target: LOG_TARGET, "Fully negotiated inbound for connection {:?}; creating inbound substream", self.connection_details);
-                self.inbound_substream =
-                    Some(InboundSubstreamState::PendingRecv(recv_msg(stream).boxed()));
-                self.pending_events_to_behaviour
-                    .push_back(ToBehaviour::FullyNegotiatedInbound);
-                VALUE_FULLY_NEGOTIATED_INBOUND
+                // If `close_substreams` has already run, the behaviour considers
+                // this connection closed. Overwriting the Dropped state with an
+                // open stream here would resurrect the substream and keep the
+                // connection alive from libp2p's perspective, even though the
+                // behaviour has stopped tracking it.
+                if matches!(self.inbound_substream, Some(InboundSubstreamState::Dropped)) {
+                    tracing::debug!(target: LOG_TARGET, "Dropping late inbound upgrade for already-closed connection {:?}.", self.connection_details);
+                    drop(stream);
+                } else {
+                    tracing::trace!(target: LOG_TARGET, "Fully negotiated inbound for connection {:?}; creating inbound substream", self.connection_details);
+                    self.inbound_substream =
+                        Some(InboundSubstreamState::PendingRecv(recv_msg(stream).boxed()));
+                    self.check_and_notify_about_upgrade();
+                }
             }
             ConnectionEvent::FullyNegotiatedOutbound(FullyNegotiatedOutbound {
                 protocol: stream,
                 ..
             }) => {
-                tracing::trace!(target: LOG_TARGET, "Fully negotiated outbound for connection {:?}; creating outbound substream", self.connection_details);
-                self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
-                self.pending_events_to_behaviour
-                    .push_back(ToBehaviour::FullyNegotiatedOutbound);
-                VALUE_FULLY_NEGOTIATED_OUTBOUND
+                if matches!(
+                    self.outbound_substream,
+                    Some(OutboundSubstreamState::Dropped)
+                ) {
+                    tracing::debug!(target: LOG_TARGET, "Dropping late outbound upgrade for already-closed connection {:?}.", self.connection_details);
+                    drop(stream);
+                } else {
+                    tracing::trace!(target: LOG_TARGET, "Fully negotiated outbound for connection {:?}; creating outbound substream", self.connection_details);
+                    self.outbound_substream = Some(OutboundSubstreamState::Idle(stream));
+                    self.check_and_notify_about_upgrade();
+                }
             }
             ConnectionEvent::DialUpgradeError(e) => {
                 tracing::error!(target: LOG_TARGET, "DialUpgradeError for connection {:?}: {:?}", self.connection_details, e);
                 self.pending_events_to_behaviour
                     .push_back(ToBehaviour::DialUpgradeError(e));
                 self.close_substreams();
-                VALUE_DIAL_UPGRADE_ERROR
             }
             event => {
                 tracing::trace!(target: LOG_TARGET, ?event, "Ignoring connection event");
-                VALUE_IGNORED
             }
-        };
+        }
 
-        tracing::trace!(counter.connection_event = 1, event = event_name);
         self.try_wake();
     }
 }

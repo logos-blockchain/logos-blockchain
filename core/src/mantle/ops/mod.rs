@@ -6,6 +6,8 @@ pub mod sdp;
 mod serde_;
 pub mod transfer;
 
+use std::sync::LazyLock;
+
 use channel::{
     deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
 };
@@ -24,6 +26,7 @@ use super::{
     },
 };
 use crate::{
+    crypto::{Digest as _, Hash, Hasher},
     mantle::{
         encoding::{decode_op, encode_op},
         ops::{
@@ -36,6 +39,18 @@ use crate::{
         channel_withdraw_proof::ChannelWithdrawProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
 };
+
+static OPERATION_ID_V1: LazyLock<Vec<u8>> = LazyLock::new(|| b"OPERATION_ID_V1".to_vec());
+
+pub trait OpId {
+    fn op_id(&self) -> Hash {
+        let mut encoded_bytes = OPERATION_ID_V1.clone();
+        encoded_bytes.extend(self.op_bytes());
+        Hasher::digest(&encoded_bytes).into()
+    }
+
+    fn op_bytes(&self) -> Vec<u8>;
+}
 
 /// Core set of supported Mantle operations.
 ///
@@ -63,7 +78,6 @@ pub enum Op {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OpProof {
-    NoProof,
     Ed25519Sig(Ed25519Signature),
     ZkSig(ZkSignature),
     ZkAndEd25519Sigs {
