@@ -11,18 +11,14 @@ use lb_core::{
         gas::{Gas, GasConstants, GasCost, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ledger::Operation as _,
-        ops::{
-            channel::{deposit::DepositOp, withdraw::ChannelWithdrawOp},
-            leader_claim::LeaderClaimOp,
-            transfer::{TransferOp, TransferValidationContext},
-        },
+        ops::transfer::{TransferOp, TransferValidationContext},
     },
     proofs::leader_proof::{self, LeaderPublic},
     sdp::locked_notes::LockedNotes,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::ZkSignature;
 use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
@@ -408,50 +404,6 @@ impl LedgerState {
             .try_apply_proof(slot, proof, config)?
             .update_nonce(&proof.entropy(), slot)
             .increment_block_density(slot))
-    }
-
-    pub fn try_apply_channel_deposit<Id, Constants: GasConstants>(
-        mut self,
-        locked_notes: &LockedNotes,
-        channel_deposit_op: &DepositOp,
-        channel_deposit_sig: &ZkSignature,
-        tx_hash: TxHash,
-    ) -> Result<(Self, Value), LedgerError<Id>> {
-        channel_deposit_op
-            .inputs
-            .validate(locked_notes, &self.utxos)
-            .map_err(LedgerError::Inputs)?;
-        let pks = channel_deposit_op.inputs.get_pk(&self.utxos)?;
-        let amount_deposited = channel_deposit_op.inputs.amount(&self.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, channel_deposit_sig) {
-            return Err(LedgerError::InvalidProof);
-        }
-        self.utxos = channel_deposit_op.inputs.execute(self.utxos)?;
-
-        Ok((self, amount_deposited))
-    }
-
-    pub fn try_apply_channel_withdraw<Id, Constants: GasConstants>(
-        mut self,
-        withdraw_op: &ChannelWithdrawOp,
-    ) -> Result<(Self, Value), LedgerError<Id>> {
-        withdraw_op
-            .outputs
-            .validate()
-            .map_err(LedgerError::Outputs)?;
-        let amount_withdrawed = withdraw_op.outputs.amount()?;
-        self.utxos = withdraw_op.outputs.execute(self.utxos, withdraw_op);
-        Ok((self, amount_withdrawed))
-    }
-
-    pub fn try_apply_leader_claim<Id, Constants: GasConstants>(
-        mut self,
-        leader_claim_op: &LeaderClaimOp,
-        reward_amount: Value,
-    ) -> Result<Self, LedgerError<Id>> {
-        let utxo = leader_claim_op.utxo(reward_amount);
-        self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-        Ok(self)
     }
 
     pub fn try_apply_transfer<Id, Constants: GasConstants>(

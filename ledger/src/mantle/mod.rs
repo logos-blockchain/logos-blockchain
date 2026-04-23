@@ -15,7 +15,7 @@ use lb_core::{
                 inscribe::{InscriptionOp, InscriptionValidationContext},
                 set_keys::{SetKeysOp, SetKeysValidationContext},
             },
-            leader_claim::{LeaderClaimError, LeaderClaimOp, RewardsRoot, VoucherCm},
+            leader_claim::{LeaderClaimError, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
@@ -257,7 +257,6 @@ impl LedgerState {
 
     pub fn try_apply_sdp_withdraw(
         mut self,
-        utxo_tree: &UtxoTree,
         sdp_withdraw_op: &SDPWithdrawOp,
         sdp_withdraw_zk_sig: &ZkSignature,
         tx_hash: TxHash,
@@ -266,7 +265,6 @@ impl LedgerState {
         self.sdp = self
             .sdp
             .apply_withdrawn_msg(
-                utxo_tree,
                 sdp_withdraw_op,
                 sdp_withdraw_zk_sig,
                 tx_hash,
@@ -276,20 +274,5 @@ impl LedgerState {
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"),
             )?;
         Ok(self)
-    }
-
-    pub fn try_apply_leader_claim(
-        mut self,
-        leader_claim_op: &LeaderClaimOp,
-    ) -> Result<(Self, Value), Error> {
-        // Correct derivation of the voucher nullifier and membership in the merkle tree
-        // can be verified outside of this function since public inputs are already
-        // available. Callers are expected to validate the proof
-        // before calling this function.
-        let reward;
-        (self.leaders, reward) = self.leaders.claim(leader_claim_op).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "failed to apply leader claim message"),
-        )?;
-        Ok((self, reward))
     }
 }

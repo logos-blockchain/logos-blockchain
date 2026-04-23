@@ -192,6 +192,11 @@ impl Inputs {
         }
         Ok(pks)
     }
+
+    #[must_use]
+    pub const fn as_vec(&self) -> &Vec<NoteId> {
+        &self.0
+    }
 }
 
 impl std::ops::Deref for Inputs {

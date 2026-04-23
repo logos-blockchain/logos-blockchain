@@ -1497,8 +1497,10 @@ async fn collect_multiple_wallets_utxos(
         }
 
         for tx in &block.transactions {
-            for transfer in tx.mantle_tx.transfers() {
-                for utxo in transfer.outputs.utxos(&transfer) {
+            let transfers = tx.mantle_tx.transfers();
+
+            for transfer in &transfers {
+                for utxo in transfer.outputs.utxos(transfer) {
                     if let Some(wallet_name) = wallets_by_pk.get(&utxo.note.pk)
                         && let Some(owned) = owned_per_wallet.get_mut(wallet_name)
                     {
@@ -1507,8 +1509,8 @@ async fn collect_multiple_wallets_utxos(
                 }
             }
 
-            for transfer in tx.mantle_tx.transfers() {
-                for spent in &*transfer.inputs {
+            for transfer in &transfers {
+                for spent in transfer.inputs.as_vec() {
                     for (wallet_name, owned) in &mut owned_per_wallet {
                         remove_spent_utxo(world, owned, spent, wallet_name);
                     }

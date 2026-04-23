@@ -627,13 +627,9 @@ impl LedgerState {
                         .try_apply_sdp_active(op, sig, tx_hash, config)?;
                 }
                 (Op::SDPWithdraw(op), OpProof::ZkSig(sig)) => {
-                    self.mantle_ledger = self.mantle_ledger.try_apply_sdp_withdraw(
-                        self.cryptarchia_ledger.latest_utxos(),
-                        op,
-                        sig,
-                        tx_hash,
-                        config,
-                    )?;
+                    self.mantle_ledger = self
+                        .mantle_ledger
+                        .try_apply_sdp_withdraw(op, sig, tx_hash, config)?;
                 }
                 (Op::LeaderClaim(op), OpProof::PoC(poc)) => {
                     // Validate the LeaderClaim

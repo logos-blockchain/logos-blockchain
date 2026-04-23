@@ -6,7 +6,7 @@ use crate::{
     block::BlockNumber,
     mantle::{
         TxHash,
-        ledger::{Declarations, Operation, Utxos},
+        ledger::{Declarations, Operation},
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -21,7 +21,6 @@ pub struct SDPWithdrawValidationContext<'a> {
 }
 
 pub struct SDPWithdrawExecutionContext {
-    pub utxo_tree: Utxos,
     pub block_number: BlockNumber,
     pub declarations: Declarations,
     pub locked_notes: LockedNotes,

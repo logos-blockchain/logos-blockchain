@@ -710,6 +710,7 @@ where
             .nullifier;
         let pks = wallet.get_known_addresses().await?;
 
+        // TODO: let the user chose where to receive the rewards
         let reward_amount = ledger_state.mantle_ledger().leader_reward_amount();
         let signed_tx = fund_and_sign_leader_claim_tx(
             LeaderClaimOp {

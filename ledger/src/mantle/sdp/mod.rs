@@ -479,7 +479,6 @@ impl SdpLedger {
 
     pub fn apply_withdrawn_msg(
         mut self,
-        utxo_tree: &UtxoTree,
         op: &SDPWithdrawOp,
         zksig: &ZkSignature,
         tx_hash: TxHash,
@@ -502,7 +501,6 @@ impl SdpLedger {
 
         // Execute SDP Withdraw
         let result = op.execute(SDPWithdrawExecutionContext {
-            utxo_tree: utxo_tree.clone(),
             block_number: self.block_number,
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
@@ -700,7 +698,6 @@ mod tests {
     }
 
     fn apply_withdraw_with_dummies(
-        utxos: &Utxos,
         sdp_ledger: SdpLedger,
         op: &SDPWithdrawOp,
         note_sk: ZkKey,
@@ -710,7 +707,7 @@ mod tests {
         let tx_hash = TxHash(Fr::from(1u8));
         let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.0).unwrap();
 
-        sdp_ledger.apply_withdrawn_msg(utxos, op, &zk_sig, tx_hash, config)
+        sdp_ledger.apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
     }
 
     fn dummy_epoch_state() -> EpochState {
@@ -813,15 +810,8 @@ mod tests {
             nonce: 1,
             locked_note_id: note_id,
         };
-        let sdp_ledger = apply_withdraw_with_dummies(
-            &utxo_tree,
-            sdp_ledger,
-            withdraw_op,
-            utxo_sk,
-            zk_key,
-            &config,
-        )
-        .unwrap();
+        let sdp_ledger =
+            apply_withdraw_with_dummies(sdp_ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
 
         // Verify declaration is removed
         let declarations = sdp_ledger.get_declarations(service_a).unwrap();

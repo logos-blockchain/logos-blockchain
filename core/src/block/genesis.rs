@@ -639,7 +639,7 @@ impl GenesisBlockBuilder<WithAll> {
                 execution_gas_price: GasPrice::new(0),
                 storage_gas_price: GasPrice::new(0),
             },
-            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); n],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
         );
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
