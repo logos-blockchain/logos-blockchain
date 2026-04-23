@@ -127,7 +127,7 @@ impl LedgerState {
         self.leaders.vouchers_snapshot_root()
     }
 
-    /// Get the MMR of voucher commitments collected up to the current block.
+    /// Get the MMR of all voucher commitments included in the chain.
     #[must_use]
     pub const fn vouchers(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
         self.leaders.vouchers()

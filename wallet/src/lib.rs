@@ -64,7 +64,7 @@ pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
     pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
     pub epoch: Epoch,
-    /// All voucher commitments collected up to the current block
+    /// MMR of all voucher commitments included in the chain
     pub vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
     /// All **tracked** voucher merkle paths up to the current block
     pub voucher_paths: VoucherPaths,

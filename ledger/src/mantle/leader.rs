@@ -31,7 +31,7 @@ pub struct LeaderState {
     /// Rewards that are being collected during the current epoch.
     /// This will be added to the `claimable_rewards` when a new epoch starts.
     pending_rewards: Value,
-    /// All voucher commitments collected up to the current block.
+    /// MMR of all voucher commitments included in the chain
     vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
 }
 
@@ -143,7 +143,7 @@ impl LeaderState {
         self.vouchers_snapshot.root
     }
 
-    /// Get the MMR of voucher commitments collected up to the current block.
+    /// Get the MMR of all voucher commitments included in the chain.
     pub(crate) const fn vouchers(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
         &self.vouchers
     }
