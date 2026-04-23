@@ -166,12 +166,9 @@ pub async fn wait_for_height(
 ) -> Result<(), Elapsed> {
     tokio::time::timeout(duration, async {
         loop {
-            let info = client
-                .consensus_info()
-                .await
-                .expect("fetching consensus info should succeed");
-
-            if info.height >= target_height {
+            if let Ok(info) = client.consensus_info().await
+                && info.height >= target_height
+            {
                 return;
             }
 

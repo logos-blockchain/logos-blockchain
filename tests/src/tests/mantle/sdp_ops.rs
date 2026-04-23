@@ -30,7 +30,6 @@ use logos_blockchain_tests::common::{
     },
 };
 use num_bigint::BigUint;
-use serial_test::serial;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
 
@@ -47,10 +46,13 @@ const LOCK_PERIOD: u64 = 3;
 /// This test focuses on declare/withdraw flow which doesn't require blend
 /// proofs.
 #[tokio::test]
-#[serial]
 #[expect(
     clippy::large_futures,
     reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
 )]
 async fn sdp_ops_e2e() {
     let (
@@ -212,7 +214,6 @@ async fn sdp_ops_e2e() {
 /// This test verifies that after restart, the validator fetches its declaration
 /// from the ledger and the SDP service correctly loads declaration state.
 #[tokio::test]
-#[serial]
 #[expect(
     clippy::large_futures,
     reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
@@ -221,7 +222,8 @@ async fn sdp_declaration_restoration_e2e() {
     let (scenario_base_dir, cluster, node0_name, node0, ..) =
         start_sdp_manual_cluster("sdp-declaration-restoration").await;
 
-    let declarations = wait_for_sdp_declarations(&node0, Duration::from_secs(30))
+    let declarations = node0
+        .get_sdp_declarations()
         .await
         .expect("fetching SDP declarations should succeed");
     assert!(
@@ -237,21 +239,14 @@ async fn sdp_declaration_restoration_e2e() {
         .await
         .expect("manual cluster node should restart successfully");
 
-    let restarted_node = cluster
-        .node_client(&node0_name)
-        .expect("restarted node client should be available");
+    sleep(Duration::from_secs(5)).await;
 
-    // Restart can return before the testing API has started listening.
-    let post_restart_declarations = timeout(Duration::from_secs(30), async {
-        loop {
-            match restarted_node.get_sdp_declarations().await {
-                Ok(declarations) if !declarations.is_empty() => break declarations,
-                Ok(_) | Err(_) => sleep(Duration::from_millis(200)).await,
-            }
-        }
-    })
-    .await
-    .expect("fetching post-restart SDP declarations should succeed");
+    let post_restart_declarations = cluster
+        .node_client(&node0_name)
+        .expect("restarted node client should be available")
+        .get_sdp_declarations()
+        .await
+        .expect("fetching post-restart SDP declarations should succeed");
     assert!(
         !post_restart_declarations.is_empty(),
         "declarations should be visible after restart"

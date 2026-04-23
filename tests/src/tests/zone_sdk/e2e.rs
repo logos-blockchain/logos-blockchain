@@ -1,7 +1,7 @@
 use std::{collections::HashSet, num::NonZero, time::Duration};
 
 use futures::{StreamExt as _, future::join_all};
-use lb_common_http_client::CommonHttpClient;
+use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, Op, OpProof, Value,
@@ -35,7 +35,6 @@ use logos_blockchain_tests::{
     },
 };
 use rand::{Rng as _, thread_rng};
-use serial_test::serial;
 use tokio::time::{sleep, timeout};
 
 fn channel_id_from_key(key: &Ed25519Key) -> ChannelId {
@@ -56,8 +55,25 @@ async fn wait_for_height(validator: &Validator, target_height: u64, duration: Du
     .is_ok()
 }
 
+async fn wait_for_lib_advance(
+    validator: &Validator,
+    initial_lib_slot: Slot,
+    duration: Duration,
+) -> bool {
+    timeout(duration, async {
+        loop {
+            let info = validator.consensus_info(false).await;
+            if info.lib_slot > initial_lib_slot {
+                return;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
 #[tokio::test]
-#[serial]
 async fn test_sequencer_publish_and_indexer_read() {
     // Use custom config with faster block production for test reliability:
     // - slot_duration: 1s (faster slots)
@@ -184,7 +200,10 @@ async fn test_sequencer_publish_and_indexer_read() {
 }
 
 #[tokio::test]
-#[serial]
+#[expect(
+    clippy::too_many_lines,
+    reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
+)]
 async fn test_sequencer_checkpoint_resume() {
     // Setup network with faster block production
     let validators = spawn_validators(
@@ -323,8 +342,11 @@ async fn test_sequencer_checkpoint_resume() {
 /// Scenario: publish messages, save checkpoint, stop. Start fresh (no
 /// checkpoint), publish more, stop. Resume from OLD checkpoint. The
 /// stale pending txs should be reconciled — no duplicates on chain.
+#[expect(
+    clippy::too_many_lines,
+    reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
+)]
 #[tokio::test]
-#[serial]
 async fn test_sequencer_stale_checkpoint_resume() {
     let validators = spawn_validators(
         Some("test_sequencer_stale_checkpoint_resume"),
@@ -427,6 +449,11 @@ async fn test_sequencer_stale_checkpoint_resume() {
     );
     let poll_task = sequencer.spawn();
     handle.wait_ready().await;
+    let phase2_ready_lib_slot = validator.consensus_info(false).await.lib_slot;
+    assert!(
+        wait_for_lib_advance(validator, phase2_ready_lib_slot, Duration::from_mins(2)).await,
+        "Phase 2 sequencer failed to observe a new LIB advancement after startup"
+    );
 
     let data_phase2: Vec<Vec<u8>> = vec![b"msg-3".to_vec(), b"msg-4".to_vec()];
     for data in &data_phase2 {
@@ -484,6 +511,11 @@ async fn test_sequencer_stale_checkpoint_resume() {
     );
     let poll_task = sequencer.spawn();
     handle.wait_ready().await;
+    let phase3_ready_lib_slot = validator.consensus_info(false).await.lib_slot;
+    assert!(
+        wait_for_lib_advance(validator, phase3_ready_lib_slot, Duration::from_mins(2)).await,
+        "Phase 3 sequencer failed to observe a new LIB advancement after startup"
+    );
 
     let data_phase3: Vec<Vec<u8>> = vec![b"msg-5".to_vec()];
     for data in &data_phase3 {
@@ -563,7 +595,6 @@ async fn test_sequencer_stale_checkpoint_resume() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_subscribe_to_finalized_deposit() {
     // Setup network with faster block production
     let validators = spawn_validators(
@@ -630,7 +661,6 @@ async fn test_subscribe_to_finalized_deposit() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_atomic_deposit_inscription() {
     // Setup network with faster block production
     let validators = spawn_validators(
@@ -738,7 +768,6 @@ async fn test_atomic_deposit_inscription() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_subscribe_to_finalized_withdraw() {
     // Setup network with faster block production
     let validators = spawn_validators(
