@@ -1497,8 +1497,10 @@ async fn collect_multiple_wallets_utxos(
         }
 
         for tx in &block.transactions {
-            for transfer in tx.mantle_tx.transfers() {
-                for utxo in transfer.utxos() {
+            let transfers = tx.mantle_tx.transfers();
+
+            for transfer in &transfers {
+                for utxo in transfer.outputs.utxos(transfer) {
                     if let Some(wallet_name) = wallets_by_pk.get(&utxo.note.pk)
                         && let Some(owned) = owned_per_wallet.get_mut(wallet_name)
                     {
@@ -1507,8 +1509,8 @@ async fn collect_multiple_wallets_utxos(
                 }
             }
 
-            for transfer in tx.mantle_tx.transfers() {
-                for spent in &transfer.inputs {
+            for transfer in &transfers {
+                for spent in transfer.inputs.as_vec() {
                     for (wallet_name, owned) in &mut owned_per_wallet {
                         remove_spent_utxo(world, owned, spent, wallet_name);
                     }
@@ -1701,7 +1703,7 @@ async fn collect_wallet_utxos(
         for tx in &block.transactions {
             // Unspent outputs
             for transfer in tx.mantle_tx.transfers() {
-                for utxo in transfer.utxos() {
+                for utxo in transfer.outputs.utxos(&transfer) {
                     if wallet_pks.contains(&utxo.note.pk) {
                         add_new_utxo(&mut wallet_owned, utxo, wallet_name);
                     }
@@ -1710,7 +1712,7 @@ async fn collect_wallet_utxos(
 
             // Spent outputs
             for transfer in tx.mantle_tx.transfers() {
-                for spent in &transfer.inputs {
+                for spent in &*transfer.inputs {
                     remove_spent_utxo(world, &mut wallet_owned, spent, wallet_name);
                 }
             }

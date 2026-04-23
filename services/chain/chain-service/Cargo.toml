@@ -28,7 +28,6 @@ lb-storage-service         = { workspace = true }
 lb-time-service            = { features = ["ntp"], workspace = true }
 lb-tracing                 = { workspace = true }
 lb-utils                   = { workspace = true }
-num-bigint                 = { default-features = false, version = "0.4" }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
 serde_with                 = { workspace = true }

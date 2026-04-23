@@ -331,8 +331,10 @@ where
     )]
     fn handle_event(&mut self, event: SwarmEvent<BlendBehaviourEvent<ObservationWindowProvider>>) {
         match event {
-            SwarmEvent::ConnectionEstablished { .. } | SwarmEvent::ConnectionClosed { .. } => {
+            SwarmEvent::ConnectionEstablished { peer_id, .. }
+            | SwarmEvent::ConnectionClosed { peer_id, .. } => {
                 let connected_count = self.swarm.connected_peers().count();
+                tracing::trace!(target: LOG_TARGET, "New connection or disconnection with peer {peer_id:?}. Number of currently connected peers: {connected_count}.");
                 metrics::peers_connected(connected_count);
             }
             SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithCore(
@@ -382,7 +384,6 @@ where
             }
             _ => {
                 tracing::trace!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
-                tracing::trace!(counter.ignored_event = 1);
             }
         }
     }

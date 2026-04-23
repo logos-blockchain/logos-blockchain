@@ -5,8 +5,8 @@ ARG LOGOS_CIRCUITS_VERSION
 
 FROM rust:1.94.0-slim-bookworm AS cfgsync-builder
 
-WORKDIR /nomos-testing
-COPY --from=nomos_testing . /nomos-testing
+WORKDIR /logos-blockchain-testing
+COPY --from=logos_blockchain_testing . /logos-blockchain-testing
 
 RUN apt-get update && apt-get install -yq \
     git gcc g++ clang libssl-dev pkg-config ca-certificates curl \
@@ -22,7 +22,7 @@ ARG LOGOS_CIRCUITS_VERSION
 
 WORKDIR /workspace
 COPY . .
-COPY --from=nomos_testing . /nomos-testing
+COPY --from=logos_blockchain_testing . /logos-blockchain-testing
 
 RUN apt-get update && apt-get install -yq \
     git gcc g++ clang libssl-dev pkg-config ca-certificates curl unzip \
@@ -46,7 +46,7 @@ RUN apt-get update && apt-get install -yq \
 
 COPY --from=builder /opt/circuits /opt/circuits
 COPY --from=builder /workspace/target/release/logos-blockchain-node /usr/bin/logos-blockchain-node
-COPY --from=cfgsync-builder /nomos-testing/target/release/cfgsync-client /usr/bin/cfgsync-client
+COPY --from=cfgsync-builder /logos-blockchain-testing/target/release/cfgsync-client /usr/bin/cfgsync-client
 
 ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 

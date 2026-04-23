@@ -23,6 +23,11 @@ impl Signature {
     pub const fn as_inner(&self) -> &ed25519_dalek::Signature {
         &self.0
     }
+
+    #[must_use]
+    pub fn zero() -> Self {
+        Self::from_bytes(&[0u8; 64])
+    }
 }
 
 impl Hash for Signature {

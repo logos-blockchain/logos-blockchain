@@ -1,11 +1,11 @@
 use std::collections::HashSet;
 
-use lb_core::{
+use serde::{Deserialize, Serialize};
+
+use crate::{
     mantle::{Note, NoteId},
     sdp::{MinStake, ServiceType},
 };
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -27,14 +27,12 @@ pub enum Error {
     NoteNotLocked(NoteId),
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct LockedNotes {
     locked_notes: rpds::HashTrieMapSync<NoteId, LockedNote>,
 }
 
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct LockedNote {
     note: Note,
     services: HashSet<ServiceType>,
@@ -90,6 +88,17 @@ impl LockedNotes {
         Ok(self)
     }
 
+    #[must_use]
+    pub fn is_locked_for_service(&self, note_id: &NoteId, service_type: &ServiceType) -> bool {
+        if let Some(locked) = self.locked_notes.get(note_id) {
+            if locked.services.contains(service_type) {
+                return true;
+            }
+            return false;
+        }
+        false
+    }
+
     pub fn unlock(&mut self, service_type: ServiceType, note_id: &NoteId) -> Result<Note, Error> {
         if let Some(note) = self.locked_notes.get_mut(note_id) {
             if !note.services.remove(&service_type) {
@@ -112,12 +121,23 @@ impl LockedNotes {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use lb_key_management_system_keys::keys::ZkKey;
+    use num_bigint::BigUint;
+    use rand::{RngCore as _, thread_rng};
 
-    use lb_core::sdp::{MinStake, ServiceType};
+    use super::*;
+    use crate::mantle::Utxo;
 
-    use super::{Error, LockedNotes};
-    use crate::cryptarchia::tests::utxo;
+    fn utxo() -> Utxo {
+        let mut op_id = [0u8; 32];
+        thread_rng().fill_bytes(&mut op_id);
+        let zk_sk = ZkKey::from(BigUint::from(0u64));
+        Utxo {
+            op_id,
+            output_index: 0,
+            note: Note::new(10000, zk_sk.to_public_key()),
+        }
+    }
 
     #[test]
     fn test_lock_success() {

@@ -11,6 +11,7 @@ use futures::Stream;
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::CryptarchiaInfo;
 use lb_common_http_client::{ApiBlock, CommonHttpClient};
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     mantle::{Transaction as _, TxHash},
     sdp::Declaration,
@@ -39,8 +40,8 @@ use tokio::time::error::Elapsed;
 
 use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
 use crate::{
-    IS_DEBUG_TRACING, common::kms::key_id_for_preload_backend, get_reserved_available_tcp_port,
-    nodes::LOGS_PREFIX, topology::configs::GeneralConfig,
+    IS_DEBUG_TRACING, get_reserved_available_tcp_port, nodes::LOGS_PREFIX,
+    topology::configs::GeneralConfig,
 };
 
 pub enum Pool {

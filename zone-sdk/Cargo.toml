@@ -18,7 +18,9 @@ async-trait                      = { workspace = true }
 futures                          = { default-features = false, version = "0.3" }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
+lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { workspace = true }
+rand                             = "0.8.5"
 reqwest                          = { workspace = true }
 rpds                             = { default-features = false, version = "1.1.1" }
 serde                            = { features = ["derive"], workspace = true }

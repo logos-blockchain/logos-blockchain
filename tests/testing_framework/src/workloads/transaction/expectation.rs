@@ -226,7 +226,7 @@ fn capture_tx_outputs(
 ) {
     for tx in &block.transactions {
         for transfer in &tx.mantle_tx().transfers() {
-            for note in &transfer.outputs {
+            for note in &*transfer.outputs {
                 if tracked_accounts.contains(&note.pk) {
                     observed.fetch_add(1, Ordering::Relaxed);
                     tracing::debug!(pk = ?note.pk, "tx inclusion observed account output");

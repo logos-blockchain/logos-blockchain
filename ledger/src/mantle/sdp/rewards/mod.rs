@@ -6,11 +6,11 @@ use std::collections::HashMap;
 
 use lb_core::{
     block::BlockNumber,
-    crypto::{ZkDigest, ZkHasher},
-    mantle::{Note, TxHash, Utxo, Value},
+    codec::SerializeOp as _,
+    crypto::{Digest, Hash, Hasher},
+    mantle::{Note, Utxo, Value},
     sdp::{ActivityMetadata, ProviderId, ServiceParameters, ServiceType, SessionNumber},
 };
-use lb_groth16::{Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use thiserror::Error;
 
@@ -99,15 +99,17 @@ pub enum Error {
 /// The hash is computed from a version constant, session number, and service
 /// type, ensuring all nodes produce identical transaction hashes for reward
 /// notes.
-fn create_reward_tx_hash(session_n: SessionNumber, service_type: ServiceType) -> TxHash {
-    let mut hasher = ZkHasher::default();
-    let session_fr = Fr::from(session_n);
-    let service_type_fr = fr_from_bytes(service_type.as_ref().as_bytes())
-        .expect("Valid service type fr representation");
-    <ZkHasher as ZkDigest>::update(&mut hasher, &service_type_fr);
-    <ZkHasher as ZkDigest>::update(&mut hasher, &session_fr);
+fn create_reward_op_id(session_n: SessionNumber, service_type: ServiceType) -> Hash {
+    let mut hasher = Hasher::default();
+    let session_u8 = session_n.to_le_bytes().to_vec();
+    let service_type_u8 = service_type
+        .to_bytes()
+        .expect("conversion to bytes should succeed")
+        .to_vec();
+    <Hasher as Digest>::update(&mut hasher, &service_type_u8);
+    <Hasher as Digest>::update(&mut hasher, &session_u8);
 
-    TxHash(hasher.finalize())
+    hasher.finalize().into()
 }
 
 /// Distributes rewards as UTXOs, sorted by `zk_id` for determinism.
@@ -127,13 +129,13 @@ fn distribute_rewards(
         .collect();
     sorted_rewards.sort_by_key(|(zk_id, _)| *zk_id);
 
-    let tx_hash = create_reward_tx_hash(session_n, service_type);
+    let op_id = create_reward_op_id(session_n, service_type);
 
     sorted_rewards
         .into_iter()
         .enumerate()
         .map(|(output_index, (zk_id, reward_amount))| {
-            Utxo::new(tx_hash, output_index, Note::new(reward_amount, zk_id))
+            Utxo::new(op_id, output_index, Note::new(reward_amount, zk_id))
         })
         .collect()
 }

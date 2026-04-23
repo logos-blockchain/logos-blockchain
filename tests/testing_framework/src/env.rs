@@ -56,29 +56,29 @@ pub fn debug_tracing() -> bool {
 }
 
 #[must_use]
-pub fn nomos_cfgsync_port() -> Option<u16> {
+pub fn logos_blockchain_cfgsync_port() -> Option<u16> {
     env_opt("LOGOS_BLOCKCHAIN_CFGSYNC_PORT")
 }
 
 #[must_use]
-pub fn nomos_log_dir() -> Option<PathBuf> {
+pub fn logos_blockchain_log_dir() -> Option<PathBuf> {
     std::env::var("LOGOS_BLOCKCHAIN_LOG_DIR")
         .ok()
         .map(PathBuf::from)
 }
 
 #[must_use]
-pub fn nomos_log_level() -> Option<String> {
+pub fn logos_blockchain_log_level() -> Option<String> {
     std::env::var("LOGOS_BLOCKCHAIN_LOG_LEVEL").ok()
 }
 
 #[must_use]
-pub fn nomos_testnet_image() -> Option<String> {
+pub fn logos_blockchain_testnet_image() -> Option<String> {
     std::env::var("LOGOS_BLOCKCHAIN_TESTNET_IMAGE").ok()
 }
 
 #[must_use]
-pub fn nomos_testnet_image_pull_policy() -> Option<String> {
+pub fn logos_blockchain_testnet_image_pull_policy() -> Option<String> {
     std::env::var("LOGOS_BLOCKCHAIN_TESTNET_IMAGE_PULL_POLICY").ok()
 }
 

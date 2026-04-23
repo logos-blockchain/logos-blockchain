@@ -2,10 +2,10 @@ pub mod genesis;
 
 use core::fmt::Debug;
 
-use ::serde::{Deserialize, Serialize, de::DeserializeOwned};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
@@ -245,7 +245,6 @@ mod tests {
     use lb_pol::LotteryConstants;
     use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
-    use num_bigint::BigUint;
 
     use super::*;
     use crate::{
@@ -267,7 +266,7 @@ mod tests {
     pub fn create_proof() -> Groth16LeaderProof {
         let leader_sk = UnsecuredZkKey::zero();
         let utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [0u8; 32],
             output_index: 0,
             note: Note::new(1000, leader_sk.to_public_key()),
         };

@@ -11,10 +11,9 @@ use lb_chain_service::{
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash, ops::channel::ChannelId},
+    mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
     sdp::Declaration,
 };
-use lb_ledger::mantle::channel::ChannelState;
 use lb_storage_service::{
     StorageMsg, StorageService,
     api::{

@@ -1104,17 +1104,29 @@ mod tests {
     use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
     use lb_core::{
         header::ContentId,
-        mantle::{
-            Note, Utxo,
-            ops::{channel::deposit::DepositOp, transfer::TransferOp},
-        },
+        mantle::{Note, Utxo, ledger::Inputs, ops::channel::deposit::DepositOp},
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_key_management_system_service::keys::ZkKey;
     use num_bigint::BigUint;
+    use rand::{RngCore as _, thread_rng};
 
     use super::*;
     use crate::ZoneMessage;
+
+    #[must_use]
+    pub fn utxo_with_sk() -> (ZkKey, Utxo) {
+        let mut op_id = [0u8; 32];
+        thread_rng().fill_bytes(&mut op_id);
+        let zk_sk = ZkKey::from(BigUint::from(0u64));
+        let utxo = Utxo {
+            op_id,
+            output_index: 0,
+            note: Note::new(10, zk_sk.to_public_key()),
+        };
+
+        (zk_sk, utxo)
+    }
 
     #[tokio::test]
     async fn prepare_submit_deposit_and_inscription() {
@@ -1126,53 +1138,35 @@ mod tests {
         let _join_handle = sequencer.spawn();
         handle.wait_ready().await;
 
-        // Prepare a deposit op and a transfer op using a depositer's key.
-        // The transfer op burns the same amount of tokens as the deposit amount.
-        let depositer_key = ZkKey::zero();
-        let input_note = Utxo::new(
-            TxHash::from(BigUint::ZERO),
-            0,
-            Note::new(30, depositer_key.to_public_key()),
-        );
+        // Prepare a deposit op
+        let (sk, utxo) = utxo_with_sk();
         let deposit_op = DepositOp {
             channel_id,
-            amount: 10,
+            inputs: Inputs::new(vec![utxo.id()]),
             metadata: "to Alice".into(),
         };
-        let transfer_op = TransferOp {
-            inputs: vec![input_note.id()],
-            // a change note
-            outputs: vec![Note::new(
-                input_note.note.value - deposit_op.amount,
-                depositer_key.to_public_key(),
-            )],
-        };
 
-        // Prepare a `MantleTx` with two operations prepared and a inscribe op
+        // Prepare a `MantleTx` with the deposit and the inscribe op
         // that presents the zone state transition corresponding to the operations.
         let (tx, msg_id, inscription_sig) = handle
             .prepare_tx(
-                vec![
-                    Op::ChannelDeposit(deposit_op.clone()),
-                    Op::Transfer(transfer_op.clone()),
-                ],
+                vec![Op::ChannelDeposit(deposit_op.clone())],
                 "Mint 10 to Alice".into(),
             )
             .await
             .unwrap();
-        assert_eq!(tx.ops.len(), 3);
+        assert_eq!(tx.ops.len(), 2);
         assert_eq!(&tx.ops[0], &Op::ChannelDeposit(deposit_op));
-        assert_eq!(&tx.ops[1], &Op::Transfer(transfer_op));
-        assert!(matches!(&tx.ops[2], &Op::ChannelInscribe(_)));
+        assert!(matches!(&tx.ops[1], &Op::ChannelInscribe(_)));
 
-        // Sign the `MantleTx` with the depositer's key, and put the signature in the
-        // 2nd position of proofs since the transfer op is the 2nd op.
-        let transfer_sig = depositer_key.sign_payload(tx.hash().as_ref()).unwrap();
+        // Sign the `MantleTx`
         let signed_tx = SignedMantleTx::new(
-            tx,
+            tx.clone(),
             vec![
-                OpProof::NoProof,
-                OpProof::ZkSig(transfer_sig),
+                OpProof::ZkSig(
+                    ZkKey::multi_sign(std::slice::from_ref(&sk), tx.clone().hash().as_ref())
+                        .unwrap(),
+                ),
                 OpProof::Ed25519Sig(inscription_sig),
             ],
         )

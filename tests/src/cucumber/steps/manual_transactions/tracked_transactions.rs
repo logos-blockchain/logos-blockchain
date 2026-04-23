@@ -3,7 +3,9 @@ use std::{collections::HashSet, time::Duration};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
-    genesis_tx::GENESIS_STORAGE_GAS_PRICE, ops::transfer::TransferOp,
+    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
+    ledger::{Inputs, Outputs},
+    ops::transfer::TransferOp,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use tokio::time::{sleep, timeout};
@@ -180,7 +182,7 @@ async fn transaction_is_in_chain(
 
 fn create_invalid_transaction() -> SignedMantleTx {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
-    let transfer_op = TransferOp::new(vec![], vec![output_note]);
+    let transfer_op = TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![output_note]));
 
     let mantle_tx = MantleTx {
         ops: vec![Op::Transfer(transfer_op)],
