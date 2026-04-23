@@ -5,10 +5,9 @@
 //! - `configs::*` for topology and wallet configuration
 //! - `NodeHttpClient` for node API calls
 
-use std::{net::Ipv4Addr, sync::LazyLock};
-extern crate self as lb_testing_framework;
-use lb_libp2p::{Multiaddr, multiaddr};
+use std::sync::LazyLock;
 
+mod diagnostics;
 pub mod env;
 mod framework;
 pub use framework::local::USER_CONFIG_FILE;
@@ -20,19 +19,12 @@ pub use unique_persistent::{
     reap_all_stale_port_blocks, release_reserved_port_block, unique_test_context,
 };
 
-pub(crate) mod common {
-    pub mod kms {
-        include!(concat!(env!("CARGO_MANIFEST_DIR"), "/../src/common/kms.rs"));
-    }
-}
-
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(env::debug_tracing);
 pub const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 
-fn node_address_from_port(port: u16) -> Multiaddr {
-    multiaddr(Ipv4Addr::LOCALHOST, port)
-}
-
+pub use diagnostics::{
+    FailureDiagnosticsExpectation, ScenarioRunDiagnosticsError, run_with_failure_diagnostics,
+};
 pub use framework::{
     BlockFeed, BlockFeedExtensionFactory, BlockFeedObservation, BlockFeedObserver,
     BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, CoreBuilderExt, LbcComposeDeployer, LbcEnv,

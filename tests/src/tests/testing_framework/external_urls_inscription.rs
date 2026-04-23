@@ -2,6 +2,7 @@ use std::{env, time::Duration};
 
 use lb_testing_framework::{
     CoreBuilderExt as _, LbcLocalDeployer, ScenarioBuilder, ScenarioBuilderExt as _,
+    run_with_failure_diagnostics,
 };
 use logos_blockchain_tests::common::manual_cluster::unique_scenario_base_dir;
 use testing_framework_core::scenario::{Deployer as _, ExternalNodeSource};
@@ -140,7 +141,7 @@ async fn external_urls_inscription_workload() -> Result<(), Box<dyn std::error::
         .build()?;
 
     let runner = deployer.deploy(&scenario).await?;
-    let _handle = runner.run(&mut scenario).await?;
+    let _handle = run_with_failure_diagnostics(runner, &mut scenario).await?;
 
     Ok(())
 }

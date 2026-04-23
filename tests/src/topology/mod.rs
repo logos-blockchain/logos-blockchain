@@ -1,4 +1,3 @@
-pub mod configs;
 use std::{collections::HashSet, time::Duration};
 
 use configs::{
@@ -7,6 +6,8 @@ use configs::{
     network::{NetworkParams, create_network_configs},
     tracing::create_tracing_configs,
 };
+pub use lb_config as configs;
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     mantle::{GenesisTx as _, Note, NoteId, genesis_tx::GenesisTx},
     sdp::{Locator, ServiceType},
@@ -18,7 +19,6 @@ use lb_testing_framework::get_reserved_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
 use crate::{
-    common::kms::key_id_for_preload_backend,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         api::create_api_configs,

@@ -4,16 +4,20 @@ use common_http_client::{
     ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
 };
 use futures::Stream;
+use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_chain_service::CryptarchiaInfo;
 use lb_core::{header::HeaderId, mantle::SignedMantleTx, sdp::Declaration};
 use lb_http_api_common::{
     bodies::wallet::transfer_funds::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
-    paths::{MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
+    paths::{BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
 };
+use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
+use lb_tx_service::MempoolMetrics;
 use reqwest::Url;
+use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct NodeHttpClient {
@@ -78,6 +82,22 @@ impl NodeHttpClient {
             .await
     }
 
+    pub async fn blend_info(&self) -> Result<Option<BlendNetworkInfo<PeerId>>, Error> {
+        let request_url = Self::join_path(&self.base_url, BLEND_NETWORK_INFO)?;
+
+        self.http_client
+            .get::<(), Option<BlendNetworkInfo<PeerId>>>(request_url, None)
+            .await
+    }
+
+    pub async fn mantle_metrics(&self) -> Result<MempoolMetrics, Error> {
+        let request_url = Self::join_path(&self.base_url, MANTLE_METRICS)?;
+
+        self.http_client
+            .get::<(), MempoolMetrics>(request_url, None)
+            .await
+    }
+
     /// Opens a processed-block stream from the node HTTP API.
     pub async fn blocks_stream(
         &self,
@@ -114,6 +134,18 @@ impl NodeHttpClient {
         self.get_sdp_declarations_at(self.base_url.clone()).await
     }
 
+    pub async fn dial_peer(&self, addr: Multiaddr) -> Result<PeerId, Error> {
+        let testing_url = self
+            .testing_url
+            .clone()
+            .ok_or_else(|| Error::Client("testing api unavailable".to_owned()))?;
+        let request_url = Self::join_path(&testing_url, DIAL_PEER)?;
+
+        self.http_client
+            .post::<_, PeerId>(request_url, &DialPeerRequestBody { addr })
+            .await
+    }
+
     #[must_use]
     pub const fn base_url(&self) -> &Url {
         &self.base_url
@@ -148,4 +180,9 @@ impl NodeHttpClient {
             .join(path.trim_start_matches('/'))
             .map_err(Error::Url)
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DialPeerRequestBody {
+    addr: Multiaddr,
 }

@@ -30,6 +30,7 @@ lb-chain-leader-service    = { workspace = true }
 lb-chain-service           = { features = ["libp2p"], workspace = true }
 lb-core                    = { workspace = true }
 lb-ledger                  = { workspace = true }
+lb-libp2p                  = { workspace = true }
 lb-network-service         = { workspace = true }
 lb-sdp-service             = { workspace = true }
 lb-storage-service         = { features = ["rocksdb-backend"], workspace = true }

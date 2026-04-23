@@ -18,6 +18,7 @@ pub use block_feed::{
     block_feed_source_provider, block_feed_sources, named_block_feed_sources,
 };
 use common_http_client::BasicAuthCredentials;
+use lb_config::kms::key_id_for_preload_backend;
 use lb_node::config::RunConfig;
 use reqwest::Url;
 use testing_framework_core::{
@@ -30,11 +31,12 @@ use testing_framework_core::{
 use testing_framework_runner_local::{ManualCluster, ProcessDeployer};
 
 use crate::{
+    FailureDiagnosticsExpectation,
     node::{
         DeploymentPlan, NodeHttpClient,
         configs::{
             deployment::{DeploymentBuilder, TopologyConfig},
-            key_id_for_preload_backend, postprocess,
+            postprocess,
             wallet::WalletConfig,
         },
     },
@@ -250,11 +252,15 @@ impl ScenarioBuilderExt for ScenarioBuilderWith {
     }
 
     fn expect_consensus_liveness(self) -> Self {
-        self.with_expectation(ConsensusLiveness::default())
+        self.with_expectation(FailureDiagnosticsExpectation::new(
+            ConsensusLiveness::default(),
+        ))
     }
 
     fn expect_cluster_fork_monitor(self) -> Self {
-        self.with_expectation(ClusterForkMonitor::<LbcEnv>::default())
+        self.with_expectation(FailureDiagnosticsExpectation::new(ClusterForkMonitor::<
+            LbcEnv,
+        >::default()))
     }
 
     fn initialize_wallet(self, total_funds: u64, users: usize) -> Self {
