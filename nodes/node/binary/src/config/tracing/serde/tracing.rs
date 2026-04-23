@@ -17,6 +17,7 @@ impl From<Layer> for TracingLayerSettings {
                 endpoint: config.endpoint,
                 sample_ratio: config.sample_ratio,
                 service_name: config.service_name,
+                authorization_header: config.authorization_header,
             }),
             Layer::None => Self::None,
         }
@@ -29,6 +30,8 @@ pub struct OtlpConfig {
     #[serde(default = "default_sample_ratio")]
     pub sample_ratio: f64,
     pub service_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_header: Option<String>,
 }
 
 const fn default_sample_ratio() -> f64 {

@@ -51,6 +51,7 @@ impl From<Layers> for LoggerLayerSettings {
             otlp: value.otlp.map(|o| lb_tracing::logging::otlp::OtlpConfig {
                 endpoint: o.endpoint,
                 service_name: o.service_name,
+                authorization_header: o.authorization_header,
             }),
             stdout: value.stdout,
             stderr: value.stderr,
@@ -98,4 +99,6 @@ pub struct LokiConfig {
 pub struct OtlpConfig {
     pub endpoint: Url,
     pub service_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_header: Option<String>,
 }

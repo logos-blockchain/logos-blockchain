@@ -70,15 +70,15 @@ fn initialize_lb_node(
         user: get_user_config(config_path)?,
     };
 
-    let rt = Runtime::new().expect("Failed to create Tokio runtime");
-    let app = run_node_from_config(run_config).map_err(|e| {
+    let runtime = Runtime::new().expect("Failed to create Tokio runtime");
+    let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
         log::error!("Could not initialize Overwatch: {e}");
         OperationStatus::InitializationError
     })?;
 
     let app_handle = app.handle();
 
-    rt.block_on(async {
+    runtime.block_on(async {
         let services_to_start = get_services_to_start(&app).await.map_err(|e| {
             log::error!("Could not get services to start: {e}");
             OperationStatus::InitializationError
@@ -93,7 +93,7 @@ fn initialize_lb_node(
         Ok(())
     })?;
 
-    Ok(LogosBlockchainNode::new(app, rt))
+    Ok(LogosBlockchainNode::new(app, runtime))
 }
 
 fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
