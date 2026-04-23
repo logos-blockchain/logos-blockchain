@@ -8,7 +8,6 @@ use logos_blockchain_tests::common::manual_cluster::{
     ManualNodeLayout, api_url, get_wallet_balance, start_local_manual_cluster_with_layout,
     wait_for_nodes_height,
 };
-use serial_test::serial;
 use testing_framework_core::scenario::DynError;
 use tokio::time::{sleep, timeout};
 
@@ -21,7 +20,6 @@ use tokio::time::{sleep, timeout};
 /// 5. Wait for the claim transaction to be included in a block.
 /// 6. Verify the funding key's wallet balance increases.
 #[tokio::test]
-#[serial]
 async fn leader_claim() {
     let (base, nodes) = start_local_manual_cluster_with_layout(
         "leader-claim",
