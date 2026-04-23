@@ -74,7 +74,7 @@ where
     //   (`iter([first_item]).chain(stream)`) so downstream consumers see the full
     //   original stream.
     // - If the stream is immediately exhausted (`None`), returns it unchanged.
-    fn validate_first_block_response(
+    fn check_first_block_response_ready(
         first_item: Option<BlockStreamItem<Tx>>,
     ) -> FirstBlockResponse<Tx> {
         match first_item {
@@ -84,7 +84,7 @@ where
         }
     }
 
-    async fn request_validated_blocks_stream_from_peer(
+    async fn request_available_blocks_stream_from_peer(
         &self,
         peer: PeerId,
         target_block: HeaderId,
@@ -112,7 +112,7 @@ where
             )
             .await?;
 
-        match Self::validate_first_block_response(stream.next().await)? {
+        match Self::check_first_block_response_ready(stream.next().await)? {
             Some(first_item) => {
                 let rebuilt = tokio_stream::iter([first_item]).chain(stream);
                 Ok(Box::new(rebuilt))
@@ -333,7 +333,7 @@ where
                 let additional_blocks = additional_blocks.clone();
                 async move {
                     let stream = self
-                        .request_validated_blocks_stream_from_peer(
+                        .request_available_blocks_stream_from_peer(
                             peer,
                             target_block,
                             local_tip,
@@ -403,7 +403,9 @@ mod tests {
         );
         let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(block_not_found));
 
-        assert!(LibP2pAdapter::<(), ()>::validate_first_block_response(Some(first_item)).is_err());
+        assert!(
+            LibP2pAdapter::<(), ()>::check_first_block_response_ready(Some(first_item)).is_err()
+        );
     }
 
     #[test]
@@ -416,13 +418,15 @@ mod tests {
         );
         let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(unknown));
 
-        assert!(LibP2pAdapter::<(), ()>::validate_first_block_response(Some(first_item)).is_err());
+        assert!(
+            LibP2pAdapter::<(), ()>::check_first_block_response_ready(Some(first_item)).is_err()
+        );
     }
 
     #[test]
     fn validate_first_block_response_accepts_empty_stream() {
         assert!(
-            LibP2pAdapter::<(), ()>::validate_first_block_response(None)
+            LibP2pAdapter::<(), ()>::check_first_block_response_ready(None)
                 .unwrap()
                 .is_none()
         );

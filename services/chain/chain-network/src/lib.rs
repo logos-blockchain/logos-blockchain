@@ -346,7 +346,7 @@ where
 
                         Self::log_received_block(&block);
 
-                        match Self::apply_reconstructed_block_with_future_block_retry(block, &relays)
+                        match Self::apply_block_with_future_block_retry(block, &relays)
                             .await
                         {
                             Ok(()) => {
@@ -508,7 +508,7 @@ where
 
         let block_id = block.header().id();
 
-        match Self::apply_reconstructed_block_with_future_block_retry(block, relays).await {
+        match Self::apply_block_with_future_block_retry(block, relays).await {
             Ok(()) => {
                 orphan_downloader.remove_orphan(&block_id);
                 trace!(counter.consensus_processed_blocks = 1);
@@ -519,7 +519,7 @@ where
         }
     }
 
-    async fn apply_reconstructed_block_with_future_block_retry(
+    async fn apply_block_with_future_block_retry(
         block: Block<Mempool::Item>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
@@ -624,6 +624,18 @@ where
     }
 }
 
+/// Retry applying a block when `Cryptarchia` reports it as a `FutureBlock`.
+///
+/// This is an acceptable incremental policy, where we accept bounded per-block
+/// latency to reduce immediate orphan churn.
+///
+/// This helper is intentionally defined in the chain-network service (instead
+/// of chain-service) because retry policy depends on **where the block came
+/// from** (for example: gossipsub, chainsync, orphan download, etc.).
+///
+/// Different ingress paths may require different retry/backoff behavior, so the
+/// networking layer owns this control and decides when/how often to retry
+/// before surfacing an error.
 async fn retry_future_block_apply_with_delay<F, Fut>(
     block_id: HeaderId,
     max_retries: usize,

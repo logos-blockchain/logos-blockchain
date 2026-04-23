@@ -8,22 +8,16 @@ pub use messages::{GetTipResponse, SerialisedBlock};
 
 pub type DynError = Box<dyn std::error::Error + Send + Sync + 'static>;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Error)]
 pub enum BlocksUnavailableReason {
+    #[error("Block not found ({0:?})")]
     BlockNotFound(HeaderId),
+    #[error("Start block not found")]
     StartBlockNotFound,
+    #[error("Unknown error {0}")]
     Unknown(String),
-}
-
-impl std::fmt::Display for BlocksUnavailableReason {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::BlockNotFound(id) => write!(f, "BlockNotFound({id:?})"),
-            Self::StartBlockNotFound => write!(f, "StartBlockNotFound"),
-            Self::Unknown(reason) => f.write_str(reason),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
