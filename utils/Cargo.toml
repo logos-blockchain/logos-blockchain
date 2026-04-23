@@ -28,7 +28,7 @@ tokio       = { optional = true, workspace = true }
 
 [features]
 rng   = ["dep:blake2"]
-serde = ["serde/alloc"]
+serde = ["const-hex/alloc", "serde/alloc"]
 time  = ["dep:humantime", "dep:serde", "dep:serde_with", "dep:time"]
 tokio = ["dep:futures", "dep:tokio"]
 types = []
