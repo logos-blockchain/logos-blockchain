@@ -28,7 +28,9 @@ use testing_framework_runner_local::{
 use tracing::debug;
 
 use crate::{
-    LOGOS_BLOCKCHAIN_LOG_LEVEL, env as tf_env,
+    LOGOS_BLOCKCHAIN_LOG_LEVEL,
+    diagnostics::{record_system_monitor_event, register_system_monitor_output_file},
+    env as tf_env,
     framework::LbcEnv,
     node::{
         DeploymentPlan, NodeHttpClient, NodePlan,
@@ -99,6 +101,13 @@ impl LocalDeployerEnv for LbcEnv {
     fn build_initial_node_configs(
         topology: &Self::Deployment,
     ) -> Result<Vec<NodeConfigEntry<<Self as Application>::NodeConfig>>, ProcessSpawnError> {
+        register_system_monitor_output_file(
+            &topology
+                .config()
+                .scenario_base_dir
+                .join("system_stats.ndjson"),
+        );
+
         topology
             .nodes()
             .iter()
@@ -133,6 +142,12 @@ impl LocalDeployerEnv for LbcEnv {
     ) -> Result<LaunchSpec, DynError> {
         let mut config = config.clone();
         ensure_recovery_paths(dir).map_err(|source| -> DynError { source.into() })?;
+
+        record_system_monitor_event(
+            "node_runtime_prepared",
+            format!("{label}:{}", dir.display()),
+        );
+
         config.user.tracing.level = configured_node_log_level();
 
         if !tf_env::debug_tracing() {

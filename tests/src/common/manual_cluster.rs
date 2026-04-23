@@ -9,7 +9,8 @@ use lb_libp2p::Multiaddr;
 use lb_node::{UserConfig, config::RunConfig};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient,
-    USER_CONFIG_FILE, internal::DeploymentPlan,
+    USER_CONFIG_FILE, internal::DeploymentPlan, record_system_monitor_event,
+    register_system_monitor_output_file,
 };
 use reqwest::Url;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
@@ -37,6 +38,12 @@ pub fn build_local_manual_cluster(
     ensure_local_node_binary_env();
 
     let scenario_base_dir = unique_scenario_base_dir(&format!("{prefix}-{test_name}"));
+    register_system_monitor_output_file(&scenario_base_dir.join("system_stats.ndjson"));
+    record_system_monitor_event(
+        "manual_cluster_prepared",
+        scenario_base_dir.display().to_string(),
+    );
+
     let deployment = builder
         .scenario_base_dir(scenario_base_dir.clone())
         .build()

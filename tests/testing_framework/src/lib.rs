@@ -23,7 +23,8 @@ pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(env::debug_tracing);
 pub const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
 
 pub use diagnostics::{
-    FailureDiagnosticsExpectation, ScenarioRunDiagnosticsError, run_with_failure_diagnostics,
+    FailureDiagnosticsExpectation, ScenarioRunDiagnosticsError, record_system_monitor_event,
+    register_system_monitor_output_file, run_with_failure_diagnostics,
 };
 pub use framework::{
     BlockFeed, BlockFeedExtensionFactory, BlockFeedObservation, BlockFeedObserver,
