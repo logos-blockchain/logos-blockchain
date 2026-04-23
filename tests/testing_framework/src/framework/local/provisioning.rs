@@ -7,6 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::mantle::{self, genesis_tx::GenesisTx};
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
@@ -34,7 +35,6 @@ use crate::{
         configs::{
             Config, Libp2pNetworkLayout, NetworkParams, create_node_config_for_node,
             default_e2e_deployment_settings, deployment::TopologyConfig,
-            key_id_for_preload_backend,
         },
     },
 };
@@ -273,7 +273,7 @@ const fn node_binary_config() -> BinaryConfig {
 fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
     debug!(prefix, base_dir = %base_dir.display(), "configuring node logging");
 
-    if let Some(log_dir) = tf_env::nomos_log_dir() {
+    if let Some(log_dir) = tf_env::logos_blockchain_log_dir() {
         match fs::create_dir_all(&log_dir) {
             Ok(()) => {
                 return logger::Layers {

@@ -1,11 +1,15 @@
 use std::{num::NonZero, time::Duration};
 
 use lb_core::mantle::{
-    GenesisTx as _,
+    GenesisTx as _, NoteId,
     gas::GasCost,
+    ledger::Inputs,
     ops::channel::{ChannelId, deposit::DepositOp},
 };
-use lb_http_api_common::bodies::channel::ChannelDepositRequestBody;
+use lb_http_api_common::bodies::{
+    channel::ChannelDepositRequestBody, wallet::balance::WalletBalanceResponseBody,
+};
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
@@ -70,12 +74,12 @@ async fn channel_deposit() {
         .channel_id;
     let channel_balance_before = get_channel_balance(&validator.client, channel_id).await;
 
-    let deposit_amount = 1;
+    let (note_id, deposit_amount) = get_wallet_note(&validator.client, funding_pk, 1).await;
     let body = ChannelDepositRequestBody {
         tip: None,
         deposit: DepositOp {
             channel_id,
-            amount: deposit_amount,
+            inputs: Inputs::new(vec![note_id]),
             metadata: b"Mint 1 to Alice in Zone".to_vec(),
         },
         change_public_key: funding_pk,
@@ -128,6 +132,33 @@ fn channel_test_config(mut config: RunConfig) -> RunConfig {
     config.deployment.cryptarchia.slot_activation_coeff =
         NonNegativeRatio::new(1, 2.try_into().unwrap());
     config
+}
+
+async fn get_wallet_note(node: &NodeHttpClient, pk: ZkPublicKey, min_value: u64) -> (NoteId, u64) {
+    let pk_hex = hex::encode(lb_groth16::fr_to_bytes(&pk.into()));
+    let url = api_url(node, &format!("wallet/{pk_hex}/balance"));
+
+    let response = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await
+        .expect("balance request should not fail");
+
+    assert!(
+        response.status().is_success(),
+        "balance request should succeed, got status: {}",
+        response.status(),
+    );
+
+    let body: WalletBalanceResponseBody = response
+        .json()
+        .await
+        .expect("balance response should be valid JSON");
+
+    body.notes
+        .into_iter()
+        .find(|(_, value)| *value >= min_value)
+        .expect("should find a note with sufficient balance for deposit")
 }
 
 async fn get_channel_balance(node: &NodeHttpClient, channel_id: ChannelId) -> u64 {

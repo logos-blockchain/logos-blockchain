@@ -22,7 +22,7 @@ use crate::{
 };
 
 const NODE_ENTRYPOINT: &str = "/etc/logos/scripts/run_logos_node.sh";
-const GHCR_TESTNET_IMAGE: &str = "ghcr.io/logos-co/nomos:testnet";
+const GHCR_TESTNET_IMAGE: &str = "ghcr.io/logos-co/logos-blockchain-node:testnet";
 const DEFAULT_CFGSYNC_HOST: &str = "cfgsync";
 
 pub(super) const fn normalized_cfgsync_port(port: u16) -> u16 {
@@ -69,7 +69,7 @@ pub(super) fn cfgsync_dir(cfgsync_path: &Path) -> Result<&Path, DynError> {
 }
 
 pub(super) fn cfgsync_container_name() -> String {
-    format!("nomos-cfgsync-{}", Uuid::new_v4())
+    format!("logos-blockchain-cfgsync-{}", Uuid::new_v4())
 }
 
 pub(super) fn build_cfgsync_container_spec(
@@ -162,14 +162,15 @@ fn default_extra_hosts() -> Vec<String> {
 
 fn base_environment(cfgsync_port: u16) -> Vec<EnvEntry> {
     let rust_log = env_value_or_default(tf_env::rust_log, "info");
-    let nomos_log_level = env_value_or_default(tf_env::nomos_log_level, "info");
+    let logos_blockchain_log_level =
+        env_value_or_default(tf_env::logos_blockchain_log_level, "info");
     let time_backend = env_value_or_default(tf_env::lb_time_service_backend, "monotonic");
     let cfgsync_host = env::var("LOGOS_BLOCKCHAIN_CFGSYNC_HOST")
         .unwrap_or_else(|_| String::from(DEFAULT_CFGSYNC_HOST));
 
     vec![
         EnvEntry::new("RUST_LOG", rust_log),
-        EnvEntry::new("LOGOS_BLOCKCHAIN_LOG_LEVEL", nomos_log_level),
+        EnvEntry::new("LOGOS_BLOCKCHAIN_LOG_LEVEL", logos_blockchain_log_level),
         EnvEntry::new("LOGOS_BLOCKCHAIN_TIME_BACKEND", time_backend),
         EnvEntry::new(
             "CFG_SERVER_ADDR",

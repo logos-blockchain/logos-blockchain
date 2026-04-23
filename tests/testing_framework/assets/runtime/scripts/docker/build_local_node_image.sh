@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STACK_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REPO_ROOT="$(cd "${STACK_DIR}/../../../.." && pwd)"
-TESTING_ROOT="$(cd "${REPO_ROOT}/../nomos-testing" && pwd)"
+TESTING_ROOT="$(cd "${REPO_ROOT}/../logos-blockchain-testing" && pwd)"
 CIRCUITS_DIR="${LOGOS_BLOCKCHAIN_CIRCUITS:-$HOME/.logos-blockchain-circuits}"
 CIRCUITS_VERSION_FILE="${CIRCUITS_DIR}/VERSION"
 
@@ -44,7 +44,7 @@ docker buildx build \
   --load \
   --pull \
   --build-arg "LOGOS_CIRCUITS_VERSION=${CIRCUITS_VERSION}" \
-  --build-context "nomos_testing=${TESTING_ROOT}" \
+  --build-context "logos_blockchain_testing=${TESTING_ROOT}" \
   -f "${STACK_DIR}/Dockerfile.node" \
   -t "${IMAGE_TAG}" \
   "${REPO_ROOT}"

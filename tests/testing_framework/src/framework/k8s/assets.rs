@@ -117,7 +117,8 @@ pub(super) fn workspace_root() -> AnyhowResult<PathBuf> {
 }
 
 fn create_assets_tempdir() -> Result<TempDir, AssetsError> {
-    create_temp_workspace("nomos-helm-").map_err(|source| AssetsError::TempDir { source })
+    create_temp_workspace("logos-blockchain-helm-")
+        .map_err(|source| AssetsError::TempDir { source })
 }
 
 fn render_and_write_cfgsync(
@@ -199,7 +200,7 @@ fn write_entropy_file(config_path: &Path) -> anyhow::Result<()> {
 
     std::fs::write(
         dir.join("cfgsync.entropy"),
-        b"nomos-testing-framework-cfgsync-entropy",
+        b"logos-blockchain-testing-framework-cfgsync-entropy",
     )?;
 
     Ok(())

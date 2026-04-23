@@ -4,6 +4,12 @@ use lb_node::config::tracing::serde as tracing;
 
 use crate::IS_DEBUG_TRACING;
 
+const LOKI_ENDPOINT: &str = "http://localhost:3100";
+const OTLP_TRACING_ENDPOINT: &str = "http://localhost:4317";
+const OTLP_METRICS_ENDPOINT: &str = "http://127.0.0.1:9090/api/v1/otlp/v1/metrics";
+
+const DEBUG_TRACING_SAMPLE_RATIO: f64 = 0.5;
+
 #[derive(Clone, Default)]
 pub struct GeneralTracingConfig {
     pub tracing_settings: tracing::Config,
@@ -16,7 +22,7 @@ impl GeneralTracingConfig {
             tracing_settings: tracing::Config {
                 logger: tracing::logger::Layers {
                     otlp: Some(tracing::logger::OtlpConfig {
-                        endpoint: "http://localhost:3100".try_into().unwrap(),
+                        endpoint: LOKI_ENDPOINT.try_into().unwrap(),
                         service_name: host_identifier.clone(),
                     }),
                     stdout: true,
@@ -26,8 +32,8 @@ impl GeneralTracingConfig {
                     stderr: false,
                 },
                 tracing: tracing::tracing::Layer::Otlp(tracing::tracing::OtlpConfig {
-                    endpoint: "http://localhost:4317".try_into().unwrap(),
-                    sample_ratio: 0.5,
+                    endpoint: OTLP_TRACING_ENDPOINT.try_into().unwrap(),
+                    sample_ratio: DEBUG_TRACING_SAMPLE_RATIO,
                     service_name: host_identifier.clone(),
                 }),
                 filter: tracing::filter::Layer::Env(tracing::filter::EnvConfig {
@@ -37,9 +43,7 @@ impl GeneralTracingConfig {
                     ]),
                 }),
                 metrics: tracing::metrics::Layer::Otlp(tracing::metrics::OtlpConfig {
-                    endpoint: "http://127.0.0.1:9090/api/v1/otlp/v1/metrics"
-                        .try_into()
-                        .unwrap(),
+                    endpoint: OTLP_METRICS_ENDPOINT.try_into().unwrap(),
                     host_identifier,
                 }),
                 console: tracing::console::Layer::None,

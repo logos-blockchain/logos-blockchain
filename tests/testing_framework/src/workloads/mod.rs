@@ -15,7 +15,7 @@ use crate::{BlockFeed, BlockRecord, NodeHttpClient, framework::LbcEnv, node::Dep
 
 pub type BlockFeedSubscription = broadcast::Receiver<Arc<BlockRecord>>;
 
-/// Common environment bounds required by Nomos-specific workloads.
+/// Common environment bounds required by Logos Blockchain-specific workloads.
 pub trait LbcScenarioEnv:
     Application<Deployment = DeploymentPlan, NodeClient = NodeHttpClient>
 {

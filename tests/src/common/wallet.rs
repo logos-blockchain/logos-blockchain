@@ -67,11 +67,11 @@ pub async fn current_utxos_for_public_key(
     for block in blocks.into_iter().rev() {
         for tx in &block.transactions {
             for transfer in tx.mantle_tx.transfers() {
-                for input in &transfer.inputs {
+                for input in transfer.inputs.as_vec() {
                     owned.remove(input);
                 }
 
-                for utxo in transfer.utxos() {
+                for utxo in transfer.outputs.utxos(&transfer) {
                     if utxo.note.pk == public_key {
                         owned.insert(utxo.id(), utxo);
                     }
