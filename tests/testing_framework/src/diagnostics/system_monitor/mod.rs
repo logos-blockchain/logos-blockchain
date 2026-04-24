@@ -20,7 +20,10 @@ use crate::env as tf_env;
 
 static SYSTEM_MONITOR: OnceLock<SystemMonitor> = OnceLock::new();
 
-/// Registers one NDJSON output file for the shared monitor.
+/// Registers one monitor output path.
+///
+/// The shared monitor writes the full stream to the provided NDJSON path and
+/// writes flat sample rows to a sibling CSV file.
 pub(super) fn register_output_file(path: &Path) {
     if !tf_env::logos_blockchain_system_monitor_enabled() {
         return;
@@ -29,7 +32,7 @@ pub(super) fn register_output_file(path: &Path) {
     system_monitor().register_output(path);
 }
 
-/// Stops writing the shared monitor stream to one NDJSON output file.
+/// Stops writing the shared monitor stream to one registered output path.
 pub(super) fn unregister_output_file(path: &Path) {
     if !tf_env::logos_blockchain_system_monitor_enabled() {
         return;
@@ -73,12 +76,19 @@ impl SystemMonitor {
     }
 
     fn register_output(&self, path: &Path) {
-        if !self.shared.register_output(path.to_path_buf()) {
+        if !self.shared.register_output(path) {
             return;
         }
 
         self.shared
             .publish_event(SystemEvent::output_registered(path));
+
+        if let Some(sample) = self.shared.latest_sample() {
+            self.shared.append_sample_to_output(path, sample);
+            return;
+        }
+
+        self.shared.publish_sample(SystemCollector::new().capture());
     }
 
     fn unregister_output(&self, path: &Path) {
@@ -131,7 +141,7 @@ struct SystemMonitorShared {
 }
 
 impl SystemMonitorShared {
-    fn register_output(&self, path: PathBuf) -> bool {
+    fn register_output(&self, path: &Path) -> bool {
         self.outputs
             .lock()
             .expect("system monitor lock poisoned")
@@ -163,6 +173,11 @@ impl SystemMonitorShared {
         let _guard = self.io.lock().expect("system monitor lock poisoned");
 
         sink::SystemStatsLog::append(path, record);
+    }
+
+    fn append_sample_to_output(&self, path: &Path, sample: SystemSample) {
+        let record = SystemMonitorRecord::Sample(Box::new(sample));
+        self.append_record(path, &record);
     }
 
     fn publish_sample(&self, sample: SystemSample) {
@@ -217,6 +232,13 @@ impl SystemMonitorShared {
             .expect("system monitor lock poisoned")
             .paths()
     }
+
+    fn latest_sample(&self) -> Option<SystemSample> {
+        self.samples
+            .lock()
+            .expect("system monitor lock poisoned")
+            .latest()
+    }
 }
 
 /// Background worker that periodically captures and publishes system samples.
@@ -267,9 +289,13 @@ mod tests {
     }
 
     #[test]
-    fn registering_output_file_creates_event_log() {
+    fn registering_output_file_bootstraps_ndjson_and_csv() {
         let tempdir = tempdir().expect("tempdir should be created");
         let path = tempdir.path().join("system_stats.ndjson");
+        let csv_path = tempdir.path().join("system_stats.csv");
+
+        fs::write(&path, "stale-ndjson\n").expect("stale ndjson should be written");
+        fs::write(&csv_path, "stale-csv\n").expect("stale csv should be written");
 
         register_output_file(&path);
         std::thread::sleep(Duration::from_millis(50));
@@ -287,5 +313,15 @@ mod tests {
                 == Some(&serde_json::Value::String("event".to_owned())),
             "first monitor record should be the registration event"
         );
+
+        let csv = fs::read_to_string(tempdir.path().join("system_stats.csv"))
+            .expect("csv log should be created for new outputs");
+
+        assert!(
+            csv.starts_with("ts_unix,os,logical_cpus"),
+            "csv log should contain the header row"
+        );
+        assert!(!contents.contains("stale-ndjson"));
+        assert!(!csv.contains("stale-csv"));
     }
 }

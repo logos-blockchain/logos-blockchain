@@ -16,9 +16,13 @@ pub(super) struct OutputRegistry {
 }
 
 impl OutputRegistry {
-    pub(super) fn register(&mut self, path: PathBuf) -> bool {
-        SystemStatsLog::ensure_parent_dir(&path);
-        self.paths.insert(path)
+    pub(super) fn register(&mut self, path: &std::path::Path) -> bool {
+        if !self.paths.insert(path.to_path_buf()) {
+            return false;
+        }
+
+        SystemStatsLog::reset_output(path);
+        true
     }
 
     pub(super) fn unregister(&mut self, path: &std::path::Path) -> bool {
@@ -47,6 +51,10 @@ impl SampleHistory {
         }
 
         self.samples.push_back(sample);
+    }
+
+    pub(super) fn latest(&self) -> Option<SystemSample> {
+        self.samples.back().cloned()
     }
 
     pub(super) fn window(&self) -> SampleWindow {

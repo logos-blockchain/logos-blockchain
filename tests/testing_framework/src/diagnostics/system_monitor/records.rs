@@ -15,6 +15,15 @@ pub(super) enum SystemMonitorRecord {
     Event(SystemEvent),
 }
 
+impl SystemMonitorRecord {
+    pub(super) fn as_sample(&self) -> Option<&SystemSample> {
+        match self {
+            Self::Sample(sample) => Some(sample),
+            Self::Event(_) => None,
+        }
+    }
+}
+
 /// One point-in-time host sample captured from `sysinfo`.
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct SystemSample {
@@ -75,6 +84,107 @@ impl ProcessSnapshot {
             cpu_usage_percent: finite_f32(process.cpu_usage()),
             rss_bytes: Some(process.memory()),
         }
+    }
+}
+
+/// Flat CSV projection of one system sample for spreadsheet-friendly analysis.
+pub(super) struct CsvSampleRow {
+    ts_unix: i64,
+    os: String,
+    logical_cpus: usize,
+    process_count: usize,
+    thread_count: Option<usize>,
+    cpu_usage_percent: f32,
+    load1: Option<f64>,
+    load5: Option<f64>,
+    load15: Option<f64>,
+    norm_load1: Option<f64>,
+    memory_used_bytes: Option<u64>,
+    memory_total_bytes: Option<u64>,
+    swap_used_bytes: Option<u64>,
+    disk_mount_point: Option<String>,
+    disk_available_bytes: Option<u64>,
+    disk_total_bytes: Option<u64>,
+    node_process_count: usize,
+    node_process_rss_bytes: u64,
+    top_cpu_processes: String,
+    top_rss_processes: String,
+}
+
+impl CsvSampleRow {
+    pub(super) const HEADER: &[&str] = &[
+        "ts_unix",
+        "os",
+        "logical_cpus",
+        "process_count",
+        "thread_count",
+        "cpu_usage_percent",
+        "load1",
+        "load5",
+        "load15",
+        "norm_load1",
+        "memory_used_bytes",
+        "memory_total_bytes",
+        "swap_used_bytes",
+        "disk_mount_point",
+        "disk_available_bytes",
+        "disk_total_bytes",
+        "node_process_count",
+        "node_process_rss_bytes",
+        "top_cpu_processes",
+        "top_rss_processes",
+    ];
+
+    pub(super) fn from_sample(sample: &SystemSample) -> Self {
+        let disk = sample.disk.as_ref();
+
+        Self {
+            ts_unix: sample.ts_unix,
+            os: sample.os.to_owned(),
+            logical_cpus: sample.host.logical_cpus,
+            process_count: sample.host.process_count,
+            thread_count: sample.host.thread_count,
+            cpu_usage_percent: sample.host.cpu_usage_percent,
+            load1: sample.host.load1,
+            load5: sample.host.load5,
+            load15: sample.host.load15,
+            norm_load1: sample.host.norm_load1,
+            memory_used_bytes: sample.host.memory_used_bytes,
+            memory_total_bytes: sample.host.memory_total_bytes,
+            swap_used_bytes: sample.host.swap_used_bytes,
+            disk_mount_point: disk.map(|value| value.mount_point.clone()),
+            disk_available_bytes: disk.map(|value| value.available_bytes),
+            disk_total_bytes: disk.map(|value| value.total_bytes),
+            node_process_count: sample.node_processes.count,
+            node_process_rss_bytes: sample.node_processes.total_rss_bytes,
+            top_cpu_processes: render_process_list(&sample.top_cpu_processes),
+            top_rss_processes: render_process_list(&sample.top_rss_processes),
+        }
+    }
+
+    pub(super) fn values(&self) -> Vec<String> {
+        vec![
+            self.ts_unix.to_string(),
+            self.os.clone(),
+            self.logical_cpus.to_string(),
+            self.process_count.to_string(),
+            format_opt_usize(self.thread_count),
+            self.cpu_usage_percent.to_string(),
+            format_opt_f64(self.load1),
+            format_opt_f64(self.load5),
+            format_opt_f64(self.load15),
+            format_opt_f64(self.norm_load1),
+            format_opt_u64(self.memory_used_bytes),
+            format_opt_u64(self.memory_total_bytes),
+            format_opt_u64(self.swap_used_bytes),
+            self.disk_mount_point.clone().unwrap_or_default(),
+            format_opt_u64(self.disk_available_bytes),
+            format_opt_u64(self.disk_total_bytes),
+            self.node_process_count.to_string(),
+            self.node_process_rss_bytes.to_string(),
+            self.top_cpu_processes.clone(),
+            self.top_rss_processes.clone(),
+        ]
     }
 }
 
@@ -198,4 +308,37 @@ fn truncate_string(mut value: String, limit: usize) -> String {
     value = value.chars().take(limit.saturating_sub(1)).collect();
     value.push('\u{2026}');
     value
+}
+
+fn render_process_list(processes: &[ProcessSnapshot]) -> String {
+    processes
+        .iter()
+        .map(render_process_summary)
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn render_process_summary(process: &ProcessSnapshot) -> String {
+    let cpu = process
+        .cpu_usage_percent
+        .map(|value| format!("{value:.1}"))
+        .unwrap_or_default();
+    let rss = process
+        .rss_bytes
+        .map(|value| value.to_string())
+        .unwrap_or_default();
+
+    format!("{}#{}#{}#{}", process.name, process.pid, cpu, rss)
+}
+
+fn format_opt_f64(value: Option<f64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn format_opt_u64(value: Option<u64>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
+}
+
+fn format_opt_usize(value: Option<usize>) -> String {
+    value.map(|value| value.to_string()).unwrap_or_default()
 }
