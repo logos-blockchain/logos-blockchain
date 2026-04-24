@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
         user_config.update_from_args(cli_args)?
     };
 
-    let app = run_node_from_config(run_config)
+    let app = run_node_from_config(run_config, None)
         .map_err(|e| eyre!("{e}"))
         .inspect_err(|e| {
             eprintln!("\nExiting... {e}.\n");

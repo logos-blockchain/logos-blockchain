@@ -8,6 +8,7 @@ pub trait ServiceComponents {
     /// Settings for broadcasting messages that have passed through the blend
     /// network.
     type BroadcastSettings;
+    type NodeId;
 }
 
 impl<CoreService, EdgeService, RuntimeServiceId> ServiceComponents
@@ -17,4 +18,5 @@ where
     EdgeService: ServiceData + edge::service_components::ServiceComponents,
 {
     type BroadcastSettings = EdgeService::BroadcastSettings;
+    type NodeId = CoreService::NodeId;
 }

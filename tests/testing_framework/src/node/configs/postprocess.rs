@@ -31,6 +31,7 @@ pub fn leader_stake_amount(total_wallet_funds: u64, n_participants: usize) -> u6
 pub fn apply_wallet_genesis_overrides(
     general_configs: &mut [Config],
     genesis_tx: &GenesisTx,
+    n_blend_core_nodes: usize,
     wallet_accounts: &[(ZkKey, u64)],
     key_id_for_preload_backend: impl Fn(&Key) -> String,
     test_context: Option<&str>,
@@ -58,7 +59,9 @@ pub fn apply_wallet_genesis_overrides(
         .collect::<Vec<GeneralBlendConfig>>();
 
     let mut providers = Vec::with_capacity(blend_configs.len());
-    for (idx, (blend_conf, private_key, secret_zk_key)) in blend_configs.iter().enumerate() {
+    for (idx, (blend_conf, private_key, secret_zk_key)) in
+        blend_configs.iter().enumerate().take(n_blend_core_nodes)
+    {
         providers.push(ProviderInfo {
             service_type: ServiceType::BlendNetwork,
             provider_sk: private_key.clone(),
@@ -69,7 +72,7 @@ pub fn apply_wallet_genesis_overrides(
     }
 
     let mut transfer_op = genesis_tx.genesis_transfer().clone();
-    for output in &mut transfer_op.outputs {
+    for output in &mut *transfer_op.outputs {
         if leader_keys.contains(&output.pk) {
             output.value = leader_stake;
         }

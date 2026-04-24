@@ -84,8 +84,30 @@ jobs:
         id: verify_local_ntp
         uses: ./.github/actions/verify-local-ntp-server
 
-      # Build release binary for logos-blockchain-node (so runtimes can be reduced)
-      - name: Build binaries with required features
+      # Build the testing-featured node binary required by test_mantle_sdp_ops.
+      - name: Build testing binary for test_mantle_sdp_ops
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          args: --locked --release -p logos-blockchain-node --features testing
+        env:
+          CARGO_INCREMENTAL: 0  # Disable incremental compilation
+
+      # Run the isolated SDP ops target that requires the testing-featured node binary.
+      - name: End-to-end integration tests - test_mantle_sdp_ops
+        id: mantle_sdp_ops_end_to_end
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 90
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+        with:
+          command: nextest
+          args: run --locked --jobs 3 --retries 2 -p logos-blockchain-tests --features mantle_sdp_ops --test test_mantle_sdp_ops --no-fail-fast
+
+      # Build release binaries for the remaining end-to-end tests.
+      - name: Build binaries for remaining end-to-end tests
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
         with:
@@ -94,7 +116,7 @@ jobs:
         env:
           CARGO_INCREMENTAL: 0  # Disable incremental compilation
 
-      # Run the main end-to-end integration tests using cargo-nextest for better performance and reliability
+      # Run the remaining end-to-end integration tests using cargo-nextest for better performance and reliability
       - name: End-to-end integration tests
         id: end_to_end
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
@@ -108,12 +130,12 @@ jobs:
           args: run --locked --jobs 3 --retries 2 -p logos-blockchain-tests --no-fail-fast
 
       - name: Upload integration tests results on failure
-        if: ${{ failure() && steps.end_to_end.conclusion == 'failure' }}
+        if: ${{ failure() && (steps.mantle_sdp_ops_end_to_end.conclusion == 'failure' || steps.end_to_end.conclusion == 'failure') }}
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
-          path: tests/.tmp*
+          path: tests/.run_*
 
       # Run cucumber integration tests with environment variables for binaries and test params
       # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
@@ -121,86 +143,45 @@ jobs:
       # - @undefined_behaviour = tests that trigger undefined system-level behaviour in the logos-blockchain-node binary
 
       # Feature: Smoke (@smoke_ci)
-      - name: Run cucumber - @smoke_ci
-        id: cucumber_smoke
-        # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
+      - name: Run cucumber suite - smoke
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
-        timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        env:
-          CUCUMBER_LOG_LEVEL: debug
-          CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
-          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
         with:
-          command: test
-          args: >-
-            --locked -p logos-blockchain-tests --features cucumber
-            --test cucumber -- --tags "@smoke_ci and not (@broken or @undefined_behaviour)"
-
-      # On failure, upload cucumber logs and artifacts for debugging
-      - name: Upload cucumber logs on failure
-        if: ${{ failure() && steps.cucumber_smoke.conclusion == 'failure' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
-        with:
-          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-smoke  # ✅ Unique per OS
-          include-hidden-files: true
-          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Smoke/**
+          suite_tag: "@smoke_ci"
+          suite_name: smoke
+          artifact_subdir: Smoke
 
       # Feature: Cryptarchia (@cryptarchia_ci)
-      - name: Run cucumber - @cryptarchia_ci
-        id: cucumber_cryptarchia
-        # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
+      - name: Run cucumber suite - cryptarchia
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
-        timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        env:
-          CUCUMBER_LOG_LEVEL: debug
-          CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
-          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
         with:
-          command: test
-          args: >-
-            --locked -p logos-blockchain-tests --features cucumber
-            --test cucumber -- --tags "@cryptarchia_ci and not (@broken or @undefined_behaviour)"
+          suite_tag: "@cryptarchia_ci"
+          suite_name: cryptarchia
+          artifact_subdir: Cryptarchia
 
-      # On failure, upload cucumber logs and artifacts for debugging
-      - name: Upload cucumber logs on failure
-        if: ${{ failure() && steps.cucumber_cryptarchia.conclusion == 'failure' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
+      # Feature: Blend (@blend_ci)
+      - name: Run cucumber suite - blend
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
         with:
-          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-cryptarchia  # ✅ Unique per OS
-          include-hidden-files: true
-          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Cryptarchia/**
+          suite_tag: "@blend_ci"
+          suite_name: blend
+          artifact_subdir: Blend
 
       # Feature: Transactions (@transactions_ci)
-      - name: Run cucumber - @transactions_ci
-        id: cucumber_transactions
-        # Run regardless of success/failure of the previous step, but do not start if a cancellation is in progress.
+      - name: Run cucumber suite - transactions
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
-        timeout-minutes: 60  # Safety net timeout - this needs to be adjusted as more tests are added
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
-        env:
-          CUCUMBER_LOG_LEVEL: debug
-          CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: true
-          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
-          CUCUMBER_VERBOSE_CONSOLE: true
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
         with:
-          command: test
-          args: >-
-            --locked -p logos-blockchain-tests --features cucumber
-            --test cucumber -- --tags "@transactions_ci and not (@broken or @undefined_behaviour)"
-
-      # On failure, upload cucumber logs and artifacts for debugging
-      - name: Upload cucumber logs on failure
-        if: ${{ failure() && steps.cucumber_transactions.conclusion == 'failure' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47
-        with:
-          name: cucumber-artifacts-${{ runner.os }}-${{ github.sha }}-transactions  # ✅ Unique per OS
-          include-hidden-files: true
-          path: ${{ github.workspace }}/tests/cucumber_tests/temp/cucumber_artefacts/Transactions/**
+          suite_tag: "@transactions_ci"
+          suite_name: transactions
+          artifact_subdir: Transactions
+          verbose_console: "true"
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results

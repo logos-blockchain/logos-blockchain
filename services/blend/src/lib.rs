@@ -84,12 +84,16 @@ where
 impl<CoreService, EdgeService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for BlendService<CoreService, EdgeService, RuntimeServiceId>
 where
-    CoreService: ServiceData<Message: MessageComponents<Payload: Into<Vec<u8>>> + Send + Sync + 'static>
-        + CoreServiceComponents<
+    CoreService: ServiceData<
+            Message: MessageComponents<CoreService::NodeId, Payload: Into<Vec<u8>>>
+                         + Send
+                         + Sync
+                         + 'static,
+        > + CoreServiceComponents<
             RuntimeServiceId,
             NetworkAdapter: NetworkAdapterTrait<
                 RuntimeServiceId,
-                BroadcastSettings = BroadcastSettings<CoreService>,
+                BroadcastSettings = BroadcastSettings<CoreService, RuntimeServiceId>,
             > + Send
                                 + Sync
                                 + 'static,
@@ -151,7 +155,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             MembershipService<EdgeService>,
             PreloadKmsService<_>
         )
@@ -226,8 +230,10 @@ where
     }
 }
 
-type BroadcastSettings<CoreService> =
-    <<CoreService as ServiceData>::Message as MessageComponents>::BroadcastSettings;
+type BroadcastSettings<CoreService, RuntimeServiceId> =
+    <<CoreService as ServiceData>::Message as MessageComponents<
+        <CoreService as CoreServiceComponents<RuntimeServiceId>>::NodeId,
+    >>::BroadcastSettings;
 
 type MembershipAdapter<EdgeService> = <EdgeService as edge::ServiceComponents>::MembershipAdapter;
 

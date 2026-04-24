@@ -19,10 +19,10 @@ use crate::{
     workloads::LbcBlockFeedEnv,
 };
 
-const DEFAULT_TIP_STALL_THRESHOLD: Duration = Duration::from_secs(180);
-const DEFAULT_NODE_TIP_STALL_THRESHOLD: Duration = Duration::from_secs(360);
-const DEFAULT_LIB_STALL_THRESHOLD: Duration = Duration::from_secs(360);
-const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(60);
+const DEFAULT_TIP_STALL_THRESHOLD: Duration = Duration::from_mins(3);
+const DEFAULT_NODE_TIP_STALL_THRESHOLD: Duration = Duration::from_mins(6);
+const DEFAULT_LIB_STALL_THRESHOLD: Duration = Duration::from_mins(6);
+const PROGRESS_LOG_INTERVAL: Duration = Duration::from_mins(1);
 const BROADCAST_LATENCY: Duration = Duration::from_secs(1);
 
 /// Monitors a running cluster and fails the scenario as soon as nodes disagree
@@ -153,6 +153,12 @@ impl<'a> SnapshotAnalysis<'a> {
             snapshot_description: ReportFormatter::snapshot_description_for(node_heads),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct HeaderAtHeight {
+    header: HeaderId,
+    height: u64,
 }
 
 /// Shared progress-tracking logic for cluster-wide tip/LIB movement.
@@ -308,22 +314,23 @@ fn propagation_budget(
         .slot_duration
         .div_f64(deployment.cryptarchia.slot_activation_coeff.as_f64());
 
-    let blend_latency = if blend_network_size < deployment.blend.common.minimum_network_size.get() {
-        Duration::ZERO
-    } else {
-        deployment.blend_round_duration().saturating_mul(
-            (deployment
-                .blend
-                .core
-                .scheduler
-                .delayer
-                .maximum_release_delay_in_rounds
-                .get()
-                * deployment.blend.common.num_blend_layers.get())
-            .try_into()
-            .expect("blend latency multiplier must fit u32"),
-        )
-    };
+    let blend_latency =
+        if blend_network_size < deployment.blend.common.minimum_network_size.into_inner() {
+            Duration::ZERO
+        } else {
+            deployment.blend_round_duration().saturating_mul(
+                (deployment
+                    .blend
+                    .core
+                    .scheduler
+                    .delayer
+                    .maximum_release_delay_in_rounds
+                    .get()
+                    * deployment.blend.common.num_blend_layers.get())
+                .try_into()
+                .expect("blend latency multiplier must fit u32"),
+            )
+        };
 
     proposal_interval
         .saturating_add(blend_latency)
@@ -354,7 +361,7 @@ where
     }
 
     async fn check_during_capture(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
-        let snapshot = E::block_feed(ctx).snapshot().await;
+        let snapshot = E::block_feed(ctx)?.snapshot();
         let analysis = SnapshotAnalysis::new(&snapshot.node_heads, &snapshot.parent_edges);
 
         self.observe_snapshot(&analysis)?;
@@ -364,7 +371,7 @@ where
     }
 
     async fn evaluate(&mut self, ctx: &RunContext<E>) -> Result<(), DynError> {
-        let snapshot = E::block_feed(ctx).snapshot().await;
+        let snapshot = E::block_feed(ctx)?.snapshot();
         let analysis = SnapshotAnalysis::new(&snapshot.node_heads, &snapshot.parent_edges);
 
         self.observe_snapshot(&analysis)?;
@@ -618,12 +625,6 @@ fn distinct_lib_headers(node_heads: &[NodeHeadSnapshot]) -> Vec<HeaderId> {
         .collect::<HashSet<_>>()
         .into_iter()
         .collect()
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct HeaderAtHeight {
-    header: HeaderId,
-    height: u64,
 }
 
 /// Computes the distance between the highest and lowest observed heights.

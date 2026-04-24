@@ -127,7 +127,7 @@ async fn step_k8s_manual_start_nodes_with_wallet_resources(
             })?;
 
         let wallet_info = build_user_wallets(world, &node_name, &wallet_start_info)?;
-        insert_started_node_info(world, node_name, started_node, wallet_info);
+        insert_started_node_info(world, &node_name, started_node, wallet_info);
     }
 
     let cluster = world

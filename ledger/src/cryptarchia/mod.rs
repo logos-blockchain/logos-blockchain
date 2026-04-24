@@ -13,13 +13,15 @@ use lb_core::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
-        ops::transfer::TransferOp,
+        ledger::Operation as _,
+        ops::transfer::{TransferOp, TransferValidationContext},
     },
     proofs::leader_proof::{self, LeaderPublic},
+    sdp::locked_notes::LockedNotes,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::ZkSignature;
 use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
@@ -48,8 +50,8 @@ const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
 const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
-use super::{Balance, Config, LedgerError};
-use crate::{WINDOW_SIZE, mantle::sdp::locked_notes::LockedNotes};
+use super::{Balance, Config, LedgerError, mantle};
+use crate::WINDOW_SIZE;
 
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -349,10 +351,10 @@ impl LedgerState {
         let new_average_execution_gas: Gas =
             ((avg_numerator / EXECUTION_MARKET_EMA_DENOMINATOR) as Value).into();
 
-        // Then update the `execution_base_fee`
+        // Then update the `execution_base_fee` using the new average
         let fee_numerator = u128::from(self.execution_base_fee.into_inner())
             * (EXECUTION_MARKET_BASE_FEE_NUMERATOR
-                + u128::from(self.average_execution_gas.into_inner()));
+                + u128::from(new_average_execution_gas.into_inner()));
         let new_base_fee =
             ((fee_numerator / EXECUTION_MARKET_BASE_FEE_DENOMINATOR) as Value).into();
 
@@ -414,36 +416,25 @@ impl LedgerState {
         transfer_sig: &ZkSignature,
         tx_hash: TxHash,
     ) -> Result<(Self, Balance), LedgerError<Id>> {
-        let mut balance: i128 = 0;
-        let mut pks: Vec<ZkPublicKey> = vec![];
-        for input in &transfer_op.inputs {
-            if locked_notes.contains(input) {
-                return Err(LedgerError::LockedNote(*input));
-            }
-            let utxo;
-            (self.utxos, utxo) = self
-                .utxos
-                .remove(input)
-                .map_err(|_| LedgerError::InvalidNote(*input))?;
-            balance = balance
-                .checked_add(utxo.note.value.into())
-                .ok_or(LedgerError::BalanceOverflow)?;
-            pks.push(utxo.note.pk);
-        }
+        //validate the transfer
+        transfer_op
+            .validate(&TransferValidationContext {
+                locked_notes,
+                utxos: &self.utxos,
+                tx_hash: &tx_hash,
+                transfer_sig,
+            })
+            .map_err(mantle::Error::Transfer)?;
 
-        if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, transfer_sig) {
-            return Err(LedgerError::InvalidProof);
-        }
+        // Compute the balance
+        let balance = transfer_op
+            .balance(&self.utxos)
+            .map_err(mantle::Error::Transfer)?;
 
-        for utxo in transfer_op.utxos() {
-            if utxo.note.value == 0 {
-                return Err(LedgerError::ZeroValueNote);
-            }
-            balance = balance
-                .checked_sub(utxo.note.value.into())
-                .ok_or(LedgerError::BalanceOverflow)?;
-            self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-        }
+        //execute the transfer
+        self.utxos = transfer_op
+            .execute(self.utxos)
+            .map_err(mantle::Error::Transfer)?;
         Ok((self, balance))
     }
 
@@ -509,6 +500,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub fn update_utxos(self, utxos: UtxoTree) -> Self {
+        Self { utxos, ..self }
+    }
+
+    #[must_use]
     pub const fn execution_base_fee(&self) -> &GasPrice {
         &self.execution_base_fee
     }
@@ -552,7 +548,11 @@ impl LedgerState {
             return Err(LedgerError::InputInGenesis(transfer_op.inputs[0]));
         }
 
-        Ok(Self::from_utxos(transfer_op.utxos(), config, epoch_nonce))
+        Ok(Self::from_utxos(
+            transfer_op.outputs.utxos(transfer_op),
+            config,
+            epoch_nonce,
+        ))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config, nonce: Fr) -> Self {
@@ -662,8 +662,12 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            AuthenticatedMantleTx, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx,
-            Transaction as _, gas::MainnetGasConstants, ops::leader_claim::VoucherCm,
+            AuthenticatedMantleTx, MantleTx, Note, Op,
+            OpProof::ZkSig,
+            SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants,
+            ledger::{Inputs, Outputs},
+            ops::leader_claim::VoucherCm,
         },
         sdp::ServiceParameters,
     };
@@ -690,10 +694,11 @@ pub mod tests {
 
     #[must_use]
     pub fn utxo_with_sk() -> (ZkKey, Utxo) {
-        let transfer_hash: Fr = BigUint::from(thread_rng().next_u64()).into();
+        let mut op_id = [0u8; 32];
+        thread_rng().fill_bytes(&mut op_id);
         let zk_sk = ZkKey::from(BigUint::from(0u64));
         let utxo = Utxo {
-            transfer_hash: transfer_hash.into(),
+            op_id,
             output_index: 0,
             note: Note::new(10000, zk_sk.to_public_key()),
         };
@@ -831,7 +836,7 @@ pub mod tests {
                 NonNegativeRatio::new(1, 10.try_into().unwrap()),
                 1f64.try_into().expect("1 > 0"),
             ),
-            sdp_config: crate::mantle::sdp::Config {
+            sdp_config: mantle::sdp::Config {
                 service_params: Arc::new(service_params),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
@@ -903,8 +908,7 @@ pub mod tests {
     }
 
     fn full_ledger_state(cryptarchia_ledger: LedgerState, config: &Config) -> crate::LedgerState {
-        let mantle_ledger =
-            crate::mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state());
+        let mantle_ledger = mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state());
         crate::LedgerState {
             block_number: 0,
             cryptarchia_ledger,
@@ -1258,7 +1262,7 @@ pub mod tests {
             .map(|(sk, _)| (*sk).clone())
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
-        let transfer_op = TransferOp::new(inputs, outputs);
+        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op.clone())],
             execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
@@ -1276,13 +1280,44 @@ pub mod tests {
     }
 
     #[test]
+    fn test_invalid_double_spend_transfer() {
+        let note_sk = ZkKey::from(BigUint::from(1u8));
+        let output_note_sk = ZkKey::from(BigUint::from(2u8));
+        let input_note = Note::new(100, note_sk.to_public_key());
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: input_note,
+        };
+
+        let output_note = Note::new(200, output_note_sk.to_public_key());
+
+        let locked_notes = LockedNotes::new();
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
+        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
+            &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
+            vec![output_note],
+        );
+
+        let _fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
+            &locked_notes,
+            &transfer_op,
+            &transfer_sig,
+            tx.hash(),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_tx_processing_valid_transaction() {
         let note_sk = ZkKey::from(BigUint::from(1u8));
         let output_note1_sk = ZkKey::from(BigUint::from(2u8));
         let output_note2_sk = ZkKey::from(BigUint::from(3u8));
         let input_note = Note::new(11000, note_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1316,8 +1351,8 @@ pub mod tests {
         // Verify outputs were created
         let (_, transfer_op, _) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
-        let output_utxo1 = transfer_op.utxo_by_index(0).unwrap();
-        let output_utxo2 = transfer_op.utxo_by_index(1).unwrap();
+        let output_utxo1 = transfer_op.outputs.utxo_by_index(0, &transfer_op).unwrap();
+        let output_utxo2 = transfer_op.outputs.utxo_by_index(1, &transfer_op).unwrap();
 
         assert!(new_state.utxos.contains(&output_utxo1.id()));
         assert!(new_state.utxos.contains(&output_utxo2.id()));
@@ -1353,25 +1388,25 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1000, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
 
         let non_existent_utxo_1 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 1,
             note: input_note,
         };
 
         let non_existent_utxo_2 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(2u8)).into(),
+            op_id: [2u8; 32],
             output_index: 0,
             note: input_note,
         };
 
         let non_existent_utxo_3 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
         };
@@ -1396,7 +1431,7 @@ pub mod tests {
                     &transfer_sig,
                     tx.hash(),
                 );
-            assert!(matches!(result, Err(LedgerError::InvalidNote(_))));
+            assert!(matches!(result, Err(LedgerError::Mantle(_))));
         }
     }
 
@@ -1405,7 +1440,7 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1449,7 +1484,7 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(10000, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1479,7 +1514,7 @@ pub mod tests {
     fn test_output_not_zero() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: Note::new(10000, input_sk.to_public_key()),
         };
@@ -1497,7 +1532,7 @@ pub mod tests {
             &transfer_sig,
             tx.hash(),
         );
-        assert!(matches!(result, Err(LedgerError::ZeroValueNote)));
+        assert!(matches!(result, Err(LedgerError::Mantle(_))));
     }
 
     #[test]
@@ -1677,70 +1712,54 @@ pub mod tests {
         // Create a base ledger first
         let mut ledger = LedgerState::from_utxos([utxo()], &config(), Fr::ZERO);
 
-        // Some random values to test
-        let old_avg = 1_596_688.into();
-        let old_price = 113.into();
-        let gas_used = 1_596_618.into();
-        // 1) G_avg = (1596618 + 9*1596688)/10 = 1596681
-        // price = 113 * (1 + 1 / 12_773_440) = 113.00000884648146 -> 113
-        ledger.execution_base_fee = old_price;
-        ledger.average_execution_gas = old_avg;
-        ledger = ledger.update_execution_market(gas_used);
+        // 1) G_avg = (1_700_000 + 9*1_596_680)/10 = 1_607_012
+        // price = 10_000 * (11_176_760 + 1_607_012) / 12_773_440 = 10_008
+        ledger.execution_base_fee = 10_000.into();
+        ledger.average_execution_gas = 1_596_680.into();
+        ledger = ledger.update_execution_market(1_700_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (113.into(), 1_596_681.into())
+            (10_008.into(), 1_607_012.into())
         );
 
-        let old_avg = 1_596_676.into();
-        let old_price = 221.into();
-        let gas_used = 1_596_706.into();
-        // 2) G_avg = (1596706 + 9*1596676)/10 = 1596679
-        // price = 221 * (1 - 1 / 12_773_440) = 220.99998269847435 -> 220
-        ledger.execution_base_fee = old_price;
-        ledger.average_execution_gas = old_avg;
-        ledger = ledger.update_execution_market(gas_used);
+        // 2) G_avg = (1_400_000 + 9*1_596_680)/10 = 1_577_012
+        // price = 10_000 * (11_176_760 + 1_577_012) / 12_773_440 = 9_984
+        ledger.execution_base_fee = 10_000.into();
+        ledger.average_execution_gas = 1_596_680.into();
+        ledger = ledger.update_execution_market(1_400_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (220.into(), 1_596_679.into())
+            (9_984.into(), 1_577_012.into())
         );
 
-        let old_avg = 1_597_925.into();
-        let old_price = 345.into();
-        let gas_used = 1_597_815.into();
-        // 3) G_avg = (1597815 + 9*1597925)/10 = 1597914
-        // price = 345 * (1 + 1234 / 12_773_440) = 345.0333293145777 -> 345
-        ledger.execution_base_fee = old_price;
-        ledger.average_execution_gas = old_avg;
-        ledger = ledger.update_execution_market(gas_used);
+        // 3) G_avg = (2_500_000 + 9*1_000_000)/10 = 1_150_000
+        // price = 20_000 * (11_176_760 + 1_150_000) / 12_773_440 = 19_300
+        ledger.execution_base_fee = 20_000.into();
+        ledger.average_execution_gas = 1_000_000.into();
+        ledger = ledger.update_execution_market(2_500_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (345.into(), 1_597_914.into())
+            (19_300.into(), 1_150_000.into())
         );
 
-        let old_avg = 1_592_354.into();
-        let old_price = 517.into();
-        let gas_used = 1_592_404.into();
-        // 4) G_avg = (1592404 + 9*1592354)/10 = 1592359
-        // price = 517 * (1 - 4321 / 12_773_440) = 516.8251092109878 -> 516
-        ledger.execution_base_fee = old_price;
-        ledger.average_execution_gas = old_avg;
-        ledger = ledger.update_execution_market(gas_used);
+        // 4) G_avg = (500_000 + 9*2_000_000)/10 = 1_850_000
+        // price = 15_000 * (11_176_760 + 1_850_000) / 12_773_440 = 15_297
+        ledger.execution_base_fee = 15_000.into();
+        ledger.average_execution_gas = 2_000_000.into();
+        ledger = ledger.update_execution_market(500_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (516.into(), 1_592_359.into())
+            (15_297.into(), 1_850_000.into())
         );
 
-        let old_avg = 1_604_466.into();
-        let old_price = 999.into();
-        let gas_used = 1_604_376.into();
-        // 5) G_avg = (1604376 + 9*1604466)/10 = 1604457
-        // price = 999 * (1 + 7777 / 12_773_440) = 999.6082326295813 -> 999
-        ledger.execution_base_fee = old_price;
-        ledger.average_execution_gas = old_avg;
-        ledger = ledger.update_execution_market(gas_used);
+        // 5) G_avg = (1_000_000 + 9*1_800_000)/10 = 1_720_000
+        // price = 30_000 * (11_176_760 + 1_720_000) / 12_773_440 = 30_289
+        ledger.execution_base_fee = 30_000.into();
+        ledger.average_execution_gas = 1_800_000.into();
+        ledger = ledger.update_execution_market(1_000_000.into());
         assert_eq!(
             (ledger.execution_base_fee, ledger.average_execution_gas),
-            (999.into(), 1_604_457.into())
+            (30_289.into(), 1_720_000.into())
         );
     }
 }

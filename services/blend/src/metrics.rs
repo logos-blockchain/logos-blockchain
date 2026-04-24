@@ -3,7 +3,7 @@ mod imp {
     const ACTION_PUBLISH: &str = "publish";
     const ACTION_FORWARD: &str = "forward";
 
-    #[derive(Clone, Copy)]
+    #[derive(Clone, Copy, Debug)]
     pub enum InboundMessageType {
         Core,
         Edge,

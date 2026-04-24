@@ -79,7 +79,7 @@ mod tests {
     #[test]
     fn with_offline_grace_period_exceeded() {
         let last_state = LastEngineState {
-            timestamp: SystemTime::now() - Duration::from_secs(30 * 60), // 30 minutes ago
+            timestamp: SystemTime::now() - Duration::from_mins(30),
             state: lb_cryptarchia_engine::State::Online,
         };
         let state = choose_engine_state(
@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn with_offline_grace_period_not_exceeded() {
         let last_state = LastEngineState {
-            timestamp: SystemTime::now() - Duration::from_secs(10 * 60), // 10 minutes ago
+            timestamp: SystemTime::now() - Duration::from_mins(10),
             state: lb_cryptarchia_engine::State::Online,
         };
         let state = choose_engine_state(
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn with_last_state_bootstrapping() {
         let last_state = LastEngineState {
-            timestamp: SystemTime::now() - Duration::from_secs(5 * 60), // 5 minutes ago
+            timestamp: SystemTime::now() - Duration::from_mins(5),
             state: lb_cryptarchia_engine::State::Bootstrapping,
         };
         let state = choose_engine_state(
@@ -126,8 +126,8 @@ mod tests {
             prolonged_bootstrap_period: Duration::ZERO,
             force_bootstrap,
             offline_grace_period: OfflineGracePeriodConfig {
-                grace_period: Duration::from_secs(20 * 60),
-                state_recording_interval: Duration::from_secs(60),
+                grace_period: Duration::from_mins(20),
+                state_recording_interval: Duration::from_mins(1),
             },
         }
     }

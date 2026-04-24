@@ -243,7 +243,15 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     pub(crate) fn start_new_session(&mut self, new_session_info: (Membership<PeerId>, u64)) {
         let current_session_number = self.current_session_info.1;
 
-        self.connections_waiting_upgrade.clear();
+        // Close any connections that were still waiting to be upgraded. Without
+        // this, a late `FullyNegotiated` event from one of those handlers would
+        // violate the invariant that every upgraded connection is present in
+        // `connections_waiting_upgrade` at the moment `handle_negotiated_connection`
+        // runs.
+        let pending_upgrades = mem::take(&mut self.connections_waiting_upgrade);
+        for (connection, _) in pending_upgrades {
+            self.close_connection(connection);
+        }
         self.current_session_info = new_session_info;
 
         self.stop_old_session();
@@ -297,35 +305,73 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// Force send a message to a peer, as long as the peer is connected, no
     /// matter the state the connection is in.
     #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub fn force_send_message_to_peer(
+    pub fn force_send_message_to_current_session_peer(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
+    ) -> Result<(), SendError> {
+        self.force_send_message_to_peer_at_session(message, peer_id, self.current_session_info.1)
+    }
+
+    /// Force send a message to a peer, as long as the peer is connected, no
+    /// matter the state the connection is in.
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    fn force_send_message_to_peer_at_session(
+        &mut self,
+        message: &EncapsulatedMessageWithVerifiedPublicHeader,
+        peer_id: PeerId,
+        session: u64,
     ) -> Result<(), SendError> {
         let serialized_message =
             lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header(
                 message,
             );
-        self.force_send_serialized_message_to_peer(serialized_message, peer_id)
+        self.force_send_serialized_message_to_peer_at_session(serialized_message, peer_id, session)
     }
 
     /// Force send a serialized message to a peer (without trying to deserialize
     /// nor validating it first), as long as the peer is connected, no
     /// matter the state the connection is in.
-    #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub fn force_send_serialized_message_to_peer(
+    #[cfg(test)]
+    fn force_send_serialized_message_to_current_session_peer(
         &mut self,
         serialized_message: Vec<u8>,
         peer_id: PeerId,
     ) -> Result<(), SendError> {
+        self.force_send_serialized_message_to_peer_at_session(
+            serialized_message,
+            peer_id,
+            self.current_session_info.1,
+        )
+    }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    pub fn force_send_serialized_message_to_peer_at_session(
+        &mut self,
+        serialized_message: Vec<u8>,
+        peer_id: PeerId,
+        session: u64,
+    ) -> Result<(), SendError> {
+        if session != self.current_session_info.1 {
+            let Some(old_session) = &mut self.old_session else {
+                return Err(SendError::InvalidSession);
+            };
+            return old_session.force_send_serialized_message_to_peer_at_session(
+                serialized_message,
+                peer_id,
+                session,
+            );
+        }
+
         let Some(RemotePeerConnectionDetails { connection_id, .. }) =
             self.negotiated_peers.get(&peer_id)
         else {
             return Err(SendError::NoPeers);
         };
+
         tracing::trace!(
             target: LOG_TARGET,
-            "Notifying handler with peer {peer_id:?} on connection {connection_id:?} to deliver already-serialized message."
+            "Notifying handler with peer {peer_id:?} on current session connection {connection_id:?} to deliver already-serialized message."
         );
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
@@ -338,6 +384,14 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
 
     pub const fn negotiated_peers(&self) -> &HashMap<PeerId, RemotePeerConnectionDetails> {
         &self.negotiated_peers
+    }
+
+    /// Returns the peer IDs of the old session's negotiated peers, if a
+    /// session transition is in progress.
+    pub fn old_session_peer_ids(&self) -> Option<impl Iterator<Item = &PeerId> + '_> {
+        self.old_session
+            .as_ref()
+            .map(OldSession::negotiated_peer_ids)
     }
 
     fn try_wake(&mut self) {
@@ -413,22 +467,23 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// Regardless of which road is taken, the connection is removed from the
     /// set of pending connections since it has now been processed.
     ///
+    /// The handler emits [`ToBehaviour::FullyNegotiated`] at most once per
+    /// connection and only for connections we chose to upgrade (i.e. handlers
+    /// returned from the `Either::Left` branch of
+    /// [`Self::handle_established_inbound_connection`]
+    /// [`Self::handle_established_outbound_connection`]), so the entry must be
+    /// present. Pending entries are proactively closed on session transition to
+    /// preserve this invariant.
+    ///
     /// # Panics
     ///
     /// If the specified connection is not present in the map of connections
-    /// waiting to be upgraded and this connection has not already been upgraded
-    /// before, since we need to peer role (i.e., dialer or listener) before
-    /// moving the connection into a different storage map.
+    /// waiting to be upgraded.
     fn handle_negotiated_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
-        let Some(new_connection_peer_role) = self
+        let new_connection_peer_role = self
             .connections_waiting_upgrade
             .remove(&(peer_id, connection_id))
-        else {
-            tracing::trace!(target: LOG_TARGET, "Negotiated connection ({peer_id:?}, {connection_id:?}) not found in map of waiting connections. This is because a different substream event was used to upgrade or drop the connection");
-            // We cannot assert anything here, since also for a connection we are not
-            // willing to upgrade, there can be two connection handler events.
-            return;
-        };
+            .unwrap_or_else(|| panic!("Negotiated connection ({peer_id:?}, {connection_id:?}) not found in map of waiting connections."));
 
         if self.negotiated_peers.contains_key(&peer_id) {
             self.handle_negotiated_connection_for_existing_peer(
@@ -654,7 +709,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
                 "Provided connection ID {connection_id:?} does not match the stored connection ID {:?} for peer {peer_id:?}. Ignoring state update.",
                 peer_details.connection_id
             );
-            return Some(state);
+            return None;
         }
         Some(mem::replace(&mut peer_details.negotiated_state, state))
     }
@@ -853,8 +908,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
                         return;
                     }
                 }
-                Err(e) => {
-                    tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old session: {e:?}");
+                Err(_) => {
                     return;
                 }
             }
@@ -941,9 +995,10 @@ where
             Either::Left(ConnectionHandler::new(
                 ConnectionMonitor::new(self.observation_window_clock_provider.interval_stream()),
                 self.protocol_name.clone(),
+                (peer_id, connection_id),
             ))
         } else {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?}.");
+            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?}.");
             Either::Right(DummyConnectionHandler)
         })
     }
@@ -989,6 +1044,7 @@ where
             Either::Left(ConnectionHandler::new(
                 ConnectionMonitor::new(self.observation_window_clock_provider.interval_stream()),
                 self.protocol_name.clone(),
+                (peer_id, connection_id),
             ))
         } else {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?}.");
@@ -1074,10 +1130,10 @@ where
                         (peer_id, connection_id),
                     );
                 }
-                // The inbound/outbound connection was fully negotiated by the peer,
-                // which means that the peer supports the blend protocol. We consider them healthy
-                // by default.
-                ToBehaviour::FullyNegotiatedInbound | ToBehaviour::FullyNegotiatedOutbound => {
+                // The connection was fully negotiated by the peer, which means that
+                // the peer supports the blend protocol. We consider them healthy by
+                // default. The handler emits this event at most once per connection.
+                ToBehaviour::FullyNegotiated => {
                     self.handle_negotiated_connection((peer_id, connection_id));
                 }
                 // TODO: Re-add logic once Blend observation window values calculation is fixed.

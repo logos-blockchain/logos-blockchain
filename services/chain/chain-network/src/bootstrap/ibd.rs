@@ -1121,9 +1121,15 @@ mod tests {
     }
 
     fn genesis_utxo() -> lb_core::mantle::ledger::Utxo {
+        use lb_core::mantle::ledger::{Inputs, Outputs};
         let zk_sk = ZkKey::from(BigUint::from(1u64));
-        TransferOp::new(vec![], vec![Note::new(1, zk_sk.to_public_key())])
-            .utxo_by_index(0)
+        let transfer = TransferOp::new(
+            Inputs::new(vec![]),
+            Outputs::new(vec![Note::new(1, zk_sk.to_public_key())]),
+        );
+        transfer
+            .outputs
+            .utxo_by_index(0, &transfer)
             .expect("genesis transfer should create one UTXO")
     }
 

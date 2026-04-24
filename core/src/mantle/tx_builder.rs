@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap};
+use std::{cmp::Ordering, collections::HashMap, ops::DerefMut as _};
 
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
@@ -7,6 +7,7 @@ use crate::{
     mantle::{
         NoteId,
         gas::{GasCost, GasOverflow, GasPrice},
+        ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         tx::MantleTxContext,
     },
@@ -34,7 +35,7 @@ impl MantleTxBuilder {
                 storage_gas_price: 0.into(),
             },
             ledger_inputs: vec![],
-            pending_transfer: TransferOp::new(vec![], vec![]),
+            pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
             channel_withdraw_proofs: HashMap::new(),
             context,
         }
@@ -80,7 +81,7 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn extend_ledger_outputs(mut self, notes: impl IntoIterator<Item = Note>) -> Self {
-        self.pending_transfer.outputs.extend(notes);
+        self.pending_transfer.outputs.deref_mut().extend(notes);
         self
     }
 
@@ -156,24 +157,7 @@ impl MantleTxBuilder {
             .map(|n| i128::from(n.value))
             .sum();
 
-        // TODO: reuse this for `LedgerState::try_apply_tx` with some refactoring
-        // https://github.com/logos-blockchain/logos-blockchain/issues/2498
-        let ops_balance: i128 = self
-            .mantle_tx
-            .ops
-            .iter()
-            .map(|op| match op {
-                Op::ChannelDeposit(deposit) => -i128::from(deposit.amount),
-                Op::ChannelWithdraw(withdraw) => i128::from(withdraw.amount),
-                Op::LeaderClaim(_) => i128::from(self.context.leader_reward_amount),
-                // `Op::Transfer` is not handled here since `self.ledger_inputs` and
-                // `self.pending_transfer.outputs` already account for the balance changes from
-                // `Op::Transfer`s.
-                _ => 0,
-            })
-            .sum();
-
-        in_sum - out_sum + ops_balance
+        in_sum - out_sum
     }
 
     pub fn gas_cost<G: GasConstants>(&self) -> Result<GasCost, GasOverflow> {
@@ -221,7 +205,6 @@ impl MantleTxBuilder {
 mod tests {
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::Ed25519Key;
-    use num_bigint::BigUint;
 
     use super::*;
     use crate::mantle::{
@@ -250,7 +233,7 @@ mod tests {
         };
         let builder = MantleTxBuilder::new(context).push_op(Op::ChannelInscribe(op));
 
-        // Check that the tx is already balanced becuase of zero gas price
+        // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
         assert_eq!(builder.funding_delta::<MainnetGasConstants>().unwrap(), 0);
     }
@@ -260,7 +243,7 @@ mod tests {
         // Build an operation
         let op = DepositOp {
             channel_id: [0; 32].into(),
-            amount: 1,
+            inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
             metadata: b"Mint 1 to Alice in Zone".to_vec(),
         };
 
@@ -269,38 +252,24 @@ mod tests {
             gas_context: MantleTxGasContext::default(),
             leader_reward_amount: 30,
         };
-        let builder = MantleTxBuilder::new(context).push_op(Op::ChannelDeposit(op.clone()));
+        let builder = MantleTxBuilder::new(context).push_op(Op::ChannelDeposit(op));
 
-        // Check that the balance reflects the deposit op
-        assert_eq!(builder.net_balance(), -i128::from(op.amount)); // not yet funded
-        assert_eq!(
-            builder.funding_delta::<MainnetGasConstants>().unwrap(),
-            -i128::from(op.amount) // zero gas price for now
-        );
-
-        // Fund tx and add change note
-        let builder = builder
-            .add_ledger_input(Utxo::new(
-                BigUint::ZERO.into(),
-                0,
-                Note::new(3, ZkPublicKey::zero()),
-            ))
-            .add_ledger_output(Note::new(2, ZkPublicKey::zero()));
-
-        // Check the tx is balanced
+        // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder.funding_delta::<MainnetGasConstants>().unwrap(),
-            0 // zero gas price for now
-        );
+        assert_eq!(builder.funding_delta::<MainnetGasConstants>().unwrap(), 0);
     }
 
     #[test]
     fn withdraw_op() {
         // Build an operation
+        let withdraw_note = Note {
+            value: 5,
+            pk: ZkPublicKey::zero(),
+        };
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
-            amount: 1,
+            outputs: Outputs::new(vec![withdraw_note]),
+            withdraw_nonce: 0,
         };
 
         // Init a tx builder
@@ -308,27 +277,11 @@ mod tests {
             gas_context: MantleTxGasContext::new([(op.channel_id, 1)].into()),
             leader_reward_amount: 30,
         };
-        let builder = MantleTxBuilder::new(context).push_op(Op::ChannelWithdraw(op.clone()));
+        let builder = MantleTxBuilder::new(context).push_op(Op::ChannelWithdraw(op));
 
-        // Check that the balance reflects the withdraw op
-        assert_eq!(builder.net_balance(), i128::from(op.amount)); // not yet funded
-        assert_eq!(
-            builder.funding_delta::<MainnetGasConstants>().unwrap(),
-            i128::from(op.amount) // zero gas price for now
-        );
-
-        // Add change note
-        let builder = builder
-            .return_change::<MainnetGasConstants>(ZkPublicKey::zero())
-            .unwrap()
-            .unwrap();
-
-        // Check the tx is balanced
+        // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder.funding_delta::<MainnetGasConstants>().unwrap(),
-            0 // zero gas price for now
-        );
+        assert_eq!(builder.funding_delta::<MainnetGasConstants>().unwrap(), 0);
     }
 
     #[test]
@@ -337,6 +290,7 @@ mod tests {
         let op = LeaderClaimOp {
             rewards_root: Fr::ZERO.into(),
             voucher_nullifier: Fr::ZERO.into(),
+            pk: ZkPublicKey::zero(),
         };
 
         // Init a tx builder
@@ -344,30 +298,11 @@ mod tests {
             gas_context: MantleTxGasContext::default(),
             leader_reward_amount: 30,
         };
-        let builder = MantleTxBuilder::new(context.clone()).push_op(Op::LeaderClaim(op));
+        let builder = MantleTxBuilder::new(context).push_op(Op::LeaderClaim(op));
 
-        // Check that the balance reflects the LeaderClaim op
-        assert_eq!(
-            builder.net_balance(),
-            i128::from(context.leader_reward_amount) // not yet funded
-        );
-        assert_eq!(
-            builder.funding_delta::<MainnetGasConstants>().unwrap(),
-            i128::from(context.leader_reward_amount) // zero gas price for now
-        );
-
-        // Add change note
-        let builder = builder
-            .return_change::<MainnetGasConstants>(ZkPublicKey::zero())
-            .unwrap()
-            .unwrap();
-
-        // Check the tx is balanced
+        // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
-        assert_eq!(
-            builder.funding_delta::<MainnetGasConstants>().unwrap(),
-            0 // zero gas price for now
-        );
+        assert_eq!(builder.funding_delta::<MainnetGasConstants>().unwrap(), 0);
     }
 
     #[test]
@@ -379,11 +314,7 @@ mod tests {
         };
         let builder = MantleTxBuilder::new(context)
             .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
-            .add_ledger_input(Utxo::new(
-                BigUint::ZERO.into(),
-                0,
-                Note::new(50, ZkPublicKey::zero()),
-            ));
+            .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero())));
 
         // Check that the balance is 10 (= 50 - 40)
         assert_eq!(builder.net_balance(), 10);
@@ -414,6 +345,10 @@ mod tests {
             gas_context: MantleTxGasContext::new([(channel_id, 1)].into()),
             leader_reward_amount: 30,
         };
+        let withdraw_note = Note {
+            value: 5,
+            pk: ZkPublicKey::zero(),
+        };
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id,
@@ -423,32 +358,31 @@ mod tests {
             }))
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
-                amount: 10,
+                inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
                 metadata: b"Mint 10 to Alice in Zone".to_vec(),
             }))
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                amount: 1,
+                outputs: Outputs::new(vec![withdraw_note]),
+                withdraw_nonce: 0,
             }))
             .push_op(Op::LeaderClaim(LeaderClaimOp {
                 rewards_root: Fr::ZERO.into(),
                 voucher_nullifier: Fr::ZERO.into(),
+                pk: ZkPublicKey::zero(),
             }))
             .add_ledger_output(Note::new(40, ZkPublicKey::zero()));
 
-        // Check the balance before funding tx: -10 + 1 + 30 - 40 = -19
-        assert_eq!(builder.net_balance(), -19);
+        // Check the balance before funding tx
+        assert_eq!(builder.net_balance(), -40);
         assert_eq!(
             builder.funding_delta::<MainnetGasConstants>().unwrap(),
-            -19 // zero gas price for now
+            -40 // zero gas price for now
         );
 
         // Fund tx
-        let builder = builder.add_ledger_input(Utxo::new(
-            BigUint::ZERO.into(),
-            0,
-            Note::new(19, ZkPublicKey::zero()),
-        ));
+        let builder =
+            builder.add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(40, ZkPublicKey::zero())));
 
         // Check the tx is balanced
         assert_eq!(builder.net_balance(), 0);

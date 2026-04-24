@@ -7,7 +7,7 @@ ARG VERSION=v0.4.2
 # ===========================
 # BUILD IMAGE
 # ===========================
-FROM rust:1.94.0-slim-bookworm AS builder
+FROM rust:1.95.0-slim-bookworm AS builder
 
 ARG VERSION
 
@@ -45,7 +45,7 @@ LABEL maintainer="augustinas@status.im" \
     description="Logos Blockchain node and other binaries image"
 
 RUN apt-get update && apt-get install -yq \
-    libstdc++6 libssl3 ca-certificates nginx \
+    libstdc++6 libssl3 ca-certificates \
     python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
 
