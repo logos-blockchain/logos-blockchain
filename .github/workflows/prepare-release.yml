@@ -171,7 +171,7 @@ jobs:
           cp "$TEMPLATE" "$OUTPUT"
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then
-            cat "$DISCLAIMER_FILE" "$OUTPUT" > "${OUTPUT}.tmp"
+            { cat "$DISCLAIMER_FILE"; echo; cat "$OUTPUT"; } > "${OUTPUT}.tmp"
             mv "${OUTPUT}.tmp" "$OUTPUT"
           fi
 
