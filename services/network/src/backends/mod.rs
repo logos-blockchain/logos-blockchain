@@ -3,7 +3,6 @@ use tokio_stream::wrappers::BroadcastStream;
 
 use super::Debug;
 
-#[cfg(feature = "libp2p")]
 pub mod libp2p;
 
 #[cfg(feature = "mock")]

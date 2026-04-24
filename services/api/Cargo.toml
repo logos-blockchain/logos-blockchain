@@ -19,10 +19,10 @@ ignored = ["serde_json"]
 async-trait                = "0.1"
 bytes                      = { workspace = true }
 futures                    = { workspace = true }
-lb-blend-service           = { features = ["libp2p"], workspace = true }
+lb-blend-service           = { workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-chain-leader-service    = { workspace = true }
-lb-chain-service           = { features = ["libp2p", "openapi"], workspace = true }
+lb-chain-service           = { features = ["openapi"], workspace = true }
 lb-core                    = { workspace = true }
 lb-ledger                  = { workspace = true }
 lb-libp2p                  = { workspace = true }
@@ -30,7 +30,7 @@ lb-network-service         = { features = ["openapi"], workspace = true }
 lb-sdp-service             = { workspace = true }
 lb-storage-service         = { features = ["rocksdb-backend"], workspace = true }
 lb-time-service            = { workspace = true }
-lb-tx-service              = { features = ["libp2p", "mock", "openapi"], workspace = true }
+lb-tx-service              = { features = ["mock", "openapi"], workspace = true }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
 serde_json                 = { workspace = true }
