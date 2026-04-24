@@ -50,14 +50,13 @@ pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError, mantle};
 use crate::WINDOW_SIZE;
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EpochState {
     /// The epoch this snapshot is for
     pub epoch: Epoch,
     /// value of the ledger nonce after `epoch_period_nonce_buffer` slots from
     /// the beginning of the epoch
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     pub nonce: Fr,
     /// stake distribution snapshot taken at the beginning of the epoch
     /// (in practice, this is equivalent to the utxos the are spendable at the
@@ -65,9 +64,9 @@ pub struct EpochState {
     pub utxos: UtxoTree,
     pub total_stake: Value,
     /// Lottery values computed based on `total_stake`
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_0: Fr,
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_1: Fr,
 }
 
@@ -135,15 +134,14 @@ impl EpochState {
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Derivative)]
+#[derive(Derivative, serde::Serialize, serde::Deserialize)]
 #[derivative(Clone, Eq, PartialEq)]
 pub struct LedgerState {
     // All available Unspent Transtaction Outputs (UTXOs) at the current slot
     // TODO: move UTXOs in the mantle ledger. There is no reason to keep them here
     pub utxos: UtxoTree,
     // randomness contribution
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     pub nonce: Fr,
     pub slot: Slot,
     // rolling snapshot of the state for the next epoch, used for epoch transitions
@@ -155,7 +153,7 @@ pub struct LedgerState {
     #[derivative(PartialEq = "ignore")]
     stake_inference: Arc<StakeInference>,
     // rolling fee window of 120 blocks, used to derive block rewards
-    #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
+    #[serde(with = "serde_arrays")]
     fee_window: [GasCost; WINDOW_SIZE],
     // Smoothed Average Execution Gas used up to the last block
     average_execution_gas: Gas,

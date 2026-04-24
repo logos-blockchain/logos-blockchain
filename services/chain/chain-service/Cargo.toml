@@ -18,10 +18,10 @@ bytes                      = { workspace = true }
 futures                    = { workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-core                    = { workspace = true }
-lb-cryptarchia-engine      = { features = ["serde"], workspace = true }
+lb-cryptarchia-engine      = { workspace = true }
 lb-cryptarchia-sync        = { workspace = true }
 lb-groth16                 = { workspace = true }
-lb-ledger                  = { features = ["serde"], workspace = true }
+lb-ledger                  = { workspace = true }
 lb-network-service         = { workspace = true }
 lb-services-utils          = { workspace = true }
 lb-storage-service         = { workspace = true }
@@ -39,9 +39,9 @@ tracing-futures            = { default-features = false, features = ["std-future
 utoipa                     = { optional = true, workspace = true }
 
 [dev-dependencies]
-lb-core                       = { features = ["mock"], workspace = true }
+lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-network-service            = { features = ["mock"], workspace = true }
+lb-network-service            = { workspace = true }
 lb-storage-service            = { features = ["rocksdb-backend"], workspace = true }
 lb-utxotree                   = { workspace = true }
 rand                          = { workspace = true }
@@ -49,5 +49,4 @@ tempfile                      = { default-features = false, version = "3" }
 
 [features]
 default = []
-libp2p  = ["lb-network-service/libp2p"]
 openapi = ["dep:utoipa"]

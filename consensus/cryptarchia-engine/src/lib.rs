@@ -1,9 +1,3 @@
-#![expect(
-    clippy::disallowed_script_idents,
-    reason = "The crate `cfg_eval` contains Sinhala script identifiers. \
-    Using the `expect` or `allow` macro on top of their usage does not remove the warning"
-)]
-
 pub mod config;
 pub mod time;
 
@@ -19,8 +13,7 @@ pub use time::{Epoch, EpochConfig, Slot};
 
 pub(crate) const LOG_TARGET: &str = "cryptarchia::engine";
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum State {
     Bootstrapping,
     Online,
@@ -174,8 +167,7 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Branch<Id> {
     id: Id,
     parent: Id,

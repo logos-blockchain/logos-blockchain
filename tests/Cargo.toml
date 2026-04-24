@@ -32,15 +32,15 @@ lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
-lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
+lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
-lb-network-service               = { features = ["libp2p"], workspace = true }
+lb-network-service               = { workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
 lb-testing-framework             = { workspace = true }
-lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
+lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
 lb-zksign                        = { workspace = true }

@@ -1,4 +1,3 @@
-#[cfg(feature = "libp2p")]
 mod imp {
     const ACTION_PUBLISH: &str = "publish";
     const ACTION_FORWARD: &str = "forward";
@@ -61,11 +60,6 @@ mod imp {
             message_type = message_type.to_str()
         );
     }
-}
-
-#[cfg(not(feature = "libp2p"))]
-mod imp {
-    pub const fn mix_packets_processed_total() {}
 }
 
 pub use imp::*;

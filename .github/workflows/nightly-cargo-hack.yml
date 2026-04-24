@@ -40,10 +40,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install cargo-hack
+      - name: Install cargo-hack and gh
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
         with:
-          tool: cargo-hack
+          tool: cargo-hack,gh
 
       # Prune after Install cargo-hack, before Set up Cargo cache — frees disk space from the previous run's leftover
       # artifacts (incremental compile dirs, fingerprints, build dirs) before the cache is restored. This means the
@@ -77,16 +77,16 @@ jobs:
       - name: Create issue on failure
         if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
-          # Use gh CLI to create an issue. 
-          # We check if an open issue with the same title already exists to avoid duplicates.
           TITLE="Cargo Hack failed on ${{ matrix.platform.label }}"
           EXISTING_ISSUE=$(gh issue list --search "$TITLE" --state open --json number --jq '.[0].number')
-          
+
           BODY="Cargo Hack check failed for platform: ${{ matrix.platform.label }}.
           See details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          
+
+          COMMIT_AUTHOR=$(gh api /repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.author.login // empty' 2>/dev/null || true)
+
           if [ -z "$EXISTING_ISSUE" ]; then
-            gh issue create --title "$TITLE" --body "$BODY" --label "bug" --label "automated-issue" --assignee "danielsanchezq,ntn-x2"
+            gh issue create --title "$TITLE" --body "$BODY" --label "bug" --label "automated-issue" --assignee "$COMMIT_AUTHOR"
           else
             gh issue comment "$EXISTING_ISSUE" --body "Another failure occurred: $BODY"
           fi

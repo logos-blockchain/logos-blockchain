@@ -39,7 +39,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Checkout and hard reset the `devnet` branch to point to the latest commit on the current release branch
 - [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -s -f compose.setup.yml compose.static.yml`
 - [ ] Push to `devnet` branch to trigger the ceremony and generate a new genesis state
-- [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. Until ready, you should see a `502` error while the containers restart when visiting [https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings](https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings
+- [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. Until ready, you should see a `502` error while the containers restart when visiting [https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings](https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings)
 - [ ] Download the new deployment configuration from the link above
 - [ ] Verify that the `time.chain_start_time` value in the deployment file indicates the right start time, which should be within the last few minutes
 - [ ] Copy-paste or attach the content of the deployment file to this issue for easier review

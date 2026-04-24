@@ -8,7 +8,6 @@ pub mod encoding;
 pub mod gas;
 pub mod genesis_tx;
 pub mod ledger;
-#[cfg(feature = "mock")]
 pub mod mock;
 pub mod ops;
 pub mod select;
