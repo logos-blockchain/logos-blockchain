@@ -39,6 +39,7 @@ use logos_blockchain_tests::{
     },
 };
 use rand::{Rng as _, thread_rng};
+use serial_test::serial;
 use tokio::time::{sleep, timeout};
 use tracing::debug;
 
