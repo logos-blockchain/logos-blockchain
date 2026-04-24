@@ -4,8 +4,6 @@ use tokio_stream::wrappers::BroadcastStream;
 use super::Debug;
 
 pub mod libp2p;
-
-#[cfg(feature = "mock")]
 pub mod mock;
 
 #[async_trait::async_trait]

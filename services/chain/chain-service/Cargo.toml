@@ -39,9 +39,9 @@ tracing-futures            = { default-features = false, features = ["std-future
 utoipa                     = { optional = true, workspace = true }
 
 [dev-dependencies]
-lb-core                       = { features = ["mock"], workspace = true }
+lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-network-service            = { features = ["mock"], workspace = true }
+lb-network-service            = { workspace = true }
 lb-storage-service            = { features = ["rocksdb-backend"], workspace = true }
 lb-utxotree                   = { workspace = true }
 rand                          = { workspace = true }

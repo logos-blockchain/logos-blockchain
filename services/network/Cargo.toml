@@ -35,5 +35,4 @@ tracing-subscriber = { default-features = false, features = ["env-filter", "fmt"
 
 [features]
 default = []
-mock    = []
 openapi = ["dep:utoipa"]
