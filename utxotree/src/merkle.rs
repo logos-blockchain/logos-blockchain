@@ -29,8 +29,7 @@ fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
     })[height]
 }
 
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 enum Node<Item> {
     Inner {
         left: Arc<Self>,

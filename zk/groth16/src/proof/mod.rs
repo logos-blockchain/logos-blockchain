@@ -7,10 +7,12 @@ use ark_ec::pairing::Pairing;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize as _, SerializationError};
 use generic_array::{ArrayLength, GenericArray, typenum::Unsigned as _};
 
-use crate::from_json_error::FromJsonError;
 pub use crate::proof::deserialize::ProofJsonDeser;
-use crate::protocol::Protocol;
-use crate::utils::{JsonG1, JsonG2, StringifiedG1, StringifiedG2};
+use crate::{
+    from_json_error::FromJsonError,
+    protocol::Protocol,
+    utils::{JsonG1, JsonG2, StringifiedG1, StringifiedG2},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Proof<E: Pairing> {

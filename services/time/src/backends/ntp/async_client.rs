@@ -23,8 +23,7 @@ pub enum Error {
 }
 
 #[serde_with::serde_as]
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NTPClientSettings {
     /// NTP server requests timeout duration
     #[serde_as(as = "MinimalBoundedDuration<1, NANO>")]

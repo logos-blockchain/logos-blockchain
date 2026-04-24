@@ -4,8 +4,7 @@ use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_pol::LotteryConstants;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Config {
     pub epoch_config: lb_cryptarchia_engine::EpochConfig,
     pub consensus_config: lb_cryptarchia_engine::Config,

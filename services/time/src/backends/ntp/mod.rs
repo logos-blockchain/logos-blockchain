@@ -25,8 +25,7 @@ use crate::{
 };
 
 #[serde_with::serde_as]
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NtpTimeBackendSettings {
     /// Ntp server address
     pub ntp_server: String,

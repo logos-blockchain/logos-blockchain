@@ -3,8 +3,7 @@ use std::num::NonZero;
 use lb_pol::LotteryConstants;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
-#[derive(serde::Serialize)]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Config {
     /// The `k` parameter in the Common Prefix property.
     /// Blocks deeper than k are generally considered stable and forks deeper

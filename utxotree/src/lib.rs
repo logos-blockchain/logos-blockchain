@@ -187,7 +187,8 @@ where
     }
 }
 
-#[derive(::serde::Serialize, ::serde::Deserialize)]#[serde(transparent)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(transparent)]
 pub struct CompressedUtxoTree<Key, Item> {
     items: BTreeMap<usize, (Key, Item)>,
 }

@@ -50,8 +50,7 @@ pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError, mantle};
 use crate::WINDOW_SIZE;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EpochState {
     /// The epoch this snapshot is for
     pub epoch: Epoch,
@@ -135,8 +134,7 @@ impl EpochState {
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Derivative)]
+#[derive(Derivative, serde::Serialize, serde::Deserialize)]
 #[derivative(Clone, Eq, PartialEq)]
 pub struct LedgerState {
     // All available Unspent Transtaction Outputs (UTXOs) at the current slot

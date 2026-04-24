@@ -1,11 +1,8 @@
 use core::ops::{Deref, DerefMut};
 use std::num::NonZeroU32;
 
-#[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-pub struct FiniteF64(
-    #[serde(deserialize_with = "serde::deserialize")] f64,
-);
+#[derive(Clone, Copy, PartialEq, PartialOrd, Debug, ::serde::Serialize, ::serde::Deserialize)]
+pub struct FiniteF64(#[serde(deserialize_with = "serde::deserialize")] f64);
 
 /// A wrapper around [`f64`] that guarantees the value is neither infinite nor
 /// NaN.
@@ -60,12 +57,8 @@ impl TryFrom<u64> for FiniteF64 {
 }
 
 /// A wrapper around [`FiniteF64`] that guarantees the value is >= 0.0.
-#[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-pub struct NonNegativeF64(
-    #[serde(deserialize_with = "serde::deserialize_non_negative")]
-    FiniteF64,
-);
+#[derive(Clone, Copy, PartialEq, PartialOrd, Debug, ::serde::Serialize, ::serde::Deserialize)]
+pub struct NonNegativeF64(#[serde(deserialize_with = "serde::deserialize_non_negative")] FiniteF64);
 
 impl NonNegativeF64 {
     #[must_use]
@@ -119,12 +112,8 @@ impl TryFrom<u64> for NonNegativeF64 {
 }
 
 /// A wrapper around [`NonNegativeF64`] that guarantees the value is > 0.0
-#[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-pub struct PositiveF64(
-    #[serde(deserialize_with = "serde::deserialize_positive")]
-    NonNegativeF64,
-);
+#[derive(Clone, Copy, PartialEq, PartialOrd, Debug, ::serde::Serialize, ::serde::Deserialize)]
+pub struct PositiveF64(#[serde(deserialize_with = "serde::deserialize_positive")] NonNegativeF64);
 
 impl PositiveF64 {
     #[must_use]
@@ -187,11 +176,8 @@ impl TryFrom<u64> for PositiveF64 {
 }
 
 /// A wrapper around [`PositiveF64`] that guarantees the value is >= 1.0
-#[derive(Clone, Copy, PartialEq, PartialOrd, Debug)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
-pub struct F64Ge1(
-    #[serde(deserialize_with = "serde::deserialize_ge1")] PositiveF64,
-);
+#[derive(Clone, Copy, PartialEq, PartialOrd, Debug, ::serde::Serialize, ::serde::Deserialize)]
+pub struct F64Ge1(#[serde(deserialize_with = "serde::deserialize_ge1")] PositiveF64);
 
 impl F64Ge1 {
     #[must_use]
@@ -247,8 +233,7 @@ impl TryFrom<u64> for F64Ge1 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
 pub struct NonNegativeRatio {
     pub numerator: u32,
     pub denominator: NonZeroU32,

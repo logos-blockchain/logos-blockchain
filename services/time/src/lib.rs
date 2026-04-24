@@ -48,8 +48,7 @@ impl Debug for TimeServiceMessage {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TimeServiceSettings<BackendSettings> {
     /// Slot settings in order to compute proper slot times
     pub slot_config: SlotConfig,

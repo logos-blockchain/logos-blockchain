@@ -3,9 +3,11 @@ use ark_ec::pairing::Pairing;
 use ark_serialize::CanonicalSerialize as _;
 pub use deserialize::VerificationKeyJsonDeser;
 
-use crate::from_json_error::FromJsonError;
-use crate::protocol::Protocol;
-use crate::utils::{StringifiedG1, StringifiedG2};
+use crate::{
+    from_json_error::FromJsonError,
+    protocol::Protocol,
+    utils::{StringifiedG1, StringifiedG2},
+};
 
 #[derive(Eq, PartialEq)]
 pub struct VerificationKey<E: Pairing> {

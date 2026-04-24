@@ -5,12 +5,24 @@ use time::OffsetDateTime;
 #[cfg(feature = "tokio")]
 use tokio::time::{Interval, MissedTickBehavior};
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Debug, Default, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Copy,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Slot(u64);
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct Epoch(u32);
 
 impl Epoch {
@@ -131,8 +143,7 @@ impl Add<u32> for Epoch {
     }
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
     // This parameters controls how many slots to wait for it to be stabilized
@@ -184,8 +195,7 @@ pub const fn epoch_length(
 }
 
 #[serde_with::serde_as]
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SlotConfig {
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,

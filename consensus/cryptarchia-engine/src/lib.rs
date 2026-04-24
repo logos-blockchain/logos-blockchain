@@ -13,8 +13,7 @@ pub use time::{Epoch, EpochConfig, Slot};
 
 pub(crate) const LOG_TARGET: &str = "cryptarchia::engine";
 
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+#[derive(Clone, Debug, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum State {
     Bootstrapping,
     Online,
@@ -168,8 +167,7 @@ where
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Branch<Id> {
     id: Id,
     parent: Id,
