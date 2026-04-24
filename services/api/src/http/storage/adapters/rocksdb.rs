@@ -1,10 +1,12 @@
 use std::{
+    collections::BTreeSet,
     fmt::{Debug, Display},
     marker::PhantomData,
 };
 
 use bytes::Bytes;
-use lb_core::{block::Block, header::HeaderId};
+use futures::{StreamExt as _, TryStreamExt as _};
+use lb_core::{block::Block, header::HeaderId, mantle::TxHash};
 use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
@@ -37,5 +39,34 @@ where
             .recv()
             .await
             .map_err(|e| Box::new(e) as crate::http::DynError)
+    }
+
+    async fn get_transactions<Tx>(
+        storage_relay: OutboundRelay<
+            <StorageService<RocksBackend, RuntimeServiceId> as ServiceData>::Message,
+        >,
+        id: TxHash,
+    ) -> Result<Vec<Tx>, crate::http::DynError>
+    where
+        Tx: DeserializeOwned + Send,
+    {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let message = StorageMsg::get_transactions_request(BTreeSet::from([id]), sender);
+        storage_relay
+            .send(message)
+            .await
+            .map_err(|(error, _)| error)?;
+
+        let bytes_stream = receiver
+            .await
+            .map_err(|error| Box::new(error) as crate::http::DynError)?;
+
+        bytes_stream
+            .map(|bytes| {
+                serde_json::from_slice::<Tx>(bytes.as_ref())
+                    .map_err(|error| Box::new(error) as crate::http::DynError)
+            })
+            .try_collect::<Vec<_>>()
+            .await
     }
 }

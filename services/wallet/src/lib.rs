@@ -15,7 +15,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
+        AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
         gas::MainnetGasConstants,
         ops::{
             channel::{ChannelId, inscribe::InscriptionOp, set_keys::SetKeysOp},
@@ -93,7 +93,7 @@ pub enum WalletServiceError {
     MissingDeclaration(lb_core::sdp::DeclarationId),
 
     #[error("Locked note {0:?} is missing in ledger")]
-    MissingLockedNote(lb_core::mantle::NoteId),
+    MissingLockedNote(NoteId),
 
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
@@ -129,6 +129,16 @@ pub enum WalletMsg {
         tip: Option<HeaderId>,
         tx_builder: MantleTxBuilder,
         resp_tx: Sender<Result<TipResponse<SignedMantleTx>, WalletServiceError>>,
+    },
+    SignTxWithEd25519 {
+        tx_hash: TxHash,
+        pk: <Ed25519Key as SecuredKey>::PublicKey,
+        resp_tx: Sender<Result<<Ed25519Key as SecuredKey>::Signature, WalletServiceError>>,
+    },
+    SignTxWithZk {
+        tx_hash: TxHash,
+        pks: Vec<ZkPublicKey>,
+        resp_tx: Sender<Result<ZkSignature, WalletServiceError>>,
     },
     GetLeaderAgedNotes {
         tip: Option<HeaderId>,
@@ -181,7 +191,10 @@ impl WalletMsg {
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetClaimableVoucher { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
-            Self::GenerateNewVoucherSecret { .. } | Self::GetKnownAddresses { .. } => None,
+            Self::SignTxWithEd25519 { .. }
+            | Self::SignTxWithZk { .. }
+            | Self::GenerateNewVoucherSecret { .. }
+            | Self::GetKnownAddresses { .. } => None,
         }
     }
 }
@@ -254,7 +267,7 @@ where
         // Wait for services (except Chain) to become ready, with timeout
         wait_until_services_are_ready!(
             &service_resources_handle.overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             lb_storage_service::StorageService<_, _>,
             Kms
         )
@@ -480,6 +493,26 @@ where
                     error!("Failed to respond to SignTx");
                 }
             }
+            WalletMsg::SignTxWithEd25519 {
+                tx_hash,
+                pk,
+                resp_tx,
+            } => {
+                let result = Self::sign_ed25519(tx_hash, pk, kms).await;
+                if resp_tx.send(result).is_err() {
+                    error!("Failed to respond to SignTxWithEd25519");
+                }
+            }
+            WalletMsg::SignTxWithZk {
+                tx_hash,
+                pks,
+                resp_tx,
+            } => {
+                let result = Self::sign_zksig(tx_hash, pks, kms).await;
+                if resp_tx.send(result).is_err() {
+                    error!("Failed to respond to SignTxWithZk");
+                }
+            }
             WalletMsg::GetLeaderAgedNotes { tip, resp_tx } => {
                 Self::get_leader_aged_notes(tip, resp_tx, state.wallet(), cryptarchia).await;
             }
@@ -539,6 +572,23 @@ where
     ) -> Result<OpProof, WalletServiceError> {
         let ed25519_sig = Self::sign_ed25519(tx_hash, inscribe_op.signer, kms).await?;
         Ok(OpProof::Ed25519Sig(ed25519_sig))
+    }
+
+    async fn sign_channel_deposit(
+        tx_hash: TxHash,
+        note_ids: Vec<NoteId>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        tx_builder: MantleTxBuilder,
+    ) -> Result<OpProof, WalletServiceError> {
+        let input_pks: Vec<ZkPublicKey> = tx_builder
+            .ledger_inputs()
+            .iter()
+            .filter(|&utxo| note_ids.contains(&utxo.id()))
+            .map(|utxo| utxo.note.pk)
+            .collect();
+
+        let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
+        Ok(OpProof::ZkSig(zk_sig))
     }
 
     async fn sign_channel_set_key(
@@ -677,9 +727,17 @@ where
 
     async fn sign_transfer(
         tx_hash: TxHash,
-        input_pks: Vec<ZkPublicKey>,
+        note_ids: Vec<NoteId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+        tx_builder: MantleTxBuilder,
     ) -> Result<OpProof, WalletServiceError> {
+        let input_pks: Vec<ZkPublicKey> = tx_builder
+            .ledger_inputs()
+            .iter()
+            .filter(|&utxo| note_ids.contains(&utxo.id()))
+            .map(|utxo| utxo.note.pk)
+            .collect();
+
         let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
         Ok(OpProof::ZkSig(zk_sig))
     }
@@ -691,14 +749,8 @@ where
         wallet: &Wallet,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
-        let input_pks: Vec<ZkPublicKey> = tx_builder
-            .ledger_inputs()
-            .iter()
-            .map(|utxo| utxo.note.pk)
-            .collect();
-
         let mut channel_withdraw_proofs = tx_builder.channel_withdraw_proofs().clone();
-        let mantle_tx = tx_builder.build();
+        let mantle_tx = tx_builder.clone().build();
         let tx_hash = mantle_tx.hash();
 
         let mut ops_proofs = Vec::new();
@@ -710,7 +762,15 @@ where
                 Op::ChannelSetKeys(set_keys_op) => {
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &ledger, kms).await?
                 }
-                Op::ChannelDeposit(_deposit_op) => OpProof::NoProof,
+                Op::ChannelDeposit(deposit_op) => {
+                    Self::sign_channel_deposit(
+                        tx_hash,
+                        deposit_op.inputs.to_vec(),
+                        kms,
+                        tx_builder.clone(),
+                    )
+                    .await?
+                }
                 Op::ChannelWithdraw(_channel_withdraw_op) => {
                     let proof = channel_withdraw_proofs
                         .remove(&i)
@@ -729,7 +789,15 @@ where
                 Op::LeaderClaim(claim_op) => {
                     Self::sign_leader_claim(tx_hash, claim_op, &ledger, wallet, kms).await?
                 }
-                Op::Transfer(_) => Self::sign_transfer(tx_hash, input_pks.clone(), kms).await?,
+                Op::Transfer(transfer_op) => {
+                    Self::sign_transfer(
+                        tx_hash,
+                        transfer_op.inputs.to_vec(),
+                        kms,
+                        tx_builder.clone(),
+                    )
+                    .await?
+                }
             };
             ops_proofs.push(proof);
         }

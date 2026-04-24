@@ -27,7 +27,7 @@ pub struct CfgSyncConfig {
     pub timeout: u64,
     pub chain_start_time: Option<OffsetDateTime>,
     pub deployment_settings_storage_path: PathBuf,
-    pub entropy_file: PathBuf,
+    pub entropy_file: Option<PathBuf>,
 
     pub mode: CfgsyncMode,
 

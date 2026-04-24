@@ -166,7 +166,7 @@ async fn restore_healthy_peer() {
     // Send a message to the listening swarm to revert from unhealthy to healthy.
     dialing_swarm
         .behaviour_mut()
-        .force_send_message_to_peer(
+        .force_send_message_to_current_session_peer(
             &TestEncapsulatedMessage::new(b"msg").into_inner(),
             *listening_swarm.local_peer_id(),
         )

@@ -1,15 +1,216 @@
-use std::sync::LazyLock;
+use std::{collections::HashSet, sync::LazyLock};
 
+use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
+use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
-use crate::{crypto::ZkHasher, mantle::tx::TxHash};
+use crate::{
+    crypto::{Hash, ZkHasher},
+    mantle::ops::OpId,
+    sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
+};
+
+pub trait Operation {
+    type ValidationContext<'a>
+    where
+        Self: 'a;
+    type ExecutionContext<'a>
+    where
+        Self: 'a;
+    type Error;
+    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error>;
+    fn execute(
+        &self,
+        ctx: Self::ExecutionContext<'_>,
+    ) -> Result<Self::ExecutionContext<'_>, Self::Error>;
+}
+
+pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
+pub type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
 pub type Value = u64;
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum InputsError {
+    #[error("Note: {0:?} isn't in the ledger")]
+    InexistingNote(NoteId),
+    #[error("Locked note: {0:?}")]
+    LockedNote(NoteId),
+    #[error("Inputs contain try to double spend the same NoteId")]
+    DoubleSpend,
+    #[error("Sum of input values overflows")]
+    InputsOverflow,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum OutputsError {
+    #[error("Zero value note")]
+    ZeroValueNote,
+    #[error("Sum of output values overflows")]
+    OutputsOverflow,
+}
+
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum LedgerError {
+    #[error("Inputs error: {0}")]
+    Inputs(#[from] InputsError),
+    #[error("Outputs error: {0}")]
+    Outputs(#[from] OutputsError),
+}
+
+#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Outputs(Vec<Note>);
+
+impl Outputs {
+    #[must_use]
+    pub const fn new(notes: Vec<Note>) -> Self {
+        Self(notes)
+    }
+
+    pub fn utxos<O: OpId>(&self, op: &O) -> impl Iterator<Item = Utxo> {
+        self.0.iter().enumerate().map(move |(index, note)| Utxo {
+            op_id: op.op_id(),
+            output_index: index,
+            note: *note,
+        })
+    }
+
+    pub fn utxo_by_index<O: OpId>(&self, index: usize, op: &O) -> Option<Utxo> {
+        self.0.get(index).map(|note| Utxo {
+            op_id: op.op_id(),
+            output_index: index,
+            note: *note,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), OutputsError> {
+        // Check that there is no duplicate
+        for note in &self.0 {
+            if note.value == 0 {
+                return Err(OutputsError::ZeroValueNote);
+            }
+        }
+        Ok(())
+    }
+
+    pub fn execute<O: OpId>(&self, mut utxos: Utxos, op: &O) -> Utxos {
+        for utxo in self.utxos(op) {
+            utxos = utxos.insert(utxo.id(), utxo).0;
+        }
+        utxos
+    }
+
+    pub fn amount(&self) -> Result<Value, OutputsError> {
+        let mut amount: Value = 0;
+        for output in &self.0 {
+            amount = amount
+                .checked_add(output.value)
+                .ok_or(OutputsError::OutputsOverflow)?;
+        }
+        Ok(amount)
+    }
+}
+
+impl std::ops::Deref for Outputs {
+    type Target = Vec<Note>;
+    fn deref(&self) -> &Vec<Note> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Outputs {
+    fn deref_mut(&mut self) -> &mut Vec<Note> {
+        &mut self.0
+    }
+}
+
+#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
+pub struct Inputs(Vec<NoteId>);
+
+impl Inputs {
+    #[must_use]
+    pub const fn new(note_ids: Vec<NoteId>) -> Self {
+        Self(note_ids)
+    }
+
+    pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
+        // Check that there is no duplicate
+        let unique: HashSet<_> = self.0.iter().collect();
+        if unique.len() != self.0.len() {
+            return Err(InputsError::DoubleSpend);
+        }
+        // Check each note is spendable
+        for input in &self.0 {
+            // Check the note isn't locked
+            if locked_notes.contains(input) {
+                return Err(InputsError::LockedNote(*input));
+            }
+            // Check the note exist in the ledger
+            if !utxos.contains(input) {
+                return Err(InputsError::InexistingNote(*input));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn execute(&self, mut utxos: Utxos) -> Result<Utxos, InputsError> {
+        // Remove notes from the ledger one by one
+        for input in &self.0 {
+            (utxos, _) = utxos
+                .remove(input)
+                .map_err(|_| InputsError::InexistingNote(*input))?;
+        }
+        Ok(utxos)
+    }
+
+    pub fn amount(&self, utxos: &Utxos) -> Result<Value, InputsError> {
+        let mut amount: Value = 0;
+        for input in &self.0 {
+            let utxo = utxos
+                .get(input)
+                .ok_or(InputsError::InexistingNote(*input))?;
+            amount = amount
+                .checked_add(utxo.note.value)
+                .ok_or(InputsError::InputsOverflow)?;
+        }
+        Ok(amount)
+    }
+
+    pub fn get_pk(&self, utxos: &Utxos) -> Result<Vec<ZkPublicKey>, InputsError> {
+        let mut pks: Vec<ZkPublicKey> = vec![];
+        for input in &self.0 {
+            let utxo = utxos
+                .get(input)
+                .ok_or(InputsError::InexistingNote(*input))?;
+            pks.push(utxo.note.pk);
+        }
+        Ok(pks)
+    }
+
+    #[must_use]
+    pub const fn as_vec(&self) -> &Vec<NoteId> {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for Inputs {
+    type Target = Vec<NoteId>;
+    fn deref(&self) -> &Vec<NoteId> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Inputs {
+    fn deref_mut(&mut self) -> &mut Vec<NoteId> {
+        &mut self.0
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -59,7 +260,7 @@ impl Note {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Utxo {
-    pub transfer_hash: TxHash,
+    pub op_id: Hash,
     pub output_index: usize,
     pub note: Note,
 }
@@ -70,9 +271,9 @@ static NOTE_ID_V1: LazyLock<Fr> = LazyLock::new(|| {
 
 impl Utxo {
     #[must_use]
-    pub const fn new(transfer_hash: TxHash, output_index: usize, note: Note) -> Self {
+    pub const fn new(op_id: Hash, output_index: usize, note: Note) -> Self {
         Self {
-            transfer_hash,
+            op_id,
             output_index,
             note,
         }
@@ -81,9 +282,9 @@ impl Utxo {
     #[must_use]
     pub fn id(&self) -> NoteId {
         // constants and structure as defined in the Mantle spec:
-        // https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e
+        // https://www.notion.so/nomos-tech/v1-4-Mantle-Specification-335261aa09df8065a38acff4b25aee82
 
-        let transfer_hash: Fr = *self.transfer_hash.as_ref();
+        let op_id: Fr = Fr::from_le_bytes_mod_order(self.op_id.as_ref());
         let output_index =
             fr_from_bytes(self.output_index.to_le_bytes().as_slice()).expect("usize fits in Fr");
         let note_value: Fr =
@@ -92,7 +293,7 @@ impl Utxo {
 
         NoteId(ZkHasher::digest(&[
             *NOTE_ID_V1,
-            transfer_hash,
+            op_id,
             output_index,
             note_value,
             note_pk,
@@ -112,7 +313,7 @@ mod test {
     #[test]
     fn test_note_id() {
         let utxo = Utxo::new(
-            TxHash::from(Fr::from(BigUint::from(123u32))),
+            [0u8; 32],
             0,
             Note::new(100, ZkPublicKey::from(Fr::from(BigUint::from(456u32)))),
         );
@@ -120,7 +321,7 @@ mod test {
             utxo.id(),
             NoteId::from(
                 Fr::from_str(
-                    "7000453536948078697982837270969513402421497654766692285707895413806329167703"
+                    "7557997998773395727489806263315711564569794358720487479582958381680367418066"
                 )
                 .unwrap()
             )

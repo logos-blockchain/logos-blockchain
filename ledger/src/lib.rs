@@ -16,6 +16,14 @@ use lb_core::{
     mantle::{
         AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
+        ledger::Operation as _,
+        ops::{
+            channel::{
+                deposit::{DepositExecutionContext, DepositValidationContext},
+                withdraw::{WithdrawExecutionContext, WithdrawValidationContext},
+            },
+            leader_claim::{LeaderClaimExecutionContext, LeaderClaimValidationContext},
+        },
         tx::MantleTxContext,
     },
     proofs::leader_proof,
@@ -77,8 +85,6 @@ pub enum LedgerError<Id> {
     ParentNotFound(Id),
     #[error("Invalid leader proof")]
     InvalidProof,
-    #[error("Invalid note: {0:?}")]
-    InvalidNote(NoteId),
     #[error("Insufficient balance")]
     InsufficientBalance,
     #[error("Applying this transaction would cause a balance overflow")]
@@ -87,12 +93,12 @@ pub enum LedgerError<Id> {
     UnbalancedTransaction,
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
-    #[error("Zero value note")]
-    ZeroValueNote,
     #[error("Mantle error: {0}")]
     Mantle(#[from] mantle::Error),
-    #[error("Locked note: {0:?}")]
-    LockedNote(NoteId),
+    #[error("Inputs error: {0}")]
+    Inputs(#[from] lb_core::mantle::ledger::InputsError),
+    #[error("Mantle error: {0}")]
+    Outputs(#[from] lb_core::mantle::ledger::OutputsError),
     #[error("Input note in genesis block: {0:?}")]
     InputInGenesis(NoteId),
     #[error("The first Transfer Operation is missing in genesis tx")]
@@ -523,6 +529,7 @@ impl LedgerState {
     ///
     /// TODO: A refactor into a typed state model to enforce verification at
     /// compile is planned.
+    #[expect(clippy::too_many_lines, reason = "We need to refactor this.")]
     fn try_apply_tx<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
@@ -540,29 +547,63 @@ impl LedgerState {
                 // The signature for channel ops can be verified before reaching this point,
                 // as you only need the signer's public key and tx hash
                 // Callers are expected to validate the proof before calling this function.
-                (Op::ChannelInscribe(op), _) => {
-                    self.mantle_ledger = self.mantle_ledger.try_apply_channel_inscription(op)?;
+                (Op::ChannelInscribe(op), OpProof::Ed25519Sig(sig)) => {
+                    self.mantle_ledger = self
+                        .mantle_ledger
+                        .try_apply_channel_inscription(op, sig, tx_hash)?;
                 }
                 (Op::ChannelSetKeys(op), OpProof::Ed25519Sig(sig)) => {
                     self.mantle_ledger = self
                         .mantle_ledger
                         .try_apply_channel_set_keys(op, sig, &tx_hash)?;
                 }
-                (Op::ChannelDeposit(op), OpProof::NoProof) => {
-                    let deposit_amount;
-                    (self.mantle_ledger, deposit_amount) =
-                        self.mantle_ledger.try_apply_channel_deposit(op)?;
-                    balance = balance
-                        .checked_sub(deposit_amount.into())
-                        .ok_or(LedgerError::BalanceOverflow)?;
+                (Op::ChannelDeposit(op), OpProof::ZkSig(sig)) => {
+                    let channels = self.mantle_ledger.channels();
+                    let locked_notes = self.mantle_ledger.locked_notes();
+                    let utxos = self.cryptarchia_ledger.latest_utxos();
+
+                    // Validate the Deposit
+                    op.validate(&DepositValidationContext {
+                        channels,
+                        locked_notes,
+                        utxos,
+                        tx_hash: &tx_hash,
+                        deposit_sig: sig,
+                    })
+                    .map_err(mantle::Error::Channel)?;
+
+                    // Execute the SetKeys
+                    let result = op
+                        .execute(DepositExecutionContext {
+                            channels: channels.clone(),
+                            locked_notes: locked_notes.clone(),
+                            utxos: utxos.clone(),
+                        })
+                        .map_err(mantle::Error::Channel)?;
+                    self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
+                    self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
                 }
-                (Op::ChannelWithdraw(op), OpProof::ChannelWithdrawProof(_proof)) => {
-                    let withdraw_amount;
-                    (self.mantle_ledger, withdraw_amount) =
-                        self.mantle_ledger.try_apply_channel_withdraw(op)?;
-                    balance = balance
-                        .checked_add(withdraw_amount.into())
-                        .ok_or(LedgerError::BalanceOverflow)?;
+                (Op::ChannelWithdraw(op), OpProof::ChannelWithdrawProof(sigs)) => {
+                    let channels = self.mantle_ledger.channels();
+                    let utxos = self.cryptarchia_ledger.latest_utxos();
+
+                    // Validate the Withdraw
+                    op.validate(&WithdrawValidationContext {
+                        channels,
+                        tx_hash: &tx_hash,
+                        withdraw_sigs: sigs,
+                    })
+                    .map_err(mantle::Error::Channel)?;
+
+                    // Execute the Withdraw
+                    let result = op
+                        .execute(WithdrawExecutionContext {
+                            channels: channels.clone(),
+                            utxos: utxos.clone(),
+                        })
+                        .map_err(mantle::Error::Channel)?;
+                    self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
+                    self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
                 }
                 (
                     Op::SDPDeclare(op),
@@ -590,16 +631,36 @@ impl LedgerState {
                         .mantle_ledger
                         .try_apply_sdp_withdraw(op, sig, tx_hash, config)?;
                 }
-                (Op::LeaderClaim(op), OpProof::PoC(_)) => {
-                    // Correct derivation of the voucher nullifier and membership in the merkle tree
-                    // can be verified outside of this function since public inputs are already
-                    // available. Callers are expected to validate the proof
-                    // before calling this function.
-                    let reward;
-                    (self.mantle_ledger, reward) = self.mantle_ledger.try_apply_leader_claim(op)?;
-                    balance = balance
-                        .checked_add(reward.into())
-                        .ok_or(LedgerError::BalanceOverflow)?;
+                (Op::LeaderClaim(op), OpProof::PoC(poc)) => {
+                    // Validate the LeaderClaim
+                    op.validate(&LeaderClaimValidationContext {
+                        nullifiers: self.mantle_ledger.leaders.nullifiers(),
+                        claimable_vouchers_root: &self
+                            .mantle_ledger
+                            .leaders
+                            .claimable_vouchers_root(),
+                        proof_of_claim: poc,
+                        tx_hash: &tx_hash,
+                    })
+                    .map_err(mantle::Error::LeaderClaim)?;
+
+                    // Execute the LeaderClaim
+                    let result = op
+                        .execute(LeaderClaimExecutionContext {
+                            nullifiers: self.mantle_ledger.leaders.nullifiers_cloned(),
+                            reward_amount: self.mantle_ledger.leaders.reward_amount(),
+                            claimable_rewards: self.mantle_ledger.leaders.claimable_rewards(),
+                            utxos: self.cryptarchia_ledger.latest_utxos().clone(),
+                        })
+                        .map_err(mantle::Error::LeaderClaim)?;
+                    self.mantle_ledger
+                        .leaders
+                        .update_nullifiers(result.nullifiers);
+                    self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
+
+                    self.mantle_ledger
+                        .leaders
+                        .update_rewards(result.claimable_rewards);
                 }
                 (Op::Transfer(op), OpProof::ZkSig(sig)) => {
                     let transfer_balance;
@@ -631,6 +692,7 @@ mod tests {
             MantleTx, Note, SignedMantleTx, Transaction as _,
             gas::{GasPrice, MainnetGasConstants},
             genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+            ledger::{Inputs, Outputs},
             ops::{
                 channel::{
                     ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
@@ -660,7 +722,7 @@ mod tests {
         execution_price: GasPrice,
         storage_price: GasPrice,
     ) -> SignedMantleTx {
-        let transfer_op = TransferOp::new(inputs, outputs);
+        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op)],
             execution_gas_price: execution_price,
@@ -693,7 +755,6 @@ mod tests {
         Zk(ZkKey),
         EmptyZk,
         Withdraw(ChannelWithdrawProof),
-        None,
     }
 
     fn create_signed_tx(op: Op, signing_key: &Key) -> SignedMantleTx {
@@ -720,7 +781,6 @@ mod tests {
                 ),
                 Key::EmptyZk => OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap()),
                 Key::Withdraw(proof) => OpProof::ChannelWithdrawProof(proof.clone()),
-                Key::None => OpProof::NoProof,
             })
             .collect();
 
@@ -810,7 +870,7 @@ mod tests {
 
         // Verify output was created
         if let Op::Transfer(transfer_op) = &tx.mantle_tx.ops[0] {
-            let output_utxo = transfer_op.utxo_by_index(0).unwrap();
+            let output_utxo = transfer_op.outputs.utxo_by_index(0, transfer_op).unwrap();
             assert!(new_state.latest_utxos().contains(&output_utxo.id()));
         } else {
             panic!("first op must be a transfer")
@@ -908,22 +968,13 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            amount: 10,
+            inputs: Inputs::new(vec![utxo.id()]),
             metadata: vec![5, 6, 7, 8],
         };
-        let ops = vec![
-            Op::ChannelDeposit(deposit.clone()),
-            Op::Transfer(TransferOp {
-                inputs: vec![utxo.id()],
-                outputs: vec![Note::new(
-                    utxo.note.value - deposit.amount,
-                    sk.to_public_key(),
-                )],
-            }),
-        ];
+        let ops = vec![Op::ChannelDeposit(deposit)];
         let result = ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(
             &test_config,
-            create_multi_signed_tx(ops, vec![&Key::None, &Key::Zk(sk)]),
+            create_multi_signed_tx(ops, vec![&Key::Zk(sk)]),
         );
         let (new_state, balance) = result.unwrap();
         assert_eq!(
@@ -934,7 +985,7 @@ mod tests {
                 .get(&channel_id)
                 .unwrap()
                 .balance,
-            deposit.amount,
+            utxo.note.value,
         );
         assert_eq!(balance, Balance::from(0));
     }
@@ -958,43 +1009,43 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            amount: 10,
+            inputs: Inputs::new(vec![utxo.id()]),
             metadata: vec![5, 6, 7, 8],
         };
-        let deposit_ops = vec![
-            Op::ChannelDeposit(deposit.clone()),
-            Op::Transfer(TransferOp {
-                inputs: vec![utxo.id()],
-                outputs: vec![Note::new(
-                    utxo.note.value - deposit.amount,
-                    sk.to_public_key(),
-                )],
-            }),
-        ];
+        let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state
             .try_apply_tx::<HeaderId, MainnetGasConstants>(
                 &test_config,
-                create_multi_signed_tx(deposit_ops, vec![&Key::None, &Key::Zk(sk)]),
+                create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]),
             )
             .unwrap()
             .0;
 
+        assert_eq!(
+            ledger_state
+                .mantle_ledger
+                .channels()
+                .channels
+                .get(&channel_id)
+                .expect("channel_created")
+                .balance,
+            utxo.note.value
+        );
+
         // Withdraw some funds from the channel
-        let withdraw = ChannelWithdrawOp {
-            channel_id,
-            amount: 6,
-        };
         let recipient_sk = ZkKey::from(BigUint::from(99u8));
         let recipient_pk = recipient_sk.to_public_key();
-        let transfer_op = TransferOp {
-            inputs: vec![],
-            outputs: vec![Note::new(withdraw.amount, recipient_pk)],
+        let withdraw_note = Note {
+            value: 500,
+            pk: recipient_pk,
+        };
+        let withdraw = ChannelWithdrawOp {
+            channel_id,
+            outputs: Outputs::new(vec![withdraw_note]),
+            withdraw_nonce: 0,
         };
         let withdraw_tx = MantleTx {
-            ops: vec![
-                Op::ChannelWithdraw(withdraw.clone()),
-                Op::Transfer(transfer_op.clone()),
-            ],
+            ops: vec![Op::ChannelWithdraw(withdraw.clone())],
             execution_gas_price: 0.into(),
             storage_gas_price: 0.into(),
         };
@@ -1005,10 +1056,8 @@ mod tests {
         )])
         .unwrap();
 
-        let signed_tx = create_multi_signed_tx(
-            withdraw_tx.ops,
-            vec![&Key::Withdraw(withdraw_proof), &Key::EmptyZk],
-        );
+        let signed_tx =
+            create_multi_signed_tx(withdraw_tx.ops, vec![&Key::Withdraw(withdraw_proof)]);
 
         let result =
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
@@ -1023,11 +1072,14 @@ mod tests {
             .get(&channel_id)
             .unwrap()
             .balance;
-        assert_eq!(channel_balance, 4);
-        let output_utxo = transfer_op.utxo_by_index(0).unwrap();
-        assert_eq!(output_utxo.note.value, withdraw.amount);
-        assert_eq!(output_utxo.note.pk, recipient_sk.to_public_key());
-        assert!(new_state.latest_utxos().contains(&output_utxo.id()));
+        assert_eq!(channel_balance, utxo.note.value - withdraw_note.value);
+        let withdraw_utxo = withdraw
+            .outputs
+            .utxos(&withdraw)
+            .next()
+            .expect("withdraw should have at least one utxo")
+            .id();
+        assert!(new_state.latest_utxos().contains(&withdraw_utxo));
     }
 
     #[test]
@@ -1049,23 +1101,14 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            amount: 10,
+            inputs: Inputs::new(vec![utxo.id()]),
             metadata: vec![],
         };
-        let deposit_ops = vec![
-            Op::ChannelDeposit(deposit.clone()),
-            Op::Transfer(TransferOp {
-                inputs: vec![utxo.id()],
-                outputs: vec![Note::new(
-                    utxo.note.value - deposit.amount,
-                    sk.to_public_key(),
-                )],
-            }),
-        ];
+        let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state
             .try_apply_tx::<HeaderId, MainnetGasConstants>(
                 &test_config,
-                create_multi_signed_tx(deposit_ops, vec![&Key::None, &Key::Zk(sk)]),
+                create_multi_signed_tx(deposit_ops, vec![&Key::Zk(sk)]),
             )
             .unwrap()
             .0;
@@ -1078,22 +1121,20 @@ mod tests {
             .balance;
 
         // Try to withdraw some funds from the channel, but with an invalid proof
+        let recipient_sk = ZkKey::from(BigUint::from(99u8));
+        let recipient_pk = recipient_sk.to_public_key();
+        let withdraw_note = Note {
+            value: 500,
+            pk: recipient_pk,
+        };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            amount: 6,
+            outputs: Outputs::new(vec![withdraw_note]),
+            withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
-        let recipient_sk = ZkKey::from(BigUint::from(100u8));
-        let recipient_pk = recipient_sk.to_public_key();
-        let transfer_op = TransferOp {
-            inputs: vec![],
-            outputs: vec![Note::new(withdraw.amount, recipient_pk)],
-        };
         let withdraw_tx = MantleTx {
-            ops: vec![
-                Op::ChannelWithdraw(withdraw),
-                Op::Transfer(transfer_op.clone()),
-            ],
+            ops: vec![Op::ChannelWithdraw(withdraw.clone())],
             execution_gas_price: 0.into(),
             storage_gas_price: 0.into(),
         };
@@ -1129,13 +1170,18 @@ mod tests {
             .get(&channel_id)
             .unwrap()
             .balance;
-        assert_eq!(channel_balance_after_deposit, 10);
+        assert_eq!(channel_balance_after_deposit, utxo.note.value);
         assert_eq!(
             channel_balance_after_deposit,
             channel_balance_after_withdraw
         );
-        let recipient_utxo = transfer_op.utxo_by_index(0).unwrap();
-        assert!(!ledger_state.latest_utxos().contains(&recipient_utxo.id()));
+        let withdraw_utxo = withdraw
+            .outputs
+            .utxos(&withdraw)
+            .next()
+            .expect("withdraw should have at least one utxo")
+            .id();
+        assert!(!ledger_state.latest_utxos().contains(&withdraw_utxo));
     }
 
     #[test]

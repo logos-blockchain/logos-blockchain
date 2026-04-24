@@ -44,9 +44,7 @@ async fn main() {
         config.deployment_settings_storage_path = storage_path;
     }
 
-    if let Some(entropy_file) = cli.entropy_file {
-        config.entropy_file = entropy_file;
-    }
+    config.entropy_file = cli.entropy_file.or(config.entropy_file);
 
     if let Some(mode) = cli.mode {
         config.mode = mode;

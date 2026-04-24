@@ -42,7 +42,7 @@ fn resolve_named_image(key: &str) -> Option<ResolvedImage> {
 
 fn resolve_runner_image(key: &str, default_local_image: &str) -> ResolvedImage {
     resolve_named_image(key)
-        .or_else(|| tf_env::nomos_testnet_image().map(resolved_remote_image))
+        .or_else(|| tf_env::logos_blockchain_testnet_image().map(resolved_remote_image))
         .unwrap_or_else(|| resolved_local_image(default_local_image))
 }
 

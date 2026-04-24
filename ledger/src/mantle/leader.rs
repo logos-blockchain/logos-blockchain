@@ -77,6 +77,29 @@ impl LeaderState {
         }
     }
 
+    #[must_use]
+    pub const fn nullifiers(&self) -> &rpds::HashTrieSetSync<VoucherNullifier> {
+        &self.nfs
+    }
+
+    #[must_use]
+    pub fn nullifiers_cloned(&self) -> rpds::HashTrieSetSync<VoucherNullifier> {
+        self.nfs.clone()
+    }
+
+    pub fn update_nullifiers(&mut self, nullifiers: rpds::HashTrieSetSync<VoucherNullifier>) {
+        self.nfs = nullifiers;
+    }
+
+    pub const fn update_rewards(&mut self, claimable_rewards: Value) {
+        self.claimable_rewards = claimable_rewards;
+    }
+
+    #[must_use]
+    pub const fn claimable_rewards(&self) -> Value {
+        self.claimable_rewards
+    }
+
     pub fn try_apply_header(self, epoch: Epoch, voucher_cm: VoucherCm) -> Result<Self, Error> {
         Ok(self
             .update_epoch_state(epoch)?
@@ -156,11 +179,9 @@ impl LeaderState {
         let n_unclaimed_vouchers = self
             .n_claimable_vouchers
             .saturating_sub(self.nfs.size() as u64);
-        if n_unclaimed_vouchers > 0 {
-            self.claimable_rewards / n_unclaimed_vouchers
-        } else {
-            0
-        }
+        self.claimable_rewards
+            .checked_div(n_unclaimed_vouchers)
+            .unwrap_or(0)
     }
 
     /// Claim the reward associated with a voucher.
@@ -193,6 +214,7 @@ impl LeaderState {
 #[cfg(test)]
 mod tests {
     use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
 
@@ -222,6 +244,7 @@ mod tests {
         let op1 = LeaderClaimOp {
             rewards_root: state.claimable_vouchers_root,
             voucher_nullifier: Fr::ZERO.into(),
+            pk: ZkPublicKey::zero(),
         };
         let (state, bal) = state.claim(&op1).unwrap();
         assert_eq!(bal, 100);
@@ -229,6 +252,7 @@ mod tests {
         let op2 = LeaderClaimOp {
             rewards_root: state.claimable_vouchers_root,
             voucher_nullifier: Fr::ONE.into(),
+            pk: ZkPublicKey::zero(),
         };
         let (state, bal) = state.claim(&op2).unwrap();
         assert_eq!(bal, 100);
@@ -236,6 +260,7 @@ mod tests {
         let op3 = LeaderClaimOp {
             rewards_root: state.claimable_vouchers_root,
             voucher_nullifier: Fr::from(2u64).into(),
+            pk: ZkPublicKey::zero(),
         };
         let (state, bal) = state.claim(&op3).unwrap();
         assert_eq!(bal, 100);
@@ -285,6 +310,7 @@ mod tests {
         let op = LeaderClaimOp {
             voucher_nullifier: Fr::ZERO.into(),
             rewards_root: state.claimable_vouchers_root,
+            pk: ZkPublicKey::zero(),
         };
         let (state, balance) = state.claim(&op).unwrap();
         assert_eq!(balance, 0);

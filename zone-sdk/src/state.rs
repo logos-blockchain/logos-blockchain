@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 
+use indexmap::IndexMap;
 use lb_core::{
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction as _, tx::TxHash},
@@ -9,7 +10,7 @@ use rpds::HashTrieSetSync;
 /// Transaction state tracker.
 pub struct TxState {
     /// All transactions being tracked, kept until finalized.
-    pending: HashMap<TxHash, SignedMantleTx>,
+    pending: IndexMap<TxHash, SignedMantleTx>,
     /// Per-block cumulative safe sets.
     block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
     /// Block parent relationships for pruning.
@@ -24,7 +25,7 @@ impl TxState {
         let mut block_states = BTreeMap::new();
         block_states.insert(lib, HashTrieSetSync::new_sync());
         Self {
-            pending: HashMap::new(),
+            pending: IndexMap::new(),
             block_states,
             parent_map: HashMap::new(),
             current_lib: lib,
@@ -75,7 +76,7 @@ impl TxState {
             while let Some(block) = block_opt {
                 if let Some(block_safe) = self.block_states.get(&block) {
                     for tx_hash in block_safe.iter() {
-                        if self.pending.remove(tx_hash).is_some() {
+                        if self.pending.shift_remove(tx_hash).is_some() {
                             newly_finalized.push(*tx_hash);
                         }
                     }

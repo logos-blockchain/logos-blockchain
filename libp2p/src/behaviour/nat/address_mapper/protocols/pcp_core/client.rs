@@ -57,7 +57,7 @@ pub struct PcpConfig {
 impl Default for PcpConfig {
     fn default() -> Self {
         Self {
-            mapping_lifetime: Duration::from_secs(7200),
+            mapping_lifetime: Duration::from_hours(2),
             initial_retry: Duration::from_millis(250),
             max_retry_delay: Duration::from_secs(1),
             max_retries: 5,

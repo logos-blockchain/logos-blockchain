@@ -5,5 +5,5 @@ pub const DEFAULT_ASSETS_STACK_DIR: &str = "tests/testing_framework/assets/runti
 
 #[must_use]
 pub fn cfgsync_port() -> u16 {
-    tf_env::nomos_cfgsync_port().unwrap_or(DEFAULT_CFGSYNC_PORT)
+    tf_env::logos_blockchain_cfgsync_port().unwrap_or(DEFAULT_CFGSYNC_PORT)
 }

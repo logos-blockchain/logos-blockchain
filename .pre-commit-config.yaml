@@ -6,7 +6,7 @@ repos:
         # We're running `fmt` with `--all` and `pass_filenames: false` to format the entire workspace at once.
         # Otherwise, `pre-commit` passes staged files one by one, which can lead to inconsistent results
         # due to, presumably, the lack of full workspace context.
-        entry: cargo +nightly-2026-01-18 fmt
+        entry: cargo +nightly-2026-02-28 fmt
         pass_filenames: false
       - id: clippy
         name: cargo clippy

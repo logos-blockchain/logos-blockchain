@@ -1,11 +1,10 @@
 use lb_common_http_client::CommonHttpClient;
-use lb_core::mantle::{MantleTx, SignedMantleTx};
+use lb_core::mantle::{MantleTx, SignedMantleTx, genesis_tx::GENESIS_STORAGE_GAS_PRICE};
 use logos_blockchain_tests::topology::{Topology, TopologyConfig};
 use reqwest::Url;
 use serial_test::serial;
 
 #[tokio::test]
-#[serial]
 async fn test_post_mantle_tx() {
     let topology = Topology::spawn(
         TopologyConfig::two_validators(),
@@ -25,7 +24,7 @@ async fn test_post_mantle_tx() {
 
     let mantle_tx = MantleTx {
         ops: Vec::new(),
-        storage_gas_price: 0.into(),
+        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         execution_gas_price: 0.into(),
     };
 

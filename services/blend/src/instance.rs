@@ -36,9 +36,9 @@ where
         // Keep the previous core mode for the session transition period.
         prev: CoreMode<CoreService, RuntimeServiceId>,
     },
-    Broadcast(BroadcastMode<CoreService::NetworkAdapter, RuntimeServiceId>),
+    Broadcast(BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>),
     BroadcastAfterCore {
-        mode: BroadcastMode<CoreService::NetworkAdapter, RuntimeServiceId>,
+        mode: BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>,
         // Keep the previous core mode for the session transition period.
         prev: CoreMode<CoreService, RuntimeServiceId>,
     },
@@ -49,8 +49,9 @@ impl<CoreService, EdgeService, RuntimeServiceId>
 where
     CoreService: ServiceData<
             Message: MessageComponents<
+                CoreService::NodeId,
                 Payload: Into<Vec<u8>>,
-                BroadcastSettings: Into<BroadcastSettings<CoreService>>,
+                BroadcastSettings: Into<BroadcastSettings<CoreService, RuntimeServiceId>>,
             > + Send
                          + Sync
                          + 'static,
@@ -58,11 +59,11 @@ where
             RuntimeServiceId,
             NetworkAdapter: NetworkAdapterTrait<
                 RuntimeServiceId,
-                BroadcastSettings = BroadcastSettings<CoreService>,
+                BroadcastSettings = BroadcastSettings<CoreService, RuntimeServiceId>,
             > + Send
                                 + Sync
                                 + 'static,
-            NodeId: Eq + Hash,
+            NodeId: Eq + Hash + Send + Sync,
         > + 'static,
     EdgeService: ServiceData<Message = CoreService::Message> + 'static,
     RuntimeServiceId: AsServiceId<CoreService>
@@ -107,7 +108,10 @@ where
 
     async fn new_broadcast_mode(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
-    ) -> Result<BroadcastMode<CoreService::NetworkAdapter, RuntimeServiceId>, modes::Error> {
+    ) -> Result<
+        BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>,
+        modes::Error,
+    > {
         BroadcastMode::new::<
             NetworkService<
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
