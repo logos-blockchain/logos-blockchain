@@ -684,75 +684,90 @@ where
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet
     /// ready (caller should return `None`).
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
     async fn ensure_connected(&mut self) -> bool {
         if self.blocks_stream.is_some() {
             return true;
         }
-
         debug!("ensure_connected: connecting...");
 
-        // Initialize state from consensus info if needed.
-        // `current_tip` stays None on cold start so the first live block
-        // event takes the no-old-canonical branch and emits everything from
-        // LIB up to the new tip as `adopted`. On reconnect this block is
-        // skipped (state is already Some), so `current_tip` is preserved.
-        if self.state.is_none() {
-            match self.node.consensus_info().await {
-                Ok(info) => {
-                    info!(
-                        "Sequencer connected: tip={:?}, lib={:?}",
-                        info.tip, info.lib
-                    );
-                    self.state = Some(TxState::new(info.lib, MsgId::root()));
-                }
-                Err(e) => {
-                    warn!("Failed to fetch consensus info: {e}");
-                    tokio::time::sleep(self.config.reconnect_delay).await;
-                    return false;
-                }
+        if !self.init_state_if_needed().await {
+            return false;
+        }
+        if !self.open_block_stream().await {
+            return false;
+        }
+        if !self.setup_backfill_range().await {
+            return false;
+        }
+        true
+    }
+
+    /// Initialize `self.state` from consensus info on cold start. `current_tip`
+    /// stays None so the first live block event emits everything from LIB up to
+    /// the new tip as `adopted`. On reconnect this is a no-op.
+    async fn init_state_if_needed(&mut self) -> bool {
+        if self.state.is_some() {
+            return true;
+        }
+        match self.node.consensus_info().await {
+            Ok(info) => {
+                info!(
+                    "Sequencer connected: tip={:?}, lib={:?}",
+                    info.tip, info.lib
+                );
+                self.state = Some(TxState::new(info.lib, MsgId::root()));
+                true
+            }
+            Err(e) => {
+                warn!("Failed to fetch consensus info: {e}");
+                tokio::time::sleep(self.config.reconnect_delay).await;
+                false
             }
         }
+    }
 
+    async fn open_block_stream(&mut self) -> bool {
         debug!("ensure_connected: opening blocks stream...");
         match self.node.block_stream().await {
             Ok(stream) => {
                 debug!("ensure_connected: blocks stream connected");
                 self.blocks_stream = Some(stream);
+                true
             }
             Err(e) => {
                 warn!("Failed to connect to blocks stream: {e}");
                 tokio::time::sleep(self.config.reconnect_delay).await;
-                return false;
+                false
             }
         }
+    }
 
-        // Check if we need incremental backfill from checkpoint to
-        // current network LIB.
-        if self.state.is_some() && self.backfill_from.is_none() {
-            match self.node.consensus_info().await {
-                Ok(info) => {
-                    let network_lib_slot = info.lib_slot;
-                    let from: u64 = self.lib_slot.into();
-                    let to: u64 = network_lib_slot.into();
-                    if from < to {
-                        debug!("Starting incremental backfill from slot {from} to {to}");
-                        self.backfill_from = Some(Slot::from(from + 1));
-                        self.backfill_to = Some(network_lib_slot);
-                        self.lib_slot = network_lib_slot;
-                        return false;
-                    }
+    /// Check whether an incremental backfill range is needed (checkpoint lib
+    /// behind current network lib). Returns `false` if a backfill was set up
+    /// (caller defers readiness until backfill completes).
+    async fn setup_backfill_range(&mut self) -> bool {
+        if self.state.is_none() || self.backfill_from.is_some() {
+            return true;
+        }
+        match self.node.consensus_info().await {
+            Ok(info) => {
+                let network_lib_slot = info.lib_slot;
+                let from: u64 = self.lib_slot.into();
+                let to: u64 = network_lib_slot.into();
+                if from < to {
+                    debug!("Starting incremental backfill from slot {from} to {to}");
+                    self.backfill_from = Some(Slot::from(from + 1));
+                    self.backfill_to = Some(network_lib_slot);
+                    self.lib_slot = network_lib_slot;
+                    return false;
                 }
-                Err(e) => {
-                    warn!("Failed to fetch consensus info for backfill check: {e}");
-                }
+                true
+            }
+            Err(e) => {
+                warn!("Failed to fetch consensus info for backfill check: {e}");
+                true
             }
         }
-
-        true
     }
 
     /// Process a `BlockEventResult`: apply channel updates to local state
@@ -1210,10 +1225,6 @@ where
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "TODO: address this in a dedicated refactor"
-)]
 async fn backfill_canonical<Node>(
     state: &mut TxState,
     missing_parent: HeaderId,
@@ -1223,17 +1234,33 @@ async fn backfill_canonical<Node>(
     Node: adapter::Node + Sync,
 {
     debug!("Backfilling canonical chain from {:?}", missing_parent);
+    let blocks = walk_back_to_known(state, missing_parent, node).await;
+    let lib = state.lib();
+    for block in &blocks {
+        apply_backfilled_block(state, block, channel_id, lib);
+    }
+    debug!("Canonical backfill complete");
+}
 
-    let mut blocks_to_process = Vec::new();
-    let mut current = missing_parent;
+/// Walk backwards from `from` until a block the state already knows about (or
+/// LIB) is reached. Returns blocks in forward order (oldest first).
+async fn walk_back_to_known<Node>(
+    state: &TxState,
+    from: HeaderId,
+    node: &Node,
+) -> Vec<lb_common_http_client::ApiBlock>
+where
+    Node: adapter::Node + Sync,
+{
+    let mut blocks = Vec::new();
+    let mut current = from;
     let lib = state.lib();
 
-    // Walk backwards until we find a known block or reach lib
     while !state.has_block(&current) && current != lib {
         match node.block(current).await {
             Ok(Some(block)) => {
                 let parent = block.header.parent_block;
-                blocks_to_process.push(block);
+                blocks.push(block);
                 current = parent;
             }
             Ok(None) => {
@@ -1250,26 +1277,30 @@ async fn backfill_canonical<Node>(
         }
     }
 
-    // Process blocks in forward order (oldest first)
-    blocks_to_process.reverse();
-    for block in blocks_to_process {
-        let block_id = block.header.id;
-        let parent_id = block.header.parent_block;
+    blocks.reverse();
+    blocks
+}
 
-        let our_txs: Vec<TxHash> = block
-            .transactions
-            .iter()
-            .filter(|tx| matches_channel(tx, channel_id))
-            .map(|tx| tx.mantle_tx.hash())
-            .collect();
+fn apply_backfilled_block(
+    state: &mut TxState,
+    block: &lb_common_http_client::ApiBlock,
+    channel_id: ChannelId,
+    lib: HeaderId,
+) {
+    let block_id = block.header.id;
+    let parent_id = block.header.parent_block;
 
-        let inscriptions = extract_inscriptions(&block.transactions, channel_id);
+    let our_txs: Vec<TxHash> = block
+        .transactions
+        .iter()
+        .filter(|tx| matches_channel(tx, channel_id))
+        .map(|tx| tx.mantle_tx.hash())
+        .collect();
 
-        // Use current state lib to avoid premature finalization
-        state.process_block(block_id, parent_id, lib, our_txs, inscriptions);
-    }
+    let inscriptions = extract_inscriptions(&block.transactions, channel_id);
 
-    debug!("Canonical backfill complete");
+    // Use current state lib to avoid premature finalization
+    state.process_block(block_id, parent_id, lib, our_txs, inscriptions);
 }
 
 fn enqueue_resubmit<Node>(

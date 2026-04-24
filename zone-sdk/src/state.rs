@@ -250,7 +250,7 @@ impl TxState {
     /// Inscriptions are returned in parent-before-child order (BFS from
     /// channel tip via `pending_by_parent`) so the node's mempool sees the
     /// parent before any child — matters on checkpoint resume, where
-    /// HashMap iteration order is arbitrary.
+    /// `HashMap` iteration order is arbitrary.
     pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx)> {
         let safe = self
             .block_states
