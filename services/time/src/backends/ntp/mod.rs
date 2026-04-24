@@ -130,6 +130,10 @@ impl Stream for NtpStream {
 }
 
 impl NtpStream {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Keep NTP update flow local in this PR"
+    )]
     fn handle_ntp_update(self: Pin<&mut Self>, cx: &mut Context<'_>) {
         let this = self.get_mut();
 
@@ -171,6 +175,10 @@ impl NtpStream {
             );
             return;
         }
+        tracing::debug!(
+            "Applying NTP clock update for slot {current_slot:?} with roundtrip {}us",
+            roundtrip.as_micros()
+        );
 
         let epoch_config = this.epoch_config;
         let base_period_length = this.base_period_length;

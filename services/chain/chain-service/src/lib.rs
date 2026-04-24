@@ -32,7 +32,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
-use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponse, ProviderResponse};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
 use lb_network_service::message::ChainSyncEvent;
@@ -975,10 +975,17 @@ where
             }
         };
         if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
-            error!("Could not notify new block to services {e}");
+            warn!("No new-block subscribers to notify: {e}");
         }
 
         if prev_lib != new_lib {
+            debug!(
+                target: LOG_TARGET,
+                "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={}, immutable_blocks={}, reorged_blocks={}",
+                pruned_blocks.stale_blocks().count(),
+                pruned_blocks.immutable_blocks().len(),
+                reorged_blocks.len()
+            );
             let height = cryptarchia
                 .consensus
                 .branches()
@@ -990,7 +997,7 @@ where
                 header_id: new_lib,
             };
             if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
-                error!("Could not notify block to services {e}");
+                warn!("Failed to notify finalized-block subscribers: {e}");
             }
 
             let lib_update = LibUpdate {
@@ -1002,7 +1009,7 @@ where
             };
 
             if let Err(e) = lib_broadcaster.send(lib_update) {
-                error!("Could not notify LIB update to services: {e}");
+                warn!("No LIB-update subscribers to notify: {e}");
             }
 
             Self::broadcast_session_updates_for_block(
@@ -1160,7 +1167,7 @@ where
             }
         };
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
-            error!("Could not notify new block to services {e}");
+            warn!("No new-block subscribers to notify: {e}");
         }
         Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
 
@@ -1341,7 +1348,14 @@ where
         debug!(target: LOG_TARGET, "Received chainsync event while in bootstrapping state. Ignoring it.");
         match event {
             ChainSyncEvent::ProvideBlocksRequest { reply_sender, .. } => {
-                Self::send_chain_sync_rejection(reply_sender).await;
+                let response = ProviderResponse::Unavailable {
+                    reason: BlocksUnavailableReason::Unknown(
+                        "Node is not in online mode".to_owned(),
+                    ),
+                };
+                if let Err(e) = reply_sender.send(response).await {
+                    error!("Failed to send chain sync response: {e}");
+                }
             }
             ChainSyncEvent::ProvideTipRequest { reply_sender } => {
                 Self::send_chain_sync_rejection(reply_sender).await;
