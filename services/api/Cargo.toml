@@ -30,7 +30,7 @@ lb-network-service         = { features = ["openapi"], workspace = true }
 lb-sdp-service             = { workspace = true }
 lb-storage-service         = { features = ["rocksdb-backend"], workspace = true }
 lb-time-service            = { workspace = true }
-lb-tx-service              = { features = ["mock", "openapi"], workspace = true }
+lb-tx-service              = { features = ["openapi"], workspace = true }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
 serde_json                 = { workspace = true }
