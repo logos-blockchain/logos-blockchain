@@ -81,7 +81,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     // - security_param (k): 5 (fewer blocks needed for LIB to advance)
     let validators = spawn_validators(
         Some("test_sequencer_publish_and_indexer_read"),
-        2,
+        1,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -209,7 +209,7 @@ async fn test_sequencer_checkpoint_resume() {
     // Setup network with faster block production
     let validators = spawn_validators(
         Some("test_sequencer_checkpoint_resume"),
-        2,
+        1,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -351,7 +351,7 @@ async fn test_sequencer_checkpoint_resume() {
 async fn test_sequencer_stale_checkpoint_resume() {
     let validators = spawn_validators(
         Some("test_sequencer_stale_checkpoint_resume"),
-        2,
+        1,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
