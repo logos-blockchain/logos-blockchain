@@ -160,10 +160,6 @@ async fn test_sequencer_publish_and_indexer_read() {
 }
 
 #[tokio::test]
-#[expect(
-    clippy::too_many_lines,
-    reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
-)]
 async fn test_sequencer_checkpoint_resume() {
     init_tracing();
     let validators = spawn_validators(

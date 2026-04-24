@@ -455,10 +455,14 @@ where
             );
             let mut tx_state = TxState::new(cp.lib, cp.last_msg_id);
             for (_hash, tx) in cp.pending_txs {
-                // Try to extract inscription metadata for lineage tracking
+                // Try to extract inscription metadata for lineage tracking.
+                // Filter by `channel_id` — a checkpoint can in principle carry
+                // txs for other channels if the caller reused it.
                 let mut is_inscription = false;
                 for op in &tx.mantle_tx.ops {
-                    if let Op::ChannelInscribe(inscribe) = op {
+                    if let Op::ChannelInscribe(inscribe) = op
+                        && inscribe.channel_id == channel_id
+                    {
                         tx_state.submit_inscription(
                             tx.clone(),
                             inscribe.parent,
@@ -647,6 +651,7 @@ where
         let to_u64: u64 = to.into();
 
         if from_u64 > to_u64 {
+            // Backfill exhausted — range advanced past `to` in a previous batch.
             self.backfill_from = None;
             self.backfill_to = None;
             return None;
@@ -1097,7 +1102,7 @@ where
     // picture to update their local state correctly.
     let finalized_inscriptions = lib_inscriptions;
     for info in &finalized_inscriptions {
-        debug!(
+        tracing::trace!(
             " Backfill-finalized: payload={:?}, tx={:?}",
             String::from_utf8_lossy(&info.payload),
             info.tx_hash
@@ -1129,23 +1134,19 @@ where
         _ => None, // tip unchanged
     };
 
-    // On LIB advance, silently drop pending txs that can no longer be
-    // included anywhere (dead branches below LIB). Not reported in the
-    // channel update — user reconciles via intent tracking.
-    if !lib_finalized.is_empty() {
-        prune_stale_pending(s);
-    }
+    // Invariant: `shed_off_branch_pending` on every `ChannelUpdate` removes
+    // anything not reachable from the current canonical tip. That's strictly
+    // stricter than stale (not reachable from ANY leaf), so stale pending
+    // should never arise.
+    debug_assert!(
+        s.collect_stale_pending().is_empty(),
+        "stale pending should never arise under the linear-pending invariant"
+    );
 
     BlockEventResult {
         finalized_tx_hashes,
         finalized_inscriptions,
         channel_update,
-    }
-}
-
-fn prune_stale_pending(s: &mut TxState) {
-    for inv in s.collect_stale_pending() {
-        s.remove_pending(&inv.tx_hash);
     }
 }
 
