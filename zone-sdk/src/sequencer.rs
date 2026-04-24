@@ -1134,14 +1134,14 @@ where
         _ => None, // tip unchanged
     };
 
-    // Invariant: `shed_off_branch_pending` on every `ChannelUpdate` removes
-    // anything not reachable from the current canonical tip. That's strictly
-    // stricter than stale (not reachable from ANY leaf), so stale pending
-    // should never arise.
-    debug_assert!(
-        s.collect_stale_pending().is_empty(),
-        "stale pending should never arise under the linear-pending invariant"
-    );
+    // Silently remove pending whose lineage is dead everywhere (e.g. rooted
+    // below LIB on a pruned branch, or on a checkpoint-restored branch that
+    // never made it to canonical). `shed_off_branch_pending` only considers
+    // forward reachability from the current channel tip, so it doesn't
+    // catch these.
+    for inv in s.collect_stale_pending() {
+        s.remove_pending(&inv.tx_hash);
+    }
 
     BlockEventResult {
         finalized_tx_hashes,
