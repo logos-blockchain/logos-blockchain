@@ -112,7 +112,7 @@ impl Downloader {
 
                     Err(ChainSyncError {
                         peer: peer_id,
-                        kind: ChainSyncErrorKind::RequestBlocksDownloadError(reason),
+                        kind: ChainSyncErrorKind::BlockProviderUnavailable(reason),
                     })
                 }
                 Ok(Err(e)) => {

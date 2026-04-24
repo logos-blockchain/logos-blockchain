@@ -17,8 +17,8 @@ bytes                 = { features = ["serde"], workspace = true }
 futures               = { workspace = true }
 lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
-libp2p                = { optional = true, workspace = true }
-libp2p-stream         = { optional = true, workspace = true }
+libp2p                = { workspace = true }
+libp2p-stream         = { workspace = true }
 rand                  = { workspace = true }
 serde                 = { workspace = true }
 serde_with            = { workspace = true }
@@ -29,7 +29,3 @@ tracing               = { default-features = false, version = "0.1" }
 [dev-dependencies]
 libp2p            = { features = ["dns", "quic", "tokio"], workspace = true }
 libp2p-swarm-test = { default-features = false, version = "0.5" }
-
-[features]
-default = []
-libp2p  = ["dep:libp2p", "dep:libp2p-stream"]

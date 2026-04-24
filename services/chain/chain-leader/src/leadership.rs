@@ -314,6 +314,14 @@ impl<'service> PotentialWinningPoLSlotNotifier<'service> {
             start.elapsed().as_millis()
         );
 
+        if first_winning_slot.is_none() {
+            tracing::debug!(
+                "Found no winning slots for epoch {:?} across {} wallet UTXOs",
+                epoch_state.epoch,
+                utxos.len()
+            );
+        }
+
         self.last_processed_epoch_and_found_first_winning_slot =
             Some((epoch_state.epoch, first_winning_slot));
     }

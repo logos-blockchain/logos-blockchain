@@ -2,9 +2,7 @@ use std::str::FromStr;
 
 use ark_bn254::{Fq, Fq2, G1Affine, G2Affine};
 
-#[cfg(feature = "deser")]
 pub type JsonG1 = [String; 3];
-#[cfg(feature = "deser")]
 pub type JsonG2 = [[String; 2]; 3];
 
 pub struct StringifiedG1(pub [String; 3]);

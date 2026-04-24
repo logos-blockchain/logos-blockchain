@@ -5,7 +5,6 @@ use std::{
 };
 
 use futures::{StreamExt as _, TryStreamExt as _, stream::FuturesUnordered};
-#[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{Error as SntpError, NtpContext, NtpResult, StdTimestampGen, get_time};
 use tokio::{
@@ -23,12 +22,11 @@ pub enum Error {
     Timeout(Elapsed),
 }
 
-#[cfg_attr(feature = "serde", cfg_eval::cfg_eval, serde_with::serde_as)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Copy, Clone)]
+#[serde_with::serde_as]
+#[derive(Debug, Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub struct NTPClientSettings {
     /// NTP server requests timeout duration
-    #[cfg_attr(feature = "serde", serde_as(as = "MinimalBoundedDuration<1, NANO>"))]
+    #[serde_as(as = "MinimalBoundedDuration<1, NANO>")]
     pub timeout: Duration,
     pub listening_interface: IpAddr,
 }

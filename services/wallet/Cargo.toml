@@ -25,7 +25,7 @@ lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-services-utils                = { workspace = true }
-lb-storage-service               = { features = ["mock"], workspace = true }
+lb-storage-service               = { workspace = true }
 lb-utxotree                      = { workspace = true }
 lb-wallet                        = { workspace = true }
 overwatch                        = { workspace = true }
