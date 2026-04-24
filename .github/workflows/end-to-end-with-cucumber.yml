@@ -41,6 +41,10 @@ jobs:
           - os: [ self-hosted, macOS ]
             label: self-hosted-macos
     runs-on: ${{ matrix.platform.os }}
+    env:
+      # Heavy Rust e2e tests become less stable when nextest oversubscribes the
+      # self-hosted runners. Keep these lanes single-job to reduce retries.
+      E2E_NEXTEST_JOBS: 1
 
     steps:
       # Remove any rustup override to ensure default toolchain is used
@@ -104,7 +108,7 @@ jobs:
           USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
         with:
           command: nextest
-          args: run --locked --jobs 3 --retries 2 -p logos-blockchain-tests --features mantle_sdp_ops --test test_mantle_sdp_ops --no-fail-fast
+          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features mantle_sdp_ops --test test_mantle_sdp_ops --no-fail-fast
 
       # Build release binaries for the remaining end-to-end tests.
       - name: Build binaries for remaining end-to-end tests
@@ -127,7 +131,7 @@ jobs:
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
-          args: run --locked --jobs 3 --retries 2 -p logos-blockchain-tests --no-fail-fast
+          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --no-fail-fast
 
       - name: Upload integration tests results on failure
         if: ${{ failure() && (steps.mantle_sdp_ops_end_to_end.conclusion == 'failure' || steps.end_to_end.conclusion == 'failure') }}
