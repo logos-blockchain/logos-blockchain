@@ -664,6 +664,7 @@ pub mod tests {
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::leader_claim::VoucherCm,
+            tx::GasPrices,
         },
         sdp::ServiceParameters,
     };
@@ -1258,11 +1259,7 @@ pub mod tests {
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
         let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
-        let mantle_tx = MantleTx {
-            ops: vec![Op::Transfer(transfer_op.clone())],
-            execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
-            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-        };
+        let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op.clone())]);
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap();
         (
             SignedMantleTx {
@@ -1294,7 +1291,8 @@ pub mod tests {
             vec![output_note],
         );
 
-        let _fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
+        let _fees =
+            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
             &transfer_op,
@@ -1325,7 +1323,8 @@ pub mod tests {
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
 
-        let _fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
+        let _fees =
+            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let (new_state, balance) = ledger_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
@@ -1361,7 +1360,8 @@ pub mod tests {
             vec![],
         );
         let locked_notes = LockedNotes::new();
-        let _fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
+        let _fees =
+            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let (final_state, final_balance) = new_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
@@ -1489,7 +1489,8 @@ pub mod tests {
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![]);
 
-        let _fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
+        let _fees =
+            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
             &transfer_op,

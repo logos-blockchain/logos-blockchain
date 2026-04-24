@@ -8,7 +8,6 @@ use crate::mantle::{
     ops::channel::{
         ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, inscribe::InscriptionOp,
     },
-    tx::MantleTxGasContext,
 };
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -55,17 +54,6 @@ pub enum Error {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Channels {
     pub channels: rpds::HashTrieMapSync<ChannelId, ChannelState>,
-}
-
-impl From<&Channels> for MantleTxGasContext {
-    fn from(value: &Channels) -> Self {
-        let withdraw_thresholds = value
-            .channels
-            .iter()
-            .map(|(channel_id, channel)| (*channel_id, channel.withdraw_threshold))
-            .collect();
-        Self::new(withdraw_thresholds)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,6 +129,7 @@ mod tests {
                 deposit::{DepositExecutionContext, DepositOp},
                 withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
             },
+            tx::{GasPrices, MantleTxGasContext},
         },
         sdp::locked_notes::LockedNotes,
     };
@@ -217,7 +206,7 @@ mod tests {
                 ),
         };
 
-        let gas_context = MantleTxGasContext::from(&channels);
+        let gas_context = MantleTxGasContext::from_channels(&channels, GasPrices::new(0, 0));
 
         assert_eq!(gas_context.withdraw_threshold(&first_id), Some(1));
         assert_eq!(gas_context.withdraw_threshold(&second_id), Some(2));

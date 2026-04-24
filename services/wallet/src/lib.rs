@@ -24,7 +24,7 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
-        tx::MantleTxContext,
+        tx::{GasPrices, MantleTxContext},
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -157,6 +157,7 @@ pub enum WalletMsg {
     },
     GetTxContext {
         block_id: Option<HeaderId>,
+        gas_prices: Option<GasPrices>,
         resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
     },
 }
@@ -531,8 +532,12 @@ where
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
-            WalletMsg::GetTxContext { block_id, resp_tx } => {
-                Self::get_tx_context(block_id, resp_tx, cryptarchia).await;
+            WalletMsg::GetTxContext {
+                block_id,
+                gas_prices,
+                resp_tx,
+            } => {
+                Self::get_tx_context(block_id, gas_prices, resp_tx, cryptarchia).await;
             }
         }
     }
@@ -754,7 +759,7 @@ where
         let tx_hash = mantle_tx.hash();
 
         let mut ops_proofs = Vec::new();
-        for (i, op) in mantle_tx.ops.iter().enumerate() {
+        for (i, op) in mantle_tx.0.iter().enumerate() {
             let proof = match op {
                 Op::ChannelInscribe(inscribe_op) => {
                     Self::sign_inscription(tx_hash, inscribe_op, kms).await?
@@ -1199,6 +1204,7 @@ where
 
     async fn get_tx_context(
         block_id: Option<HeaderId>,
+        gas_prices: Option<GasPrices>,
         resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -1222,7 +1228,8 @@ where
             }
         };
 
-        if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context())) {
+        let gas_prices = gas_prices.unwrap_or_else(|| ledger_state.get_gas_prices());
+        if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context(gas_prices))) {
             error!(err = ?e, "Failed to send gas context response");
         }
     }

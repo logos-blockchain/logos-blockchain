@@ -6,7 +6,7 @@ use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
-        gas::{GasCost, GasOverflow, GasPrice},
+        gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         tx::MantleTxContext,
@@ -29,11 +29,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new(context: MantleTxContext) -> Self {
         Self {
-            mantle_tx: MantleTx {
-                ops: vec![],
-                execution_gas_price: 0.into(),
-                storage_gas_price: 0.into(),
-            },
+            mantle_tx: MantleTx(vec![]),
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
             channel_withdraw_proofs: HashMap::new(),
@@ -48,14 +44,14 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Self {
-        self.mantle_tx.ops.extend(ops);
+        self.mantle_tx.0.extend(ops);
         self
     }
 
     #[must_use]
     pub fn push_channel_withdraw(self, op: ChannelWithdrawOp, proof: ChannelWithdrawProof) -> Self {
         let mut builder = self.push_op(Op::ChannelWithdraw(op));
-        let index = builder.mantle_tx.ops.len() - 1;
+        let index = builder.mantle_tx.0.len() - 1;
         builder.channel_withdraw_proofs.insert(index, proof);
         builder
     }
@@ -82,18 +78,6 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn extend_ledger_outputs(mut self, notes: impl IntoIterator<Item = Note>) -> Self {
         self.pending_transfer.outputs.deref_mut().extend(notes);
-        self
-    }
-
-    #[must_use]
-    pub const fn set_execution_gas_price(mut self, price: GasPrice) -> Self {
-        self.mantle_tx.execution_gas_price = price;
-        self
-    }
-
-    #[must_use]
-    pub const fn set_storage_gas_price(mut self, price: GasPrice) -> Self {
-        self.mantle_tx.storage_gas_price = price;
         self
     }
 
@@ -174,7 +158,7 @@ impl MantleTxBuilder {
     /// - Additional transfer operations that will be added to the transaction
     pub fn input_notes(&self) -> impl Iterator<Item = NoteId> {
         self.mantle_tx
-            .ops
+            .0
             .iter()
             .filter_map(|op| match op {
                 Op::Transfer(transfer) => Some(transfer.inputs.iter().copied()),
@@ -196,7 +180,7 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn build(mut self) -> MantleTx {
-        self.mantle_tx.ops.push(Op::Transfer(self.pending_transfer));
+        self.mantle_tx.0.push(Op::Transfer(self.pending_transfer));
         self.mantle_tx
     }
 }
@@ -213,7 +197,7 @@ mod tests {
             channel::{ChannelId, deposit::DepositOp, inscribe::InscriptionOp},
             leader_claim::LeaderClaimOp,
         },
-        tx::MantleTxGasContext,
+        tx::{GasPrices, MantleTxGasContext},
     };
 
     #[test]
@@ -274,7 +258,7 @@ mod tests {
 
         // Init a tx builder
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new([(op.channel_id, 1)].into()),
+            gas_context: MantleTxGasContext::new([(op.channel_id, 1)].into(), GasPrices::new(0, 0)),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new(context).push_op(Op::ChannelWithdraw(op));
@@ -342,7 +326,7 @@ mod tests {
         // Init a tx builder for sending 30 to the recipient
         let channel_id = ChannelId::from([0; 32]);
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new([(channel_id, 1)].into()),
+            gas_context: MantleTxGasContext::new([(channel_id, 1)].into(), GasPrices::new(0, 0)),
             leader_reward_amount: 30,
         };
         let withdraw_note = Note {

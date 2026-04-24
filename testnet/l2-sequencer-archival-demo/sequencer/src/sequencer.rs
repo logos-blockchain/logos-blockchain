@@ -165,11 +165,7 @@ impl Sequencer {
             signer: verifying_key,
         };
 
-        let inscribe_tx = MantleTx {
-            ops: vec![Op::ChannelInscribe(inscribe_op)],
-            storage_gas_price: 0.into(),
-            execution_gas_price: 0.into(),
-        };
+        let inscribe_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         let tx_hash = inscribe_tx.hash();
         let signature_bytes = self
@@ -206,7 +202,7 @@ impl Sequencer {
         block_id: HeaderId,
     ) -> bool {
         for tx in &block.transactions {
-            for op in &tx.mantle_tx.ops {
+            for op in &tx.mantle_tx.0 {
                 if let Op::ChannelInscribe(inscribe) = op {
                     tracing::debug!(
                         "Found inscription: channel={}, parent={}",
@@ -273,7 +269,7 @@ impl Sequencer {
     fn get_expected_inscription(tx: &SignedMantleTx) -> &InscriptionOp {
         let expected_op = tx
             .mantle_tx
-            .ops
+            .0
             .first()
             .expect("transaction should have at least one op");
 
@@ -513,7 +509,7 @@ impl Sequencer {
         let parent = self.get_last_msg_id().await?;
         let tx = self.create_inscribe_tx(inscription_data, parent);
 
-        let new_msg_id = match tx.mantle_tx.ops.first() {
+        let new_msg_id = match tx.mantle_tx.0.first() {
             Some(Op::ChannelInscribe(inscribe)) => inscribe.id(),
             _ => panic!("Expected ChannelInscribe op"),
         };

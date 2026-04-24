@@ -985,7 +985,7 @@ fn enqueue_resubmit<Node>(
 fn find_channel_tip(txs: &[SignedMantleTx], channel_id: ChannelId) -> Option<MsgId> {
     txs.iter()
         .rev()
-        .flat_map(|tx| tx.mantle_tx.ops.iter().rev())
+        .flat_map(|tx| tx.mantle_tx.0.iter().rev())
         .find_map(|op| {
             if let Op::ChannelInscribe(inscribe) = op
                 && inscribe.channel_id == channel_id
@@ -998,7 +998,7 @@ fn find_channel_tip(txs: &[SignedMantleTx], channel_id: ChannelId) -> Option<Msg
 }
 
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
-    tx.mantle_tx.ops.iter().any(|op| match op {
+    tx.mantle_tx.0.iter().any(|op| match op {
         Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
         Op::ChannelSetKeys(set_keys) => set_keys.channel == channel_id,
         _ => false,
@@ -1022,11 +1022,7 @@ fn create_inscribe_tx(
     let msg_id = inscribe_op.id();
 
     // TODO: set realistic gas prices and fund tx
-    let inscribe_tx = MantleTx {
-        ops: vec![Op::ChannelInscribe(inscribe_op)],
-        storage_gas_price: 0.into(),
-        execution_gas_price: 0.into(),
-    };
+    let inscribe_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
 
     let tx_hash = inscribe_tx.hash();
     let signature = sign_tx(tx_hash, signing_key);
@@ -1050,11 +1046,7 @@ fn create_set_keys_tx(
     };
 
     // TODO: set realistic gas prices and fund tx
-    let set_keys_tx = MantleTx {
-        ops: vec![Op::ChannelSetKeys(set_keys_op)],
-        storage_gas_price: 0.into(),
-        execution_gas_price: 0.into(),
-    };
+    let set_keys_tx = MantleTx(vec![Op::ChannelSetKeys(set_keys_op)]);
 
     let tx_hash = set_keys_tx.hash();
     let signature = sign_tx(tx_hash, signing_key);
@@ -1082,11 +1074,7 @@ fn prepare_tx(
     ops.push(Op::ChannelInscribe(inscription_op));
 
     // TODO: set realistic gas prices and fund tx
-    let tx = MantleTx {
-        ops,
-        storage_gas_price: 0.into(),
-        execution_gas_price: 0.into(),
-    };
+    let tx = MantleTx(ops);
 
     let inscription_sig = sign_tx(tx.hash(), signing_key);
 
@@ -1155,9 +1143,9 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(tx.ops.len(), 2);
-        assert_eq!(&tx.ops[0], &Op::ChannelDeposit(deposit_op));
-        assert!(matches!(&tx.ops[1], &Op::ChannelInscribe(_)));
+        assert_eq!(tx.0.len(), 2);
+        assert_eq!(&tx.0[0], &Op::ChannelDeposit(deposit_op));
+        assert!(matches!(&tx.0[1], &Op::ChannelInscribe(_)));
 
         // Sign the `MantleTx`
         let signed_tx = SignedMantleTx::new(

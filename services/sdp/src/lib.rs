@@ -500,7 +500,7 @@ where
         let Some(ledger_state) = chain_api.get_ledger_state(block_id).await? else {
             return Err(format!("Ledger state not found for block {block_id:?}").into());
         };
-        Ok(ledger_state.tx_context())
+        Ok(ledger_state.tx_context(ledger_state.get_gas_prices()))
     }
 
     /// Increments the nonce of the current declaration, and returns the

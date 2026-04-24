@@ -1,4 +1,7 @@
-use std::fmt::{self, Display};
+use std::{
+    fmt::{self, Display},
+    ops::Add,
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +32,7 @@ impl From<Value> for Gas {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GasPrice(Value);
 
 impl GasPrice {
@@ -41,6 +44,14 @@ impl GasPrice {
     #[must_use]
     pub const fn into_inner(self) -> Value {
         self.0
+    }
+}
+
+impl Add for GasPrice {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
     }
 }
 

@@ -355,7 +355,7 @@ mod tests {
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            tx::MantleTxContext,
+            tx::{GasPrices, MantleTxContext},
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
@@ -522,9 +522,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
-            .set_execution_gas_price(1.into())
-            .set_storage_gas_price(1.into());
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context(GasPrices::new(1, 1)));
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
@@ -540,7 +538,7 @@ mod tests {
 
         let funded_tx = funded_tx_builder.build();
 
-        if let Op::Transfer(transfer_op) = &funded_tx.ops[funded_tx.ops.len() - 1] {
+        if let Op::Transfer(transfer_op) = &funded_tx.0[funded_tx.0.len() - 1] {
             // ensure alices utxo was used to pay the fee
             assert_eq!(transfer_op.inputs, Inputs::new(vec![alice_utxo.id()]));
             // ensure change was returned to alice
@@ -571,9 +569,7 @@ mod tests {
 
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        let mut tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
-            .set_execution_gas_price(1.into())
-            .set_storage_gas_price(1.into());
+        let mut tx_builder = MantleTxBuilder::new(ledger_state.tx_context(GasPrices::new(1, 1)));
 
         // Add a costly inscription
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -603,9 +599,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
-            .set_execution_gas_price(1.into())
-            .set_storage_gas_price(1.into());
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context(GasPrices::new(1, 1)));
 
         // Fund the transaction
         let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice]);
@@ -627,9 +621,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1), (bob, 2)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
-            .set_execution_gas_price(1.into())
-            .set_storage_gas_price(1.into());
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context(GasPrices::new(1, 1)));
 
         // Attempt to fund the transaction with Alice's notes.
         let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice]);
@@ -649,9 +641,7 @@ mod tests {
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
 
-        let tx_builder = MantleTxBuilder::new(MantleTxContext::default())
-            .set_execution_gas_price(1.into())
-            .set_storage_gas_price(1.into());
+        let tx_builder = MantleTxBuilder::new(MantleTxContext::default());
 
         // Determine gas cost without change note
         assert_eq!(
@@ -680,9 +670,7 @@ mod tests {
             .build(); // successfully funded the tx
 
         // verify that no change output was used.
-        if let Op::Transfer(transfer_op) =
-            &funded_tx_wo_change.ops[funded_tx_wo_change.ops.len() - 1]
-        {
+        if let Op::Transfer(transfer_op) = &funded_tx_wo_change.0[funded_tx_wo_change.0.len() - 1] {
             assert_eq!(transfer_op.outputs, Outputs::new(vec![]));
         } else {
             panic!("last op must be a transfer")
@@ -735,9 +723,7 @@ mod tests {
             .build(); // successfully funded the tx
 
         // verify that indeed a change output was used.
-        if let Op::Transfer(transfer_op) =
-            &funded_tx_wo_change.ops[funded_tx_wo_change.ops.len() - 1]
-        {
+        if let Op::Transfer(transfer_op) = &funded_tx_wo_change.0[funded_tx_wo_change.0.len() - 1] {
             assert_eq!(transfer_op.outputs, Outputs::new(vec![Note::new(1, alice)]));
         } else {
             panic!("the last operation must be a transfer")

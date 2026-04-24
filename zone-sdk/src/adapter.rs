@@ -98,7 +98,7 @@ impl Node for NodeHttpClient {
         Ok(stream::iter(
             transactions
                 .into_iter()
-                .flat_map(|tx| tx.mantle_tx.ops)
+                .flat_map(|tx| tx.mantle_tx.0)
                 .filter_map(move |op| op_to_zone_message(&op, channel_id)),
         ))
     }
@@ -123,7 +123,7 @@ impl Node for NodeHttpClient {
             block
                 .transactions
                 .into_iter()
-                .flat_map(|tx| tx.mantle_tx.ops)
+                .flat_map(|tx| tx.mantle_tx.0)
                 .filter_map(move |op| op_to_zone_message(&op, channel_id))
                 .map(move |msg| (msg, slot))
         })))

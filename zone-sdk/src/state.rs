@@ -187,12 +187,8 @@ mod tests {
         HeaderId::from(bytes)
     }
 
-    fn make_dummy_tx(data: u8) -> SignedMantleTx {
-        let mantle_tx = MantleTx {
-            ops: vec![],
-            storage_gas_price: 0.into(),
-            execution_gas_price: u64::from(data).into(),
-        };
+    fn make_dummy_tx() -> SignedMantleTx {
+        let mantle_tx = MantleTx(vec![]);
         SignedMantleTx {
             ops_proofs: vec![],
             mantle_tx,
@@ -203,7 +199,7 @@ mod tests {
     fn submit_and_query_pending() {
         let genesis = header_id(0);
         let mut state = TxState::new(genesis);
-        let tx = make_dummy_tx(1);
+        let tx = make_dummy_tx();
 
         state.submit(tx);
         assert_eq!(state.unfinalized_count(), 1);
@@ -215,7 +211,7 @@ mod tests {
         let b1 = header_id(1);
         let mut state = TxState::new(genesis);
 
-        let tx = make_dummy_tx(1);
+        let tx = make_dummy_tx();
         let hash = tx.mantle_tx.hash();
         state.submit(tx);
 
@@ -236,7 +232,7 @@ mod tests {
         let b2 = header_id(2);
         let mut state = TxState::new(genesis);
 
-        let tx = make_dummy_tx(1);
+        let tx = make_dummy_tx();
         let hash = tx.mantle_tx.hash();
         state.submit(tx);
 
@@ -256,8 +252,8 @@ mod tests {
         let b1 = header_id(1);
         let mut state = TxState::new(genesis);
 
-        let tx1 = make_dummy_tx(1);
-        let tx2 = make_dummy_tx(2);
+        let tx1 = make_dummy_tx();
+        let tx2 = make_dummy_tx();
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
@@ -282,7 +278,7 @@ mod tests {
         let b2 = header_id(2);
         let mut state = TxState::new(genesis);
 
-        let tx = make_dummy_tx(1);
+        let tx = make_dummy_tx();
         let hash = tx.mantle_tx.hash();
         state.submit(tx);
 
@@ -379,8 +375,8 @@ mod tests {
         let b3 = header_id(3);
         let mut state = TxState::new(genesis);
 
-        let tx1 = make_dummy_tx(1);
-        let tx2 = make_dummy_tx(2);
+        let tx1 = make_dummy_tx();
+        let tx2 = make_dummy_tx();
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 

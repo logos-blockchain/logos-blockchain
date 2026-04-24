@@ -26,7 +26,8 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, genesis_tx::GenesisTx,
+        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants,
+        genesis_tx::GenesisTx, tx::GasPrices,
     },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
@@ -283,7 +284,7 @@ impl Cryptarchia {
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>), Error>
     where
-        Tx: AuthenticatedMantleTx,
+        Tx: AuthenticatedMantleTx<Context = GasPrices>,
     {
         let header = block.header();
         let id = header.id();
@@ -496,7 +497,7 @@ impl<Tx, Storage, TimeBackend, RuntimeServiceId> ServiceCore<RuntimeServiceId>
     for CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: Transaction<Hash = TxHash>
-        + AuthenticatedMantleTx
+        + AuthenticatedMantleTx<Context = GasPrices>
         + Debug
         + Clone
         + Eq
@@ -704,7 +705,7 @@ impl<Tx, Storage, TimeBackend, RuntimeServiceId>
     CryptarchiaConsensus<Tx, Storage, TimeBackend, RuntimeServiceId>
 where
     Tx: Transaction<Hash = TxHash>
-        + AuthenticatedMantleTx
+        + AuthenticatedMantleTx<Context = GasPrices>
         + Debug
         + Clone
         + Eq

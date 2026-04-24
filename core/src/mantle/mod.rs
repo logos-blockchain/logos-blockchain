@@ -50,16 +50,29 @@ pub trait Transaction {
 }
 
 pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + StorageSize {
+    type Context;
     /// Returns the underlying `MantleTx` that this transaction represents.
     fn mantle_tx(&self) -> &MantleTx;
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
 
     // Gas Cost functions with context already handled
-    fn total_gas_cost<Constants: GasConstants>(&self) -> Result<GasCost, GasOverflow>;
-    fn storage_gas_cost(&self) -> Result<GasCost, GasOverflow>;
-    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Result<Gas, GasOverflow>;
-    fn storage_gas_consumption(&self) -> Result<Gas, GasOverflow>;
+    fn total_gas_cost<Constants: GasConstants>(
+        &self,
+        context: <Self as AuthenticatedMantleTx>::Context,
+    ) -> Result<GasCost, GasOverflow>;
+    fn storage_gas_cost(
+        &self,
+        context: <Self as AuthenticatedMantleTx>::Context,
+    ) -> Result<GasCost, GasOverflow>;
+    fn execution_gas_consumption<Constants: GasConstants>(
+        &self,
+        context: <Self as AuthenticatedMantleTx>::Context,
+    ) -> Result<Gas, GasOverflow>;
+    fn storage_gas_consumption(
+        &self,
+        context: <Self as AuthenticatedMantleTx>::Context,
+    ) -> Result<Gas, GasOverflow>;
 
     fn verify_ops_proofs_with_helper(
         &self,
@@ -92,6 +105,7 @@ impl<T: StorageSize> StorageSize for &T {
 }
 
 impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
+    type Context = <T as AuthenticatedMantleTx>::Context;
     fn mantle_tx(&self) -> &MantleTx {
         T::mantle_tx(self)
     }
@@ -100,20 +114,32 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
         T::ops_with_proof(self)
     }
 
-    fn total_gas_cost<Constants: GasConstants>(&self) -> Result<GasCost, GasOverflow> {
-        <T as AuthenticatedMantleTx>::total_gas_cost::<Constants>(self)
+    fn total_gas_cost<Constants: GasConstants>(
+        &self,
+        context: <Self as AuthenticatedMantleTx>::Context,
+    ) -> Result<GasCost, GasOverflow> {
+        <T as AuthenticatedMantleTx>::total_gas_cost::<Constants>(self, context)
     }
 
-    fn storage_gas_cost(&self) -> Result<GasCost, GasOverflow> {
-        <T as AuthenticatedMantleTx>::storage_gas_cost(self)
+    fn storage_gas_cost(
+        &self,
+        context: <Self as AuthenticatedMantleTx>::Context,
+    ) -> Result<GasCost, GasOverflow> {
+        <T as AuthenticatedMantleTx>::storage_gas_cost(self, context)
     }
 
-    fn execution_gas_consumption<Constants: GasConstants>(&self) -> Result<Gas, GasOverflow> {
-        <T as AuthenticatedMantleTx>::execution_gas_consumption::<Constants>(self)
+    fn execution_gas_consumption<Constants: GasConstants>(
+        &self,
+        context: <Self as AuthenticatedMantleTx>::Context,
+    ) -> Result<Gas, GasOverflow> {
+        <T as AuthenticatedMantleTx>::execution_gas_consumption::<Constants>(self, context)
     }
 
-    fn storage_gas_consumption(&self) -> Result<Gas, GasOverflow> {
-        <T as AuthenticatedMantleTx>::storage_gas_consumption(self)
+    fn storage_gas_consumption(
+        &self,
+        context: <Self as AuthenticatedMantleTx>::Context,
+    ) -> Result<Gas, GasOverflow> {
+        <T as AuthenticatedMantleTx>::storage_gas_consumption(self, context)
     }
 
     fn verify_ops_proofs_with_helper(
