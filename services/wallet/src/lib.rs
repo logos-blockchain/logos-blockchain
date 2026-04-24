@@ -1143,6 +1143,10 @@ where
         state.prune_vouchers(claimed_nullifiers);
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Keep backfill flow local in this PR"
+    )]
     async fn backfill_missing_blocks(
         tip: HeaderId,
         state: &mut ServiceState<'_>,
