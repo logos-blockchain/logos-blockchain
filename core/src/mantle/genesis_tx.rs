@@ -1,12 +1,10 @@
-use lb_groth16::Fr;
-use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
 #[cfg(feature = "mock")]
 use crate::mantle::tx::MantleTxContext;
 use crate::{
-    crypto::ZkHasher,
+    crypto::{Digest as _, Hasher},
     mantle::{
         MantleTx, Transaction, TransactionHasher, TxHash,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
@@ -129,11 +127,10 @@ fn valid_cryptarchia_inscription(inscription: &InscriptionOp) -> Result<(), Erro
 }
 
 impl Transaction for GenesisTx {
-    const HASHER: TransactionHasher<Self> =
-        |tx| <ZkHasher as Digest>::digest(&tx.as_signing_frs()).into();
+    const HASHER: TransactionHasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
     type Hash = TxHash;
-    fn as_signing_frs(&self) -> Vec<Fr> {
-        self.0.mantle_tx.as_signing_frs()
+    fn as_signing(&self) -> Vec<u8> {
+        self.0.mantle_tx.as_signing()
     }
 }
 
@@ -281,7 +278,7 @@ mod tests {
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         };
         let mut new_op_proofs = vec![OpProof::ZkSig(
-            ZkKey::multi_sign(&[], mantle_tx.hash().as_ref()).unwrap(),
+            ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
         )];
         new_op_proofs.append(&mut ops_proofs);
         SignedMantleTx {

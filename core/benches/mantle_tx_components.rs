@@ -133,7 +133,7 @@ fn bench_sign_b_zk_key_multi_sign_no_keys(bencher: Bencher) {
             let tx = make_inscription_tx(1);
             tx.hash()
         })
-        .bench_values(|txhash: TxHash| black_box(ZkKey::multi_sign(&[], &txhash.0).unwrap()));
+        .bench_values(|txhash: TxHash| black_box(ZkKey::multi_sign(&[], &txhash.to_fr()).unwrap()));
 }
 
 // Verify ops proofs

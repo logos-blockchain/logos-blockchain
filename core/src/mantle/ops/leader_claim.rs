@@ -192,7 +192,7 @@ impl Operation for LeaderClaimOp {
         // Check the proof of claim
         if ctx.proof_of_claim.verify(&LeaderClaimPublic {
             voucher_root: ctx.claimable_vouchers_root.0,
-            mantle_tx_hash: ctx.tx_hash.0,
+            mantle_tx_hash: ctx.tx_hash.to_fr(),
         }) {
             return Err(LeaderClaimError::InvalidPoC);
         }

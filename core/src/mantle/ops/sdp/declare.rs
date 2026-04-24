@@ -46,7 +46,11 @@ impl Operation for SDPDeclareOp {
 
         // Ensure locked note exists and ownership over the locked note and `zk_id`
         let note = utxo.note;
-        if !ZkPublicKey::verify_multi(&[note.pk, self.zk_id], &ctx.tx_hash.0, ctx.declare_zk_sig) {
+        if !ZkPublicKey::verify_multi(
+            &[note.pk, self.zk_id],
+            &ctx.tx_hash.to_fr(),
+            ctx.declare_zk_sig,
+        ) {
             return Err(SdpError::InvalidZkSignature);
         }
 

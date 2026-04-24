@@ -3,15 +3,14 @@ use std::{
     sync::LazyLock,
 };
 
+use ark_ff::PrimeField as _;
 use bytes::Bytes;
-use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked, fr_to_bytes, serde::serde_fr};
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_poseidon2::{Digest, ZkHash};
-use num_bigint::BigUint;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
+    crypto::{Digest as _, Hash, Hasher},
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
@@ -32,42 +31,29 @@ use crate::{
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, Serialize, Deserialize,
 )]
-#[serde(transparent)]
-pub struct TxHash(#[serde(with = "serde_fr")] pub ZkHash);
+pub struct TxHash(pub Hash);
 
-impl From<ZkHash> for TxHash {
-    fn from(fr: ZkHash) -> Self {
-        Self(fr)
+impl From<Hash> for TxHash {
+    fn from(hash: Hash) -> Self {
+        Self(hash)
     }
 }
 
-impl From<BigUint> for TxHash {
-    fn from(value: BigUint) -> Self {
-        Self(value.into())
-    }
-}
-
-impl From<TxHash> for ZkHash {
+impl From<TxHash> for Hash {
     fn from(hash: TxHash) -> Self {
         hash.0
     }
 }
 
-impl AsRef<ZkHash> for TxHash {
-    fn as_ref(&self) -> &ZkHash {
+impl AsRef<Hash> for TxHash {
+    fn as_ref(&self) -> &Hash {
         &self.0
     }
 }
 
 impl From<TxHash> for Bytes {
     fn from(tx_hash: TxHash) -> Self {
-        Self::copy_from_slice(&fr_to_bytes(tx_hash.as_ref()))
-    }
-}
-
-impl From<TxHash> for [u8; 32] {
-    fn from(tx_hash: TxHash) -> Self {
-        fr_to_bytes(tx_hash.as_ref())
+        Self::copy_from_slice(&tx_hash.0)
     }
 }
 
@@ -75,12 +61,19 @@ impl TxHash {
     /// For testing purposes
     #[cfg(test)]
     pub fn random(mut rng: impl rand::RngCore) -> Self {
-        Self(BigUint::from(rng.next_u64()).into())
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+        Self(bytes)
     }
 
     #[must_use]
     pub fn as_signing_bytes(&self) -> Bytes {
-        self.0.0.0.iter().flat_map(|b| b.to_le_bytes()).collect()
+        Bytes::from(self.0.to_vec())
+    }
+
+    #[must_use]
+    pub fn to_fr(&self) -> Fr {
+        Fr::from_le_bytes_mod_order(&self.0)
     }
 }
 
@@ -240,24 +233,21 @@ impl MantleTx {
     }
 }
 
-static MANTLE_TXHASH_V1_FR: LazyLock<Fr> =
-    LazyLock::new(|| fr_from_bytes(b"MANTLE_TXHASH_V1").expect("Constant should be valid Fr"));
+static MANTLE_TXHASH_V1_BYTES: LazyLock<Vec<u8>> = LazyLock::new(|| b"MANTLE_TXHASH_V1".to_vec());
 
 impl Transaction for MantleTx {
-    const HASHER: TransactionHasher<Self> =
-        |tx| <ZkHasher as Digest>::digest(&tx.as_signing_frs()).into();
+    const HASHER: TransactionHasher<Self> = |tx| {
+        let bytes: [u8; 32] = Hasher::digest(tx.as_signing()).into();
+        TxHash::from(bytes)
+    };
     type Hash = TxHash;
 
-    fn as_signing_frs(&self) -> Vec<Fr> {
+    fn as_signing(&self) -> Vec<u8> {
         // constant and structure as defined in the Mantle specification:
         // https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e
-        let encoded_bytes = encode_mantle_tx(self);
-        let first_blake_hash = Hasher::digest(encoded_bytes);
-        let frs = first_blake_hash
-            .as_slice()
-            .chunks(HALF_BLAKE_DIGEST_BYTES_SIZE)
-            .map(fr_from_bytes_unchecked);
-        std::iter::once(*MANTLE_TXHASH_V1_FR).chain(frs).collect()
+        let mut buffer = MANTLE_TXHASH_V1_BYTES.to_vec();
+        buffer.extend(encode_mantle_tx(self));
+        buffer
     }
 }
 
@@ -404,7 +394,7 @@ impl SignedMantleTx {
                 (Op::LeaderClaim(leader_claim_op), OpProof::PoC(poc)) => {
                     let ok = poc.verify(&LeaderClaimPublic {
                         voucher_root: leader_claim_op.rewards_root.into(),
-                        mantle_tx_hash: tx_hash.into(),
+                        mantle_tx_hash: tx_hash.to_fr(),
                     });
                     if !ok {
                         return Err(VerificationError::InvalidProofOfClaim { op_index: idx });
@@ -513,12 +503,14 @@ fn verify_channel_withdraw(
 }
 
 impl Transaction for SignedMantleTx {
-    const HASHER: TransactionHasher<Self> =
-        |tx| <ZkHasher as Digest>::digest(&tx.as_signing_frs()).into();
+    const HASHER: TransactionHasher<Self> = |tx| {
+        let bytes: [u8; 32] = Hasher::digest(tx.as_signing()).into();
+        TxHash::from(bytes)
+    };
     type Hash = TxHash;
 
-    fn as_signing_frs(&self) -> Vec<Fr> {
-        self.mantle_tx.as_signing_frs()
+    fn as_signing(&self) -> Vec<u8> {
+        self.mantle_tx.as_signing()
     }
 }
 
@@ -616,6 +608,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
 #[cfg(test)]
 mod tests {
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
+    use num_bigint::BigUint;
 
     use super::*;
     use crate::{
@@ -767,7 +760,7 @@ mod tests {
 
         // Use wrong proof type
         let tx_hash = mantle_tx.hash();
-        let zk_sig = OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap());
+        let zk_sig = OpProof::ZkSig(ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap());
         let result = SignedMantleTx::new(mantle_tx, vec![zk_sig]);
 
         assert!(matches!(

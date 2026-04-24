@@ -18,7 +18,7 @@ use lb_key_management_system_service::keys::{
 const TEST_SIGNING_KEY_BYTES: [u8; 32] = [0u8; 32];
 
 fn prove_zk_signature(tx_hash: &TxHash, keys: &[ZkKey]) -> ZkSignature {
-    ZkKey::multi_sign(keys, tx_hash.as_ref()).expect("zk signature generation should succeed")
+    ZkKey::multi_sign(keys, &tx_hash.to_fr()).expect("zk signature generation should succeed")
 }
 
 #[must_use]

@@ -253,7 +253,7 @@ pub(crate) async fn prepare_user_wallet_built_transaction_submission(
 
     let mantle_tx = funded_builder.clone().build();
     let tx_hash = mantle_tx.hash();
-    let transfer_proof = ZkKey::multi_sign(&signing_keys, tx_hash.as_ref()).inspect_err(|e| {
+    let transfer_proof = ZkKey::multi_sign(&signing_keys, &tx_hash.to_fr()).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
     })?;
 

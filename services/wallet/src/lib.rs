@@ -842,7 +842,7 @@ where
             .map(|pk| hex::encode(lb_groth16::fr_to_bytes(&pk.into_inner())))
             .collect();
 
-        let payload = PayloadEncoding::Zk(tx_hash.into());
+        let payload = PayloadEncoding::Zk(tx_hash.to_fr());
         let signature = kms
             .sign_multiple(key_ids, payload)
             .await
@@ -866,7 +866,7 @@ where
         Ok(Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
             LeaderClaimPublic {
                 voucher_root: rewards_root.into(),
-                mantle_tx_hash: tx_hash.into(),
+                mantle_tx_hash: tx_hash.to_fr(),
             },
             path,
             voucher_secret,

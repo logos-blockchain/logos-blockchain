@@ -1047,8 +1047,8 @@ mod tests {
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
             + "6400000000000000"                                                 // ExecutionGasPrice
             + "3200000000000000"                                                 // StorageGasPrice
-            + "0422c15f3b8c1e5a213d2d41d46b9c6644f7fe0a3d34695d3af450f06b10fdec" // Signature (64Byte)
-            + "ac806ad87e6a73efd5c901dc3af295620615702cbae4de9f46b7e1333284b803";
+            + "a53621dc1a5d7be2d8f8771139df91f961a60e546e9cdeff499d0c28ae10165c" // Signature (64Byte)
+            + "7dd0e314f2ba839dd0bff3a567be06f3aafdeddddd9de00e5117ab1584cd3201";
 
         // ENCODING
         let encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
@@ -1362,7 +1362,7 @@ mod tests {
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::ZkAndEd25519Sigs {
-                zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &txhash.0).unwrap(),
+                zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &txhash.to_fr()).unwrap(),
                 ed25519_sig: Ed25519Signature::from_bytes(&[0u8; 64]),
             }],
         )
@@ -1399,7 +1399,7 @@ mod tests {
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::ZkSig(
-                ZkKey::multi_sign(&[ZkKey::zero()], &txhash.0).unwrap(),
+                ZkKey::multi_sign(&[ZkKey::zero()], &txhash.to_fr()).unwrap(),
             )],
         )
         .unwrap();
@@ -1442,7 +1442,7 @@ mod tests {
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![OpProof::ZkSig(
-                ZkKey::multi_sign(&[ZkKey::zero()], &txhash.0).unwrap(),
+                ZkKey::multi_sign(&[ZkKey::zero()], &txhash.to_fr()).unwrap(),
             )],
         )
         .unwrap();
@@ -1506,7 +1506,7 @@ mod tests {
             vec![
                 OpProof::Ed25519Sig(op_sig),
                 OpProof::Ed25519Sig(op_sig),
-                OpProof::ZkSig(ZkKey::zero().sign_payload(&txhash.0).unwrap()),
+                OpProof::ZkSig(ZkKey::zero().sign_payload(&txhash.to_fr()).unwrap()),
             ],
         )
         .unwrap();
@@ -1620,7 +1620,7 @@ mod tests {
                 OpProof::Ed25519Sig(op_ed25519_sig),
                 OpProof::Ed25519Sig(op_ed25519_sig),
                 OpProof::ZkAndEd25519Sigs {
-                    zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &txhash.0).unwrap(),
+                    zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &txhash.to_fr()).unwrap(),
                     ed25519_sig: op_ed25519_sig,
                 },
                 OpProof::ZkSig(ZkKey::multi_sign(&[], &Fr::ZERO).unwrap()),

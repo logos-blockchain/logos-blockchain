@@ -1263,7 +1263,7 @@ pub mod tests {
             execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         };
-        let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().into()).unwrap();
+        let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
         (
             SignedMantleTx {
                 ops_proofs: vec![ZkSig(transfer_sig.clone())],

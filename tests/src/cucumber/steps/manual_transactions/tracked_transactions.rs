@@ -190,7 +190,7 @@ fn create_invalid_transaction() -> SignedMantleTx {
         execution_gas_price: 0.into(),
     };
 
-    let transfer_proof = ZkKey::multi_sign(&[], mantle_tx.hash().as_ref())
+    let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");
 
     SignedMantleTx {

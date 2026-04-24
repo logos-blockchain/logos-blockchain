@@ -141,7 +141,7 @@ impl Header {
         let tx_hash: TxHash = tx.hash();
         Self::new(
             HeaderId([0; 32]),
-            ContentId::from(fr_to_bytes(&tx_hash.0)),
+            ContentId(tx_hash.into()),
             Slot::from(0u64),
             Groth16LeaderProof::genesis(),
         )
