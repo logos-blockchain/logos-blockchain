@@ -5,7 +5,6 @@ use reqwest::Url;
 use serial_test::serial;
 
 #[tokio::test]
-#[serial]
 async fn test_post_mantle_tx() {
     let topology = Topology::spawn(
         TopologyConfig::two_validators(),

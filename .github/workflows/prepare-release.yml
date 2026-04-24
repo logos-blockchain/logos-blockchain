@@ -158,6 +158,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
+      - name: Prepare release body by injecting release candidate-specific disclaimers
+        env:
+          IS_PRERELEASE: ${{ needs.configure-version.outputs.is_prerelease }}
+        run: |
+          set -euo pipefail
+
+          TEMPLATE=.github/release/release-content.md
+          DISCLAIMER_FILE=.github/release/release-content-rc-disclaimer.md
+          OUTPUT=.github/release/release-content.generated.md
+
+          cp "$TEMPLATE" "$OUTPUT"
+
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            cat "$DISCLAIMER_FILE" "$OUTPUT" > "${OUTPUT}.tmp"
+            mv "${OUTPUT}.tmp" "$OUTPUT"
+          fi
+
       - name: Create Draft Release
         uses: actions/create-release@4c11c9fe1dcd9636620a16455165783b20fc7ea0  # Version 1.1.4
         id: create-draft-release
@@ -166,7 +183,7 @@ jobs:
         with:
           tag_name: ${{ env.VERSION }}
           release_name: Logos Blockchain Node ${{ env.VERSION }}
-          body_path: .github/release/release-content.md
+          body_path: .github/release/release-content.generated.md
           draft: true
           prerelease: ${{ env.IS_PRERELEASE }}
 

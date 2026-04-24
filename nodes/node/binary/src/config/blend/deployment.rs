@@ -3,6 +3,7 @@ use core::{num::NonZeroU64, time::Duration};
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_utils::math::NonNegativeF64;
+use nutype::nutype;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
@@ -106,7 +107,7 @@ impl Settings {
             activity_threshold_sensitivity: self.core.activity_threshold_sensitivity,
             data_replication_factor: self.common.data_replication_factor,
             message_frequency_per_round: self.core.scheduler.cover.message_frequency_per_round,
-            minimum_network_size: self.common.minimum_network_size,
+            minimum_network_size: self.common.minimum_network_size.into(),
             num_blend_layers: self.common.num_blend_layers,
             rounds_per_session: self.rounds_per_session(
                 cryptarchia_deployment.slots_per_epoch(),
@@ -121,9 +122,24 @@ pub struct CommonSettings {
     /// `ß_c`: expected number of blending operations for each locally generated
     /// message.
     pub num_blend_layers: NonZeroU64,
-    pub minimum_network_size: NonZeroU64,
+    pub minimum_network_size: MinimumNetworkSize,
     pub protocol_name: StreamProtocol,
     pub data_replication_factor: u64,
+}
+
+#[nutype(
+    validate(greater_or_equal = 2),
+    derive(Serialize, Deserialize, Debug, Clone, Copy)
+)]
+pub struct MinimumNetworkSize(u64);
+
+impl From<MinimumNetworkSize> for NonZeroU64 {
+    fn from(value: MinimumNetworkSize) -> Self {
+        value
+            .into_inner()
+            .try_into()
+            .expect("Minimum network size is at least 2, which is > than 0.")
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

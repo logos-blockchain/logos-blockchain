@@ -263,14 +263,14 @@ fn is_pid_alive(pid: u32) -> bool {
             ))
             .status();
 
-        return match status {
+        match status {
             // process exists
             Ok(s) if s.code() == Some(0) => true,
             // process absent
             Ok(s) if s.code() == Some(1) => false,
             // probe failed -> conservative
             _ => true,
-        };
+        }
     }
 
     #[cfg(not(any(unix, windows)))]
