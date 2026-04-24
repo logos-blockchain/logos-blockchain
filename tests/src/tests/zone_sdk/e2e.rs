@@ -101,6 +101,12 @@ async fn test_sequencer_publish_and_indexer_read() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -167,6 +173,12 @@ async fn test_sequencer_checkpoint_resume() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -445,6 +457,12 @@ async fn test_sequential_multi_sequencer() {
         .map(|c| {
             let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -578,6 +596,12 @@ async fn test_concurrent_multi_sequencer() {
         .map(|c| {
             let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -878,6 +902,12 @@ async fn test_sorted_conflict_resolution() {
         .map(|c| {
             let mut config = create_validator_config(c, deployment_settings.clone());
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -1126,6 +1156,12 @@ async fn test_sequencer_stale_checkpoint_resume() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -1380,6 +1416,12 @@ async fn test_subscribe_to_finalized_deposit() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -1441,6 +1483,12 @@ async fn test_atomic_deposit_inscription() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
@@ -1547,6 +1595,12 @@ async fn test_subscribe_to_finalized_withdraw() {
         2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
             config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
