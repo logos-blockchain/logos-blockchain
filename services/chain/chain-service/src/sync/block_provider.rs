@@ -652,8 +652,12 @@ mod tests {
         let known_blocks = HashSet::from([ids[0]]);
         let fake_target = HeaderId::from([99u8; 32]);
 
-        env.test_error_scenario(fake_target, &known_blocks, "BlockNotFound")
-            .await;
+        env.test_error_scenario(
+            fake_target,
+            &known_blocks,
+            BlocksUnavailableReason::BlockNotFound(fake_target),
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -664,8 +668,12 @@ mod tests {
         let fake_known = HashSet::from([HeaderId::from([98u8; 32]), HeaderId::from([97u8; 32])]);
         let target_block = ids[4];
 
-        env.test_error_scenario(target_block, &fake_known, "StartBlockNotFound")
-            .await;
+        env.test_error_scenario(
+            target_block,
+            &fake_known,
+            BlocksUnavailableReason::StartBlockNotFound,
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -675,8 +683,12 @@ mod tests {
         let fake_target_block = HeaderId::from([88u8; 32]);
         let known_blocks = HashSet::from([HeaderId::from([99u8; 32])]);
 
-        env.test_error_scenario(fake_target_block, &known_blocks, "BlockNotFound")
-            .await;
+        env.test_error_scenario(
+            fake_target_block,
+            &known_blocks,
+            BlocksUnavailableReason::BlockNotFound(fake_target_block),
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -943,29 +955,37 @@ mod tests {
             &self,
             target_block: HeaderId,
             known_blocks: &HashSet<HeaderId>,
-            expected_error_type: &str,
+            expected_reason: BlocksUnavailableReason,
         ) {
             let (tx, mut rx) = mpsc::channel(1);
             self.provider
                 .send_blocks(&self.cryptarchia, target_block, known_blocks, tx)
                 .await;
 
-            let error_occurred = if let Some(response) = rx.recv().await {
+            let (error_occurred, actual_outcome) = if let Some(response) = rx.recv().await {
                 match response {
                     ProviderResponse::Unavailable { reason } => {
-                        reason.to_string().contains(expected_error_type)
+                        (reason == expected_reason, format!("Unavailable({reason})"))
                     }
-                    ProviderResponse::Available(mut stream) => {
-                        stream.next().await.is_some_and(|result| result.is_err())
-                    }
+                    ProviderResponse::Available(mut stream) => match stream.next().await {
+                        Some(Ok(bytes)) => {
+                            let block: Block<()> = Block::from_bytes(&bytes).unwrap();
+                            (
+                                false,
+                                format!("Available(first_block={:?})", block.header().id()),
+                            )
+                        }
+                        Some(Err(err)) => (false, format!("Available(first_err={err})")),
+                        None => (false, "Available(empty_stream)".to_owned()),
+                    },
                 }
             } else {
-                false
+                (false, "No response received".to_owned())
             };
 
             assert!(
                 error_occurred,
-                "Expected {expected_error_type} error but operation succeeded",
+                "Expected {expected_reason} but got {actual_outcome}",
             );
         }
 
