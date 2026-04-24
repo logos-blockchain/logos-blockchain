@@ -190,7 +190,7 @@ impl Operation for LeaderClaimOp {
         }
 
         // Check the proof of claim
-        if ctx.proof_of_claim.verify(&LeaderClaimPublic {
+        if !ctx.proof_of_claim.verify(&LeaderClaimPublic {
             voucher_root: ctx.claimable_vouchers_root.0,
             mantle_tx_hash: ctx.tx_hash.0,
         }) {
@@ -215,5 +215,46 @@ impl Operation for LeaderClaimOp {
         ctx.claimable_rewards -= ctx.reward_amount;
 
         Ok(ctx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_utxotree::DynamicMerkleTree;
+
+    use super::*;
+    use crate::proofs::leader_claim_proof::LeaderClaimPrivate;
+
+    #[test]
+    fn validate_accepts_valid_proof_of_claim() {
+        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let voucher_cm = VoucherCm::from_secret(voucher_secret);
+        let (voucher_tree, voucher_index) =
+            DynamicMerkleTree::<VoucherCm, ZkHasher>::new().insert(voucher_cm);
+        let voucher_root = RewardsRoot::from(voucher_tree.root());
+        let voucher_path = voucher_tree
+            .path(voucher_index)
+            .expect("voucher path should exist");
+        let tx_hash = TxHash::from(Fr::from(11u64));
+        let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
+            LeaderClaimPublic::new(voucher_root.into(), tx_hash.0),
+            &voucher_path,
+            voucher_secret,
+        ))
+        .expect("proof generation should succeed");
+        let op = LeaderClaimOp {
+            rewards_root: voucher_root,
+            voucher_nullifier: VoucherNullifier::from_secret(voucher_secret),
+            pk: ZkPublicKey::zero(),
+        };
+        let nullifiers = rpds::HashTrieSetSync::new_sync();
+        let ctx = LeaderClaimValidationContext {
+            nullifiers: &nullifiers,
+            claimable_vouchers_root: &voucher_root,
+            proof_of_claim: &proof,
+            tx_hash: &tx_hash,
+        };
+
+        assert_eq!(op.validate(&ctx), Ok(()));
     }
 }
