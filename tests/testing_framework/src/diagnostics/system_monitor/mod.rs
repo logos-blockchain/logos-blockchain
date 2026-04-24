@@ -29,6 +29,15 @@ pub(super) fn register_output_file(path: &Path) {
     system_monitor().register_output(path);
 }
 
+/// Stops writing the shared monitor stream to one NDJSON output file.
+pub(super) fn unregister_output_file(path: &Path) {
+    if !tf_env::logos_blockchain_system_monitor_enabled() {
+        return;
+    }
+
+    system_monitor().unregister_output(path);
+}
+
 /// Records one lifecycle marker in the shared monitor stream.
 pub(super) fn record_event(label: &str, detail: impl Into<String>) {
     if !tf_env::logos_blockchain_system_monitor_enabled() {
@@ -70,6 +79,17 @@ impl SystemMonitor {
 
         self.shared
             .publish_event(SystemEvent::output_registered(path));
+    }
+
+    fn unregister_output(&self, path: &Path) {
+        if !self.shared.unregister_output(path) {
+            return;
+        }
+
+        self.shared.publish_event(SystemEvent::new(
+            "output_unregistered",
+            path.display().to_string(),
+        ));
     }
 
     fn record_event(&self, event: SystemEvent) {
@@ -116,6 +136,13 @@ impl SystemMonitorShared {
             .lock()
             .expect("system monitor lock poisoned")
             .register(path)
+    }
+
+    fn unregister_output(&self, path: &Path) -> bool {
+        self.outputs
+            .lock()
+            .expect("system monitor lock poisoned")
+            .unregister(path)
     }
 
     fn record_sample(&self, sample: SystemSample) {

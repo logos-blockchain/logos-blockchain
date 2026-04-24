@@ -21,6 +21,10 @@ impl OutputRegistry {
         self.paths.insert(path)
     }
 
+    pub(super) fn unregister(&mut self, path: &std::path::Path) -> bool {
+        self.paths.remove(path)
+    }
+
     pub(super) fn len(&self) -> usize {
         self.paths.len()
     }

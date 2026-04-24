@@ -20,6 +20,11 @@ pub fn register_system_monitor_output_file(path: &std::path::Path) {
 }
 
 #[doc(hidden)]
+pub fn unregister_system_monitor_output_file(path: &std::path::Path) {
+    system_monitor::unregister_output_file(path);
+}
+
+#[doc(hidden)]
 pub fn record_system_monitor_event(label: &str, detail: impl Into<String>) {
     system_monitor::record_event(label, detail);
 }
