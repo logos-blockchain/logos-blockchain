@@ -30,12 +30,12 @@ hex                              = { default-features = false, version = "0.4.3"
 http                             = "1.3"
 lb-api-service                   = { workspace = true }
 lb-blend                         = { workspace = true }
-lb-blend-service                 = { features = ["libp2p"], workspace = true }
+lb-blend-service                 = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
-lb-chain-network-service         = { features = ["libp2p"], workspace = true }
+lb-chain-network-service         = { workspace = true }
 lb-chain-service                 = { workspace = true }
-lb-core                          = { features = ["mock"], workspace = true }
+lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
@@ -48,11 +48,11 @@ lb-sdp-service                   = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-storage-service               = { workspace = true }
 lb-system-sig-service            = { workspace = true }
-lb-time-service                  = { features = ["ntp", "serde"], workspace = true }
+lb-time-service                  = { features = ["ntp"], workspace = true }
 lb-tracing                       = { workspace = true }
 lb-tracing-service               = { workspace = true }
 lb-tx-service                    = { features = ["rocksdb-backend"], workspace = true }
-lb-utils                         = { features = ["serde", "time"], workspace = true }
+lb-utils                         = { features = ["time"], workspace = true }
 lb-wallet-service                = { workspace = true }
 libp2p                           = { features = ["autonat", "gossipsub", "identify", "kad", "macros"], workspace = true }
 logos-blockchain-tui-zone        = { path = "../../../testnet/tui-zone" }
@@ -90,11 +90,10 @@ tikv-jemallocator = { optional = true, version = "0.6" }
 rand = { workspace = true }
 
 [features]
-config-gen      = ["lb-key-management-system-service/unsafe"]
-default         = ["config-gen", "tracing"]
-dhat-heap       = ["dep:dhat"]
-instrumentation = []
-jemalloc        = ["dep:tikv-jemallocator"]
-profiling       = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
-testing         = ["lb-key-management-system-service/unsafe"]
-tracing         = []
+config-gen = ["lb-key-management-system-service/unsafe"]
+default    = ["config-gen", "tracing"]
+dhat-heap  = ["dep:dhat"]
+jemalloc   = ["dep:tikv-jemallocator"]
+profiling  = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
+testing    = ["lb-key-management-system-service/unsafe"]
+tracing    = []

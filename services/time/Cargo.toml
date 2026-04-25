@@ -14,15 +14,14 @@ workspace = true
 
 [dependencies]
 async-trait           = "0.1"
-cfg_eval              = { optional = true, version = "0.1" }
 futures               = { workspace = true }
 lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
 lb-tracing            = { workspace = true }
-lb-utils              = { optional = true, workspace = true }
+lb-utils              = { workspace = true }
 log                   = { workspace = true }
 overwatch             = { workspace = true }
-serde                 = { features = ["derive"], optional = true, workspace = true }
-serde_with            = { optional = true, workspace = true }
+serde                 = { features = ["derive"], workspace = true }
+serde_with            = { workspace = true }
 sntpc                 = { default-features = false, features = ["std", "tokio-socket"], optional = true, version = "0.5" }
 thiserror             = { default-features = false, optional = true, version = "2.0" }
 time                  = { default-features = false, features = ["std"], version = "0.3" }
@@ -30,10 +29,5 @@ tokio                 = { workspace = true }
 tokio-stream          = { workspace = true }
 tracing               = { default-features = false, version = "0.1" }
 
-[dev-dependencies]
-lb-utils = { workspace = true }
-
 [features]
-ntp       = ["dep:sntpc", "dep:thiserror", "tokio/net"]
-serde     = ["dep:cfg_eval", "dep:lb-utils", "dep:serde", "dep:serde_with", "lb-cryptarchia-engine/serde"]
-testutils = []
+ntp = ["dep:sntpc", "dep:thiserror", "tokio/net"]

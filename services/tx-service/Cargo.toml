@@ -40,15 +40,12 @@ utoipa             = { optional = true, workspace = true }
 [dev-dependencies]
 lb-tracing-service          = { workspace = true }
 lb-utils                    = { workspace = true }
-logos-blockchain-tx-service = { features = ["mock", "rocksdb-backend"], path = "." }
+logos-blockchain-tx-service = { features = ["rocksdb-backend"], path = "." }
 overwatch-derive            = { workspace = true }
 tempfile                    = "3"
 
 [features]
 default         = []
-instrumentation = []
-libp2p          = ["lb-network-service/libp2p"]
-mock            = ["lb-core/mock", "lb-network-service/mock"]
 rocksdb-backend = ["lb-storage-service/rocksdb-backend"]
 
 # enable to help generate OpenAPI

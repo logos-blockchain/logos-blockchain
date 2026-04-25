@@ -13,8 +13,8 @@ version     = { workspace = true }
 ark-ff       = { default-features = false, features = ["std"], version = "0.4" }
 lb-groth16   = { workspace = true }
 lb-poseidon2 = { workspace = true }
-rpds         = { default-features = false, version = "1.1.1" }
-serde        = { features = ["derive"], optional = true, workspace = true }
+rpds         = { default-features = false, features = ["serde"], version = "1.1.1" }
+serde        = { features = ["derive"], workspace = true }
 thiserror    = { workspace = true }
 
 [dev-dependencies]
@@ -23,9 +23,6 @@ proptest-macro = "0.2"
 
 [lints]
 workspace = true
-
-[features]
-serde = ["dep:serde", "lb-groth16/deser", "rpds/serde"]
 
 [package.metadata.cargo-machete]
 # False positives.

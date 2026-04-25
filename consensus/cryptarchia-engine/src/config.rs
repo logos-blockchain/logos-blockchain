@@ -3,8 +3,7 @@ use std::num::NonZero;
 use lb_pol::LotteryConstants;
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Config {
     /// The `k` parameter in the Common Prefix property.
     /// Blocks deeper than k are generally considered stable and forks deeper
@@ -15,11 +14,10 @@ pub struct Config {
     slot_activation_coeff: NonNegativeRatio,
     stake_inference_learning_rate: NonNegativeF64,
     /// Lottery approximation constants computed from `slot_activation_coeff`
-    #[cfg_attr(feature = "serde", serde(skip))]
+    #[serde(skip)]
     lottery_constants: LotteryConstants,
 }
 
-#[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for Config {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

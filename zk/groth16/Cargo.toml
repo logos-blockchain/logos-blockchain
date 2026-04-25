@@ -15,20 +15,15 @@ ark-ec        = "0.4"
 ark-ff        = { version = "0.4" }
 ark-groth16   = { default-features = false, features = ["std"], version = "0.4" }
 ark-serialize = { default-features = false, version = "0.4.2" }
-generic-array = { default-features = false, version = "1.2" }
+generic-array = { default-features = false, features = ["serde"], version = "1.2" }
 hex           = { default-features = false, features = ["alloc"], version = "0.4" }
 num-bigint    = { default-features = false, version = "0.4" }
-serde         = { features = ["derive"], optional = true, workspace = true }
-serde_json    = { default-features = false, features = ["alloc"], optional = true, version = "1.0" }
+serde         = { features = ["derive"], workspace = true }
+serde_json    = { default-features = false, features = ["alloc"], version = "1.0" }
 thiserror     = { default-features = false, version = "2.0" }
 
 [dev-dependencies]
-bincode    = { default-features = false, version = "1.3" }
-serde_json = { default-features = false, features = ["alloc"], version = "1.0" }
+bincode = { default-features = false, version = "1.3" }
 
 [lints]
 workspace = true
-
-[features]
-default = []
-deser   = ["dep:serde", "dep:serde_json", "generic-array/serde"]

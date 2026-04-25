@@ -20,8 +20,8 @@ either = { default-features = false, version = "1.13.0" }
 futures = { workspace = true }
 hex = { default-features = false, version = "0.4.3" }
 igd-next = { features = ["aio_tokio", "tokio"], version = "0.16.1" }
-lb-cryptarchia-sync = { features = ["libp2p"], workspace = true }
-lb-utils = { features = ["serde", "time"], workspace = true }
+lb-cryptarchia-sync = { workspace = true }
+lb-utils = { features = ["time"], workspace = true }
 libp2p = { features = [
   "autonat",
   "dns",

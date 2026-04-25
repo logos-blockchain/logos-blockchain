@@ -12,7 +12,7 @@ version     = { workspace = true }
 [dependencies]
 lb-circuits-prover   = { workspace = true }
 lb-circuits-utils    = { workspace = true }
-lb-groth16           = { features = ["deser"], workspace = true }
+lb-groth16           = { workspace = true }
 lb-pol               = { workspace = true }
 lb-witness-generator = { workspace = true }
 num-bigint           = "0.4"

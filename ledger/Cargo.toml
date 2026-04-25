@@ -27,16 +27,13 @@ lb-utxotree                   = { workspace = true }
 num-bigint                    = { default-features = false, version = "0.4" }
 rand                          = { workspace = true }
 rpds                          = { default-features = false, version = "1.1.1" }
-serde                         = { default-features = false, features = ["derive"], optional = true, workspace = true }
+serde                         = { default-features = false, features = ["derive"], workspace = true }
 serde_arrays                  = { default-features = false, version = "0.2.0" }
 thiserror                     = "1"
 tracing                       = { workspace = true }
 
 [dev-dependencies]
 rand = { features = ["std", "std_rng"], workspace = true }
-
-[features]
-serde = ["dep:serde", "lb-cryptarchia-engine/serde", "lb-groth16/deser", "lb-utils/serde", "lb-utxotree/serde"]
 
 [package.metadata.cargo-machete]
 ignored = ["serde_arrays"]
