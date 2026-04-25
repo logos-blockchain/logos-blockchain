@@ -39,7 +39,6 @@ use logos_blockchain_tests::{
     },
 };
 use rand::{Rng as _, thread_rng};
-use serial_test::serial;
 use tokio::time::{sleep, timeout};
 use tracing::debug;
 
@@ -445,12 +444,11 @@ fn tag_payload(msg: &str) -> Vec<u8> {
     format!("{:016x}:{msg}", rand::random::<u64>()).into_bytes()
 }
 
-#[tokio::test]
-#[serial]
-async fn test_sequential_multi_sequencer() {
-    init_tracing();
-    // Setup: two validators, fast blocks
-    let (configs, genesis_tx) = create_general_configs(2, None);
+/// Spawn `n` validators with the standard fast-block test config and wait
+/// for the chain to produce its first block. Returns the validators and the
+/// URL of the first one (where sequencers + indexer connect).
+async fn spawn_competing_validators(n: usize) -> (Vec<Validator>, reqwest::Url) {
+    let (configs, genesis_tx) = create_general_configs(n, None);
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs: Vec<_> = configs
         .into_iter()
@@ -476,12 +474,112 @@ async fn test_sequential_multi_sequencer() {
         .collect::<Result<Vec<_>, _>>()
         .expect("Failed to spawn validators");
 
-    let validator = &validators[0];
     assert!(
-        wait_for_height(validator, 1, Duration::from_mins(2)).await,
+        wait_for_height(&validators[0], 1, Duration::from_mins(2)).await,
         "Chain should produce the first block"
     );
-    let node_url = validator.url();
+    let node_url = validators[0].url();
+    (validators, node_url)
+}
+
+/// Bootstrap the channel by submitting `set_keys` from a transient sequencer
+/// using `admin_key`. Waits for finalization, then drops the sequencer.
+async fn authorize_keys(
+    channel_id: ChannelId,
+    admin_key: Ed25519Key,
+    keys: Vec<lb_core::mantle::ops::channel::Ed25519PublicKey>,
+    node_url: reqwest::Url,
+    sequencer_config: SequencerConfig,
+) {
+    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
+        channel_id,
+        admin_key,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+        sequencer_config,
+        None,
+    );
+    let (poll, _rx) = spawn_drive(sequencer);
+    handle.wait_ready().await;
+    let (_result, finalized) = handle
+        .set_keys(keys)
+        .await
+        .expect("set_keys should succeed");
+    timeout(Duration::from_mins(6), finalized)
+        .await
+        .expect("Timeout waiting for set_keys to finalize")
+        .expect("set_keys finalization failed");
+    poll.abort();
+}
+
+/// Convenience wrapper around `ZoneSequencer::init_with_config` for tests that
+/// always start fresh (no checkpoint) and connect via the standard HTTP client.
+fn init_sequencer(
+    channel_id: ChannelId,
+    signing_key: Ed25519Key,
+    node_url: reqwest::Url,
+    config: SequencerConfig,
+) -> (ZoneSequencer<Node>, SequencerHandle<Node>) {
+    ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+        config,
+        None,
+    )
+}
+
+/// Drive each `(handle, payloads)` pair in parallel: every handle publishes
+/// its payloads in order, but the handles run concurrently so their messages
+/// interleave on chain.
+async fn publish_concurrently(jobs: Vec<(SequencerHandle<Node>, Vec<Vec<u8>>)>) {
+    join_all(jobs.into_iter().map(async |(handle, data)| {
+        for d in data {
+            handle.publish_message(d).await.expect("publish failed");
+        }
+    }))
+    .await;
+}
+
+/// Scan the indexer end-to-end for all on-chain payloads matching `expected`.
+/// Used after settlement to detect duplicates the test should have prevented.
+async fn scan_indexer_for_payloads(
+    indexer: &ZoneIndexer<Node>,
+    expected: &HashSet<Vec<u8>>,
+) -> Vec<Vec<u8>> {
+    let mut all_payloads: Vec<Vec<u8>> = Vec::new();
+    let mut last_zone_block = None;
+    loop {
+        let stream = indexer
+            .next_messages(last_zone_block)
+            .await
+            .expect("next_messages should succeed");
+        futures::pin_mut!(stream);
+        let mut got_any = false;
+        while let Some((msg, slot)) = stream.next().await {
+            got_any = true;
+            if let ZoneMessage::Block(block) = msg {
+                if expected.contains(&block.data) {
+                    debug!(
+                        "Post-settlement scan: {:?} id={:?} slot={slot:?}",
+                        String::from_utf8_lossy(&block.data),
+                        block.id,
+                    );
+                    all_payloads.push(block.data.clone());
+                }
+                last_zone_block = Some((block.id, slot));
+            }
+        }
+        if !got_any {
+            break;
+        }
+    }
+    all_payloads
+}
+
+#[tokio::test]
+async fn test_sequential_multi_sequencer() {
+    init_tracing();
+    let (_validators, node_url) = spawn_competing_validators(2).await;
 
     let sequencer_config = SequencerConfig {
         resubmit_interval: Duration::from_secs(3),
@@ -579,90 +677,35 @@ async fn test_sequential_multi_sequencer() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_concurrent_multi_sequencer() {
     init_tracing();
-    // Use case B — ad-hoc: three sequencers publish concurrently on the same
-    // channel with set_keys authorization. SeqA creates the channel, then
-    // all three publish in parallel. Each sequencer's inscriptions maintain
-    // their internal order but may be interleaved with each other on chain.
-
-    // Setup: two validators, all sequencers share one node to avoid
-    // immutable block index divergence between validators.
-    let (configs, genesis_tx) = create_general_configs(2, None);
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
-    let configs: Vec<_> = configs
-        .into_iter()
-        .map(|c| {
-            let mut config = create_validator_config(c, deployment_settings.clone());
-            config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
-            config.deployment.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
-            config
-        })
-        .collect();
-
-    let validators: Vec<Validator> = join_all(configs.into_iter().map(Validator::spawn))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("Failed to spawn validators");
-
-    assert!(
-        wait_for_height(&validators[0], 1, Duration::from_mins(2)).await,
-        "Chain should produce the first block"
-    );
-    let node_url = validators[0].url();
+    // Three sequencers publish concurrently on the same channel via set_keys
+    // authorization. Each sequencer's inscriptions maintain their internal
+    // order but may be interleaved with each other on chain.
+    let (_validators, node_url) = spawn_competing_validators(2).await;
 
     let sequencer_config = SequencerConfig {
         resubmit_interval: Duration::from_secs(30),
         ..SequencerConfig::default()
     };
 
-    // Create three signing keys — SeqA is the channel creator/admin
     let signing_key_a = keygen();
     let admin_pk = signing_key_a.public_key();
     let channel_id = channel_id_from_key(&signing_key_a);
-
     let signing_key_b = keygen();
     let seq_b_pk = signing_key_b.public_key();
-
     let signing_key_c = keygen();
     let seq_c_pk = signing_key_c.public_key();
 
-    // --- Phase 1: SeqA creates channel and authorizes all three via set_keys ---
-    debug!("Phase 1: Starting SeqA for set_keys");
-    let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
+    // Phase 1: bootstrap the channel by authorizing all three keys.
+    authorize_keys(
         channel_id,
         signing_key_a.clone(),
-        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
+        vec![admin_pk, seq_b_pk, seq_c_pk],
+        node_url.clone(),
         sequencer_config.clone(),
-        None,
-    );
-    let (poll_a, _rx) = spawn_drive(sequencer_a);
-
-    handle_a.wait_ready().await;
-    debug!("Phase 1: SeqA ready, submitting set_keys");
-    let (_result, finalized) = handle_a
-        .set_keys(vec![admin_pk, seq_b_pk, seq_c_pk])
-        .await
-        .expect("set_keys should succeed");
-    timeout(Duration::from_mins(6), finalized)
-        .await
-        .expect("Timeout waiting for set_keys to finalize")
-        .expect("set_keys finalization failed");
-
-    // Stop SeqA — will restart concurrently with B and C
-    debug!("Phase 1: set_keys finalized, stopping SeqA");
-    poll_a.abort();
-    drop(handle_a);
+    )
+    .await;
 
     // Prepare payloads before starting sequencers
     let data_a: Vec<Vec<u8>> = vec![tag_payload("a1"), tag_payload("a2"), tag_payload("a3")];
@@ -671,47 +714,29 @@ async fn test_concurrent_multi_sequencer() {
 
     // --- Phase 2: Start all three sequencers with intent tracking ---
     debug!("Phase 2: Starting 3 sequencers concurrently");
-    let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
+    let (seq_a, mut handle_a) = init_sequencer(
         channel_id,
         signing_key_a,
-        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
+        node_url.clone(),
         sequencer_config.clone(),
-        None,
     );
-
-    let (sequencer_b, mut handle_b) = ZoneSequencer::init_with_config(
+    let (seq_b, mut handle_b) = init_sequencer(
         channel_id,
         signing_key_b,
-        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
+        node_url.clone(),
         sequencer_config.clone(),
-        None,
     );
-
-    let (sequencer_c, mut handle_c) = ZoneSequencer::init_with_config(
+    let (seq_c, mut handle_c) = init_sequencer(
         channel_id,
         signing_key_c,
-        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
+        node_url.clone(),
         sequencer_config,
-        None,
     );
 
-    let poll_a = spawn_drive_republish(
-        sequencer_a,
-        handle_a.clone(),
-        data_a.iter().cloned().collect(),
-    );
-    let poll_b = spawn_drive_republish(
-        sequencer_b,
-        handle_b.clone(),
-        data_b.iter().cloned().collect(),
-    );
-    let poll_c = spawn_drive_republish(
-        sequencer_c,
-        handle_c.clone(),
-        data_c.iter().cloned().collect(),
-    );
+    let poll_a = spawn_drive_republish(seq_a, handle_a.clone(), data_a.iter().cloned().collect());
+    let poll_b = spawn_drive_republish(seq_b, handle_b.clone(), data_b.iter().cloned().collect());
+    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), data_c.iter().cloned().collect());
 
-    // Wait for all three to be ready
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
     handle_c.wait_ready().await;
@@ -719,32 +744,12 @@ async fn test_concurrent_multi_sequencer() {
 
     // Phase 3: Publish initial inscriptions concurrently.
     debug!("Phase 3: Publishing 9 inscriptions concurrently");
-    tokio::join!(
-        async {
-            for d in &data_a {
-                handle_a
-                    .publish_message(d.clone())
-                    .await
-                    .expect("publish failed");
-            }
-        },
-        async {
-            for d in &data_b {
-                handle_b
-                    .publish_message(d.clone())
-                    .await
-                    .expect("publish failed");
-            }
-        },
-        async {
-            for d in &data_c {
-                handle_c
-                    .publish_message(d.clone())
-                    .await
-                    .expect("publish failed");
-            }
-        },
-    );
+    publish_concurrently(vec![
+        (handle_a, data_a.clone()),
+        (handle_b, data_b.clone()),
+        (handle_c, data_c.clone()),
+    ])
+    .await;
 
     // Phase 4: Wait for all 9 inscriptions to appear on chain
     debug!("Phase 4: Waiting for all 9 inscriptions in indexer");
@@ -752,10 +757,12 @@ async fn test_concurrent_multi_sequencer() {
         channel_id,
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
     );
-    let mut expected_all: HashSet<Vec<u8>> = HashSet::new();
-    expected_all.extend(data_a.iter().cloned());
-    expected_all.extend(data_b.iter().cloned());
-    expected_all.extend(data_c.iter().cloned());
+    let expected_all: HashSet<Vec<u8>> = data_a
+        .iter()
+        .chain(&data_b)
+        .chain(&data_c)
+        .cloned()
+        .collect();
     assert_eq!(expected_all.len(), 9);
 
     wait_for_indexer_unordered(&indexer, &expected_all, Duration::from_mins(20)).await;
@@ -765,33 +772,7 @@ async fn test_concurrent_multi_sequencer() {
     // to be safe — enough for resubmit cycles and in-flight txs to settle.
     sleep(Duration::from_secs(30)).await;
 
-    let mut all_payloads: Vec<Vec<u8>> = Vec::new();
-    let mut last_zone_block = None;
-    loop {
-        let stream = indexer
-            .next_messages(last_zone_block)
-            .await
-            .expect("next_messages should succeed");
-        futures::pin_mut!(stream);
-        let mut got_any = false;
-        while let Some((msg, slot)) = stream.next().await {
-            got_any = true;
-            if let ZoneMessage::Block(block) = msg {
-                if expected_all.contains(&block.data) {
-                    debug!(
-                        "Post-settlement scan: {:?} id={:?} slot={slot:?}",
-                        String::from_utf8_lossy(&block.data),
-                        block.id,
-                    );
-                    all_payloads.push(block.data.clone());
-                }
-                last_zone_block = Some((block.id, slot));
-            }
-        }
-        if !got_any {
-            break;
-        }
-    }
+    let all_payloads = scan_indexer_for_payloads(&indexer, &expected_all).await;
 
     let unique: HashSet<&Vec<u8>> = all_payloads.iter().collect();
     assert_eq!(
@@ -886,171 +867,26 @@ fn spawn_sequencer_sorted_policy(
     })
 }
 
-#[tokio::test]
-#[serial]
-async fn test_sorted_conflict_resolution() {
-    init_tracing();
-    // Two sequencers publish interleaved sorted payloads concurrently.
-    // Custom policy: "smallest wins" — when a conflict occurs, the
-    // lexicographically smaller payload keeps its position; the larger
-    // one is dropped. The on-chain result must be sorted.
-
-    let (configs, genesis_tx) = create_general_configs(2, None);
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
-    let configs: Vec<_> = configs
-        .into_iter()
-        .map(|c| {
-            let mut config = create_validator_config(c, deployment_settings.clone());
-            config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
-            config.deployment.cryptarchia.slot_activation_coeff =
-                NonNegativeRatio::new(1, 2.try_into().unwrap());
-            config
-        })
-        .collect();
-
-    let validators: Vec<Validator> = join_all(configs.into_iter().map(Validator::spawn))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .expect("Failed to spawn validators");
-
-    assert!(
-        wait_for_height(&validators[0], 1, Duration::from_mins(2)).await,
-        "Chain should produce the first block"
-    );
-    let node_url = validators[0].url();
-
-    let sequencer_config = SequencerConfig {
-        resubmit_interval: Duration::from_secs(3),
-        ..SequencerConfig::default()
-    };
-
-    // SeqA is the channel admin
-    let signing_key_a = keygen();
-    let admin_pk = signing_key_a.public_key();
-    let channel_id = channel_id_from_key(&signing_key_a);
-
-    let signing_key_b = keygen();
-    let seq_b_pk = signing_key_b.public_key();
-
-    // Phase 1: SeqA creates channel and authorizes SeqB
-    debug!("Phase 1: set_keys");
-    let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
-        channel_id,
-        signing_key_a.clone(),
-        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
-        sequencer_config.clone(),
-        None,
-    );
-    let (poll_a, _rx) = spawn_drive(sequencer_a);
-
-    handle_a.wait_ready().await;
-    let (_result, finalized) = handle_a
-        .set_keys(vec![admin_pk, seq_b_pk])
-        .await
-        .expect("set_keys should succeed");
-    timeout(Duration::from_mins(6), finalized)
-        .await
-        .expect("Timeout waiting for set_keys to finalize")
-        .expect("set_keys finalization failed");
-
-    poll_a.abort();
-    drop(handle_a);
-
-    // Phase 2: Both sequencers publish interleaved sorted payloads.
-    // All payloads are unique across both sets — no UUIDs needed.
-    // SeqA: "aa", "cc", "ee", "gg", "ii"
-    // SeqB: "bb", "dd", "ff", "hh", "jj"
-    debug!("Phase 2: Starting both sequencers with sorted policy");
-    let data_a: Vec<Vec<u8>> = ["aa", "cc", "ee", "gg", "ii"]
-        .iter()
-        .map(|s| s.as_bytes().to_vec())
-        .collect();
-    let data_b: Vec<Vec<u8>> = ["bb", "dd", "ff", "hh", "jj"]
-        .iter()
-        .map(|s| s.as_bytes().to_vec())
-        .collect();
-
-    let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
-        channel_id,
-        signing_key_a,
-        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
-        sequencer_config.clone(),
-        None,
-    );
-    let (sequencer_b, mut handle_b) = ZoneSequencer::init_with_config(
-        channel_id,
-        signing_key_b,
-        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
-        sequencer_config,
-        None,
-    );
-
-    let discarded: DiscardedSet = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
-    let poll_a = spawn_sequencer_sorted_policy(
-        sequencer_a,
-        handle_a.clone(),
-        DiscardedSet::clone(&discarded),
-    );
-    let poll_b = spawn_sequencer_sorted_policy(
-        sequencer_b,
-        handle_b.clone(),
-        DiscardedSet::clone(&discarded),
-    );
-
-    handle_a.wait_ready().await;
-    handle_b.wait_ready().await;
-    debug!("Phase 2: Both sequencers ready, publishing");
-
-    // Publish concurrently
-    tokio::join!(
-        async {
-            for d in &data_a {
-                handle_a
-                    .publish_message(d.clone())
-                    .await
-                    .expect("publish failed");
-            }
-        },
-        async {
-            for d in &data_b {
-                handle_b
-                    .publish_message(d.clone())
-                    .await
-                    .expect("publish failed");
-            }
-        },
-    );
-
-    // Phase 3: Poll indexer until we see all non-discarded payloads.
-    debug!("Phase 3: Polling indexer for finalized inscriptions");
-    let indexer = ZoneIndexer::new(
-        channel_id,
-        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
-    );
-    let all_payloads: HashSet<Vec<u8>> = data_a.iter().chain(data_b.iter()).cloned().collect();
+/// Poll the indexer until `total - discarded.len()` of `expected` have settled
+/// on chain. Returns the on-chain payloads in order of arrival.
+async fn wait_until_settled(
+    indexer: &ZoneIndexer<Node>,
+    expected: &HashSet<Vec<u8>>,
+    discarded: &DiscardedSet,
+    total: usize,
+) -> Vec<Vec<u8>> {
     let mut on_chain: Vec<Vec<u8>> = Vec::new();
     let mut last_zone_block = None;
     let start = std::time::Instant::now();
-
     loop {
         assert!(
             start.elapsed() <= Duration::from_mins(10),
             "Timeout waiting for inscriptions to finalize"
         );
-
-        let expected_count = 10 - discarded.lock().await.len();
+        let expected_count = total - discarded.lock().await.len();
         if on_chain.len() >= expected_count && expected_count > 0 {
             break;
         }
-
         let stream = indexer
             .next_messages(last_zone_block)
             .await
@@ -1058,7 +894,7 @@ async fn test_sorted_conflict_resolution() {
         futures::pin_mut!(stream);
         while let Some((msg, slot)) = stream.next().await {
             if let ZoneMessage::Block(block) = msg {
-                if all_payloads.contains(&block.data) && !on_chain.contains(&block.data) {
+                if expected.contains(&block.data) && !on_chain.contains(&block.data) {
                     on_chain.push(block.data.clone());
                     debug!(
                         "Indexer found: {:?} ({}/{})",
@@ -1072,69 +908,133 @@ async fn test_sorted_conflict_resolution() {
         }
         sleep(Duration::from_millis(500)).await;
     }
+    on_chain
+}
 
-    debug!(
-        "On-chain payloads: {:?}",
-        on_chain
-            .iter()
+/// Verify the sorted-policy invariants: no duplicates, ascending order,
+/// `on_chain ∩ discarded == ∅`, and `on_chain ∪ discarded` covers all `total`
+/// published payloads.
+fn assert_sorted_outcome(on_chain: &[Vec<u8>], discarded: &HashSet<Vec<u8>>, total: usize) {
+    let pretty = |bs: &[Vec<u8>]| {
+        bs.iter()
             .map(|p| String::from_utf8_lossy(p).to_string())
             .collect::<Vec<_>>()
-    );
+    };
+    debug!("On-chain payloads: {:?}", pretty(on_chain));
 
-    // No duplicates
     let unique: HashSet<&Vec<u8>> = on_chain.iter().collect();
     assert_eq!(
         unique.len(),
         on_chain.len(),
         "Duplicate inscriptions detected on chain"
     );
-
-    // The key invariant: whatever survived on chain must be sorted.
-    let is_sorted = on_chain.windows(2).all(|w| w[0] <= w[1]);
     assert!(
-        is_sorted,
+        on_chain.windows(2).all(|w| w[0] <= w[1]),
         "On-chain payloads must be sorted, got: {:?}",
-        on_chain
-            .iter()
-            .map(|p| String::from_utf8_lossy(p).to_string())
-            .collect::<Vec<_>>()
+        pretty(on_chain)
     );
-
-    // At least some payloads should have survived
     assert!(
         !on_chain.is_empty(),
         "At least some payloads should be on chain"
     );
 
-    // Accounting: on-chain + discarded == total published
-    let discarded_set = discarded.lock().await;
     debug!(
-        "{} on chain + {} discarded = {} (of 10 published)",
+        "{} on chain + {} discarded = {} (of {} published)",
         on_chain.len(),
-        discarded_set.len(),
-        on_chain.len() + discarded_set.len(),
+        discarded.len(),
+        on_chain.len() + discarded.len(),
+        total
     );
 
-    // No overlap between on-chain and discarded
     let on_chain_set: HashSet<Vec<u8>> = on_chain.iter().cloned().collect();
-    let overlap: Vec<_> = on_chain_set.intersection(&discarded_set).collect();
+    let overlap: Vec<_> = on_chain_set.intersection(discarded).cloned().collect();
     assert!(
         overlap.is_empty(),
         "Payload both on chain and discarded: {:?}",
-        overlap
-            .iter()
-            .map(|p| String::from_utf8_lossy(p))
-            .collect::<Vec<_>>()
+        pretty(&overlap)
     );
-
     assert_eq!(
-        on_chain.len() + discarded_set.len(),
-        10,
+        on_chain.len() + discarded.len(),
+        total,
         "on_chain + discarded must equal total published"
     );
-    drop(discarded_set);
+}
 
-    // Clean up
+#[tokio::test]
+async fn test_sorted_conflict_resolution() {
+    init_tracing();
+    // Two sequencers publish interleaved sorted payloads concurrently.
+    // Custom policy: "smallest wins" — when a conflict occurs, the
+    // lexicographically smaller payload keeps its position; the larger
+    // one is dropped. The on-chain result must be sorted.
+    let (_validators, node_url) = spawn_competing_validators(2).await;
+
+    let sequencer_config = SequencerConfig {
+        resubmit_interval: Duration::from_secs(3),
+        ..SequencerConfig::default()
+    };
+
+    let signing_key_a = keygen();
+    let admin_pk = signing_key_a.public_key();
+    let channel_id = channel_id_from_key(&signing_key_a);
+    let signing_key_b = keygen();
+    let seq_b_pk = signing_key_b.public_key();
+
+    // Phase 1: SeqA creates channel and authorizes SeqB
+    authorize_keys(
+        channel_id,
+        signing_key_a.clone(),
+        vec![admin_pk, seq_b_pk],
+        node_url.clone(),
+        sequencer_config.clone(),
+    )
+    .await;
+
+    // Phase 2: Both sequencers publish interleaved sorted payloads.
+    // SeqA: "aa", "cc", "ee", "gg", "ii"; SeqB: "bb", "dd", "ff", "hh", "jj"
+    let data_a: Vec<Vec<u8>> = ["aa", "cc", "ee", "gg", "ii"]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+    let data_b: Vec<Vec<u8>> = ["bb", "dd", "ff", "hh", "jj"]
+        .iter()
+        .map(|s| s.as_bytes().to_vec())
+        .collect();
+    let total = data_a.len() + data_b.len();
+
+    let (seq_a, mut handle_a) = init_sequencer(
+        channel_id,
+        signing_key_a,
+        node_url.clone(),
+        sequencer_config.clone(),
+    );
+    let (seq_b, mut handle_b) = init_sequencer(
+        channel_id,
+        signing_key_b,
+        node_url.clone(),
+        sequencer_config,
+    );
+
+    let discarded: DiscardedSet = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
+    let poll_a =
+        spawn_sequencer_sorted_policy(seq_a, handle_a.clone(), DiscardedSet::clone(&discarded));
+    let poll_b =
+        spawn_sequencer_sorted_policy(seq_b, handle_b.clone(), DiscardedSet::clone(&discarded));
+
+    handle_a.wait_ready().await;
+    handle_b.wait_ready().await;
+    publish_concurrently(vec![(handle_a, data_a.clone()), (handle_b, data_b.clone())]).await;
+
+    // Phase 3: Poll indexer until settled, then assert invariants.
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+    );
+    let all_payloads: HashSet<Vec<u8>> = data_a.iter().chain(&data_b).cloned().collect();
+    let on_chain = wait_until_settled(&indexer, &all_payloads, &discarded, total).await;
+    let discarded_snapshot = discarded.lock().await.clone();
+    assert_sorted_outcome(&on_chain, &discarded_snapshot, total);
+
     poll_a.abort();
     poll_b.abort();
 }

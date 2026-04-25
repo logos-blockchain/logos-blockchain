@@ -244,13 +244,11 @@ impl TxState {
 
     /// Pending txs eligible for resubmission: not yet safe at tip AND
     /// part of the local suffix reachable from canonical channel tip.
-    /// Stale suffix txs are excluded — they need invalidation and
-    /// rebuild, not blind resubmission.
     ///
-    /// Inscriptions are returned in parent-before-child order (BFS from
-    /// channel tip via `pending_by_parent`) so the node's mempool sees the
-    /// parent before any child — matters on checkpoint resume, where
-    /// `HashMap` iteration order is arbitrary.
+    /// Returned in parent-before-child order (BFS from channel tip via
+    /// `pending_by_parent`) so the node's mempool sees the parent before
+    /// any child — matters on checkpoint resume, where `HashMap`
+    /// iteration order is arbitrary.
     pub fn pending_txs(&self, tip: HeaderId) -> Vec<(TxHash, SignedMantleTx)> {
         let safe = self
             .block_states
@@ -258,17 +256,11 @@ impl TxState {
             .cloned()
             .unwrap_or_else(HashTrieSetSync::new_sync);
 
-        let stale: std::collections::HashSet<TxHash> = self
-            .collect_stale_pending()
-            .iter()
-            .map(|i| i.tx_hash)
-            .collect();
-
         let channel_tip = self.channel_tip_at(tip);
         let inscriptions = self
             .collect_pending_suffix(channel_tip)
             .into_iter()
-            .filter(|inv| !safe.contains(&inv.tx_hash) && !stale.contains(&inv.tx_hash))
+            .filter(|inv| !safe.contains(&inv.tx_hash))
             .filter_map(|inv| {
                 self.pending
                     .get(&inv.tx_hash)
@@ -374,52 +366,6 @@ impl TxState {
             self.remove_pending(&inv.tx_hash);
         }
         ordered
-    }
-
-    /// Collect pending inscriptions not valid on ANY active branch.
-    ///
-    /// A pending inscription is stale if it's not reachable from any
-    /// leaf tip's channel tip and not in any leaf's safe set. Only
-    /// safe to call when branches are resolved (e.g. on LIB advance).
-    #[must_use]
-    pub fn collect_stale_pending(&self) -> Vec<InscriptionInfo> {
-        if self.pending.is_empty() {
-            return Vec::new();
-        }
-
-        let all_parents: std::collections::HashSet<&HeaderId> = self.parent_map.values().collect();
-        let leaves: Vec<HeaderId> = self
-            .block_states
-            .keys()
-            .filter(|id| !all_parents.contains(id))
-            .copied()
-            .collect();
-
-        let mut valid_on_any: std::collections::HashSet<TxHash> = std::collections::HashSet::new();
-        for leaf in &leaves {
-            let channel_tip = self.channel_tip_at(*leaf);
-            for inv in self.collect_pending_suffix(channel_tip) {
-                valid_on_any.insert(inv.tx_hash);
-            }
-            if let Some(safe) = self.block_states.get(leaf) {
-                for hash in safe.iter() {
-                    if self.pending.contains_key(hash) {
-                        valid_on_any.insert(*hash);
-                    }
-                }
-            }
-        }
-
-        self.pending
-            .values()
-            .filter(|p| !valid_on_any.contains(&p.tx_hash))
-            .map(|p| InscriptionInfo {
-                tx_hash: p.tx_hash,
-                parent_msg: p.parent_msg,
-                this_msg: p.this_msg,
-                payload: p.payload.clone(),
-            })
-            .collect()
     }
 
     /// Check if we have state for a block.

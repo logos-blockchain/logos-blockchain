@@ -790,6 +790,7 @@ where
         }
 
         let channel_event = result.channel_update.map(|u| self.build_channel_event(u));
+
         let finalized_event = (!result.finalized_tx_hashes.is_empty()
             || !result.finalized_inscriptions.is_empty())
         .then_some(Event::TxsFinalized {
@@ -838,8 +839,9 @@ where
 
     /// Build the `ChannelUpdate` event. `invalidated` = orphaned blocks ∪
     /// pending shed because lineage no longer reaches the new channel tip.
-    /// Shedding keeps `self.pending` linear so `publish_parent` stays
-    /// unambiguous.
+    /// Shed runs here (only when there's a canonical change) — pre-event
+    /// state is preserved so shed can correctly identify what just went
+    /// off-branch.
     fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
         let shed = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
@@ -1133,15 +1135,6 @@ where
         }
         _ => None, // tip unchanged
     };
-
-    // Silently remove pending whose lineage is dead everywhere (e.g. rooted
-    // below LIB on a pruned branch, or on a checkpoint-restored branch that
-    // never made it to canonical). `shed_off_branch_pending` only considers
-    // forward reachability from the current channel tip, so it doesn't
-    // catch these.
-    for inv in s.collect_stale_pending() {
-        s.remove_pending(&inv.tx_hash);
-    }
 
     BlockEventResult {
         finalized_tx_hashes,
