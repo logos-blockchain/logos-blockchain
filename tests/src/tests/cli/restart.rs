@@ -9,11 +9,9 @@ use logos_blockchain_tests::common::manual_cluster::{
     build_local_manual_cluster, override_node_initial_peers,
     wait_for_height as wait_for_manual_cluster_height,
 };
-use serial_test::serial;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions};
 
 #[tokio::test]
-#[serial]
 #[expect(
     clippy::large_futures,
     reason = "Manual-cluster start operations return large futures in tests; boxing adds noise without improving the test"

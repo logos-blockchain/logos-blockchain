@@ -138,6 +138,19 @@ macro_rules! non_zero {
     };
 }
 
+#[macro_export]
+macro_rules! add_strings {
+    ($parts:expr) => {{
+        let parts: &[&str] = $parts;
+        let capacity: usize = parts.iter().map(|s| s.len()).sum();
+        let mut out = String::with_capacity(capacity);
+        for part in parts {
+            out.push_str(part);
+        }
+        out
+    }};
+}
+
 /// Reads a node YAML user config file and extracts the `PeerId` from the node
 /// key.
 pub fn peer_id_from_node_yaml(path: &Path) -> Result<PeerId, StepError> {

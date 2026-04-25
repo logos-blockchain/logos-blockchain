@@ -13,7 +13,7 @@ version     = { workspace = true }
 astro-float          = "0.9"
 lb-circuits-prover   = { workspace = true }
 lb-circuits-utils    = { workspace = true }
-lb-groth16           = { features = ["deser"], workspace = true }
+lb-groth16           = { workspace = true }
 lb-utils             = { workspace = true }
 lb-witness-generator = { workspace = true }
 num-bigint           = "0.4"
@@ -28,7 +28,3 @@ lb-circuits-utils = { workspace = true }
 
 [lints]
 workspace = true
-
-[features]
-build-verification-key = []
-default                = ["build-verification-key"]

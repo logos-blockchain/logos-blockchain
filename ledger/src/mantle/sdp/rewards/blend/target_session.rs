@@ -19,8 +19,7 @@ use crate::mantle::sdp::rewards::{
 
 /// The immutable state of the target session for which rewards are being
 /// calculated. The target session is `s-1` if `s` is the current session.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TargetSessionState<ProofsVerifier> {
     /// The target session number
     session_number: SessionNumber,
@@ -128,8 +127,7 @@ where
 
 /// Tracks activity proofs submitted for the target session whose rewards are
 /// being calculated. The target session is `s-1` if `s` is the current session.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TargetSessionTracker {
     /// Collecting proofs submitted by providers in the target session.
     submitted_proofs: HashTrieMapSync<ProviderId, (ZkPublicKey, HammingDistance)>,
@@ -208,8 +206,7 @@ impl TargetSessionTracker {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MinHammingDistance {
     min_distance: HammingDistance,
     providers: HashTrieSetSync<ProviderId>,

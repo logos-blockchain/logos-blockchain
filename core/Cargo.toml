@@ -22,8 +22,8 @@ const-hex                     = { default-features = false, features = ["alloc"]
 futures                       = { features = ["alloc"], workspace = true }
 hex                           = { default-features = false, features = ["alloc"], version = "0.4" }
 lb-blend-proofs               = { workspace = true }
-lb-cryptarchia-engine         = { features = ["serde"], workspace = true }
-lb-groth16                    = { features = ["deser"], workspace = true }
+lb-cryptarchia-engine         = { workspace = true }
+lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-poc                        = { workspace = true }
 lb-pol                        = { workspace = true }
@@ -52,4 +52,3 @@ name    = "mantle_tx_components"
 
 [features]
 default = []
-mock    = []

@@ -1,4 +1,5 @@
 use lb_core::{block::Block, header::HeaderId};
+use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
@@ -24,6 +25,11 @@ pub enum ApiError {
     ParentMissing {
         parent: HeaderId,
         info: Box<CryptarchiaInfo>,
+    },
+    #[error("Block from future slot({block_slot:?}): current_slot:{current_slot:?}")]
+    FutureBlock {
+        block_slot: Slot,
+        current_slot: Slot,
     },
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
@@ -169,7 +175,7 @@ where
     /// Get the epoch state for a given slot
     pub async fn get_epoch_state(
         &self,
-        slot: lb_cryptarchia_engine::Slot,
+        slot: Slot,
     ) -> Result<Result<lb_ledger::EpochState, crate::Error>, ApiError> {
         let (tx, rx) = oneshot::channel();
 
@@ -212,6 +218,13 @@ where
                 crate::Error::ParentMissing { parent, info } => {
                     ApiError::ParentMissing { parent, info }
                 }
+                crate::Error::FutureBlock {
+                    block_slot,
+                    current_slot,
+                } => ApiError::FutureBlock {
+                    block_slot,
+                    current_slot,
+                },
                 err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
             })
     }

@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 async-trait                      = { workspace = true }
 futures                          = { default-features = false, version = "0.3" }
+indexmap                         = { default-features = false, version = "2" }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-groth16                       = { workspace = true }

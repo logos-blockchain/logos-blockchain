@@ -21,7 +21,7 @@ hex                             = { workspace = true }
 lb-groth16                      = { workspace = true }
 lb-key-management-system-macros = { workspace = true }
 lb-poseidon2                    = { workspace = true }
-lb-utils                        = { features = ["rng", "serde", "types"], workspace = true }
+lb-utils                        = { features = ["rng"], workspace = true }
 lb-zksign                       = { workspace = true }
 num-bigint                      = { default-features = false, version = "0.4.6" }
 rand_core                       = { default-features = false, version = "0.6.4" }

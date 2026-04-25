@@ -361,7 +361,7 @@ pub fn build_user_wallets(
 
 pub fn insert_started_node_info<S: BuildHasher>(
     world: &mut CucumberWorld,
-    logical_node_name: String,
+    logical_node_name: &str,
     started_node: StartedNode<LbcEnv>,
     wallet_info: HashMap<String, WalletInfo, S>,
 ) {
@@ -372,14 +372,15 @@ pub fn insert_started_node_info<S: BuildHasher>(
         .extend(wallet_info.iter().map(|(k, v)| (k.clone(), v.clone())));
 
     world.nodes_info.insert(
-        logical_node_name.clone(),
+        logical_node_name.to_owned(),
         NodeInfo {
-            name: logical_node_name,
+            name: logical_node_name.to_owned(),
             started_node,
             run_config: None,
             chain_info: HashMap::new(),
             wallet_info,
             runtime_dir: std::path::PathBuf::new(),
+            immediate_start: world.network_immediate_start(logical_node_name),
         },
     );
 }

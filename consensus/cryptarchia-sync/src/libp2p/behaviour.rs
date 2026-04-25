@@ -536,7 +536,7 @@ mod tests {
     use tokio::sync::oneshot;
 
     use crate::{
-        BlocksResponse, DynError,
+        BlocksResponse, BlocksUnavailableReason, DynError,
         GetTipResponse::Tip,
         ProviderResponse, TipResponse,
         config::Config,
@@ -793,7 +793,7 @@ mod tests {
 
         fn handle_blocks_request(&self, _requested: usize) -> BlocksResponse {
             ProviderResponse::Unavailable {
-                reason: "Node is not in online mode".to_owned(),
+                reason: BlocksUnavailableReason::Unknown("Node is not in online mode".to_owned()),
             }
         }
     }

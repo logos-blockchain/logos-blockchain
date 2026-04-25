@@ -36,6 +36,7 @@ opentelemetry_sdk = { default-features = false, features = ["logs", "rt-tokio"],
 rand = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
+tonic = { workspace = true }
 tracing = { workspace = true }
 tracing-appender = "0.2"
 tracing-gelf = "0.7"

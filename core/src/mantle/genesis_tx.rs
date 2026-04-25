@@ -3,8 +3,6 @@ use lb_poseidon2::Digest;
 use serde::{Deserialize, Serialize};
 
 use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
-#[cfg(feature = "mock")]
-use crate::mantle::tx::MantleTxContext;
 use crate::{
     crypto::ZkHasher,
     mantle::{
@@ -92,17 +90,6 @@ impl GenesisTx {
             _ => return Err(Error::MissingTransferAndInscription),
         }
         Ok(Self(signed_mantle_tx))
-    }
-
-    #[cfg(feature = "mock")]
-    #[must_use]
-    pub fn new_mocked(context: MantleTxContext) -> Self {
-        use crate::mantle::tx_builder::MantleTxBuilder;
-
-        Self(SignedMantleTx::new_unverified(
-            MantleTxBuilder::new(context).build(),
-            vec![],
-        ))
     }
 }
 

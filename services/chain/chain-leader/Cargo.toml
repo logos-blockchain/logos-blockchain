@@ -22,7 +22,7 @@ lb-chain-service-common          = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
-lb-ledger                        = { features = ["serde"], workspace = true }
+lb-ledger                        = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
@@ -42,4 +42,3 @@ lb-utils   = { workspace = true }
 
 [features]
 default = []
-libp2p  = ["lb-blend-service/libp2p"]
