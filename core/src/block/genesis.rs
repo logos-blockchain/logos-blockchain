@@ -64,50 +64,54 @@ impl GenesisBlock {
 // ─────────────────────────────────────────────────────────
 
 /// Typestate marker: builder has no input yet.
-struct Empty;
+pub struct Empty;
 
 /// Typestate marker: builder holds a pre-validated [`GenesisTx`].
-struct WithGenesisTx {
+pub struct WithGenesisTx {
     tx: GenesisTx,
 }
 
 /// Typestate marker: builder has genesis transfer output notes only.
-struct WithNotes {
+pub struct WithNotes {
     notes: Vec<Note>,
 }
 
 /// Typestate marker: builder has a genesis inscription only.
-struct WithInscription {
+pub struct WithInscription {
     inscription: InscriptionOp,
 }
 
 /// Typestate marker: builder has SDP service-declaration ops only.
-struct WithDeclarations {
+pub struct WithDeclarations {
     sdp_declarations: Vec<SDPDeclareOp>,
 }
 
 /// Typestate marker: builder has genesis notes and an inscription.
-struct WithNotesAndInscription {
+pub struct WithNotesAndInscription {
     notes: Vec<Note>,
     inscription: InscriptionOp,
 }
 
 /// Typestate marker: builder has genesis notes and SDP declarations.
-struct WithNotesAndDeclarations {
+pub struct WithNotesAndDeclarations {
     notes: Vec<Note>,
     sdp_declarations: Vec<SDPDeclareOp>,
 }
 
 /// Typestate marker: builder has a genesis inscription and SDP declarations.
-struct WithInscriptionAndDeclarations {
+pub struct WithInscriptionAndDeclarations {
     inscription: InscriptionOp,
     sdp_declarations: Vec<SDPDeclareOp>,
 }
 
+#[expect(
+    clippy::too_long_first_doc_paragraph,
+    reason = "Necessary documentation"
+)]
 /// Typestate marker: builder holds all three pieces required to assemble a
 /// [`GenesisTx`] — notes, an inscription, and at least one SDP declaration.
 /// This is the only state that exposes [`GenesisBlockBuilder::build`].
-struct WithAll {
+pub struct WithAll {
     notes: Vec<Note>,
     inscription: InscriptionOp,
     sdp_declarations: Vec<SDPDeclareOp>,

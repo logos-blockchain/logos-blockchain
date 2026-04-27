@@ -105,7 +105,15 @@ impl ServiceConfig {
                     .with_extension("json")
                     .as_path(),
             ),
-            starting_state: self.deployment.genesis_state.into(),
+            // TODO: Change starting state to be genesis block.
+            starting_state: self
+                .deployment
+                .genesis_block
+                .into_transactions()
+                .into_iter()
+                .next()
+                .expect("genesis block always contains exactly one transaction")
+                .into(),
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: lb_chain_network_service::BootstrapConfig {

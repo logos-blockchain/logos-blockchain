@@ -15,6 +15,7 @@ workspace = true
 [dependencies]
 async-trait                = "0.1"
 bytes                      = { workspace = true }
+derivative                 = "2"
 futures                    = { workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-core                    = { workspace = true }

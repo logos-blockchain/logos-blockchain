@@ -37,6 +37,7 @@ lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
+lb-mmr                           = { workspace = true }
 lb-network-service               = { workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
 lb-testing-framework             = { workspace = true }

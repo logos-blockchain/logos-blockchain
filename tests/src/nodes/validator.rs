@@ -32,13 +32,17 @@ use lb_node::{
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
-use lb_testing_framework::release_reserved_port_block;
+use lb_testing_framework::{
+    record_system_monitor_event, register_system_monitor_output_file, release_reserved_port_block,
+};
 use lb_tx_service::MempoolMetrics;
 use reqwest::Url;
 use tempfile::NamedTempFile;
 use tokio::time::error::Elapsed;
 
-use super::{CLIENT, create_tempdir, get_exe_path, persist_tempdir};
+use super::{
+    CLIENT, create_tempdir, current_test_system_stats_file, get_exe_path, persist_tempdir,
+};
 use crate::{
     IS_DEBUG_TRACING, get_reserved_available_tcp_port, nodes::LOGS_PREFIX,
     topology::configs::GeneralConfig,
@@ -197,6 +201,11 @@ impl Validator {
 
     pub async fn spawn(mut config: RunConfig) -> Result<Self, Elapsed> {
         let dir = create_tempdir().unwrap();
+        register_system_monitor_output_file(&current_test_system_stats_file());
+        record_system_monitor_event(
+            "validator_runtime_prepared",
+            dir.path().display().to_string(),
+        );
 
         if !*IS_DEBUG_TRACING {
             // setup logging so that we can intercept it later in testing

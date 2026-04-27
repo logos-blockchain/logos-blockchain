@@ -4,7 +4,7 @@ use core::{
 };
 use std::sync::OnceLock;
 
-use lb_core::{mantle::genesis_tx::GenesisTx, sdp::ServiceType};
+use lb_core::{block::genesis::GenesisBlock, mantle::genesis_tx::GenesisTx, sdp::ServiceType};
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
@@ -147,7 +147,7 @@ pub fn e2e_deployment_settings_with_genesis_tx(genesis_tx: GenesisTx) -> Deploym
                     timestamp: MIN_STAKE_TIMESTAMP,
                 },
             },
-            genesis_state: genesis_tx,
+            genesis_block: GenesisBlock::genesis(genesis_tx),
             learning_rate: LEARNING_RATE.try_into().expect("1 > 0"),
             faucet_pk: None,
         },

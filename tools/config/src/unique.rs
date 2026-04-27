@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{Mutex, OnceLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
@@ -15,6 +15,7 @@ use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
 const PORT_BLOCK_SIZE: u16 = 256;
 const PORT_RANGE_START: u16 = 20_000;
 const PORT_RANGE_END: u16 = 55_000;
+const MALFORMED_CLAIM_FILE_REAP_GRACE: Duration = Duration::from_mins(1);
 
 static TEST_PORT_ALLOCATOR: OnceLock<Mutex<Option<TestPortAllocator>>> = OnceLock::new();
 static PROCESS_START_NONCE: OnceLock<String> = OnceLock::new();
@@ -179,7 +180,7 @@ fn write_port_claim_metadata(
 
 fn try_reap_stale_port_claim_file(claim_file: &Path) {
     let Ok(contents) = fs::read_to_string(claim_file) else {
-        drop(fs::remove_file(claim_file));
+        try_reap_malformed_claim_file(claim_file);
         return;
     };
 
@@ -189,13 +190,30 @@ fn try_reap_stale_port_claim_file(claim_file: &Path) {
         .and_then(|pid| pid.parse::<u32>().ok());
 
     let Some(pid) = pid else {
-        drop(fs::remove_file(claim_file));
+        try_reap_malformed_claim_file(claim_file);
         return;
     };
 
     if !process_exists(pid) {
         drop(fs::remove_file(claim_file));
     }
+}
+
+fn try_reap_malformed_claim_file(claim_file: &Path) {
+    // A claim file is visible before its metadata is fully written. Give fresh
+    // malformed files time to become valid instead of deleting a live claim.
+    if claim_file_age(claim_file).is_some_and(|age| age >= MALFORMED_CLAIM_FILE_REAP_GRACE) {
+        drop(fs::remove_file(claim_file));
+    }
+}
+
+fn claim_file_age(claim_file: &Path) -> Option<Duration> {
+    fs::metadata(claim_file)
+        .ok()?
+        .modified()
+        .ok()?
+        .elapsed()
+        .ok()
 }
 
 fn process_exists(pid: u32) -> bool {

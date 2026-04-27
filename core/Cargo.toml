@@ -25,6 +25,7 @@ lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-mmr                        = { workspace = true }
 lb-poc                        = { workspace = true }
 lb-pol                        = { workspace = true }
 lb-poseidon2                  = { workspace = true }
@@ -34,7 +35,7 @@ multiaddr                     = { default-features = false, version = "0.18" }
 nom                           = { default-features = false, features = ["alloc"], version = "8" }
 num-bigint                    = { default-features = false, version = "0.4" }
 rpds                          = "1.2.0"
-serde                         = { workspace = true }
+serde                         = { features = ["derive"], workspace = true }
 strum                         = { features = ["derive"], version = "0.27" }
 thiserror                     = "1.0"
 tracing                       = { workspace = true }
