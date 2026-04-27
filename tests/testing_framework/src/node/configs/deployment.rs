@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc, time::Duration};
 
-use lb_core::block::genesis::GenesisBlock;
 use lb_config::kms::key_id_for_preload_backend;
+use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::RunConfig;
 use rand::{Rng, SeedableRng as _};
 use testing_framework_core::topology::{DeploymentProvider, DeploymentSeed, DynTopologyError};

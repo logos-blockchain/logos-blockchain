@@ -18,8 +18,8 @@ pub use block_feed::{
     block_feed_source_provider, block_feed_sources, named_block_feed_sources,
 };
 use common_http_client::BasicAuthCredentials;
-use lb_core::block::genesis::GenesisBlock;
 use lb_config::kms::key_id_for_preload_backend;
+use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::RunConfig;
 use reqwest::Url;
 use testing_framework_core::{
