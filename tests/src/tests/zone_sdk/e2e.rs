@@ -453,8 +453,8 @@ fn tag_payload(msg: &str) -> Vec<u8> {
 /// for the chain to produce its first block. Returns the validators and the
 /// URL of the first one (where sequencers + indexer connect).
 async fn spawn_competing_validators(n: usize) -> (Vec<Validator>, reqwest::Url) {
-    let (configs, genesis_tx) = create_general_configs(n, None);
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+    let (configs, genesis_block) = create_general_configs(n, None);
+    let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
     let configs: Vec<_> = configs
         .into_iter()
         .map(|c| {
