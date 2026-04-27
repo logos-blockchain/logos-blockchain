@@ -49,6 +49,7 @@ impl WalletBlock {
     where
         Tx: AuthenticatedMantleTx,
     {
+        // TODO: handle inputs/outputs of ALL operations: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let mut spent_notes = Vec::new();
         let mut transfers = Vec::new();
 
@@ -144,12 +145,14 @@ impl WalletState {
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Result<MantleTxBuilder, WalletError> {
         // Get all UTXOs owned by the provided PKs, excluding any that are already being
-        // used as inputs in the tx builder.
-        let inputs = tx_builder.input_notes().collect::<HashSet<_>>();
+        // consumed/locked by the tx.
+        let consumed_or_locked = tx_builder
+            .consumed_or_locked_notes()
+            .collect::<HashSet<_>>();
         let mut utxos = self
             .utxos_owned_by_pks(pks)
             .into_iter()
-            .filter(|utxo| !inputs.contains(&utxo.id()))
+            .filter(|utxo| !consumed_or_locked.contains(&utxo.id()))
             .collect::<Vec<_>>();
 
         // Consume large valued notes first to ensure we converge.
