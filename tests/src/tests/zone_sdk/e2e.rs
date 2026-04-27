@@ -603,10 +603,11 @@ async fn test_sequencer_stale_checkpoint_resume() {
 #[tokio::test]
 async fn test_subscribe_to_finalized_deposit() {
     // Setup network with faster block production
+    let deposit_amount = 1;
     let validators = spawn_validators_with_extra_funding_notes(
         Some("test_subscribe_to_finalized_deposit"),
         2,
-        [1],
+        [deposit_amount],
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -653,7 +654,6 @@ async fn test_subscribe_to_finalized_deposit() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Now, submit a deposit directly to Bedrock
-    let deposit_amount = 1;
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
     let (note_id, _) = get_note_with_value(validator, pk, deposit_amount)
         .await
@@ -661,7 +661,7 @@ async fn test_subscribe_to_finalized_deposit() {
     let deposit = DepositOp {
         channel_id,
         inputs: Inputs::new(vec![note_id]),
-        metadata: b"Mint 1 to Alice in Zone".to_vec(),
+        metadata: format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
     };
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
     submit_deposit(validator, deposit.clone(), pk).await;
@@ -753,9 +753,9 @@ async fn test_atomic_deposit_inscription() {
                 .expect("the first note of the transfer is the deposit_note")
                 .id(),
         ]),
-        metadata: b"Mint 1 to Alice in Zone".to_vec(),
+        metadata: format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
     };
-    let inscription_data = b"Mint 1 to Alice".to_vec();
+    let inscription_data = format!("Mint {deposit_amount} to Alice").into_bytes();
     let (tx, msg_id, sequencer_sig) = handle
         .prepare_tx(
             vec![Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())],
@@ -791,10 +791,11 @@ async fn test_atomic_deposit_inscription() {
 #[tokio::test]
 async fn test_subscribe_to_finalized_withdraw() {
     // Setup network with faster block production
+    let deposit_amount = 3;
     let validators = spawn_validators_with_extra_funding_notes(
         Some("test_subscribe_to_finalized_withdraw"),
         2,
-        [3],
+        [deposit_amount],
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -845,7 +846,6 @@ async fn test_subscribe_to_finalized_withdraw() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Deposit 3 into the channel
-    let deposit_amount = 3;
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
     let (deposit_note_id, _) = get_note_with_value(validator, pk, deposit_amount)
         .await

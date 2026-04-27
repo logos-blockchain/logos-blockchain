@@ -33,7 +33,8 @@ use tokio::time::sleep;
 /// 6. Verify the channel balance increases.
 #[tokio::test]
 async fn channel_deposit() {
-    let (wallet_config, funding_pk) = channel_deposit_wallet_config();
+    let deposit_amount = 1;
+    let (wallet_config, funding_pk) = channel_deposit_wallet_config(deposit_amount, 100);
     let (base, nodes) = start_local_manual_cluster_with_layout(
         "channel-deposit",
         "mantle-channel",
@@ -74,13 +75,14 @@ async fn channel_deposit() {
         .channel_id;
     let channel_balance_before = get_channel_balance(&validator.client, channel_id).await;
 
-    let (note_id, deposit_amount) = get_wallet_note(&validator.client, funding_pk, 1).await;
+    let (note_id, selected_deposit_amount) =
+        get_wallet_note(&validator.client, funding_pk, deposit_amount).await;
     let body = ChannelDepositRequestBody {
         tip: None,
         deposit: DepositOp {
             channel_id,
             inputs: Inputs::new(vec![note_id]),
-            metadata: b"Mint 1 to Alice in Zone".to_vec(),
+            metadata: format!("Mint {selected_deposit_amount} to Alice in Zone").into_bytes(),
         },
         change_public_key: funding_pk,
         funding_public_keys: vec![funding_pk],
@@ -126,14 +128,17 @@ async fn channel_deposit() {
     );
 }
 
-fn channel_deposit_wallet_config() -> (WalletConfig, ZkPublicKey) {
-    let deposit_note =
-        WalletAccount::deterministic(0, 1, false).expect("deposit wallet should be valid");
+fn channel_deposit_wallet_config(
+    deposit_note_amount: u64,
+    fee_note_amount: u64,
+) -> (WalletConfig, ZkPublicKey) {
+    let deposit_note = WalletAccount::deterministic(0, deposit_note_amount, false)
+        .expect("deposit wallet should be valid");
 
     let fee_note = WalletAccount::new(
         "channel-deposit-fee-note".to_owned(),
         deposit_note.secret_key.clone(),
-        100,
+        fee_note_amount,
         false,
     )
     .expect("fee wallet should be valid");
