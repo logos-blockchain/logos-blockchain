@@ -1883,10 +1883,7 @@ where
 
     // Release all messages concurrently, and wait for all of them to be sent.
     join_all(message_futures).await;
-    tracing::trace!(
-        target: LOG_TARGET,
-        "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
-    );
+    log_release_window_summary(data_count, processed_count, cover_count);
 
     state_updater.commit_changes()
 }
@@ -1915,10 +1912,35 @@ async fn handle_release_round_for_old_session<NodeId, Rng, Backend, NetAdapter, 
     // Release all messages concurrently, and wait for all of them to be sent.
     let num_futures = futures.len();
     join_all(futures).await;
-    tracing::trace!(
-        target: LOG_TARGET,
-        "Sent out {num_futures} processed messages at this release window for the old session"
-    );
+    log_old_session_release_summary(num_futures);
+}
+
+fn log_release_window_summary(data_count: usize, processed_count: usize, cover_count: usize) {
+    if data_count > 0 || processed_count > 0 {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
+        );
+    } else {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
+        );
+    }
+}
+
+fn log_old_session_release_summary(num_futures: usize) {
+    if num_futures > 0 {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Sent out {num_futures} processed messages at this release window for the old session"
+        );
+    } else {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Sent out {num_futures} processed messages at this release window for the old session"
+        );
+    }
 }
 
 fn build_futures_to_release_processed_messages<

@@ -23,7 +23,6 @@ use serial_test::serial;
 /// Verifies that invalid transactions don't prevent valid transactions from
 /// being included in blocks.
 #[tokio::test]
-#[serial]
 async fn invalid_transactions_are_handled() {
     let topology = Topology::spawn(
         TopologyConfig::two_validators(),

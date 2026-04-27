@@ -1,4 +1,5 @@
 use lb_poseidon2::{Digest, Fr};
+use serde::{Deserialize, Serialize};
 
 use crate::{Root, empty_subtree_root};
 
@@ -10,14 +11,13 @@ use crate::{Root, empty_subtree_root};
 ///
 /// Paths are created via [`crate::MerkleMountainRange::push_with_paths`] and
 /// kept up-to-date by passing them to subsequent `push_with_paths` calls.
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MerklePath {
     /// The 0-indexed leaf position in the tree.
     pub leaf_index: usize,
     /// Sibling hashes from height 1 (bottom) up to height `MAX_HEIGHT - 1`.
     /// `siblings[h - 1]` is the root of the sibling subtree at height `h`.
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr_vec"))]
+    #[serde(with = "lb_groth16::serde::serde_fr_vec")]
     pub siblings: Vec<Fr>,
 }
 

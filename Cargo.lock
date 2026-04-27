@@ -1192,17 +1192,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
-name = "cfg_eval"
-version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45565fc9416b9896014f5732ac776f810ee53a66730c17e4020c3ec064a8f88f"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "cfgsync-adapter"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=d3bb6348#d3bb6348e52a42a5b24eaf6b531dd5aa57610f52"
@@ -1793,7 +1782,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -3500,6 +3489,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "kinded"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce4bdbb2f423660b19f0e9f7115182214732d8dd5f840cd0a3aee3e22562f34c"
+dependencies = [
+ "kinded_macros",
+]
+
+[[package]]
+name = "kinded_macros"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a13b4ddc5dcb32f45dac3d6f606da2a52fdb9964a18427e63cd5ef6c0d13288d"
+dependencies = [
+ "convert_case 0.6.0",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "kube"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4123,6 +4133,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "libyml"
+version = "0.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3302702afa434ffa30847a83305f0a69d6abd74293b6554c18ec85c7ef30c980"
+dependencies = [
+ "anyhow",
+ "version_check",
+]
+
+[[package]]
 name = "libz-sys"
 version = "1.1.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4627,7 +4647,6 @@ dependencies = [
 name = "logos-blockchain-cryptarchia-engine"
 version = "0.1.2"
 dependencies = [
- "cfg_eval",
  "logos-blockchain-pol",
  "logos-blockchain-utils",
  "serde",
@@ -4960,6 +4979,7 @@ dependencies = [
  "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
  "num-bigint",
+ "nutype",
  "overwatch",
  "rand 0.8.5",
  "serde",
@@ -5138,6 +5158,7 @@ dependencies = [
  "rand 0.8.5",
  "reqwest",
  "rpds",
+ "serde",
  "serde_json",
  "serde_yaml",
  "serial_test",
@@ -5159,7 +5180,6 @@ name = "logos-blockchain-time-service"
 version = "0.1.2"
 dependencies = [
  "async-trait",
- "cfg_eval",
  "futures",
  "log",
  "logos-blockchain-cryptarchia-engine",
@@ -5174,6 +5194,19 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-tools"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "clap",
+ "logos-blockchain-core",
+ "logos-blockchain-node",
+ "serde",
+ "serde_json",
+ "serde_yml",
 ]
 
 [[package]]
@@ -5968,6 +6001,30 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "nutype"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70587a780088c67dad31bf722b875c5616096b4d8c0ded8b7de03294ffb9bbb5"
+dependencies = [
+ "nutype_macros",
+]
+
+[[package]]
+name = "nutype_macros"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "148934b975faeddd8f0679d7cf11280b50c4c5495d6fe72bdaf07c932874b404"
+dependencies = [
+ "cfg-if",
+ "kinded",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn 2.0.117",
+ "urlencoding",
 ]
 
 [[package]]
@@ -7734,6 +7791,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_yml"
+version = "0.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59e2dd588bf1597a252c3b920e0143eb99b0f76e4e082f4c92ce34fbc9e71ddd"
+dependencies = [
+ "indexmap 2.13.1",
+ "itoa",
+ "libyml",
+ "memchr",
+ "ryu",
+ "serde",
+ "version_check",
+]
+
+[[package]]
 name = "serial_test"
 version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9136,6 +9208,12 @@ dependencies = [
  "serde",
  "serde_derive",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf8_iter"

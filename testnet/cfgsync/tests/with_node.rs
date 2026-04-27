@@ -19,8 +19,6 @@ async fn test_deploy_setup_stage() {
     let mut server = std::process::Command::new(SERVER_BIN)
         .arg("--mode")
         .arg("setup")
-        .arg("--entropy-file")
-        .arg("tests/test_entropy")
         .arg(SERVER_CFG)
         .spawn()
         .expect("server failed");

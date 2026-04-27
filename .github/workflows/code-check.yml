@@ -57,66 +57,6 @@ jobs:
       - name: Run cargo-deny
         run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
-  features:
-    name: Check packages feature combinations
-    strategy:
-      fail-fast: false
-      matrix:
-        platform:
-          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
-          - os: [self-hosted, Linux]
-            label: self-hosted-linux
-          - os: [self-hosted, macOS]
-            label: self-hosted-macos
-    runs-on: ${{ matrix.platform.os }}
-    steps:
-      # Disable rustup override before checkout, so the toolchain state is clean before any workspace files or
-      # .rust-toolchain.toml are present. Prevents a stale override from affecting the toolchain resolution during
-      # checkout or subsequent steps.
-      - name: Disable rustup override
-        run: rustup override unset || true
-
-      - name: Checkout repository
-        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install cargo-hack
-        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
-        with:
-          tool: cargo-hack
-
-      # Prune after Install cargo-hack, before Set up Cargo cache — frees disk space from the previous run's leftover
-      # artifacts (incremental compile dirs, fingerprints, build dirs) before the cache is restored. This means the
-      # restored cache lands onto a disk that has already been cleaned, maximizing the chance the restore succeeds
-      # without hitting disk limits.
-      - name: Prune disk space (cache-aware, self-hosted)
-        uses: ./.github/actions/prune-disk-space
-
-      - name: Set up Cargo cache
-        uses: ./.github/actions/setup-cargo-cache
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
-
-      - name: Run Cargo Hack Check (Cache-Aware)
-        uses: ./.github/actions/cargo-hack-check-cached
-
-      - name: Update Cargo cache
-        if: success() || failure()
-        uses: ./.github/actions/update-cargo-cache
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          key-prefix: code-check/feature-combinations/${{ matrix.platform.label }}
-      
-      - name: Clean up build artifacts
-        if: success() || failure()
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: clean
-
   unused-deps:
     name: Check for unused dependencies
     strategy:
@@ -171,7 +111,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           key-prefix: code-check/lints/${{ matrix.os }}
- 
+
   tests:
     name: Run test suite
     if: ${{ !startsWith(github.event.pull_request.title, '[WIP]') && !contains(github.event.label.name,  'DO NOT MERGE') }}

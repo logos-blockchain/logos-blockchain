@@ -1187,10 +1187,17 @@ where
             .try_collect::<Vec<_>>()
             .await?;
 
+        if !missing_headers.is_empty() {
+            debug!(
+                "Backfilling wallet to tip {tip:?} with {} missing headers",
+                missing_headers.len()
+            );
+        }
+
         // Load/apply blocks in order from `state.lib` to `tip`
         for header_id in missing_headers.into_iter().rev() {
             if state.wallet().has_processed_block(header_id) {
-                debug!("skipping already processed block");
+                debug!("Skipping already processed wallet block {header_id:?}");
                 continue;
             }
 

@@ -34,6 +34,9 @@ use crate::{
 
 type Relay<T, RuntimeServiceId> =
     OutboundRelay<<NetworkService<T, RuntimeServiceId> as ServiceData>::Message>;
+type BlockStreamItem<Tx> = Result<(HeaderId, Block<Tx>), DynError>;
+type FirstBlockResponse<Tx> = Result<Option<BlockStreamItem<Tx>>, DynError>;
+type BlockDownloadStream<Tx> = BoxedStream<BlockStreamItem<Tx>>;
 
 #[derive(Clone)]
 pub struct LibP2pAdapter<Tx, RuntimeServiceId>
@@ -61,6 +64,63 @@ impl<Tx, RuntimeServiceId> LibP2pAdapter<Tx, RuntimeServiceId>
 where
     Tx: Clone + Eq + Serialize,
 {
+    // Requests a blocks stream from a single peer and validates the first item
+    // before this peer is considered a successful candidate by `select_ok`.
+    //
+    // Behavior:
+    // - If the first item is any error, returns `Err` so this peer is excluded from
+    //   winner selection.
+    // - Otherwise, returns a reconstructed stream where the first item is put back
+    //   (`iter([first_item]).chain(stream)`) so downstream consumers see the full
+    //   original stream.
+    // - If the stream is immediately exhausted (`None`), returns it unchanged.
+    fn check_first_block_response_ready(
+        first_item: Option<BlockStreamItem<Tx>>,
+    ) -> FirstBlockResponse<Tx> {
+        match first_item {
+            Some(Err(err)) => Err(err),
+            Some(first_item) => Ok(Some(first_item)),
+            None => Ok(None),
+        }
+    }
+
+    async fn request_available_blocks_stream_from_peer(
+        &self,
+        peer: PeerId,
+        target_block: HeaderId,
+        local_tip: HeaderId,
+        latest_immutable_block: HeaderId,
+        additional_blocks: HashSet<HeaderId>,
+    ) -> Result<BlockDownloadStream<Tx>, DynError>
+    where
+        Tx: AuthenticatedMantleTx
+            + Serialize
+            + DeserializeOwned
+            + Clone
+            + Eq
+            + Send
+            + Sync
+            + 'static,
+    {
+        let mut stream = self
+            .request_blocks_from_peer(
+                peer,
+                target_block,
+                local_tip,
+                latest_immutable_block,
+                additional_blocks,
+            )
+            .await?;
+
+        match Self::check_first_block_response_ready(stream.next().await)? {
+            Some(first_item) => {
+                let rebuilt = tokio_stream::iter([first_item]).chain(stream);
+                Ok(Box::new(rebuilt))
+            }
+            None => Ok(stream),
+        }
+    }
+
     async fn subscribe(relay: &Relay<Libp2p, RuntimeServiceId>, topic: &str) {
         if let Err((e, _)) = relay
             .send(NetworkMsg::Process(Command::PubSub(Subscribe(
@@ -125,6 +185,10 @@ where
 
     async fn new(settings: Self::Settings, network_relay: Relay<Libp2p, RuntimeServiceId>) -> Self {
         let relay = network_relay.clone();
+        tracing::debug!(
+            "Subscribing chain-network adapter to pubsub topic {}",
+            settings.topic
+        );
         Self::subscribe(&relay, settings.topic.as_str()).await;
         tracing::trace!("Starting up...");
         // this wait seems to be helpful in some cases since we give the time
@@ -190,6 +254,7 @@ where
 
     async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
         let started_at = Instant::now();
+        tracing::debug!("Requesting chain tip from peer {peer:?}");
         let (reply_sender, receiver) = oneshot::channel();
         if let Err((e, _)) = self
             .network_relay
@@ -217,6 +282,10 @@ where
         latest_immutable_block: HeaderId,
         additional_blocks: HashSet<HeaderId>,
     ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
+        let additional_blocks_len = additional_blocks.len();
+        tracing::debug!(
+            "Requesting blocks from peer {peer:?} for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?} and {additional_blocks_len} additional blocks"
+        );
         let (reply_sender, receiver) = oneshot::channel();
         if let Err((e, _)) = self
             .network_relay
@@ -260,11 +329,18 @@ where
         // All peers we know about, including those that are not connected.
         let discovered_peers = Self::get_discovered_peers(&self.network_relay).await?;
 
-        let peers_to_request = choose_peers_to_request_download(
+        let peers_to_request: Vec<_> = choose_peers_to_request_download(
             &connected_peers,
             self.settings.max_connected_peers_to_try_download,
             &discovered_peers,
             self.settings.max_discovered_peers_to_try_download,
+        )
+        .collect();
+        tracing::debug!(
+            "Selecting peers for target block {target_block:?} from local tip {local_tip:?} with immutable block {latest_immutable_block:?}; selected_peers={peers_to_request:?}, connected={}, discovered={}, additional_blocks={}",
+            connected_peers.len(),
+            discovered_peers.len(),
+            additional_blocks.len()
         );
 
         let requests = peers_to_request
@@ -273,7 +349,7 @@ where
                 let additional_blocks = additional_blocks.clone();
                 async move {
                     let stream = self
-                        .request_blocks_from_peer(
+                        .request_available_blocks_stream_from_peer(
                             peer,
                             target_block,
                             local_tip,
@@ -290,6 +366,7 @@ where
             })
             .collect::<Vec<_>>();
 
+        // First peer with a validated first response wins
         select_ok(requests).await.map(|(stream, _)| stream)
     }
 }
@@ -328,7 +405,48 @@ where
 
 #[cfg(test)]
 mod tests {
+    use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
+
     use super::*;
+
+    #[test]
+    fn validate_first_block_response_rejects_block_not_found() {
+        let block_not_found = ChainSyncError::new(
+            PeerId::random(),
+            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::BlockNotFound(
+                HeaderId::from([9u8; 32]),
+            )),
+        );
+        let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(block_not_found));
+
+        assert!(
+            LibP2pAdapter::<(), ()>::check_first_block_response_ready(Some(first_item)).is_err()
+        );
+    }
+
+    #[test]
+    fn validate_first_block_response_rejects_other_provider_errors() {
+        let unknown = ChainSyncError::new(
+            PeerId::random(),
+            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown(
+                "oops".to_owned(),
+            )),
+        );
+        let first_item: Result<(HeaderId, Block<()>), DynError> = Err(Box::new(unknown));
+
+        assert!(
+            LibP2pAdapter::<(), ()>::check_first_block_response_ready(Some(first_item)).is_err()
+        );
+    }
+
+    #[test]
+    fn validate_first_block_response_accepts_empty_stream() {
+        assert!(
+            LibP2pAdapter::<(), ()>::check_first_block_response_ready(None)
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn choose_peers() {

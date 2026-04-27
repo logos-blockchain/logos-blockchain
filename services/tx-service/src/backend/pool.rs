@@ -100,6 +100,11 @@ where
 
         self.pending_items.insert(key);
         self.last_item_timestamp = timestamp;
+        tracing::debug!(
+            "Added item to mempool; pending_items={}, last_item_timestamp={}",
+            self.pending_items.len(),
+            self.last_item_timestamp
+        );
 
         metrics::mempool_transactions_added();
         metrics::mempool_transactions_pending(self.pending_items.len());
@@ -134,6 +139,10 @@ where
         for key in keys {
             self.pending_items.remove(key);
         }
+        tracing::debug!(
+            "Removed {removed_count} items from mempool; pending_items={}",
+            self.pending_items.len()
+        );
 
         metrics::mempool_transactions_removed(removed_count);
         metrics::mempool_transactions_pending(self.pending_items.len());

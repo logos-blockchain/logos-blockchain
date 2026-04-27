@@ -15,7 +15,6 @@ use overwatch::overwatch::handle::OverwatchHandle;
 
 use crate::{core::settings::RunningBlendConfig as BlendConfig, message::NetworkInfo};
 
-#[cfg(feature = "libp2p")]
 pub mod libp2p;
 
 pub type EpochInfo = LeaderInputs;

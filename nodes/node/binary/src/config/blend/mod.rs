@@ -62,7 +62,7 @@ impl ServiceConfig {
             common: CommonSettings {
                 non_ephemeral_signing_key_id: self.user.non_ephemeral_signing_key_id,
                 num_blend_layers: self.deployment.common.num_blend_layers,
-                minimum_network_size: self.deployment.common.minimum_network_size,
+                minimum_network_size: self.deployment.common.minimum_network_size.into(),
                 recovery_path_prefix,
                 time: TimingSettings {
                     epoch_transition_period_in_slots: self

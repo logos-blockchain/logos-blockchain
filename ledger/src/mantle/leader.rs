@@ -9,13 +9,13 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_mmr::MerkleMountainRange;
+use serde::{Deserialize, Serialize};
 
 /// A leader state in the mantle ledger.
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaderState {
     /// current epoch
     epoch: Epoch,
@@ -36,8 +36,7 @@ pub struct LeaderState {
 }
 
 /// A snapshot of voucher commitments, updated once at each epoch start.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct VouchersSnapshot {
     /// Root of voucher commitment tree
     root: RewardsRoot,

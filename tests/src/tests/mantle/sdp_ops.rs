@@ -30,7 +30,6 @@ use logos_blockchain_tests::common::{
     },
 };
 use num_bigint::BigUint;
-use serial_test::serial;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
 
@@ -47,10 +46,13 @@ const LOCK_PERIOD: u64 = 3;
 /// This test focuses on declare/withdraw flow which doesn't require blend
 /// proofs.
 #[tokio::test]
-#[serial]
 #[expect(
     clippy::large_futures,
     reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
 )]
 async fn sdp_ops_e2e() {
     let (
@@ -68,8 +70,7 @@ async fn sdp_ops_e2e() {
     let inclusion_timeout = Duration::from_mins(1);
     let state_timeout = Duration::from_secs(45);
 
-    let existing = node0
-        .get_sdp_declarations()
+    let existing = wait_for_sdp_declarations(&node0, Duration::from_secs(30))
         .await
         .expect("fetching SDP declarations should succeed");
     let locked: HashSet<_> = existing.iter().map(|decl| decl.locked_note_id).collect();
@@ -213,7 +214,6 @@ async fn sdp_ops_e2e() {
 /// This test verifies that after restart, the validator fetches its declaration
 /// from the ledger and the SDP service correctly loads declaration state.
 #[tokio::test]
-#[serial]
 #[expect(
     clippy::large_futures,
     reason = "Manual-cluster startup futures are large in these integration tests; boxing would not improve readability"
@@ -283,11 +283,9 @@ where
 {
     timeout(duration, async {
         loop {
-            let declarations = node
-                .get_sdp_declarations()
-                .await
-                .expect("fetching SDP declarations should succeed");
-            if let Some(declaration) = declarations.into_iter().find(|decl| predicate(decl)) {
+            if let Ok(declarations) = node.get_sdp_declarations().await
+                && let Some(declaration) = declarations.into_iter().find(|decl| predicate(decl))
+            {
                 break declaration;
             }
 
@@ -308,9 +306,11 @@ async fn wait_for_declaration_absence(
             let present = node
                 .get_sdp_declarations()
                 .await
-                .expect("fetching SDP declarations should succeed")
-                .into_iter()
-                .any(|decl| decl.locked_note_id == locked_note_id);
+                .map_or(true, |declarations| {
+                    declarations
+                        .into_iter()
+                        .any(|decl| decl.locked_note_id == locked_note_id)
+                });
 
             if !present {
                 break;
@@ -321,6 +321,23 @@ async fn wait_for_declaration_absence(
     })
     .await
     .is_ok()
+}
+
+async fn wait_for_sdp_declarations(
+    node: &NodeHttpClient,
+    duration: Duration,
+) -> Option<Vec<Declaration>> {
+    timeout(duration, async {
+        loop {
+            if let Ok(declarations) = node.get_sdp_declarations().await {
+                break declarations;
+            }
+
+            sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await
+    .ok()
 }
 
 #[expect(
