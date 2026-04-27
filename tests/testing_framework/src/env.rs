@@ -91,3 +91,18 @@ pub fn rust_log() -> Option<String> {
 pub fn lb_time_service_backend() -> Option<String> {
     std::env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").ok()
 }
+
+#[must_use]
+pub fn logos_blockchain_system_monitor_enabled() -> bool {
+    std::env::var("LOGOS_BLOCKCHAIN_SYSTEM_MONITOR").map_or(true, |raw| {
+        !matches!(
+            raw.trim().to_ascii_lowercase().as_str(),
+            "0" | "false" | "no" | "off"
+        )
+    })
+}
+
+#[must_use]
+pub fn logos_blockchain_system_monitor_interval_secs() -> u64 {
+    env_u64("LOGOS_BLOCKCHAIN_SYSTEM_MONITOR_INTERVAL_SECS", 10)
+}
