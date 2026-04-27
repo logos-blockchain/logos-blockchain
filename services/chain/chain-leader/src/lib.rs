@@ -9,7 +9,7 @@ mod wallet;
 use core::fmt::Debug;
 use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
-use futures::{StreamExt as _, stream};
+use futures::StreamExt as _;
 use lb_chain_network_service::api::ChainNetworkServiceData;
 use lb_chain_service::{
     Epoch,
@@ -560,14 +560,14 @@ where
     )]
     #[instrument(
         level = "debug",
-        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key)
+        skip(_tx_selector, relays, ledger_state, ledger_config, proof, signing_key)
     )]
     async fn propose_block(
         parent: HeaderId,
         slot: Slot,
         proof: Groth16LeaderProof,
         signing_key: &Ed25519Key,
-        tx_selector: TxS,
+        _tx_selector: TxS,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
             Mempool,
@@ -591,19 +591,14 @@ where
 
         let mut valid_txs = Vec::new();
         let mut invalid_tx_hashes = Vec::new();
+        let mut acc_size = 0usize;
 
         while let Some(tx) = tx_stream.next().await {
             let tx_hash = tx.hash();
             let tx_size = tx.storage_size();
-            if tx_size > MAX_BLOCK_SIZE {
-                tracing::debug!(
-                    target: LOG_TARGET,
-                    ?tx_hash,
-                    tx_size,
-                    max = MAX_BLOCK_SIZE,
-                    "skipping individually oversized tx during block assembly"
-                );
-                invalid_tx_hashes.push(tx_hash);
+
+            if acc_size + tx_size > MAX_BLOCK_SIZE {
+                // Tx is valid but doesn't fit this block
                 continue;
             }
 
@@ -615,6 +610,7 @@ where
                 ) {
                 Ok(new_state) => {
                     ledger_state = new_state;
+                    acc_size += tx_size;
                     valid_txs.push(tx);
                 }
                 Err(err) => {
@@ -637,12 +633,7 @@ where
             error!("Failed to remove invalid transactions from mempool: {e:?}");
         }
 
-        let valid_tx_stream = stream::iter(valid_txs);
-        let selected_txs_stream = tx_selector.select_tx_from(valid_tx_stream);
-        let txs: Vec<_> = selected_txs_stream
-            .take(MAX_BLOCK_TRANSACTIONS)
-            .collect()
-            .await;
+        let txs: Vec<_> = valid_txs.into_iter().take(MAX_BLOCK_TRANSACTIONS).collect();
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
@@ -851,7 +842,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_block_with_tail_trim() {
+    fn test_block_create_errors_on_aggregate_overflow() {
         let parent = HeaderId::from([0; 32]);
         let slot = Slot::from(42u64);
         let signing_key = Ed25519Key::from_bytes(&[0; 32]);
@@ -865,14 +856,11 @@ mod tests {
             TestTx { id: 3, size: 32 },
         ];
 
-        let block = Block::create(parent, slot, proof, txs, &signing_key).unwrap();
+        let result = Block::create(parent, slot, proof, txs, &signing_key);
 
-        assert_eq!(
-            block.transactions().copied().collect::<Vec<_>>(),
-            vec![TestTx {
-                id: 1,
-                size: MAX_BLOCK_SIZE - 16,
-            }]
+        assert!(
+            matches!(result, Err(BlockError::ContentTooBig { .. })),
+            "Block::create must error when aggregate tx size exceeds MAX_BLOCK_SIZE"
         );
     }
 }

@@ -85,7 +85,7 @@ impl<Tx> Block<Tx> {
         parent_block: HeaderId,
         slot: Slot,
         proof_of_leadership: Groth16LeaderProof,
-        mut transactions: Vec<Tx>,
+        transactions: Vec<Tx>,
         signing_key: &Ed25519Key,
     ) -> Result<Self, Error>
     where
@@ -104,28 +104,12 @@ impl<Tx> Block<Tx> {
             });
         }
 
-        for tx in &transactions {
-            let tx_size = tx.storage_size();
-            if tx_size > MAX_BLOCK_SIZE {
-                return Err(Error::ContentTooBig {
-                    count: tx_size,
-                    max: MAX_BLOCK_SIZE,
-                });
-            }
-        }
-
-        let mut acc_size = 0usize;
-        let trim_point = transactions.iter().position(|tx| {
-            let size = tx.storage_size();
-            if acc_size + size <= MAX_BLOCK_SIZE {
-                acc_size += size;
-                false
-            } else {
-                true
-            }
-        });
-        if let Some(point) = trim_point {
-            transactions.truncate(point);
+        let acc_size: usize = transactions.iter().map(StorageSize::storage_size).sum();
+        if acc_size > MAX_BLOCK_SIZE {
+            return Err(Error::ContentTooBig {
+                count: acc_size,
+                max: MAX_BLOCK_SIZE,
+            });
         }
 
         let block_root = Self::calculate_content_id(&transactions);
