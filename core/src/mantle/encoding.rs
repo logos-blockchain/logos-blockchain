@@ -713,6 +713,7 @@ pub fn encode_leader_claim(op: &LeaderClaimOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_field_element(&op.rewards_root.into()));
     bytes.extend(encode_field_element(&op.voucher_nullifier.into()));
+    bytes.extend(encode_field_element(op.pk.as_fr()));
     bytes
 }
 
@@ -1697,6 +1698,21 @@ mod tests {
                 voucher_nf,
             ))
         );
+    }
+
+    #[test]
+    fn test_encode_decode_leader_claim_op() {
+        let leader_claim_op = LeaderClaimOp {
+            rewards_root: RewardsRoot::default(),
+            voucher_nullifier: VoucherNullifier::default(),
+            pk: ZkPublicKey::from(BigUint::from(0u64)),
+        };
+        let op = Op::LeaderClaim(leader_claim_op);
+
+        let encoded = encode_op(&op);
+        let (remaining, decoded_op) = decode_op(&encoded).unwrap();
+        assert!(remaining.is_empty());
+        assert_eq!(decoded_op, op);
     }
 
     #[test]
