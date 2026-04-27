@@ -3,9 +3,9 @@ use std::{collections::HashSet, num::NonZero, time::Duration};
 use futures::{StreamExt as _, future::join_all};
 use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
+    block::genesis::GenesisBlock,
     mantle::{
         GenesisTx as _, MantleTx, Note, NoteId, Op, OpProof, Value,
-        genesis_tx::GenesisTx as GenesisTransaction,
         ledger::{Inputs, Outputs},
         ops::{
             channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
@@ -38,9 +38,9 @@ use logos_blockchain_tests::{
     nodes::{Validator, create_validator_config},
     topology::configs::{
         GeneralConfig,
-        consensus::{ProviderInfo, create_genesis_tx_with_declarations},
+        consensus::{ProviderInfo, create_genesis_block_with_declarations},
         create_general_configs,
-        deployment::e2e_deployment_settings_with_genesis_tx,
+        deployment::e2e_deployment_settings_with_genesis_block,
     },
 };
 use rand::{Rng as _, thread_rng};
@@ -1630,10 +1630,14 @@ async fn spawn_validators_with_extra_funding_notes(
     modify_run_config: impl Fn(RunConfig) -> RunConfig,
     target_block: u64,
 ) -> Vec<Validator> {
-    let (configs, genesis_tx) = create_general_configs(count, test_context);
-    let genesis_tx =
-        add_extra_funding_notes_to_genesis(&configs, genesis_tx, funding_note_values, test_context);
-    let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+    let (configs, genesis_block) = create_general_configs(count, test_context);
+    let genesis_block = add_extra_funding_notes_to_genesis(
+        &configs,
+        genesis_block,
+        funding_note_values,
+        test_context,
+    );
+    let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
     let configs: Vec<_> = configs
         .into_iter()
         .map(|c| {
@@ -1667,19 +1671,20 @@ async fn spawn_validators_with_extra_funding_notes(
 
 fn add_extra_funding_notes_to_genesis(
     configs: &[GeneralConfig],
-    genesis_tx: GenesisTransaction,
+    genesis_tx: GenesisBlock,
     values: impl IntoIterator<Item = Value>,
     test_context: Option<&str>,
-) -> GenesisTransaction {
+) -> GenesisBlock {
     let values = values.into_iter().collect::<Vec<_>>();
     if values.is_empty() {
         return genesis_tx;
     }
 
     let funding_pk = configs[0].consensus_config.funding_pk;
-    let mut transfer_op = genesis_tx.genesis_transfer().clone();
+    let mut transfer_op = genesis_tx.genesis_tx().genesis_transfer().clone();
     transfer_op
         .outputs
+        .as_mut()
         .extend(values.into_iter().map(|value| Note::new(value, funding_pk)));
 
     let providers = configs
@@ -1697,7 +1702,7 @@ fn add_extra_funding_notes_to_genesis(
         })
         .collect();
 
-    create_genesis_tx_with_declarations(transfer_op, providers, test_context)
+    create_genesis_block_with_declarations(transfer_op, providers, test_context)
 }
 
 async fn wait_for_zone_block(

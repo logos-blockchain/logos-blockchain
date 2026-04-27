@@ -278,7 +278,7 @@ where
     E: LbcBlockFeedEnv,
 {
     let config: &TopologyConfig = ctx.descriptors().config();
-    let Some(genesis_tx) = config.genesis_tx.clone() else {
+    let Some(genesis_tx) = config.genesis_block.clone() else {
         return (
             DEFAULT_TIP_STALL_THRESHOLD,
             DEFAULT_NODE_TIP_STALL_THRESHOLD,
@@ -286,7 +286,7 @@ where
         );
     };
 
-    let deployment = default_e2e_deployment_settings(genesis_tx);
+    let deployment = default_e2e_deployment_settings(&genesis_tx);
     let node_count = ctx.node_clients().len() as u64;
 
     (

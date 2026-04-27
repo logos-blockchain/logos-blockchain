@@ -68,7 +68,7 @@ pub async fn current_utxos_for_public_key(
     for block in blocks.into_iter().rev() {
         for tx in &block.transactions {
             for transfer in tx.mantle_tx.transfers() {
-                for input in transfer.inputs.as_vec() {
+                for input in &transfer.inputs {
                     owned.remove(input);
                 }
 

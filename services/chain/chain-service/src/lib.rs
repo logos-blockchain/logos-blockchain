@@ -27,11 +27,9 @@ use lb_chain_broadcast_service::{
     BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate,
 };
 use lb_core::{
-    block::Block,
+    block::{Block, genesis::GenesisBlock},
     header::HeaderId,
-    mantle::{
-        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, genesis_tx::GenesisTx,
-    },
+    mantle::{AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants},
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
@@ -458,7 +456,7 @@ pub struct CryptarchiaSettings {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub enum StartingState {
     Genesis {
-        genesis_tx: GenesisTx,
+        genesis_block: Box<GenesisBlock>,
     },
     Lib {
         lib_id: HeaderId,
@@ -467,9 +465,11 @@ pub enum StartingState {
     },
 }
 
-impl From<GenesisTx> for StartingState {
-    fn from(value: GenesisTx) -> Self {
-        Self::Genesis { genesis_tx: value }
+impl From<GenesisBlock> for StartingState {
+    fn from(genesis_block: GenesisBlock) -> Self {
+        Self::Genesis {
+            genesis_block: Box::new(genesis_block),
+        }
     }
 }
 

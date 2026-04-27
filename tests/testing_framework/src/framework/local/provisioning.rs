@@ -8,7 +8,10 @@ use std::{
 use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
 use lb_config::kms::key_id_for_preload_backend;
-use lb_core::mantle::{self, genesis_tx::GenesisTx};
+use lb_core::{
+    block::genesis::GenesisBlock,
+    mantle::{self},
+};
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
 use lb_node::{
@@ -51,7 +54,7 @@ pub const DEPLOYMENT_CONFIG_FILE: &str = "deployment.yaml";
 struct PlannedLocalNodeConfig {
     config: Config,
     descriptor_override: Option<RunConfig>,
-    genesis_tx: GenesisTx,
+    genesis_block: GenesisBlock,
     port_strategy: PortStrategy,
 }
 
@@ -399,9 +402,9 @@ fn plan_local_node_config(
         return Ok(PlannedLocalNodeConfig {
             config,
             descriptor_override: descriptors.config().node_config_override(index).cloned(),
-            genesis_tx: descriptors
+            genesis_block: descriptors
                 .config()
-                .genesis_tx
+                .genesis_block
                 .clone()
                 .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
             port_strategy: PortStrategy::PreservePlannedPorts,
@@ -449,9 +452,9 @@ fn plan_local_node_config(
     Ok(PlannedLocalNodeConfig {
         config,
         descriptor_override: descriptors.config().node_config_override(index).cloned(),
-        genesis_tx: descriptors
+        genesis_block: descriptors
             .config()
-            .genesis_tx
+            .genesis_block
             .clone()
             .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
         port_strategy: PortStrategy::AllocateEphemeralPorts,
@@ -467,12 +470,12 @@ pub fn build_node_run_config(
         return Ok(override_config.clone());
     }
 
-    let genesis_tx = topology
+    let genesis_block = topology
         .config()
-        .genesis_tx
+        .genesis_block
         .clone()
         .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
-    Ok(build_run_config(node.general.clone(), genesis_tx))
+    Ok(build_run_config(node.general.clone(), &genesis_block))
 }
 
 fn finalize_dynamic_run_config(
@@ -492,11 +495,11 @@ fn finalize_dynamic_run_config(
         return override_config.clone();
     }
 
-    build_run_config(plan.config.clone(), plan.genesis_tx.clone())
+    build_run_config(plan.config.clone(), &plan.genesis_block)
 }
 
-fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
-    let deployment_config = default_e2e_deployment_settings(genesis_tx);
+fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
+    let deployment_config = default_e2e_deployment_settings(genesis_block);
 
     let user_config = UserConfig {
         network: config.network_config,

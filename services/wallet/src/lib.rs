@@ -767,7 +767,7 @@ where
                 Op::ChannelDeposit(deposit_op) => {
                     Self::sign_channel_deposit(
                         tx_hash,
-                        deposit_op.inputs.to_vec(),
+                        deposit_op.inputs.as_ref().clone(),
                         kms,
                         &tip_leader,
                     )
@@ -792,8 +792,13 @@ where
                     Self::sign_leader_claim(tx_hash, claim_op, tip, wallet, kms).await?
                 }
                 Op::Transfer(transfer_op) => {
-                    Self::sign_transfer(tx_hash, transfer_op.inputs.to_vec(), kms, &tip_leader)
-                        .await?
+                    Self::sign_transfer(
+                        tx_hash,
+                        transfer_op.inputs.as_ref().clone(),
+                        kms,
+                        &tip_leader,
+                    )
+                    .await?
                 }
             };
             ops_proofs.push(proof);

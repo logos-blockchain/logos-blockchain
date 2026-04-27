@@ -58,6 +58,11 @@ impl GenesisBlock {
             transactions,
         }
     }
+
+    #[must_use]
+    pub fn genesis_tx(&self) -> GenesisTx {
+        self.transactions[0].clone()
+    }
 }
 
 // ── Typestate markers
@@ -196,6 +201,29 @@ impl GenesisBlockBuilder<Empty> {
         }
     }
 
+    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// [`WithNotes`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `notes` is empty.
+    #[must_use]
+    pub fn add_notes(
+        self,
+        notes: impl IntoIterator<Item = impl Into<Note>>,
+    ) -> GenesisBlockBuilder<WithNotes> {
+        let mut iter = notes.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
+        GenesisBlockBuilder {
+            state: WithNotes {
+                notes: iter.map(Into::into).collect(),
+            },
+        }
+    }
+
     /// Set the genesis inscription, transitioning to [`WithInscription`].
     #[must_use]
     pub const fn set_inscription(
@@ -220,6 +248,29 @@ impl GenesisBlockBuilder<Empty> {
             },
         }
     }
+
+    /// Add multiple SDP service-declaration ops at once, transitioning to
+    /// [`WithDeclarations`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `declarations` is empty.
+    #[must_use]
+    pub fn add_declarations(
+        self,
+        declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
+    ) -> GenesisBlockBuilder<WithDeclarations> {
+        let mut iter = declarations.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_declarations called with empty iterator"
+        );
+        GenesisBlockBuilder {
+            state: WithDeclarations {
+                sdp_declarations: iter.map(Into::into).collect(),
+            },
+        }
+    }
 }
 
 // ── WithNotes
@@ -233,6 +284,27 @@ impl GenesisBlockBuilder<WithNotes> {
             state: WithNotes { mut notes },
         } = self;
         notes.push(note);
+        Self {
+            state: WithNotes { notes },
+        }
+    }
+
+    /// Append multiple genesis transfer output notes at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `notes` is empty.
+    #[must_use]
+    pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
+        let mut iter = notes.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
+        let Self {
+            state: WithNotes { mut notes },
+        } = self;
+        notes.extend(iter.map(Into::into));
         Self {
             state: WithNotes { notes },
         }
@@ -270,6 +342,33 @@ impl GenesisBlockBuilder<WithNotes> {
             },
         }
     }
+
+    /// Add multiple SDP declarations at once, transitioning to
+    /// [`WithNotesAndDeclarations`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `declarations` is empty.
+    #[must_use]
+    pub fn add_declarations(
+        self,
+        declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
+    ) -> GenesisBlockBuilder<WithNotesAndDeclarations> {
+        let mut iter = declarations.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_declarations called with empty iterator"
+        );
+        let Self {
+            state: WithNotes { notes },
+        } = self;
+        GenesisBlockBuilder {
+            state: WithNotesAndDeclarations {
+                notes,
+                sdp_declarations: iter.map(Into::into).collect(),
+            },
+        }
+    }
 }
 
 // ── WithInscription
@@ -286,6 +385,33 @@ impl GenesisBlockBuilder<WithInscription> {
         GenesisBlockBuilder {
             state: WithNotesAndInscription {
                 notes: vec![note],
+                inscription,
+            },
+        }
+    }
+
+    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// [`WithNotesAndInscription`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `notes` is empty.
+    #[must_use]
+    pub fn add_notes(
+        self,
+        notes: impl IntoIterator<Item = impl Into<Note>>,
+    ) -> GenesisBlockBuilder<WithNotesAndInscription> {
+        let mut iter = notes.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
+        let Self {
+            state: WithInscription { inscription },
+        } = self;
+        GenesisBlockBuilder {
+            state: WithNotesAndInscription {
+                notes: iter.map(Into::into).collect(),
                 inscription,
             },
         }
@@ -316,6 +442,33 @@ impl GenesisBlockBuilder<WithInscription> {
             },
         }
     }
+
+    /// Add multiple SDP declarations at once, transitioning to
+    /// [`WithInscriptionAndDeclarations`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `declarations` is empty.
+    #[must_use]
+    pub fn add_declarations(
+        self,
+        declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
+    ) -> GenesisBlockBuilder<WithInscriptionAndDeclarations> {
+        let mut iter = declarations.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_declarations called with empty iterator"
+        );
+        let Self {
+            state: WithInscription { inscription },
+        } = self;
+        GenesisBlockBuilder {
+            state: WithInscriptionAndDeclarations {
+                inscription,
+                sdp_declarations: iter.map(Into::into).collect(),
+            },
+        }
+    }
 }
 
 // ── WithDeclarations
@@ -332,6 +485,33 @@ impl GenesisBlockBuilder<WithDeclarations> {
         GenesisBlockBuilder {
             state: WithNotesAndDeclarations {
                 notes: vec![note],
+                sdp_declarations,
+            },
+        }
+    }
+
+    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// [`WithNotesAndDeclarations`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `notes` is empty.
+    #[must_use]
+    pub fn add_notes(
+        self,
+        notes: impl IntoIterator<Item = impl Into<Note>>,
+    ) -> GenesisBlockBuilder<WithNotesAndDeclarations> {
+        let mut iter = notes.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
+        let Self {
+            state: WithDeclarations { sdp_declarations },
+        } = self;
+        GenesisBlockBuilder {
+            state: WithNotesAndDeclarations {
+                notes: iter.map(Into::into).collect(),
                 sdp_declarations,
             },
         }
@@ -368,6 +548,32 @@ impl GenesisBlockBuilder<WithDeclarations> {
             state: WithDeclarations { sdp_declarations },
         }
     }
+
+    /// Append multiple SDP declarations at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `declarations` is empty.
+    #[must_use]
+    pub fn add_declarations(
+        self,
+        declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
+    ) -> Self {
+        let mut iter = declarations.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_declarations called with empty iterator"
+        );
+        let Self {
+            state: WithDeclarations {
+                mut sdp_declarations,
+            },
+        } = self;
+        sdp_declarations.extend(iter.map(Into::into));
+        Self {
+            state: WithDeclarations { sdp_declarations },
+        }
+    }
 }
 
 // ── WithNotesAndInscription
@@ -385,6 +591,31 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
                 },
         } = self;
         notes.push(note);
+        Self {
+            state: WithNotesAndInscription { notes, inscription },
+        }
+    }
+
+    /// Append multiple genesis transfer output notes at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `notes` is empty.
+    #[must_use]
+    pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
+        let mut iter = notes.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
+        let Self {
+            state:
+                WithNotesAndInscription {
+                    mut notes,
+                    inscription,
+                },
+        } = self;
+        notes.extend(iter.map(Into::into));
         Self {
             state: WithNotesAndInscription { notes, inscription },
         }
@@ -416,6 +647,47 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
             },
         }
     }
+
+    /// Add multiple SDP declarations at once, completing all three pieces and
+    /// transitioning to [`WithAll`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `declarations` is empty.
+    #[must_use]
+    pub fn add_declarations(
+        self,
+        declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
+    ) -> GenesisBlockBuilder<WithAll> {
+        let mut iter = declarations.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_declarations called with empty iterator"
+        );
+        let Self {
+            state: WithNotesAndInscription { notes, inscription },
+        } = self;
+        GenesisBlockBuilder {
+            state: WithAll {
+                notes,
+                inscription,
+                sdp_declarations: iter.map(Into::into).collect(),
+            },
+        }
+    }
+
+    // Build a block with empty declarations but properly set inscription and
+    // transfer.
+    pub fn build(self) -> Result<GenesisBlock> {
+        GenesisBlockBuilder {
+            state: WithAll {
+                notes: self.state.notes,
+                inscription: self.state.inscription,
+                sdp_declarations: vec![],
+            },
+        }
+        .build()
+    }
 }
 
 // ── WithNotesAndDeclarations
@@ -433,6 +705,34 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
                 },
         } = self;
         notes.push(note);
+        Self {
+            state: WithNotesAndDeclarations {
+                notes,
+                sdp_declarations,
+            },
+        }
+    }
+
+    /// Append multiple genesis transfer output notes at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `notes` is empty.
+    #[must_use]
+    pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
+        let mut iter = notes.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
+        let Self {
+            state:
+                WithNotesAndDeclarations {
+                    mut notes,
+                    sdp_declarations,
+                },
+        } = self;
+        notes.extend(iter.map(Into::into));
         Self {
             state: WithNotesAndDeclarations {
                 notes,
@@ -479,6 +779,37 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
             },
         }
     }
+
+    /// Append multiple SDP declarations at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `declarations` is empty.
+    #[must_use]
+    pub fn add_declarations(
+        self,
+        declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
+    ) -> Self {
+        let mut iter = declarations.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_declarations called with empty iterator"
+        );
+        let Self {
+            state:
+                WithNotesAndDeclarations {
+                    notes,
+                    mut sdp_declarations,
+                },
+        } = self;
+        sdp_declarations.extend(iter.map(Into::into));
+        Self {
+            state: WithNotesAndDeclarations {
+                notes,
+                sdp_declarations,
+            },
+        }
+    }
 }
 
 // ── WithInscriptionAndDeclarations
@@ -499,6 +830,38 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
         GenesisBlockBuilder {
             state: WithAll {
                 notes: vec![note],
+                inscription,
+                sdp_declarations,
+            },
+        }
+    }
+
+    /// Add multiple genesis transfer output notes at once, completing all three
+    /// pieces and transitioning to [`WithAll`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `notes` is empty.
+    #[must_use]
+    pub fn add_notes(
+        self,
+        notes: impl IntoIterator<Item = impl Into<Note>>,
+    ) -> GenesisBlockBuilder<WithAll> {
+        let mut iter = notes.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
+        let Self {
+            state:
+                WithInscriptionAndDeclarations {
+                    inscription,
+                    sdp_declarations,
+                },
+        } = self;
+        GenesisBlockBuilder {
+            state: WithAll {
+                notes: iter.map(Into::into).collect(),
                 inscription,
                 sdp_declarations,
             },
@@ -540,6 +903,37 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
             },
         }
     }
+
+    /// Append multiple SDP declarations at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `declarations` is empty.
+    #[must_use]
+    pub fn add_declarations(
+        self,
+        declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
+    ) -> Self {
+        let mut iter = declarations.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_declarations called with empty iterator"
+        );
+        let Self {
+            state:
+                WithInscriptionAndDeclarations {
+                    inscription,
+                    mut sdp_declarations,
+                },
+        } = self;
+        sdp_declarations.extend(iter.map(Into::into));
+        Self {
+            state: WithInscriptionAndDeclarations {
+                inscription,
+                sdp_declarations,
+            },
+        }
+    }
 }
 
 // ── WithAll
@@ -558,6 +952,36 @@ impl GenesisBlockBuilder<WithAll> {
                 },
         } = self;
         notes.push(note);
+        Self {
+            state: WithAll {
+                notes,
+                inscription,
+                sdp_declarations,
+            },
+        }
+    }
+
+    /// Append multiple genesis transfer output notes at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `notes` is empty.
+    #[must_use]
+    pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
+        let mut iter = notes.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_notes called with empty iterator"
+        );
+        let Self {
+            state:
+                WithAll {
+                    mut notes,
+                    inscription,
+                    sdp_declarations,
+                },
+        } = self;
+        notes.extend(iter.map(Into::into));
         Self {
             state: WithAll {
                 notes,
@@ -599,6 +1023,39 @@ impl GenesisBlockBuilder<WithAll> {
                 },
         } = self;
         sdp_declarations.push(declaration);
+        Self {
+            state: WithAll {
+                notes,
+                inscription,
+                sdp_declarations,
+            },
+        }
+    }
+
+    /// Append multiple SDP declarations at once.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `declarations` is empty.
+    #[must_use]
+    pub fn add_declarations(
+        self,
+        declarations: impl IntoIterator<Item = impl Into<SDPDeclareOp>>,
+    ) -> Self {
+        let mut iter = declarations.into_iter().peekable();
+        assert!(
+            iter.peek().is_some(),
+            "add_declarations called with empty iterator"
+        );
+        let Self {
+            state:
+                WithAll {
+                    notes,
+                    inscription,
+                    mut sdp_declarations,
+                },
+        } = self;
+        sdp_declarations.extend(iter.map(Into::into));
         Self {
             state: WithAll {
                 notes,
@@ -953,6 +1410,82 @@ mod tests {
                 Error::InvalidGenesisTx(genesis_tx::Error::InvalidInscription(_))
             ),
             "expected InvalidInscription, got {err:?}"
+        );
+    }
+
+    // ── add_notes / add_declarations batch helpers ────────────────────────────
+
+    #[test]
+    fn add_notes_batch_preserved() {
+        let block = GenesisBlockBuilder::new()
+            .add_notes([make_note(10), make_note(20), make_note(30)])
+            .set_inscription(valid_inscription())
+            .add_declaration(make_sdp_decl(0))
+            .build()
+            .unwrap();
+
+        let tx = block.transactions().next().unwrap();
+        assert_eq!(tx.genesis_transfer().outputs.len(), 3);
+    }
+
+    #[test]
+    fn add_declarations_batch_preserved() {
+        let block = GenesisBlockBuilder::new()
+            .add_note(make_note(100))
+            .set_inscription(valid_inscription())
+            .add_declarations([make_sdp_decl(0), make_sdp_decl(1), make_sdp_decl(2)])
+            .build()
+            .unwrap();
+
+        let tx = block.transactions().next().unwrap();
+        assert_eq!(tx.sdp_declarations().count(), 3);
+    }
+
+    #[test]
+    fn add_notes_and_add_declarations_interleaved_with_batch() {
+        let block = GenesisBlockBuilder::new()
+            .add_note(make_note(1))
+            .add_notes([make_note(2), make_note(3)])
+            .set_inscription(valid_inscription())
+            .add_declaration(make_sdp_decl(0))
+            .add_declarations([make_sdp_decl(1), make_sdp_decl(2)])
+            .build()
+            .unwrap();
+
+        let tx = block.transactions().next().unwrap();
+        assert_eq!(tx.genesis_transfer().outputs.len(), 3);
+        assert_eq!(tx.sdp_declarations().count(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "add_notes called with empty iterator")]
+    fn add_notes_panics_on_empty_from_empty() {
+        drop(GenesisBlockBuilder::new().add_notes(std::iter::empty::<Note>()));
+    }
+
+    #[test]
+    #[should_panic(expected = "add_notes called with empty iterator")]
+    fn add_notes_panics_on_empty_from_with_notes() {
+        drop(
+            GenesisBlockBuilder::new()
+                .add_note(make_note(1))
+                .add_notes(std::iter::empty::<Note>()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "add_declarations called with empty iterator")]
+    fn add_declarations_panics_on_empty_from_empty() {
+        drop(GenesisBlockBuilder::new().add_declarations(std::iter::empty::<SDPDeclareOp>()));
+    }
+
+    #[test]
+    #[should_panic(expected = "add_declarations called with empty iterator")]
+    fn add_declarations_panics_on_empty_from_with_declarations() {
+        drop(
+            GenesisBlockBuilder::new()
+                .add_declaration(make_sdp_decl(0))
+                .add_declarations(std::iter::empty::<SDPDeclareOp>()),
         );
     }
 

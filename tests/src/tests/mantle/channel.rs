@@ -65,15 +65,18 @@ async fn channel_deposit() {
 
     let balance_before = get_wallet_balance(&validator.client, funding_pk).await;
 
+    // Also, record the channel balance before deposit
+    // We use the channel created by the genesis inscription for simplicity.
     let channel_id = base
         .deployment
         .config
-        .genesis_tx
-        .clone()
+        .genesis_block
         .expect("manual-cluster deployment should include genesis tx")
+        .genesis_tx()
         .genesis_inscription()
         .channel_id;
     let channel_balance_before = get_channel_balance(&validator.client, channel_id).await;
+    println!("Channel balance before deposit: {channel_balance_before}");
 
     let (note_id, selected_deposit_amount) =
         get_wallet_note(&validator.client, funding_pk, deposit_amount).await;
