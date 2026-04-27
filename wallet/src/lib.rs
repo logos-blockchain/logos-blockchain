@@ -11,6 +11,7 @@ use std::{
 pub use error::WalletError;
 use lb_core::{
     block::Block,
+    crypto::ZkHasher,
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GasConstants, NoteId, Utxo, Value,
@@ -20,20 +21,32 @@ use lb_core::{
         },
         tx_builder::MantleTxBuilder,
     },
+    proofs::leader_proof::LeaderProof as _,
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
+use lb_mmr::{MerkleMountainRange, MerklePath};
+use serde::{Deserialize, Serialize};
+use tracing::info;
 
 pub use crate::voucher::Vouchers;
 
+/// A lightweight block information necessary for wallet
 pub struct WalletBlock {
     pub id: HeaderId,
     pub parent: HeaderId,
+    pub epoch: Epoch,
+    pub voucher_cm: VoucherCm,
     pub transfers: Vec<TransferOp>,
 }
 
-impl<Tx: AuthenticatedMantleTx> From<Block<Tx>> for WalletBlock {
-    fn from(block: Block<Tx>) -> Self {
+impl WalletBlock {
+    #[must_use]
+    pub fn from_block<Tx>(block: &Block<Tx>, epoch: Epoch) -> Self
+    where
+        Tx: AuthenticatedMantleTx,
+    {
         let transfers: Vec<TransferOp> = block
             .transactions()
             .flat_map(|auth_tx| auth_tx.mantle_tx().transfers())
@@ -41,16 +54,28 @@ impl<Tx: AuthenticatedMantleTx> From<Block<Tx>> for WalletBlock {
         Self {
             id: block.header().id(),
             parent: block.header().parent(),
+            epoch,
+            voucher_cm: *block.header().leader_proof().voucher_cm(),
             transfers,
         }
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
     pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
+    pub epoch: Epoch,
+    /// MMR of all voucher commitments included in the chain
+    pub vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
+    /// All **tracked** voucher merkle paths up to the current block
+    pub voucher_paths: VoucherPaths,
+    /// A snapshot of **tracked** voucher merkle paths,
+    /// updated at the first block of each epoch.
+    pub voucher_paths_snapshot: VoucherPaths,
 }
+
+pub type VoucherPaths = rpds::HashTrieMapSync<VoucherCm, MerklePath>;
 
 impl WalletState {
     pub fn from_ledger<KeyId>(
@@ -74,7 +99,14 @@ impl WalletState {
             }
         }
 
-        Self { utxos, pk_index }
+        Self {
+            utxos,
+            pk_index,
+            epoch: ledger.epoch_state().epoch,
+            vouchers: ledger.mantle_ledger().vouchers().clone(),
+            voucher_paths: rpds::HashTrieMapSync::new_sync(),
+            voucher_paths_snapshot: rpds::HashTrieMapSync::new_sync(),
+        }
     }
 
     pub fn utxos_owned_by_pks(
@@ -156,9 +188,10 @@ impl WalletState {
     }
 
     #[must_use]
-    pub fn apply_block<KeyId>(
+    pub fn apply_block<KeyId, VoucherId>(
         &self,
         known_keys: &HashMap<ZkPublicKey, KeyId>,
+        known_vouchers: &Vouchers<VoucherId>,
         block: &WalletBlock,
     ) -> Self {
         let mut utxos = self.utxos.clone();
@@ -167,7 +200,7 @@ impl WalletState {
         // Process each transaction in the block
         for transfer in &block.transfers {
             // Remove spent UTXOs (inputs)
-            for spent_id in &transfer.inputs {
+            for spent_id in &*transfer.inputs {
                 if let Some(utxo) = utxos.get(spent_id) {
                     let pk = utxo.note.pk;
                     utxos = utxos.remove(spent_id);
@@ -184,7 +217,7 @@ impl WalletState {
             }
 
             // Add new UTXOs (outputs) - only if they belong to our known keys
-            for utxo in transfer.utxos() {
+            for utxo in transfer.outputs.utxos(transfer) {
                 if known_keys.contains_key(&utxo.note.pk) {
                     let note_id = utxo.id();
                     utxos = utxos.insert(note_id, utxo);
@@ -199,7 +232,69 @@ impl WalletState {
             }
         }
 
-        Self { utxos, pk_index }
+        let (vouchers, voucher_paths, voucher_paths_snapshot) =
+            self.apply_voucher(known_vouchers, block);
+
+        Self {
+            utxos,
+            pk_index,
+            epoch: block.epoch,
+            vouchers,
+            voucher_paths,
+            voucher_paths_snapshot,
+        }
+    }
+
+    /// Apply the voucher commitment from the block to the wallet state.
+    ///
+    /// Returns:
+    /// - Updated MMR including the new voucher commitment
+    /// - Updated tracked voucher paths, including the new voucher if it is
+    ///   owned by us
+    /// - Snapshot of trakced voucher paths (updated only if epoch is advancing)
+    fn apply_voucher<VoucherId>(
+        &self,
+        known_vouchers: &Vouchers<VoucherId>,
+        block: &WalletBlock,
+    ) -> (
+        MerkleMountainRange<VoucherCm, ZkHasher>,
+        VoucherPaths,
+        VoucherPaths,
+    ) {
+        // Snapshot voucher paths if epoch is advancing
+        let snapshot = if block.epoch > self.epoch {
+            self.voucher_paths.clone()
+        } else {
+            self.voucher_paths_snapshot.clone()
+        };
+
+        // Filter out vouchers that have been claimed/finalized.
+        // `known_vouchers` always reflects the latest set of vouchers to be tracked.
+        let (cms, mut paths): (Vec<VoucherCm>, Vec<MerklePath>) = self
+            .voucher_paths
+            .iter()
+            .filter(|(cm, _)| known_vouchers.get(cm).is_some())
+            .map(|(cm, path)| (*cm, path.clone()))
+            .unzip();
+
+        // Push the new voucher to the MMR and update all tracked paths
+        let (vouchers, new_path) = self
+            .vouchers
+            .push_with_paths(block.voucher_cm, &mut paths)
+            .expect("vouchers MMR shouldn't be full");
+
+        // Rebuild the tracked voucher paths map with updated paths.
+        let mut voucher_paths = rpds::HashTrieMapSync::new_sync();
+        for (cm, path) in cms.into_iter().zip(paths) {
+            voucher_paths = voucher_paths.insert(cm, path);
+        }
+
+        // Track the new voucher's path if it is owned by us
+        if known_vouchers.get(&block.voucher_cm).is_some() {
+            voucher_paths = voucher_paths.insert(block.voucher_cm, new_path);
+        }
+
+        (vouchers, voucher_paths, snapshot)
     }
 }
 
@@ -214,7 +309,11 @@ impl<KeyId, VoucherId> Wallet<KeyId, VoucherId>
 where
     VoucherId: Debug,
 {
-    pub fn from_lib(
+    /// Initialize [`Wallet`] from a given [`LedgerState`] at LIB.
+    ///
+    /// It initializes empty Merkle paths for all known vouchers,
+    /// which will be updated as new blocks are applied.
+    pub fn from_lib_ledger_state(
         known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
         known_vouchers: Vouchers<VoucherId>,
         lib: HeaderId,
@@ -222,6 +321,44 @@ where
     ) -> Self {
         let known_keys = known_keys.into_iter().collect();
         let wallet_state = WalletState::from_ledger(&known_keys, ledger);
+
+        info!(
+            ?lib,
+            n_known_keys = known_keys.len(),
+            n_known_vouchers = known_vouchers.count(),
+            n_all_vouchers = wallet_state.vouchers.len(),
+            "initializing wallet with LIB ledger state"
+        );
+
+        Self {
+            known_keys,
+            known_vouchers,
+            wallet_states: [(lib, wallet_state)].into(),
+        }
+    }
+
+    /// Initialize [`Wallet`] from a given [`WalletState`] at LIB
+    /// (e.g., restored from persisted state).
+    ///
+    /// Tracking of Merkle paths  for known vouchers starts from the paths
+    /// stored in the [`WalletState`].
+    pub fn from_lib_wallet_state(
+        known_keys: impl IntoIterator<Item = (ZkPublicKey, KeyId)>,
+        known_vouchers: Vouchers<VoucherId>,
+        lib: HeaderId,
+        wallet_state: WalletState,
+    ) -> Self {
+        let known_keys = known_keys.into_iter().collect::<HashMap<_, _>>();
+
+        info!(
+            ?lib,
+            n_known_keys = known_keys.len(),
+            n_known_vouchers = known_vouchers.count(),
+            n_all_vouchers = wallet_state.vouchers.len(),
+            n_voucher_paths = wallet_state.voucher_paths.size(),
+            n_snapshotted_voucher_paths = wallet_state.voucher_paths_snapshot.size(),
+            "initializing wallet with LIB wallet state"
+        );
 
         Self {
             known_keys,
@@ -266,11 +403,37 @@ where
             return Ok(());
         }
 
-        let block_wallet_state = self
-            .wallet_state_at(block.parent)?
-            .apply_block(&self.known_keys, block);
+        let block_wallet_state = self.wallet_state_at(block.parent)?.apply_block(
+            &self.known_keys,
+            &self.known_vouchers,
+            block,
+        );
         self.wallet_states.insert(block.id, block_wallet_state);
         Ok(())
+    }
+
+    /// Get the snapshotted Merkle path for a voucher.
+    pub fn voucher_path_snapshot(
+        &self,
+        tip: HeaderId,
+        cm: &VoucherCm,
+    ) -> Result<Option<MerklePath>, WalletError> {
+        Ok(self
+            .wallet_state_at(tip)?
+            .voucher_paths_snapshot
+            .get(cm)
+            .cloned())
+    }
+
+    /// Get the Merkle path for a voucher that is not yet snapshotted
+    /// (only for testing)
+    #[cfg(test)]
+    fn voucher_path(
+        &self,
+        tip: HeaderId,
+        cm: &VoucherCm,
+    ) -> Result<Option<MerklePath>, WalletError> {
+        Ok(self.wallet_state_at(tip)?.voucher_paths.get(cm).cloned())
     }
 
     pub fn balance(
@@ -349,10 +512,11 @@ mod tests {
     };
 
     use lb_core::{
-        crypto::{ZkDigest as _, ZkHasher},
+        crypto::{Hash, ZkDigest as _},
         mantle::{
-            Note, Op, TxHash,
+            Note, Op,
             gas::MainnetGasConstants as Gas,
+            ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
             tx::MantleTxContext,
         },
@@ -370,8 +534,8 @@ mod tests {
         ZkPublicKey::from(BigUint::from(v))
     }
 
-    fn tx_hash(v: u64) -> TxHash {
-        TxHash::from(BigUint::from(v))
+    fn tx_hash(v: u8) -> Hash {
+        [v; 32]
     }
 
     fn voucher(key_id: u64, idx: u64) -> (VoucherCm, VoucherNullifier) {
@@ -403,7 +567,7 @@ mod tests {
             &ledger_config(),
         );
 
-        let wallet = Wallet::<_, TestVoucherId>::from_lib(
+        let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
             empty::<(ZkPublicKey, u64)>(),
             Vouchers::default(),
             genesis,
@@ -413,7 +577,7 @@ mod tests {
         assert_eq!(wallet.balance(genesis, bob).unwrap(), None);
         assert!(wallet.vouchers().get(&voucher_cm).is_none());
 
-        let wallet = Wallet::from_lib(
+        let wallet = Wallet::from_lib_ledger_state(
             [(alice, 1)],
             Vouchers::new([(voucher_cm, voucher_nf, (voucher_master_key, voucher_index))]),
             genesis,
@@ -429,12 +593,16 @@ mod tests {
             Some(&(voucher_master_key, voucher_index))
         );
 
-        let wallet =
-            Wallet::<_, TestVoucherId>::from_lib([(bob, 2)], Vouchers::default(), genesis, &ledger);
+        let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(bob, 2)],
+            Vouchers::default(),
+            genesis,
+            &ledger,
+        );
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
         assert_eq!(wallet.balance(genesis, bob).unwrap().unwrap().balance, 20);
 
-        let wallet = Wallet::<_, TestVoucherId>::from_lib(
+        let wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
             [(alice, 1), (bob, 2)],
             Vouchers::default(),
             genesis,
@@ -456,41 +624,57 @@ mod tests {
 
         let genesis_ledger = LedgerState::from_utxos([], &ledger_config());
 
-        let mut wallet = Wallet::<_, TestVoucherId>::from_lib(
+        let (v1_cm, v1_nf) = voucher(1, 0);
+        let (v2_cm, v2_nf) = voucher(1, 1);
+        let (v3_cm, _v3_nf) = voucher(2, 0);
+
+        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
             [(alice, 1), (bob, 2)],
-            Vouchers::default(),
+            Vouchers::new([(v1_cm, v1_nf, (1, 0)), (v2_cm, v2_nf, (1, 1))]),
             genesis,
             &genesis_ledger,
         );
 
-        // Block 1
+        // Block 1 (epoch 1)
         // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
+        // - voucher v1 is ours -> should be tracked
         let transfer1 = TransferOp {
-            inputs: vec![],
-            outputs: vec![Note::new(100, alice), Note::new(4, alice)],
+            inputs: Inputs::new(vec![]),
+            outputs: Outputs::new(vec![Note::new(100, alice), Note::new(4, alice)]),
         };
 
         let block_1 = WalletBlock {
             id: HeaderId::from([1; 32]),
             parent: genesis,
+            epoch: 1.into(),
+            voucher_cm: v1_cm,
             transfers: vec![transfer1.clone()],
         };
 
         wallet.apply_block(&block_1).unwrap();
+        // v1 is tracked but not yet claimable (no epoch transition yet)
+        assert_tracked_but_not_snapshotted_voucher(&wallet, block_1.id, &v1_cm);
 
-        // Block 2
+        // Block 2 (epoch 2) -- epoch transition snapshots v1's path as claimable
         //  - alice spends 100 NMO utxo, sending 20 NMO to bob and 80 to herself
-        let alice_100_nmo_utxo = transfer1.utxo_by_index(0).unwrap();
+        // - voucher v2 is ours -> should be tracked
+        let alice_100_nmo_utxo = transfer1.outputs.utxo_by_index(0, &transfer1).unwrap();
 
         let block_2 = WalletBlock {
             id: HeaderId::from([2; 32]),
             parent: block_1.id,
+            epoch: 2.into(),
+            voucher_cm: v2_cm,
             transfers: vec![TransferOp {
-                inputs: vec![alice_100_nmo_utxo.id()],
-                outputs: vec![Note::new(20, bob), Note::new(80, alice)],
+                inputs: Inputs::new(vec![alice_100_nmo_utxo.id()]),
+                outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
             }],
         };
         wallet.apply_block(&block_2).unwrap();
+        // v1 is now claimable after epoch transition
+        assert_snapshotted_voucher(&wallet, block_2.id, &v1_cm);
+        // v2 is ours, but not yet snapshotted
+        assert_tracked_but_not_snapshotted_voucher(&wallet, block_2.id, &v2_cm);
 
         // Query the balance of for each pk at different points in the blockchain
         assert_eq!(wallet.balance(genesis, alice).unwrap(), None);
@@ -510,6 +694,23 @@ mod tests {
             wallet.balance(block_2.id, bob).unwrap().unwrap().balance,
             20
         );
+
+        // Block 3 (still, epoch 2)
+        // - voucher v3 is not ours -> should not be tracked
+        let block_3 = WalletBlock {
+            id: HeaderId::from([3; 32]),
+            parent: block_2.id,
+            epoch: 2.into(),
+            voucher_cm: v3_cm,
+            transfers: vec![],
+        };
+        wallet.apply_block(&block_3).unwrap();
+        // v1 is still claimable
+        assert_snapshotted_voucher(&wallet, block_3.id, &v1_cm);
+        // v2 is still not snapshotted
+        assert_tracked_but_not_snapshotted_voucher(&wallet, block_3.id, &v2_cm);
+        // v3 is not ours, so not tracked at all
+        assert_not_tracked_voucher(&wallet, block_3.id, &v3_cm);
     }
 
     #[test]
@@ -531,24 +732,24 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            2925,
+            810,
             funded_tx_builder.gas_cost::<Gas>().unwrap().into_inner()
         );
-        assert_eq!(2925, funded_tx_builder.net_balance());
+        assert_eq!(810, funded_tx_builder.net_balance());
         assert_eq!(0, funded_tx_builder.funding_delta::<Gas>().unwrap());
 
         let funded_tx = funded_tx_builder.build();
 
         if let Op::Transfer(transfer_op) = &funded_tx.ops[funded_tx.ops.len() - 1] {
             // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, vec![alice_utxo.id()]);
+            assert_eq!(transfer_op.inputs, Inputs::new(vec![alice_utxo.id()]));
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,
-                vec![Note {
-                    value: 2075,
+                Outputs::new(vec![Note {
+                    value: 4190,
                     pk: alice,
-                }]
+                }])
             );
         } else {
             panic!("last op must be a transfer")
@@ -654,7 +855,7 @@ mod tests {
 
         // Determine gas cost without change note
         assert_eq!(
-            2885,
+            770,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -668,7 +869,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(2885, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(770, alice))],
                 &ledger_config(),
             ),
         );
@@ -682,14 +883,14 @@ mod tests {
         if let Op::Transfer(transfer_op) =
             &funded_tx_wo_change.ops[funded_tx_wo_change.ops.len() - 1]
         {
-            assert_eq!(transfer_op.outputs, vec![]);
+            assert_eq!(transfer_op.outputs, Outputs::new(vec![]));
         } else {
             panic!("last op must be a transfer")
         }
 
         // Determine gas cost with change note
         assert_eq!(
-            2925,
+            810,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -699,7 +900,7 @@ mod tests {
                 .into_inner()
         );
 
-        for value in 2886..=2925 {
+        for value in 771..=810 {
             // this region of note values will fail to fund the tx.
             // We can fund the tx if the note value is exactly the gas cost without change
             // note
@@ -723,7 +924,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(2926, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(811, alice))],
                 &ledger_config(),
             ),
         );
@@ -737,7 +938,7 @@ mod tests {
         if let Op::Transfer(transfer_op) =
             &funded_tx_wo_change.ops[funded_tx_wo_change.ops.len() - 1]
         {
-            assert_eq!(transfer_op.outputs, vec![Note::new(1, alice)]);
+            assert_eq!(transfer_op.outputs, Outputs::new(vec![Note::new(1, alice)]));
         } else {
             panic!("the last operation must be a transfer")
         }
@@ -787,5 +988,32 @@ mod tests {
             },
             faucet_pk: None,
         }
+    }
+
+    fn assert_snapshotted_voucher<KeyId>(
+        wallet: &Wallet<KeyId, TestVoucherId>,
+        tip: HeaderId,
+        cm: &VoucherCm,
+    ) {
+        assert!(wallet.voucher_path(tip, cm).unwrap().is_some());
+        assert!(wallet.voucher_path_snapshot(tip, cm).unwrap().is_some());
+    }
+
+    fn assert_tracked_but_not_snapshotted_voucher<KeyId>(
+        wallet: &Wallet<KeyId, TestVoucherId>,
+        tip: HeaderId,
+        cm: &VoucherCm,
+    ) {
+        assert!(wallet.voucher_path(tip, cm).unwrap().is_some());
+        assert!(wallet.voucher_path_snapshot(tip, cm).unwrap().is_none());
+    }
+
+    fn assert_not_tracked_voucher<KeyId>(
+        wallet: &Wallet<KeyId, TestVoucherId>,
+        tip: HeaderId,
+        cm: &VoucherCm,
+    ) {
+        assert!(wallet.voucher_path(tip, cm).unwrap().is_none());
+        assert!(wallet.voucher_path_snapshot(tip, cm).unwrap().is_none());
     }
 }

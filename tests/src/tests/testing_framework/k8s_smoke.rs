@@ -2,6 +2,7 @@ use std::{error::Error, thread, time::Duration};
 
 use lb_testing_framework::{
     CoreBuilderExt as _, K8sRunnerError, LbcK8sDeployer, ScenarioBuilder, ScenarioBuilderExt as _,
+    run_with_failure_diagnostics,
 };
 use testing_framework_core::scenario::Deployer as _;
 
@@ -50,8 +51,7 @@ fn run_k8s_smoke() -> TestResult {
             Err(err) => return Err(Box::<dyn Error + Send + Sync>::from(err)),
         };
 
-        let handle = runner
-            .run(&mut scenario)
+        let handle = run_with_failure_diagnostics(runner, &mut scenario)
             .await
             .map_err(|err| -> Box<dyn Error + Send + Sync> { err.into() })?;
 

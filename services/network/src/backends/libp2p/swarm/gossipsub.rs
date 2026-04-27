@@ -64,8 +64,14 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         match self.swarm.broadcast(&topic, message.to_vec()) {
             Ok(id) => {
                 tracing::trace!("Broadcasted message with id: {id} to topic: {topic}");
-                // self-notification because libp2p doesn't do it
-                if self.swarm.is_subscribed(&topic) {
+                // self-notification because libp2p doesn't do it.
+                // Only do this on first attempt; if a previous attempt already
+                // injected the message locally due to InsufficientPeers, avoid
+                // notifying local subscribers twice.
+                // TODO: Remove this logic once we start re-applying blocks produced locally. In
+                // that case, we don't need to bubble this up since we have already applied the
+                // block before broadcasting it.
+                if retry_count == 0 && self.swarm.is_subscribed(&topic) {
                     log_error!(self.pubsub_messages_tx.send(gossipsub::Message {
                         source: None,
                         data: message.into(),
@@ -75,6 +81,21 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 }
             }
             Err(gossipsub::PublishError::InsufficientPeers) if retry_count < MAX_RETRY => {
+                // TODO: Remove this logic once we start re-applying blocks produced locally. In
+                // that case, we don't need to bubble this up since we have already applied the
+                // block before broadcasting it. In single-node or transiently isolated setups,
+                // publish can fail with InsufficientPeers. Still surface the
+                // message locally once so higher layers can progress while
+                // retries continue for eventual dissemination.
+                if retry_count == 0 && self.swarm.is_subscribed(&topic) {
+                    log_error!(self.pubsub_messages_tx.send(gossipsub::Message {
+                        source: None,
+                        data: message.clone().into(),
+                        sequence_number: None,
+                        topic: topic_hash(&topic),
+                    }));
+                }
+
                 let wait = exp_backoff(retry_count);
                 tracing::trace!(
                     "failed to broadcast message to topic due to insufficient peers, trying again in {wait:?}"

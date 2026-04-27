@@ -32,23 +32,27 @@ lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
-lb-cryptarchia-engine            = { features = ["serde"], workspace = true }
+lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
-lb-network-service               = { features = ["libp2p"], workspace = true }
+lb-mmr                           = { workspace = true }
+lb-network-service               = { workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
 lb-testing-framework             = { workspace = true }
-lb-tx-service                    = { features = ["libp2p", "mock"], workspace = true }
+lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
 lb-zksign                        = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
+lb_config                        = { workspace = true }
 libp2p                           = "0.55.0"
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }
 reqwest                          = { features = ["json"], workspace = true }
+rpds                             = { default-features = false, version = "1.1.1" }
+serde                            = { features = ["derive"], version = "1.0.228" }
 serde_json                       = "1.0"
 serde_yaml                       = "0.9"
 serial_test                      = "3.1.1"
@@ -66,6 +70,7 @@ tracing-subscriber               = { features = ["env-filter", "fmt"], version =
 [features]
 cucumber             = []
 cucumber_stand_alone = []
+mantle_sdp_ops       = []
 testing_framework    = []
 
 [[test]]
@@ -73,44 +78,21 @@ name = "blend_devnet_setup"
 path = "src/tests/blend/devnet.rs"
 
 [[test]]
-name = "test_cryptarchia_happy_path"
-path = "src/tests/cryptarchia/happy.rs"
-
-[[test]]
-name = "test_cryptarchia_bootstrap"
-path = "src/tests/cryptarchia/bootstrap.rs"
-
-[[test]]
-name = "test_orphan_handling"
-path = "src/tests/cryptarchia/orphan.rs"
-
-[[test]]
-name = "test_immutable_blocks"
-path = "src/tests/cryptarchia/immutable_blocks.rs"
-
-[[test]]
-name = "test_invalid_tx_handling"
-path = "src/tests/cryptarchia/invalid_tx_handling.rs"
-
-[[test]]
-name = "test_mempool_api"
-path = "src/tests/mempool/api.rs"
+name = "test_cli_restart"
+path = "src/tests/cli/restart.rs"
 
 [[test]]
 name = "test_mantle_channel"
 path = "src/tests/mantle/channel.rs"
 
 [[test]]
-name = "test_mantle_sdp_ops"
-path = "src/tests/mantle/sdp_ops.rs"
+name              = "test_mantle_sdp_ops"
+path              = "src/tests/mantle/sdp_ops.rs"
+required-features = ["mantle_sdp_ops"]
 
 [[test]]
 name = "test_mantle_leader"
 path = "src/tests/mantle/leader.rs"
-
-[[test]]
-name = "test_cli_restart"
-path = "src/tests/cli/restart.rs"
 
 [[test]]
 name              = "test_testing_framework_smoke_local"

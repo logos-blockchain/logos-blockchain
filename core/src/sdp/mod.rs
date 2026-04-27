@@ -1,4 +1,5 @@
 pub mod blend;
+pub mod locked_notes;
 
 use std::hash::Hash;
 

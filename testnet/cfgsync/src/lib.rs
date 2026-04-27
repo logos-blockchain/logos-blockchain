@@ -7,6 +7,7 @@ use std::{net::Ipv4Addr, path::Path};
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
 use clap::ValueEnum;
+use rand::Rng as _;
 use serde::{Deserialize, Serialize};
 
 pub type Entropy = [u8; 32];
@@ -18,6 +19,15 @@ pub fn load_entropy(path: &Path) -> Result<Entropy, String> {
         .map_err(|e| format!("Failed to read entropy file {}: {e}", path.display()))?;
     let hash = Blake2b::<U32>::digest(&data);
     Ok(hash.into())
+}
+
+/// Generate random entropy bytes.
+#[must_use]
+pub fn random_entropy() -> Entropy {
+    let mut rng = rand::thread_rng();
+    let mut entropy: Entropy = [0u8; 32];
+    rng.fill(&mut entropy);
+    entropy
 }
 
 const DEFAULT_LIBP2P_NETWORK_PORT: u16 = 3000;

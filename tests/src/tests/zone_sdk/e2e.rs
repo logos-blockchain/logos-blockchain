@@ -1,10 +1,11 @@
 use std::{collections::HashSet, num::NonZero, time::Duration};
 
 use futures::{StreamExt as _, future::join_all};
-use lb_common_http_client::CommonHttpClient;
+use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, Op, OpProof, Value,
+        ledger::{Inputs, Outputs},
         ops::{
             channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
@@ -35,7 +36,6 @@ use logos_blockchain_tests::{
     },
 };
 use rand::{Rng as _, thread_rng};
-use serial_test::serial;
 use tokio::time::{sleep, timeout};
 
 fn channel_id_from_key(key: &Ed25519Key) -> ChannelId {
@@ -56,8 +56,25 @@ async fn wait_for_height(validator: &Validator, target_height: u64, duration: Du
     .is_ok()
 }
 
+async fn wait_for_lib_advance(
+    validator: &Validator,
+    initial_lib_slot: Slot,
+    duration: Duration,
+) -> bool {
+    timeout(duration, async {
+        loop {
+            let info = validator.consensus_info(false).await;
+            if info.lib_slot > initial_lib_slot {
+                return;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+    .is_ok()
+}
+
 #[tokio::test]
-#[serial]
 async fn test_sequencer_publish_and_indexer_read() {
     // Use custom config with faster block production for test reliability:
     // - slot_duration: 1s (faster slots)
@@ -184,7 +201,10 @@ async fn test_sequencer_publish_and_indexer_read() {
 }
 
 #[tokio::test]
-#[serial]
+#[expect(
+    clippy::too_many_lines,
+    reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
+)]
 async fn test_sequencer_checkpoint_resume() {
     // Setup network with faster block production
     let validators = spawn_validators(
@@ -323,8 +343,11 @@ async fn test_sequencer_checkpoint_resume() {
 /// Scenario: publish messages, save checkpoint, stop. Start fresh (no
 /// checkpoint), publish more, stop. Resume from OLD checkpoint. The
 /// stale pending txs should be reconciled — no duplicates on chain.
+#[expect(
+    clippy::too_many_lines,
+    reason = "This test covers a full E2E flow with multiple steps, and breaking it up would not improve readability"
+)]
 #[tokio::test]
-#[serial]
 async fn test_sequencer_stale_checkpoint_resume() {
     let validators = spawn_validators(
         Some("test_sequencer_stale_checkpoint_resume"),
@@ -427,6 +450,11 @@ async fn test_sequencer_stale_checkpoint_resume() {
     );
     let poll_task = sequencer.spawn();
     handle.wait_ready().await;
+    let phase2_ready_lib_slot = validator.consensus_info(false).await.lib_slot;
+    assert!(
+        wait_for_lib_advance(validator, phase2_ready_lib_slot, Duration::from_mins(2)).await,
+        "Phase 2 sequencer failed to observe a new LIB advancement after startup"
+    );
 
     let data_phase2: Vec<Vec<u8>> = vec![b"msg-3".to_vec(), b"msg-4".to_vec()];
     for data in &data_phase2 {
@@ -484,6 +512,11 @@ async fn test_sequencer_stale_checkpoint_resume() {
     );
     let poll_task = sequencer.spawn();
     handle.wait_ready().await;
+    let phase3_ready_lib_slot = validator.consensus_info(false).await.lib_slot;
+    assert!(
+        wait_for_lib_advance(validator, phase3_ready_lib_slot, Duration::from_mins(2)).await,
+        "Phase 3 sequencer failed to observe a new LIB advancement after startup"
+    );
 
     let data_phase3: Vec<Vec<u8>> = vec![b"msg-5".to_vec()];
     for data in &data_phase3 {
@@ -563,12 +596,11 @@ async fn test_sequencer_stale_checkpoint_resume() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_subscribe_to_finalized_deposit() {
     // Setup network with faster block production
     let validators = spawn_validators(
         Some("test_subscribe_to_finalized_deposit"),
-        1,
+        2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -615,9 +647,13 @@ async fn test_subscribe_to_finalized_deposit() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Now, submit a deposit directly to Bedrock
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let (note_id, _) = get_note(validator, pk, 1u64)
+        .await
+        .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        amount: 1,
+        inputs: Inputs::new(vec![note_id]),
         metadata: b"Mint 1 to Alice in Zone".to_vec(),
     };
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
@@ -630,12 +666,11 @@ async fn test_subscribe_to_finalized_deposit() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_atomic_deposit_inscription() {
     // Setup network with faster block production
     let validators = spawn_validators(
         Some("test_atomic_deposit_inscription"),
-        1,
+        2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -686,23 +721,32 @@ async fn test_atomic_deposit_inscription() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Now, prepare a tx for deposit (from user) + inscription (from sequencer)
-    let deposit = DepositOp {
-        channel_id,
-        amount: 1,
-        metadata: b"Mint 1 to Alice in Zone".to_vec(),
-    };
+    let deposit_amount = 1u64;
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
-    let (note_id, note_value) = get_note(validator, pk, deposit.amount)
+    let deposit_note = Note::new(deposit_amount, pk);
+    let (note_id, note_value) = get_note(validator, pk, deposit_amount)
         .await
         .expect("should find a note with sufficient balance for deposit");
-    let change = note_value.checked_sub(deposit.amount).unwrap();
+
+    let change = note_value.checked_sub(deposit_amount).unwrap();
     let transfer = TransferOp {
-        inputs: vec![note_id],
+        inputs: Inputs::new(vec![note_id]),
         outputs: if change > 0 {
-            vec![Note::new(change, pk)]
+            Outputs::new(vec![deposit_note, Note::new(change, pk)])
         } else {
-            vec![]
+            Outputs::new(vec![deposit_note])
         },
+    };
+    let deposit = DepositOp {
+        channel_id,
+        inputs: Inputs::new(vec![
+            transfer
+                .outputs
+                .utxo_by_index(0, &transfer)
+                .expect("the first note of the transfer is the deposit_note")
+                .id(),
+        ]),
+        metadata: b"Mint 1 to Alice in Zone".to_vec(),
     };
     let inscription_data = b"Mint 1 to Alice".to_vec();
     let (tx, msg_id, sequencer_sig) = handle
@@ -720,7 +764,7 @@ async fn test_atomic_deposit_inscription() {
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
-            OpProof::NoProof,
+            OpProof::ZkSig(user_transfer_sig.clone()),
             OpProof::ZkSig(user_transfer_sig),
             OpProof::Ed25519Sig(sequencer_sig),
         ],
@@ -738,12 +782,11 @@ async fn test_atomic_deposit_inscription() {
 }
 
 #[tokio::test]
-#[serial]
 async fn test_subscribe_to_finalized_withdraw() {
     // Setup network with faster block production
     let validators = spawn_validators(
         Some("test_subscribe_to_finalized_withdraw"),
-        1,
+        2,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -794,12 +837,15 @@ async fn test_subscribe_to_finalized_withdraw() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Deposit 3 into the channel
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let (deposit_note_id, _) = get_note(validator, pk, 3)
+        .await
+        .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
         channel_id,
-        amount: 3,
+        inputs: Inputs::new(vec![deposit_note_id]),
         metadata: b"Mint 3 to Alice in Zone".to_vec(),
     };
-    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
     submit_deposit(validator, deposit.clone(), pk).await;
 
     // Wait for the deposit to be finalized and detected by the ZoneIndexer
@@ -808,33 +854,20 @@ async fn test_subscribe_to_finalized_withdraw() {
     // Withdraw 1 from the channel
     let withdraw = ChannelWithdrawOp {
         channel_id,
-        amount: 2,
-    };
-    // Prepare a transfer op to send the withdrawn fund to a certain note.
-    // `inputs` is not required actually, but signing tx with 0 key is not support.
-    // So, we're setting a input note. It'll be necessary anyway once we set
-    // non-zero gas price.
-    let (note_id, note_value) = get_note(validator, pk, 1)
-        .await
-        .expect("should find a note with sufficient balance for deposit");
-    let transfer = TransferOp {
-        inputs: vec![note_id],
-        outputs: vec![Note::new(note_value, pk), Note::new(withdraw.amount, pk)],
+        outputs: Outputs::new(vec![Note::new(2, pk)]),
+        withdraw_nonce: 0,
     };
     let inscription_data = b"Burn 2".to_vec();
     let (tx, msg_id, inscription_proof) = handle
         .prepare_tx(
-            vec![
-                Op::ChannelWithdraw(withdraw.clone()),
-                Op::Transfer(transfer),
-            ],
+            vec![Op::ChannelWithdraw(withdraw.clone())],
             inscription_data.clone(),
         )
         .await
         .unwrap();
 
     // For this channel, a single sequencer signature is sufficient for withdraw,
-    // because withdraw_threhold is 1.
+    // because withdraw_threshold is 1.
     // We can actually reuse `inscription_proof`, but here we use
     // `SequencerHandle::sign_tx` to show how to sign tx built by other sequencers.
     let withdraw_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
@@ -843,15 +876,11 @@ async fn test_subscribe_to_finalized_withdraw() {
     )])
     .unwrap();
 
-    // Sign tx for transfer op
-    let transfer_proof = sign_tx_zk(validator, &tx, vec![pk]).await;
-
     // Build a signed tx using signatures from user and sequencer
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
             OpProof::ChannelWithdrawProof(withdraw_proof),
-            OpProof::ZkSig(transfer_proof),
             OpProof::Ed25519Sig(inscription_proof),
         ],
     )
@@ -947,12 +976,12 @@ async fn wait_for_deposit(
                         last_zone_block = Some((block.id, slot));
                     }
                     ZoneMessage::Deposit(deposit) => {
-                        if deposit.amount == expected.amount
+                        if deposit.inputs == expected.inputs
                             && deposit.metadata == expected.metadata
                         {
                             println!(
-                                "Found expected deposit in indexer: amount={} metadata={:?}",
-                                deposit.amount, deposit.metadata
+                                "Found expected deposit in indexer: amount={:?} metadata={:?}",
+                                deposit.inputs, deposit.metadata
                             );
                             return;
                         }
@@ -985,10 +1014,10 @@ async fn wait_for_withdraw(
                         last_zone_block = Some((block.id, slot));
                     }
                     ZoneMessage::Withdraw(withdraw) => {
-                        if withdraw.amount == expected.amount {
+                        if withdraw.outputs == expected.outputs {
                             println!(
-                                "Found expected withdraw in indexer: amount={}",
-                                withdraw.amount,
+                                "Found expected withdraw in indexer: amount={:?}",
+                                withdraw.outputs,
                             );
                             return;
                         }

@@ -97,6 +97,10 @@ where
         Ok((Self { merkle, items }, item.clone()))
     }
 
+    pub fn get(&self, key: &Key) -> Option<Item> {
+        self.items.get(key).map(|(item, _)| item.clone())
+    }
+
     #[must_use]
     pub fn root(&self) -> Fr {
         self.merkle.root()
@@ -183,16 +187,12 @@ where
     }
 }
 
-#[cfg_attr(
-    feature = "serde",
-    derive(::serde::Serialize, ::serde::Deserialize),
-    serde(transparent)
-)]
+#[derive(::serde::Serialize, ::serde::Deserialize)]
+#[serde(transparent)]
 pub struct CompressedUtxoTree<Key, Item> {
     items: BTreeMap<usize, (Key, Item)>,
 }
 
-#[cfg(feature = "serde")]
 mod serde {
     use lb_poseidon2::{Digest, Fr};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

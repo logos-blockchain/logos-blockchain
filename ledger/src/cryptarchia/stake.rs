@@ -1,7 +1,6 @@
 pub const PRECISION: u64 = 1000;
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StakeInference {
     learning_rate: f64,
     slot_activation_coefficient: f64,

@@ -147,7 +147,10 @@ pub struct LogosBlockchain {
     tracing: TracingService,
 }
 
-pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServiceId>, DynError> {
+pub fn run_node_from_config(
+    config: RunConfig,
+    handle: Option<runtime::Handle>,
+) -> Result<Overwatch<RuntimeServiceId>, DynError> {
     let blend_rewards_params = config.deployment.blend_reward_params();
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
@@ -248,7 +251,7 @@ pub fn run_node_from_config(config: RunConfig) -> Result<Overwatch<RuntimeServic
             #[cfg(feature = "testing")]
             testing_http: testing_config,
         },
-        Some(runtime::Handle::current()),
+        handle,
     )
     .map_err(|e| eyre!("Error encountered: {}", e))?;
     Ok(app)

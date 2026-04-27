@@ -85,4 +85,11 @@ mod tests {
     fn devnet_initialization() {
         drop(DeploymentSettings::from(WellKnownDeployment::Devnet));
     }
+
+    #[test]
+    fn serialize_deserialize_yaml() {
+        let settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
+        let as_str = serde_yaml::to_string(&settings).unwrap();
+        let _recovered: DeploymentSettings = serde_yaml::from_str(&as_str).unwrap();
+    }
 }

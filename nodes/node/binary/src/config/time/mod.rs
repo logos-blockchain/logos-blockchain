@@ -28,7 +28,8 @@ impl ServiceConfig {
             slot_config: SlotConfig {
                 slot_duration: self.deployment.slot_duration,
                 genesis_time: cryptarchia_deployment
-                    .genesis_state
+                    .genesis_block
+                    .genesis_tx()
                     .cryptarchia_parameter()
                     .genesis_time,
             },

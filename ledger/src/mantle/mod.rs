@@ -1,4 +1,4 @@
-pub mod channel;
+pub use lb_core::mantle::channel;
 pub mod helpers;
 pub mod leader;
 pub mod sdp;
@@ -6,23 +6,28 @@ pub mod sdp;
 use std::collections::HashMap;
 
 use lb_core::{
-    crypto::ZkHash,
+    crypto::ZkHasher,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
+        ledger::Operation as _,
         ops::{
             channel::{
-                deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp,
-                withdraw::ChannelWithdrawOp,
+                inscribe::{InscriptionOp, InscriptionValidationContext},
+                set_keys::{SetKeysOp, SetKeysValidationContext},
             },
-            leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm},
+            leader_claim::{LeaderClaimError, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+            transfer::TransferError,
         },
     },
-    sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
+    sdp::{
+        Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber,
+        locked_notes::LockedNotes,
+    },
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_utxotree::MerklePath;
-use sdp::{Error as SdpLedgerError, locked_notes::LockedNotes};
+use lb_mmr::MerkleMountainRange;
+use sdp::Error as SdpLedgerError;
 use tracing::error;
 
 use crate::{Config, EpochState, UtxoTree};
@@ -37,6 +42,10 @@ pub enum Error {
     Leader(#[from] leader::Error),
     #[error("Sdp ledger error: {0:?}")]
     Sdp(#[from] SdpLedgerError),
+    #[error(transparent)]
+    Transfer(#[from] TransferError),
+    #[error(transparent)]
+    LeaderClaim(#[from] LeaderClaimError),
     #[error("Note not found: {0:?}")]
     NoteNotFound(NoteId),
 }
@@ -45,8 +54,7 @@ pub enum Error {
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
 pub struct LedgerState {
     channels: channel::Channels,
     pub sdp: sdp::SdpLedger,
@@ -104,6 +112,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub fn update_channels(self, channels: channel::Channels) -> Self {
+        Self { channels, ..self }
+    }
+
+    #[must_use]
     pub fn active_session_providers(
         &self,
         service_type: ServiceType,
@@ -121,19 +134,16 @@ impl LedgerState {
         self.sdp.declarations()
     }
 
+    /// Get the root of the voucher commitments snapshot.
     #[must_use]
-    pub fn has_claimable_voucher(&self, voucher_cm: &VoucherCm) -> bool {
-        self.leaders.has_claimable_voucher(voucher_cm)
+    pub const fn vouchers_snapshot_root(&self) -> RewardsRoot {
+        self.leaders.vouchers_snapshot_root()
     }
 
+    /// Get the MMR of all voucher commitments included in the chain.
     #[must_use]
-    pub const fn claimable_vouchers_root(&self) -> RewardsRoot {
-        self.leaders.claimable_vouchers_root()
-    }
-
-    #[must_use]
-    pub fn voucher_merkle_path(&self, voucher_cm: VoucherCm) -> Option<MerklePath<ZkHash>> {
-        self.leaders.voucher_merkle_path(voucher_cm)
+    pub const fn vouchers(&self) -> &MerkleMountainRange<VoucherCm, ZkHasher> {
+        self.leaders.vouchers()
     }
 
     #[must_use]
@@ -156,18 +166,21 @@ impl LedgerState {
     pub fn try_apply_channel_inscription(
         mut self,
         inscription_op: &InscriptionOp,
+        inscription_sig: &Ed25519Signature,
+        tx_hash: TxHash,
     ) -> Result<Self, Error> {
-        self.channels = self
-            .channels
-            .apply_msg(
-                inscription_op.channel_id,
-                &inscription_op.parent,
-                inscription_op.id(),
-                &inscription_op.signer,
-            )
-            .inspect_err(
-                |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
-            )?;
+        //validate the inscription
+        inscription_op.validate(&InscriptionValidationContext {
+            channels: &self.channels,
+            tx_hash: &tx_hash,
+            inscribe_sig: inscription_sig,
+        })?;
+
+        // Execute the inscription
+        self.channels = inscription_op.execute(self.channels).inspect_err(
+            |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
+        )?;
+
         Ok(self)
     }
 
@@ -177,30 +190,19 @@ impl LedgerState {
         set_keys_sig: &Ed25519Signature,
         tx_hash: &TxHash,
     ) -> Result<Self, Error> {
-        self.channels = self
-            .channels
-            .set_keys(set_keys_op.channel, set_keys_op, set_keys_sig, tx_hash)
-            .inspect_err(
-                |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
-            )?;
+        // Validate the SetKeys
+        set_keys_op.validate(&SetKeysValidationContext {
+            channels: &self.channels,
+            tx_hash,
+            setkeys_sig: set_keys_sig,
+        })?;
+
+        // Execute the SetKeys
+        self.channels = set_keys_op.execute(self.channels).inspect_err(
+            |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
+        )?;
+
         Ok(self)
-    }
-
-    pub fn try_apply_channel_deposit(mut self, op: &DepositOp) -> Result<(Self, Value), Error> {
-        self.channels = self.channels.deposit(op).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Deposit message."),
-        )?;
-        Ok((self, op.amount))
-    }
-
-    pub fn try_apply_channel_withdraw(
-        mut self,
-        op: &ChannelWithdrawOp,
-    ) -> Result<(Self, Value), Error> {
-        self.channels = self.channels.withdraw(op).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "Failed to apply the Channel Withdraw message."),
-        )?;
-        Ok((self, op.amount))
     }
 
     pub fn try_apply_sdp_declaration(
@@ -212,14 +214,11 @@ impl LedgerState {
         tx_hash: TxHash,
         config: &Config,
     ) -> Result<Self, Error> {
-        let Some((utxo, _)) = utxo_tree.utxos().get(&sdp_declare_op.locked_note_id) else {
-            return Err(Error::NoteNotFound(sdp_declare_op.locked_note_id));
-        };
         self.sdp = self
             .sdp
-            .apply_declare_msg(
+            .try_apply_sdp_declaration(
+                utxo_tree,
                 sdp_declare_op,
-                utxo.note,
                 sdp_declare_zk_sig,
                 sdp_declare_ed_sig,
                 tx_hash,
@@ -271,20 +270,5 @@ impl LedgerState {
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"),
             )?;
         Ok(self)
-    }
-
-    pub fn try_apply_leader_claim(
-        mut self,
-        leader_claim_op: &LeaderClaimOp,
-    ) -> Result<(Self, Value), Error> {
-        // Correct derivation of the voucher nullifier and membership in the merkle tree
-        // can be verified outside of this function since public inputs are already
-        // available. Callers are expected to validate the proof
-        // before calling this function.
-        let reward;
-        (self.leaders, reward) = self.leaders.claim(leader_claim_op).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "failed to apply leader claim message"),
-        )?;
-        Ok((self, reward))
     }
 }

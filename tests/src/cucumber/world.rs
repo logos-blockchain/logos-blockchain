@@ -76,6 +76,49 @@ pub struct RunState {
 }
 
 #[derive(Debug, Default, Clone)]
+pub struct ManualNodeConfigOverrides {
+    pub cryptarchia_security_param: Option<NonZero<u32>>,
+    pub prolonged_bootstrap_period: Option<Duration>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ManualClusterKind {
+    Generated,
+    Devnet,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ManualClusterSpec {
+    pub kind: ManualClusterKind,
+    pub capacity: usize,
+}
+
+impl ManualNodeConfigOverrides {
+    pub const fn apply_to(&self, config: &mut RunConfig) {
+        if let Some(security_param) = self.cryptarchia_security_param {
+            config.deployment.cryptarchia.security_param = security_param;
+        }
+
+        if let Some(prolonged_bootstrap_period) = self.prolonged_bootstrap_period {
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = prolonged_bootstrap_period;
+        }
+    }
+
+    pub const fn set_cryptarchia_security_param(&mut self, security_param: NonZero<u32>) {
+        self.cryptarchia_security_param = Some(security_param);
+    }
+
+    pub const fn set_prolonged_bootstrap_period(&mut self, period: Duration) {
+        self.prolonged_bootstrap_period = Some(period);
+    }
+}
+
+#[derive(Debug, Default, Clone)]
 pub struct WalletRuntimeState {
     pub encumbered_tokens: Vec<Utxo>,
     pub submitted_tx_hashes: Vec<TxHash>,
@@ -90,7 +133,7 @@ pub struct PublicCryptarchiaEndpointPeer {
 }
 
 #[derive(Debug, Clone)]
-pub struct UserConfigOverride {
+pub struct ConfigOverride {
     /// Dot-separated user config path, e.g.
     /// `network.backend.swarm.gossipsub.retain_scores`.
     pub path: String,
@@ -181,6 +224,8 @@ pub struct CucumberWorld {
     pub wallet_tokens_per_block: HashMap<String, WalletTokenMap>,
     /// Manual: Mutable runtime state scoped to each logical wallet.
     pub wallet_runtime_state: HashMap<String, WalletRuntimeState>,
+    /// Manual: Mapping of scenario transaction aliases to submitted hashes.
+    pub submitted_transactions: HashMap<String, TxHash>,
     /// Manual:  Per node: `header_id` -> height
     pub node_header_heights: HashMap<String, HashMap<String, u64>>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
@@ -194,6 +239,9 @@ pub struct CucumberWorld {
     /// Manual: Number of leading nodes declared as blend providers in the
     /// generated deployment. Defaults to all nodes when unset.
     pub blend_core_nodes: Option<usize>,
+    /// Manual: Pending manual-cluster build recipe used to rebuild the local
+    /// cluster when deployment-shape steps change before any nodes start.
+    pub manual_cluster_spec: Option<ManualClusterSpec>,
     /// Manual: Whether to populate the IBD peers for each node after starting
     /// them,
     pub populate_ibd_peers_from_initial_peers: Option<bool>,
@@ -208,7 +256,9 @@ pub struct CucumberWorld {
     /// `/cryptarchia/info` for external chain sync reference.
     pub public_cryptarchia_endpoint_peers: Option<Vec<PublicCryptarchiaEndpointPeer>>,
     /// Manual: Dynamic user-config overrides applied on node startup.
-    pub user_config_overrides: Vec<UserConfigOverride>,
+    pub user_config_overrides: Vec<ConfigOverride>,
+    /// Manual: Dynamic deployment-config overrides applied on node startup.
+    pub deployment_config_overrides: Vec<ConfigOverride>,
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
@@ -222,6 +272,9 @@ pub struct CucumberWorld {
     /// Manual: Whether to have dynamically started nodes join the external
     /// network
     pub join_external_network: Option<bool>,
+    /// Manual: Runtime state for node-control extensions added outside the
+    /// legacy generic step files.
+    pub manual_node_config_overrides: ManualNodeConfigOverrides,
     /// Manual: Faucet base URL configuration for manual transactions, if
     /// applicable.
     pub faucet_base_url: Option<String>,
@@ -269,6 +322,10 @@ pub struct NodeSnapshot {
 }
 
 impl Debug for CucumberWorld {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Debug output intentionally enumerates world state fields for test diagnostics"
+    )]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
@@ -320,6 +377,7 @@ impl Debug for CucumberWorld {
             )
             .field("wallet_accounts", &self.wallet_accounts.len())
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
+            .field("submitted_transactions", &self.submitted_transactions.len())
             .field(
                 "wallet_tokens_per_block",
                 &self.wallet_tokens_per_block.len(),
@@ -334,6 +392,11 @@ impl Debug for CucumberWorld {
             .field("node_groups", &self.node_groups.len())
             .field("node_to_group", &self.node_to_group.len())
             .field("blend_core_nodes", &self.blend_core_nodes)
+            .field("manual_cluster_spec", &self.manual_cluster_spec)
+            .field(
+                "manual_node_config_overrides",
+                &self.manual_node_config_overrides,
+            )
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
@@ -351,6 +414,10 @@ impl Debug for CucumberWorld {
             .field(
                 "user_config_overrides",
                 &user_config_overrides_display(&self.user_config_overrides),
+            )
+            .field(
+                "deployment_config_overrides",
+                &user_config_overrides_display(&self.deployment_config_overrides),
             )
             .field(
                 "deployment_config_override_path",
@@ -462,6 +529,9 @@ pub struct NodeInfo {
     /// The node's runtime directory where all its runtime artifacts will be
     /// collected
     pub runtime_dir: PathBuf,
+    /// Whether this node is only expected to be network ready after startup and
+    /// not `Mode::OnLine`
+    pub immediate_start: bool,
 }
 
 impl NodeInfo {
@@ -484,6 +554,20 @@ impl NodeInfo {
 }
 
 impl CucumberWorld {
+    /// Set a scenario-wide cryptarchia security parameter override for
+    /// manual-cluster nodes.
+    pub const fn set_cryptarchia_security_param(&mut self, security_param: NonZero<u32>) {
+        self.manual_node_config_overrides
+            .set_cryptarchia_security_param(security_param);
+    }
+
+    /// Set a scenario-wide prolonged bootstrap period override for
+    /// manual-cluster nodes.
+    pub const fn set_prolonged_bootstrap_period(&mut self, period: Duration) {
+        self.manual_node_config_overrides
+            .set_prolonged_bootstrap_period(period);
+    }
+
     /// Get the best known height for the given node, if any. This is based on
     /// the cached height -> hash information stored in the world for each
     /// node.
@@ -734,6 +818,8 @@ impl CucumberWorld {
             .clone())
     }
 
+    /// Helper to resolve a wallet name to the actual node name that the wallet
+    /// is associated with.
     pub fn resolve_wallet_node_name(&self, wallet_name: &str) -> Result<String, StepError> {
         Ok(self
             .wallet_info
@@ -743,6 +829,14 @@ impl CucumberWorld {
             })?
             .node_name
             .clone())
+    }
+
+    /// Helper to check if a node is configured for immediate start (not
+    /// awaiting network readiness)
+    pub fn network_immediate_start(&self, node_name: &str) -> bool {
+        self.nodes_info
+            .get(node_name)
+            .is_some_and(|info| info.immediate_start)
     }
 
     /// Helper to resolve a list of node names to a `PeerSelection::Named` with
@@ -821,6 +915,19 @@ impl CucumberWorld {
             .into_iter()
             .next()
             .ok_or(StepError::MissingWallet)
+    }
+
+    pub fn remember_submitted_transaction(&mut self, alias: String, tx_hash: TxHash) {
+        self.submitted_transactions.insert(alias, tx_hash);
+    }
+
+    pub fn resolve_submitted_transaction(&self, alias: &str) -> Result<TxHash, StepError> {
+        self.submitted_transactions
+            .get(alias)
+            .copied()
+            .ok_or(StepError::LogicalError {
+                message: format!("Transaction alias '{alias}' not found in world state"),
+            })
     }
 
     /// Helper to resolve multiple wallet names to their actual wallet
@@ -1278,7 +1385,7 @@ fn deployment_config_override_path_display(
     )
 }
 
-fn user_config_overrides_display(overrides: &[UserConfigOverride]) -> String {
+fn user_config_overrides_display(overrides: &[ConfigOverride]) -> String {
     if overrides.is_empty() {
         return "[]".to_owned();
     }
