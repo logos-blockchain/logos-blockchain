@@ -4,7 +4,8 @@ use futures::{StreamExt as _, future::join_all};
 use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
     mantle::{
-        MantleTx, Note, NoteId, Op, OpProof, Value,
+        GenesisTx as _, MantleTx, Note, NoteId, Op, OpProof, Value,
+        genesis_tx::GenesisTx as GenesisTransaction,
         ledger::{Inputs, Outputs},
         ops::{
             channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
@@ -12,6 +13,7 @@ use lb_core::{
         },
     },
     proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature},
+    sdp::{Locator, ServiceType},
 };
 use lb_http_api_common::bodies::{
     channel::ChannelDepositRequestBody,
@@ -32,7 +34,10 @@ use lb_zone_sdk::{
 use logos_blockchain_tests::{
     nodes::{Validator, create_validator_config},
     topology::configs::{
-        create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
+        GeneralConfig,
+        consensus::{ProviderInfo, create_genesis_tx_with_declarations},
+        create_general_configs,
+        deployment::e2e_deployment_settings_with_genesis_tx,
     },
 };
 use rand::{Rng as _, thread_rng};
@@ -598,9 +603,10 @@ async fn test_sequencer_stale_checkpoint_resume() {
 #[tokio::test]
 async fn test_subscribe_to_finalized_deposit() {
     // Setup network with faster block production
-    let validators = spawn_validators(
+    let validators = spawn_validators_with_extra_funding_notes(
         Some("test_subscribe_to_finalized_deposit"),
         2,
+        [1],
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -647,8 +653,9 @@ async fn test_subscribe_to_finalized_deposit() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Now, submit a deposit directly to Bedrock
+    let deposit_amount = 1;
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
-    let (note_id, _) = get_note(validator, pk, 1u64)
+    let (note_id, _) = get_note_with_value(validator, pk, deposit_amount)
         .await
         .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
@@ -751,7 +758,7 @@ async fn test_atomic_deposit_inscription() {
     let inscription_data = b"Mint 1 to Alice".to_vec();
     let (tx, msg_id, sequencer_sig) = handle
         .prepare_tx(
-            vec![Op::ChannelDeposit(deposit.clone()), Op::Transfer(transfer)],
+            vec![Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())],
             inscription_data.clone(),
         )
         .await
@@ -784,9 +791,10 @@ async fn test_atomic_deposit_inscription() {
 #[tokio::test]
 async fn test_subscribe_to_finalized_withdraw() {
     // Setup network with faster block production
-    let validators = spawn_validators(
+    let validators = spawn_validators_with_extra_funding_notes(
         Some("test_subscribe_to_finalized_withdraw"),
         2,
+        [3],
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -837,8 +845,9 @@ async fn test_subscribe_to_finalized_withdraw() {
     wait_for_zone_block(&indexer, msg1, Duration::from_mins(1)).await;
 
     // Deposit 3 into the channel
+    let deposit_amount = 3;
     let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
-    let (deposit_note_id, _) = get_note(validator, pk, 3)
+    let (deposit_note_id, _) = get_note_with_value(validator, pk, deposit_amount)
         .await
         .expect("should find a note with sufficient balance for deposit");
     let deposit = DepositOp {
@@ -902,7 +911,26 @@ async fn spawn_validators(
     modify_run_config: impl Fn(RunConfig) -> RunConfig,
     target_block: u64,
 ) -> Vec<Validator> {
+    spawn_validators_with_extra_funding_notes(
+        test_context,
+        count,
+        [],
+        modify_run_config,
+        target_block,
+    )
+    .await
+}
+
+async fn spawn_validators_with_extra_funding_notes(
+    test_context: Option<&str>,
+    count: usize,
+    funding_note_values: impl IntoIterator<Item = Value>,
+    modify_run_config: impl Fn(RunConfig) -> RunConfig,
+    target_block: u64,
+) -> Vec<Validator> {
     let (configs, genesis_tx) = create_general_configs(count, test_context);
+    let genesis_tx =
+        add_extra_funding_notes_to_genesis(&configs, genesis_tx, funding_note_values, test_context);
     let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
     let configs: Vec<_> = configs
         .into_iter()
@@ -923,6 +951,41 @@ async fn spawn_validators(
     assert!(wait_for_height(&validators[0], target_block, Duration::from_mins(2)).await);
 
     validators
+}
+
+fn add_extra_funding_notes_to_genesis(
+    configs: &[GeneralConfig],
+    genesis_tx: GenesisTransaction,
+    values: impl IntoIterator<Item = Value>,
+    test_context: Option<&str>,
+) -> GenesisTransaction {
+    let values = values.into_iter().collect::<Vec<_>>();
+    if values.is_empty() {
+        return genesis_tx;
+    }
+
+    let funding_pk = configs[0].consensus_config.funding_pk;
+    let mut transfer_op = genesis_tx.genesis_transfer().clone();
+    transfer_op
+        .outputs
+        .extend(values.into_iter().map(|value| Note::new(value, funding_pk)));
+
+    let providers = configs
+        .iter()
+        .map(|config| {
+            let (blend_config, provider_sk, zk_sk) = &config.blend_config;
+
+            ProviderInfo {
+                service_type: ServiceType::BlendNetwork,
+                provider_sk: provider_sk.clone(),
+                zk_sk: zk_sk.clone(),
+                locator: Locator(blend_config.core.backend.listening_address.clone()),
+                note: config.consensus_config.blend_note.clone(),
+            }
+        })
+        .collect();
+
+    create_genesis_tx_with_declarations(transfer_op, providers, test_context)
 }
 
 async fn wait_for_zone_block(
@@ -1038,6 +1101,26 @@ async fn get_note(
     pk: ZkPublicKey,
     min_value: Value,
 ) -> Option<(NoteId, Value)> {
+    get_wallet_balance(validator, pk)
+        .await
+        .notes
+        .into_iter()
+        .find(|(_, value)| *value >= min_value)
+}
+
+async fn get_note_with_value(
+    validator: &Validator,
+    pk: ZkPublicKey,
+    expected_value: Value,
+) -> Option<(NoteId, Value)> {
+    get_wallet_balance(validator, pk)
+        .await
+        .notes
+        .into_iter()
+        .find(|(_, value)| *value == expected_value)
+}
+
+async fn get_wallet_balance(validator: &Validator, pk: ZkPublicKey) -> WalletBalanceResponseBody {
     let resp = reqwest::Client::new()
         .get(format!(
             "http://{}/wallet/{}/balance",
@@ -1054,17 +1137,9 @@ async fn get_note(
         resp.status()
     );
 
-    let body: WalletBalanceResponseBody = resp
-        .json()
+    resp.json()
         .await
-        .expect("balance response should be valid JSON");
-    for (note_id, value) in body.notes {
-        if value >= min_value {
-            return Some((note_id, value));
-        }
-    }
-
-    None
+        .expect("balance response should be valid JSON")
 }
 
 async fn sign_tx_zk(validator: &Validator, tx: &MantleTx, pks: Vec<ZkPublicKey>) -> ZkSignature {

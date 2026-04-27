@@ -16,6 +16,7 @@ use lb_core::{
     mantle::{
         AuthenticatedMantleTx, GasConstants, NoteId, Utxo, Value,
         ops::{
+            Op,
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
@@ -38,6 +39,7 @@ pub struct WalletBlock {
     pub parent: HeaderId,
     pub epoch: Epoch,
     pub voucher_cm: VoucherCm,
+    pub spent_notes: Vec<NoteId>,
     pub transfers: Vec<TransferOp>,
 }
 
@@ -47,15 +49,30 @@ impl WalletBlock {
     where
         Tx: AuthenticatedMantleTx,
     {
-        let transfers: Vec<TransferOp> = block
-            .transactions()
-            .flat_map(|auth_tx| auth_tx.mantle_tx().transfers())
-            .collect();
+        let mut spent_notes = Vec::new();
+        let mut transfers = Vec::new();
+
+        for auth_tx in block.transactions() {
+            for op in &auth_tx.mantle_tx().ops {
+                match op {
+                    Op::ChannelDeposit(deposit) => {
+                        spent_notes.extend(deposit.inputs.iter().copied());
+                    }
+                    Op::Transfer(transfer) => {
+                        spent_notes.extend(transfer.inputs.iter().copied());
+                        transfers.push(transfer.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         Self {
             id: block.header().id(),
             parent: block.header().parent(),
             epoch,
             voucher_cm: *block.header().leader_proof().voucher_cm(),
+            spent_notes,
             transfers,
         }
     }
@@ -197,25 +214,11 @@ impl WalletState {
         let mut utxos = self.utxos.clone();
         let mut pk_index = self.pk_index.clone();
 
-        // Process each transaction in the block
+        for spent_id in &block.spent_notes {
+            remove_spent_utxo(spent_id, &mut utxos, &mut pk_index);
+        }
+
         for transfer in &block.transfers {
-            // Remove spent UTXOs (inputs)
-            for spent_id in &*transfer.inputs {
-                if let Some(utxo) = utxos.get(spent_id) {
-                    let pk = utxo.note.pk;
-                    utxos = utxos.remove(spent_id);
-
-                    if let Some(note_set) = pk_index.get(&pk) {
-                        let updated_set = note_set.remove(spent_id);
-                        if updated_set.is_empty() {
-                            pk_index = pk_index.remove(&pk);
-                        } else {
-                            pk_index = pk_index.insert(pk, updated_set);
-                        }
-                    }
-                }
-            }
-
             // Add new UTXOs (outputs) - only if they belong to our known keys
             for utxo in transfer.outputs.utxos(transfer) {
                 if known_keys.contains_key(&utxo.note.pk) {
@@ -295,6 +298,30 @@ impl WalletState {
         }
 
         (vouchers, voucher_paths, snapshot)
+    }
+}
+
+fn remove_spent_utxo(
+    spent_id: &NoteId,
+    utxos: &mut rpds::HashTrieMapSync<NoteId, Utxo>,
+    pk_index: &mut rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
+) {
+    let Some(utxo) = utxos.get(spent_id) else {
+        return;
+    };
+
+    let pk = utxo.note.pk;
+    *utxos = utxos.remove(spent_id);
+
+    let Some(note_set) = pk_index.get(&pk) else {
+        return;
+    };
+
+    let updated_set = note_set.remove(spent_id);
+    if updated_set.is_empty() {
+        *pk_index = pk_index.remove(&pk);
+    } else {
+        *pk_index = pk_index.insert(pk, updated_set);
     }
 }
 
@@ -514,7 +541,7 @@ mod tests {
     use lb_core::{
         crypto::{Hash, ZkDigest as _},
         mantle::{
-            Note, Op,
+            Note,
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -648,6 +675,7 @@ mod tests {
             parent: genesis,
             epoch: 1.into(),
             voucher_cm: v1_cm,
+            spent_notes: vec![],
             transfers: vec![transfer1.clone()],
         };
 
@@ -665,6 +693,7 @@ mod tests {
             parent: block_1.id,
             epoch: 2.into(),
             voucher_cm: v2_cm,
+            spent_notes: vec![alice_100_nmo_utxo.id()],
             transfers: vec![TransferOp {
                 inputs: Inputs::new(vec![alice_100_nmo_utxo.id()]),
                 outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
@@ -696,15 +725,32 @@ mod tests {
         );
 
         // Block 3 (still, epoch 2)
+        // - alice spends the 80 NMO note through a non-transfer operation.
         // - voucher v3 is not ours -> should not be tracked
+        let alice_80_nmo_utxo = block_2.transfers[0]
+            .outputs
+            .utxo_by_index(1, &block_2.transfers[0])
+            .unwrap();
+
         let block_3 = WalletBlock {
             id: HeaderId::from([3; 32]),
             parent: block_2.id,
             epoch: 2.into(),
             voucher_cm: v3_cm,
+            spent_notes: vec![alice_80_nmo_utxo.id()],
             transfers: vec![],
         };
         wallet.apply_block(&block_3).unwrap();
+
+        assert_eq!(
+            wallet.balance(block_3.id, alice).unwrap().unwrap().balance,
+            4
+        );
+        assert_eq!(
+            wallet.balance(block_3.id, bob).unwrap().unwrap().balance,
+            20
+        );
+
         // v1 is still claimable
         assert_snapshotted_voucher(&wallet, block_3.id, &v1_cm);
         // v2 is still not snapshotted

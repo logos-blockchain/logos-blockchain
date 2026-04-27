@@ -169,18 +169,20 @@ impl MantleTxBuilder {
         Ok(self.net_balance() - i128::from(self.gas_cost::<G>()?.into_inner()))
     }
 
-    /// Returns all note IDs used as inputs in the transaction, including
-    /// - Transfer operations already in the transaction
-    /// - Additional transfer operations that will be added to the transaction
+    /// Returns all note IDs already consumed by this transaction, plus the
+    /// funding inputs that will be appended as a transfer during build.
     pub fn input_notes(&self) -> impl Iterator<Item = NoteId> {
         self.mantle_tx
             .ops
             .iter()
-            .filter_map(|op| match op {
-                Op::Transfer(transfer) => Some(transfer.inputs.iter().copied()),
-                _ => None,
+            .flat_map(|op| {
+                let inputs: &[NoteId] = match op {
+                    Op::Transfer(transfer) => &transfer.inputs,
+                    Op::ChannelDeposit(deposit) => &deposit.inputs,
+                    _ => &[],
+                };
+                inputs.iter().copied()
             })
-            .flatten()
             .chain(self.ledger_inputs().iter().map(Utxo::id))
     }
 

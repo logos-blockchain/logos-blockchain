@@ -11,7 +11,10 @@ use lb_http_api_common::bodies::{
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
-use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
+use lb_testing_framework::{
+    DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+    configs::wallet::{WalletAccount, WalletConfig},
+};
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::common::manual_cluster::{
     ManualNodeLayout, api_url, get_wallet_balance, start_local_manual_cluster_with_layout,
@@ -30,13 +33,16 @@ use tokio::time::sleep;
 /// 6. Verify the channel balance increases.
 #[tokio::test]
 async fn channel_deposit() {
+    let (wallet_config, funding_pk) = channel_deposit_wallet_config();
     let (base, nodes) = start_local_manual_cluster_with_layout(
         "channel-deposit",
         "mantle-channel",
         DeploymentBuilder::new(
             TfTopologyConfig::with_node_numbers(2)
+                .with_allow_multiple_genesis_tokens(true)
                 .with_test_context(Some("channel_deposit".to_owned())),
-        ),
+        )
+        .with_wallet_config(wallet_config),
         2,
         ManualNodeLayout::SelectNodeSeed(0),
         |config| Ok::<_, DynError>(channel_test_config(config)),
@@ -44,10 +50,6 @@ async fn channel_deposit() {
     .await;
 
     let validator = &nodes[0];
-    let funding_pk = base.deployment.nodes()[0]
-        .general
-        .consensus_config
-        .funding_pk;
 
     wait_for_nodes_height(
         nodes
@@ -124,6 +126,22 @@ async fn channel_deposit() {
     );
 }
 
+fn channel_deposit_wallet_config() -> (WalletConfig, ZkPublicKey) {
+    let deposit_note =
+        WalletAccount::deterministic(0, 1, false).expect("deposit wallet should be valid");
+
+    let fee_note = WalletAccount::new(
+        "channel-deposit-fee-note".to_owned(),
+        deposit_note.secret_key.clone(),
+        100,
+        false,
+    )
+    .expect("fee wallet should be valid");
+    let funding_pk = deposit_note.public_key();
+
+    (WalletConfig::new(vec![deposit_note, fee_note]), funding_pk)
+}
+
 fn channel_test_config(mut config: RunConfig) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
     config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
@@ -155,7 +173,8 @@ async fn get_wallet_note(node: &NodeHttpClient, pk: ZkPublicKey, min_value: u64)
 
     body.notes
         .into_iter()
-        .find(|(_, value)| *value >= min_value)
+        .filter(|(_, value)| *value >= min_value)
+        .min_by_key(|(_, value)| *value)
         .expect("should find a note with sufficient balance for deposit")
 }
 
