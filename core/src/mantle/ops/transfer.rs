@@ -1,83 +1,118 @@
-use std::sync::LazyLock;
-
-use lb_groth16::{Fr, fr_from_bytes, fr_from_bytes_unchecked};
-use lb_poseidon2::Digest;
+use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::{
-    crypto::{Digest as _, HALF_BLAKE_DIGEST_BYTES_SIZE, Hasher, ZkHasher},
     mantle::{
-        Note, NoteId, Transaction, TransactionHasher, TxHash, Utxo, encoding::encode_transfer_op,
+        TxHash,
+        encoding::encode_transfer_op,
+        ledger,
+        ledger::{Inputs, Operation, Outputs, Utxos},
+        ops::OpId,
     },
+    sdp::locked_notes::LockedNotes,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TransferOp {
-    pub inputs: Vec<NoteId>,
-    pub outputs: Vec<Note>,
+    pub inputs: Inputs,
+    pub outputs: Outputs,
 }
-
-static TRANSFER_HASH_V1_FR: LazyLock<Fr> =
-    LazyLock::new(|| fr_from_bytes(b"TRANSFER_HASH_V1").expect("Constant should be valid Fr"));
 
 impl TransferOp {
     #[must_use]
-    pub const fn new(inputs: Vec<NoteId>, outputs: Vec<Note>) -> Self {
+    pub const fn new(inputs: Inputs, outputs: Outputs) -> Self {
         Self { inputs, outputs }
     }
 
-    #[must_use]
-    pub fn as_signing_frs(&self) -> Vec<Fr> {
-        // constants and structure as defined in the Mantle spec:
-        // <https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e>
-        let encoded_bytes = encode_transfer_op(self);
-        let first_blake_hash = Hasher::digest(encoded_bytes);
-        let frs = first_blake_hash
-            .as_slice()
-            .chunks(HALF_BLAKE_DIGEST_BYTES_SIZE)
-            .map(fr_from_bytes_unchecked);
-        std::iter::once(*TRANSFER_HASH_V1_FR).chain(frs).collect()
-    }
-
-    #[must_use]
-    pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
-        self.outputs.get(index).map(|note| Utxo {
-            transfer_hash: self.hash(),
-            output_index: index,
-            note: *note,
-        })
-    }
-
-    pub fn utxos(&self) -> impl Iterator<Item = Utxo> + '_ {
-        let transfer_hash = self.hash();
-        self.outputs
-            .iter()
-            .enumerate()
-            .map(move |(index, note)| Utxo {
-                transfer_hash,
-                output_index: index,
-                note: *note,
-            })
+    pub fn balance(&self, utxos: &Utxos) -> Result<i128, TransferError> {
+        let mut balance: i128 = 0;
+        let input_amount = self.inputs.amount(utxos)?;
+        let output_amount = self.outputs.amount()?;
+        balance = balance
+            .checked_add(i128::from(input_amount))
+            .ok_or(TransferError::BalanceOverflow)?;
+        balance = balance
+            .checked_sub(i128::from(output_amount))
+            .ok_or(TransferError::BalanceOverflow)?;
+        Ok(balance)
     }
 }
 
-impl Transaction for TransferOp {
-    const HASHER: TransactionHasher<Self> =
-        |op| <ZkHasher as Digest>::digest(&op.as_signing_frs()).into();
-    type Hash = TxHash;
+impl OpId for TransferOp {
+    fn op_bytes(&self) -> Vec<u8> {
+        encode_transfer_op(self)
+    }
+}
 
-    fn as_signing_frs(&self) -> Vec<Fr> {
-        Self::as_signing_frs(self)
+#[derive(Clone, Debug, Error, Eq, PartialEq)]
+pub enum TransferError {
+    #[error("Inputs error: {0}")]
+    Inputs(#[from] ledger::InputsError),
+    #[error("Outputs error: {0}")]
+    Outputs(#[from] ledger::OutputsError),
+    #[error("The Transfer Operation doesn't have any input")]
+    NoInputTransfer,
+    #[error("Applying this transaction would cause a balance overflow")]
+    BalanceOverflow,
+    #[error("Invalid transfer ZkSignature")]
+    InvalidProof,
+}
+
+pub struct TransferValidationContext<'a> {
+    pub locked_notes: &'a LockedNotes,
+    pub utxos: &'a Utxos,
+    pub tx_hash: &'a TxHash,
+    pub transfer_sig: &'a ZkSignature,
+}
+
+impl Operation for TransferOp {
+    type ValidationContext<'a>
+        = TransferValidationContext<'a>
+    where
+        Self: 'a;
+    type ExecutionContext<'a>
+        = Utxos
+    where
+        Self: 'a;
+    type Error = TransferError;
+
+    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+        // Ensure the inputs is non-empty
+        if self.inputs.is_empty() {
+            return Err(TransferError::NoInputTransfer);
+        }
+        // Validate Inputs
+        self.inputs.validate(ctx.locked_notes, ctx.utxos)?;
+        // Validate Outputs
+        self.outputs.validate()?;
+        // Check the transfer Proof
+        let pks = self.inputs.get_pk(ctx.utxos)?;
+        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.0, ctx.transfer_sig) {
+            return Err(TransferError::InvalidProof);
+        }
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        mut utxos: Self::ExecutionContext<'_>,
+    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+        // Remove inputs from the ledger
+        utxos = self.inputs.execute(utxos)?;
+        // Add outputs from the ledger
+        utxos = self.outputs.execute(utxos, self);
+        Ok(utxos)
     }
 }
 
 #[cfg(test)]
 mod test {
-
-    use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_poseidon2::Fr;
     use num_bigint::BigUint;
 
     use super::*;
+    use crate::mantle::{Note, NoteId, Utxo};
 
     #[test]
     fn test_utxo_by_index() {
@@ -85,38 +120,38 @@ mod test {
         let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
         let transfer = TransferOp {
-            inputs: vec![NoteId(BigUint::from(0u8).into())],
-            outputs: vec![
+            inputs: Inputs::new(vec![NoteId(BigUint::from(0u8).into())]),
+            outputs: Outputs::new(vec![
                 Note::new(100, pk0),
                 Note::new(200, pk1),
                 Note::new(300, pk2),
-            ],
+            ]),
         };
         assert_eq!(
-            transfer.utxo_by_index(0),
+            transfer.outputs.utxo_by_index(0, &transfer),
             Some(Utxo {
-                transfer_hash: transfer.hash(),
+                op_id: transfer.op_id(),
                 output_index: 0,
                 note: Note::new(100, pk0),
             })
         );
         assert_eq!(
-            transfer.utxo_by_index(1),
+            transfer.outputs.utxo_by_index(1, &transfer),
             Some(Utxo {
-                transfer_hash: transfer.hash(),
+                op_id: transfer.op_id(),
                 output_index: 1,
                 note: Note::new(200, pk1),
             })
         );
         assert_eq!(
-            transfer.utxo_by_index(2),
+            transfer.outputs.utxo_by_index(2, &transfer),
             Some(Utxo {
-                transfer_hash: transfer.hash(),
+                op_id: transfer.op_id(),
                 output_index: 2,
                 note: Note::new(300, pk2),
             })
         );
 
-        assert!(transfer.utxo_by_index(3).is_none());
+        assert!(transfer.outputs.utxo_by_index(3, &transfer).is_none());
     }
 }

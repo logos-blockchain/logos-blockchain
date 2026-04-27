@@ -7,6 +7,7 @@ use std::{
 
 use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     block::genesis::GenesisBlock,
     mantle::{self},
@@ -30,14 +31,15 @@ use testing_framework_runner_local::{
 use tracing::debug;
 
 use crate::{
-    LOGOS_BLOCKCHAIN_LOG_LEVEL, env as tf_env,
+    LOGOS_BLOCKCHAIN_LOG_LEVEL,
+    diagnostics::{record_system_monitor_event, register_system_monitor_output_file},
+    env as tf_env,
     framework::LbcEnv,
     node::{
         DeploymentPlan, NodeHttpClient, NodePlan,
         configs::{
             Config, Libp2pNetworkLayout, NetworkParams, create_node_config_for_node,
             default_e2e_deployment_settings, deployment::TopologyConfig,
-            key_id_for_preload_backend,
         },
     },
 };
@@ -102,6 +104,13 @@ impl LocalDeployerEnv for LbcEnv {
     fn build_initial_node_configs(
         topology: &Self::Deployment,
     ) -> Result<Vec<NodeConfigEntry<<Self as Application>::NodeConfig>>, ProcessSpawnError> {
+        register_system_monitor_output_file(
+            &topology
+                .config()
+                .scenario_base_dir
+                .join("system_stats.ndjson"),
+        );
+
         topology
             .nodes()
             .iter()
@@ -136,6 +145,12 @@ impl LocalDeployerEnv for LbcEnv {
     ) -> Result<LaunchSpec, DynError> {
         let mut config = config.clone();
         ensure_recovery_paths(dir).map_err(|source| -> DynError { source.into() })?;
+
+        record_system_monitor_event(
+            "node_runtime_prepared",
+            format!("{label}:{}", dir.display()),
+        );
+
         config.user.tracing.level = configured_node_log_level();
 
         if !tf_env::debug_tracing() {
@@ -153,7 +168,9 @@ impl LocalDeployerEnv for LbcEnv {
         Ok(build_node_launch_spec(dir, user_yaml, deployment_yaml))
     }
 
-    fn node_endpoints(config: &<Self as Application>::NodeConfig) -> NodeEndpoints {
+    fn node_endpoints(
+        config: &<Self as Application>::NodeConfig,
+    ) -> Result<NodeEndpoints, DynError> {
         let mut endpoints = NodeEndpoints {
             api: config.user.api.backend.listen_address,
             ..Default::default()
@@ -161,7 +178,7 @@ impl LocalDeployerEnv for LbcEnv {
 
         add_endpoint_ports(&mut endpoints, config);
 
-        endpoints
+        Ok(endpoints)
     }
 
     fn node_peer_port(node: &Node<Self>) -> u16 {
@@ -170,12 +187,12 @@ impl LocalDeployerEnv for LbcEnv {
             .unwrap_or_else(|| node.config().user.network.backend.swarm.port)
     }
 
-    fn node_client(endpoints: &NodeEndpoints) -> Self::NodeClient {
+    fn node_client(endpoints: &NodeEndpoints) -> Result<Self::NodeClient, DynError> {
         let testing_api = endpoints
             .port(&NodeEndpointPort::TestingApi)
             .map(|port| (endpoints.api.ip(), port).into());
 
-        NodeHttpClient::new(endpoints.api, testing_api)
+        Ok(NodeHttpClient::new(endpoints.api, testing_api))
     }
 
     fn readiness_endpoint_path() -> &'static str {
@@ -274,7 +291,7 @@ const fn node_binary_config() -> BinaryConfig {
 fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
     debug!(prefix, base_dir = %base_dir.display(), "configuring node logging");
 
-    if let Some(log_dir) = tf_env::nomos_log_dir() {
+    if let Some(log_dir) = tf_env::logos_blockchain_log_dir() {
         match fs::create_dir_all(&log_dir) {
             Ok(()) => {
                 return logger::Layers {
@@ -458,7 +475,7 @@ pub fn build_node_run_config(
         .genesis_block
         .clone()
         .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
-    Ok(build_run_config(node.general.clone(), genesis_block))
+    Ok(build_run_config(node.general.clone(), &genesis_block))
 }
 
 fn finalize_dynamic_run_config(
@@ -478,10 +495,10 @@ fn finalize_dynamic_run_config(
         return override_config.clone();
     }
 
-    build_run_config(plan.config.clone(), plan.genesis_block.clone())
+    build_run_config(plan.config.clone(), &plan.genesis_block)
 }
 
-fn build_run_config(config: Config, genesis_block: GenesisBlock) -> RunConfig {
+fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
     let deployment_config = default_e2e_deployment_settings(genesis_block);
 
     let user_config = UserConfig {
@@ -504,14 +521,14 @@ fn build_run_config(config: Config, genesis_block: GenesisBlock) -> RunConfig {
         },
         storage: storage::serde::Config::default(),
         sdp: sdp::serde::Config {
-            declaration_id: None,
+            declaration_id: config.sdp_config.declaration_id,
             wallet: sdp::serde::WalletConfig {
                 max_tx_fee: mantle::Value::MAX.into(),
                 funding_pk: config.consensus_config.funding_sk.as_public_key(),
             },
         },
-        wallet: wallet::serde::Config {
-            known_keys: HashMap::from_iter([
+        wallet: {
+            let known_keys: HashMap<_, _> = [
                 (
                     key_id_for_preload_backend(&Key::Zk(config.consensus_config.known_key.clone())),
                     config.consensus_config.known_key.as_public_key(),
@@ -522,10 +539,36 @@ fn build_run_config(config: Config, genesis_block: GenesisBlock) -> RunConfig {
                     )),
                     config.consensus_config.funding_sk.as_public_key(),
                 ),
-            ]),
-            voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
-                config.consensus_config.known_key.clone(),
-            )),
+            ]
+            .into_iter()
+            .chain(config.consensus_config.other_keys.iter().map(|sk| {
+                (
+                    key_id_for_preload_backend(&sk.clone().into()),
+                    sk.as_public_key(),
+                )
+            }))
+            .chain(
+                config
+                    .kms_config
+                    .backend
+                    .keys
+                    .values()
+                    .filter_map(|key| match key {
+                        Key::Zk(sk) => Some((
+                            key_id_for_preload_backend(&Key::Zk(sk.clone())),
+                            sk.as_public_key(),
+                        )),
+                        Key::Ed25519(_) => None,
+                    }),
+            )
+            .collect();
+
+            wallet::serde::Config {
+                known_keys,
+                voucher_master_key_id: key_id_for_preload_backend(&Key::Zk(
+                    config.consensus_config.known_key.clone(),
+                )),
+            }
         },
         kms: config::kms::serde::Config {
             backend: config::kms::serde::PreloadKmsBackendSettings {
@@ -574,8 +617,8 @@ fn build_cryptarchia_user_config(
             bootstrap: service::BootstrapConfig {
                 force_bootstrap: false,
                 offline_grace_period: service::OfflineGracePeriodConfig {
-                    grace_period: Duration::from_secs(20 * 60),
-                    state_recording_interval: Duration::from_secs(60),
+                    grace_period: Duration::from_mins(20),
+                    state_recording_interval: Duration::from_mins(1),
                 },
                 prolonged_bootstrap_period: consensus.prolonged_bootstrap_period,
             },

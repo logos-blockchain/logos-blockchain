@@ -12,7 +12,10 @@ use super::{LbcEnv, deployment_artifacts::add_shared_deployment_file};
 
 #[async_trait]
 impl ComposeDeployEnv for LbcEnv {
-    fn compose_descriptor(topology: &Self::Deployment, cfgsync_port: u16) -> ComposeDescriptor {
+    fn compose_descriptor(
+        topology: &Self::Deployment,
+        cfgsync_port: u16,
+    ) -> Result<ComposeDescriptor, DynError> {
         let cfgsync_port = runtime::normalized_cfgsync_port(cfgsync_port);
         let (image, platform) = runtime::resolve_node_image();
         let nodes = topology
@@ -24,7 +27,7 @@ impl ComposeDeployEnv for LbcEnv {
             })
             .collect();
 
-        ComposeDescriptor::new(nodes)
+        Ok(ComposeDescriptor::new(nodes))
     }
 
     fn enrich_cfgsync_artifacts(

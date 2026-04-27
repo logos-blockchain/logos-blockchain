@@ -31,7 +31,6 @@ tempfile = { workspace = true }
 
 [features]
 default         = []
-mock            = []
 rocksdb-backend = ["dep:rocksdb"]
 
 [[bin]]

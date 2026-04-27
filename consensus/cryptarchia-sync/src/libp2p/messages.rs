@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use lb_core::header::HeaderId;
 use serde::{Deserialize, Serialize};
 
-use crate::SerialisedBlock;
+use crate::{BlocksUnavailableReason, SerialisedBlock};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum RequestMessage {
@@ -59,5 +59,5 @@ pub enum DownloadBlocksResponse {
     /// A response indicating that no more blocks are available.
     NoMoreBlocks,
     /// A response indicating that the request failed.
-    Failure(String),
+    Failure(BlocksUnavailableReason),
 }

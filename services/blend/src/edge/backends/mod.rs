@@ -6,7 +6,6 @@ use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
 
-#[cfg(feature = "libp2p")]
 pub mod libp2p;
 
 /// A trait for blend backends that send messages to the blend network.

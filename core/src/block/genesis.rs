@@ -9,6 +9,7 @@ use crate::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
         gas::GasPrice,
         genesis_tx::{self, GenesisTx},
+        ledger::{Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
         tx::VerificationError,
     },
@@ -110,7 +111,7 @@ pub struct WithInscriptionAndDeclarations {
 
 #[expect(
     clippy::too_long_first_doc_paragraph,
-    reason = "Its actually not that long..."
+    reason = "Necessary documentation"
 )]
 /// Typestate marker: builder holds all three pieces required to assemble a
 /// [`GenesisTx`] — notes, an inscription, and at least one SDP declaration.
@@ -1085,10 +1086,13 @@ impl GenesisBlockBuilder<WithAll> {
                 },
         } = self;
         // Order is important to keep here
-        let ops: Vec<Op> = std::iter::once(Op::Transfer(TransferOp::new(vec![], notes)))
-            .chain(std::iter::once(Op::ChannelInscribe(inscription)))
-            .chain(sdp_declarations.into_iter().map(Op::SDPDeclare))
-            .collect();
+        let ops: Vec<Op> = std::iter::once(Op::Transfer(TransferOp::new(
+            Inputs::new(vec![]),
+            Outputs::new(notes),
+        )))
+        .chain(std::iter::once(Op::ChannelInscribe(inscription)))
+        .chain(sdp_declarations.into_iter().map(Op::SDPDeclare))
+        .collect();
         let n = ops.len();
         let signed_tx = SignedMantleTx::new_unverified(
             MantleTx {
@@ -1096,7 +1100,7 @@ impl GenesisBlockBuilder<WithAll> {
                 execution_gas_price: GasPrice::new(0),
                 storage_gas_price: GasPrice::new(0),
             },
-            vec![OpProof::NoProof; n],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
         );
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
@@ -1178,7 +1182,10 @@ mod tests {
 
     fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx {
         let mut ops = vec![
-            Op::Transfer(TransferOp::new(vec![], vec![make_note(1_000)])),
+            Op::Transfer(TransferOp::new(
+                Inputs::new(vec![]),
+                Outputs::new(vec![make_note(1_000)]),
+            )),
             Op::ChannelInscribe(valid_inscription()),
         ];
         ops.extend(extra_ops);
@@ -1189,7 +1196,7 @@ mod tests {
                 execution_gas_price: GasPrice::new(0),
                 storage_gas_price: GasPrice::new(0),
             },
-            vec![OpProof::NoProof; n],
+            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); n],
         )
     }
 

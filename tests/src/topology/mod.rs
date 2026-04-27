@@ -1,4 +1,3 @@
-pub mod configs;
 use std::{collections::HashSet, time::Duration};
 
 use configs::{
@@ -7,6 +6,8 @@ use configs::{
     network::{NetworkParams, create_network_configs},
     tracing::create_tracing_configs,
 };
+pub use lb_config as configs;
+use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     block::genesis::GenesisBlock,
     mantle::{GenesisTx as _, Note, NoteId},
@@ -19,13 +20,12 @@ use lb_testing_framework::get_reserved_available_udp_port;
 use rand::{Rng as _, thread_rng};
 
 use crate::{
-    common::kms::key_id_for_preload_backend,
     nodes::validator::{Validator, create_validator_config},
     topology::configs::{
         api::create_api_configs,
         blend::{GeneralBlendConfig, create_blend_configs},
         consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
-        deployment::e2e_deployment_settings_with_genesis_tx,
+        deployment::e2e_deployment_settings_with_genesis_block,
         sdp::create_sdp_configs,
         time::set_time_config,
     },
@@ -153,7 +153,7 @@ impl Topology {
         let mut transfer_op = base_transfer_op.clone();
         let base_outputs = transfer_op.outputs.len();
         for note_spec in &config.extra_genesis_notes {
-            transfer_op.outputs.push(note_spec.note);
+            transfer_op.outputs.as_mut().push(note_spec.note);
         }
         let providers: Vec<_> = blend_configs
             .iter()
@@ -174,7 +174,8 @@ impl Topology {
             create_genesis_block_with_declarations(transfer_op, providers, test_context);
         let updated_transfer_op = genesis_block.genesis_tx().genesis_transfer().clone();
         let injected_utxos: Vec<_> = updated_transfer_op
-            .utxos()
+            .outputs
+            .utxos(&updated_transfer_op)
             .skip(base_outputs)
             .collect::<Vec<_>>();
 
@@ -222,7 +223,7 @@ impl Topology {
     ) -> Vec<Validator> {
         let mut validators = Vec::new();
         for general_config in config {
-            let mut deployment = e2e_deployment_settings_with_genesis_tx(genesis_block.clone());
+            let mut deployment = e2e_deployment_settings_with_genesis_block(&genesis_block);
             if let Some(lock_period) = lock_period_override {
                 for params in deployment
                     .cryptarchia
@@ -328,7 +329,7 @@ trait ReadinessCheck<'a> {
     fn timeout_message(&self, data: Self::Data) -> String;
 
     async fn wait(&'a self) {
-        let timeout = tokio::time::timeout(Duration::from_secs(60), async {
+        let timeout = tokio::time::timeout(Duration::from_mins(1), async {
             loop {
                 let data = self.collect().await;
                 if self.is_ready(&data) {

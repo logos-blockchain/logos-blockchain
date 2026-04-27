@@ -14,16 +14,16 @@ pub mod network {
 }
 
 pub(crate) use dynamic::create_node_config_for_node;
+use lb_config::deployment::e2e_deployment_settings_with_genesis_block;
+pub use node_configs::GeneralConfig as Config;
 pub(crate) use node_configs::{
-    GeneralConfig as Config, create_general_configs_from_ids as create_node_configs_from_ids,
+    create_general_configs_from_ids as create_node_configs_from_ids,
     network::{Libp2pNetworkLayout, NetworkParams},
 };
 
-pub(crate) use crate::common::kms::key_id_for_preload_backend;
-
 #[must_use]
 pub fn default_e2e_deployment_settings(
-    genesis_block: lb_core::block::genesis::GenesisBlock,
+    genesis_block: &lb_core::block::genesis::GenesisBlock,
 ) -> DeploymentSettings {
-    node_configs::deployment::e2e_deployment_settings_with_genesis_tx(genesis_block)
+    e2e_deployment_settings_with_genesis_block(genesis_block)
 }

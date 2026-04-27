@@ -1,8 +1,9 @@
 use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 
+use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
-    DeploymentBuilder, LbcEnv, NodeHttpClient, configs::wallet::WalletAccount,
-    internal::DeploymentPlan,
+    DeploymentBuilder, LbcEnv, LbcLocalDeployer, NodeHttpClient, TopologyConfig,
+    configs::wallet::WalletAccount, internal::DeploymentPlan,
 };
 use testing_framework_core::scenario::{StartNodeOptions, StartedNode};
 use tokio::time::{Instant, sleep};
@@ -12,17 +13,40 @@ use crate::cucumber::{
     error::{StepError, StepResult},
     fee_reserve::create_scenario_fee_wallet_account,
     steps::TARGET,
-    world::{CucumberWorld, NodeInfo, WalletInfo, WalletType},
+    world::{
+        CucumberWorld, ManualClusterKind, ManualClusterSpec, NodeInfo, WalletInfo, WalletType,
+    },
 };
+
+fn apply_blend_core_nodes(
+    world: &CucumberWorld,
+    mut config: TopologyConfig,
+    nodes_count: usize,
+) -> Result<TopologyConfig, StepError> {
+    let blend_core_nodes = world.blend_core_nodes.unwrap_or(nodes_count);
+
+    if blend_core_nodes > nodes_count {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "Blend provider count ({blend_core_nodes}) must be <= cluster capacity ({nodes_count})"
+            ),
+        });
+    }
+
+    config = config.with_blend_core_nodes(blend_core_nodes);
+
+    Ok(config)
+}
 
 pub fn build_manual_cluster_deployment(
     world: &mut CucumberWorld,
     nodes_count: usize,
 ) -> Result<DeploymentPlan, StepError> {
-    let mut config = lb_testing_framework::TopologyConfig::with_node_numbers(nodes_count)
+    let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
         .with_test_context(world.test_context.clone());
+    let mut config = apply_blend_core_nodes(world, config, nodes_count)?;
 
     for genesis_token in &world.genesis_tokens {
         let wallet_account = WalletAccount::deterministic(
@@ -70,6 +94,85 @@ pub fn build_manual_cluster_deployment(
     }
 
     Ok(deployment)
+}
+
+pub fn install_local_manual_cluster(
+    world: &mut CucumberWorld,
+    spec: ManualClusterSpec,
+) -> Result<(), StepError> {
+    let deployment = build_manual_cluster_from_spec(world, spec)?;
+    let deployer = LbcLocalDeployer::new();
+    let cluster = deployer.manual_cluster_from_descriptors(deployment);
+
+    world.local_cluster = Some(cluster);
+    world.k8s_manual_cluster = None;
+    world.manual_cluster_spec = Some(spec);
+
+    Ok(())
+}
+
+fn build_devnet_manual_cluster_deployment(
+    world: &mut CucumberWorld,
+    nodes_count: usize,
+) -> Result<DeploymentPlan, StepError> {
+    // For devnet runs we do not allocate genesis tokens/accounts here.
+    // Wallet keys are derived later, and node startup may switch deployment
+    // settings, so locally generated genesis outputs are not meaningful for
+    // wallet tracking.
+    world.genesis_block_utxos.clear();
+    world.wallet_accounts.clear();
+
+    let config = TopologyConfig::with_node_numbers(nodes_count)
+        .with_allow_multiple_genesis_tokens(true)
+        .with_allow_zero_value_genesis_tokens(true)
+        .with_test_context(world.test_context.clone());
+    let config = apply_blend_core_nodes(world, config, nodes_count)?;
+
+    DeploymentBuilder::new(config)
+        .build()
+        .map_err(|e| StepError::LogicalError {
+            message: format!("failed to build devnet manual cluster: {e}"),
+        })
+}
+
+fn build_manual_cluster_from_spec(
+    world: &mut CucumberWorld,
+    spec: ManualClusterSpec,
+) -> Result<DeploymentPlan, StepError> {
+    match spec.kind {
+        ManualClusterKind::Generated => build_manual_cluster_deployment(world, spec.capacity),
+        ManualClusterKind::Devnet => build_devnet_manual_cluster_deployment(world, spec.capacity),
+    }
+}
+
+pub fn rebuild_pending_local_manual_cluster(world: &mut CucumberWorld) -> StepResult {
+    if world.nodes_info.is_empty() {
+        if let Some(spec) = world.manual_cluster_spec {
+            return install_local_manual_cluster(world, spec);
+        }
+
+        return Ok(());
+    }
+
+    Err(StepError::LogicalError {
+        message: "cannot change manual cluster deployment shape after nodes have started".into(),
+    })
+}
+
+pub fn stop_active_manual_cluster(world: &CucumberWorld) -> StepResult {
+    if let Some(cluster) = world.local_cluster.as_ref() {
+        cluster.stop_all();
+        return Ok(());
+    }
+
+    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
+        cluster.stop_all();
+        return Ok(());
+    }
+
+    Err(StepError::LogicalError {
+        message: "No manual cluster available".into(),
+    })
 }
 
 pub async fn start_manual_node(
@@ -147,22 +250,6 @@ pub fn manual_node_client(
     })
 }
 
-pub fn stop_active_manual_cluster(world: &CucumberWorld) -> StepResult {
-    if let Some(cluster) = world.local_cluster.as_ref() {
-        cluster.stop_all();
-        return Ok(());
-    }
-
-    if let Some(cluster) = world.k8s_manual_cluster.as_ref() {
-        cluster.stop_all();
-        return Ok(());
-    }
-
-    Err(StepError::LogicalError {
-        message: "No manual cluster available".into(),
-    })
-}
-
 pub async fn assert_manual_node_has_peers(
     world: &CucumberWorld,
     node_name: &str,
@@ -202,6 +289,46 @@ pub async fn assert_manual_node_has_peers(
     }
 }
 
+pub async fn connect_manual_node_to_node(
+    world: &CucumberWorld,
+    source_node_name: &str,
+    target_node_name: &str,
+) -> StepResult {
+    let source_client = world.resolve_node_http_client(source_node_name)?;
+    let target_client = world.resolve_node_http_client(target_node_name)?;
+    let target_network = target_client.network_info().await?;
+    let target_addr = compose_dial_addr(
+        target_network.listen_addresses.first(),
+        target_network.peer_id,
+    )
+    .ok_or_else(|| StepError::LogicalError {
+        message: format!("node '{target_node_name}' has no listen address to dial"),
+    })?;
+
+    source_client
+        .dial_peer(target_addr)
+        .await
+        .map(|_| ())
+        .map_err(|error| StepError::LogicalError {
+            message: format!(
+                "failed to connect node '{source_node_name}' to node '{target_node_name}': {error}"
+            ),
+        })
+}
+
+fn compose_dial_addr(listen_addr: Option<&Multiaddr>, peer_id: PeerId) -> Option<Multiaddr> {
+    let mut addr = listen_addr?.clone();
+    let has_peer_id = addr
+        .iter()
+        .any(|protocol| matches!(protocol, Protocol::P2p(_)));
+
+    if !has_peer_id {
+        addr.push(Protocol::P2p(peer_id));
+    }
+
+    Some(addr)
+}
+
 pub fn build_user_wallets(
     world: &CucumberWorld,
     node_name: &str,
@@ -236,7 +363,7 @@ pub fn build_user_wallets(
 
 pub fn insert_started_node_info<S: BuildHasher>(
     world: &mut CucumberWorld,
-    logical_node_name: String,
+    logical_node_name: &str,
     started_node: StartedNode<LbcEnv>,
     wallet_info: HashMap<String, WalletInfo, S>,
 ) {
@@ -247,14 +374,15 @@ pub fn insert_started_node_info<S: BuildHasher>(
         .extend(wallet_info.iter().map(|(k, v)| (k.clone(), v.clone())));
 
     world.nodes_info.insert(
-        logical_node_name.clone(),
+        logical_node_name.to_owned(),
         NodeInfo {
-            name: logical_node_name,
+            name: logical_node_name.to_owned(),
             started_node,
             run_config: None,
             chain_info: HashMap::new(),
             wallet_info,
             runtime_dir: std::path::PathBuf::new(),
+            immediate_start: world.network_immediate_start(logical_node_name),
         },
     );
 }

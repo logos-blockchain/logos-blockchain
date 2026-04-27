@@ -24,6 +24,7 @@ reqwest                          = { features = ["json"], workspace = true }
 serde                            = { workspace = true }
 serde_json                       = { workspace = true }
 serde_yaml                       = { workspace = true }
+sysinfo                          = "0.37"
 tempfile                         = { workspace = true }
 testing-framework-core           = { workspace = true }
 testing-framework-runner-compose = { workspace = true }
@@ -51,7 +52,9 @@ lb-libp2p                        = { workspace = true }
 lb-network-service               = { workspace = true }
 lb-node                          = { features = ["testing"], workspace = true }
 lb-time-service                  = { workspace = true }
+lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
+lb_config                        = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = [

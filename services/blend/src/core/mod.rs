@@ -197,7 +197,7 @@ where
             StartingBlendConfig<Backend::Settings>,
         >,
     >;
-    type Message = ServiceMessage<Network::BroadcastSettings>;
+    type Message = ServiceMessage<Network::BroadcastSettings, NodeId>;
 }
 
 #[async_trait]
@@ -292,7 +292,7 @@ where
 
         wait_until_services_are_ready!(
             &overwatch_handle,
-            Some(Duration::from_secs(60)),
+            Some(Duration::from_mins(1)),
             NetworkService<_, _>,
             TimeService<_, _>,
             <MembershipAdapter as membership::Adapter>::Service,
@@ -817,6 +817,10 @@ where
 //
 // Returns the old session components when the node is no longer a core node.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this at some point"
+)]
 async fn run_event_loop<
     NodeId,
     Backend,
@@ -828,7 +832,9 @@ async fn run_event_loop<
     CorePoQGenerator,
     RuntimeServiceId,
 >(
-    mut inbound_relay: impl Stream<Item = ServiceMessage<NetAdapter::BroadcastSettings>> + Send + Unpin,
+    mut inbound_relay: impl Stream<Item = ServiceMessage<NetAdapter::BroadcastSettings, NodeId>>
+    + Send
+    + Unpin,
     blend_messages: &mut (
              impl Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)> + Send + Unpin + 'static
          ),
@@ -902,13 +908,21 @@ where
 
     loop {
         tokio::select! {
-            Some(ServiceMessage::Blend(message_payload)) = inbound_relay.next() => {
-                // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
-                let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
+            Some(msg) = inbound_relay.next() => {
+                match msg {
+                    ServiceMessage::Blend(message_payload) => {
+                        // We serialize here, outside of the handler function, so that we can serialize only once for all replicas.
+                        let serialized_data_message = NetworkMessage::<NetAdapter::BroadcastSettings>::to_bytes(&message_payload).expect("NetworkMessage should be able to be serialized");
 
-                let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
-                for _ in 0..message_copies {
-                    recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                        let message_copies = blend_config.data_replication_factor.checked_add(1).unwrap();
+                        for _ in 0..message_copies {
+                            recovery_checkpoint = handle_serialized_local_data_message(&serialized_data_message, &mut crypto_processor, &mut message_scheduler, recovery_checkpoint).await;
+                        }
+                    }
+                    ServiceMessage::GetNetworkInfo { reply } => {
+                        let info = backend.network_info().await;
+                        drop(reply.send(info));
+                    }
                 }
             }
             Some(incoming_message) = blend_messages.next() => {
@@ -1869,10 +1883,7 @@ where
 
     // Release all messages concurrently, and wait for all of them to be sent.
     join_all(message_futures).await;
-    tracing::debug!(
-        target: LOG_TARGET,
-        "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
-    );
+    log_release_window_summary(data_count, processed_count, cover_count);
 
     state_updater.commit_changes()
 }
@@ -1901,10 +1912,35 @@ async fn handle_release_round_for_old_session<NodeId, Rng, Backend, NetAdapter, 
     // Release all messages concurrently, and wait for all of them to be sent.
     let num_futures = futures.len();
     join_all(futures).await;
-    tracing::debug!(
-        target: LOG_TARGET,
-        "Sent out {num_futures} processed messages at this release window for the old session"
-    );
+    log_old_session_release_summary(num_futures);
+}
+
+fn log_release_window_summary(data_count: usize, processed_count: usize, cover_count: usize) {
+    if data_count > 0 || processed_count > 0 {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
+        );
+    } else {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Sent out {data_count} data, {processed_count} processed and {cover_count} cover messages at this release window."
+        );
+    }
+}
+
+fn log_old_session_release_summary(num_futures: usize) {
+    if num_futures > 0 {
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Sent out {num_futures} processed messages at this release window for the old session"
+        );
+    } else {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Sent out {num_futures} processed messages at this release window for the old session"
+        );
+    }
 }
 
 fn build_futures_to_release_processed_messages<

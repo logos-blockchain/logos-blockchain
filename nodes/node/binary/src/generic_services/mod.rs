@@ -82,7 +82,6 @@ pub type CryptarchiaLeaderService<Cryptarchia, ChainNetwork, Wallet, RuntimeServ
         Cryptarchia,
         ChainNetwork,
         Wallet,
-        lb_blend_service::core::network::libp2p::Libp2pAdapter<RuntimeServiceId>,
         RuntimeServiceId,
     >;
 

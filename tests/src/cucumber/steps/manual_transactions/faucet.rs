@@ -139,7 +139,7 @@ impl FaucetTask {
                 Ok(response) => {
                     if !response.status().is_success() {
                         last_err = Some(
-                            format!("[check_block_height] HTTP {} from {url}", response.status(),)
+                            format!("[check_block_height] HTTP {} from {url}", response.status())
                                 .into(),
                         );
                         continue;
@@ -202,12 +202,7 @@ impl FaucetTask {
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
         json.get("hash").and_then(|v| v.as_str()).map_or_else(
-            || {
-                Err(
-                    format!("[request_funds] Missing or invalid `hash` in response: {body}",)
-                        .into(),
-                )
-            },
+            || Err(format!("[request_funds] Missing or invalid `hash` in response: {body}").into()),
             |hash| Ok(hash.to_owned()),
         )
     }

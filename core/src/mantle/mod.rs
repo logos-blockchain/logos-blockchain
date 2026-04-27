@@ -3,11 +3,11 @@ use std::{hash::Hash, pin::Pin};
 use futures::Stream;
 use thiserror::Error;
 
+pub mod channel;
 pub mod encoding;
 pub mod gas;
 pub mod genesis_tx;
 pub mod ledger;
-#[cfg(feature = "mock")]
 pub mod mock;
 pub mod ops;
 pub mod select;

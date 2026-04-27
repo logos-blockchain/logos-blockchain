@@ -18,9 +18,9 @@ futures                 = { workspace = true }
 lb-chain-service        = { workspace = true }
 lb-chain-service-common = { workspace = true }
 lb-core                 = { workspace = true }
-lb-cryptarchia-engine   = { features = ["serde"], workspace = true }
+lb-cryptarchia-engine   = { workspace = true }
 lb-cryptarchia-sync     = { workspace = true }
-lb-ledger               = { features = ["serde"], workspace = true }
+lb-ledger               = { workspace = true }
 lb-network-service      = { workspace = true }
 lb-services-utils       = { workspace = true }
 lb-time-service         = { workspace = true }
@@ -37,10 +37,9 @@ tracing                 = { workspace = true }
 tracing-futures         = { default-features = false, version = "0.2" }
 
 [dev-dependencies]
-lb-core            = { features = ["mock"], workspace = true }
-lb-network-service = { features = ["mock"], workspace = true }
+lb-core            = { workspace = true }
+lb-network-service = { workspace = true }
 lb-utils           = { workspace = true }
 
 [features]
 default = []
-libp2p  = ["lb-network-service/libp2p"]

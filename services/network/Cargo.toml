@@ -17,11 +17,11 @@ async-trait         = "0.1"
 futures             = { workspace = true }
 lb-core             = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }
-lb-libp2p           = { optional = true, workspace = true }
+lb-libp2p           = { workspace = true }
 lb-tracing          = { workspace = true }
 overwatch           = { workspace = true }
-rand                = { features = ["std"], optional = true, workspace = true }
-rand_chacha         = { default-features = false, optional = true, version = "0.3" }
+rand                = { features = ["std"], workspace = true }
+rand_chacha         = { default-features = false, version = "0.3" }
 serde               = { features = ["derive"], workspace = true }
 tokio               = { features = ["macros", "sync"], workspace = true }
 tokio-stream        = { workspace = true }
@@ -35,6 +35,4 @@ tracing-subscriber = { default-features = false, features = ["env-filter", "fmt"
 
 [features]
 default = []
-libp2p  = ["dep:lb-libp2p", "dep:rand", "dep:rand_chacha", "lb-cryptarchia-sync/libp2p"]
-mock    = ["dep:rand", "dep:rand_chacha"]
 openapi = ["dep:utoipa"]

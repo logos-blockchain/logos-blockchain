@@ -8,8 +8,6 @@ services:
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
-    environment:
-      - ENTROPY_FILE=${ENTROPY_FILE:-/etc/logos-blockchain/entropy}
     ports:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_server.sh
@@ -80,17 +78,20 @@ services:
 
   nginx:
     container_name: nginx
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: docker.io/library/nginx:stable-trixie-perl
     ports:
       - "13000:13000"
       - "13001:13001"
     depends_on:
       - cfgsync
+    environment:
+      - ENV_TITLE_STRING=${ENV_TITLE_STRING}
     volumes:
       - node-data:/node-data
-      - ./testnet/nginx/setup.conf:/etc/nginx/nginx.conf:ro
-      - ./testnet/nginx/static/setup:/usr/share/nginx/html:ro
-    entrypoint: [ "nginx", "-g", "daemon off;" ]
+      - ./testnet/nginx/setup.conf:/etc/nginx/nginx.conf
+      - ./testnet/nginx/static/setup:/usr/share/nginx/html_template
+      - ./testnet/scripts/setup_nginx.sh:/etc/setup_nginx.sh
+    entrypoint: /etc/setup_nginx.sh
 
 volumes:
   node-data:

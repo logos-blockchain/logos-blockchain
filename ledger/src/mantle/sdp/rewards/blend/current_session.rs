@@ -25,8 +25,7 @@ use crate::{
 /// Immutable state of the current session.
 /// The current session is `s` if `s-1` is the target session for which rewards
 /// are being calculated.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CurrentSessionState {
     /// Current session randomness
     session_randomness: SessionRandomness,
@@ -45,8 +44,7 @@ impl CurrentSessionState {
 /// Collects epoch states seen in the current session.
 /// The current session is `s` if `s-1` is the target session for which rewards
 /// are being calculated.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CurrentSessionTracker {
     /// Collecting leader inputs derived from epoch states seen in the current
     /// session. These will be used to create proof verifiers after the next

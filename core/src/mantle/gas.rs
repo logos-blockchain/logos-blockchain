@@ -170,13 +170,13 @@ pub trait GasConstants {
 pub struct MainnetGasConstants;
 
 impl GasConstants for MainnetGasConstants {
-    const TRANSFER: Gas = Gas(2705);
-    const CHANNEL_INSCRIBE: Gas = Gas(22);
-    const CHANNEL_SET_KEYS: Gas = Gas(22);
-    const CHANNEL_DEPOSIT: Gas = Gas(0);
-    const CHANNEL_WITHDRAW: Gas = Gas(22);
-    const SDP_DECLARE: Gas = Gas(2727);
-    const SDP_WITHDRAW: Gas = Gas(2705);
-    const SDP_ACTIVE: Gas = Gas(2705);
-    const LEADER_CLAIM: Gas = Gas(1150);
+    const TRANSFER: Gas = Gas(590);
+    const CHANNEL_INSCRIBE: Gas = Gas(56);
+    const CHANNEL_SET_KEYS: Gas = Gas(56);
+    const CHANNEL_DEPOSIT: Gas = Gas(590);
+    const CHANNEL_WITHDRAW: Gas = Gas(56);
+    const SDP_DECLARE: Gas = Gas(646);
+    const SDP_WITHDRAW: Gas = Gas(590);
+    const SDP_ACTIVE: Gas = Gas(590);
+    const LEADER_CLAIM: Gas = Gas(580);
 }

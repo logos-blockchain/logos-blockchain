@@ -1,11 +1,13 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, Value, ops::leader_claim::VoucherCm, tx::MantleTxContext,
+        Note, SignedMantleTx, TxHash, Value, ops::leader_claim::VoucherCm, tx::MantleTxContext,
         tx_builder::MantleTxBuilder,
     },
 };
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{
+    Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey,
+};
 use lb_wallet::WalletBalance;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -169,6 +171,42 @@ where
             .send(WalletMsg::SignTx {
                 tip,
                 tx_builder,
+                resp_tx,
+            })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
+    pub async fn sign_tx_with_ed25519(
+        &self,
+        tx_hash: TxHash,
+        pk: <Ed25519Key as SecuredKey>::PublicKey,
+    ) -> Result<<Ed25519Key as SecuredKey>::Signature, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::SignTxWithEd25519 {
+                tx_hash,
+                pk,
+                resp_tx,
+            })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
+    pub async fn sign_tx_with_zk(
+        &self,
+        tx_hash: TxHash,
+        pks: Vec<ZkPublicKey>,
+    ) -> Result<ZkSignature, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::SignTxWithZk {
+                tx_hash,
+                pks,
                 resp_tx,
             })
             .await?;

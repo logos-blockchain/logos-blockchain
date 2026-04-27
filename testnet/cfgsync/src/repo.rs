@@ -5,18 +5,18 @@ use std::{
     time::Duration,
 };
 
+use lb_config::GeneralConfig;
 use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
 };
-use lb_tests::topology::configs::GeneralConfig;
 use time::OffsetDateTime;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
     Entropy, FaucetSettings, Host,
     config::{create_node_config_from_template, create_node_configs},
-    load_entropy,
+    load_entropy, random_entropy,
     server::CfgSyncConfig,
 };
 
@@ -40,7 +40,13 @@ pub struct ConfigRepo {
 
 impl From<CfgSyncConfig> for Arc<ConfigRepo> {
     fn from(config: CfgSyncConfig) -> Self {
-        let entropy = load_entropy(&config.entropy_file).expect("Failed to load entropy file");
+        let entropy = config
+            .entropy_file
+            .as_ref()
+            .map_or_else(random_entropy, |path| {
+                load_entropy(path).expect("Failed to load entropy file")
+            });
+
         ConfigRepo::new(
             config.n_hosts,
             entropy,
@@ -147,7 +153,7 @@ impl ConfigRepo {
             );
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
-                default_settings.cryptarchia.genesis_state = genesis_block;
+                default_settings.cryptarchia.genesis_block = genesis_block;
                 default_settings.cryptarchia.faucet_pk = faucet_pk;
                 default_settings.time.chain_start_time = self.chain_start_time;
                 default_settings

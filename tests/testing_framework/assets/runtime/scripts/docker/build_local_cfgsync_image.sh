@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 STACK_DIR="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REPO_ROOT="$(cd "${STACK_DIR}/../../../.." && pwd)"
-TESTING_ROOT="$(cd "${REPO_ROOT}/../nomos-testing" && pwd)"
+TESTING_ROOT="$(cd "${REPO_ROOT}/../logos-blockchain-testing" && pwd)"
 
 IMAGE_TAG="${1:-logos-blockchain-cfgsync-testing:local}"
 FORCE_REBUILD="${LOGOS_FORCE_IMAGE_REBUILD:-0}"
@@ -23,7 +23,7 @@ echo "Building cfgsync image ${IMAGE_TAG} from ${STACK_DIR}/Dockerfile.cfgsync"
 docker buildx build \
   --load \
   --pull \
-  --build-context "nomos_testing=${TESTING_ROOT}" \
+  --build-context "logos_blockchain_testing=${TESTING_ROOT}" \
   -f "${STACK_DIR}/Dockerfile.cfgsync" \
   -t "${IMAGE_TAG}" \
   "${REPO_ROOT}"

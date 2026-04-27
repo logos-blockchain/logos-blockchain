@@ -20,7 +20,7 @@ pub struct Settings {
     pub learning_rate: NonNegativeF64,
     pub sdp_config: SdpConfig,
     pub gossipsub_protocol: String,
-    pub genesis_state: GenesisBlock,
+    pub genesis_block: GenesisBlock,
     #[serde(default)]
     pub faucet_pk: Option<ZkPublicKey>,
 }

@@ -1,4 +1,3 @@
-#[cfg(feature = "deser")]
 pub mod deserialize;
 
 use core::fmt::{self, Debug, Formatter};
@@ -8,14 +7,12 @@ use ark_ec::pairing::Pairing;
 use ark_serialize::{CanonicalDeserialize, CanonicalSerialize as _, SerializationError};
 use generic_array::{ArrayLength, GenericArray, typenum::Unsigned as _};
 
-#[cfg(feature = "deser")]
-use crate::from_json_error::FromJsonError;
-#[cfg(feature = "deser")]
 pub use crate::proof::deserialize::ProofJsonDeser;
-#[cfg(feature = "deser")]
-use crate::protocol::Protocol;
-#[cfg(feature = "deser")]
-use crate::utils::{JsonG1, JsonG2, StringifiedG1, StringifiedG2};
+use crate::{
+    from_json_error::FromJsonError,
+    protocol::Protocol,
+    utils::{JsonG1, JsonG2, StringifiedG1, StringifiedG2},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Proof<E: Pairing> {
@@ -111,7 +108,6 @@ impl<E: Pairing> From<&Proof<E>> for ark_groth16::Proof<E> {
     }
 }
 
-#[cfg(feature = "deser")]
 impl TryFrom<ProofJsonDeser> for Proof<Bn254> {
     type Error = FromJsonError;
     fn try_from(value: ProofJsonDeser) -> Result<Self, Self::Error> {

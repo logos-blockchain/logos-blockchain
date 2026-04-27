@@ -18,9 +18,8 @@ fn create_tempdir() -> std::io::Result<TempDir> {
     // It's easier to use the current location instead of OS-default tempfile
     // location because Github Actions can easily access files in the current
     // location using wildcard to upload them as artifacts.
-    let mut suffix = "_".to_owned();
-    suffix.push_str(std::thread::current().name().unwrap_or("NODE"));
-    TempDir::with_suffix_in(&suffix, std::env::current_dir()?)
+    let prefix = format!(".run_{}_", std::thread::current().name().unwrap_or("NODE"));
+    TempDir::with_prefix_in(prefix, std::env::current_dir()?)
 }
 
 fn persist_tempdir(tempdir: &mut TempDir, label: &str) -> std::io::Result<()> {
@@ -33,6 +32,21 @@ fn persist_tempdir(tempdir: &mut TempDir, label: &str) -> std::io::Result<()> {
     let dir = std::mem::replace(tempdir, tempfile::tempdir()?);
     drop(dir.keep());
     Ok(())
+}
+
+#[must_use]
+pub fn current_test_system_stats_file() -> PathBuf {
+    let current_thread = std::thread::current();
+    let thread_name = current_thread.name().unwrap_or("NODE");
+    let thread_slug = thread_name
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+
+    std::env::current_dir().unwrap().join(format!(
+        ".run_{thread_slug}_{}_system_stats.ndjson",
+        std::process::id()
+    ))
 }
 
 #[must_use]

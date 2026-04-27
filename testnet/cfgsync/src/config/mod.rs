@@ -1,10 +1,22 @@
-mod blend;
 mod consensus;
-mod kms;
 
 use std::{collections::HashMap, net::Ipv4Addr, str::FromStr as _};
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
+use lb_config::{
+    GeneralConfig,
+    api::GeneralApiConfig,
+    blend::{GeneralBlendConfig, create_blend_configs_with_listening_host},
+    consensus::{
+        GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
+        create_genesis_block_with_declarations,
+    },
+    kms::create_kms_configs,
+    network::{NetworkParams, create_network_configs},
+    sdp::{GeneralSdpConfig, create_sdp_configs},
+    time::set_time_config,
+    tracing::GeneralTracingConfig,
+};
 use lb_core::{
     block::genesis::GenesisBlock,
     mantle::GenesisTx as _,
@@ -13,29 +25,15 @@ use lb_core::{
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, multiaddr};
 use lb_node::config::{TracingConfig, network::serde as network, tracing::serde as tracing};
-use lb_tests::topology::configs::{
-    GeneralConfig,
-    api::GeneralApiConfig,
-    blend::GeneralBlendConfig,
-    consensus::{
-        GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
-        create_genesis_block_with_declarations,
-    },
-    network::{NetworkParams, create_network_configs},
-    sdp::{GeneralSdpConfig, create_sdp_configs},
-    time::set_time_config,
-    tracing::GeneralTracingConfig,
-};
 use rand::{Rng as _, thread_rng};
 
-use crate::{
-    Entropy, FaucetSettings, Host,
-    config::{
-        blend::create_blend_configs, consensus::create_consensus_configs, kms::create_kms_configs,
-    },
-};
+use crate::{Entropy, FaucetSettings, Host, config::consensus::create_consensus_configs};
 
 type HostId = [u8; 32];
+
+const BIND_HOST: &str = "0.0.0.0";
+
+const LIBP2P_QUIC_PROTOCOL_SUFFIX: &str = "/quic-v1";
 
 #[must_use]
 pub fn host_to_id(entropy: &Entropy, identifier: &str) -> HostId {
@@ -71,8 +69,9 @@ pub fn create_node_configs(
     );
     let faucet_pk = faucet_info.as_ref().map(|f| f.pk);
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
-    let blend_configs = create_blend_configs(
+    let blend_configs = create_blend_configs_with_listening_host(
         &ids,
+        BIND_HOST,
         hosts
             .iter()
             .map(|h| h.blend_port)
@@ -82,8 +81,8 @@ pub fn create_node_configs(
     let api_configs = hosts
         .iter()
         .map(|host| GeneralApiConfig {
-            address: format!("0.0.0.0:{}", host.api_port).parse().unwrap(),
-            testing_http_address: format!("0.0.0.0:{}", host.api_port).parse().unwrap(),
+            address: format!("{BIND_HOST}:{}", host.api_port).parse().unwrap(),
+            testing_http_address: format!("{BIND_HOST}:{}", host.api_port).parse().unwrap(),
         })
         .collect::<Vec<_>>();
     let mut configured_hosts = HashMap::new();
@@ -100,7 +99,11 @@ pub fn create_node_configs(
 
     // Set Blend keys in KMS of each node config.
     // Give faucet SK to all nodes so the faucet service can route to any node.
-    let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, faucet_info.as_ref());
+    let shared_keys = faucet_info
+        .as_ref()
+        .map(|faucet| vec![faucet.sk.clone().into()]);
+    let kms_configs =
+        create_kms_configs(&blend_configs, &consensus_configs, shared_keys.as_deref());
 
     let sdp_configs =
         create_sdp_configs(&genesis_block_with_declarations.genesis_tx(), hosts.len());
@@ -120,7 +123,7 @@ pub fn create_node_configs(
 
         // Libp2p network config.
         let mut network_config = network_configs[i].clone();
-        network_config.backend.swarm.host = Ipv4Addr::from_str("0.0.0.0").unwrap();
+        network_config.backend.swarm.host = Ipv4Addr::from_str(BIND_HOST).unwrap();
         network_config.backend.swarm.port = host.network_port;
         network_config
             .backend
@@ -128,8 +131,8 @@ pub fn create_node_configs(
             .clone_from(&host_network_init_peers);
         network_config.backend.swarm.nat = network::nat::Config::Static {
             external_address: Multiaddr::from_str(&format!(
-                "/ip4/{}/udp/{}/quic-v1",
-                host.ip, host.network_port
+                "/ip4/{}/udp/{}{}",
+                host.ip, host.network_port, LIBP2P_QUIC_PROTOCOL_SUFFIX
             ))
             .unwrap(),
         };
@@ -176,12 +179,13 @@ pub fn create_node_config_from_template(
         &FaucetSettings::default(),
     );
     let network_configs = create_network_configs(&ids, &NetworkParams::default());
-    let blend_configs = create_blend_configs(&ids, &[new_host.blend_port]);
+    let blend_configs =
+        create_blend_configs_with_listening_host(&ids, BIND_HOST, &[new_host.blend_port]);
 
     let kms_configs = create_kms_configs(&blend_configs, &consensus_configs, None);
 
     let mut network_config = network_configs[0].clone();
-    network_config.backend.swarm.host = Ipv4Addr::from_str("0.0.0.0").unwrap();
+    network_config.backend.swarm.host = Ipv4Addr::from_str(BIND_HOST).unwrap();
     network_config.backend.swarm.port = new_host.network_port;
 
     network_config
@@ -191,8 +195,8 @@ pub fn create_node_config_from_template(
 
     network_config.backend.swarm.nat = network::nat::Config::Static {
         external_address: Multiaddr::from_str(&format!(
-            "/ip4/{}/udp/{}/quic-v1",
-            new_host.ip, new_host.network_port
+            "/ip4/{}/udp/{}{}",
+            new_host.ip, new_host.network_port, LIBP2P_QUIC_PROTOCOL_SUFFIX
         ))
         .unwrap(),
     };
@@ -202,8 +206,12 @@ pub fn create_node_config_from_template(
         network_config,
         blend_config: blend_configs[0].clone(),
         api_config: GeneralApiConfig {
-            address: format!("0.0.0.0:{}", new_host.api_port).parse().unwrap(),
-            testing_http_address: format!("0.0.0.0:{}", new_host.api_port).parse().unwrap(),
+            address: format!("{BIND_HOST}:{}", new_host.api_port)
+                .parse()
+                .unwrap(),
+            testing_http_address: format!("{BIND_HOST}:{}", new_host.api_port)
+                .parse()
+                .unwrap(),
         },
         tracing_config: update_tracing_identifier(tracing_settings.clone(), &new_host.identifier),
         time_config: template.time_config.clone(),
@@ -228,8 +236,8 @@ fn create_providers(
             zk_sk: secret_zk_key.clone(),
             locator: Locator(
                 Multiaddr::from_str(&format!(
-                    "/ip4/{}/udp/{}/quic-v1",
-                    hosts[i].ip, hosts[i].blend_port
+                    "/ip4/{}/udp/{}{}",
+                    hosts[i].ip, hosts[i].blend_port, LIBP2P_QUIC_PROTOCOL_SUFFIX
                 ))
                 .unwrap(),
             ),
@@ -290,10 +298,10 @@ mod cfgsync_tests {
     use std::{net::Ipv4Addr, str::FromStr as _};
 
     use ::tracing::Level;
+    use lb_config::kms::key_id_for_preload_backend;
     use lb_core::mantle::GenesisTx as _;
     use lb_libp2p::{Multiaddr, Protocol, ed25519};
     use lb_node::config::{TracingConfig, tracing::serde as tracing};
-    use lb_tests::common::kms::key_id_for_preload_backend;
 
     use super::{Host, create_node_configs};
     use crate::{

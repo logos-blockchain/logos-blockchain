@@ -1,3 +1,4 @@
+use lb_config::kms::key_id_for_preload_backend;
 use lb_key_management_system_service::keys::Key;
 use lb_libp2p::Multiaddr;
 use lb_node::config::KmsConfig;
@@ -8,6 +9,7 @@ use super::node_configs::{
     blend::GeneralBlendConfig,
     consensus::{GeneralConsensusConfig, SHORT_PROLONGED_BOOTSTRAP_PERIOD},
     network::NetworkParams,
+    sdp::GeneralSdpConfig,
     time::GeneralTimeConfig,
 };
 
@@ -69,6 +71,9 @@ pub fn create_node_config_for_node(
         tracing_config,
         time_config: time_config.clone(),
         kms_config,
+        sdp_config: GeneralSdpConfig {
+            declaration_id: None,
+        },
     })
 }
 
@@ -106,13 +111,15 @@ fn build_kms_config_for_node(
                     Key::Zk(secret_zk_key.clone()),
                 ),
                 (
-                    super::key_id_for_preload_backend(&Key::Zk(consensus_config.known_key.clone())),
+                    key_id_for_preload_backend(&Key::Zk(consensus_config.blend_note.sk.clone())),
+                    Key::Zk(consensus_config.blend_note.sk.clone()),
+                ),
+                (
+                    key_id_for_preload_backend(&Key::Zk(consensus_config.known_key.clone())),
                     Key::Zk(consensus_config.known_key.clone()),
                 ),
                 (
-                    super::key_id_for_preload_backend(&Key::Zk(
-                        consensus_config.funding_sk.clone(),
-                    )),
+                    key_id_for_preload_backend(&Key::Zk(consensus_config.funding_sk.clone())),
                     Key::Zk(consensus_config.funding_sk.clone()),
                 ),
             ]

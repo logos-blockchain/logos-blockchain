@@ -30,7 +30,7 @@ const fn default_timeout() -> Duration {
 }
 
 const fn default_lifetime() -> Duration {
-    Duration::from_secs(7200) // 2 hours
+    Duration::from_hours(2)
 }
 
 const fn default_max_retries() -> u32 {

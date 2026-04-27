@@ -9,8 +9,11 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use multiaddr::Multiaddr;
 
 use crate::{
-    LogosBlockchainNode, api::sdp::post_declaration_sync, errors::OperationStatus,
-    result::ValueResult, return_error_if_null_pointer, unwrap_or_return_err,
+    LogosBlockchainNode,
+    api::sdp::post_declaration_sync,
+    errors::OperationStatus,
+    result::{FfiStatusResult, StatusResult},
+    return_error_if_null_pointer, unwrap_or_return_error,
 };
 
 pub const KEY_SIZE: usize = 32;
@@ -51,10 +54,7 @@ unsafe fn parse_locked_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus
     })
 }
 
-unsafe fn parse_locators(
-    ptrs: *const *const c_char,
-    len: usize,
-) -> Result<Vec<Locator>, OperationStatus> {
+unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult<Vec<Locator>> {
     let locator_ptrs = unsafe { std::slice::from_raw_parts(ptrs, len) };
     let mut parsed = Vec::with_capacity(len);
     for (i, &ptr) in locator_ptrs.iter().enumerate() {
@@ -92,7 +92,7 @@ unsafe fn parse_locators(
 ///
 /// # Returns
 ///
-/// A [`ValueResult`] containing the declaration ID as a 32-byte array on
+/// A [`FfiStatusResult`] containing the declaration ID as a 32-byte array on
 /// success, or an [`OperationStatus`] error on failure.
 ///
 /// # Safety
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     locked_note_id: *const u8,
     locators: *const *const c_char,
     locators_len: usize,
-) -> ValueResult<DeclarationId, OperationStatus> {
+) -> FfiStatusResult<DeclarationId> {
     return_error_if_null_pointer!("blend_join_as_core_node", node);
     return_error_if_null_pointer!("blend_join_as_core_node", provider_id);
     return_error_if_null_pointer!("blend_join_as_core_node", zk_id);
@@ -115,10 +115,10 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         return_error_if_null_pointer!("blend_join_as_core_node", locators);
     }
 
-    let provider_id = unwrap_or_return_err!(unsafe { parse_provider_id(provider_id) });
-    let zk_id = unwrap_or_return_err!(unsafe { parse_zk_id(zk_id) });
-    let locked_note_id = unwrap_or_return_err!(unsafe { parse_locked_note_id(locked_note_id) });
-    let locators = unwrap_or_return_err!(unsafe { parse_locators(locators, locators_len) });
+    let provider_id = unwrap_or_return_error!(unsafe { parse_provider_id(provider_id) });
+    let zk_id = unwrap_or_return_error!(unsafe { parse_zk_id(zk_id) });
+    let locked_note_id = unwrap_or_return_error!(unsafe { parse_locked_note_id(locked_note_id) });
+    let locators = unwrap_or_return_error!(unsafe { parse_locators(locators, locators_len) });
 
     let node = unsafe { &*node };
 
@@ -130,6 +130,10 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         locked_note_id,
     };
     post_declaration_sync(node, join_blend_as_core_node_message)
+        .inspect_err(|(message, _operation_status)| {
+            log::error!("[blend_join_as_core_node] Failed to post declaration: {message}");
+        })
+        .map_err(|(_message, operation_status)| operation_status)
         .map(DeclarationId::from)
         .into()
 }

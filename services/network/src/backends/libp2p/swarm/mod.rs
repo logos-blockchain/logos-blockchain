@@ -231,6 +231,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 let info = Libp2pInfo {
                     listen_addresses: swarm.listeners().cloned().collect(),
                     peer_id: *swarm.local_peer_id(),
+                    connected_peers: swarm.connected_peers().copied().collect(),
                     n_peers: network_info.num_peers(),
                     n_connections: counters.num_connections(),
                     n_pending_connections: counters.num_pending(),
@@ -480,11 +481,11 @@ mod tests {
                 .await
                 .expect("Failed to send dump command");
 
-                let routing_table = dump_rx.await.expect("Failed to receive routing table dump");
-
-                let routing_table = routing_table
-                    .into_iter()
-                    .flat_map(|(_, peers)| peers)
+                let routing_table = dump_rx
+                    .await
+                    .expect("Failed to receive routing table dump")
+                    .into_values()
+                    .flatten()
                     .collect::<Vec<_>>();
 
                 if routing_table.len() >= NODE_COUNT - 1 {

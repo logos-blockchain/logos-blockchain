@@ -10,13 +10,15 @@ use lb_core::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
-        ops::transfer::TransferOp,
+        ledger::Operation as _,
+        ops::transfer::{TransferOp, TransferValidationContext},
     },
     proofs::leader_proof::{self, LeaderPublic},
+    sdp::locked_notes::LockedNotes,
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::ZkSignature;
 use lb_utxotree::MerklePath;
 
 use crate::cryptarchia::{
@@ -45,17 +47,16 @@ const STORAGE_MARKET_CLAMP_DOWN_NUMERATOR: u128 = 7;
 const STORAGE_MARKET_CLAMP_UP_NUMERATOR: u128 = 9;
 
 pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
-use super::{Balance, Config, LedgerError};
-use crate::{WINDOW_SIZE, mantle::sdp::locked_notes::LockedNotes};
+use super::{Balance, Config, LedgerError, mantle};
+use crate::WINDOW_SIZE;
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct EpochState {
     /// The epoch this snapshot is for
     pub epoch: Epoch,
     /// value of the ledger nonce after `epoch_period_nonce_buffer` slots from
     /// the beginning of the epoch
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     pub nonce: Fr,
     /// stake distribution snapshot taken at the beginning of the epoch
     /// (in practice, this is equivalent to the utxos the are spendable at the
@@ -63,9 +64,9 @@ pub struct EpochState {
     pub utxos: UtxoTree,
     pub total_stake: Value,
     /// Lottery values computed based on `total_stake`
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_0: Fr,
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_1: Fr,
 }
 
@@ -133,15 +134,14 @@ impl EpochState {
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Derivative)]
+#[derive(Derivative, serde::Serialize, serde::Deserialize)]
 #[derivative(Clone, Eq, PartialEq)]
 pub struct LedgerState {
     // All available Unspent Transtaction Outputs (UTXOs) at the current slot
     // TODO: move UTXOs in the mantle ledger. There is no reason to keep them here
     pub utxos: UtxoTree,
     // randomness contribution
-    #[cfg_attr(feature = "serde", serde(with = "lb_groth16::serde::serde_fr"))]
+    #[serde(with = "lb_groth16::serde::serde_fr")]
     pub nonce: Fr,
     pub slot: Slot,
     // rolling snapshot of the state for the next epoch, used for epoch transitions
@@ -153,7 +153,7 @@ pub struct LedgerState {
     #[derivative(PartialEq = "ignore")]
     stake_inference: Arc<StakeInference>,
     // rolling fee window of 120 blocks, used to derive block rewards
-    #[cfg_attr(feature = "serde", serde(with = "serde_arrays"))]
+    #[serde(with = "serde_arrays")]
     fee_window: [GasCost; WINDOW_SIZE],
     // Smoothed Average Execution Gas used up to the last block
     average_execution_gas: Gas,
@@ -411,36 +411,25 @@ impl LedgerState {
         transfer_sig: &ZkSignature,
         tx_hash: TxHash,
     ) -> Result<(Self, Balance), LedgerError<Id>> {
-        let mut balance: i128 = 0;
-        let mut pks: Vec<ZkPublicKey> = vec![];
-        for input in &transfer_op.inputs {
-            if locked_notes.contains(input) {
-                return Err(LedgerError::LockedNote(*input));
-            }
-            let utxo;
-            (self.utxos, utxo) = self
-                .utxos
-                .remove(input)
-                .map_err(|_| LedgerError::InvalidNote(*input))?;
-            balance = balance
-                .checked_add(utxo.note.value.into())
-                .ok_or(LedgerError::BalanceOverflow)?;
-            pks.push(utxo.note.pk);
-        }
+        //validate the transfer
+        transfer_op
+            .validate(&TransferValidationContext {
+                locked_notes,
+                utxos: &self.utxos,
+                tx_hash: &tx_hash,
+                transfer_sig,
+            })
+            .map_err(mantle::Error::Transfer)?;
 
-        if !ZkPublicKey::verify_multi(&pks, &tx_hash.0, transfer_sig) {
-            return Err(LedgerError::InvalidProof);
-        }
+        // Compute the balance
+        let balance = transfer_op
+            .balance(&self.utxos)
+            .map_err(mantle::Error::Transfer)?;
 
-        for utxo in transfer_op.utxos() {
-            if utxo.note.value == 0 {
-                return Err(LedgerError::ZeroValueNote);
-            }
-            balance = balance
-                .checked_sub(utxo.note.value.into())
-                .ok_or(LedgerError::BalanceOverflow)?;
-            self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-        }
+        //execute the transfer
+        self.utxos = transfer_op
+            .execute(self.utxos)
+            .map_err(mantle::Error::Transfer)?;
         Ok((self, balance))
     }
 
@@ -506,6 +495,11 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub fn update_utxos(self, utxos: UtxoTree) -> Self {
+        Self { utxos, ..self }
+    }
+
+    #[must_use]
     pub const fn execution_base_fee(&self) -> &GasPrice {
         &self.execution_base_fee
     }
@@ -546,10 +540,14 @@ impl LedgerState {
     ) -> Result<Self, LedgerError<Id>> {
         let transfer_op = tx.genesis_transfer();
         if !transfer_op.inputs.is_empty() {
-            return Err(LedgerError::InputInGenesis(transfer_op.inputs[0]));
+            return Err(LedgerError::InputInGenesis(transfer_op.inputs.as_ref()[0]));
         }
 
-        Ok(Self::from_utxos(transfer_op.utxos(), config, epoch_nonce))
+        Ok(Self::from_utxos(
+            transfer_op.outputs.utxos(transfer_op),
+            config,
+            epoch_nonce,
+        ))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config, nonce: Fr) -> Self {
@@ -658,8 +656,12 @@ pub mod tests {
     use lb_core::{
         crypto::{Digest as _, Hasher},
         mantle::{
-            AuthenticatedMantleTx, MantleTx, Note, Op, OpProof::ZkSig, SignedMantleTx,
-            Transaction as _, gas::MainnetGasConstants, ops::leader_claim::VoucherCm,
+            AuthenticatedMantleTx, MantleTx, Note, Op,
+            OpProof::ZkSig,
+            SignedMantleTx, Transaction as _,
+            gas::MainnetGasConstants,
+            ledger::{Inputs, Outputs},
+            ops::leader_claim::VoucherCm,
         },
         sdp::ServiceParameters,
     };
@@ -686,10 +688,11 @@ pub mod tests {
 
     #[must_use]
     pub fn utxo_with_sk() -> (ZkKey, Utxo) {
-        let transfer_hash: Fr = BigUint::from(thread_rng().next_u64()).into();
+        let mut op_id = [0u8; 32];
+        thread_rng().fill_bytes(&mut op_id);
         let zk_sk = ZkKey::from(BigUint::from(0u64));
         let utxo = Utxo {
-            transfer_hash: transfer_hash.into(),
+            op_id,
             output_index: 0,
             note: Note::new(10000, zk_sk.to_public_key()),
         };
@@ -827,7 +830,7 @@ pub mod tests {
                 NonNegativeRatio::new(1, 10.try_into().unwrap()),
                 1f64.try_into().expect("1 > 0"),
             ),
-            sdp_config: crate::mantle::sdp::Config {
+            sdp_config: mantle::sdp::Config {
                 service_params: Arc::new(service_params),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
@@ -898,8 +901,7 @@ pub mod tests {
     }
 
     fn full_ledger_state(cryptarchia_ledger: LedgerState, config: &Config) -> crate::LedgerState {
-        let mantle_ledger =
-            crate::mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state());
+        let mantle_ledger = mantle::LedgerState::new(config, cryptarchia_ledger.epoch_state());
         crate::LedgerState {
             block_number: 0,
             cryptarchia_ledger,
@@ -1253,7 +1255,7 @@ pub mod tests {
             .map(|(sk, _)| (*sk).clone())
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
-        let transfer_op = TransferOp::new(inputs, outputs);
+        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
         let mantle_tx = MantleTx {
             ops: vec![Op::Transfer(transfer_op.clone())],
             execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
@@ -1271,13 +1273,44 @@ pub mod tests {
     }
 
     #[test]
+    fn test_invalid_double_spend_transfer() {
+        let note_sk = ZkKey::from(BigUint::from(1u8));
+        let output_note_sk = ZkKey::from(BigUint::from(2u8));
+        let input_note = Note::new(100, note_sk.to_public_key());
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: input_note,
+        };
+
+        let output_note = Note::new(200, output_note_sk.to_public_key());
+
+        let locked_notes = LockedNotes::new();
+        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
+        let (tx, transfer_op, transfer_sig) = create_tx_with_transfer(
+            &[(&note_sk, &input_utxo), (&note_sk, &input_utxo)],
+            vec![output_note],
+        );
+
+        let _fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx);
+        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
+            &locked_notes,
+            &transfer_op,
+            &transfer_sig,
+            tx.hash(),
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_tx_processing_valid_transaction() {
         let note_sk = ZkKey::from(BigUint::from(1u8));
         let output_note1_sk = ZkKey::from(BigUint::from(2u8));
         let output_note2_sk = ZkKey::from(BigUint::from(3u8));
         let input_note = Note::new(11000, note_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1311,8 +1344,8 @@ pub mod tests {
         // Verify outputs were created
         let (_, transfer_op, _) =
             create_tx_with_transfer(&[(&note_sk, &input_utxo)], vec![output_note1, output_note2]);
-        let output_utxo1 = transfer_op.utxo_by_index(0).unwrap();
-        let output_utxo2 = transfer_op.utxo_by_index(1).unwrap();
+        let output_utxo1 = transfer_op.outputs.utxo_by_index(0, &transfer_op).unwrap();
+        let output_utxo2 = transfer_op.outputs.utxo_by_index(1, &transfer_op).unwrap();
 
         assert!(new_state.utxos.contains(&output_utxo1.id()));
         assert!(new_state.utxos.contains(&output_utxo2.id()));
@@ -1348,25 +1381,25 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1000, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
 
         let non_existent_utxo_1 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 1,
             note: input_note,
         };
 
         let non_existent_utxo_2 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(2u8)).into(),
+            op_id: [2u8; 32],
             output_index: 0,
             note: input_note,
         };
 
         let non_existent_utxo_3 = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: Note::new(999, Fr::from(BigUint::from(1u8)).into()),
         };
@@ -1391,7 +1424,7 @@ pub mod tests {
                     &transfer_sig,
                     tx.hash(),
                 );
-            assert!(matches!(result, Err(LedgerError::InvalidNote(_))));
+            assert!(matches!(result, Err(LedgerError::Mantle(_))));
         }
     }
 
@@ -1400,7 +1433,7 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(1, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1444,7 +1477,7 @@ pub mod tests {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_note = Note::new(10000, input_sk.to_public_key());
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: input_note,
         };
@@ -1474,7 +1507,7 @@ pub mod tests {
     fn test_output_not_zero() {
         let input_sk = ZkKey::from(BigUint::from(1u8));
         let input_utxo = Utxo {
-            transfer_hash: Fr::from(BigUint::from(1u8)).into(),
+            op_id: [1u8; 32],
             output_index: 0,
             note: Note::new(10000, input_sk.to_public_key()),
         };
@@ -1492,7 +1525,7 @@ pub mod tests {
             &transfer_sig,
             tx.hash(),
         );
-        assert!(matches!(result, Err(LedgerError::ZeroValueNote)));
+        assert!(matches!(result, Err(LedgerError::Mantle(_))));
     }
 
     #[test]

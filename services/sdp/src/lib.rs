@@ -293,6 +293,9 @@ where
         // Get current chain info to find the tip
         let info = chain_api.info().await?;
         let tip = info.tip;
+        tracing::debug!(
+            "Fetching declaration state for {declaration_id:?} from ledger tip {tip:?}"
+        );
 
         // Get ledger state at tip
         let Some(ledger_state) = chain_api.get_ledger_state(tip).await? else {

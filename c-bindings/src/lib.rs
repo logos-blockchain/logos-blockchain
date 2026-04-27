@@ -4,6 +4,7 @@
 )]
 
 pub mod api;
+mod callbacks;
 mod errors;
 mod macros;
 mod node;
@@ -11,4 +12,4 @@ mod result;
 
 pub use errors::OperationStatus;
 pub use node::LogosBlockchainNode;
-pub(crate) use result::{PointerResult, ValueResult};
+pub use result::{FfiResult, FfiStatusResult, StatusResult};
