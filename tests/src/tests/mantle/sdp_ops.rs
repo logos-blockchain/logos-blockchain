@@ -410,17 +410,18 @@ async fn start_sdp_manual_cluster(
     let genesis_utxos: Vec<_> = base
         .deployment
         .config
-        .genesis_tx
+        .genesis_block
         .clone()
         .expect("manual-cluster deployment should include genesis tx")
+        .genesis_tx()
         .genesis_transfer()
         .outputs
         .utxos(
             base.deployment
                 .config
-                .genesis_tx
-                .clone()
+                .genesis_block
                 .expect("manual-cluster deployment should include genesis tx")
+                .genesis_tx()
                 .genesis_transfer(),
         )
         .collect();

@@ -1,3 +1,6 @@
+use std::pin::Pin;
+
+use futures::{Stream, TryStreamExt as _};
 use lb_core::{block::Block, header::HeaderId};
 use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
@@ -121,36 +124,36 @@ where
         })
     }
 
-    /// Get headers in the range from `from` to `to`
-    /// If `from` is None, defaults to tip
-    /// If `to` is None, defaults to LIB
+    /// Get headers in the range from descendant (inclusive) to ancestor
+    /// (inclusive).
+    ///
+    /// If `from_descendant` is None, defaults to tip
+    /// If `to_ancestor` is None, defaults to LIB
     pub async fn get_headers(
         &self,
-        from: Option<HeaderId>,
-        to: Option<HeaderId>,
-    ) -> Result<Vec<HeaderId>, ApiError> {
+        from_descendant: HeaderId,
+        to_ancestor: HeaderId,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<HeaderId, ApiError>> + Send>>, ApiError> {
         let (tx, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetHeaders { from, to, tx })
+            .send(ConsensusMsg::GetHeaders {
+                from_descendant: Some(from_descendant),
+                to_ancestor: Some(to_ancestor),
+                tx,
+            })
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetHeaders"))
             })?;
 
-        rx.await.map_err(|relay_error| {
+        let stream = rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetHeaders"))
-        })
-    }
+        })?;
 
-    /// Get all headers from a specific block to LIB
-    pub async fn get_headers_to_lib(&self, from: HeaderId) -> Result<Vec<HeaderId>, ApiError> {
-        self.get_headers(Some(from), None).await
-    }
-
-    /// Get all headers from tip to a specific block
-    pub async fn get_headers_from_tip(&self, to: HeaderId) -> Result<Vec<HeaderId>, ApiError> {
-        self.get_headers(None, Some(to)).await
+        Ok(Box::pin(stream.map_err(|e| {
+            ApiError::Unexpected(format!("Error while fetching block IDs: {e}"))
+        })))
     }
 
     /// Get the ledger state at a specific block
@@ -188,6 +191,30 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochState resp"))
+        })
+    }
+
+    /// Get the epoch and consensus configs
+    pub async fn get_epoch_config(
+        &self,
+    ) -> Result<
+        (
+            lb_cryptarchia_engine::EpochConfig,
+            lb_cryptarchia_engine::Config,
+        ),
+        ApiError,
+    > {
+        let (tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(ConsensusMsg::GetEpochConfig { tx })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetEpochConfig"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochConfig"))
         })
     }
 

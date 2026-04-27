@@ -623,7 +623,7 @@ mod tests {
         add_strings,
         nodes::create_validator_config,
         topology::configs::{
-            create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
+            create_general_configs, deployment::e2e_deployment_settings_with_genesis_block,
         },
     };
 
@@ -690,8 +690,8 @@ mod tests {
 
     #[test]
     fn apply_overrides_updates_user_and_deployment_config() {
-        let (configs, genesis_tx) = create_general_configs(1, Some("test_set_config_overrides"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+        let (configs, genesis_block) = create_general_configs(1, Some("test_set_config_overrides"));
+        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
         let mut config = create_validator_config(configs[0].clone(), deployment_settings);
 
         let retain_scores = config.user.network.backend.swarm.gossipsub.retain_scores;
@@ -746,8 +746,8 @@ mod tests {
 
     #[test]
     fn world_overrides_accept_explicit_functions() {
-        let (configs, genesis_tx) = create_general_configs(1, Some("test_override_functions"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+        let (configs, genesis_block) = create_general_configs(1, Some("test_override_functions"));
+        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
         let mut config = create_validator_config(configs[0].clone(), deployment_settings);
         let mut world = CucumberWorld::default();
 
@@ -804,8 +804,9 @@ mod tests {
 
     #[test]
     fn world_overrides_round_trip_scalar_types() {
-        let (configs, genesis_tx) = create_general_configs(1, Some("test_override_scalar_types"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+        let (configs, genesis_block) =
+            create_general_configs(1, Some("test_override_scalar_types"));
+        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
         let mut config = create_validator_config(configs[0].clone(), deployment_settings);
         let mut world = CucumberWorld::default();
 
@@ -903,9 +904,9 @@ mod tests {
 
     #[test]
     fn deployment_override_hex_inscription_round_trips_into_genesis_inscription_bytes() {
-        let (configs, genesis_tx) =
+        let (configs, genesis_block) =
             create_general_configs(1, Some("test_override_inscription_hex"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
         let mut config = create_validator_config(configs[0].clone(), deployment_settings);
         let mut world = CucumberWorld::default();
 

@@ -35,6 +35,21 @@ fn persist_tempdir(tempdir: &mut TempDir, label: &str) -> std::io::Result<()> {
 }
 
 #[must_use]
+pub fn current_test_system_stats_file() -> PathBuf {
+    let current_thread = std::thread::current();
+    let thread_name = current_thread.name().unwrap_or("NODE");
+    let thread_slug = thread_name
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect::<String>();
+
+    std::env::current_dir().unwrap().join(format!(
+        ".run_{thread_slug}_{}_system_stats.ndjson",
+        std::process::id()
+    ))
+}
+
+#[must_use]
 pub fn get_exe_path() -> PathBuf {
     let debug_binary = std::env::current_dir().unwrap().join(BIN_PATH_DEBUG);
     let release_binary = std::env::current_dir().unwrap().join(BIN_PATH_RELEASE);

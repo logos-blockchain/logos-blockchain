@@ -105,7 +105,7 @@ impl ServiceConfig {
                     .with_extension("json")
                     .as_path(),
             ),
-            starting_state: self.deployment.genesis_state.into(),
+            starting_state: self.deployment.genesis_block.into(),
         };
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: lb_chain_network_service::BootstrapConfig {

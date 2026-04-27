@@ -1,5 +1,6 @@
 use std::fmt::{Debug, Display};
 
+use futures::{StreamExt as _, TryStreamExt as _};
 use lb_chain_service::{ConsensusMsg, CryptarchiaConsensus, CryptarchiaInfo};
 use lb_core::{header::HeaderId, mantle::SignedMantleTx};
 use lb_ledger::LedgerState;
@@ -30,10 +31,12 @@ where
     Ok(receiver.await?)
 }
 
+const HEADERS_LIMIT: usize = 512;
+
 pub async fn cryptarchia_headers<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
-    from: Option<HeaderId>,
-    to: Option<HeaderId>,
+    from_descendant: Option<HeaderId>,
+    to_ancestor: Option<HeaderId>,
 ) -> Result<Vec<HeaderId>, DynError>
 where
     RuntimeServiceId:
@@ -43,14 +46,15 @@ where
     let (sender, receiver) = oneshot::channel();
     relay
         .send(ConsensusMsg::GetHeaders {
-            from,
-            to,
+            from_descendant,
+            to_ancestor,
             tx: sender,
         })
         .await
         .map_err(|(e, _)| e)?;
 
-    Ok(receiver.await?)
+    let stream = receiver.await?;
+    Ok(stream.take(HEADERS_LIMIT).try_collect().await?)
 }
 
 pub async fn cryptarchia_ledger_state<RuntimeServiceId>(

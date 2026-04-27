@@ -7,7 +7,7 @@ use rpds::StackSync;
 
 mod path;
 
-pub use path::MerklePath;
+pub use path::{MerklePath, is_left_child};
 use path::{update_paths_above_merge, update_paths_at_merge};
 
 const EMPTY_VALUE: Fr = Fr::ZERO;
