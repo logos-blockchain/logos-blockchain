@@ -215,16 +215,18 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
-    use crate::mantle::{
-        gas::MainnetGasConstants,
-        ops::{
-            channel::{ChannelId, deposit::DepositOp, inscribe::InscriptionOp},
-            leader_claim::LeaderClaimOp,
-            sdp::{SDPDeclareOp, SDPWithdrawOp},
+    use crate::{
+        mantle::{
+            gas::MainnetGasConstants,
+            ops::{
+                channel::{ChannelId, deposit::DepositOp, inscribe::InscriptionOp},
+                leader_claim::LeaderClaimOp,
+                sdp::{SDPDeclareOp, SDPWithdrawOp},
+            },
+            tx::MantleTxGasContext,
         },
-        tx::MantleTxGasContext,
+        sdp::{DeclarationId, ProviderId, ServiceType},
     };
-    use crate::sdp::{DeclarationId, ProviderId, ServiceType};
 
     #[test]
     fn inscription_op() {
@@ -434,24 +436,23 @@ mod tests {
             }))
             .add_ledger_input(transfer_input);
 
-        let notes: Vec<_> = builder.consumed_or_locked_notes().collect();
-
+        let consumed_or_locked: Vec<_> = builder.consumed_or_locked_notes().collect();
         assert!(
-            notes.contains(&deposit_input),
+            consumed_or_locked.contains(&deposit_input),
             "should contain deposit input"
         );
         assert!(
-            notes.contains(&declare_locked),
+            consumed_or_locked.contains(&declare_locked),
             "should contain declare locked note"
         );
         assert!(
-            notes.contains(&withdraw_locked),
+            consumed_or_locked.contains(&withdraw_locked),
             "should contain withdraw locked note"
         );
         assert!(
-            notes.contains(&transfer_input.id()),
+            consumed_or_locked.contains(&transfer_input.id()),
             "should contain transfer input"
         );
-        assert_eq!(notes.len(), 4);
+        assert_eq!(consumed_or_locked.len(), 4);
     }
 }
