@@ -54,7 +54,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Tag the commit with `X.Y.Z-rc.N` and push the tag
 - [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z-rc.N` tag on GitHub with the `release-candidate` input to prepare the GitHub release draft with the build binaries
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release. While the release is in progress, follow the steps in the [Devnet deployment][devnet-deployment-section] section below.
+- [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release.
 - [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
 - [ ] Publish release
 - [ ] Post the link to the published release to this issue for easier review
@@ -62,6 +62,7 @@ Most of the template content is the same or very similar to what is in `release.
 ## Devnet deployment
 
 - [ ] Checkout `devnet` branch again and change the `compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml compose.static.yml`
+- [ ] Update `.env.devnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z-rc.N` set to latest version
 - [ ] Commit and push the changes to trigger environment re-deployment. Environment is now live.
 - [ ] Wait around 1 minute for deployment to be updated
 - [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://devnet.blockchain.logos.co/internal/node-data/](https://devnet.blockchain.logos.co/internal/node-data/)
