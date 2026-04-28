@@ -627,6 +627,9 @@ mod tests {
         },
     };
 
+    const GENESIS_INSCRIPTION_OVERRIDE_PATH: &str =
+        "cryptarchia.genesis_block.transactions.0.mantle_tx.ops.1.payload.inscription";
+
     #[test]
     fn normalize_path_rejects_empty_segments() {
         let path = "network..backend";
@@ -914,7 +917,7 @@ mod tests {
         set_deployment_config_override(
             &mut world,
             "test-step",
-            "cryptarchia.genesis_state.mantle_tx.ops.1.payload.inscription",
+            GENESIS_INSCRIPTION_OVERRIDE_PATH,
             "hex(70726f636573735f73746172745f6e6f6e6365)",
         )
         .expect("inscription hex override");
@@ -922,63 +925,30 @@ mod tests {
         apply_deployment_config_overrides(&mut config, &world.deployment_config_overrides)
             .expect("apply deployment overrides");
 
-        let yaml = serde_yaml::to_value(&config.deployment).expect("deployment yaml");
-        let inscription = get_at_path(
-            &yaml,
-            &[
-                "cryptarchia",
-                "genesis_state",
-                "mantle_tx",
-                "ops",
-                "1",
-                "payload",
-                "inscription",
-            ],
-        )
-        .expect("inscription path");
+        assert_genesis_inscription_bytes(&config, b"process_start_nonce");
 
-        let seq = inscription.as_sequence().expect("inscription bytes");
-        let got = seq
-            .iter()
-            .map(|v| v.as_i64().expect("byte") as u8)
-            .collect::<Vec<_>>();
-
-        assert_eq!(got, b"process_start_nonce");
-
-        // Human readable string input
         set_deployment_config_override(
             &mut world,
             "test-step",
-            "cryptarchia.genesis_state.mantle_tx.ops.1.payload.inscription",
-            "process_start_nonce",
+            GENESIS_INSCRIPTION_OVERRIDE_PATH,
+            "70726f636573735f73746172745f6e6f6e6365",
         )
         .expect("inscription text override");
 
         apply_deployment_config_overrides(&mut config, &world.deployment_config_overrides)
             .expect("apply deployment overrides");
 
+        assert_genesis_inscription_bytes(&config, b"process_start_nonce");
+    }
+
+    fn assert_genesis_inscription_bytes(config: &RunConfig, expected: &[u8]) {
         let yaml = serde_yaml::to_value(&config.deployment).expect("deployment yaml");
-        let inscription = get_at_path(
-            &yaml,
-            &[
-                "cryptarchia",
-                "genesis_state",
-                "mantle_tx",
-                "ops",
-                "1",
-                "payload",
-                "inscription",
-            ],
-        )
-        .expect("inscription path");
+        let path = split_path(GENESIS_INSCRIPTION_OVERRIDE_PATH);
+        let inscription = get_at_path(&yaml, &path).expect("inscription path");
+        let encoded = inscription.as_str().expect("inscription hex string");
+        let got = hex::decode(encoded).expect("inscription hex");
 
-        let seq = inscription.as_sequence().expect("inscription bytes");
-        let got = seq
-            .iter()
-            .map(|v| v.as_i64().expect("byte") as u8)
-            .collect::<Vec<_>>();
-
-        assert_eq!(got, b"process_start_nonce");
+        assert_eq!(got, expected);
     }
 
     #[test]
