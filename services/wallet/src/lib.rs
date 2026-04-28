@@ -687,15 +687,7 @@ where
                 active_op.declaration_id,
             ))?;
 
-        let locked_note = ledger
-            .mantle_ledger()
-            .locked_notes()
-            .get(&declaration.locked_note_id)
-            .ok_or(WalletServiceError::MissingLockedNote(
-                declaration.locked_note_id,
-            ))?;
-
-        let zk_sig = Self::sign_zksig(tx_hash, [locked_note.pk, declaration.zk_id], kms).await?;
+        let zk_sig = Self::sign_zksig(tx_hash, [declaration.zk_id], kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
     }
