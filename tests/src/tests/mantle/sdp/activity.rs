@@ -1,4 +1,11 @@
-use std::{num::NonZero, time::Duration};
+use std::{
+    num::NonZero,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use lb_core::sdp::ServiceType;
 use lb_cryptarchia_engine::{base_period_length, time::epoch_length};
@@ -23,6 +30,7 @@ const NODE_COUNT: usize = 2;
 ///    automatically submitted valid activity messages that the ledger accepted.
 #[tokio::test]
 async fn sdp_blend_activity() {
+    let blocks_per_session = Arc::new(AtomicU64::new(0));
     let (_base, nodes) = start_local_manual_cluster_with_layout(
         "sdp-blend-activity",
         "mantle-sdp",
@@ -32,9 +40,13 @@ async fn sdp_blend_activity() {
         ),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        |config| Ok::<_, DynError>(test_config(config)),
+        {
+            let blocks_per_session = Arc::clone(&blocks_per_session);
+            move |config| Ok::<_, DynError>(test_config(config, &blocks_per_session))
+        },
     )
     .await;
+    let blocks_per_session = blocks_per_session.load(Ordering::Relaxed);
 
     let node0 = &nodes[0];
     let node1 = &nodes[1];
@@ -59,7 +71,6 @@ async fn sdp_blend_activity() {
     //
     // We wait for more sessions to give a solid margin and ensure that if
     // activity proofs are being submitted, they keep the declarations alive.
-    let blocks_per_session = blocks_per_session();
     let survival_sessions = INACTIVITY_PERIOD + RETENTION_PERIOD + 1; // +1 margin
     let target_height = survival_sessions * blocks_per_session;
     println!(
@@ -92,12 +103,21 @@ async fn sdp_blend_activity() {
 const INACTIVITY_PERIOD: u64 = 1;
 const RETENTION_PERIOD: u64 = 1;
 
-fn test_config(mut config: RunConfig) -> RunConfig {
-    let (epoch_config, security_param, slot_activation_coeff) = cryptarchia_config();
+fn test_config(mut config: RunConfig, blocks_per_session: &AtomicU64) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
-    config.deployment.cryptarchia.epoch_config = epoch_config;
-    config.deployment.cryptarchia.security_param = security_param;
-    config.deployment.cryptarchia.slot_activation_coeff = slot_activation_coeff;
+    config.deployment.cryptarchia.epoch_config = EpochConfig {
+        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+        epoch_period_nonce_buffer: 1.try_into().unwrap(),
+        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+    };
+    config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
+    config.deployment.cryptarchia.slot_activation_coeff =
+        NonNegativeRatio::new(1, 10.try_into().unwrap());
+
+    blocks_per_session.store(
+        config.deployment.cryptarchia.blocks_per_epoch(),
+        Ordering::Relaxed,
+    );
 
     // Set small inactivity/retention periods so that declarations are removed
     // quickly if no activity proofs are submitted.
@@ -112,32 +132,6 @@ fn test_config(mut config: RunConfig) -> RunConfig {
     blend_params.retention_period = RETENTION_PERIOD;
 
     config
-}
-
-fn blocks_per_session() -> u64 {
-    let (epoch_config, security_param, slot_activation_coeff) = cryptarchia_config();
-    let base_period = base_period_length(security_param, slot_activation_coeff);
-    let slots_per_epoch = epoch_length(
-        epoch_config.epoch_stake_distribution_stabilization,
-        epoch_config.epoch_period_nonce_buffer,
-        epoch_config.epoch_period_nonce_stabilization,
-        base_period,
-    );
-
-    let avg_slots_per_block =
-        base_period_length(NonZero::<u32>::new(1).unwrap(), slot_activation_coeff).get();
-    slots_per_epoch / avg_slots_per_block
-}
-
-fn cryptarchia_config() -> (EpochConfig, NonZero<u32>, NonNegativeRatio) {
-    let epoch_config = EpochConfig {
-        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-        epoch_period_nonce_buffer: 1.try_into().unwrap(),
-        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-    };
-    let security_param = NonZero::new(2).unwrap();
-    let slot_activation_coeff = NonNegativeRatio::new(1, 10.try_into().unwrap());
-    (epoch_config, security_param, slot_activation_coeff)
 }
 
 async fn wait_for_declarations(
