@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use tracing::error;
 
 use crate::{
-    BlocksResponse, DynError, ProviderResponse, TipResponse,
+    BlocksResponse, BlocksUnavailableReason, DynError, ProviderResponse, TipResponse,
     libp2p::{
         errors::{ChainSyncError, ChainSyncErrorKind},
         messages::{DownloadBlocksResponse, RequestMessage},
@@ -110,7 +110,9 @@ impl Provider {
             }
             Err(e) => {
                 error!("Failed to send blocks to peer {}: {}", peer_id, e);
-                let message = DownloadBlocksResponse::Failure(e.to_string());
+                let message = DownloadBlocksResponse::Failure(BlocksUnavailableReason::Unknown(
+                    e.to_string(),
+                ));
                 drop(send_message(peer_id, &mut libp2p_stream, &message).await);
                 Err(e)
             }

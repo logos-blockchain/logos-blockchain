@@ -18,6 +18,7 @@ where
     RuntimeServiceId: Debug + Display + Sync,
 {
     async fn ctrl_c_signal_received(overwatch_handle: &OverwatchHandle<RuntimeServiceId>) {
+        tracing::debug!("Ctrl-C received, requesting shutdown");
         drop(overwatch_handle.shutdown().await);
     }
 }

@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use lb_core::{
-    mantle::{GenesisTx as _, Note, genesis_tx::GenesisTx},
+    block::genesis::GenesisBlock,
+    mantle::{GenesisTx as _, Note},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::{Key, ZkKey};
@@ -10,7 +11,7 @@ use super::{
     Config,
     node_configs::{
         blend::GeneralBlendConfig,
-        consensus::{ProviderInfo, create_genesis_tx_with_declarations},
+        consensus::{ProviderInfo, create_genesis_block_with_declarations},
     },
 };
 
@@ -30,18 +31,18 @@ pub fn leader_stake_amount(total_wallet_funds: u64, n_participants: usize) -> u6
 
 pub fn apply_wallet_genesis_overrides(
     general_configs: &mut [Config],
-    genesis_tx: &GenesisTx,
+    genesis_block: &GenesisBlock,
     n_blend_core_nodes: usize,
     wallet_accounts: &[(ZkKey, u64)],
     key_id_for_preload_backend: impl Fn(&Key) -> String,
     test_context: Option<&str>,
-) -> GenesisTx {
+) -> GenesisBlock {
     if wallet_accounts.is_empty() {
-        return genesis_tx.clone();
+        return genesis_block.clone();
     }
 
     if general_configs.is_empty() {
-        return genesis_tx.clone();
+        return genesis_block.clone();
     }
 
     let n_participants = general_configs.len();
@@ -71,8 +72,13 @@ pub fn apply_wallet_genesis_overrides(
         });
     }
 
-    let mut transfer_op = genesis_tx.genesis_transfer().clone();
-    for output in &mut *transfer_op.outputs {
+    let mut transfer_op = genesis_block
+        .transactions()
+        .next()
+        .expect("Genesis block should have a genesis tx")
+        .genesis_transfer()
+        .clone();
+    for output in transfer_op.outputs.as_mut() {
         if leader_keys.contains(&output.pk) {
             output.value = leader_stake;
         }
@@ -80,10 +86,12 @@ pub fn apply_wallet_genesis_overrides(
     for (secret_key, value) in wallet_accounts {
         transfer_op
             .outputs
+            .as_mut()
             .push(Note::new(*value, secret_key.to_public_key()));
     }
 
-    let genesis_tx = create_genesis_tx_with_declarations(transfer_op, providers, test_context);
+    let genesis_block =
+        create_genesis_block_with_declarations(transfer_op, providers, test_context);
 
     for general in general_configs.iter_mut() {
         for (secret_key, _) in wallet_accounts {
@@ -93,5 +101,5 @@ pub fn apply_wallet_genesis_overrides(
         }
     }
 
-    genesis_tx
+    genesis_block
 }

@@ -757,8 +757,8 @@ fn encode_outputs(outputs: &[Note]) -> Vec<u8> {
 #[must_use]
 pub fn encode_transfer_op(op: &TransferOp) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend(encode_inputs(&op.inputs));
-    bytes.extend(encode_outputs(&op.outputs));
+    bytes.extend(encode_inputs(op.inputs.as_ref()));
+    bytes.extend(encode_outputs(op.outputs.as_ref()));
     bytes
 }
 

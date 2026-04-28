@@ -1,14 +1,10 @@
-#[cfg(feature = "deser")]
 mod curve;
-#[cfg(feature = "deser")]
 mod from_json_error;
 mod proof;
 pub use proof::{CompressSize, CompressedProof};
-#[cfg(feature = "deser")]
 mod protocol;
 mod public_input;
 
-#[cfg(feature = "deser")]
 pub mod serde;
 pub(crate) mod utils;
 mod verification_key;
@@ -31,14 +27,11 @@ impl CompressSize for Bn254 {
 
 pub type Groth16Proof = proof::Proof<Bn254>;
 pub type CompressedGroth16Proof = CompressedProof<Bn254>;
-#[cfg(feature = "deser")]
 pub type Groth16ProofJsonDeser = proof::ProofJsonDeser;
 pub type Groth16VerificationKey = verification_key::VerificationKey<Bn254>;
 pub type Groth16PreparedVerificationKey = verification_key::PreparedVerificationKey<Bn254>;
-#[cfg(feature = "deser")]
 pub type Groth16VerificationKeyJsonDeser = verification_key::VerificationKeyJsonDeser;
 pub type Groth16Input = public_input::Input<Bn254>;
-#[cfg(feature = "deser")]
 pub type Groth16InputDeser = public_input::InputDeser;
 
 pub type FrBytes = [u8; 32];

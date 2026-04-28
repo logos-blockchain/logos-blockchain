@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashMap, ops::DerefMut as _};
+use std::{cmp::Ordering, collections::HashMap};
 
 use lb_key_management_system_keys::keys::ZkPublicKey;
 
@@ -68,7 +68,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn extend_ledger_inputs(mut self, utxos: impl IntoIterator<Item = Utxo>) -> Self {
         for utxo in utxos {
-            self.pending_transfer.inputs.push(utxo.id());
+            self.pending_transfer.inputs.as_mut().push(utxo.id());
             self.ledger_inputs.push(utxo);
         }
         self
@@ -81,7 +81,7 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn extend_ledger_outputs(mut self, notes: impl IntoIterator<Item = Note>) -> Self {
-        self.pending_transfer.outputs.deref_mut().extend(notes);
+        self.pending_transfer.outputs.as_mut().extend(notes);
         self
     }
 
@@ -169,18 +169,26 @@ impl MantleTxBuilder {
         Ok(self.net_balance() - i128::from(self.gas_cost::<G>()?.into_inner()))
     }
 
-    /// Returns all note IDs used as inputs in the transaction, including
-    /// - Transfer operations already in the transaction
-    /// - Additional transfer operations that will be added to the transaction
-    pub fn input_notes(&self) -> impl Iterator<Item = NoteId> {
+    /// Returns all note IDs already consumed or locked by this transaction,
+    /// plus the funding inputs that will be appended as a transfer during
+    /// build.
+    pub fn consumed_or_locked_notes(&self) -> impl Iterator<Item = NoteId> {
         self.mantle_tx
             .ops
             .iter()
-            .filter_map(|op| match op {
-                Op::Transfer(transfer) => Some(transfer.inputs.iter().copied()),
-                _ => None,
+            .flat_map(|op| {
+                let inputs: &[NoteId] = match op {
+                    Op::Transfer(transfer) => transfer.inputs.as_ref(),
+                    Op::ChannelDeposit(deposit) => deposit.inputs.as_ref(),
+                    _ => &[],
+                };
+                let locked = match op {
+                    Op::SDPDeclare(declare) => Some(declare.locked_note_id),
+                    Op::SDPWithdraw(withdraw) => Some(withdraw.locked_note_id),
+                    _ => None,
+                };
+                inputs.iter().copied().chain(locked)
             })
-            .flatten()
             .chain(self.ledger_inputs().iter().map(Utxo::id))
     }
 
@@ -207,13 +215,17 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
-    use crate::mantle::{
-        gas::MainnetGasConstants,
-        ops::{
-            channel::{ChannelId, deposit::DepositOp, inscribe::InscriptionOp},
-            leader_claim::LeaderClaimOp,
+    use crate::{
+        mantle::{
+            gas::MainnetGasConstants,
+            ops::{
+                channel::{ChannelId, deposit::DepositOp, inscribe::InscriptionOp},
+                leader_claim::LeaderClaimOp,
+                sdp::{SDPDeclareOp, SDPWithdrawOp},
+            },
+            tx::MantleTxGasContext,
         },
-        tx::MantleTxGasContext,
+        sdp::{DeclarationId, ProviderId, ServiceType},
     };
 
     #[test]
@@ -390,5 +402,57 @@ mod tests {
             builder.funding_delta::<MainnetGasConstants>().unwrap(),
             0 // zero gas price for now
         );
+    }
+
+    #[test]
+    fn consumed_or_locked_notes() {
+        let context = MantleTxContext {
+            gas_context: MantleTxGasContext::default(),
+            leader_reward_amount: 30,
+        };
+
+        let deposit_input = NoteId(Fr::from(1u64));
+        let declare_locked = NoteId(Fr::from(2u64));
+        let withdraw_locked = NoteId(Fr::from(3u64));
+        let transfer_input = Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero()));
+
+        let builder = MantleTxBuilder::new(context)
+            .push_op(Op::ChannelDeposit(DepositOp {
+                channel_id: [0; 32].into(),
+                inputs: Inputs::new(vec![deposit_input]),
+                metadata: vec![],
+            }))
+            .push_op(Op::SDPDeclare(SDPDeclareOp {
+                service_type: ServiceType::BlendNetwork,
+                locators: vec![],
+                provider_id: ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key()),
+                zk_id: ZkPublicKey::zero(),
+                locked_note_id: declare_locked,
+            }))
+            .push_op(Op::SDPWithdraw(SDPWithdrawOp {
+                declaration_id: DeclarationId([0; 32]),
+                locked_note_id: withdraw_locked,
+                nonce: 1,
+            }))
+            .add_ledger_input(transfer_input);
+
+        let consumed_or_locked: Vec<_> = builder.consumed_or_locked_notes().collect();
+        assert!(
+            consumed_or_locked.contains(&deposit_input),
+            "should contain deposit input"
+        );
+        assert!(
+            consumed_or_locked.contains(&declare_locked),
+            "should contain declare locked note"
+        );
+        assert!(
+            consumed_or_locked.contains(&withdraw_locked),
+            "should contain withdraw locked note"
+        );
+        assert!(
+            consumed_or_locked.contains(&transfer_input.id()),
+            "should contain transfer input"
+        );
+        assert_eq!(consumed_or_locked.len(), 4);
     }
 }

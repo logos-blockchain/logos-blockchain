@@ -1,17 +1,28 @@
 use std::{num::NonZero, ops::Add, time::Duration};
 
-#[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
 #[cfg(feature = "tokio")]
 use tokio::time::{Interval, MissedTickBehavior};
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, Default, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Copy,
+    Hash,
+    PartialOrd,
+    Ord,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Slot(u64);
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Copy, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct Epoch(u32);
 
 impl Epoch {
@@ -132,8 +143,7 @@ impl Add<u32> for Epoch {
     }
 }
 
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EpochConfig {
     // The stake distribution is always taken at the beginning of the previous epoch.
     // This parameters controls how many slots to wait for it to be stabilized
@@ -184,11 +194,10 @@ pub const fn epoch_length(
     .saturating_mul(base_period_length.get())
 }
 
-#[cfg_attr(feature = "serde", cfg_eval::cfg_eval, serde_with::serde_as)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Copy, Clone, Debug)]
+#[serde_with::serde_as]
+#[derive(Copy, Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct SlotConfig {
-    #[cfg_attr(feature = "serde", serde_as(as = "MinimalBoundedDuration<1, SECOND>"))]
+    #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
     /// Start of the first epoch
     pub chain_start_time: OffsetDateTime,

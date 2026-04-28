@@ -1,15 +1,11 @@
-#[cfg(feature = "deser")]
 use std::str::FromStr;
 
 use ark_bn254::{Bn254, Fr};
 use ark_ec::pairing::Pairing;
-#[cfg(feature = "deser")]
 use ark_ff::Zero as _;
 
-#[cfg(feature = "deser")]
 pub mod deserialize;
 
-#[cfg(feature = "deser")]
 pub use deserialize::InputDeser;
 
 #[derive(Copy, Clone, Debug)]
@@ -37,7 +33,6 @@ impl From<Fr> for Input<Bn254> {
     }
 }
 
-#[cfg(feature = "deser")]
 impl TryFrom<InputDeser> for Input<Bn254> {
     type Error = <<Bn254 as Pairing>::ScalarField as FromStr>::Err;
 
@@ -48,7 +43,6 @@ impl TryFrom<InputDeser> for Input<Bn254> {
     }
 }
 
-#[cfg(feature = "deser")]
 impl From<&Input<Bn254>> for InputDeser {
     fn from(value: &Input<Bn254>) -> Self {
         // Have to branch here, as by default it's an empty string, but we want "0"
@@ -61,12 +55,9 @@ impl From<&Input<Bn254>> for InputDeser {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "deser")]
     use ark_ff::Field as _;
 
-    #[cfg(feature = "deser")]
     use super::*;
-    #[cfg(feature = "deser")]
     #[test]
     fn serialize_zero() {
         let zero: Input<Bn254> = Fr::ZERO.into();

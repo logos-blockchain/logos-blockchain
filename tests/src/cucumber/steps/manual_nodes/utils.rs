@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use cucumber::gherkin::Table;
@@ -19,7 +19,7 @@ use lb_testing_framework::{
 use libp2p::Multiaddr;
 use reqwest::{Client, Url};
 use testing_framework_core::scenario::{PeerSelection, StartNodeOptions, StartedNode};
-use tokio::time::{Instant, sleep, timeout};
+use tokio::time::{Instant as TokioInstant, sleep, timeout};
 use tracing::{info, warn};
 
 use crate::cucumber::{
@@ -1508,14 +1508,14 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
                 header_hash: info.tip.encode_hex(),
             }),
             Err(e) => {
-                // If network info in unresponsive, we can assume the node is dead
-                if let Err(e2) = nodes_info
-                    .get_mut(&node_name)
-                    .expect("Failed to get node")
-                    .started_node
-                    .client
-                    .network_info()
-                    .await
+                // If both `consensus_info` and `network_info` fail, assume the node is no
+                // longer responsive.
+                if let Err(e2) = poll_network_info(
+                    nodes_info.get_mut(&node_name).expect("Failed to get node"),
+                    &node_name,
+                    5,
+                )
+                .await
                 {
                     return Err(StepError::StepFail {
                         message: format!(
@@ -1572,6 +1572,24 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
     }
 
     Ok(())
+}
+
+async fn poll_network_info(
+    node_info: &NodeInfo,
+    node_name: &str,
+    time_out_seconds: u64,
+) -> Result<(), String> {
+    let start = TokioInstant::now();
+    let time_out = Duration::from_secs(time_out_seconds);
+    while start.elapsed() <= time_out {
+        if node_info.started_node.client.network_info().await.is_ok() {
+            return Ok(());
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+    Err(format!(
+        "Node `{node_name}` did not respond to network_info after {time_out_seconds:.2?}"
+    ))
 }
 
 /// This struct represents the wallet resources to be associated with a node at

@@ -277,7 +277,7 @@ impl<Backend, RuntimeServiceId> StorageService<Backend, RuntimeServiceId>
 where
     Backend: StorageBackend + Send + Sync + 'static,
 {
-    async fn handle_storage_message(msg: StorageMsg<Backend>, backend: &mut Backend) {
+    pub async fn handle_storage_message(msg: StorageMsg<Backend>, backend: &mut Backend) {
         let started_at = Instant::now();
 
         let result = match msg {

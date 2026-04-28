@@ -51,4 +51,9 @@ impl<Id> Vouchers<Id> {
     ) -> impl Iterator<Item = (&VoucherNullifier, &VoucherCm)> {
         self.voucher_nullifiers.iter()
     }
+
+    #[must_use]
+    pub fn count(&self) -> usize {
+        self.vouchers.len()
+    }
 }

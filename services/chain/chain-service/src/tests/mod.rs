@@ -1,5 +1,11 @@
-use std::{collections::HashSet, num::NonZero, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::{self, Display},
+    num::NonZero,
+    sync::Arc,
+};
 
+use futures::StreamExt as _;
 use lb_core::{
     block::Block,
     mantle::{
@@ -17,10 +23,24 @@ use lb_ledger::{
     LedgerState,
     mantle::sdp::{ServiceRewardsParameters, rewards},
 };
+use lb_storage_service::{
+    StorageMsg, StorageService,
+    backends::{
+        StorageBackend as _,
+        rocksdb::{RocksBackend, RocksBackendSettings},
+    },
+};
+use lb_time_service::backends::SystemTimeBackend;
 use lb_utils::math::NonNegativeRatio;
+use overwatch::services::{AsServiceId, relay::OutboundRelay, state::StateUpdater};
 use rand::{RngCore as _, thread_rng};
+use tempfile::TempDir;
+use tokio::{
+    sync::{broadcast, mpsc, watch},
+    task::JoinHandle,
+};
 
-use crate::Cryptarchia;
+use crate::{Cryptarchia, CryptarchiaConsensus, Error, relays::CryptarchiaConsensusRelays};
 
 #[test]
 fn cryptarchia_switch_to_online() {
@@ -83,9 +103,145 @@ fn cryptarchia_switch_to_online() {
     assert!(cryptarchia.ledger.state(&block_ids[1]).is_none());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "better to have one comprehensive test"
+)]
+async fn get_block_ids() {
+    // Init dummy relays for chain service
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays =
+        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
+            OutboundRelay::new(broadcast_tx),
+            OutboundRelay::new(storage_tx),
+            OutboundRelay::new(time_tx),
+        )
+        .await;
+    let (state_tx, _state_rx) = watch::channel(None);
+    let state_updater = StateUpdater::new(Arc::new(state_tx));
+    let (new_block_tx, _new_block_rx) = broadcast::channel(10);
+    let (lib_tx, _lib_rx) = broadcast::channel(10);
+
+    // Init `Cryptarchia`
+    let k = 3.try_into().unwrap();
+    let config = ledger_config(k);
+    let genesis_id = [0; 32].into();
+    let (zk_key, utxo) = utxo();
+    let mut cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Online,
+        Slot::genesis(),
+        0,
+    );
+
+    // Add 2 blocks (not finalized yet since k=3)
+    let mut slot = Slot::genesis() + 1;
+    let mut block_ids = vec![genesis_id];
+    for _ in 0..2 {
+        let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
+        CryptarchiaConsensus::<_, RocksBackend, SystemTimeBackend, TestRuntimeServiceId>::process_block_and_update_state(
+            &mut cryptarchia,
+            block.clone(),
+            block.header().slot(),
+            &HashSet::new(),
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+            &state_updater,
+        )
+        .await
+        .unwrap();
+        block_ids.push(block.header().id());
+        slot = block.header().slot() + 1;
+    }
+
+    // get_block_ids when all blocks are in memory.
+    let mut stream = CryptarchiaConsensus::get_block_ids(
+        block_ids[2],
+        block_ids[0],
+        &cryptarchia,
+        relays.storage_adapter().clone(),
+    );
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[0]);
+    assert!(stream.next().await.is_none());
+
+    // Hitting genesis before reaching `to_ancestor`
+    let mut stream = CryptarchiaConsensus::get_block_ids(
+        block_ids[2],
+        [99; 32].into(), // unknown block ID
+        &cryptarchia,
+        relays.storage_adapter().clone(),
+    );
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[0]);
+    assert!(matches!(
+        stream.next().await.unwrap(),
+        Err(Error::ParentIdNotFound(_))
+    ));
+
+    // Add 3 more blocks.
+    // Now G, b1 are in storage, and b2~5 are in memory.
+    for _ in 0..3 {
+        let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
+        CryptarchiaConsensus::<_, RocksBackend, SystemTimeBackend, TestRuntimeServiceId>::process_block_and_update_state(
+            &mut cryptarchia,
+            block.clone(),
+            block.header().slot(),
+            &HashSet::new(),
+            &relays,
+            &new_block_tx,
+            &lib_tx,
+            &state_updater,
+        )
+        .await
+        .unwrap();
+        block_ids.push(block.header().id());
+        slot = block.header().slot() + 1;
+    }
+
+    // All blocks are loaded from memory + storage.
+    let mut stream = CryptarchiaConsensus::get_block_ids(
+        block_ids[5],
+        block_ids[0],
+        &cryptarchia,
+        relays.storage_adapter().clone(),
+    );
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[5]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[4]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[3]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[2]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[0]);
+    assert!(stream.next().await.is_none());
+
+    // Hitting genesis in storage before reaching `to_ancestor`
+    let mut stream = CryptarchiaConsensus::get_block_ids(
+        block_ids[1],
+        [99; 32].into(), // unknown block ID
+        &cryptarchia,
+        relays.storage_adapter().clone(),
+    );
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[1]);
+    assert_eq!(stream.next().await.unwrap().unwrap(), block_ids[0]);
+    assert!(matches!(
+        stream.next().await.unwrap(),
+        Err(Error::ParentIdNotFound(_))
+    ));
+}
+
 #[must_use]
 fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
-    let mut service_params = std::collections::HashMap::new();
+    let mut service_params = HashMap::new();
     service_params.insert(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
@@ -194,4 +350,42 @@ fn utxo() -> (ZkKey, Utxo) {
         note: Note::new(10000, zk_sk.to_public_key()),
     };
     (zk_sk, utxo)
+}
+
+fn spawn_storage_service(
+    mut rx: mpsc::Receiver<StorageMsg<RocksBackend>>,
+) -> (JoinHandle<()>, TempDir) {
+    let db_dir = TempDir::new().unwrap();
+    let mut backend = RocksBackend::new(RocksBackendSettings {
+        db_path: db_dir.path().join("db"),
+        read_only: false,
+        column_family: None,
+    })
+    .unwrap();
+
+    let handle = tokio::spawn(async move {
+        while let Some(msg) = rx.recv().await {
+            StorageService::<RocksBackend, TestRuntimeServiceId>::handle_storage_message(
+                msg,
+                &mut backend,
+            )
+            .await;
+        }
+    });
+
+    (handle, db_dir)
+}
+
+struct TestRuntimeServiceId;
+
+impl AsServiceId<CryptarchiaConsensus<SignedMantleTx, RocksBackend, SystemTimeBackend, Self>>
+    for TestRuntimeServiceId
+{
+    const SERVICE_ID: Self = Self;
+}
+
+impl Display for TestRuntimeServiceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "TestRuntimeServiceId")
+    }
 }

@@ -25,16 +25,16 @@ lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { default-features = false, workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
-lb-libp2p                        = { optional = true, workspace = true }
+lb-libp2p                        = { workspace = true }
 lb-network-service               = { workspace = true }
 lb-poq                           = { workspace = true }
 lb-sdp-service                   = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
-lb-utils                         = { features = ["serde"], workspace = true }
-libp2p                           = { features = ["dns"], optional = true, workspace = true }
-libp2p-stream                    = { optional = true, workspace = true }
+lb-utils                         = { workspace = true }
+libp2p                           = { features = ["dns"], workspace = true }
+libp2p-stream                    = { workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
@@ -53,4 +53,3 @@ test-log          = { default-features = false, features = ["trace"], version = 
 
 [features]
 default = []
-libp2p  = ["dep:lb-libp2p", "dep:libp2p", "dep:libp2p-stream", "lb-network-service/libp2p"]

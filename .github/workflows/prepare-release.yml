@@ -165,13 +165,13 @@ jobs:
           set -euo pipefail
 
           TEMPLATE=.github/release/release-content.md
-          DISCLAIMER_FILE=.github/release/release-content-rc-disclaimer.md
+          DISCLAIMER_FILE=.github/release/rc-disclaimer.md
           OUTPUT=.github/release/release-content.generated.md
 
           cp "$TEMPLATE" "$OUTPUT"
 
           if [[ "$IS_PRERELEASE" == "true" ]]; then
-            cat "$DISCLAIMER_FILE" "$OUTPUT" > "${OUTPUT}.tmp"
+            { cat "$DISCLAIMER_FILE"; echo; cat "$OUTPUT"; } > "${OUTPUT}.tmp"
             mv "${OUTPUT}.tmp" "$OUTPUT"
           fi
 

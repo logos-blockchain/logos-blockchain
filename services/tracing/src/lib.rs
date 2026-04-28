@@ -272,7 +272,7 @@ where
                 loki_config,
                 service_resources_handle.overwatch_handle.runtime(),
             )?;
-            logger_layers.push(Box::new(loki_layer));
+            push_logger_layer!(logger_layers, env_filter, loki_layer);
         }
 
         if let Some(gelf_config) = config.logger.gelf {
@@ -280,12 +280,12 @@ where
                 &gelf_config,
                 service_resources_handle.overwatch_handle.runtime(),
             )?;
-            logger_layers.push(Box::new(gelf_layer));
+            push_logger_layer!(logger_layers, env_filter, gelf_layer);
         }
 
         if let Some(otlp_config) = config.logger.otlp {
             let otlp_logging_layer = create_otlp_layer(otlp_config)?;
-            logger_layers.push(Box::new(otlp_logging_layer));
+            push_logger_layer!(logger_layers, env_filter, otlp_logging_layer);
         }
 
         let mut other_layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
