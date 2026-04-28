@@ -8,7 +8,6 @@ use std::{
 };
 
 use lb_core::sdp::ServiceType;
-use lb_cryptarchia_engine::{base_period_length, time::epoch_length};
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
