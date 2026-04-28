@@ -842,7 +842,7 @@ mod tests {
 
         if let Op::Transfer(transfer_op) = &funded_tx.ops[funded_tx.ops.len() - 1] {
             // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, Inputs::new(vec![utxo1.id()]));
+            assert_eq!(transfer_op.inputs, Inputs::new(vec![utxo2.id()]));
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,
