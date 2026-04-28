@@ -87,7 +87,12 @@ path = "src/tests/mantle/channel.rs"
 
 [[test]]
 name              = "test_mantle_sdp_ops"
-path              = "src/tests/mantle/sdp_ops.rs"
+path              = "src/tests/mantle/sdp/ops.rs"
+required-features = ["mantle_sdp_ops"]
+
+[[test]]
+name              = "test_mantle_sdp_blend"
+path              = "src/tests/mantle/sdp/activity.rs"
 required-features = ["mantle_sdp_ops"]
 
 [[test]]
