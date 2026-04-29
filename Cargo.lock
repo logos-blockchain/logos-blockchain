@@ -5258,9 +5258,13 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "rand 0.8.5",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
+ "tracing",
+ "tracing-appender",
  "tracing-subscriber 0.3.23",
+ "uuid",
 ]
 
 [[package]]
@@ -5333,6 +5337,7 @@ version = "0.1.2"
 dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-ledger",
  "logos-blockchain-mmr",
@@ -5411,7 +5416,6 @@ version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures",
- "indexmap 2.13.1",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
@@ -9326,6 +9330,7 @@ checksum = "5ac8b6f42ead25368cf5b098aeb3dc8a1a2c05a3eee8a9a1a68c640edbfc79d9"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
+ "serde_core",
  "wasm-bindgen",
 ]
 

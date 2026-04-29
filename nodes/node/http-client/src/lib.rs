@@ -159,7 +159,7 @@ impl CommonHttpClient {
     pub async fn get_lib_stream(
         &self,
         base_url: Url,
-    ) -> Result<impl Stream<Item = BlockInfo>, Error> {
+    ) -> Result<impl Stream<Item = BlockInfo> + use<>, Error> {
         let request_url = base_url
             .join(CRYPTARCHIA_LIB_STREAM.trim_start_matches('/'))
             .map_err(Error::Url)?;

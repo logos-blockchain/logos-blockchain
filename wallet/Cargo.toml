@@ -26,6 +26,7 @@ tracing                       = { workspace = true }
 
 [dev-dependencies]
 lb-cryptarchia-engine = { workspace = true }
+lb-groth16            = { workspace = true }
 lb-utils              = { workspace = true }
 
 [features]
