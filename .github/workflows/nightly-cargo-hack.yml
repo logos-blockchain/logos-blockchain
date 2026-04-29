@@ -76,9 +76,9 @@ jobs:
 
   report:
     name: Report failures
-    needs: [features]
+    needs: [ features ]
     if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    runs-on: [self-hosted, Linux]
+    runs-on: [ self-hosted, Linux ]
     steps:
       - name: Create or update failure issue
         run: |
@@ -103,4 +103,4 @@ jobs:
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+          GH_REPO: ${{ github.repository }}
