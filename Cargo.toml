@@ -176,6 +176,8 @@ blake2            = { default-features = false, version = "0.10" }
 bytes             = { default-features = false, version = "1.3" }
 cached            = { default-features = false, version = "0.55.1" }
 cfg-if            = { default-features = false, version = "1.0.4" }
+cipher            = { default-features = false, version = "0.4" }
+const-hex         = { default-features = false, version = "1" }
 dirs              = { default-features = false, version = "6.0" }
 divan             = { default-features = false, version = "0.1" }
 ed25519-dalek     = { default-features = false, version = "2" }
@@ -184,16 +186,19 @@ futures           = { default-features = false, version = "0.3.32" }
 futures-util      = { default-features = false, version = "0.3.32" }
 generic-array     = { default-features = false, version = "1.2" }
 hex               = { default-features = false, version = "0.4" }
+humantime         = { default-features = false, version = "2.1" }
 kube              = { default-features = false, features = ["client", "rustls-tls"], version = "0.87" }
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
 log               = { default-features = false, version = "0.4" }
+nistrs            = { default-features = false, version = "0.1.2" }
 num-bigint        = { default-features = false, version = "0.4" }
 num-traits        = { default-features = false, version = "0.2.19" }
 nutype            = { default-features = false, version = "0.6.2" }
 overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
 overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
 rand              = { default-features = false, version = "0.8" }
+rand_chacha       = { default-features = false, version = "0.3" }
 reqwest           = { default-features = false, version = "0.12" }
 serde             = { default-features = false, version = "1.0" }
 serde-big-array   = { default-features = false, version = "0.5" }

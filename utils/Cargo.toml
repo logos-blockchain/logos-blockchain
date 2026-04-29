@@ -13,12 +13,12 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
-blake2      = { default-features = false, optional = true, version = "0.10" }
-cipher      = { version = "0.4" }
-const-hex   = { default-features = false, version = "1" }
+async-trait = { workspace = true }
+blake2      = { workspace = true, optional = true }
+cipher      = { workspace = true }
+const-hex   = { workspace = true }
 futures     = { optional = true, workspace = true }
-humantime   = { optional = true, version = "2.1" }
+humantime   = { optional = true, workspace = true }
 overwatch   = { workspace = true }
 rand        = { features = ["getrandom"], workspace = true }
 serde       = { features = ["alloc", "derive"], workspace = true }
@@ -33,7 +33,7 @@ time  = ["dep:humantime", "dep:serde_with", "dep:time"]
 tokio = ["dep:futures", "dep:tokio"]
 
 [dev-dependencies]
-nistrs      = "0.1.2"
-rand_chacha = { default-features = false, version = "0.3" }
-serde_json  = { default-features = false, features = ["alloc"], version = "1.0" }
+nistrs      = { workspace = true }
+rand_chacha = { workspace = true }
+serde_json  = { workspace = true, features = ["alloc"] }
 serde_with  = { features = ["macros"], workspace = true }
