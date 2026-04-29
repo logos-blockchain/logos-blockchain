@@ -20,6 +20,7 @@ ignored = [
 workspace = true
 
 [dependencies]
+lb-log-targets = { workspace = true }
 opentelemetry = { default-features = false, version = "0.31" }
 opentelemetry-appender-tracing = { default-features = false, version = "0.31" }
 opentelemetry-http = { default-features = false, features = ["reqwest"], version = "0.31" }

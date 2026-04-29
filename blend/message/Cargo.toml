@@ -22,14 +22,13 @@ lb-blend-proofs               = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-
-lb-utils        = { features = ["rng"], workspace = true }
-serde           = { workspace = true }
-serde-big-array = { workspace = true }
-serde_with      = { default-features = false, features = ["alloc"], version = "3" }
-thiserror       = { default-features = false, version = "1.0.69" }
-tracing         = { workspace = true }
-zeroize         = { workspace = true }
+lb-utils                      = { features = ["rng"], workspace = true }
+serde                         = { workspace = true }
+serde-big-array               = { workspace = true }
+serde_with                    = { default-features = false, features = ["alloc"], version = "3" }
+thiserror                     = { default-features = false, version = "1.0.69" }
+tracing                       = { workspace = true }
+zeroize                       = { workspace = true }
 
 [dev-dependencies]
 test-log = { default-features = false, features = ["trace"], version = "0.2" }

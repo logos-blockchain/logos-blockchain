@@ -46,7 +46,7 @@ pub trait PolInfoProvider<RuntimeServiceId> {
     ) -> Option<Self::Stream>;
 }
 
-const LOG_TARGET: &str = "blend::service::epoch";
+const LOG_TARGET: &str = lb_log_targets::blend::service::EPOCH;
 
 /// A trait that provides the needed functionalities for the epoch stream to
 /// fetch the epoch state for a given slot.

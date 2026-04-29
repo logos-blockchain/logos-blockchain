@@ -51,6 +51,45 @@ pub fn default_debug_log_filter(level: Level) -> HashMap<String, Level> {
     filters
 }
 
+/// Validates a configured log-filter target against the known Logos target
+/// catalog.
+///
+/// Targets outside the Logos catalog are currently accepted so that
+/// external targets and not-yet-catalogued internal targets continue to work.
+pub fn validate_log_filter_target(target: &str) -> Result<(), String> {
+    if target == "*" {
+        return Ok(());
+    }
+
+    if lb_log_targets::is_logos_target_root(target)
+        && !lb_log_targets::is_valid_logos_target_prefix(target)
+    {
+        return Err(format!("unknown log filter target `{target}`"));
+    }
+
+    Ok(())
+}
+
+/// Parses comma-separated filter directives into the typed filter config form.
+///
+/// Supported syntax:
+/// - `target=level`
+/// - bare global level such as `warn`
+pub fn parse_filter_directives(raw: &str) -> Result<HashMap<String, Level>, String> {
+    let filters = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|directive| !directive.is_empty())
+        .map(parse_filter_directive)
+        .collect::<Result<HashMap<_, _>, _>>()?;
+
+    if filters.is_empty() {
+        return Err(format!("Invalid log filter provided: {raw}"));
+    }
+
+    Ok(filters)
+}
+
 /// Converts the typed filter config into native `EnvFilter` directives.
 fn envfilter_directives(filters: &HashMap<String, Level>) -> String {
     let mut directives = filters
@@ -66,6 +105,29 @@ fn envfilter_directives(filters: &HashMap<String, Level>) -> String {
 
     directives.sort();
     directives.join(",")
+}
+
+fn parse_filter_directive(directive: &str) -> Result<(String, Level), String> {
+    if let Some((target, level)) = directive.split_once('=') {
+        let target = target.trim();
+        let level = level.trim();
+
+        if target.is_empty() || level.is_empty() {
+            return Err(format!("Invalid log filter directive: {directive}"));
+        }
+
+        validate_log_filter_target(target)?;
+        return Ok((target.to_owned(), parse_filter_level(level)?));
+    }
+
+    Ok(("*".to_owned(), parse_filter_level(directive)?))
+}
+
+fn parse_filter_level(level: &str) -> Result<Level, String> {
+    level
+        .trim()
+        .parse()
+        .map_err(|_| format!("Invalid log filter level provided: {level}"))
 }
 
 pub mod serde_filters {
@@ -106,13 +168,47 @@ pub mod serde_filters {
     }
 }
 
+pub mod serde_validated_filters {
+    use std::collections::HashMap;
+
+    use serde::{Deserializer, Serializer, de::Error as _};
+    use tracing::Level;
+
+    use super::{serde_filters, validate_log_filter_target};
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<HashMap<String, Level>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let filters = serde_filters::deserialize(deserializer)?;
+        for target in filters.keys() {
+            validate_log_filter_target(target).map_err(D::Error::custom)?;
+        }
+        Ok(filters)
+    }
+
+    pub fn serialize<S, H>(
+        value: &HashMap<String, Level, H>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        H: std::hash::BuildHasher,
+    {
+        serde_filters::serialize(value, serializer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use tracing::Level;
 
-    use super::{EnvFilterConfig, create_envfilter_layer};
+    use super::{
+        EnvFilterConfig, create_envfilter_layer, parse_filter_directives,
+        validate_log_filter_target,
+    };
 
     #[test]
     fn create_envfilter_layer_accepts_global_and_target_directives() {
@@ -125,5 +221,28 @@ mod tests {
         };
 
         assert!(create_envfilter_layer(&config).is_ok());
+    }
+
+    #[test]
+    fn validate_log_filter_target_rejects_unknown_blend_target() {
+        let error = validate_log_filter_target("blend::service::missing")
+            .expect_err("unknown blend target should fail");
+
+        assert_eq!(error, "unknown log filter target `blend::service::missing`");
+    }
+
+    #[test]
+    fn validate_log_filter_target_accepts_external_targets() {
+        assert!(validate_log_filter_target("libp2p").is_ok());
+    }
+
+    #[test]
+    fn parse_filter_directives_accepts_global_and_target_directives() {
+        let filters = parse_filter_directives("warn,blend::service=debug,libp2p=info")
+            .expect("filter directives should parse");
+
+        assert_eq!(filters.get("*"), Some(&Level::WARN));
+        assert_eq!(filters.get("blend::service"), Some(&Level::DEBUG));
+        assert_eq!(filters.get("libp2p"), Some(&Level::INFO));
     }
 }
