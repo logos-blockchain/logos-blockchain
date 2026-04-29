@@ -43,7 +43,17 @@ jobs:
       - name: Install cargo-hack and gh
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
         with:
-          tool: cargo-hack,gh
+          tool: cargo-hack
+
+      - name: Install gh
+        run: |
+          if ! command -v gh &> /dev/null; then
+            if [[ "$RUNNER_OS" == "Linux" ]]; then
+              sudo apt update && sudo apt install -y gh
+            elif [[ "$RUNNER_OS" == "macOS" ]]; then
+              brew install gh
+            fi
+          fi
 
       # Prune after Install cargo-hack, before Set up Cargo cache — frees disk space from the previous run's leftover
       # artifacts (incremental compile dirs, fingerprints, build dirs) before the cache is restored. This means the
