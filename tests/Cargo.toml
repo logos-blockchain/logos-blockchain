@@ -70,7 +70,7 @@ tracing-subscriber               = { features = ["env-filter", "fmt"], version =
 [features]
 cucumber             = []
 cucumber_stand_alone = []
-mantle_sdp_ops       = []
+mantle_sdp           = []
 testing_framework    = []
 
 [[test]]
@@ -87,8 +87,13 @@ path = "src/tests/mantle/channel.rs"
 
 [[test]]
 name              = "test_mantle_sdp_ops"
-path              = "src/tests/mantle/sdp_ops.rs"
-required-features = ["mantle_sdp_ops"]
+path              = "src/tests/mantle/sdp/ops.rs"
+required-features = ["mantle_sdp"]
+
+[[test]]
+name              = "test_mantle_sdp_blend"
+path              = "src/tests/mantle/sdp/activity.rs"
+required-features = ["mantle_sdp"]
 
 [[test]]
 name = "test_mantle_leader"

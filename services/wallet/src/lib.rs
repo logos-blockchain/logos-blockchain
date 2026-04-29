@@ -94,6 +94,9 @@ pub enum WalletServiceError {
     #[error("Locked note {0:?} is missing in ledger")]
     MissingLockedNote(NoteId),
 
+    #[error("Input note {0:?} is missing in ledger")]
+    MissingInputNote(NoteId),
+
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
@@ -586,16 +589,11 @@ where
         tx_hash: TxHash,
         note_ids: Vec<NoteId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        tx_builder: MantleTxBuilder,
+        ledger: &LedgerState,
     ) -> Result<OpProof, WalletServiceError> {
-        let input_pks: Vec<ZkPublicKey> = tx_builder
-            .ledger_inputs()
-            .iter()
-            .filter(|&utxo| note_ids.contains(&utxo.id()))
-            .map(|utxo| utxo.note.pk)
-            .collect();
-
+        let input_pks = Self::resolve_note_input_pks(ledger, note_ids)?;
         let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
+
         Ok(OpProof::ZkSig(zk_sig))
     }
 
@@ -689,15 +687,7 @@ where
                 active_op.declaration_id,
             ))?;
 
-        let locked_note = ledger
-            .mantle_ledger()
-            .locked_notes()
-            .get(&declaration.locked_note_id)
-            .ok_or(WalletServiceError::MissingLockedNote(
-                declaration.locked_note_id,
-            ))?;
-
-        let zk_sig = Self::sign_zksig(tx_hash, [locked_note.pk, declaration.zk_id], kms).await?;
+        let zk_sig = Self::sign_zksig(tx_hash, [declaration.zk_id], kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
     }
@@ -737,16 +727,11 @@ where
         tx_hash: TxHash,
         note_ids: Vec<NoteId>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        tx_builder: MantleTxBuilder,
+        ledger: &LedgerState,
     ) -> Result<OpProof, WalletServiceError> {
-        let input_pks: Vec<ZkPublicKey> = tx_builder
-            .ledger_inputs()
-            .iter()
-            .filter(|&utxo| note_ids.contains(&utxo.id()))
-            .map(|utxo| utxo.note.pk)
-            .collect();
-
+        let input_pks = Self::resolve_note_input_pks(ledger, note_ids)?;
         let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
+
         Ok(OpProof::ZkSig(zk_sig))
     }
 
@@ -774,9 +759,9 @@ where
                 Op::ChannelDeposit(deposit_op) => {
                     Self::sign_channel_deposit(
                         tx_hash,
-                        deposit_op.inputs.to_vec(),
+                        deposit_op.inputs.as_ref().clone(),
                         kms,
-                        tx_builder.clone(),
+                        &tip_leader,
                     )
                     .await?
                 }
@@ -801,9 +786,9 @@ where
                 Op::Transfer(transfer_op) => {
                     Self::sign_transfer(
                         tx_hash,
-                        transfer_op.inputs.to_vec(),
+                        transfer_op.inputs.as_ref().clone(),
                         kms,
-                        tx_builder.clone(),
+                        &tip_leader,
                     )
                     .await?
                 }
@@ -864,6 +849,23 @@ where
         };
 
         Ok(zk_sig)
+    }
+
+    fn resolve_note_input_pks(
+        ledger: &LedgerState,
+        note_ids: impl IntoIterator<Item = NoteId>,
+    ) -> Result<Vec<ZkPublicKey>, WalletServiceError> {
+        note_ids
+            .into_iter()
+            .map(|note_id| {
+                ledger
+                    .latest_utxos()
+                    .utxos()
+                    .get(&note_id)
+                    .map(|(utxo, _)| utxo.note.pk)
+                    .ok_or(WalletServiceError::MissingInputNote(note_id))
+            })
+            .collect()
     }
 
     fn generate_poc(

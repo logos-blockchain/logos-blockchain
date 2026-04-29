@@ -68,7 +68,7 @@ pub async fn current_utxos_for_public_key(
     for block in blocks.into_iter().rev() {
         for tx in &block.transactions {
             for transfer in tx.mantle_tx.transfers() {
-                for input in transfer.inputs.as_vec() {
+                for input in &transfer.inputs {
                     owned.remove(input);
                 }
 
@@ -104,6 +104,7 @@ fn wallet_state_from_utxos(utxos: Vec<Utxo>) -> WalletState {
     WalletState {
         utxos: utxo_map,
         pk_index,
+        locked_notes: HashTrieSetSync::new_sync(),
         epoch: 0.into(),
         vouchers: MerkleMountainRange::new(),
         voucher_paths: HashTrieMapSync::new_sync(),

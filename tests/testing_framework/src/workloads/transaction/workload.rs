@@ -104,12 +104,17 @@ where
             .nodes()
             .first()
             .ok_or(TxWorkloadError::MissingReferenceNode)?;
-        let genesis_tx = descriptors
+        let genesis_block = descriptors
             .config()
-            .genesis_tx
+            .genesis_block
             .as_ref()
             .ok_or(TxWorkloadError::MissingReferenceNode)?;
-        let utxo_map = wallet_utxo_map(genesis_tx);
+        let utxo_map = wallet_utxo_map(
+            genesis_block
+                .transactions()
+                .next()
+                .expect("Genesis block should contain a genesis tx"),
+        );
 
         let mut accounts = wallet_accounts
             .into_iter()

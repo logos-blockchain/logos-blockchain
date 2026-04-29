@@ -1,7 +1,7 @@
 use std::{collections::HashMap, error::Error, path::PathBuf, sync::Arc, time::Duration};
 
 use lb_config::kms::key_id_for_preload_backend;
-use lb_core::mantle::genesis_tx::GenesisTx;
+use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::RunConfig;
 use rand::{Rng, SeedableRng as _};
 use testing_framework_core::topology::{DeploymentProvider, DeploymentSeed, DynTopologyError};
@@ -46,7 +46,7 @@ pub struct TopologyConfig {
     pub network_params: Arc<NetworkParams>,
     pub wallet_config: WalletConfig,
     pub scenario_base_dir: PathBuf,
-    pub genesis_tx: Option<GenesisTx>,
+    pub genesis_block: Option<GenesisBlock>,
     pub slot_duration: Option<Duration>,
     pub active_slot_coeff: f64,
     pub security_param: u32,
@@ -113,7 +113,7 @@ impl Default for TopologyConfig {
             network_params: Arc::new(NetworkParams::default()),
             wallet_config: WalletConfig::default(),
             scenario_base_dir: std::env::temp_dir(),
-            genesis_tx: None,
+            genesis_block: None,
             slot_duration: Some(Duration::from_secs(DEFAULT_SLOT_TIME_IN_SECS)),
             active_slot_coeff: DEFAULT_ACTIVE_SLOT_COEFF,
             security_param: DEFAULT_SECURITY_PARAM,
@@ -207,7 +207,7 @@ impl DeploymentBuilder {
         let ids = generate_node_ids(node_count, self.seed.as_ref());
 
         let blend_ports = allocate_blend_ports(node_count)?;
-        let (mut node_configs, base_genesis_tx) = create_node_configs_from_ids(
+        let (mut node_configs, genesis_block) = create_node_configs_from_ids(
             &ids,
             &blend_ports,
             self.config.blend_core_nodes,
@@ -223,9 +223,9 @@ impl DeploymentBuilder {
             .map(|account| (account.secret_key.clone(), account.value))
             .collect::<Vec<_>>();
 
-        let genesis_tx = postprocess::apply_wallet_genesis_overrides(
+        let genesis_block = postprocess::apply_wallet_genesis_overrides(
             &mut node_configs,
-            &base_genesis_tx,
+            &genesis_block,
             self.config.blend_core_nodes,
             &wallet_accounts,
             key_id_for_preload_backend,
@@ -233,7 +233,7 @@ impl DeploymentBuilder {
         );
 
         let nodes = build_node_plans(node_count, &ids, &node_configs)?;
-        self.config.genesis_tx = Some(genesis_tx);
+        self.config.genesis_block = Some(genesis_block);
 
         Ok(DeploymentPlan::new(self.config, nodes))
     }

@@ -9,7 +9,7 @@ use lb_config::{
     blend::{GeneralBlendConfig, create_blend_configs_with_listening_host},
     consensus::{
         GeneralConsensusConfig, ProviderInfo, SHORT_PROLONGED_BOOTSTRAP_PERIOD,
-        create_genesis_tx_with_declarations,
+        create_genesis_block_with_declarations,
     },
     kms::create_kms_configs,
     network::{NetworkParams, create_network_configs},
@@ -18,7 +18,8 @@ use lb_config::{
     tracing::GeneralTracingConfig,
 };
 use lb_core::{
-    mantle::{GenesisTx as _, genesis_tx::GenesisTx},
+    block::genesis::GenesisBlock,
+    mantle::GenesisTx as _,
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -48,7 +49,11 @@ pub fn create_node_configs(
     faucet_settings: &FaucetSettings,
     tracing_settings: &TracingConfig,
     mut hosts: Vec<Host>,
-) -> (HashMap<Host, GeneralConfig>, GenesisTx, Option<ZkPublicKey>) {
+) -> (
+    HashMap<Host, GeneralConfig>,
+    GenesisBlock,
+    Option<ZkPublicKey>,
+) {
     hosts.sort();
     let mut ids = Vec::with_capacity(hosts.len());
 
@@ -56,7 +61,7 @@ pub fn create_node_configs(
         ids.push(host_to_id(entropy, &host.identifier));
     }
 
-    let (consensus_configs, faucet_info, genesis_tx) = create_consensus_configs(
+    let (consensus_configs, faucet_info, genesis_block) = create_consensus_configs(
         entropy,
         &ids,
         SHORT_PROLONGED_BOOTSTRAP_PERIOD,
@@ -88,9 +93,9 @@ pub fn create_node_configs(
     let providers = create_providers(&hosts, &consensus_configs, &blend_configs);
 
     // Update genesis TX to contain Blend providers.
-    let transfer_op = genesis_tx.genesis_transfer().clone();
-    let genesis_tx_with_declarations =
-        create_genesis_tx_with_declarations(transfer_op, providers, None);
+    let transfer_op = genesis_block.genesis_tx().genesis_transfer().clone();
+    let genesis_block_with_declarations =
+        create_genesis_block_with_declarations(transfer_op, providers, None);
 
     // Set Blend keys in KMS of each node config.
     // Give faucet SK to all nodes so the faucet service can route to any node.
@@ -100,7 +105,8 @@ pub fn create_node_configs(
     let kms_configs =
         create_kms_configs(&blend_configs, &consensus_configs, shared_keys.as_deref());
 
-    let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, hosts.len());
+    let sdp_configs =
+        create_sdp_configs(&genesis_block_with_declarations.genesis_tx(), hosts.len());
 
     // Add faucet SK to all nodes' other_keys so it appears in the wallet
     // known_keys.
@@ -152,7 +158,7 @@ pub fn create_node_configs(
         );
     }
 
-    (configured_hosts, genesis_tx_with_declarations, faucet_pk)
+    (configured_hosts, genesis_block_with_declarations, faucet_pk)
 }
 
 #[must_use]
@@ -501,8 +507,8 @@ mod cfgsync_tests {
         // Same entropy + same hosts → identical genesis transfer operations
         // (ZK proofs use internal randomness, so compare the transfers only).
         assert_eq!(
-            serde_json::to_string(&genesis1.genesis_transfer()).unwrap(),
-            serde_json::to_string(&genesis2.genesis_transfer()).unwrap(),
+            serde_json::to_string(&genesis1.genesis_tx().genesis_transfer()).unwrap(),
+            serde_json::to_string(&genesis2.genesis_tx().genesis_transfer()).unwrap(),
         );
 
         // Same entropy + same hosts → identical node network keys.

@@ -6,7 +6,6 @@ use std::{
 };
 
 use lb_config::GeneralConfig;
-use lb_core::block::genesis::GenesisBlock;
 use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
@@ -139,7 +138,7 @@ impl ConfigRepo {
             let mut waiting_hosts = self.waiting_hosts.lock().unwrap();
             let hosts = waiting_hosts.keys().cloned().collect();
 
-            let (configs, genesis_tx, faucet_pk) = create_node_configs(
+            let (configs, genesis_block, faucet_pk) = create_node_configs(
                 &self.entropy,
                 &self.faucet_settings,
                 &self.tracing_settings,
@@ -147,8 +146,7 @@ impl ConfigRepo {
             );
             let devnet_settings = {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
-                // TODO: This will be fixed from different PR
-                default_settings.cryptarchia.genesis_block = GenesisBlock::genesis(genesis_tx);
+                default_settings.cryptarchia.genesis_block = genesis_block;
                 default_settings.cryptarchia.faucet_pk = faucet_pk;
                 default_settings
             };

@@ -4,7 +4,7 @@ services:
 
   cfgsync:
     container_name: cfgsync
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -14,7 +14,7 @@ services:
 
   client-0:
     container_name: client_0
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -30,7 +30,7 @@ services:
 
   client-1:
     container_name: client_1
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -46,7 +46,7 @@ services:
 
   client-2:
     container_name: client_2
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -62,7 +62,7 @@ services:
 
   client-3:
     container_name: client_3
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain

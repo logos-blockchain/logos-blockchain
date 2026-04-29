@@ -377,17 +377,14 @@ mod tests {
 
         async fn block_stream(
             &self,
-        ) -> Result<
-            impl Stream<Item = ProcessedBlockEvent> + Send + 'static,
-            lb_common_http_client::Error,
-        > {
-            Ok(futures::stream::empty())
+        ) -> Result<adapter::BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::empty()))
         }
 
         async fn lib_stream(
             &self,
-        ) -> Result<impl Stream<Item = BlockInfo> + Send, lb_common_http_client::Error> {
-            Ok(futures::stream::empty())
+        ) -> Result<adapter::BoxStream<BlockInfo>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::empty()))
         }
 
         async fn block(
@@ -409,8 +406,8 @@ mod tests {
             &self,
             _id: HeaderId,
             _channel_id: ChannelId,
-        ) -> Result<impl Stream<Item = ZoneMessage>, lb_common_http_client::Error> {
-            Ok(futures::stream::empty())
+        ) -> Result<adapter::BoxStream<ZoneMessage>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::empty()))
         }
 
         async fn zone_messages_in_blocks(
@@ -418,13 +415,14 @@ mod tests {
             slot_from: Slot,
             slot_to: Slot,
             _channel_id: ChannelId,
-        ) -> Result<impl Stream<Item = (ZoneMessage, Slot)>, lb_common_http_client::Error> {
-            Ok(futures::stream::iter(
-                self.messages
-                    .iter()
-                    .filter(move |(_, slot)| *slot >= slot_from && *slot <= slot_to)
-                    .cloned(),
-            ))
+        ) -> Result<adapter::BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            let msgs: Vec<_> = self
+                .messages
+                .iter()
+                .filter(move |(_, slot)| *slot >= slot_from && *slot <= slot_to)
+                .cloned()
+                .collect();
+            Ok(Box::pin(futures::stream::iter(msgs)))
         }
 
         async fn post_transaction(
