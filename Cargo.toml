@@ -197,6 +197,8 @@ num-traits        = { default-features = false, version = "0.2.19" }
 nutype            = { default-features = false, version = "0.6.2" }
 overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
 overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
+proptest          = { default-features = false, version = "1.0" }
+proptest-macro    = { default-features = false, version = "0.2" }
 quickcheck        = { default-features = false, version = "1.0" }
 quickcheck_macros = { default-features = false, version = "1.0" }
 rand              = { default-features = false, version = "0.8" }
