@@ -178,6 +178,7 @@ cached            = { default-features = false, version = "0.55.1" }
 cfg-if            = { default-features = false, version = "1.0.4" }
 cipher            = { default-features = false, version = "0.4" }
 const-hex         = { default-features = false, version = "1" }
+derivative        = { default-features = false, version = "2" }
 dirs              = { default-features = false, version = "6.0" }
 divan             = { default-features = false, version = "0.1" }
 ed25519-dalek     = { default-features = false, version = "2" }
@@ -187,6 +188,7 @@ futures-util      = { default-features = false, version = "0.3.32" }
 generic-array     = { default-features = false, version = "1.2" }
 hex               = { default-features = false, version = "0.4" }
 humantime         = { default-features = false, version = "2.1" }
+itertools         = { default-features = false, version = "0.14" }
 kube              = { default-features = false, features = ["client", "rustls-tls"], version = "0.87" }
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
@@ -219,6 +221,7 @@ serde_yaml        = { default-features = false, version = "0.9.33" }
 strum             = { default-features = false, version = "0.27" }
 subtle            = { default-features = false, version = "2.6.1" }
 tempfile          = { default-features = false, version = "3" }
+test-log          = { default-features = false, version = "0.2" }
 thiserror         = { default-features = false, version = "2.0" }
 time              = { default-features = false, version = "0.3" }
 tokio             = { default-features = false, version = "1" }
