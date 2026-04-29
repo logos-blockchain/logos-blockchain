@@ -596,7 +596,7 @@ where
     post,
     path = paths::LEADER_CLAIM,
     responses(
-        (status = 200, description = "Leader claim transaction submitted"),
+        (status = 200, description = "Leader claim transaction submitted", body = lb_api_service::http::consensus::leader::LeaderClaimResponseBody),
         (status = 500, description = "Internal server error", body = String),
     )
 )]

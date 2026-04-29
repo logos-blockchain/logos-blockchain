@@ -5136,6 +5136,7 @@ dependencies = [
  "hex",
  "lb_config",
  "libp2p",
+ "logos-blockchain-api-service",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
