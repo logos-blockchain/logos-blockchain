@@ -6,22 +6,22 @@
 //! this too, but the declaration format and expansion logic became harder to
 //! read once nesting and collection were involved.
 //!
-//! The input we want to support is a flat list of target paths:
+//! The input is a grouped list of target paths:
 //!
 //! ```ignore
 //! log_targets! {
-//!     blend::service::CORE,
-//!     blend::service::core::KMS_POQ_GENERATOR,
-//!     blend::network::core::handler::CORE_EDGE,
+//!     blend::{
+//!         service::{CORE, core::KMS_POQ_GENERATOR},
+//!         network::core::handler::{CORE_EDGE},
+//!     }
 //! }
 //! ```
-//!
-//! From that list we need to generate:
+//! From those declarations the macro generates:
 //! - nested modules and `ROOT` / leaf constants
 //! - target collection helpers
 //!
 //! The proc macro does the following:
-//! - parse the flat path list once
+//! - parse the grouped declarations once
 //! - build a small in-memory tree
 //! - emit the nested module structure from that tree
 //! - report duplicate/conflicting definitions with direct, readable errors
@@ -37,16 +37,30 @@ use syn::{
 
 /// A parsed list of target declarations passed to `log_targets!`.
 struct TargetList {
-    /// Comma-separated target declarations such as
-    /// `blend::service::core::KMS_POQ_GENERATOR`.
-    targets: Punctuated<TargetPath, Token![,]>,
+    /// Comma-separated grouped declarations such as
+    /// `blend::{service::{CORE}}`.
+    groups: Punctuated<TargetGroup, Token![,]>,
 }
 
-/// One declared target path from the macro input.
-struct TargetPath {
-    /// Top-level namespace root, for example `blend`.
-    root: Ident,
-    /// Intermediate modules between the root and the leaf constant.
+/// One grouped declaration block such as `service::{CORE, core::LEAF}`.
+struct TargetGroup {
+    /// Path prefix shared by all items in this group.
+    prefix: Vec<Ident>,
+    /// Items declared under that prefix.
+    items: Punctuated<TargetItem, Token![,]>,
+}
+
+/// One item inside a grouped declaration block.
+enum TargetItem {
+    /// A leaf target like `CORE` or `core::KMS_POQ_GENERATOR`.
+    Leaf(TargetLeafPath),
+    /// A nested grouped block such as `service::{...}`.
+    Group(TargetGroup),
+}
+
+/// One declared leaf path relative to its surrounding group.
+struct TargetLeafPath {
+    /// Intermediate modules between the surrounding group prefix and the leaf.
     modules: Vec<Ident>,
     /// Final constant name, for example `CORE_AND_LEADER`.
     leaf: Ident,
@@ -85,26 +99,45 @@ struct TargetLeaf {
 }
 
 impl Parse for TargetList {
-    /// Parse the full macro input as a comma-separated list of target paths.
+    /// Parse the full macro input as a comma-separated list of grouped target
+    /// declarations.
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         Ok(Self {
-            targets: Punctuated::parse_terminated(input)?,
+            groups: Punctuated::parse_terminated(input)?,
         })
     }
 }
 
-impl Parse for TargetPath {
-    /// Parse a single declaration such as `blend::service::CORE`.
+impl Parse for TargetGroup {
+    /// Parse a grouped declaration such as `blend::{service::{CORE}}`.
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let root = input.parse()?;
+        let prefix = parse_path_segments(input)?;
         input.parse::<Token![::]>()?;
 
-        let mut parts = Vec::new();
-        parts.push(input.parse::<Ident>()?);
+        let content;
+        syn::braced!(content in input);
 
-        while input.peek(Token![::]) {
+        Ok(Self {
+            prefix,
+            items: Punctuated::parse_terminated(&content)?,
+        })
+    }
+}
+
+impl Parse for TargetItem {
+    /// Parse one item inside a grouped declaration.
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut parts = parse_path_segments(input)?;
+
+        if input.peek(Token![::]) {
             input.parse::<Token![::]>()?;
-            parts.push(input.parse::<Ident>()?);
+            let content;
+            syn::braced!(content in input);
+
+            return Ok(Self::Group(TargetGroup {
+                prefix: parts,
+                items: Punctuated::parse_terminated(&content)?,
+            }));
         }
 
         let segment_override = if input.peek(Token![=]) {
@@ -115,13 +148,29 @@ impl Parse for TargetPath {
         };
 
         let leaf = parts.pop().expect("target path must have a leaf");
-        Ok(Self {
-            root,
+        Ok(Self::Leaf(TargetLeafPath {
             modules: parts,
             leaf,
             segment_override,
-        })
+        }))
     }
+}
+
+fn parse_path_segments(input: ParseStream<'_>) -> Result<Vec<Ident>> {
+    let mut parts = vec![input.parse::<Ident>()?];
+
+    while input.peek(Token![::]) {
+        let fork = input.fork();
+        fork.parse::<Token![::]>()?;
+        if fork.peek(syn::token::Brace) {
+            break;
+        }
+
+        input.parse::<Token![::]>()?;
+        parts.push(input.parse::<Ident>()?);
+    }
+
+    Ok(parts)
 }
 
 impl ModuleNode {
@@ -197,22 +246,12 @@ pub fn log_targets(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Convert the parsed flat path list into a grouped module tree, then emit
-/// code.
+/// Convert the parsed grouped declarations into a module tree, then emit code.
 fn expand_target_list(input: TargetList) -> Result<TokenStream2> {
     let mut roots: Vec<(Ident, ModuleNode)> = Vec::new();
 
-    for target in input.targets {
-        let root_index =
-            if let Some(index) = roots.iter().position(|(name, _)| *name == target.root) {
-                index
-            } else {
-                roots.push((target.root.clone(), ModuleNode::default()));
-                roots.len() - 1
-            };
-
-        let root = &mut roots[root_index].1;
-        root.insert(&target.modules, target.leaf, target.segment_override)?;
+    for group in input.groups {
+        flatten_group(group, &mut roots)?;
     }
 
     let modules = roots
@@ -223,6 +262,59 @@ fn expand_target_list(input: TargetList) -> Result<TokenStream2> {
     Ok(quote! {
         #(#modules)*
     })
+}
+
+fn flatten_group(group: TargetGroup, roots: &mut Vec<(Ident, ModuleNode)>) -> Result<()> {
+    for item in group.items {
+        flatten_item(item, &group.prefix, roots)?;
+    }
+
+    Ok(())
+}
+
+fn flatten_item(
+    item: TargetItem,
+    parent_prefix: &[Ident],
+    roots: &mut Vec<(Ident, ModuleNode)>,
+) -> Result<()> {
+    match item {
+        TargetItem::Leaf(leaf) => insert_leaf(parent_prefix, leaf, roots),
+        TargetItem::Group(group) => {
+            let mut prefix = parent_prefix.to_vec();
+            prefix.extend(group.prefix);
+            for child in group.items {
+                flatten_item(child, &prefix, roots)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+fn insert_leaf(
+    parent_prefix: &[Ident],
+    leaf: TargetLeafPath,
+    roots: &mut Vec<(Ident, ModuleNode)>,
+) -> Result<()> {
+    let mut full_prefix = parent_prefix.to_vec();
+    full_prefix.extend(leaf.modules);
+
+    let Some((root_name, modules)) = full_prefix.split_first() else {
+        return Err(Error::new_spanned(
+            &leaf.leaf,
+            "target declaration must have a root prefix",
+        ));
+    };
+
+    let root_index = roots
+        .iter()
+        .position(|(name, _)| *name == *root_name)
+        .unwrap_or_else(|| {
+            roots.push((root_name.clone(), ModuleNode::default()));
+            roots.len() - 1
+        });
+
+    let root = &mut roots[root_index].1;
+    root.insert(modules, leaf.leaf, leaf.segment_override)
 }
 
 fn kebab_case_ident(ident: &Ident) -> String {
