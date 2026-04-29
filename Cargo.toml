@@ -203,6 +203,7 @@ rand              = { default-features = false, version = "0.8" }
 rand_chacha       = { default-features = false, version = "0.3" }
 reqwest           = { default-features = false, version = "0.12" }
 rpds              = { default-features = false, version = "1" }
+rs-merkle-tree    = { default-features = false, version = "0.1" }
 serde             = { default-features = false, version = "1.0" }
 serde-big-array   = { default-features = false, version = "0.5" }
 serde_ignored     = { default-features = false, version = "0.1" }
