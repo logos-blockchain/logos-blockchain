@@ -169,6 +169,7 @@ ark-ec            = { default-features = false, version = "0.4" }
 ark-ff            = { default-features = false, version = "0.4" }
 ark-groth16       = { default-features = false, version = "0.4" }
 ark-serialize     = { default-features = false, version = "0.4.2" }
+astro-float       = { default-features = false, version = "0.9" }
 async-trait       = { default-features = false, version = "0.1" }
 bincode           = { default-features = false, version = "1.3" }
 blake2            = { default-features = false, version = "0.10" }
@@ -188,6 +189,7 @@ libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
 log               = { default-features = false, version = "0.4" }
 num-bigint        = { default-features = false, version = "0.4" }
+num-traits        = { default-features = false, version = "0.2.19" }
 nutype            = { default-features = false, version = "0.6.2" }
 overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
 overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }

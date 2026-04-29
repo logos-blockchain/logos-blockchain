@@ -537,8 +537,6 @@ checksum = "86887daca11d02e0b04f37a9cb81888aae881397fb48ff66494e356aea97554a"
 dependencies = [
  "itertools 0.10.5",
  "lazy_static",
- "rand 0.8.5",
- "serde",
 ]
 
 [[package]]
