@@ -25,7 +25,7 @@ lb-utils                        = { features = ["rng"], workspace = true }
 lb-zksign                       = { workspace = true }
 num-bigint                      = { workspace = true }
 rand_core                       = { workspace = true }
-serde                           = { workspace = true, features = ["derive"] }
+serde                           = { features = ["derive"], workspace = true }
 subtle                          = { workspace = true }
 thiserror                       = { workspace = true }
 tokio                           = { features = ["rt"], workspace = true }

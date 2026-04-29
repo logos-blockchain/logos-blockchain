@@ -19,7 +19,7 @@ lb-key-management-system-keys = { workspace = true }
 lb-ledger                     = { workspace = true }
 lb-mmr                        = { workspace = true }
 num-bigint                    = { workspace = true }
-rpds                          = { workspace = true, features = ["serde"] }
+rpds                          = { features = ["serde"], workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }
 tracing                       = { workspace = true }

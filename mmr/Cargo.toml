@@ -10,15 +10,15 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-ff       = { workspace = true, features = ["std"] }
+ark-ff       = { features = ["std"], workspace = true }
 lb-groth16   = { workspace = true }
 lb-poseidon2 = { workspace = true }
-rpds         = { workspace = true, features = ["serde"] }
+rpds         = { features = ["serde"], workspace = true }
 serde        = { features = ["derive"], workspace = true }
 thiserror    = { workspace = true }
 
 [dev-dependencies]
-proptest       = { workspace = true, features = ["std"] }
+proptest       = { features = ["std"], workspace = true }
 proptest-macro = { workspace = true }
 
 [lints]

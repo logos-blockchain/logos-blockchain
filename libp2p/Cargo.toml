@@ -14,7 +14,7 @@ workspace = true
 
 [dependencies]
 async-trait = { workspace = true }
-backon = { workspace = true }
+backon = { features = ["tokio-sleep"], workspace = true }
 blake2 = { workspace = true }
 either = { workspace = true }
 futures = { workspace = true }

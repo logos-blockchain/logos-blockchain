@@ -28,7 +28,7 @@ lb-utxotree                   = { workspace = true }
 num-bigint                    = { workspace = true }
 rand                          = { workspace = true }
 rpds                          = { workspace = true }
-serde                         = { workspace = true, features = ["derive"] }
+serde                         = { features = ["derive"], workspace = true }
 serde_arrays                  = { workspace = true }
 thiserror                     = { workspace = true }
 tracing                       = { workspace = true }

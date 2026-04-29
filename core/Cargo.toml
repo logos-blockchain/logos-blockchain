@@ -18,9 +18,9 @@ ark-ff                        = { workspace = true }
 bincode                       = { workspace = true }
 blake2                        = { workspace = true }
 bytes                         = { workspace = true }
-const-hex                     = { workspace = true, features = ["alloc"] }
+const-hex                     = { features = ["alloc"], workspace = true }
 futures                       = { features = ["alloc"], workspace = true }
-hex                           = { workspace = true, features = ["alloc"] }
+hex                           = { features = ["alloc"], workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
@@ -32,7 +32,7 @@ lb-poseidon2                  = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }
 multiaddr                     = { workspace = true }
-nom                           = { workspace = true, features = ["alloc"] }
+nom                           = { features = ["alloc"], workspace = true }
 num-bigint                    = { workspace = true }
 rpds                          = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }

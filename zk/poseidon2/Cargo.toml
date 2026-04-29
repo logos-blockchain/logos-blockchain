@@ -10,9 +10,9 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-bn254    = { workspace = true, features = ["scalar_field"] }
+ark-bn254    = { features = ["scalar_field"], workspace = true }
 ark-ff       = { workspace = true }
-jf-poseidon2 = { workspace = true, features = ["bn254"] }
+jf-poseidon2 = { features = ["bn254"], workspace = true }
 num-bigint   = { workspace = true }
 
 [lints]

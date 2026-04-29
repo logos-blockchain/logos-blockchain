@@ -14,7 +14,7 @@ ark-ff       = { workspace = true }
 lb-groth16   = { workspace = true }
 lb-poseidon2 = { workspace = true }
 num-bigint   = { workspace = true }
-rpds         = { workspace = true, features = ["serde"] }
+rpds         = { features = ["serde"], workspace = true }
 serde        = { features = ["alloc", "derive", "rc"], workspace = true }
 thiserror    = { workspace = true }
 
@@ -22,7 +22,7 @@ thiserror    = { workspace = true }
 quickcheck        = { workspace = true }
 quickcheck_macros = { workspace = true }
 # TODO: Replace with unified workspace dependency
-rand = { version = "0.9", features = ["thread_rng"], default-features = false }
+rand = { default-features = false, features = ["thread_rng"], version = "0.9" }
 
 [lints]
 workspace = true

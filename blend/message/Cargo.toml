@@ -26,13 +26,13 @@ lb-key-management-system-keys = { workspace = true }
 lb-utils        = { features = ["rng"], workspace = true }
 serde           = { workspace = true }
 serde-big-array = { workspace = true }
-serde_with      = { workspace = true, features = ["alloc"] }
+serde_with      = { features = ["alloc"], workspace = true }
 thiserror       = { workspace = true }
 tracing         = { workspace = true }
 zeroize         = { workspace = true }
 
 [dev-dependencies]
-test-log = { workspace = true, features = ["trace"] }
+test-log = { features = ["trace"], workspace = true }
 
 [features]
 unsafe-test-functions = []

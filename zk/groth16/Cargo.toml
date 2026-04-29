@@ -10,16 +10,16 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-bn254     = { workspace = true, features = ["curve"] }
+ark-bn254     = { features = ["curve"], workspace = true }
 ark-ec        = { workspace = true }
 ark-ff        = { workspace = true }
-ark-groth16   = { workspace = true, features = ["std"] }
+ark-groth16   = { features = ["std"], workspace = true }
 ark-serialize = { workspace = true }
-generic-array = { workspace = true, features = ["serde"] }
-hex           = { workspace = true, features = ["alloc"] }
+generic-array = { features = ["serde"], workspace = true }
+hex           = { features = ["alloc"], workspace = true }
 num-bigint    = { workspace = true }
 serde         = { features = ["derive"], workspace = true }
-serde_json    = { workspace = true, features = ["alloc"] }
+serde_json    = { features = ["alloc"], workspace = true }
 thiserror     = { workspace = true }
 
 [dev-dependencies]
