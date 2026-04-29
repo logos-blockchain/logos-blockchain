@@ -191,7 +191,9 @@ kube              = { default-features = false, features = ["client", "rustls-tl
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
 log               = { default-features = false, version = "0.4" }
+multiaddr         = { default-features = false, version = "0.18" }
 nistrs            = { default-features = false, version = "0.1.2" }
+nom               = { default-features = false, version = "8" }
 num-bigint        = { default-features = false, version = "0.4" }
 num-traits        = { default-features = false, version = "0.2.19" }
 nutype            = { default-features = false, version = "0.6.2" }
@@ -213,6 +215,7 @@ serde_ignored     = { default-features = false, version = "0.1" }
 serde_json        = { default-features = false, version = "1.0" }
 serde_with        = { default-features = false, version = "3.14.0" }
 serde_yaml        = { default-features = false, version = "0.9.33" }
+strum             = { default-features = false, version = "0.27" }
 subtle            = { default-features = false, version = "2.6.1" }
 tempfile          = { default-features = false, version = "3" }
 thiserror         = { default-features = false, version = "2.0" }

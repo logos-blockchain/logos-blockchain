@@ -4636,8 +4636,12 @@ dependencies = [
  "serde",
  "serde_json",
  "strum",
+<<<<<<< HEAD
  "thiserror 1.0.69",
  "time",
+=======
+ "thiserror 2.0.18",
+>>>>>>> 42eea90c0 (lb-core)
  "tokio",
  "tracing",
 ]
