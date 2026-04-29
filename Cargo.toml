@@ -182,8 +182,10 @@ derivative        = { default-features = false, version = "2" }
 dirs              = { default-features = false, version = "6.0" }
 divan             = { default-features = false, version = "0.1" }
 ed25519-dalek     = { default-features = false, version = "2" }
+either            = { default-features = false, version = "1.15.0" }
 fork_stream       = { default-features = false, version = "0.1.0" }
 futures           = { default-features = false, version = "0.3.32" }
+futures-timer     = { default-features = false, version = "3.0.3" }
 futures-util      = { default-features = false, version = "0.3.32" }
 generic-array     = { default-features = false, version = "1.2" }
 hex               = { default-features = false, version = "0.4" }
