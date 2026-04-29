@@ -343,6 +343,15 @@ where
             additional_blocks.len()
         );
 
+        if peers_to_request.is_empty() {
+            return Err(format!(
+                "no candidate peers available to download orphan ancestors for target block {target_block:?} (connected={}, discovered={})",
+                connected_peers.len(),
+                discovered_peers.len()
+            )
+            .into());
+        }
+
         let requests = peers_to_request
             .into_iter()
             .map(|peer| {
