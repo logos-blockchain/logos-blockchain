@@ -190,6 +190,7 @@ humantime         = { default-features = false, version = "2.1" }
 kube              = { default-features = false, features = ["client", "rustls-tls"], version = "0.87" }
 libp2p            = { default-features = false, version = "0.55" }
 libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
+libp2p-swarm-test = { default-features = false, version = "0.5" }
 log               = { default-features = false, version = "0.4" }
 multiaddr         = { default-features = false, version = "0.18" }
 nistrs            = { default-features = false, version = "0.1.2" }
