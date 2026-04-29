@@ -10,7 +10,7 @@ use std::{
 use futures::StreamExt as _;
 use lb_api_service::http::consensus::leader::LeaderClaimResponseBody;
 use lb_node::{
-    Transaction, TxHash,
+    Transaction as _, TxHash,
     config::{RunConfig, cryptarchia::deployment::EpochConfig},
 };
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
@@ -77,7 +77,7 @@ async fn leader_claim() {
     // Wait for the claim tx to be included in the chain
     // TODO: Check if wallet balance is increased by improving wallet
     // to track reward UTXOs in the wallet: https://github.com/logos-blockchain/logos-blockchain/issues/2627
-    timeout(Duration::from_secs(60), {
+    timeout(Duration::from_mins(1), {
         async {
             while let Some(block) = block_stream.next().await {
                 if block
