@@ -1,9 +1,6 @@
 name: Publish Logos Blockchain Node Docker Image
 
 on:
-  push:
-    branches:
-      - master
   release:
     types: [published, created]
 
