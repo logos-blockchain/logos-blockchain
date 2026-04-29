@@ -77,7 +77,7 @@ jobs:
       - name: Create issue on failure
         if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
         run: |
-          TITLE="Cargo Hack failed on ${{ matrix.platform.label }}"
+          TITLE="[CI GENERATED] Cargo Hack failed on ${{ matrix.platform.label }}"
           EXISTING_ISSUE=$(nix run 'nixpkgs#gh' -- issue list --search "$TITLE" --state open --json number --jq '.[0].number')
 
           BODY="Cargo Hack check failed for platform: ${{ matrix.platform.label }}.
