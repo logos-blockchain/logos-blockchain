@@ -78,7 +78,7 @@ utoipa-swagger-ui = { features = ["axum", "vendored"], workspace = true }
 
 # axum related dependencies
 axum       = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
-time       = { default-features = false, version = "0.3" }
+time       = { workspace = true }
 tower      = { default-features = false, features = ["limit"], version = "0.4" }
 tower-http = { default-features = false, features = ["cors", "limit", "timeout", "trace"], version = "0.5" }
 

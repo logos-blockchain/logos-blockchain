@@ -28,6 +28,10 @@ lb-key-management-system-service = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }
+serde                            = { features = ["derive"], version = "1" }
 serde_json                       = { workspace = true }
 tokio                            = { features = ["macros", "rt-multi-thread", "signal", "sync"], workspace = true }
-tracing-subscriber               = { features = ["env-filter"], version = "0.3" }
+tracing                          = { workspace = true }
+tracing-appender                 = "0.2"
+tracing-subscriber               = { features = ["env-filter", "registry"], version = "0.3" }
+uuid                             = { features = ["serde", "v4"], version = "1" }

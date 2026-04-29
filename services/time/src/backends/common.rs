@@ -74,7 +74,7 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let slot_config = SlotConfig {
             slot_duration: Duration::from_secs(1),
-            chain_start_time: now,
+            genesis_time: now,
         };
         let (current_slot_tick, timer) = slot_timer(
             slot_config,

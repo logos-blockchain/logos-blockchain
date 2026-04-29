@@ -68,7 +68,7 @@ impl StaticNodeConfigProvider for LbcEnv {
         apply_launch_ready_bind_addresses(&mut config);
 
         match &options.peers {
-            PeerSelection::DefaultLayout => {
+            None | Some(PeerSelection::DefaultLayout) => {
                 if options.config_override.is_none() && options.config_patch.is_none() {
                     return Ok(None);
                 }
@@ -76,10 +76,14 @@ impl StaticNodeConfigProvider for LbcEnv {
                     .map_err(NodeCfgsyncError::from)?;
                 apply_runtime_networking(&mut config, &hostnames[node_index], peers);
             }
-            PeerSelection::Named(_) | PeerSelection::None => {
-                let peers =
-                    resolve_selected_peers(deployment, node_index, hostnames, &options.peers)
-                        .map_err(NodeCfgsyncError::from)?;
+            Some(PeerSelection::Named(_) | PeerSelection::None) => {
+                let peers = resolve_selected_peers(
+                    deployment,
+                    node_index,
+                    hostnames,
+                    options.peers.as_ref(),
+                )
+                .map_err(NodeCfgsyncError::from)?;
                 apply_runtime_networking(&mut config, &hostnames[node_index], peers);
             }
         }
@@ -185,12 +189,14 @@ fn resolve_selected_peers(
     deployment: &DeploymentPlan,
     node_index: usize,
     hostnames: &[String],
-    peer_selection: &PeerSelection,
+    peer_selection: Option<&PeerSelection>,
 ) -> Result<Vec<Multiaddr>, DynError> {
     match peer_selection {
-        PeerSelection::DefaultLayout => rewrite_node_peers(deployment, node_index, hostnames),
-        PeerSelection::None => Ok(Vec::new()),
-        PeerSelection::Named(names) => {
+        None | Some(PeerSelection::DefaultLayout) => {
+            rewrite_node_peers(deployment, node_index, hostnames)
+        }
+        Some(PeerSelection::None) => Ok(Vec::new()),
+        Some(PeerSelection::Named(names)) => {
             resolve_named_peers(deployment, node_index, hostnames, names)
         }
     }

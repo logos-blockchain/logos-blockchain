@@ -38,6 +38,7 @@ rpds                          = "1.2.0"
 serde                         = { features = ["derive"], workspace = true }
 strum                         = { features = ["derive"], version = "0.27" }
 thiserror                     = "1.0"
+time                          = { workspace = true }
 tracing                       = { workspace = true }
 
 [dev-dependencies]

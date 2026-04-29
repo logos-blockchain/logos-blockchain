@@ -1,7 +1,6 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use lb_core::header::HeaderId;
-use lb_groth16::{Field as _, Fr};
+use lb_core::{header::HeaderId, mantle::GenesisTx as _};
 use lb_ledger::LedgerState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
@@ -77,7 +76,7 @@ impl ServiceState for CryptarchiaConsensusState {
                 let ledger = LedgerState::from_genesis_tx(
                     genesis_tx,
                     &settings.config,
-                    Fr::ZERO, // TODO: recover from genesis tx
+                    genesis_tx.cryptarchia_parameter().epoch_nonce,
                 )?;
                 (lib_id, lib_id, ledger)
             }

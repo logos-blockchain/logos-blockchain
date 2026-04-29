@@ -41,6 +41,8 @@ pub struct WalletBlock {
     pub voucher_cm: VoucherCm,
     pub spent_notes: Vec<NoteId>,
     pub transfers: Vec<TransferOp>,
+    pub locked_notes: HashSet<NoteId>,
+    pub unlocked_notes: HashSet<NoteId>,
 }
 
 impl WalletBlock {
@@ -52,6 +54,8 @@ impl WalletBlock {
         // TODO: handle inputs/outputs of ALL operations: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let mut spent_notes = Vec::new();
         let mut transfers = Vec::new();
+        let mut locked_notes = HashSet::new();
+        let mut unlocked_notes = HashSet::new();
 
         for auth_tx in block.transactions() {
             for op in &auth_tx.mantle_tx().ops {
@@ -62,6 +66,12 @@ impl WalletBlock {
                     Op::Transfer(transfer) => {
                         spent_notes.extend(transfer.inputs.iter().copied());
                         transfers.push(transfer.clone());
+                    }
+                    Op::SDPDeclare(declaration) => {
+                        locked_notes.insert(declaration.locked_note_id);
+                    }
+                    Op::SDPWithdraw(withdrawal) => {
+                        unlocked_notes.insert(withdrawal.locked_note_id);
                     }
                     _ => {}
                 }
@@ -75,6 +85,8 @@ impl WalletBlock {
             voucher_cm: *block.header().leader_proof().voucher_cm(),
             spent_notes,
             transfers,
+            locked_notes,
+            unlocked_notes,
         }
     }
 }
@@ -83,6 +95,7 @@ impl WalletBlock {
 pub struct WalletState {
     pub utxos: rpds::HashTrieMapSync<NoteId, Utxo>,
     pub pk_index: rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
+    pub locked_notes: rpds::HashTrieSetSync<NoteId>,
     pub epoch: Epoch,
     /// MMR of all voucher commitments included in the chain
     pub vouchers: MerkleMountainRange<VoucherCm, ZkHasher>,
@@ -102,7 +115,9 @@ impl WalletState {
     ) -> Self {
         let mut utxos = rpds::HashTrieMapSync::new_sync();
         let mut pk_index = rpds::HashTrieMapSync::new_sync();
+        let mut locked_notes = rpds::HashTrieSetSync::new_sync();
 
+        let all_locked_notes = ledger.mantle_ledger().sdp_ledger().locked_notes();
         for (_, (utxo, _)) in ledger.latest_utxos().utxos().iter() {
             if known_keys.contains_key(&utxo.note.pk) {
                 let note_id = utxo.id();
@@ -114,12 +129,17 @@ impl WalletState {
                     .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
                     .insert(note_id);
                 pk_index = pk_index.insert(utxo.note.pk, note_set);
+
+                if all_locked_notes.contains(&note_id) {
+                    locked_notes = locked_notes.insert(note_id);
+                }
             }
         }
 
         Self {
             utxos,
             pk_index,
+            locked_notes,
             epoch: ledger.epoch_state().epoch,
             vouchers: ledger.mantle_ledger().vouchers().clone(),
             voucher_paths: rpds::HashTrieMapSync::new_sync(),
@@ -144,10 +164,12 @@ impl WalletState {
         change_pk: ZkPublicKey,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        // Get all UTXOs owned by the provided PKs, excluding any that are already being
-        // consumed/locked by the tx.
+        // Get all UTXOs owned by the provided PKs, excluding the following notes:
+        // - Notes that are being consumed/locked by the tx
+        // - Notes that are already locked in Ledger
         let consumed_or_locked = tx_builder
             .consumed_or_locked_notes()
+            .chain(self.locked_notes.iter().copied())
             .collect::<HashSet<_>>();
         let mut utxos = self
             .utxos_owned_by_pks(pks)
@@ -216,6 +238,7 @@ impl WalletState {
     ) -> Self {
         let mut utxos = self.utxos.clone();
         let mut pk_index = self.pk_index.clone();
+        let mut locked_notes = self.locked_notes.clone();
 
         for spent_id in &block.spent_notes {
             remove_spent_utxo(spent_id, &mut utxos, &mut pk_index);
@@ -238,12 +261,22 @@ impl WalletState {
             }
         }
 
+        for locked_note in &block.locked_notes {
+            if utxos.contains_key(locked_note) {
+                locked_notes = locked_notes.insert(*locked_note);
+            }
+        }
+        for unlocked_note in &block.unlocked_notes {
+            locked_notes = locked_notes.remove(unlocked_note);
+        }
+
         let (vouchers, voucher_paths, voucher_paths_snapshot) =
             self.apply_voucher(known_vouchers, block);
 
         Self {
             utxos,
             pk_index,
+            locked_notes,
             epoch: block.epoch,
             vouchers,
             voucher_paths,
@@ -553,10 +586,12 @@ mod tests {
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
+    use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::Ed25519Key;
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;
+    use rpds::HashTrieSetSync;
 
     use super::*;
 
@@ -672,6 +707,8 @@ mod tests {
             inputs: Inputs::new(vec![]),
             outputs: Outputs::new(vec![Note::new(100, alice), Note::new(4, alice)]),
         };
+        // immediately lock the 2nd note from `transfer1`
+        let locked_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
 
         let block_1 = WalletBlock {
             id: HeaderId::from([1; 32]),
@@ -680,9 +717,13 @@ mod tests {
             voucher_cm: v1_cm,
             spent_notes: vec![],
             transfers: vec![transfer1.clone()],
+            locked_notes: HashSet::from([locked_note]),
+            // Unknown unlocked note that will be ignored
+            unlocked_notes: HashSet::from([NoteId::from(Fr::ONE)]),
         };
 
         wallet.apply_block(&block_1).unwrap();
+        assert_locked_notes(&wallet, block_1.id, [locked_note]);
         // v1 is tracked but not yet claimable (no epoch transition yet)
         assert_tracked_but_not_snapshotted_voucher(&wallet, block_1.id, &v1_cm);
 
@@ -701,8 +742,13 @@ mod tests {
                 inputs: Inputs::new(vec![alice_100_nmo_utxo.id()]),
                 outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
             }],
+            // Unknown locked note that will be ignored
+            locked_notes: HashSet::from([NoteId::from(Fr::ONE)]),
+            // Unlock the previously locked note
+            unlocked_notes: HashSet::from([locked_note]),
         };
         wallet.apply_block(&block_2).unwrap();
+        assert_locked_notes(&wallet, block_2.id, []);
         // v1 is now claimable after epoch transition
         assert_snapshotted_voucher(&wallet, block_2.id, &v1_cm);
         // v2 is ours, but not yet snapshotted
@@ -742,6 +788,8 @@ mod tests {
             voucher_cm: v3_cm,
             spent_notes: vec![alice_80_nmo_utxo.id()],
             transfers: vec![],
+            locked_notes: HashSet::new(),
+            unlocked_notes: HashSet::new(),
         };
         wallet.apply_block(&block_3).unwrap();
 
@@ -765,11 +813,14 @@ mod tests {
     #[test]
     fn test_fund_tx_with_change() {
         let alice = pk(1);
-        let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
-        let ledger_state = LedgerState::from_utxos([alice_utxo], &ledger_config());
+        let utxo1 = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
+        let utxo2 = Utxo::new(tx_hash(0), 1, Note::new(5000, alice));
+        let ledger_state = LedgerState::from_utxos([utxo1, utxo2], &ledger_config());
 
-        let wallet_state =
+        let mut wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
+        // Lock `utxo1` deliberately to ensure that `fund_tx` excludes locked notes
+        wallet_state.locked_notes = wallet_state.locked_notes.insert(utxo1.id());
 
         let tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
             .set_execution_gas_price(1.into())
@@ -791,7 +842,7 @@ mod tests {
 
         if let Op::Transfer(transfer_op) = &funded_tx.ops[funded_tx.ops.len() - 1] {
             // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, Inputs::new(vec![alice_utxo.id()]));
+            assert_eq!(transfer_op.inputs, Inputs::new(vec![utxo2.id()]));
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,
@@ -864,6 +915,31 @@ mod tests {
             WalletError::InsufficientFunds { available: 0 }
         );
     }
+
+    #[test]
+    fn test_fund_tx_all_locked_notes() {
+        let alice = pk(1);
+        let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
+        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
+
+        let mut wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
+        // Lock `utxo` deliberately to ensure that `fund_tx` excludes locked notes
+        wallet_state.locked_notes = wallet_state.locked_notes.insert(utxo.id());
+
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context())
+            .set_execution_gas_price(1.into())
+            .set_storage_gas_price(1.into());
+
+        // Fund the transaction
+        let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice]);
+
+        assert_eq!(
+            fund_attempt.unwrap_err(),
+            WalletError::InsufficientFunds { available: 0 }
+        );
+    }
+
     #[test]
     fn test_fund_tx_respects_pk_list() {
         let alice = pk(1);
@@ -1037,6 +1113,15 @@ mod tests {
             },
             faucet_pk: None,
         }
+    }
+
+    fn assert_locked_notes<KeyId>(
+        wallet: &Wallet<KeyId, TestVoucherId>,
+        tip: HeaderId,
+        notes: impl IntoIterator<Item = NoteId>,
+    ) {
+        let wallet_state = wallet.wallet_state_at(tip).unwrap();
+        assert_eq!(wallet_state.locked_notes, HashTrieSetSync::from_iter(notes));
     }
 
     fn assert_snapshotted_voucher<KeyId>(

@@ -10,7 +10,6 @@ use lb_node::config::{
     TracingConfig,
     deployment::{DeploymentSettings, WellKnownDeployment},
 };
-use time::OffsetDateTime;
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
@@ -34,7 +33,6 @@ pub struct ConfigRepo {
     entropy: Entropy,
     faucet_settings: FaucetSettings,
     tracing_settings: TracingConfig,
-    chain_start_time: OffsetDateTime,
     timeout_duration: Duration,
 }
 
@@ -51,9 +49,6 @@ impl From<CfgSyncConfig> for Arc<ConfigRepo> {
             config.n_hosts,
             entropy,
             config.faucet_settings(),
-            config
-                .chain_start_time
-                .unwrap_or_else(OffsetDateTime::now_utc),
             config.tracing_settings(),
             Duration::from_secs(config.timeout),
             config.deployment_settings_storage_path,
@@ -67,7 +62,6 @@ impl ConfigRepo {
         n_hosts: usize,
         entropy: Entropy,
         faucet_settings: FaucetSettings,
-        chain_start_time: OffsetDateTime,
         tracing_settings: TracingConfig,
         timeout_duration: Duration,
         deployment_settings_storage_path: PathBuf,
@@ -80,7 +74,6 @@ impl ConfigRepo {
             n_hosts,
             entropy,
             faucet_settings,
-            chain_start_time,
             tracing_settings,
             timeout_duration,
         });
@@ -155,7 +148,6 @@ impl ConfigRepo {
                 let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
                 default_settings.cryptarchia.genesis_block = genesis_block;
                 default_settings.cryptarchia.faucet_pk = faucet_pk;
-                default_settings.time.chain_start_time = self.chain_start_time;
                 default_settings
             };
 

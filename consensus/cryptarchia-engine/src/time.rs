@@ -74,7 +74,7 @@ impl Slot {
         slot_config: SlotConfig,
     ) -> Self {
         // TODO: leap seconds / weird time stuff
-        let since_start = offset_date_time - slot_config.chain_start_time;
+        let since_start = offset_date_time - slot_config.genesis_time;
         if since_start.is_negative() {
             // current slot is behind the start time, so return default 0
             Self::genesis()
@@ -200,7 +200,7 @@ pub struct SlotConfig {
     #[serde_as(as = "MinimalBoundedDuration<1, SECOND>")]
     pub slot_duration: Duration,
     /// Start of the first epoch
-    pub chain_start_time: OffsetDateTime,
+    pub genesis_time: OffsetDateTime,
 }
 
 #[cfg(feature = "tokio")]
@@ -225,8 +225,8 @@ impl SlotTimer {
     #[must_use]
     pub fn slot_interval(&self, now: OffsetDateTime) -> Interval {
         let slot_duration = self.config.slot_duration;
-        let next_slot_start = self.config.chain_start_time
-            + slot_duration * u64::from(self.current_slot(now) + 1) as u32;
+        let next_slot_start =
+            self.config.genesis_time + slot_duration * u64::from(self.current_slot(now) + 1) as u32;
         let delay = next_slot_start - now;
         let mut interval = tokio::time::interval_at(
             tokio::time::Instant::now()
