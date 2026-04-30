@@ -174,6 +174,7 @@ ark-ff                             = { default-features = false, version = "0.4"
 ark-groth16                        = { default-features = false, version = "0.4" }
 ark-serialize                      = { default-features = false, version = "0.4.2" }
 astro-float                        = { default-features = false, version = "0.9" }
+async-ctrlc                        = { default-features = false, version = "1.2" }
 async-stream                       = { default-features = false, version = "0.3.6" }
 async-trait                        = { default-features = false, version = "0.1" }
 axum                               = { default-features = false, version = "0.7.5" }
