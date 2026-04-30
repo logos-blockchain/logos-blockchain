@@ -13,7 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait             = "0.1"
+async-trait             = { workspace = true }
 futures                 = { workspace = true }
 lb-chain-service        = { workspace = true }
 lb-chain-service-common = { workspace = true }
@@ -27,14 +27,14 @@ lb-time-service         = { workspace = true }
 lb-tracing              = { workspace = true }
 lb-tx-service           = { workspace = true }
 overwatch               = { workspace = true }
-rand                    = { default-features = false, version = "0.8" }
-serde                   = { default-features = false, version = "1" }
+rand                    = { workspace = true }
+serde                   = { workspace = true }
 serde_with              = { workspace = true }
-thiserror               = "1.0"
+thiserror               = { workspace = true }
 tokio                   = { workspace = true }
 tokio-stream            = { workspace = true }
 tracing                 = { workspace = true }
-tracing-futures         = { default-features = false, version = "0.2" }
+tracing-futures         = { workspace = true }
 
 [dev-dependencies]
 lb-core            = { workspace = true }
