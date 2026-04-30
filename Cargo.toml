@@ -231,6 +231,7 @@ rand                               = { default-features = false, version = "0.8"
 rand_chacha                        = { default-features = false, version = "0.3" }
 rand_core                          = { default-features = false, version = "0.6.4" }
 reqwest                            = { default-features = false, version = "0.12" }
+rocksdb                            = { default-features = false, version = "0.24" }
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
 serde                              = { default-features = false, version = "1.0" }
@@ -242,7 +243,6 @@ serde_with                         = { default-features = false, version = "3.14
 serde_yaml                         = { default-features = false, version = "0.9.33" }
 sntpc                              = { default-features = false, version = "0.5" }
 strum                              = { default-features = false, version = "0.27" }
-tracing-futures            = { default-features = false, version = "0.2" }
 subtle                             = { default-features = false, version = "2.6.1" }
 syn                                = { default-features = false, features = ["full"], version = "2" }
 tempfile                           = { default-features = false, version = "3" }
@@ -254,6 +254,7 @@ tokio-stream                       = { default-features = false, version = "0.1.
 tonic                              = { default-features = false, version = "0.14.5" }
 tracing                            = { default-features = false, version = "0.1" }
 tracing-appender                   = { default-features = false, version = "0.2" }
+tracing-futures                    = { default-features = false, version = "0.2" }
 tracing-gelf                       = { default-features = false, version = "0.7" }
 tracing-loki                       = { default-features = false, version = "0.2.5" }
 tracing-opentelemetry              = { default-features = false, version = "0.32.1" }
