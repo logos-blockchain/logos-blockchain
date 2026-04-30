@@ -420,6 +420,51 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy, Debug)]
+    struct SizedTx {
+        id: u64,
+        size: usize,
+    }
+
+    impl Transaction for SizedTx {
+        const HASHER: TransactionHasher<Self> = |tx| TxHash(Fr::from(tx.id));
+        type Hash = TxHash;
+
+        fn as_signing_frs(&self) -> Vec<Fr> {
+            vec![Fr::from(self.id)]
+        }
+    }
+
+    impl StorageSize for SizedTx {
+        fn storage_size(&self) -> usize {
+            self.size
+        }
+    }
+
+    #[test]
+    fn test_block_aggregate_size_validation() {
+        let parent_block = [0u8; 32].into();
+        let slot = Slot::from(42u64);
+        let proof_of_leadership = create_proof();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let txs = vec![
+            SizedTx {
+                id: 1,
+                size: MAX_BLOCK_SIZE - 16,
+            },
+            SizedTx { id: 2, size: 32 },
+            SizedTx { id: 3, size: 32 },
+        ];
+
+        let result = Block::create(parent_block, slot, proof_of_leadership, txs, &signing_key);
+
+        assert!(
+            matches!(result, Err(Error::ContentTooBig { .. })),
+            "Block::create must error when aggregate tx size exceeds MAX_BLOCK_SIZE"
+        );
+    }
+
     #[test]
     fn test_block_transaction_size_validation() {
         let parent_block = [0u8; 32].into();
