@@ -202,7 +202,6 @@ mod test {
         #[must_use]
         pub fn new(location: PathBuf) -> Self {
             let exists = location.exists();
-            println!("Creating node state guard for directory: {location:?}");
             Self {
                 location,
                 existed_before: exists,
