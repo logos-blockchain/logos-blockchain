@@ -13,9 +13,9 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                = "0.1"
+async-trait                = { workspace = true }
 bytes                      = { workspace = true }
-derivative                 = "2"
+derivative                 = { workspace = true }
 futures                    = { workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-core                    = { workspace = true }
@@ -32,11 +32,11 @@ lb-utils                   = { workspace = true }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
 serde_with                 = { workspace = true }
-strum                      = "0.27"
-thiserror                  = "1.0"
+strum                      = { workspace = true }
+thiserror                  = { workspace = true }
 tokio                      = { workspace = true }
 tracing                    = { workspace = true }
-tracing-futures            = { default-features = false, features = ["std-future"], version = "0.2" }
+tracing-futures            = { features = ["std-future"], workspace = true }
 utoipa                     = { optional = true, workspace = true }
 
 [dev-dependencies]
@@ -46,7 +46,7 @@ lb-network-service            = { workspace = true }
 lb-storage-service            = { features = ["rocksdb-backend"], workspace = true }
 lb-utxotree                   = { workspace = true }
 rand                          = { workspace = true }
-tempfile                      = { default-features = false, version = "3" }
+tempfile                      = { workspace = true }
 
 [features]
 default = []

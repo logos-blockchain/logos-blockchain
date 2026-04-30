@@ -242,6 +242,7 @@ serde_with                         = { default-features = false, version = "3.14
 serde_yaml                         = { default-features = false, version = "0.9.33" }
 sntpc                              = { default-features = false, version = "0.5" }
 strum                              = { default-features = false, version = "0.27" }
+tracing-futures            = { default-features = false, version = "0.2" }
 subtle                             = { default-features = false, version = "2.6.1" }
 syn                                = { default-features = false, features = ["full"], version = "2" }
 tempfile                           = { default-features = false, version = "3" }
