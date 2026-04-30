@@ -13,6 +13,7 @@ use axum::{
     },
     routing,
 };
+use http::StatusCode;
 use lb_api_service::{Backend, http::consensus::Cryptarchia};
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
@@ -317,7 +318,10 @@ where
             .layer(axum::extract::DefaultBodyLimit::max(
                 self.settings.max_body_size,
             ))
-            .layer(TimeoutLayer::new(self.settings.timeout))
+            .layer(TimeoutLayer::with_status_code(
+                StatusCode::REQUEST_TIMEOUT,
+                self.settings.timeout,
+            ))
             .layer(RequestBodyLimitLayer::new(self.settings.max_body_size))
             .layer(ConcurrencyLimitLayer::new(
                 self.settings.max_concurrent_requests,

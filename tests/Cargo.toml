@@ -32,6 +32,7 @@ lb-api-service                   = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
+lb-config                        = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
@@ -47,7 +48,6 @@ lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
 lb-zksign                        = { workspace = true }
 lb-zone-sdk                      = { workspace = true }
-lb_config                        = { workspace = true }
 libp2p                           = "0.55.0"
 num-bigint                       = { default-features = false, version = "0.4" }
 rand                             = { workspace = true }

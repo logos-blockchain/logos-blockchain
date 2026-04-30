@@ -69,6 +69,7 @@ members = [
   "testnet/faucet",
   "testnet/l2-sequencer-archival-demo/archiver",
   "testnet/l2-sequencer-archival-demo/sequencer",
+  "testnet/tui-zone",
   "tests",
   "tests/testing_framework",
   "tools/blockchain-tools",
@@ -119,6 +120,7 @@ lb-circuits-prover                 = { default-features = false, package = "logo
 lb-circuits-utils                  = { default-features = false, package = "logos-blockchain-circuits-utils", path = "./zk/circuits/utils" }
 lb-circuits-verifier               = { default-features = false, package = "logos-blockchain-circuits-verifier", path = "./zk/circuits/verifier" }
 lb-common-http-client              = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
+lb-config                          = { default-features = false, package = "logos-blockchain-config", path = "./tools/config" }
 lb-core                            = { default-features = false, package = "logos-blockchain-core", path = "./core" }
 lb-cryptarchia-engine              = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
@@ -151,6 +153,7 @@ lb-time-service                    = { default-features = false, package = "logo
 lb-tools                           = { default-features = false, package = "logos-blockchain-tools", path = "./tools/blockchain-tools" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
+lb-tui-zone                        = { default-features = false, package = "logos-blockchain-tui-zone", path = "./testnet/tui-zone" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
 lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
 lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "./utxotree" }
@@ -160,8 +163,6 @@ lb-wallet-service                  = { default-features = false, package = "logo
 lb-witness-generator               = { default-features = false, package = "logos-blockchain-witness-generator", path = "./zk/circuits/witness-generator" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
-lb_config                          = { default-features = false, package = "lb_config", path = "./tools/config" }
-lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
 testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
 testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
 testing-framework-runner-k8s       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
@@ -187,10 +188,12 @@ cfg-if                             = { default-features = false, version = "1.0.
 chrono                             = { default-features = false, version = "0.4" }
 cipher                             = { default-features = false, version = "0.4" }
 clap                               = { default-features = false, version = "4" }
+color-eyre                         = { default-features = false, version = "0.6.0" }
 console-subscriber                 = { default-features = false, version = "0.4" }
 const-hex                          = { default-features = false, version = "1" }
 const-str                          = { default-features = false, version = "0.4.3" }
 derivative                         = { default-features = false, version = "2" }
+dhat                               = { default-features = false, version = "0.3.3" }
 dirs                               = { default-features = false, version = "6.0" }
 divan                              = { default-features = false, version = "0.1" }
 ed25519-dalek                      = { default-features = false, version = "2" }
@@ -201,6 +204,7 @@ futures-timer                      = { default-features = false, version = "3.0.
 futures-util                       = { default-features = false, version = "0.3.32" }
 generic-array                      = { default-features = false, version = "1.2" }
 hex                                = { default-features = false, version = "0.4" }
+http                               = { default-features = false, version = "1.3" }
 humantime                          = { default-features = false, version = "2.1" }
 hyper                              = { default-features = false, version = "1.0" }
 igd-next                           = { default-features = false, version = "0.16.1" }
@@ -257,11 +261,13 @@ syn                                = { default-features = false, features = ["fu
 tempfile                           = { default-features = false, version = "3" }
 test-log                           = { default-features = false, version = "0.2" }
 thiserror                          = { default-features = false, version = "2.0" }
+tikv-jemallocator                  = { default-features = false, version = "0.6" }
 time                               = { default-features = false, version = "0.3" }
 tokio                              = { default-features = false, version = "1" }
 tokio-stream                       = { default-features = false, version = "0.1.18" }
 tokio-util                         = { default-features = false, version = "0.7" }
 tonic                              = { default-features = false, version = "0.14.5" }
+tower                              = { default-features = false, version = "0.4" }
 tower-http                         = { default-features = true, version = "0.6.8" }
 tracing                            = { default-features = false, version = "0.1" }
 tracing-appender                   = { default-features = false, version = "0.2" }

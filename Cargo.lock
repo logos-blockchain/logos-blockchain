@@ -3363,7 +3363,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower 0.5.3",
- "tower-http 0.6.8",
+ "tower-http",
  "tracing",
 ]
 
@@ -3417,22 +3417,6 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
-
-[[package]]
-name = "lb_config"
-version = "0.1.2"
-dependencies = [
- "hex",
- "logos-blockchain-core",
- "logos-blockchain-groth16",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-libp2p",
- "logos-blockchain-node",
- "logos-blockchain-utils",
- "num-bigint",
- "rand 0.8.6",
- "time",
-]
 
 [[package]]
 name = "leb128fmt"
@@ -4229,7 +4213,7 @@ dependencies = [
  "blake2",
  "clap",
  "hex",
- "lb_config",
+ "logos-blockchain-config",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
@@ -4409,6 +4393,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-config"
+version = "0.1.2"
+dependencies = [
+ "hex",
+ "logos-blockchain-core",
+ "logos-blockchain-groth16",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-libp2p",
+ "logos-blockchain-node",
+ "logos-blockchain-utils",
+ "num-bigint",
+ "rand 0.8.6",
+ "time",
+]
+
+[[package]]
 name = "logos-blockchain-core"
 version = "0.1.2"
 dependencies = [
@@ -4500,7 +4500,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "tower-http 0.6.8",
+ "tower-http",
  "url",
 ]
 
@@ -4522,7 +4522,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
- "tower-http 0.6.8",
+ "tower-http",
  "tracing",
  "tracing-subscriber 0.3.23",
 ]
@@ -4811,7 +4811,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tower 0.4.13",
- "tower-http 0.5.2",
+ "tower-http",
  "tracing",
  "url",
  "utoipa",
@@ -4952,12 +4952,12 @@ dependencies = [
  "futures",
  "futures-util",
  "hex",
- "lb_config",
  "libp2p",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
+ "logos-blockchain-config",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -7066,7 +7066,7 @@ dependencies = [
  "tokio-rustls",
  "tokio-util",
  "tower 0.5.3",
- "tower-http 0.6.8",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -8219,12 +8219,12 @@ dependencies = [
  "cfgsync-artifacts",
  "futures",
  "hex",
- "lb_config",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-network-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-common-http-client",
+ "logos-blockchain-config",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-cryptarchia-sync",
@@ -8672,24 +8672,6 @@ dependencies = [
 
 [[package]]
 name = "tower-http"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e9cd434a998747dd2c4276bc96ee2e0c7a2eadf3cae88e52be55a05fa9053f5"
-dependencies = [
- "bitflags 2.11.1",
- "bytes",
- "http 1.4.0",
- "http-body",
- "http-body-util",
- "pin-project-lite",
- "tokio",
- "tower-layer",
- "tower-service",
- "tracing",
-]
-
-[[package]]
-name = "tower-http"
 version = "0.6.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4e6559d53cc268e5031cd8429d05415bc4cb4aefc4aa5d6cc35fbf5b924a1f8"
@@ -8700,9 +8682,11 @@ dependencies = [
  "futures-util",
  "http 1.4.0",
  "http-body",
+ "http-body-util",
  "iri-string",
  "mime",
  "pin-project-lite",
+ "tokio",
  "tower 0.5.3",
  "tower-layer",
  "tower-service",
