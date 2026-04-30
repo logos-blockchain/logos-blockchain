@@ -1,43 +1,78 @@
 //! Proc-macro implementation for the log-targets crate.
 //!
-//! A proc macro is used here so target definitions only need to be written
-//! once, while still generating both the constants used by code and the
-//! collected target list used for validation. A `macro_rules!` macro could do
-//! this too, but the declaration format and expansion logic became harder to
-//! read once nesting and collection were involved.
+//! `log_targets!` defines one target namespace per file. The namespace root is
+//! inferred from the call-site path:
+//! - `blend.rs` -> `blend`
+//! - `time.rs` -> `time`
+//! - `mod.rs` -> parent directory name
 //!
-//! The input is a grouped list of target paths under an explicit root:
+//! Inside the macro, declarations are written relative to that inferred root:
 //!
 //! ```ignore
+//! // blend.rs
 //! log_targets! {
-//!     root = blend;
-//!
 //!     service::{CORE, core::KMS_POQ_GENERATOR},
 //!     network::core::handler::{CORE_EDGE},
 //! }
 //! ```
-//! From those declarations the macro generates:
+//!
+//! That input generates:
 //! - nested modules and `ROOT` / leaf constants
 //! - target collection helpers
 //!
-//! The proc macro does the following:
-//! - parse the grouped declarations once
-//! - build a small in-memory tree
-//! - emit the nested module structure from that tree
-//! - report duplicate/conflicting definitions with direct, readable errors
-
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Literal, TokenStream as TokenStream2};
 use quote::quote;
+use std::path::Path;
 use syn::{
-    Error, LitStr, Result, Token,
+    Error, Result, Token,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
 };
 
+/// Define log targets for one namespace from grouped relative declarations.
+///
+/// The namespace root is inferred from the file where the macro is invoked:
+/// - `blend.rs` -> `blend`
+/// - `time.rs` -> `time`
+/// - `mod.rs` -> parent directory name
+///
+/// Declarations inside the macro are written relative to that inferred root.
+///
+/// For example, in `blend.rs`:
+///
+/// ```ignore
+/// log_targets! {
+///     service::{CORE, core::KMS_POQ_GENERATOR},
+///     network::core::handler::{CORE_EDGE},
+/// }
+/// ```
+///
+/// This generates nested modules and constants such as:
+/// - `blend::ROOT`
+/// - `blend::service::ROOT`
+/// - `blend::service::CORE`
+/// - `blend::service::core::KMS_POQ_GENERATOR`
+/// - `blend::network::core::handler::CORE_EDGE`
+///
+/// It also generates target collection helpers under the inferred root module.
+///
+/// Naming convention:
+/// - use one file per target namespace
+/// - file name determines the root namespace
+/// - leaf identifiers are written in `SHOUTY_SNAKE_CASE`
+/// - leaf string segments are emitted in kebab-case
+#[proc_macro]
+pub fn log_targets(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as TargetList);
+    expand_target_list(input)
+        .unwrap_or_else(Error::into_compile_error)
+        .into()
+}
+
 /// A parsed list of target declarations passed to `log_targets!`.
 struct TargetList {
-    /// Top-level namespace root such as `blend`.
+    /// Top-level namespace root inferred from the call-site file name.
     root: Ident,
     /// Comma-separated grouped declarations such as `service::{CORE}`.
     groups: Punctuated<TargetGroup, Token![,]>,
@@ -65,10 +100,6 @@ struct TargetLeafPath {
     modules: Vec<Ident>,
     /// Final constant name, for example `CORE_AND_LEADER`.
     leaf: Ident,
-    /// Optional explicit string segment override for the leaf.
-    ///
-    /// If omitted, the leaf is converted from `SHOUTY_SNAKE` to kebab-case.
-    segment_override: Option<LitStr>,
 }
 
 /// A mutable tree node used while grouping flat target paths into nested
@@ -93,27 +124,14 @@ struct ChildModule {
 struct TargetLeaf {
     /// Rust identifier used for the generated constant.
     ident: Ident,
-    /// Optional explicit string segment override for the constant.
-    ///
-    /// If absent, the identifier is converted to kebab-case at compile time.
-    segment_override: Option<LitStr>,
 }
 
 impl Parse for TargetList {
     /// Parse the full macro input as a comma-separated list of grouped target
     /// declarations.
     fn parse(input: ParseStream<'_>) -> Result<Self> {
-        let keyword = input.parse::<Ident>()?;
-        if keyword != "root" {
-            return Err(Error::new_spanned(keyword, "expected `root = <ident>;`"));
-        }
-
-        input.parse::<Token![=]>()?;
-        let root = input.parse::<Ident>()?;
-        input.parse::<Token![;]>()?;
-
         Ok(Self {
-            root,
+            root: infer_root_ident()?,
             groups: Punctuated::parse_terminated(input)?,
         })
     }
@@ -150,18 +168,10 @@ impl Parse for TargetItem {
             }));
         }
 
-        let segment_override = if input.peek(Token![=]) {
-            input.parse::<Token![=]>()?;
-            Some(input.parse()?)
-        } else {
-            None
-        };
-
         let leaf = parts.pop().expect("target path must have a leaf");
         Ok(Self::Leaf(TargetLeafPath {
             modules: parts,
             leaf,
-            segment_override,
         }))
     }
 }
@@ -183,6 +193,43 @@ fn parse_path_segments(input: ParseStream<'_>) -> Result<Vec<Ident>> {
     Ok(parts)
 }
 
+fn infer_root_ident() -> Result<Ident> {
+    let Some(path) = proc_macro::Span::call_site().local_file() else {
+        return Err(Error::new(
+            proc_macro2::Span::call_site(),
+            "could not infer target root; use `root = <ident>;` explicitly",
+        ));
+    };
+
+    let root = infer_root_name_from_path(&path).ok_or_else(|| {
+        Error::new(
+            proc_macro2::Span::call_site(),
+            "could not infer target root from call-site path; use `root = <ident>;` explicitly",
+        )
+    })?;
+
+    syn::parse_str::<Ident>(&root).map_err(|_| {
+        Error::new(
+            proc_macro2::Span::call_site(),
+            format!(
+                "inferred target root `{root}` is not a valid Rust identifier; use `root = <ident>;` explicitly"
+            ),
+        )
+    })
+}
+
+fn infer_root_name_from_path(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    if stem != "mod" {
+        return Some(stem.to_owned());
+    }
+
+    path.parent()?
+        .file_name()?
+        .to_str()
+        .map(ToOwned::to_owned)
+}
+
 impl ModuleNode {
     /// Insert one parsed target path into the module tree.
     ///
@@ -192,7 +239,6 @@ impl ModuleNode {
         &mut self,
         modules: &[Ident],
         leaf: Ident,
-        segment_override: Option<LitStr>,
     ) -> Result<()> {
         let mut current = self;
         for module in modules {
@@ -210,10 +256,7 @@ impl ModuleNode {
             return Err(Error::new_spanned(&leaf, "duplicate target leaf"));
         }
 
-        current.leaves.push(TargetLeaf {
-            ident: leaf,
-            segment_override,
-        });
+        current.leaves.push(TargetLeaf { ident: leaf });
         Ok(())
     }
 
@@ -244,16 +287,6 @@ impl ModuleNode {
             Ok(&mut self.children[last].node)
         }
     }
-}
-
-/// Expand the `log_targets!` macro into nested modules plus target collection
-/// helpers.
-#[proc_macro]
-pub fn log_targets(input: TokenStream) -> TokenStream {
-    let input = syn::parse_macro_input!(input as TargetList);
-    expand_target_list(input)
-        .unwrap_or_else(Error::into_compile_error)
-        .into()
 }
 
 /// Convert the parsed grouped declarations into a module tree, then emit code.
@@ -331,7 +364,7 @@ fn insert_leaf(
         });
 
     let root = &mut roots[root_index].1;
-    root.insert(modules, leaf.leaf, leaf.segment_override)
+    root.insert(modules, leaf.leaf)
 }
 
 fn kebab_case_ident(ident: &Ident) -> String {
@@ -349,10 +382,7 @@ fn emit_module(module_ident: &Ident, root_path: &str, node: &ModuleNode) -> Toke
     let root_literal = Literal::string(root_path);
     let leaves = node.leaves.iter().map(|leaf| {
         let ident = &leaf.ident;
-        let leaf_segment = leaf
-            .segment_override
-            .as_ref()
-            .map_or_else(|| kebab_case_ident(ident), LitStr::value);
+        let leaf_segment = kebab_case_ident(ident);
         let leaf_literal = Literal::string(&format!("{root_path}::{leaf_segment}"));
 
         quote! {

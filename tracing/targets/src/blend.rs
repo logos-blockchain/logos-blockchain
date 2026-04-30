@@ -1,8 +1,6 @@
 use lb_log_targets_macros::log_targets;
 
 log_targets! {
-    root = blend;
-
     backend::{LIBP2P},
     message::{REWARD},
     network::core::{
