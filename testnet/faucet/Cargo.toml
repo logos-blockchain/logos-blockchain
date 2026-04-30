@@ -10,16 +10,16 @@ repository.workspace  = true
 version.workspace     = true
 
 [dependencies]
-axum                          = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
-clap                          = { default-features = false, features = ["derive", "env", "std"], version = "4" }
-hex                           = { default-features = false, features = ["alloc"], workspace = true }
+axum                          = { workspace = true, features = ["http1", "http2", "json", "tokio"] }
+clap                          = { workspace = true, features = ["derive", "env", "std"] }
+hex                           = { workspace = true, features = ["alloc"] }
 lb-common-http-client         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
 reqwest                       = { workspace = true }
-serde_yaml                    = "0.9"
+serde_yaml                    = { workspace = true }
 tokio                         = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 
 [lints]
