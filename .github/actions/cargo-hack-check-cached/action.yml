@@ -42,7 +42,7 @@ runs:
       shell: bash
       env:
         RUSTFLAGS: "-D warnings"
-      run: python3 ./scripts/cargo-hack-check/script.py
+      run: python3 ./scripts/cargo-hack-check/script.py --continue-on-failure
 
     - name: Save Cargo Hack Keys (main)
       if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')

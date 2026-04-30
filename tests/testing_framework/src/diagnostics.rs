@@ -1,5 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+#[path = "diagnostics/system_monitor/mod.rs"]
+mod system_monitor;
+
 use async_trait::async_trait;
 use futures::future::join_all;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
@@ -10,6 +13,26 @@ use testing_framework_core::scenario::{
 use thiserror::Error;
 
 use crate::{BlockFeed, LbcEnv, NodeHttpClient, node::DeploymentPlan};
+
+#[doc(hidden)]
+pub fn register_system_monitor_output_file(path: &std::path::Path) {
+    system_monitor::register_output_file(path);
+}
+
+#[doc(hidden)]
+pub fn unregister_system_monitor_output_file(path: &std::path::Path) {
+    system_monitor::unregister_output_file(path);
+}
+
+#[doc(hidden)]
+pub fn record_system_monitor_event(label: &str, detail: impl Into<String>) {
+    system_monitor::record_event(label, detail);
+}
+
+fn render_system_monitor() -> String {
+    system_monitor::render_recent_summary()
+        .unwrap_or_else(|| "system_monitor:\n  unavailable".to_owned())
+}
 
 #[derive(Debug, Error)]
 pub enum ScenarioRunDiagnosticsError {
@@ -50,10 +73,14 @@ where
         Err(source) if scenario_error_has_diagnostics(&source) => {
             Err(ScenarioRunDiagnosticsError::AlreadyCaptured { source })
         }
-        Err(source) => Err(ScenarioRunDiagnosticsError::Captured {
-            report: sources.render().await,
-            source,
-        }),
+        Err(source) => {
+            record_system_monitor_event("scenario_failure", source.to_string());
+
+            Err(ScenarioRunDiagnosticsError::Captured {
+                report: sources.render().await,
+                source,
+            })
+        }
     }
 }
 
@@ -120,6 +147,8 @@ async fn add_failure_diagnostics(ctx: &RunContext<LbcEnv>, source: DynError) -> 
         return source;
     }
 
+    record_system_monitor_event("expectation_failure", source.to_string());
+
     Box::new(FailureDiagnosticsError {
         report: collect_failure_report(ctx).await,
         source,
@@ -164,6 +193,7 @@ impl DiagnosticSources {
             summary.render(),
             summary.render_connectivity(),
             self.render_block_feed(),
+            render_system_monitor(),
             render_nodes(&diagnostics),
         ];
 

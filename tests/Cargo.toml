@@ -37,6 +37,7 @@ lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
+lb-mmr                           = { workspace = true }
 lb-network-service               = { workspace = true }
 lb-node                          = { default-features = false, features = ["testing"], workspace = true }
 lb-testing-framework             = { workspace = true }
@@ -61,7 +62,7 @@ tempfile                         = { workspace = true }
 testing-framework-core           = { workspace = true }
 testing-framework-runner-local   = { workspace = true }
 thiserror                        = { default-features = false, version = "2.0" }
-time                             = { default-features = false, version = "0.3" }
+time                             = { workspace = true }
 tokio                            = { workspace = true }
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }
@@ -69,7 +70,7 @@ tracing-subscriber               = { features = ["env-filter", "fmt"], version =
 [features]
 cucumber             = []
 cucumber_stand_alone = []
-mantle_sdp_ops       = []
+mantle_sdp           = []
 testing_framework    = []
 
 [[test]]
@@ -86,8 +87,13 @@ path = "src/tests/mantle/channel.rs"
 
 [[test]]
 name              = "test_mantle_sdp_ops"
-path              = "src/tests/mantle/sdp_ops.rs"
-required-features = ["mantle_sdp_ops"]
+path              = "src/tests/mantle/sdp/ops.rs"
+required-features = ["mantle_sdp"]
+
+[[test]]
+name              = "test_mantle_sdp_blend"
+path              = "src/tests/mantle/sdp/activity.rs"
+required-features = ["mantle_sdp"]
 
 [[test]]
 name = "test_mantle_leader"

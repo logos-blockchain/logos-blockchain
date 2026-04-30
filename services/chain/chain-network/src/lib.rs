@@ -15,12 +15,11 @@ use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     block::{Block, Proposal},
     header::HeaderId,
-    mantle::{AuthenticatedMantleTx, Transaction, TxHash, genesis_tx::GenesisTx},
+    mantle::{AuthenticatedMantleTx, Transaction, TxHash},
     sdp::ServiceType,
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
-use lb_ledger::LedgerState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
@@ -91,18 +90,6 @@ where
     pub network: NetworkAdapterSettings,
     pub bootstrap: BootstrapConfig<NodeId>,
     pub sync: SyncConfig,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub enum StartingState {
-    Genesis {
-        genesis_tx: GenesisTx,
-    },
-    Lib {
-        lib_id: HeaderId,
-        lib_ledger_state: Box<LedgerState>,
-        genesis_id: HeaderId,
-    },
 }
 
 #[expect(clippy::allow_attributes_without_reason)]

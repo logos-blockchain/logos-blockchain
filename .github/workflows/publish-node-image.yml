@@ -3,16 +3,11 @@ name: Publish Logos Blockchain Node Docker Image
 on:
   release:
     types: [published, created]
-  workflow_dispatch:
-    inputs:
-      node_version:
-        description: 'Node version (e.g. 0.2.1)'
-        required: true
-        default: '0.2.1'
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/logos-blockchain-node
+  IMAGE_TAG: ${{ github.event.inputs.node_version || github.ref_name }}
 
 jobs:
   push_to_registries:
@@ -60,9 +55,9 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            LB_NODE_VERSION=${{ github.event.inputs.node_version || github.ref_name }}
+            LB_NODE_VERSION=${{ env.IMAGE_TAG }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.event.inputs.node_version || github.ref_name }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
             ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
           labels: ${{ steps.meta.outputs.labels }}
 

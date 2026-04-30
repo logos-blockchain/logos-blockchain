@@ -21,6 +21,7 @@ lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-mmr                        = { workspace = true }
 lb-pol                        = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-utxotree                   = { workspace = true }

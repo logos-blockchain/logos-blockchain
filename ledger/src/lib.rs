@@ -639,7 +639,7 @@ impl LedgerState {
                         claimable_vouchers_root: &self
                             .mantle_ledger
                             .leaders
-                            .claimable_vouchers_root(),
+                            .vouchers_snapshot_root(),
                         proof_of_claim: poc,
                         tx_hash: &tx_hash,
                     })

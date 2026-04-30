@@ -595,6 +595,7 @@ impl CucumberWorld {
     pub fn set_scenario_base_dir(&mut self, log_dir: &Path, deployer: &DeployerKind) {
         let log_dir = PathBuf::from(log_dir);
         init_node_log_dir_defaults(deployer, Some(&log_dir));
+
         self.scenario_base_dir.clone_from(&log_dir);
         if let Some(topology) = self.spec.topology.as_mut() {
             topology.scenario_base_dir = log_dir;

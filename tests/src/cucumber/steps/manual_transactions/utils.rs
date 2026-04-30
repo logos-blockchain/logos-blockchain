@@ -1510,7 +1510,7 @@ async fn collect_multiple_wallets_utxos(
             }
 
             for transfer in &transfers {
-                for spent in transfer.inputs.as_vec() {
+                for spent in &transfer.inputs {
                     for (wallet_name, owned) in &mut owned_per_wallet {
                         remove_spent_utxo(world, owned, spent, wallet_name);
                     }
@@ -1712,7 +1712,7 @@ async fn collect_wallet_utxos(
 
             // Spent outputs
             for transfer in tx.mantle_tx.transfers() {
-                for spent in &*transfer.inputs {
+                for spent in &transfer.inputs {
                     remove_spent_utxo(world, &mut wallet_owned, spent, wallet_name);
                 }
             }
