@@ -13,24 +13,24 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                        = "0.1"
+async-trait                        = { workspace = true }
 lb-key-management-system-keys      = { workspace = true }
 lb-key-management-system-operators = { workspace = true }
 lb-tracing                         = { workspace = true }
 log                                = { workspace = true }
 overwatch                          = { workspace = true }
 serde                              = { features = ["derive"], workspace = true }
-thiserror                          = { default-features = false, version = "2" }
+thiserror                          = { workspace = true }
 tokio                              = { features = ["rt"], workspace = true }
-tracing                            = { default-features = false, version = "0.1" }
+tracing                            = { workspace = true }
 
 [dev-dependencies]
 bytes                         = { workspace = true }
 lb-key-management-system-keys = { features = ["unsafe"], workspace = true }
-num-bigint                    = { default-features = false, version = "0.4" }
+num-bigint                    = { workspace = true }
 rand                          = { features = ["getrandom"], workspace = true }
 serde                         = { features = ["std"], workspace = true }
-serde_yaml                    = "0.9"
+serde_yaml                    = { workspace = true }
 
 [features]
 unsafe = ["lb-key-management-system-keys/unsafe", "lb-key-management-system-operators/unsafe"]
