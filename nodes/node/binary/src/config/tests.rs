@@ -206,7 +206,11 @@ fn env_config_deserialization_rejects_invalid_level() {
     let error = serde_json::from_str::<EnvConfig>(r#"{"filters":{"logos_blockchain":"debgu"}}"#)
         .expect_err("invalid level should fail");
 
-    assert!(error.to_string().contains("invalid log level"));
+    assert!(
+        error
+            .to_string()
+            .contains("Invalid log filter level provided: debgu")
+    );
 }
 
 #[test]

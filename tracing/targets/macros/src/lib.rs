@@ -19,11 +19,11 @@
 //! That input generates:
 //! - nested modules and `ROOT` / leaf constants
 //! - target collection helpers
-//!
+use std::path::Path;
+
 use proc_macro::TokenStream;
 use proc_macro2::{Ident, Literal, TokenStream as TokenStream2};
 use quote::quote;
-use std::path::Path;
 use syn::{
     Error, Result, Token,
     parse::{Parse, ParseStream},
@@ -224,10 +224,7 @@ fn infer_root_name_from_path(path: &Path) -> Option<String> {
         return Some(stem.to_owned());
     }
 
-    path.parent()?
-        .file_name()?
-        .to_str()
-        .map(ToOwned::to_owned)
+    path.parent()?.file_name()?.to_str().map(ToOwned::to_owned)
 }
 
 impl ModuleNode {
@@ -235,11 +232,7 @@ impl ModuleNode {
     ///
     /// This also rejects invalid declarations where a leaf conflicts with a
     /// child module or a leaf is declared more than once in the same module.
-    fn insert(
-        &mut self,
-        modules: &[Ident],
-        leaf: Ident,
-    ) -> Result<()> {
+    fn insert(&mut self, modules: &[Ident], leaf: Ident) -> Result<()> {
         let mut current = self;
         for module in modules {
             current = current.child_mut(module)?;
