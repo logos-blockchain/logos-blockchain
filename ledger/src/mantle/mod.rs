@@ -221,6 +221,7 @@ impl LedgerState {
                 sdp_declare_ed_sig,
                 tx_hash,
                 &config.sdp_config,
+                false,
             )
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"),

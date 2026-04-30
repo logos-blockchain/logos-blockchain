@@ -311,8 +311,15 @@ impl SdpLedger {
             else {
                 return Err(Error::InvalidProof);
             };
-            sdp =
-                sdp.try_apply_sdp_declaration(utxo_tree, op, zk_sig, ed25519_sig, tx_hash, config)?;
+            sdp = sdp.try_apply_sdp_declaration(
+                utxo_tree,
+                op,
+                zk_sig,
+                ed25519_sig,
+                tx_hash,
+                config,
+                true,
+            )?;
         }
 
         let blend = sdp
@@ -395,6 +402,10 @@ impl SdpLedger {
         ))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Temporary until we refactor how genesis TXs are handled."
+    )]
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
@@ -403,21 +414,24 @@ impl SdpLedger {
         ed25519_sig: &Ed25519Signature,
         tx_hash: TxHash,
         config: &Config,
+        is_genesis: bool,
     ) -> Result<Self, Error> {
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
         // Validate SDP Declare
-        op.validate(&SDPDeclareValidationContext {
-            utxo_tree,
-            locked_notes: &self.locked_notes,
-            tx_hash: &tx_hash,
-            declare_zk_sig: zk_sig,
-            declare_eddsa_sig: ed25519_sig,
-            declarations: service_state.declarations(),
-            min_stake: &config.min_stake,
-        })?;
+        if !is_genesis {
+            op.validate(&SDPDeclareValidationContext {
+                utxo_tree,
+                locked_notes: &self.locked_notes,
+                tx_hash: &tx_hash,
+                declare_zk_sig: zk_sig,
+                declare_eddsa_sig: ed25519_sig,
+                declarations: service_state.declarations(),
+                min_stake: &config.min_stake,
+            })?;
+        }
 
         // Execute SDP Declare
         let result = op.execute(SDPDeclareExecutionContext {
@@ -426,6 +440,7 @@ impl SdpLedger {
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
             min_stake: config.min_stake,
+            is_genesis,
         })?;
 
         self.locked_notes = result.locked_notes;
@@ -690,7 +705,15 @@ mod tests {
         let signing_key = create_signing_key();
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-        sdp_ledger.try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
+        sdp_ledger.try_apply_sdp_declaration(
+            utxos,
+            op,
+            &zk_sig,
+            &ed25519_sig,
+            tx_hash,
+            config,
+            false,
+        )
     }
 
     fn apply_withdraw_with_dummies(

@@ -25,6 +25,7 @@ pub struct SDPDeclareExecutionContext {
     pub declarations: Declarations,
     pub locked_notes: LockedNotes,
     pub min_stake: MinStake,
+    pub is_genesis: bool,
 }
 
 impl Operation for SDPDeclareOp {
@@ -102,22 +103,25 @@ impl Operation for SDPDeclareOp {
         let declaration_id = self.id();
         let declaration = Declaration::new(ctx.block_number, self);
         ctx.declarations = ctx.declarations.insert(declaration_id, declaration);
-        let utxo = ctx
-            .utxo_tree
-            .utxos()
-            .get(&self.locked_note_id)
-            .expect("The operation should have been checked")
-            .0;
 
-        ctx.locked_notes = ctx
-            .locked_notes
-            .lock(
-                &ctx.min_stake,
-                self.service_type,
-                utxo.note,
-                &self.locked_note_id,
-            )
-            .map_err(|_| SdpError::UnexpectedError)?;
+        if !ctx.is_genesis {
+            let utxo = ctx
+                .utxo_tree
+                .utxos()
+                .get(&self.locked_note_id)
+                .expect("The operation should have been checked")
+                .0;
+
+            ctx.locked_notes = ctx
+                .locked_notes
+                .lock(
+                    &ctx.min_stake,
+                    self.service_type,
+                    utxo.note,
+                    &self.locked_note_id,
+                )
+                .map_err(|_| SdpError::UnexpectedError)?;
+        }
 
         Ok(ctx)
     }
