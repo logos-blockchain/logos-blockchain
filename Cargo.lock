@@ -7628,9 +7628,6 @@ version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "911bd979bf1070a3f3aa7b691a3b3e9968f339ceeec89e08c280a8a22207a32f"
 dependencies = [
- "futures-executor",
- "futures-util",
- "log",
  "once_cell",
  "parking_lot",
  "scc",

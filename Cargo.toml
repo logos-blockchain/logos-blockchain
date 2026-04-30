@@ -194,10 +194,12 @@ color-eyre                         = { default-features = false, version = "0.6.
 console-subscriber                 = { default-features = false, version = "0.4" }
 const-hex                          = { default-features = false, version = "1" }
 const-str                          = { default-features = false, version = "0.4.3" }
+cucumber                           = { default-features = false, version = "=0.22.0" }
 derivative                         = { default-features = false, version = "2" }
 dhat                               = { default-features = false, version = "0.3.3" }
 dirs                               = { default-features = false, version = "6.0" }
 divan                              = { default-features = false, version = "0.1" }
+ed25519                            = { default-features = false, version = "2.2.3" }
 ed25519-dalek                      = { default-features = false, version = "2" }
 either                             = { default-features = false, version = "1.15.0" }
 fork_stream                        = { default-features = false, version = "0.1.0" }
@@ -256,8 +258,11 @@ serde_ignored                      = { default-features = false, version = "0.1"
 serde_json                         = { default-features = false, version = "1.0" }
 serde_with                         = { default-features = false, version = "3.14.0" }
 serde_yaml                         = { default-features = false, version = "0.9.33" }
+serde_yml                          = { default-features = false, version = "0.0.12" }
+serial_test                        = { default-features = false, version = "3.1.1" }
 sntpc                              = { default-features = false, version = "0.5" }
 strum                              = { default-features = false, version = "0.27" }
+strum_macros                       = { default-features = false, version = "0.27.2" }
 subtle                             = { default-features = false, version = "2.6.1" }
 syn                                = { default-features = false, version = "2" }
 sysinfo                            = { default-features = false, version = "0.37" }
@@ -286,7 +291,6 @@ uuid                               = { default-features = false, version = "1" }
 x25519-dalek                       = { default-features = false, version = "2" }
 zerocopy                           = { default-features = false, version = "0.8.26" }
 zeroize                            = { default-features = false, version = "1" }
-serde_yml  = { default-features = false, version = "0.0.12" }
 
 [workspace.lints.clippy]
 
