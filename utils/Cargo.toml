@@ -16,7 +16,7 @@ workspace = true
 async-trait = { workspace = true }
 blake2      = { optional = true, workspace = true }
 cipher      = { workspace = true }
-const-hex   = { workspace = true }
+const-hex   = { workspace = true, features = ["alloc"] }
 futures     = { optional = true, workspace = true }
 humantime   = { optional = true, workspace = true }
 overwatch   = { workspace = true }
