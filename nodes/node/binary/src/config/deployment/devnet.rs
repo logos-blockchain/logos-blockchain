@@ -4,7 +4,7 @@ pub const SERIALIZED_DEPLOYMENT: &str = "
 blend:
   common:
     num_blend_layers: 1
-    minimum_network_size: 32
+    minimum_network_size: 2
     protocol_name: /logos-blockchain-devnet/blend/1.0.0
     data_replication_factor: 0
   core:
