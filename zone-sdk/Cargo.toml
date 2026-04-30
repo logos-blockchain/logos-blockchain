@@ -15,18 +15,18 @@ workspace = true
 
 [dependencies]
 async-trait                      = { workspace = true }
-futures                          = { default-features = false, version = "0.3" }
+futures                          = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { workspace = true }
-rand                             = "0.8.5"
+rand                             = { workspace = true }
 reqwest                          = { workspace = true }
-rpds                             = { default-features = false, version = "1.1.1" }
+rpds                             = { workspace = true }
 serde                            = { features = ["derive"], workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { features = ["macros", "rt", "sync", "time"], workspace = true }
 tracing                          = { workspace = true }
 
 [dev-dependencies]
-num-bigint = { default-features = false, version = "0.4" }
+num-bigint = { workspace = true }
