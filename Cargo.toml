@@ -286,6 +286,7 @@ uuid                               = { default-features = false, version = "1" }
 x25519-dalek                       = { default-features = false, version = "2" }
 zerocopy                           = { default-features = false, version = "0.8.26" }
 zeroize                            = { default-features = false, version = "1" }
+serde_yml  = { default-features = false, version = "0.0.12" }
 
 [workspace.lints.clippy]
 

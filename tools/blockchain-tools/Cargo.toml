@@ -10,13 +10,13 @@ repository.workspace  = true
 version.workspace     = true
 
 [dependencies]
-anyhow     = "1"
-clap       = { default-features = false, features = ["derive", "help", "std", "string"], version = "4" }
+anyhow     = { workspace = true }
+clap       = { workspace = true, features = ["derive", "help", "std", "string"] }
 lb-core    = { workspace = true }
-lb-node    = { default-features = false, workspace = true }
+lb-node    = { workspace = true }
 serde      = { features = ["derive"], workspace = true }
 serde_json = { workspace = true }
-serde_yml  = { version = "0.0.12" }
+serde_yml  = { workspace = true }
 
 [lints]
 workspace = true
