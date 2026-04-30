@@ -25,7 +25,7 @@ lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { default-features = false, workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
-lb-libp2p                        = { optional = true, workspace = true }
+lb-libp2p                        = { workspace = true }
 lb-log-targets                   = { workspace = true }
 lb-network-service               = { workspace = true }
 lb-poq                           = { workspace = true }

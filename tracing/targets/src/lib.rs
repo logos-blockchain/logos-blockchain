@@ -1,32 +1,33 @@
-#![forbid(unsafe_code)]
+use std::collections::HashSet;
 
 pub mod blend;
 
+/// Log target namespaces follow Rust-style `module::path` segments.
+const TARGET_NAMESPACE_DELIMITER: &str = "::";
+
 #[must_use]
-pub(crate) fn matches_target_prefix(target: &str, candidate: &str) -> bool {
+fn matches_target_prefix(target: &str, candidate: &str) -> bool {
     target == candidate
         || candidate
             .strip_prefix(target)
-            .is_some_and(|suffix| suffix.starts_with("::"))
+            .is_some_and(|suffix| suffix.starts_with(TARGET_NAMESPACE_DELIMITER))
 }
 
 #[must_use]
 fn target_root(target: &str) -> &str {
-    target.split("::").next().unwrap_or(target)
+    target
+        .split(TARGET_NAMESPACE_DELIMITER)
+        .next()
+        .unwrap_or(target)
 }
 
 #[must_use]
-pub fn all_targets() -> Vec<&'static str> {
-    blend::all_targets()
+pub fn all_targets() -> HashSet<&'static str> {
+    blend::all_targets().into_iter().collect()
 }
 
 #[must_use]
-pub fn is_valid_target(target: &str) -> bool {
-    all_targets().into_iter().any(|known| known == target)
-}
-
-#[must_use]
-pub fn is_valid_logos_target_prefix(target: &str) -> bool {
+fn is_valid_logos_target_prefix(target: &str) -> bool {
     all_targets()
         .into_iter()
         .any(|known| matches_target_prefix(target, known))
@@ -40,9 +41,17 @@ pub fn is_logos_target_root(target: &str) -> bool {
         .any(|known| target_root(known) == root)
 }
 
+#[must_use]
+pub fn is_valid_logos_target(target: &str) -> bool {
+    is_logos_target_root(target) && is_valid_logos_target_prefix(target)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{blend, is_logos_target_root, is_valid_logos_target_prefix, is_valid_target};
+    use super::{
+        all_targets, blend, is_logos_target_root, is_valid_logos_target,
+        is_valid_logos_target_prefix,
+    };
 
     #[test]
     fn blend_targets_are_registered() {
@@ -52,9 +61,9 @@ mod tests {
 
     #[test]
     fn exact_target_validation_accepts_known_targets() {
-        assert!(is_valid_target(blend::service::ROOT));
-        assert!(is_valid_target(blend::service::core::KMS_POQ_GENERATOR));
-        assert!(!is_valid_target("blend::service::missing"));
+        assert!(all_targets().contains(&blend::service::ROOT));
+        assert!(all_targets().contains(&blend::service::core::KMS_POQ_GENERATOR));
+        assert!(!all_targets().contains(&"blend::service::missing"));
     }
 
     #[test]
@@ -74,5 +83,13 @@ mod tests {
         assert!(!is_logos_target_root("bl"));
         assert!(!is_logos_target_root("libp2p"));
         assert!(!is_logos_target_root("other"));
+    }
+
+    #[test]
+    fn logos_target_validation_requires_known_root_and_prefix() {
+        assert!(is_valid_logos_target("blend"));
+        assert!(is_valid_logos_target("blend::service"));
+        assert!(!is_valid_logos_target("blend::service::missing"));
+        assert!(!is_valid_logos_target("libp2p"));
     }
 }

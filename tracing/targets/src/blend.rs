@@ -1,4 +1,4 @@
-use logos_blockchain_log_targets_macros::log_targets;
+use lb_log_targets_macros::log_targets;
 
 log_targets! {
     blend::{

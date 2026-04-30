@@ -13,4 +13,4 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-logos-blockchain-log-targets-macros = { path = "./macros" }
+lb-log-targets-macros = { workspace = true }
