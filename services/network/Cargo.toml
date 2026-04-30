@@ -31,7 +31,7 @@ utoipa              = { optional = true, workspace = true }
 [dev-dependencies]
 chrono             = { features = ["now"], workspace = true }
 lb-utils           = { workspace = true }
-tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std"] }
+tracing-subscriber = { features = ["env-filter", "fmt", "std"], workspace = true }
 
 [features]
 default = []

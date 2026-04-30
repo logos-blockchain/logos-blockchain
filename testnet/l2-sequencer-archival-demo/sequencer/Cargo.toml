@@ -13,7 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                             = { workspace = true, features = ["http1", "http2", "json", "tokio"] }
+axum                             = { features = ["http1", "http2", "json", "tokio"], workspace = true }
 hex                              = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
@@ -27,6 +27,6 @@ serde_json                       = { workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { features = ["macros", "net", "rt-multi-thread", "signal", "sync"], workspace = true }
 tokio-util                       = { workspace = true }
-tower-http                       = { workspace = true, features = ["cors"] }
+tower-http                       = { features = ["cors"], workspace = true }
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter"], workspace = true }

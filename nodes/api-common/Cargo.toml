@@ -13,7 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                          = { workspace = true, features = ["http1", "http2", "json", "matched-path", "query", "tokio"] }
+axum                          = { features = ["http1", "http2", "json", "matched-path", "query", "tokio"], workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-tracing                    = { workspace = true }
@@ -24,7 +24,7 @@ tokio                         = { features = ["time"], optional = true, workspac
 tracing                       = { workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
-pprof = { workspace = true, features = ["criterion", "flamegraph", "protobuf-codec"], optional = true }
+pprof = { features = ["criterion", "flamegraph", "protobuf-codec"], optional = true, workspace = true }
 
 [features]
 profiling = ["dep:pprof", "dep:tokio"]

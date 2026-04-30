@@ -10,9 +10,9 @@ repository.workspace  = true
 version.workspace     = true
 
 [dependencies]
-axum                          = { workspace = true, features = ["http1", "http2", "json", "tokio"] }
-clap                          = { workspace = true, features = ["derive", "env", "std"] }
-hex                           = { workspace = true, features = ["alloc"] }
+axum                          = { features = ["http1", "http2", "json", "tokio"], workspace = true }
+clap                          = { features = ["derive", "env", "std"], workspace = true }
+hex                           = { features = ["alloc"], workspace = true }
 lb-common-http-client         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }

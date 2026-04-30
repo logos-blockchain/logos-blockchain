@@ -44,7 +44,7 @@ utoipa = { workspace = true }
 utoipa-swagger-ui = { features = ["vendored"], workspace = true }
 
 [dev-dependencies]
-axum              = { workspace = true, features = ["http1", "http2", "json", "query", "tokio"] }
+axum              = { features = ["http1", "http2", "json", "query", "tokio"], workspace = true }
 hyper             = { workspace = true }
 reqwest           = { features = ["blocking"], workspace = true }
 serde             = { workspace = true }

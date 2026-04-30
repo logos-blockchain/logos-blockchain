@@ -20,7 +20,7 @@ lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
 lb-tracing            = { workspace = true }
 overwatch             = { workspace = true }
-rocksdb               = { workspace = true, features = ["bindgen-runtime"], optional = true }
+rocksdb               = { features = ["bindgen-runtime"], optional = true, workspace = true }
 serde                 = { workspace = true }
 thiserror             = { workspace = true }
 tokio                 = { workspace = true }

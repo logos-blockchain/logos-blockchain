@@ -16,7 +16,7 @@ lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-node                       = { workspace = true, features = ["config-gen"] }
+lb-node                       = { features = ["config-gen"], workspace = true }
 lb-sdp-service                = { workspace = true }
 lb-wallet-service             = { workspace = true }
 log                           = { workspace = true }

@@ -43,7 +43,7 @@ reqwest                          = { features = ["json"], workspace = true }
 serde                            = { workspace = true }
 serde_json                       = { workspace = true }
 serde_yaml                       = { workspace = true }
-sysinfo                          = { workspace = true, features = ["disk", "system"] }
+sysinfo                          = { features = ["disk", "system"], workspace = true }
 tempfile                         = { workspace = true }
 testing-framework-core           = { workspace = true }
 testing-framework-runner-compose = { workspace = true }

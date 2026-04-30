@@ -13,9 +13,9 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                             = { workspace = true, features = ["http1", "http2", "json", "tokio"] }
+axum                             = { features = ["http1", "http2", "json", "tokio"], workspace = true }
 blake2                           = { workspace = true }
-clap                             = { workspace = true, features = ["derive", "env", "std"] }
+clap                             = { features = ["derive", "env", "std"], workspace = true }
 lb-config                        = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }

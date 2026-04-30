@@ -11,7 +11,7 @@ version.workspace     = true
 
 [dependencies]
 anyhow     = { workspace = true }
-clap       = { workspace = true, features = ["derive", "help", "std", "string"] }
+clap       = { features = ["derive", "help", "std", "string"], workspace = true }
 lb-core    = { workspace = true }
 lb-node    = { workspace = true }
 serde      = { features = ["derive"], workspace = true }

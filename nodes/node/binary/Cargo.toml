@@ -22,7 +22,7 @@ workspace = true
 [dependencies]
 async-trait                      = { workspace = true }
 cfg-if                           = { workspace = true }
-clap                             = { workspace = true, features = ["derive", "env", "help", "std", "string"] }
+clap                             = { features = ["derive", "env", "help", "std", "string"], workspace = true }
 color-eyre                       = { workspace = true }
 dhat                             = { optional = true, workspace = true }
 futures                          = { workspace = true }
@@ -77,10 +77,10 @@ utoipa = { workspace = true }
 utoipa-swagger-ui = { features = ["axum", "vendored"], workspace = true }
 
 # axum related dependencies
-axum       = { workspace = true, features = ["http1", "http2", "json", "query", "tokio"] }
+axum       = { features = ["http1", "http2", "json", "query", "tokio"], workspace = true }
 time       = { workspace = true }
-tower      = { workspace = true, features = ["limit"] }
-tower-http = { workspace = true, features = ["cors", "limit", "timeout", "trace"] }
+tower      = { features = ["limit"], workspace = true }
+tower-http = { features = ["cors", "limit", "timeout", "trace"], workspace = true }
 
 # Jemalloc
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

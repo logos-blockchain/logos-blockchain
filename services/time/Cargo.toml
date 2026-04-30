@@ -23,7 +23,7 @@ overwatch             = { workspace = true }
 serde                 = { features = ["derive"], workspace = true }
 serde_with            = { workspace = true }
 sntpc                 = { features = ["std", "tokio-socket"], optional = true, workspace = true }
-thiserror             = { workspace = true, optional = true }
+thiserror             = { optional = true, workspace = true }
 time                  = { features = ["std"], workspace = true }
 tokio                 = { workspace = true }
 tokio-stream          = { workspace = true }

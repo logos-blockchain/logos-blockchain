@@ -50,7 +50,7 @@ lb-blend          = { features = ["unsafe-test-functions"], workspace = true }
 libp2p            = { features = ["plaintext", "tcp", "yamux"], workspace = true }
 libp2p-swarm-test = { workspace = true }
 tempfile          = { workspace = true }
-test-log          = { workspace = true, features = ["trace"] }
+test-log          = { features = ["trace"], workspace = true }
 
 [features]
 default = []

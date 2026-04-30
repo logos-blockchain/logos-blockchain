@@ -17,7 +17,7 @@ profiling = ["console-subscriber"]
 
 [dependencies]
 async-trait        = { workspace = true }
-console-subscriber = { workspace = true, optional = true }
+console-subscriber = { optional = true, workspace = true }
 lb-tracing         = { workspace = true }
 overwatch          = { workspace = true }
 serde              = { workspace = true }
