@@ -2,7 +2,6 @@ use core::{
     num::{NonZero, NonZeroU64},
     time::Duration,
 };
-use std::sync::OnceLock;
 
 use lb_core::{block::genesis::GenesisBlock, sdp::ServiceType};
 use lb_libp2p::protocol_name::StreamProtocol;
@@ -21,14 +20,11 @@ use lb_node::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
-use time::OffsetDateTime;
 
 use crate::{
     release::ProtocolIdentity,
     time::{CONSENSUS_SLOT_TIME_VAR, DEFAULT_SLOT_TIME_IN_SECS},
 };
-
-static CHAIN_START_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
 
 const MINIMUM_BLEND_NETWORK_SIZE: u64 = 2;
 const NUM_BLEND_LAYERS: u64 = 3;
@@ -64,10 +60,6 @@ const LEARNING_RATE: f64 = 0.1;
 
 const MEMPOOL_TOPIC: &str = "mantle_e2e_tests";
 const DEFAULT_PROTOCOL_NAMESPACE: &str = "integration/logos-blockchain";
-
-fn get_or_init_chain_start_time() -> OffsetDateTime {
-    *CHAIN_START_TIME.get_or_init(OffsetDateTime::now_utc)
-}
 
 #[must_use]
 pub fn e2e_deployment_settings_with_genesis_block(
@@ -156,7 +148,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
         },
         time: TimeDeploymentSettings {
             slot_duration: Duration::from_secs(slot_duration_in_secs),
-            chain_start_time: get_or_init_chain_start_time(),
         },
         mempool: MempoolDeploymentSettings {
             pubsub_topic: MEMPOOL_TOPIC.to_owned(),

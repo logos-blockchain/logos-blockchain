@@ -63,7 +63,7 @@ tempfile                         = { workspace = true }
 testing-framework-core           = { workspace = true }
 testing-framework-runner-local   = { workspace = true }
 thiserror                        = { default-features = false, version = "2.0" }
-time                             = { default-features = false, version = "0.3" }
+time                             = { workspace = true }
 tokio                            = { workspace = true }
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], version = "0.3" }

@@ -1120,15 +1120,16 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 #[cfg(test)]
 mod tests {
     use lb_cryptarchia_engine::Slot;
-    use lb_groth16::Fr;
+    use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
     use num_bigint::BigUint;
+    use time::OffsetDateTime;
 
     use super::*;
     use crate::{
         header::HeaderId,
         mantle::{
-            GenesisTx as _, NoteId,
+            CryptarchiaParameter, GenesisTx as _, NoteId,
             ops::channel::{ChannelId, MsgId},
         },
         sdp::{ProviderId, ServiceType},
@@ -1139,7 +1140,12 @@ mod tests {
     fn valid_inscription() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId::from([0; 32]),
-            inscription: vec![],
+            inscription: CryptarchiaParameter {
+                chain_id: "test-chain".into(),
+                genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+                epoch_nonce: Fr::ZERO,
+            }
+            .encode(),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         }
@@ -1148,7 +1154,12 @@ mod tests {
     fn invalid_inscription() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId::from([1; 32]), // non-zero — invalid
-            inscription: vec![],
+            inscription: CryptarchiaParameter {
+                chain_id: "test-chain".into(),
+                genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+                epoch_nonce: Fr::ZERO,
+            }
+            .encode(),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         }

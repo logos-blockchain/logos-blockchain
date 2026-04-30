@@ -1,9 +1,10 @@
 use core::time::Duration;
+use std::sync::OnceLock;
 
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        MantleTx, Note, NoteId, OpProof, Utxo,
+        CryptarchiaParameter, MantleTx, Note, NoteId, OpProof, Utxo,
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTx},
         ops::{
             Op, OpId as _,
@@ -13,12 +14,13 @@ use lb_core::{
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use lb_groth16::CompressedGroth16Proof;
+use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{SignedMantleTx, Transaction as _};
 use num_bigint::BigUint;
+use time::OffsetDateTime;
 
 use crate::unique::unique_test_context;
 
@@ -79,6 +81,12 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
+static GENESIS_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
+
+fn get_or_init_genesis_time() -> OffsetDateTime {
+    *GENESIS_TIME.get_or_init(OffsetDateTime::now_utc)
+}
+
 pub struct BaseConsensusMaterial {
     pub regular_note_keys: Vec<ZkKey>,
     pub blend_notes: Vec<ServiceNote>,
@@ -91,7 +99,12 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
     println!("Genesis inscription: {owner}");
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
-        inscription: owner.into_bytes(),
+        inscription: CryptarchiaParameter {
+            chain_id: owner,
+            genesis_time: get_or_init_genesis_time(),
+            epoch_nonce: Fr::ZERO,
+        }
+        .encode(),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
     }

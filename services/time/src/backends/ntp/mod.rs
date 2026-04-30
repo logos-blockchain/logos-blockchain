@@ -217,7 +217,7 @@ mod tests {
     fn test_configs() -> (SlotConfig, EpochConfig, NonZeroU64) {
         let slot_config = SlotConfig {
             slot_duration: Duration::from_secs(1),
-            chain_start_time: OffsetDateTime::UNIX_EPOCH,
+            genesis_time: OffsetDateTime::UNIX_EPOCH,
         };
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
@@ -503,7 +503,7 @@ mod tests {
         };
         let slot_config = SlotConfig {
             slot_duration: Duration::from_secs(1),
-            chain_start_time: OffsetDateTime::UNIX_EPOCH,
+            genesis_time: OffsetDateTime::UNIX_EPOCH,
         };
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
@@ -535,7 +535,7 @@ mod tests {
         };
         let slot_config = SlotConfig {
             slot_duration: Duration::from_secs(1),
-            chain_start_time: OffsetDateTime::UNIX_EPOCH,
+            genesis_time: OffsetDateTime::UNIX_EPOCH,
         };
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),

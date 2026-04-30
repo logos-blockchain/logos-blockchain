@@ -22,7 +22,7 @@ lb-utils   = { features = ["time"], workspace = true }
 serde      = { workspace = true }
 serde_with = { features = ["macros"], workspace = true }
 thiserror  = "1"
-time       = { default-features = false, version = "0.3" }
+time       = { workspace = true }
 tokio      = { features = ["time"], optional = true, workspace = true }
 tracing    = { workspace = true }
 

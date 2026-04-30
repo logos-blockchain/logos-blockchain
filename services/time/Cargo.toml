@@ -24,7 +24,7 @@ serde                 = { features = ["derive"], workspace = true }
 serde_with            = { workspace = true }
 sntpc                 = { default-features = false, features = ["std", "tokio-socket"], optional = true, version = "0.5" }
 thiserror             = { default-features = false, optional = true, version = "2.0" }
-time                  = { default-features = false, features = ["std"], version = "0.3" }
+time                  = { features = ["std"], workspace = true }
 tokio                 = { workspace = true }
 tokio-stream          = { workspace = true }
 tracing               = { default-features = false, version = "0.1" }

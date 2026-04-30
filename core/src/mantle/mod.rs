@@ -15,6 +15,7 @@ pub mod tx;
 pub mod tx_builder;
 
 pub use gas::{GasCalculator, GasConstants};
+pub use genesis_tx::CryptarchiaParameter;
 use lb_groth16::Fr;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
@@ -71,6 +72,7 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + St
 pub trait GenesisTx: Transaction<Hash = TxHash> {
     fn genesis_transfer(&self) -> &TransferOp;
     fn genesis_inscription(&self) -> &InscriptionOp;
+    fn cryptarchia_parameter(&self) -> CryptarchiaParameter;
     fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)>;
     fn mantle_tx(&self) -> &MantleTx;
 }
@@ -132,6 +134,10 @@ impl<T: GenesisTx> GenesisTx for &T {
     }
     fn genesis_inscription(&self) -> &InscriptionOp {
         T::genesis_inscription(self)
+    }
+
+    fn cryptarchia_parameter(&self) -> CryptarchiaParameter {
+        T::cryptarchia_parameter(self)
     }
 
     fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)> {

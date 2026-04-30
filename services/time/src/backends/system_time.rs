@@ -52,7 +52,7 @@ mod test {
         let settings = TimeServiceSettings {
             slot_config: SlotConfig {
                 slot_duration: Duration::from_secs(1),
-                chain_start_time: OffsetDateTime::now_utc(),
+                genesis_time: OffsetDateTime::now_utc(),
             },
             epoch_config: EpochConfig {
                 epoch_stake_distribution_stabilization: NonZero::new(3).unwrap(),

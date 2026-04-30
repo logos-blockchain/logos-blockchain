@@ -16,14 +16,14 @@ workspace = true
 async-trait = "0.1"
 blake2      = { default-features = false, optional = true, version = "0.10" }
 cipher      = { version = "0.4" }
-const-hex   = { default-features = false, version = "1" }
+const-hex   = { default-features = false, features = ["alloc"], version = "1" }
 futures     = { optional = true, workspace = true }
 humantime   = { optional = true, version = "2.1" }
 overwatch   = { workspace = true }
 rand        = { features = ["getrandom"], workspace = true }
 serde       = { features = ["alloc", "derive"], workspace = true }
 serde_with  = { optional = true, workspace = true }
-time        = { default-features = false, features = ["serde-human-readable"], optional = true, version = "0.3" }
+time        = { features = ["serde-human-readable"], optional = true, workspace = true }
 tokio       = { optional = true, workspace = true }
 
 [features]

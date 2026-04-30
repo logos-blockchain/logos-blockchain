@@ -21,13 +21,13 @@ use logos_blockchain_tests::common::manual_cluster::{
 use testing_framework_core::scenario::DynError;
 use tokio::time::{sleep, timeout};
 
-const NODE_COUNT: usize = 2;
+const NODE_COUNT: usize = 1;
 
 /// End-to-end test for the leader claim flow:
 ///
-/// 1. Spawn nodes that produce blocks.
+/// 1. Spawn a node that produce blocks.
 /// 2. Wait for enough slot progress to cross epoch boundaries.
-/// 3. Call the POST `/leader/claim` HTTP endpoint on one node.
+/// 3. Call the POST `/leader/claim` HTTP endpoint on the node.
 /// 4. Verify the claim tx is successfully included in the chain.
 #[tokio::test]
 async fn leader_claim() {
@@ -51,7 +51,7 @@ async fn leader_claim() {
     .await;
     let slots_per_epoch = slots_per_epoch.load(Ordering::Relaxed);
 
-    let node0 = &nodes[0];
+    let node = &nodes[0];
 
     // Wait for two epoch transitions.
     // 0->1: vouchers (blocks) are collected but not added to MMR
@@ -69,10 +69,10 @@ async fn leader_claim() {
     .await;
 
     // Subscribes to process blocks to check if our tx is included in the end
-    let mut block_stream = node0.client.blocks_stream().await.unwrap();
+    let mut block_stream = node.client.blocks_stream().await.unwrap();
 
     // Submit a tx with a LeaderClaim operation
-    let tx_hash = claim_leader_rewards(&node0.client, Duration::from_secs(30)).await;
+    let tx_hash = claim_leader_rewards(&node.client, Duration::from_secs(30)).await;
 
     // Wait for the claim tx to be included in the chain
     // TODO: Check if wallet balance is increased by improving wallet

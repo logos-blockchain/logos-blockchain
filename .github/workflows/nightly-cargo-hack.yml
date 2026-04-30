@@ -40,10 +40,10 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install cargo-hack and gh
+      - name: Install cargo-hack
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25  # Version 2.49.35
         with:
-          tool: cargo-hack,gh
+          tool: cargo-hack
 
       # Prune after Install cargo-hack, before Set up Cargo cache — frees disk space from the previous run's leftover
       # artifacts (incremental compile dirs, fingerprints, build dirs) before the cache is restored. This means the
@@ -74,21 +74,33 @@ jobs:
         with:
           command: clean
 
-      - name: Create issue on failure
-        if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+  report:
+    name: Report failures
+    needs: [ features ]
+    if: failure() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: [ self-hosted, Linux ]
+    steps:
+      - name: Create or update failure issue
         run: |
-          TITLE="Cargo Hack failed on ${{ matrix.platform.label }}"
-          EXISTING_ISSUE=$(gh issue list --search "$TITLE" --state open --json number --jq '.[0].number')
+          FAILED_PLATFORMS=$(nix run 'nixpkgs#gh' -- api \
+            /repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs \
+            --jq '[.jobs[] | select(.conclusion == "failure") | .name] | join(", ")')
 
-          BODY="Cargo Hack check failed for platform: ${{ matrix.platform.label }}.
+          TITLE="[CI GENERATED] Cargo Hack failed"
+          EXISTING_ISSUE=$(nix run 'nixpkgs#gh' -- issue list --search "$TITLE" --state open --json number --jq '.[0].number')
+
+          COMMIT_AUTHOR=$(nix run 'nixpkgs#gh' -- api \
+            /repos/${{ github.repository }}/commits/${{ github.sha }} \
+            --jq '.author.login // empty' 2>/dev/null || true)
+
+          BODY="Cargo Hack check failed for the following platforms: $FAILED_PLATFORMS
           See details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
 
-          COMMIT_AUTHOR=$(gh api /repos/${{ github.repository }}/commits/${{ github.sha }} --jq '.author.login // empty' 2>/dev/null || true)
-
           if [ -z "$EXISTING_ISSUE" ]; then
-            gh issue create --title "$TITLE" --body "$BODY" --label "bug" --label "automated-issue" --assignee "$COMMIT_AUTHOR"
+            nix run 'nixpkgs#gh' -- issue create --title "$TITLE" --body "$BODY" --label "bug" --assignee "$COMMIT_AUTHOR"
           else
-            gh issue comment "$EXISTING_ISSUE" --body "Another failure occurred: $BODY"
+            nix run 'nixpkgs#gh' -- issue comment "$EXISTING_ISSUE" --body "Another failure occurred: $BODY"
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}

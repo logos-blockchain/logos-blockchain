@@ -70,7 +70,9 @@ cryptarchia:
         - opcode: 17
           payload:
             channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-            inscription: '67656e65736973'
+            # chain_id_len=12 (u64_le), chain_id=logos-devnet (utf-8),
+            # genesis_time=2026-01-10T07:47:56Z (u64_le), epoch_nonce=[0u8; 32]
+            inscription: '0c000000000000006c6f676f732d6465766e65742c046269000000000000000000000000000000000000000000000000000000000000000000000000'
             parent: '0000000000000000000000000000000000000000000000000000000000000000'
             signer: '0000000000000000000000000000000000000000000000000000000000000000'
         - opcode: 32
@@ -89,7 +91,6 @@ cryptarchia:
   faucet_pk: faf8a7e44e9f45d35efcd9043c4a55095339e229c4115dbeb6231e2b8422f610
 time:
   slot_duration: '1.000000000'
-  chain_start_time: '2026-03-03 14:49:11.0 +00:00:00'
 mempool:
   pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0
 
