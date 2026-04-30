@@ -8,6 +8,7 @@ use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::error;
 
 use crate::{
     mantle::{
@@ -114,7 +115,8 @@ impl LeaderProof for Groth16LeaderProof {
                 leader_pk,
             ),
         )
-        .is_ok()
+        .inspect_err(|e| error!("Error verifying LeaderProof: {e:?}"))
+        .unwrap_or(false)
     }
 
     fn verify_genesis(&self) -> bool {
