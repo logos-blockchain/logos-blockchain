@@ -1120,6 +1120,7 @@ mod tests {
         )
     }
 
+    /// Chain should start with `total_stake` ≥ 1
     fn genesis_utxo() -> lb_core::mantle::ledger::Utxo {
         use lb_core::mantle::ledger::{Inputs, Outputs};
         let zk_sk = ZkKey::from(BigUint::from(1u64));
