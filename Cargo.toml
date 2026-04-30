@@ -196,6 +196,7 @@ owo-colors                       = { default-features = false, version = "4.2.3"
 fork_stream                        = { default-features = false, version = "0.1.0" }
 futures                            = { default-features = false, version = "0.3.32" }
 futures-timer                      = { default-features = false, version = "3.0.3" }
+hyper             = { default-features = false, version = "1.0" }
 futures-util                       = { default-features = false, version = "0.3.32" }
 tower-http                       = { default-features = true, version = "0.6.8" }
 tokio-util                       = { default-features = false, version = "0.7" }
