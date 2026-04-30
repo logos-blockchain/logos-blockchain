@@ -2,7 +2,7 @@
 description          = "Logos blockchain test-framework integration crate"
 edition.workspace    = true
 license.workspace    = true
-name                 = "testing_framework"
+name                 = "testing-framework"
 publish              = false
 readme.workspace     = true
 repository.workspace = true
@@ -12,31 +12,13 @@ version.workspace    = true
 workspace = true
 
 [dependencies]
-anyhow                           = "1"
+anyhow                           = { workspace = true }
 async-trait                      = { workspace = true }
 cfgsync-adapter                  = { workspace = true }
 cfgsync-artifacts                = { workspace = true }
-futures                          = { default-features = false, version = "0.3" }
-hex                              = { workspace = true }
-num-bigint                       = { default-features = false, version = "0.4" }
-rand                             = { workspace = true }
-reqwest                          = { features = ["json"], workspace = true }
-serde                            = { workspace = true }
-serde_json                       = { workspace = true }
-serde_yaml                       = { workspace = true }
-sysinfo                          = "0.37"
-tempfile                         = { workspace = true }
-testing-framework-core           = { workspace = true }
-testing-framework-runner-compose = { workspace = true }
-testing-framework-runner-k8s     = { workspace = true }
-testing-framework-runner-local   = { workspace = true }
-thiserror                        = { workspace = true }
-time                             = { workspace = true }
-tokio                            = { features = ["macros", "process", "rt-multi-thread", "time"], workspace = true }
-tracing                          = { workspace = true }
-uuid                             = { workspace = true }
-
 common-http-client               = { workspace = true }
+futures                          = { workspace = true }
+hex                              = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
 lb-chain-network-service         = { workspace = true }
@@ -55,6 +37,23 @@ lb-node                          = { features = ["testing"], workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
+num-bigint                       = { workspace = true }
+rand                             = { workspace = true }
+reqwest                          = { features = ["json"], workspace = true }
+serde                            = { workspace = true }
+serde_json                       = { workspace = true }
+serde_yaml                       = { workspace = true }
+sysinfo                          = { workspace = true, features = ["disk", "system"] }
+tempfile                         = { workspace = true }
+testing-framework-core           = { workspace = true }
+testing-framework-runner-compose = { workspace = true }
+testing-framework-runner-k8s     = { workspace = true }
+testing-framework-runner-local   = { workspace = true }
+thiserror                        = { workspace = true }
+time                             = { workspace = true }
+tokio                            = { features = ["macros", "process", "rt-multi-thread", "time"], workspace = true }
+tracing                          = { workspace = true }
+uuid                             = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = [

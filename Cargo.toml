@@ -147,7 +147,7 @@ lb-sdp-service                     = { default-features = false, package = "logo
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
 lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }
-lb-testing-framework               = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
+lb-testing-framework               = { default-features = false, package = "testing-framework", path = "./tests/testing_framework" }
 lb-tests                           = { default-features = false, package = "logos-blockchain-tests", path = "./tests" }
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
 lb-tools                           = { default-features = false, package = "logos-blockchain-tools", path = "./tools/blockchain-tools" }
@@ -169,6 +169,7 @@ testing-framework-runner-k8s       = { default-features = false, git = "https://
 testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
 
 # External
+anyhow                             = { default-features = false, version = "1" }
 ark-bn254                          = { default-features = false, version = "0.4" }
 ark-ec                             = { default-features = false, version = "0.4" }
 ark-ff                             = { default-features = false, version = "0.4" }
@@ -257,7 +258,8 @@ serde_yaml                         = { default-features = false, version = "0.9.
 sntpc                              = { default-features = false, version = "0.5" }
 strum                              = { default-features = false, version = "0.27" }
 subtle                             = { default-features = false, version = "2.6.1" }
-syn                                = { default-features = false, features = ["full"], version = "2" }
+syn                                = { default-features = false, version = "2" }
+sysinfo                            = { default-features = false, version = "0.37" }
 tempfile                           = { default-features = false, version = "3" }
 test-log                           = { default-features = false, version = "0.2" }
 thiserror                          = { default-features = false, version = "2.0" }

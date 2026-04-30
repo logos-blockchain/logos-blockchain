@@ -4984,9 +4984,9 @@ dependencies = [
  "strum",
  "strum_macros",
  "tempfile",
+ "testing-framework",
  "testing-framework-core",
  "testing-framework-runner-local",
- "testing_framework",
  "thiserror 2.0.18",
  "time",
  "tokio",
@@ -8124,6 +8124,54 @@ dependencies = [
 ]
 
 [[package]]
+name = "testing-framework"
+version = "0.1.2"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cfgsync-adapter",
+ "cfgsync-artifacts",
+ "futures",
+ "hex",
+ "logos-blockchain-blend-service",
+ "logos-blockchain-chain-leader-service",
+ "logos-blockchain-chain-network-service",
+ "logos-blockchain-chain-service",
+ "logos-blockchain-common-http-client",
+ "logos-blockchain-config",
+ "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-cryptarchia-sync",
+ "logos-blockchain-groth16",
+ "logos-blockchain-http-api-common",
+ "logos-blockchain-key-management-system-service",
+ "logos-blockchain-ledger",
+ "logos-blockchain-libp2p",
+ "logos-blockchain-network-service",
+ "logos-blockchain-node",
+ "logos-blockchain-time-service",
+ "logos-blockchain-tx-service",
+ "logos-blockchain-utils",
+ "num-bigint",
+ "rand 0.8.6",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sysinfo",
+ "tempfile",
+ "testing-framework-core",
+ "testing-framework-runner-compose",
+ "testing-framework-runner-k8s",
+ "testing-framework-runner-local",
+ "thiserror 2.0.18",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "testing-framework-core"
 version = "0.1.0"
 source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=dev_snapshot_2026_04_23_4854942d#4854942dcedd226f6adbe9970afc4661dfdb1e6d"
@@ -8207,54 +8255,6 @@ dependencies = [
  "tokio-retry",
  "tracing",
  "which 6.0.3",
-]
-
-[[package]]
-name = "testing_framework"
-version = "0.1.2"
-dependencies = [
- "anyhow",
- "async-trait",
- "cfgsync-adapter",
- "cfgsync-artifacts",
- "futures",
- "hex",
- "logos-blockchain-blend-service",
- "logos-blockchain-chain-leader-service",
- "logos-blockchain-chain-network-service",
- "logos-blockchain-chain-service",
- "logos-blockchain-common-http-client",
- "logos-blockchain-config",
- "logos-blockchain-core",
- "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-cryptarchia-sync",
- "logos-blockchain-groth16",
- "logos-blockchain-http-api-common",
- "logos-blockchain-key-management-system-service",
- "logos-blockchain-ledger",
- "logos-blockchain-libp2p",
- "logos-blockchain-network-service",
- "logos-blockchain-node",
- "logos-blockchain-time-service",
- "logos-blockchain-tx-service",
- "logos-blockchain-utils",
- "num-bigint",
- "rand 0.8.6",
- "reqwest",
- "serde",
- "serde_json",
- "serde_yaml",
- "sysinfo",
- "tempfile",
- "testing-framework-core",
- "testing-framework-runner-compose",
- "testing-framework-runner-k8s",
- "testing-framework-runner-local",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "tracing",
- "uuid",
 ]
 
 [[package]]
