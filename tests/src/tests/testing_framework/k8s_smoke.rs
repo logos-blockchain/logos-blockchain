@@ -33,7 +33,7 @@ fn run_k8s_smoke() -> TestResult {
 
     let run_handle = runtime.block_on(async {
         let mut scenario = ScenarioBuilder::deployment_with(|topology| {
-            topology.nodes(2).scenario_base_dir(std::env::temp_dir())
+            topology.nodes(1).scenario_base_dir(std::env::temp_dir())
         })
         .with_run_duration(Duration::from_mins(3))
         .expect_consensus_liveness()

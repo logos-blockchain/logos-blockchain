@@ -16,7 +16,7 @@ workspace = true
 async-trait = "0.1"
 blake2      = { default-features = false, optional = true, version = "0.10" }
 cipher      = { version = "0.4" }
-const-hex   = { default-features = false, version = "1" }
+const-hex   = { default-features = false, features = ["alloc"], version = "1" }
 futures     = { optional = true, workspace = true }
 humantime   = { optional = true, version = "2.1" }
 overwatch   = { workspace = true }

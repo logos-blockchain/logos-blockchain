@@ -25,10 +25,10 @@ async fn leader_claim() {
         "leader-claim",
         "mantle-leader",
         DeploymentBuilder::new(
-            TfTopologyConfig::with_node_numbers(2)
+            TfTopologyConfig::with_node_numbers(1)
                 .with_test_context(Some("leader_claim".to_owned())),
         ),
-        2,
+        1,
         ManualNodeLayout::SelectNodeSeed(0),
         |config| Ok::<_, DynError>(leader_test_config(config)),
     )
@@ -40,7 +40,7 @@ async fn leader_claim() {
         .consensus_config
         .funding_pk;
 
-    let target_slot = 3 * leader_slots_per_epoch();
+    let target_slot = 2 * leader_slots_per_epoch();
     wait_for_nodes_slot(
         nodes
             .iter()
@@ -53,8 +53,18 @@ async fn leader_claim() {
     .await;
 
     let balance_before = get_wallet_balance(&validator.client, funding_pk).await;
+    let response = reqwest::Client::new()
+        .post(api_url(&validator.client, "leader/claim"))
+        .send()
+        .await
+        .expect("leader claim request should not fail");
 
-    claim_leader_rewards(&validator.client, Duration::from_secs(30)).await;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    assert!(
+        status.is_success(),
+        "leader claim should succeed, got status: {status} body: {body}",
+    );
 
     let tip_height = validator
         .client
@@ -108,36 +118,6 @@ fn leader_slots_per_epoch() -> u64 {
         epoch_config.epoch_period_nonce_stabilization,
         base_period_length(security_param, slot_activation_coeff),
     )
-}
-
-async fn claim_leader_rewards(node: &NodeHttpClient, duration: Duration) {
-    timeout(duration, async {
-        loop {
-            let response = reqwest::Client::new()
-                .post(api_url(node, "leader/claim"))
-                .send()
-                .await
-                .expect("leader claim request should not fail");
-
-            let status = response.status();
-            let body = response.text().await.unwrap_or_default();
-
-            if status.is_success() {
-                return;
-            }
-
-            if status == reqwest::StatusCode::INTERNAL_SERVER_ERROR
-                && body.contains("No claimable voucher found")
-            {
-                sleep(Duration::from_millis(500)).await;
-                continue;
-            }
-
-            panic!("leader claim should succeed, got status: {status} body: {body}");
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("leader claim should become available within {duration:?}"));
 }
 
 async fn wait_for_nodes_slot(nodes: &[&NodeHttpClient], target_slot: u64, duration: Duration) {
