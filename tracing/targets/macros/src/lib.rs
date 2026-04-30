@@ -6,14 +6,14 @@
 //! this too, but the declaration format and expansion logic became harder to
 //! read once nesting and collection were involved.
 //!
-//! The input is a grouped list of target paths:
+//! The input is a grouped list of target paths under an explicit root:
 //!
 //! ```ignore
 //! log_targets! {
-//!     blend::{
-//!         service::{CORE, core::KMS_POQ_GENERATOR},
-//!         network::core::handler::{CORE_EDGE},
-//!     }
+//!     root = blend;
+//!
+//!     service::{CORE, core::KMS_POQ_GENERATOR},
+//!     network::core::handler::{CORE_EDGE},
 //! }
 //! ```
 //! From those declarations the macro generates:
@@ -37,14 +37,15 @@ use syn::{
 
 /// A parsed list of target declarations passed to `log_targets!`.
 struct TargetList {
-    /// Comma-separated grouped declarations such as
-    /// `blend::{service::{CORE}}`.
+    /// Top-level namespace root such as `blend`.
+    root: Ident,
+    /// Comma-separated grouped declarations such as `service::{CORE}`.
     groups: Punctuated<TargetGroup, Token![,]>,
 }
 
 /// One grouped declaration block such as `service::{CORE, core::LEAF}`.
 struct TargetGroup {
-    /// Path prefix shared by all items in this group.
+    /// Path prefix shared by all items in this group, relative to the root.
     prefix: Vec<Ident>,
     /// Items declared under that prefix.
     items: Punctuated<TargetItem, Token![,]>,
@@ -102,18 +103,27 @@ impl Parse for TargetList {
     /// Parse the full macro input as a comma-separated list of grouped target
     /// declarations.
     fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let keyword = input.parse::<Ident>()?;
+        if keyword != "root" {
+            return Err(Error::new_spanned(keyword, "expected `root = <ident>;`"));
+        }
+
+        input.parse::<Token![=]>()?;
+        let root = input.parse::<Ident>()?;
+        input.parse::<Token![;]>()?;
+
         Ok(Self {
+            root,
             groups: Punctuated::parse_terminated(input)?,
         })
     }
 }
 
 impl Parse for TargetGroup {
-    /// Parse a grouped declaration such as `blend::{service::{CORE}}`.
+    /// Parse a grouped declaration such as `service::{CORE}`.
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let prefix = parse_path_segments(input)?;
         input.parse::<Token![::]>()?;
-
         let content;
         syn::braced!(content in input);
 
@@ -248,10 +258,10 @@ pub fn log_targets(input: TokenStream) -> TokenStream {
 
 /// Convert the parsed grouped declarations into a module tree, then emit code.
 fn expand_target_list(input: TargetList) -> Result<TokenStream2> {
-    let mut roots: Vec<(Ident, ModuleNode)> = Vec::new();
+    let mut roots = vec![(input.root.clone(), ModuleNode::default())];
 
     for group in input.groups {
-        flatten_group(group, &mut roots)?;
+        flatten_group(group, &input.root, &mut roots)?;
     }
 
     let modules = roots
@@ -264,9 +274,16 @@ fn expand_target_list(input: TargetList) -> Result<TokenStream2> {
     })
 }
 
-fn flatten_group(group: TargetGroup, roots: &mut Vec<(Ident, ModuleNode)>) -> Result<()> {
+fn flatten_group(
+    group: TargetGroup,
+    root: &Ident,
+    roots: &mut Vec<(Ident, ModuleNode)>,
+) -> Result<()> {
+    let mut prefix = vec![root.clone()];
+    prefix.extend(group.prefix);
+
     for item in group.items {
-        flatten_item(item, &group.prefix, roots)?;
+        flatten_item(item, &prefix, roots)?;
     }
 
     Ok(())
