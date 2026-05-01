@@ -6,13 +6,14 @@ use std::collections::HashSet;
 
 pub use activity::ActivityProof;
 use lb_core::sdp::SessionNumber;
+use lb_log_targets::blend;
 use serde::{Deserialize, Serialize};
 pub use session::SessionInfo;
 pub use token::{BlendingToken, HammingDistance};
 
 pub use crate::reward::session::{BlendingTokenEvaluation, Error, SessionRandomness};
 
-const LOG_TARGET: &str = "blend::message::reward";
+const LOG_TARGET: &str = blend::message::REWARD;
 
 /// Holds blending tokens collected during a single session.
 #[derive(Debug, Clone, Serialize, Deserialize)]

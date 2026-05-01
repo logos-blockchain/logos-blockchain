@@ -5,6 +5,7 @@ use core::{
 };
 use std::io;
 
+use lb_log_targets::blend;
 use libp2p::{
     StreamProtocol,
     core::upgrade::{DeniedUpgrade, ReadyUpgrade},
@@ -21,7 +22,7 @@ mod ready_to_receive;
 mod receiving;
 mod starting;
 
-const LOG_TARGET: &str = "blend::network::core::handler::core-edge";
+const LOG_TARGET: &str = blend::network::core::handler::CORE_EDGE;
 
 type TimerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 type MessageReceiveFuture = Pin<Box<dyn Future<Output = Result<Vec<u8>, io::Error>> + Send>>;

@@ -24,6 +24,7 @@ lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-log-targets                = { workspace = true }
 lb-utils                      = { features = ["rng", "tokio"], workspace = true }
 multiaddr                     = { default-features = false, version = "0.18" }
 rand                          = { features = ["alloc"], workspace = true }

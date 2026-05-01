@@ -61,6 +61,7 @@ use lb_key_management_system_service::{
     keys::{KeyOperators, PublicKeyEncoding},
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
+use lb_log_targets::blend;
 use lb_network_service::NetworkService;
 use lb_sdp_service::SdpMessage;
 use lb_services_utils::{
@@ -121,7 +122,7 @@ mod state;
 mod tests;
 pub use state::RecoveryServiceState as CoreServiceState;
 
-const LOG_TARGET: &str = "blend::service::core";
+const LOG_TARGET: &str = blend::service::CORE;
 
 /// A blend service that sends messages to the blend network
 /// and broadcasts fully unwrapped messages through the [`NetworkService`].

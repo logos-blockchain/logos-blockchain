@@ -15,6 +15,7 @@ use lb_blend_message::encap::validated::{
     EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
 };
 use lb_blend_scheduling::membership::Membership;
+use lb_log_targets::blend;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -48,7 +49,7 @@ mod utils;
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = "blend::network::core::core::behaviour";
+const LOG_TARGET: &str = blend::network::core::core::BEHAVIOUR;
 
 #[derive(Debug)]
 pub struct Config {
