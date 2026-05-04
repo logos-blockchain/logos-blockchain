@@ -24,7 +24,7 @@ use lb_core::{
             },
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
-        tx::{GasPrices, MantleTxContext},
+        tx::MantleTxContext,
         tx_builder::MantleTxBuilder,
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
@@ -157,7 +157,6 @@ pub enum WalletMsg {
     },
     GetTxContext {
         block_id: Option<HeaderId>,
-        gas_prices: Option<GasPrices>,
         resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
     },
 }
@@ -532,12 +531,8 @@ where
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
             }
-            WalletMsg::GetTxContext {
-                block_id,
-                gas_prices,
-                resp_tx,
-            } => {
-                Self::get_tx_context(block_id, gas_prices, resp_tx, cryptarchia).await;
+            WalletMsg::GetTxContext { block_id, resp_tx } => {
+                Self::get_tx_context(block_id, resp_tx, cryptarchia).await;
             }
         }
     }
@@ -1204,7 +1199,6 @@ where
 
     async fn get_tx_context(
         block_id: Option<HeaderId>,
-        gas_prices: Option<GasPrices>,
         resp_tx: Sender<Result<MantleTxContext, WalletServiceError>>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
@@ -1228,8 +1222,7 @@ where
             }
         };
 
-        let gas_prices = gas_prices.unwrap_or_else(|| ledger_state.get_gas_prices());
-        if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context(gas_prices))) {
+        if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context())) {
             error!(err = ?e, "Failed to send gas context response");
         }
     }

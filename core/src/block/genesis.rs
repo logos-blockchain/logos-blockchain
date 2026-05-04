@@ -955,7 +955,7 @@ mod tests {
             .unwrap();
 
         let tx = block.transactions().next().unwrap();
-        let ops = &tx.mantle_tx().0;
+        let ops = tx.mantle_tx().ops();
         assert!(matches!(ops[0], Op::Transfer(_)));
         assert!(matches!(ops[1], Op::ChannelInscribe(_)));
         assert!(matches!(ops[2], Op::SDPDeclare(_)));

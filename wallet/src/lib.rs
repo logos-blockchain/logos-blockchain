@@ -355,7 +355,7 @@ mod tests {
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            tx::{GasPrices, MantleTxContext},
+            tx::MantleTxContext,
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
@@ -522,7 +522,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context(GasPrices::new(1, 1)));
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context());
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
@@ -569,7 +569,7 @@ mod tests {
 
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        let mut tx_builder = MantleTxBuilder::new(ledger_state.tx_context(GasPrices::new(1, 1)));
+        let mut tx_builder = MantleTxBuilder::new(ledger_state.tx_context());
 
         // Add a costly inscription
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -599,7 +599,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context(GasPrices::new(1, 1)));
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context());
 
         // Fund the transaction
         let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice]);
@@ -621,7 +621,7 @@ mod tests {
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1), (bob, 2)]), &ledger_state);
 
-        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context(GasPrices::new(1, 1)));
+        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context());
 
         // Attempt to fund the transaction with Alice's notes.
         let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice]);

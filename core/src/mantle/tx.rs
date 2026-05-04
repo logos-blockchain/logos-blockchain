@@ -101,7 +101,7 @@ pub struct MantleTxGasContext {
     gas_prices: GasPrices,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GasPrices {
     pub execution_base_gas_price: GasPrice,
     pub storage_gas_price: GasPrice,
@@ -252,6 +252,11 @@ impl MantleTx {
             }
         }
         transfers
+    }
+
+    #[must_use]
+    pub const fn ops(&self) -> &Vec<Op> {
+        &self.0
     }
 }
 

@@ -3,7 +3,7 @@ use core::time::Duration;
 use lb_core::{
     mantle::{
         MantleTx, Note, NoteId, OpProof, Utxo,
-        genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTx},
+        genesis_tx::GenesisTx,
         ledger::{Inputs, Outputs},
         ops::{
             Op, OpId as _,
@@ -104,11 +104,10 @@ pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisT
 
     // Create the mantle transaction
     let transfer_op = TransferOp::new(Inputs::new(vec![]), Outputs::new(outputs));
-    let mantle_tx = MantleTx {
-        ops: vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)],
-        execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
-        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-    };
+    let mantle_tx = MantleTx(vec![
+        Op::Transfer(transfer_op),
+        Op::ChannelInscribe(inscription),
+    ]);
     let signed_mantle_tx = SignedMantleTx {
         mantle_tx,
         ops_proofs: vec![
@@ -276,11 +275,7 @@ pub fn create_genesis_tx_with_declarations(
         ops.push(Op::SDPDeclare(declaration));
     }
 
-    let mantle_tx = MantleTx {
-        ops,
-        execution_gas_price: GENESIS_EXECUTION_GAS_PRICE,
-        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-    };
+    let mantle_tx = MantleTx(ops);
 
     let mantle_tx_hash = mantle_tx.hash();
     let mut ops_proofs = vec![

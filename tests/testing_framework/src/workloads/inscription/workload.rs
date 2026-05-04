@@ -9,7 +9,6 @@ use std::{
 use async_trait::async_trait;
 use lb_core::mantle::{
     MantleTx, SignedMantleTx, Transaction as _,
-    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
     ops::{
         Op, OpProof,
         channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -389,11 +388,7 @@ fn build_inscription_transaction(
     };
     let msg_id = op.id();
 
-    let mantle_tx = MantleTx {
-        ops: vec![Op::ChannelInscribe(op)],
-        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-        execution_gas_price: 0.into(),
-    };
+    let mantle_tx = MantleTx(vec![Op::ChannelInscribe(op)]);
     let tx_hash = mantle_tx.hash();
 
     let ed25519_signature = channel

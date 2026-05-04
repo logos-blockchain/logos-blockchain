@@ -504,11 +504,11 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn tx_context(&self, gas_prices: GasPrices) -> MantleTxContext {
+    pub fn tx_context(&self) -> MantleTxContext {
         MantleTxContext {
             gas_context: MantleTxGasContext::from_channels(
                 self.mantle_ledger().channels(),
-                gas_prices,
+                self.get_gas_prices(),
             ),
             leader_reward_amount: self.mantle_ledger().leader_reward_amount(),
         }

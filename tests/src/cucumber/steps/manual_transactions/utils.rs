@@ -14,7 +14,7 @@ use lb_core::{
         AuthenticatedMantleTx as _, Note, NoteId, OpProof, SignedMantleTx, Transaction as _,
         TxHash, Utxo,
         gas::MainnetGasConstants,
-        tx::{MantleTxContext, MantleTxGasContext},
+        tx::{GasPrices, MantleTxContext, MantleTxGasContext},
         tx_builder::MantleTxBuilder,
     },
 };
@@ -318,7 +318,7 @@ pub(crate) async fn submit_prepared_user_wallet_transaction(
     world.record_tracked_spent_fee(
         sender_wallet_name,
         signed_tx
-            .total_gas_cost::<MainnetGasConstants>()
+            .total_gas_cost::<MainnetGasConstants>(GasPrices::new(0, 0))
             .map_err(|e| StepError::LogicalError {
                 message: format!("Step `{step}` error: failed to compute gas cost: {e}"),
             })
@@ -768,11 +768,13 @@ fn log_wallet_balance(
 
 fn base_user_wallet_transaction(receivers: &[(ZkPublicKey, u64)]) -> MantleTxBuilder {
     let empty_context = MantleTxContext {
-        gas_context: MantleTxGasContext::new(HashMap::new()),
+        gas_context: MantleTxGasContext::new(
+            HashMap::new(),
+            GasPrices::new(0, DEFAULT_STORAGE_GAS_PRICE),
+        ),
         ..MantleTxContext::default()
     };
-    let mut tx_builder =
-        MantleTxBuilder::new(empty_context).set_storage_gas_price(DEFAULT_STORAGE_GAS_PRICE.into());
+    let mut tx_builder = MantleTxBuilder::new(empty_context);
 
     for (receiver_pk, value) in receivers {
         tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk));

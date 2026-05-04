@@ -162,7 +162,7 @@ impl GasCalculator for GenesisTx {
 impl crate::mantle::GenesisTx for GenesisTx {
     fn genesis_inscription(&self) -> &InscriptionOp {
         // Safe to unwrap because we validated this in from_tx
-        match &self.mantle_tx().0[1] {
+        match &self.mantle_tx().ops()[1] {
             Op::ChannelInscribe(op) => op,
             _ => unreachable!("GenesisTx always has a valid inscription as second op"),
         }
@@ -170,7 +170,7 @@ impl crate::mantle::GenesisTx for GenesisTx {
 
     fn genesis_transfer(&self) -> &TransferOp {
         // Safe to unwrap because we validated this in from_tx
-        match &self.mantle_tx().0[0] {
+        match &self.mantle_tx().ops()[0] {
             Op::Transfer(op) => op,
             _ => unreachable!("GenesisTx always has a valid transfer as first op"),
         }

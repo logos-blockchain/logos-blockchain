@@ -1,8 +1,7 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, TxHash, Value, ops::leader_claim::VoucherCm,
-        tx::{GasPrices, MantleTxContext},
+        Note, SignedMantleTx, TxHash, Value, ops::leader_claim::VoucherCm, tx::MantleTxContext,
         tx_builder::MantleTxBuilder,
     },
 };
@@ -136,15 +135,10 @@ where
     pub async fn get_tx_context(
         &self,
         block_id: Option<HeaderId>,
-        gas_prices: Option<GasPrices>,
     ) -> Result<MantleTxContext, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
         self.relay
-            .send(WalletMsg::GetTxContext {
-                block_id,
-                gas_prices,
-                resp_tx,
-            })
+            .send(WalletMsg::GetTxContext { block_id, resp_tx })
             .await?;
         Ok(rx.await??)
     }
@@ -152,13 +146,12 @@ where
     pub async fn transfer_funds(
         &self,
         tip: Option<HeaderId>,
-        gas_prices: GasPrices,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         recipient_pk: ZkPublicKey,
         amount: Value,
     ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
-        let context = self.get_tx_context(tip, gas_prices).await?;
+        let context = self.get_tx_context(tip).await?;
         let mantle_tx_builder =
             MantleTxBuilder::new(context).add_ledger_output(Note::new(amount, recipient_pk));
         let funded_tx_builder = self
@@ -260,7 +253,7 @@ mod tests {
 
     use lb_core::mantle::{
         ops::channel::{ChannelId, ChannelKeyIndex},
-        tx::MantleTxGasContext,
+        tx::{GasPrices, MantleTxGasContext},
     };
     use overwatch::services::state::{NoOperator, NoState};
     use tokio::sync::mpsc;
@@ -306,17 +299,12 @@ mod tests {
         let (msg_sender, mut msg_receiver) = mpsc::channel(1);
         tokio::spawn(async move {
             while let Some(msg) = msg_receiver.recv().await {
-                if let WalletMsg::GetTxContext {
-                    block_id,
-                    gas_prices,
-                    resp_tx,
-                } = msg
-                {
+                if let WalletMsg::GetTxContext { block_id, resp_tx } = msg {
                     assert_eq!(block_id, Some(expected_block_id));
                     let context = MantleTxContext {
                         gas_context: MantleTxGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
-                            gas_prices,
+                            expected_gas_prices,
                         ),
                         leader_reward_amount: 0,
                     };
@@ -329,7 +317,7 @@ mod tests {
         let api =
             WalletApi::<DummyWallet, TestRuntimeServiceId>::new(OutboundRelay::new(msg_sender));
         let context = api
-            .get_tx_context(Some(expected_block_id), expected_gas_prices)
+            .get_tx_context(Some(expected_block_id))
             .await
             .expect("gas context should round-trip through the wallet API");
 

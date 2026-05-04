@@ -3,7 +3,6 @@ use std::{collections::HashSet, time::Duration};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
-    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
 };
@@ -184,11 +183,7 @@ fn create_invalid_transaction() -> SignedMantleTx {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![output_note]));
 
-    let mantle_tx = MantleTx {
-        ops: vec![Op::Transfer(transfer_op)],
-        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-        execution_gas_price: 0.into(),
-    };
+    let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
 
     let transfer_proof = ZkKey::multi_sign(&[], mantle_tx.hash().as_ref())
         .expect("invalid transfer proof should still be constructible");
