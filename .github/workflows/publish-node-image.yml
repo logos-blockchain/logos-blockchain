@@ -3,12 +3,12 @@ name: Publish Logos Blockchain Node Docker Image
 on:
   release:
     types: [published, created]
-  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/logos-blockchain-node
-  VERSION_TAG: 0.1.3-rc.5
+  VERSION_TAG: ${{ github.ref_name }}
+  LATEST_TAG: ${{ contains(github.ref_name, '-rc.') && 'latest-rc' || 'latest' }}
 
 jobs:
   push_to_registries:
@@ -59,7 +59,7 @@ jobs:
             LB_NODE_VERSION=${{ env.VERSION_TAG }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-rc
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Generate artifact attestation
