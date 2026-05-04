@@ -408,19 +408,6 @@ impl Cryptarchia {
         (cryptarchia, pruned_blocks)
     }
 
-    fn awaiting(self) -> Self {
-        let consensus = self.consensus.awaiting();
-        Self {
-            ledger: self.ledger,
-            consensus,
-            genesis_id: self.genesis_id,
-        }
-    }
-
-    const fn is_awaiting_start(&self) -> bool {
-        self.consensus.state().is_awaiting_start()
-    }
-
     const fn is_bootstrapping(&self) -> bool {
         self.consensus.state().is_bootstrapping()
     }
@@ -635,8 +622,6 @@ where
                 info!("Chain configured to start in the future: {genesis_time}");
                 chain_start_timer = Some(Box::pin(tokio::time::sleep(delay)));
             }
-
-            cryptarchia = cryptarchia.awaiting();
         }
 
         // The prolonged bootstrap timer will be started when chain-network notifies us
@@ -660,9 +645,15 @@ where
         let async_loop = async {
             loop {
                 tokio::select! {
-                    () = async { if let Some(timer) = chain_start_timer.as_mut() { timer.await; } }, if chain_start_timer.is_some() && cryptarchia.is_awaiting_start() => {
+                    () = async { if let Some(timer) = chain_start_timer.as_mut() { timer.await; } }, if chain_start_timer.is_some() => {
                         info!("Genesis time reached. Chain is now starting...");
                         chain_start_timer = None;
+
+                        // Just like in the Ibd case, the bootstrap timer is started after the chain
+                        // start time begun.
+                        prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
+                            Instant::now() + bootstrap_config.prolonged_bootstrap_period,
+                        )));
                     }
 
                     () = async { prolonged_bootstrap_timer.as_mut().unwrap().as_mut().await }, if prolonged_bootstrap_timer.is_some() && cryptarchia.is_bootstrapping() => {
@@ -680,17 +671,21 @@ where
                         );
                     }
 
-                    Some(msg) = self.service_resources_handle.inbound_relay.next(), if !cryptarchia.is_awaiting_start() => {
+                    Some(msg) = self.service_resources_handle.inbound_relay.next() => {
                         // Handle ApplyBlock, ChainSync, and IbdCompleted separately since they need async context
                         match msg {
-                            ConsensusMsg::IbdCompleted => {
+                            // IbdCompleted is only relevant if the chain start time has begun. If
+                            // we receive completion event before chain start time, it will be
+                            // ignored.
+                            ConsensusMsg::IbdCompleted if chain_start_timer.is_none() => {
                                 info!("Received IBD completion notification. Starting prolonged bootstrap timer.");
                                 // Start the prolonged bootstrap timer now that IBD is complete
                                 prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
                                     Instant::now() + bootstrap_config.prolonged_bootstrap_period,
                                 )));
                             }
-                            ConsensusMsg::ApplyBlock { block, tx } => {
+                            // Blocks will be applied if chain start time didn't begun yet.
+                            ConsensusMsg::ApplyBlock { block, tx } if chain_start_timer.is_none() => {
                                 // TODO: move this into the process_message() function after making the process_message async.
                                 match Self::process_block_and_update_state(
                                         &mut cryptarchia,
