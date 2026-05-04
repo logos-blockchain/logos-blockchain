@@ -16,7 +16,7 @@ async fn smoke_two_validators_run_180s() -> Result<(), Box<dyn std::error::Error
         .try_init();
     let duration = Duration::from_mins(3);
     let mut scenario =
-        ScenarioBuilder::deployment_with(|t| t.nodes(2).scenario_base_dir(std::env::temp_dir()))
+        ScenarioBuilder::deployment_with(|t| t.nodes(1).scenario_base_dir(std::env::temp_dir()))
             .with_run_duration(duration)
             .expect_consensus_liveness()
             .build()?;

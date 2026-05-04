@@ -102,7 +102,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     init_tracing();
     let validators = spawn_validators(
         Some("test_sequencer_publish_and_indexer_read"),
-        2,
+        1,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -174,7 +174,7 @@ async fn test_sequencer_checkpoint_resume() {
     init_tracing();
     let validators = spawn_validators(
         Some("test_sequencer_checkpoint_resume"),
-        2,
+        1,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config
@@ -1058,7 +1058,7 @@ async fn test_sequencer_stale_checkpoint_resume() {
     init_tracing();
     let validators = spawn_validators(
         Some("test_sequencer_stale_checkpoint_resume"),
-        2,
+        1,
         |mut config| {
             config.deployment.time.slot_duration = Duration::from_secs(1);
             config

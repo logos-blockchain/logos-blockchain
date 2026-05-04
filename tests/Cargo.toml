@@ -28,6 +28,7 @@ ed25519                          = "2.2.3"
 futures                          = { workspace = true }
 futures-util                     = { workspace = true }
 hex                              = { default-features = false, version = "0.4.3" }
+lb-api-service                   = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }

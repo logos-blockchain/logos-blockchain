@@ -1,6 +1,5 @@
 use core::{convert::Infallible, str::FromStr};
 use std::{
-    collections::HashMap,
     io::Read,
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
@@ -10,7 +9,7 @@ use ::tracing::{Level, warn};
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
-use lb_tracing::filter::envfilter::default_envfilter_config;
+use lb_tracing::filter::envfilter::{default_envfilter_config, parse_filter_directives};
 use serde::Deserialize;
 use tracing::serde::filter::{EnvConfig, Layer};
 
@@ -473,16 +472,7 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
 
 /// Parses CLI/env filter overrides into the typed filter config form.
 fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
-    let filters = raw
-        .split(',')
-        .map(str::trim)
-        .filter(|directive| !directive.is_empty())
-        .map(parse_log_filter_directive)
-        .collect::<Result<HashMap<_, _>>>()?;
-
-    if filters.is_empty() {
-        return Err(eyre!("Invalid log filter provided: {}", raw));
-    }
+    let filters = parse_filter_directives(raw).map_err(|error| eyre!(error))?;
 
     Ok(Layer::Env(EnvConfig { filters }))
 }
@@ -499,27 +489,6 @@ fn apply_default_debug_log_filter(tracing: &mut TracingConfig) {
             filters: filter.filters,
         });
     }
-}
-
-/// Parses a single filter directive of the form `target=level` or a bare
-/// global level such as `warn`.
-fn parse_log_filter_directive(directive: &str) -> Result<(String, Level)> {
-    if let Some((target, level)) = directive.split_once('=') {
-        let target = target.trim();
-        let level = level.trim();
-
-        if target.is_empty() || level.is_empty() {
-            return Err(eyre!("Invalid log filter directive: {}", directive));
-        }
-
-        return Ok((target.to_owned(), parse_log_filter_level(level)?));
-    }
-
-    Ok(("*".to_owned(), parse_log_filter_level(directive)?))
-}
-
-fn parse_log_filter_level(level: &str) -> Result<Level> {
-    Level::from_str(level.trim()).map_err(|_| eyre!("Invalid log filter level provided: {}", level))
 }
 
 pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) -> Result<()> {

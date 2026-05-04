@@ -343,6 +343,15 @@ where
             additional_blocks.len()
         );
 
+        if peers_to_request.is_empty() {
+            return Err(format!(
+                "no candidate peers available to download orphan ancestors for target block {target_block:?} (connected={}, discovered={})",
+                connected_peers.len(),
+                discovered_peers.len()
+            )
+            .into());
+        }
+
         let requests = peers_to_request
             .into_iter()
             .map(|peer| {
@@ -464,7 +473,7 @@ mod tests {
         // other selected peers must be from the connected set
         result
             .iter()
-            .filter(|&id| ![[4; 32], [5; 32]].contains(id))
+            .filter(|&id| id != &[4; 32] && id != &[5; 32])
             .for_each(|id| {
                 assert!(
                     connected.contains(id),
@@ -484,7 +493,7 @@ mod tests {
             choose_peers_to_request_download(&connected, 0, &discovered, 2).collect::<Vec<_>>();
 
         assert_eq!(result.len(), 2);
-        // all discovered peers except `3` must be returned
+        // all selected peers must be from the discovered-but-not-connected set
         assert!(result.contains(&[4; 32]));
         assert!(result.contains(&[5; 32]));
 
@@ -520,7 +529,7 @@ mod tests {
 
         // set max=3 larger than # of `discovered - connected` peers
         let result =
-            choose_peers_to_request_download(&connected, 0, &discovered, 2).collect::<Vec<_>>();
+            choose_peers_to_request_download(&connected, 0, &discovered, 3).collect::<Vec<_>>();
 
         // all discovered peers except `3` must be returned
         assert_eq!(result.len(), 2);

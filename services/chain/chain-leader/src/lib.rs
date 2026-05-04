@@ -110,7 +110,7 @@ pub enum LeaderMsg {
         sender: oneshot::Sender<watch::Receiver<Option<WinningPolInfo>>>,
     },
     Claim {
-        sender: oneshot::Sender<Result<(), Error>>,
+        sender: oneshot::Sender<Result<TxHash, Error>>,
     },
 }
 
@@ -686,7 +686,7 @@ where
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         config: &LeaderWalletConfig,
         mempool: &MempoolAdapter<Mempool::Item>,
-        resp_tx: oneshot::Sender<Result<(), Error>>,
+        resp_tx: oneshot::Sender<Result<TxHash, Error>>,
     ) {
         let result = Self::build_and_submit_claim_tx(cryptarchia, wallet, mempool, config).await;
         if resp_tx.send(result).is_err() {
@@ -699,7 +699,7 @@ where
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
         mempool: &MempoolAdapter<Mempool::Item>,
         config: &LeaderWalletConfig,
-    ) -> Result<(), Error> {
+    ) -> Result<TxHash, Error> {
         let (tip, ledger_state) = Self::get_tip_ledger_state(cryptarchia).await?;
 
         let voucher_nullifier = wallet
@@ -724,8 +724,10 @@ where
             config,
         )
         .await?;
+        let tx_hash = signed_tx.hash();
 
-        mempool.post_tx(signed_tx).await.map_err(Error::Mempool)
+        mempool.post_tx(signed_tx).await.map_err(Error::Mempool)?;
+        Ok(tx_hash)
     }
 
     async fn get_tip_ledger_state(

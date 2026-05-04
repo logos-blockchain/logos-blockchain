@@ -172,6 +172,18 @@ fn parse_log_filter_layer_rejects_empty_directive() {
 }
 
 #[test]
+fn parse_log_filter_layer_rejects_unknown_blend_target() {
+    let error = parse_log_filter_layer("blend::service::missing=debug")
+        .expect_err("unknown blend target should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unknown log filter target `blend::service::missing`")
+    );
+}
+
+#[test]
 fn env_config_serializes_and_deserializes_typed_levels() {
     let config = EnvConfig {
         filters: [
@@ -194,5 +206,22 @@ fn env_config_deserialization_rejects_invalid_level() {
     let error = serde_json::from_str::<EnvConfig>(r#"{"filters":{"logos_blockchain":"debgu"}}"#)
         .expect_err("invalid level should fail");
 
-    assert!(error.to_string().contains("invalid log level"));
+    assert!(
+        error
+            .to_string()
+            .contains("Invalid log filter level provided: debgu")
+    );
+}
+
+#[test]
+fn env_config_deserialization_rejects_unknown_blend_target() {
+    let error =
+        serde_json::from_str::<EnvConfig>(r#"{"filters":{"blend::service::missing":"debug"}}"#)
+            .expect_err("unknown blend target should fail");
+
+    assert!(
+        error
+            .to_string()
+            .contains("unknown log filter target `blend::service::missing`")
+    );
 }

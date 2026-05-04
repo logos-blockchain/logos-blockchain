@@ -407,20 +407,21 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: Re-enable when session_income is implemented (currently hardcoded to 0)"]
     fn test_rewards_calculation() {
         let provider1 = create_provider_id(1);
         let provider2 = create_provider_id(2);
         let provider3 = create_provider_id(3);
         let provider4 = create_provider_id(4);
 
-        // Create a reward tracker, and update session from 0 to 1.
+        // Create a reward tracker, accumulate session income during session 0,
+        // and update session from 0 to 1.
         let config = create_service_parameters();
         let epoch_state = dummy_epoch_state();
         let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(
             create_blend_rewards_params(864_000, 1),
             &epoch_state,
         )
+        .add_income(1000)
         .update_session(
             &create_test_session_state(
                 &[provider1, provider2, provider3, provider4],
@@ -431,8 +432,7 @@ mod tests {
             &config,
         );
 
-        // provider1 submits an activity proof, which has the minimum
-        // Hamming distance among all proofs.
+        // provider1 submits an activity proof
         let rewards_tracker = rewards_tracker
             .update_active(
                 provider1,
@@ -446,7 +446,8 @@ mod tests {
             )
             .unwrap();
 
-        // provider2 submits an activity proof.
+        // provider2 submits an activity proof, which has the minimum
+        // Hamming distance among all proofs.
         let rewards_tracker = rewards_tracker
             .update_active(
                 provider2,
@@ -460,8 +461,7 @@ mod tests {
             )
             .unwrap();
 
-        // provider3 submits an activity proof, which has the minimum
-        // Hamming distance among all proofs.
+        // provider3 submits an activity proof
         let rewards_tracker = rewards_tracker
             .update_active(
                 provider3,
@@ -512,14 +512,14 @@ mod tests {
             })
             .collect();
 
-        // Provider1 and provider3 should get double rewards compared to provider2.
+        // Provider2 gets double rewards compared to provider1 and provider3.
         assert_eq!(
-            *rewards.get(&provider1).unwrap(),
-            rewards.get(&provider2).unwrap() * 2
+            *rewards.get(&provider2).unwrap(),
+            rewards.get(&provider1).unwrap() * 2
         );
         assert_eq!(
-            *rewards.get(&provider3).unwrap(),
-            rewards.get(&provider2).unwrap() * 2
+            *rewards.get(&provider2).unwrap(),
+            rewards.get(&provider3).unwrap() * 2
         );
         // Provider4 should get no rewards.
         assert_eq!(rewards.get(&provider4), None);
