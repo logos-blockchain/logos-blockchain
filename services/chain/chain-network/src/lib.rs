@@ -42,7 +42,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
-use tracing::{Level, debug, error, info, instrument, span, trace};
+use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
 pub use crate::{
@@ -467,6 +467,10 @@ where
             .await;
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Keep proposal error handling in one match."
+    )]
     fn handle_proposal_processing_error(
         err: Error,
         block_id: HeaderId,
@@ -486,6 +490,15 @@ where
                         "Failed to enqueue block for orphan processing",
                     );
                 }
+            }
+            Error::Cryptarchia(lb_chain_service::api::ApiError::FutureBlock {
+                block_slot,
+                current_slot,
+            }) => {
+                warn!(
+                    target: LOG_TARGET, ?block_id, ?block_slot, ?current_slot,
+                    "Block is still from a future slot after apply retries",
+                );
             }
             err => {
                 error!(
@@ -699,7 +712,7 @@ where
                 block_slot,
                 current_slot,
             })) if attempt < max_retries => {
-                info!(
+                debug!(
                     target: LOG_TARGET,
                     ?block_id,
                     ?block_slot,
@@ -725,7 +738,11 @@ where
 /// Try to add a [`Block`] to [`Cryptarchia`].
 /// A [`Block`] is only added if it's valid
 #[expect(clippy::allow_attributes_without_reason)]
-#[instrument(level = "debug", skip(cryptarchia, mempool_adapter))]
+#[instrument(
+    level = "debug",
+    skip(block, cryptarchia, mempool_adapter),
+    fields(block_id = %block.header().id(), tx_count = block.transactions().len())
+)]
 async fn apply_block_and_reconcile_mempool<Cryptarchia, Mempool, RuntimeServiceId>(
     block: Block<Cryptarchia::Tx>,
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
@@ -738,7 +755,7 @@ where
         RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = Cryptarchia::Tx> + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
-    debug!("Received proposal with ID: {:?}", block.header().id());
+    trace!("Received proposal with ID: {:?}", block.header().id());
 
     let (tip, reorged_txs) = cryptarchia.apply_block(block.clone()).await?;
     let reorged_tx_count = reorged_txs.len();
