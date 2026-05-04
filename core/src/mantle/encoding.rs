@@ -983,10 +983,7 @@ mod tests {
             clippy::string_add,
             reason = "Recommended String::push_str does not support chaining"
         )]
-        let test_vector = String::new()
-            + "00"                                                               // OpCount=0u8
-            + "6400000000000000"                                                 // ExecutionGasPrice
-            + "3200000000000000"; // StorageGasPrice
+        let test_vector = String::new() + "00"; // OpCount=0u8
 
         // ENCODING
         let encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
@@ -1029,10 +1026,8 @@ mod tests {
             + "68656c6c6f"                                                       // Inscription
             + "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" // Parent (32Byte)
             + "ca93ac1705187071d67b83c7ff0efe8108e8ec4530575d7726879333dbdabe7c" // Signer (32Byte)
-            + "6400000000000000"                                                 // ExecutionGasPrice
-            + "3200000000000000"                                                 // StorageGasPrice
-            + "0422c15f3b8c1e5a213d2d41d46b9c6644f7fe0a3d34695d3af450f06b10fdec" // Signature (64Byte)
-            + "ac806ad87e6a73efd5c901dc3af295620615702cbae4de9f46b7e1333284b803";
+            + "9de1d7d1183f1a4e9233888bfdd299e2cb8f67a8e7b9268bf782e6181d27cf46" // Signature (64Byte)
+            + "e171d51f834d1e0d94fd45a40a8ef37b1c1b00556b5d776fd6c8e87f198e0201";
 
         // ENCODING
         let encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));

@@ -703,7 +703,7 @@ mod tests {
     use lb_core::{
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _,
-            gas::{GasPrice, MainnetGasConstants},
+            gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{
                 channel::{
@@ -750,6 +750,17 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[seed; 32]);
         let verifying_key = signing_key.public_key();
         (signing_key, verifying_key)
+    }
+
+    fn update_ledger_prices(ledger_state: &mut LedgerState, new_execution: u64, new_storage: u64) {
+        ledger_state.cryptarchia_ledger = ledger_state
+            .cryptarchia_ledger
+            .clone()
+            .set_storage_price(new_storage.into());
+        ledger_state.cryptarchia_ledger = ledger_state
+            .cryptarchia_ledger
+            .clone()
+            .set_execution_base_fee(new_execution.into());
     }
 
     enum Key {
@@ -1406,37 +1417,12 @@ mod tests {
     }
 
     #[test]
-    fn test_storage_price_rejection() {
-        let utxo = utxo();
-        let config = config();
-        let ledger = LedgerState::from_utxos([utxo], &config);
-
-        let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(1u8).into()));
-        let sk = ZkKey::from(BigUint::from(0u8));
-        let tx = create_tx(
-            vec![utxo.id()],
-            vec![output_note],
-            std::slice::from_ref(&sk),
-        );
-        let mut gas_prices = GasPrices::default();
-        gas_prices.execution_base_gas_price =
-            gas_prices.execution_base_gas_price + GasPrice::new(1); // wrong storage gas price
-        let fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, gas_prices).unwrap();
-        output_note.value = utxo.note.value - fees.into_inner();
-        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
-
-        let result = ledger
-            .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
-        assert_eq!(result, Err(LedgerError::InvalidStoragePrice));
-    }
-
-    #[test]
     #[ignore = "TODO: enable once we determine non-zero genesis execution gas price"]
-    fn test_base_fee_rejection() {
+    fn test_fee_rejection() {
         let utxo = utxo();
         let config = config();
         let mut ledger = LedgerState::from_utxos([utxo], &config);
+        update_ledger_prices(&mut ledger, 1, 1);
 
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
@@ -1445,10 +1431,12 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        let gas_prices = GasPrices::new(1, 1);
         // Pays 2925 fees = 2705 execution base fee + 0 execution tip + 220 storage
-        let fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, gas_prices).unwrap();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(
+            &tx,
+            ledger.get_gas_prices(),
+        )
+        .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
 
@@ -1464,7 +1452,7 @@ mod tests {
             .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
         // The transaction should be rejected because the price indicated for execution
         // doesn't cover the base fee that cost 27 050
-        assert_eq!(result, Err(LedgerError::InsufficientExecutionFee));
+        assert_eq!(result, Err(LedgerError::InsufficientBalance));
     }
 
     #[test]
@@ -1472,7 +1460,7 @@ mod tests {
     fn test_priority_fees_go_to_leader() {
         let utxo = utxo();
         let config = config();
-        let ledger = LedgerState::from_utxos([utxo], &config);
+        let mut ledger = LedgerState::from_utxos([utxo], &config);
 
         let mut output_note = Note::new(1, ZkPublicKey::new(BigUint::from(0u8).into()));
         let sk = ZkKey::from(BigUint::from(0u8));
@@ -1481,11 +1469,14 @@ mod tests {
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        let gas_prices = GasPrices::new(1, 1);
-        // The tx ays 2925 fees = 2705 execution base fee + 0 execution tip + 220
+        update_ledger_prices(&mut ledger, 1, 1);
+        // The tx pays 794 fees = 590 execution base fee + 0 execution tip + 204
         // storage
-        let fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, gas_prices).unwrap();
+        let fees = AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(
+            &tx,
+            ledger.get_gas_prices(),
+        )
+        .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
         let tx = create_tx(
             vec![utxo.id()],
@@ -1496,24 +1487,21 @@ mod tests {
         let result = ledger
             .clone()
             .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
-        // The unwrap should succeed because the user pays at least the base fee of 2705
+        // The unwrap should succeed because the user pays at least the base fee of 794
         let no_priority_fee_ledger = result.unwrap();
 
-        let gas_prices = GasPrices::new(2, 1);
+        // The tx ays 1794 fees = 590 execution base fee + 1000 execution tip + 204
+        // storage
+        output_note.value = utxo.note.value - fees.into_inner() - 1000;
         let tx = create_tx(
             vec![utxo.id()],
             vec![output_note],
             std::slice::from_ref(&sk),
         );
-        // The tx ays 5630 fees = 2705 execution base fee + 2705 execution tip + 220
-        // storage
-        let fees =
-            AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, gas_prices).unwrap();
-        output_note.value = utxo.note.value - fees.into_inner();
-        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
+
         let result = ledger
             .try_apply_contents::<HeaderId, MainnetGasConstants>(&config, std::iter::once(&tx));
-        // The unwrap should succeed because the user pays at least the base fee of 2705
+        // The unwrap should succeed because the user pays at least the base fee of 794
         let priority_fee_ledger = result.unwrap();
 
         assert_eq!(
@@ -1521,7 +1509,7 @@ mod tests {
                 .mantle_ledger
                 .leaders
                 .get_pending_rewards()
-                + 2705,
+                + 1000,
             priority_fee_ledger
                 .mantle_ledger
                 .leaders

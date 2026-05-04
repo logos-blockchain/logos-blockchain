@@ -741,6 +741,15 @@ pub mod tests {
                 ..self
             }
         }
+
+        #[cfg(test)]
+        #[must_use]
+        pub fn set_storage_price(self, new_storage_price: GasPrice) -> Self {
+            Self {
+                storage_gas_price: new_storage_price,
+                ..self
+            }
+        }
     }
 
     fn update_ledger(
