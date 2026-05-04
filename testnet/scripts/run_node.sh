@@ -11,4 +11,4 @@ export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml" \
        LOG_DIR="/node-data/${LB_HOST_IDX}/" \
        STATE_PATH="/node-data/${LB_HOST_IDX}/state"
 
-exec /usr/bin/logos-blockchain-node --deployment $CFG_DEPLOYMENT_PATH $CFG_FILE_PATH
+exec /usr/local/bin/logos-blockchain-node --deployment $CFG_DEPLOYMENT_PATH $CFG_FILE_PATH
