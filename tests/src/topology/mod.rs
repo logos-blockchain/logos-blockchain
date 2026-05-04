@@ -2,14 +2,15 @@ use std::{collections::HashSet, time::Duration};
 
 use configs::{
     GeneralConfig,
-    consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_tx_with_declarations},
+    consensus::{GeneralConsensusConfig, ProviderInfo, create_genesis_block_with_declarations},
     network::{NetworkParams, create_network_configs},
     tracing::create_tracing_configs,
 };
 pub use lb_config as configs;
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
-    mantle::{GenesisTx as _, Note, NoteId, genesis_tx::GenesisTx},
+    block::genesis::GenesisBlock,
+    mantle::{GenesisTx as _, Note, NoteId},
     sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkKey;
@@ -24,7 +25,7 @@ use crate::{
         api::create_api_configs,
         blend::{GeneralBlendConfig, create_blend_configs},
         consensus::{SHORT_PROLONGED_BOOTSTRAP_PERIOD, create_consensus_configs},
-        deployment::e2e_deployment_settings_with_genesis_tx,
+        deployment::e2e_deployment_settings_with_genesis_block,
         sdp::create_sdp_configs,
         time::set_time_config,
     },
@@ -134,7 +135,7 @@ impl Topology {
             blend_ports.push(get_reserved_available_udp_port().unwrap());
         }
 
-        let (consensus_configs, genesis_tx) =
+        let (consensus_configs, genesis_block) =
             create_consensus_configs(&ids, SHORT_PROLONGED_BOOTSTRAP_PERIOD, test_context);
         let network_configs = create_network_configs(&ids, &config.network_params);
         let blend_configs = create_blend_configs(&ids, &blend_ports);
@@ -143,11 +144,16 @@ impl Topology {
         let time_config = set_time_config();
 
         // Setup genesis TX with Blend service declarations.
-        let base_transfer_op = genesis_tx.genesis_transfer().clone();
+        let base_transfer_op = genesis_block
+            .transactions()
+            .next()
+            .expect("Genesis block should contain a genesis tx")
+            .genesis_transfer()
+            .clone();
         let mut transfer_op = base_transfer_op.clone();
         let base_outputs = transfer_op.outputs.len();
         for note_spec in &config.extra_genesis_notes {
-            transfer_op.outputs.push(note_spec.note);
+            transfer_op.outputs.as_mut().push(note_spec.note);
         }
         let providers: Vec<_> = blend_configs
             .iter()
@@ -164,9 +170,9 @@ impl Topology {
             .collect();
 
         // Update genesis TX to contain Blend providers.
-        let genesis_tx_with_declarations =
-            create_genesis_tx_with_declarations(transfer_op, providers, test_context);
-        let updated_transfer_op = genesis_tx_with_declarations.genesis_transfer().clone();
+        let genesis_block =
+            create_genesis_block_with_declarations(transfer_op, providers, test_context);
+        let updated_transfer_op = genesis_block.genesis_tx().genesis_transfer().clone();
         let injected_utxos: Vec<_> = updated_transfer_op
             .outputs
             .utxos(&updated_transfer_op)
@@ -181,7 +187,7 @@ impl Topology {
         // Set Blend keys in KMS of each node config.
         let kms_configs = create_kms_configs(&blend_configs, &consensus_configs);
 
-        let sdp_configs = create_sdp_configs(&genesis_tx_with_declarations, n_participants);
+        let sdp_configs = create_sdp_configs(&genesis_block.genesis_tx(), n_participants);
 
         let mut node_configs = vec![];
 
@@ -200,12 +206,8 @@ impl Topology {
 
         let general_configs = node_configs.clone();
 
-        let validators = Self::spawn_validators(
-            node_configs,
-            genesis_tx_with_declarations,
-            config.lock_period_override,
-        )
-        .await;
+        let validators =
+            Self::spawn_validators(node_configs, genesis_block, config.lock_period_override).await;
 
         Self {
             validators,
@@ -216,12 +218,12 @@ impl Topology {
 
     async fn spawn_validators(
         config: Vec<GeneralConfig>,
-        genesis_tx: GenesisTx,
+        genesis_block: GenesisBlock,
         lock_period_override: Option<u64>,
     ) -> Vec<Validator> {
         let mut validators = Vec::new();
         for general_config in config {
-            let mut deployment = e2e_deployment_settings_with_genesis_tx(genesis_tx.clone());
+            let mut deployment = e2e_deployment_settings_with_genesis_block(&genesis_block);
             if let Some(lock_period) = lock_period_override {
                 for params in deployment
                     .cryptarchia

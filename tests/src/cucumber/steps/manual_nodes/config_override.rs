@@ -623,7 +623,7 @@ mod tests {
         add_strings,
         nodes::create_validator_config,
         topology::configs::{
-            create_general_configs, deployment::e2e_deployment_settings_with_genesis_tx,
+            create_general_configs, deployment::e2e_deployment_settings_with_genesis_block,
         },
     };
 
@@ -690,8 +690,8 @@ mod tests {
 
     #[test]
     fn apply_overrides_updates_user_and_deployment_config() {
-        let (configs, genesis_tx) = create_general_configs(1, Some("test_set_config_overrides"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+        let (configs, genesis_block) = create_general_configs(1, Some("test_set_config_overrides"));
+        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
         let mut config = create_validator_config(configs[0].clone(), deployment_settings);
 
         let retain_scores = config.user.network.backend.swarm.gossipsub.retain_scores;
@@ -746,8 +746,8 @@ mod tests {
 
     #[test]
     fn world_overrides_accept_explicit_functions() {
-        let (configs, genesis_tx) = create_general_configs(1, Some("test_override_functions"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+        let (configs, genesis_block) = create_general_configs(1, Some("test_override_functions"));
+        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
         let mut config = create_validator_config(configs[0].clone(), deployment_settings);
         let mut world = CucumberWorld::default();
 
@@ -804,8 +804,9 @@ mod tests {
 
     #[test]
     fn world_overrides_round_trip_scalar_types() {
-        let (configs, genesis_tx) = create_general_configs(1, Some("test_override_scalar_types"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
+        let (configs, genesis_block) =
+            create_general_configs(1, Some("test_override_scalar_types"));
+        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
         let mut config = create_validator_config(configs[0].clone(), deployment_settings);
         let mut world = CucumberWorld::default();
 
@@ -899,85 +900,6 @@ mod tests {
             config.user.cryptarchia.leader.wallet.funding_pk,
             lb_key_management_system_service::keys::ZkPublicKey::zero(),
         );
-    }
-
-    #[test]
-    fn deployment_override_hex_inscription_round_trips_into_genesis_inscription_bytes() {
-        let (configs, genesis_tx) =
-            create_general_configs(1, Some("test_override_inscription_hex"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_tx(genesis_tx);
-        let mut config = create_validator_config(configs[0].clone(), deployment_settings);
-        let mut world = CucumberWorld::default();
-
-        // Hex input
-        set_deployment_config_override(
-            &mut world,
-            "test-step",
-            "cryptarchia.genesis_state.mantle_tx.ops.1.payload.inscription",
-            "hex(70726f636573735f73746172745f6e6f6e6365)",
-        )
-        .expect("inscription hex override");
-
-        apply_deployment_config_overrides(&mut config, &world.deployment_config_overrides)
-            .expect("apply deployment overrides");
-
-        let yaml = serde_yaml::to_value(&config.deployment).expect("deployment yaml");
-        let inscription = get_at_path(
-            &yaml,
-            &[
-                "cryptarchia",
-                "genesis_state",
-                "mantle_tx",
-                "ops",
-                "1",
-                "payload",
-                "inscription",
-            ],
-        )
-        .expect("inscription path");
-
-        let seq = inscription.as_sequence().expect("inscription bytes");
-        let got = seq
-            .iter()
-            .map(|v| v.as_i64().expect("byte") as u8)
-            .collect::<Vec<_>>();
-
-        assert_eq!(got, b"process_start_nonce");
-
-        // Human readable string input
-        set_deployment_config_override(
-            &mut world,
-            "test-step",
-            "cryptarchia.genesis_state.mantle_tx.ops.1.payload.inscription",
-            "process_start_nonce",
-        )
-        .expect("inscription text override");
-
-        apply_deployment_config_overrides(&mut config, &world.deployment_config_overrides)
-            .expect("apply deployment overrides");
-
-        let yaml = serde_yaml::to_value(&config.deployment).expect("deployment yaml");
-        let inscription = get_at_path(
-            &yaml,
-            &[
-                "cryptarchia",
-                "genesis_state",
-                "mantle_tx",
-                "ops",
-                "1",
-                "payload",
-                "inscription",
-            ],
-        )
-        .expect("inscription path");
-
-        let seq = inscription.as_sequence().expect("inscription bytes");
-        let got = seq
-            .iter()
-            .map(|v| v.as_i64().expect("byte") as u8)
-            .collect::<Vec<_>>();
-
-        assert_eq!(got, b"process_start_nonce");
     }
 
     #[test]

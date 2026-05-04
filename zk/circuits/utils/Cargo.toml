@@ -10,7 +10,7 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-dirs = "6.0"
+dirs = { workspace = true }
 
 [lints]
 workspace = true

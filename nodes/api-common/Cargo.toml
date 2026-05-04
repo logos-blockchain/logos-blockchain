@@ -13,29 +13,18 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum = { default-features = false, features = [
-  "http1",
-  "http2",
-  "json",
-  "matched-path",
-  "query",
-  "tokio",
-], version = "0.7.5" }
-lb-core = { workspace = true }
+axum                          = { features = ["http1", "http2", "json", "matched-path", "query", "tokio"], workspace = true }
+lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-lb-tracing = { workspace = true }
-serde = { features = ["alloc", "derive"], workspace = true }
-serde_json = { workspace = true }
-serde_with = { default-features = false, features = ["macros"], workspace = true }
-tokio = { features = ["time"], optional = true, workspace = true }
-tracing = { default-features = false, workspace = true }
+lb-tracing                    = { workspace = true }
+serde                         = { features = ["alloc", "derive"], workspace = true }
+serde_json                    = { workspace = true }
+serde_with                    = { features = ["macros"], workspace = true }
+tokio                         = { features = ["time"], optional = true, workspace = true }
+tracing                       = { workspace = true }
 
 [target.'cfg(not(windows))'.dependencies]
-pprof = { default-features = false, features = [
-  "criterion",
-  "flamegraph",
-  "protobuf-codec",
-], optional = true, version = "0.15" }
+pprof = { features = ["criterion", "flamegraph", "protobuf-codec"], optional = true, workspace = true }
 
 [features]
-profiling = ["pprof", "tokio"]
+profiling = ["dep:pprof", "dep:tokio"]

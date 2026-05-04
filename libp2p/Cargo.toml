@@ -13,15 +13,15 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait = { default-features = false, version = "0.1.88" }
-backon = { features = ["tokio-sleep"], version = "1.3.0" }
-blake2 = { default-features = false, version = "0.10" }
-either = { default-features = false, version = "1.13.0" }
+async-trait = { workspace = true }
+backon = { features = ["tokio-sleep"], workspace = true }
+blake2 = { workspace = true }
+either = { workspace = true }
 futures = { workspace = true }
-hex = { default-features = false, version = "0.4.3" }
-igd-next = { features = ["aio_tokio", "tokio"], version = "0.16.1" }
-lb-cryptarchia-sync = { features = ["libp2p"], workspace = true }
-lb-utils = { features = ["serde", "time"], workspace = true }
+hex = { workspace = true }
+igd-next = { features = ["aio_tokio", "tokio"], workspace = true }
+lb-cryptarchia-sync = { workspace = true }
+lb-utils = { features = ["time"], workspace = true }
 libp2p = { features = [
   "autonat",
   "dns",
@@ -34,19 +34,19 @@ libp2p = { features = [
   "serde",
   "tokio",
 ], workspace = true }
-multiaddr = { default-features = false, version = "0.18" }
-natpmp = { features = ["tokio"], version = "0.5" }
-netdev = { default-features = false, version = "0.31" }
-num_enum = { default-features = false, version = "0.7.4" }
-rand = { default-features = false, version = "0.8" }
+multiaddr = { workspace = true }
+natpmp = { features = ["tokio"], workspace = true }
+netdev = { workspace = true }
+num_enum = { workspace = true }
+rand = { workspace = true }
 serde = { features = ["derive"], workspace = true }
 serde_with = { workspace = true }
-thiserror = "1.0.40"
+thiserror = { workspace = true }
 tokio = { features = ["macros", "test-util", "time"], workspace = true }
 tracing = { workspace = true }
-zerocopy = { features = ["derive"], version = "0.8.26" }
+zerocopy = { features = ["derive"], workspace = true }
 
 [dev-dependencies]
-libp2p-swarm-test  = { features = ["tokio"], version = "0.5.0" }
-serde_json         = { default-features = false, version = "1.0.99" }
-tracing-subscriber = { features = ["env-filter"], version = "0.3" }
+libp2p-swarm-test  = { features = ["tokio"], workspace = true }
+serde_json         = { workspace = true }
+tracing-subscriber = { features = ["env-filter", "fmt"], workspace = true }

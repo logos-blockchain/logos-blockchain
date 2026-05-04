@@ -13,9 +13,9 @@ version     = { workspace = true }
 proc-macro = true
 
 [dependencies]
-proc-macro2 = { default-features = false, version = "1" }
-quote       = { default-features = false, version = "1" }
-syn         = { features = ["full"], version = "2" }
+proc-macro2 = { workspace = true }
+quote       = { workspace = true }
+syn         = { features = ["full"], workspace = true }
 
 [lints]
 workspace = true

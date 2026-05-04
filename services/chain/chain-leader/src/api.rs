@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+use lb_core::mantle::TxHash;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use tokio::sync::oneshot;
 
@@ -31,7 +32,7 @@ where
         }
     }
 
-    pub async fn claim(&self) -> Result<(), ApiError> {
+    pub async fn claim(&self) -> Result<TxHash, ApiError> {
         let (resp_tx, resp_rx) = oneshot::channel();
         self.relay
             .send(LeaderMsg::Claim { sender: resp_tx })

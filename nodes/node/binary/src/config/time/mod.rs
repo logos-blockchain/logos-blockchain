@@ -1,3 +1,4 @@
+use lb_core::mantle::GenesisTx as _;
 use lb_cryptarchia_engine::{EpochConfig, time::SlotConfig};
 use lb_time_service::{
     TimeServiceSettings,
@@ -26,7 +27,11 @@ impl ServiceConfig {
         TimeServiceSettings {
             slot_config: SlotConfig {
                 slot_duration: self.deployment.slot_duration,
-                chain_start_time: self.deployment.chain_start_time,
+                genesis_time: cryptarchia_deployment
+                    .genesis_block
+                    .genesis_tx()
+                    .cryptarchia_parameter()
+                    .genesis_time,
             },
             epoch_config: EpochConfig {
                 epoch_period_nonce_buffer: cryptarchia_deployment

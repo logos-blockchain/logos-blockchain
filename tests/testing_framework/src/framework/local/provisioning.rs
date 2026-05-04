@@ -8,7 +8,10 @@ use std::{
 use async_trait::async_trait;
 use config::{api, sdp, state, storage, wallet};
 use lb_config::kms::key_id_for_preload_backend;
-use lb_core::mantle::{self, genesis_tx::GenesisTx};
+use lb_core::{
+    block::genesis::GenesisBlock,
+    mantle::{self},
+};
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
 use lb_node::{
@@ -28,7 +31,9 @@ use testing_framework_runner_local::{
 use tracing::debug;
 
 use crate::{
-    LOGOS_BLOCKCHAIN_LOG_LEVEL, env as tf_env,
+    LOGOS_BLOCKCHAIN_LOG_LEVEL,
+    diagnostics::{record_system_monitor_event, register_system_monitor_output_file},
+    env as tf_env,
     framework::LbcEnv,
     node::{
         DeploymentPlan, NodeHttpClient, NodePlan,
@@ -49,7 +54,7 @@ pub const DEPLOYMENT_CONFIG_FILE: &str = "deployment.yaml";
 struct PlannedLocalNodeConfig {
     config: Config,
     descriptor_override: Option<RunConfig>,
-    genesis_tx: GenesisTx,
+    genesis_block: GenesisBlock,
     port_strategy: PortStrategy,
 }
 
@@ -99,6 +104,13 @@ impl LocalDeployerEnv for LbcEnv {
     fn build_initial_node_configs(
         topology: &Self::Deployment,
     ) -> Result<Vec<NodeConfigEntry<<Self as Application>::NodeConfig>>, ProcessSpawnError> {
+        register_system_monitor_output_file(
+            &topology
+                .config()
+                .scenario_base_dir
+                .join("system_stats.ndjson"),
+        );
+
         topology
             .nodes()
             .iter()
@@ -133,6 +145,12 @@ impl LocalDeployerEnv for LbcEnv {
     ) -> Result<LaunchSpec, DynError> {
         let mut config = config.clone();
         ensure_recovery_paths(dir).map_err(|source| -> DynError { source.into() })?;
+
+        record_system_monitor_event(
+            "node_runtime_prepared",
+            format!("{label}:{}", dir.display()),
+        );
+
         config.user.tracing.level = configured_node_log_level();
 
         if !tf_env::debug_tracing() {
@@ -330,7 +348,7 @@ fn build_dynamic_node_config(
         topology,
         index,
         peer_ports_by_name,
-        &options.peers,
+        options.peers.as_ref(),
         peer_ports,
     )?;
     let mut config =
@@ -358,7 +376,7 @@ fn plan_local_node_config(
     descriptors: &DeploymentPlan,
     index: usize,
     peer_ports_by_name: &HashMap<String, u16>,
-    peer_selection: &PeerSelection,
+    peer_selection: Option<&PeerSelection>,
     peer_ports: &[u16],
 ) -> Result<PlannedLocalNodeConfig, DynError> {
     let base_node = descriptors
@@ -384,9 +402,9 @@ fn plan_local_node_config(
         return Ok(PlannedLocalNodeConfig {
             config,
             descriptor_override: descriptors.config().node_config_override(index).cloned(),
-            genesis_tx: descriptors
+            genesis_block: descriptors
                 .config()
-                .genesis_tx
+                .genesis_block
                 .clone()
                 .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
             port_strategy: PortStrategy::PreservePlannedPorts,
@@ -434,9 +452,9 @@ fn plan_local_node_config(
     Ok(PlannedLocalNodeConfig {
         config,
         descriptor_override: descriptors.config().node_config_override(index).cloned(),
-        genesis_tx: descriptors
+        genesis_block: descriptors
             .config()
-            .genesis_tx
+            .genesis_block
             .clone()
             .ok_or_else(|| io::Error::other("missing topology genesis tx"))?,
         port_strategy: PortStrategy::AllocateEphemeralPorts,
@@ -452,12 +470,12 @@ pub fn build_node_run_config(
         return Ok(override_config.clone());
     }
 
-    let genesis_tx = topology
+    let genesis_block = topology
         .config()
-        .genesis_tx
+        .genesis_block
         .clone()
         .ok_or_else(|| io::Error::other("missing topology genesis tx"))?;
-    Ok(build_run_config(node.general.clone(), genesis_tx))
+    Ok(build_run_config(node.general.clone(), &genesis_block))
 }
 
 fn finalize_dynamic_run_config(
@@ -477,11 +495,11 @@ fn finalize_dynamic_run_config(
         return override_config.clone();
     }
 
-    build_run_config(plan.config.clone(), plan.genesis_tx.clone())
+    build_run_config(plan.config.clone(), &plan.genesis_block)
 }
 
-fn build_run_config(config: Config, genesis_tx: GenesisTx) -> RunConfig {
-    let deployment_config = default_e2e_deployment_settings(genesis_tx);
+fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
+    let deployment_config = default_e2e_deployment_settings(genesis_block);
 
     let user_config = UserConfig {
         network: config.network_config,
@@ -616,13 +634,13 @@ fn build_cryptarchia_user_config(
 
 fn resolve_initial_peers(
     peer_ports_by_name: &HashMap<String, u16>,
-    peer_selection: &PeerSelection,
+    peer_selection: Option<&PeerSelection>,
     default_peers: &[Multiaddr],
     descriptors: &DeploymentPlan,
     peer_ports: &[u16],
 ) -> Result<Vec<Multiaddr>, DynError> {
     match peer_selection {
-        PeerSelection::Named(names) => {
+        Some(PeerSelection::Named(names)) => {
             let mut peers = Vec::with_capacity(names.len());
             for name in names {
                 let port = peer_ports_by_name
@@ -633,7 +651,7 @@ fn resolve_initial_peers(
 
             Ok(peers)
         }
-        PeerSelection::DefaultLayout => {
+        None | Some(PeerSelection::DefaultLayout) => {
             if default_peers.is_empty() {
                 let topology: &TopologyConfig = descriptors.config();
                 Ok(initial_peers_for_dynamic_node(
@@ -644,7 +662,7 @@ fn resolve_initial_peers(
                 Ok(default_peers.to_vec())
             }
         }
-        PeerSelection::None => Ok(Vec::new()),
+        Some(PeerSelection::None) => Ok(Vec::new()),
     }
 }
 

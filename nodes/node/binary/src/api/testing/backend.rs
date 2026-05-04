@@ -8,6 +8,7 @@ use axum::{
     },
     routing::{get, post},
 };
+use http::StatusCode;
 use lb_api_service::Backend;
 use lb_http_api_common::paths::{DIAL_PEER, MANTLE_SDP_DECLARATIONS};
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as NetworkBackend};
@@ -90,7 +91,10 @@ where
             .layer(axum::extract::DefaultBodyLimit::max(
                 self.settings.max_body_size,
             ))
-            .layer(TimeoutLayer::new(self.settings.timeout))
+            .layer(TimeoutLayer::with_status_code(
+                StatusCode::REQUEST_TIMEOUT,
+                self.settings.timeout,
+            ))
             .layer(RequestBodyLimitLayer::new(self.settings.max_body_size))
             .layer(ConcurrencyLimitLayer::new(
                 self.settings.max_concurrent_requests,

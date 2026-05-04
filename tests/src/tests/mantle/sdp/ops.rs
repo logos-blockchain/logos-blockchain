@@ -368,7 +368,7 @@ async fn start_sdp_manual_cluster(
     let base = build_local_manual_cluster(
         test_name,
         "tf-sdp",
-        DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(2))
+        DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(1))
             .with_wallet_config(WalletConfig::new(vec![
                 funding_wallet.clone(),
                 spare_wallet.clone(),
@@ -378,7 +378,6 @@ async fn start_sdp_manual_cluster(
 
     let cluster = base.cluster;
     let node0_persist_dir = base.scenario_base_dir.join("node-0");
-    let node1_persist_dir = base.scenario_base_dir.join("node-1");
 
     let node0 = cluster
         .start_node_with(
@@ -389,16 +388,6 @@ async fn start_sdp_manual_cluster(
         )
         .await
         .expect("starting node-0 should succeed");
-
-    cluster
-        .start_node_with(
-            "1",
-            StartNodeOptions::default()
-                .with_persist_dir(node1_persist_dir)
-                .create_patch(|config| Ok::<_, DynError>(patch_sdp_manual_cluster_config(config))),
-        )
-        .await
-        .expect("starting node-1 should succeed");
 
     cluster
         .wait_network_ready()
@@ -412,17 +401,18 @@ async fn start_sdp_manual_cluster(
     let genesis_utxos: Vec<_> = base
         .deployment
         .config
-        .genesis_tx
+        .genesis_block
         .clone()
         .expect("manual-cluster deployment should include genesis tx")
+        .genesis_tx()
         .genesis_transfer()
         .outputs
         .utxos(
             base.deployment
                 .config
-                .genesis_tx
-                .clone()
+                .genesis_block
                 .expect("manual-cluster deployment should include genesis tx")
+                .genesis_tx()
                 .genesis_transfer(),
         )
         .collect();

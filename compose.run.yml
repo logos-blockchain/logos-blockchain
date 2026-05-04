@@ -19,21 +19,19 @@ services:
 
   cfgsync:
     container_name: cfgsync
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
     depends_on:
       - grafana
-    environment:
-      - ENTROPY_FILE=${ENTROPY_FILE:-/etc/logos-blockchain/entropy}
     ports:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
   faucet:
     container_name: faucet
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -44,7 +42,7 @@ services:
 
   logos-blockchain-node-0:
     container_name: logos_blockchain_node_0
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -64,7 +62,7 @@ services:
 
   logos-blockchain-node-1:
     container_name: logos_blockchain_node_1
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -84,7 +82,7 @@ services:
 
   logos-blockchain-node-2:
     container_name: logos_blockchain_node_2
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -104,7 +102,7 @@ services:
 
   logos-blockchain-node-3:
     container_name: logos_blockchain_node_3
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./testnet:/etc/logos-blockchain
@@ -144,7 +142,7 @@ services:
   # L2 Sequencer Demo Services
   l2-sequencer:
     container_name: l2_sequencer
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     environment:
       - SEQUENCER_LISTEN_ADDR=0.0.0.0:8080
       - SEQUENCER_NODE_ENDPOINT=http://logos-blockchain-node-0:18081
@@ -158,7 +156,7 @@ services:
 
   l2-archiver:
     container_name: l2_archiver
-    image: ghcr.io/logos-blockchain/logos-blockchain:${IMAGE_LABEL}
+    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     environment:
       - TESTNET_ENDPOINT=http://logos-blockchain-node-1:18081
       - CHANNEL_ID=6d656d636f696e00000000000000000000000000000000000000000000000001

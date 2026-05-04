@@ -8,6 +8,7 @@ use lb_blend::{
 };
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::identity::Keypair;
+use lb_log_targets::blend;
 use libp2p::PeerId;
 use overwatch::overwatch::OverwatchHandle;
 use rand::RngCore;
@@ -17,7 +18,7 @@ use tokio::sync::mpsc;
 
 use super::BlendBackend;
 
-const LOG_TARGET: &str = "blend::service::edge::backend::libp2p";
+const LOG_TARGET: &str = blend::service::edge::backend::LIBP2P;
 
 #[cfg(test)]
 mod tests;

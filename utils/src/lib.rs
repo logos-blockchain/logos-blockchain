@@ -2,8 +2,6 @@ pub mod fisheryates;
 pub mod math;
 pub mod net;
 pub mod noop_service;
-
-#[cfg(feature = "types")]
 pub mod types;
 
 #[cfg(feature = "rng")]
@@ -15,7 +13,6 @@ pub mod bounded_duration;
 #[cfg(feature = "tokio")]
 pub mod tokio;
 
-#[cfg(feature = "serde")]
 pub mod serde {
     fn serialize_human_readable_bytes_array<const N: usize, S: serde::Serializer>(
         src: [u8; N],
@@ -79,6 +76,29 @@ pub mod serde {
             deserialize_human_readable_bytes_array(deserializer)
         } else {
             deserialize_human_unreadable_bytes_array(deserializer)
+        }
+    }
+
+    pub mod serde_bytes_vec {
+        use serde::{Deserialize as _, Deserializer, Serializer};
+
+        pub fn serialize<S: Serializer>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error> {
+            if serializer.is_human_readable() {
+                serializer.serialize_str(&const_hex::encode(bytes))
+            } else {
+                serializer.serialize_bytes(bytes)
+            }
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(
+            deserializer: D,
+        ) -> Result<Vec<u8>, D::Error> {
+            if deserializer.is_human_readable() {
+                let s = String::deserialize(deserializer)?;
+                const_hex::decode(s).map_err(serde::de::Error::custom)
+            } else {
+                Vec::<u8>::deserialize(deserializer)
+            }
         }
     }
 }

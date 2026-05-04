@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
                 return logos_blockchain_node::init::run(&init_args);
             }
             logos_blockchain_node::config::Command::Inscribe(inscribe_args) => {
-                logos_blockchain_tui_zone::run(inscribe_args).await;
+                lb_tui_zone::run(inscribe_args).await;
                 return Ok(());
             }
         }

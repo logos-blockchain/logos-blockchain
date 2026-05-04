@@ -5,11 +5,12 @@ use core::{
 };
 
 use futures::{Stream, StreamExt as _};
+use lb_log_targets::blend;
 use tracing::trace;
 
 use crate::message_scheduler::round_info::Round;
 
-const LOG_TARGET: &str = "blend::scheduling::cover";
+const LOG_TARGET: &str = blend::scheduling::COVER;
 
 /// A scheduler for cover messages that can yield a new cover message when
 /// polled, as per the specification.

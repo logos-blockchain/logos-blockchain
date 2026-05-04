@@ -206,8 +206,7 @@ where
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LedgerState {
     block_number: BlockNumber,
     cryptarchia_ledger: CryptarchiaLedger,
@@ -651,7 +650,7 @@ impl LedgerState {
                         claimable_vouchers_root: &self
                             .mantle_ledger
                             .leaders
-                            .claimable_vouchers_root(),
+                            .vouchers_snapshot_root(),
                         proof_of_claim: poc,
                         tx_hash: &tx_hash,
                     })

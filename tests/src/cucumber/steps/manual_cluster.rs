@@ -86,9 +86,11 @@ pub fn build_manual_cluster_deployment(
                 message: format!("failed to build manual cluster: {e}"),
             })?;
 
-    if let Some(genesis_tx) = deployment.config.genesis_tx.clone() {
+    if let Some(genesis_block) = deployment.config.genesis_block.clone() {
         world.genesis_block_utxos =
-            crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(&genesis_tx);
+            crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(
+                &genesis_block.genesis_tx(),
+            );
     }
 
     Ok(deployment)

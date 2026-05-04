@@ -16,13 +16,12 @@ workspace = true
 profiling = ["console-subscriber"]
 
 [dependencies]
-async-trait        = "0.1"
+async-trait        = { workspace = true }
+console-subscriber = { optional = true, workspace = true }
 lb-tracing         = { workspace = true }
 overwatch          = { workspace = true }
 serde              = { workspace = true }
 time               = { workspace = true }
 tracing            = { workspace = true }
-tracing-appender   = "0.2"
-tracing-subscriber = { default-features = false, version = "0.3" }
-
-console-subscriber = { default-features = false, optional = true, version = "0.4" }
+tracing-appender   = { workspace = true }
+tracing-subscriber = { workspace = true }

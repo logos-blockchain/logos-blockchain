@@ -8,6 +8,7 @@ use either::Either;
 use lb_blend_message::encap::validated::{
     EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
 };
+use lb_log_targets::blend;
 use libp2p::{
     PeerId,
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
@@ -26,7 +27,7 @@ use crate::core::with_core::{
     error::{ReceiveError, SendError},
 };
 
-const LOG_TARGET: &str = "blend::network::core::core::behaviour::old";
+const LOG_TARGET: &str = blend::network::core::core::behaviour::OLD;
 
 /// Defines behaviours for processing messages from the old session
 /// until the session transition period has passed.

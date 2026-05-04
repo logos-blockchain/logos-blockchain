@@ -4,7 +4,7 @@ description = { workspace = true }
 edition     = { workspace = true }
 keywords    = { workspace = true }
 license     = { workspace = true }
-name        = "lb_config"
+name        = "logos-blockchain-config"
 publish     = false
 readme      = { workspace = true }
 repository  = { workspace = true }
@@ -21,6 +21,6 @@ lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-node                          = { workspace = true }
 lb-utils                         = { workspace = true }
-num-bigint                       = { default-features = false, version = "0.4" }
+num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
-time                             = { default-features = false, version = "0.3" }
+time                             = { workspace = true }

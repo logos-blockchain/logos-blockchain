@@ -6,11 +6,12 @@ use core::{
 use std::num::{NonZeroU64, NonZeroU128};
 
 use futures::{Stream, StreamExt as _};
+use lb_log_targets::blend;
 use tracing::trace;
 
 use crate::message_scheduler::round_info::Round;
 
-const LOG_TARGET: &str = "blend::scheduling::delay";
+const LOG_TARGET: &str = blend::scheduling::DELAY;
 
 /// A scheduler for delaying processed messages and batch them into release
 /// rounds, as per the specification.

@@ -1,11 +1,13 @@
 use std::time::Duration;
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use lb_config::consensus::{
-    GeneralConsensusConfig, create_base_consensus_material, create_genesis_tx,
+use lb_config::consensus::{GeneralConsensusConfig, create_base_consensus_material};
+use lb_core::{
+    block::genesis::GenesisBlock,
+    mantle::{Note, Utxo},
 };
-use lb_core::mantle::{Note, Utxo, genesis_tx::GenesisTx};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
+use lb_tests::topology::configs::consensus::create_genesis_block;
 use num_bigint::BigUint;
 
 use crate::{Entropy, FaucetSettings};
@@ -23,10 +25,14 @@ pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
     faucet_settings: &FaucetSettings,
-) -> (Vec<GeneralConsensusConfig>, Option<FaucetInfo>, GenesisTx) {
+) -> (
+    Vec<GeneralConsensusConfig>,
+    Option<FaucetInfo>,
+    GenesisBlock,
+) {
     let material = create_base_consensus_material(ids);
     let (utxos, faucet_info) = create_utxos(entropy, material.utxos, faucet_settings);
-    let genesis_tx = create_genesis_tx(&utxos, None);
+    let genesis_block = create_genesis_block(&utxos, None);
     let consensus_configs = material
         .regular_note_keys
         .into_iter()
@@ -47,7 +53,7 @@ pub fn create_consensus_configs(
         })
         .collect();
 
-    (consensus_configs, faucet_info, genesis_tx)
+    (consensus_configs, faucet_info, genesis_block)
 }
 
 fn generate_faucet_key(entropy: &Entropy) -> ZkKey {

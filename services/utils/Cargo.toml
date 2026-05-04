@@ -20,17 +20,17 @@ ignored = [
 workspace = true
 
 [dependencies]
-async-trait = "0.1.83"
+async-trait = { workspace = true }
 futures     = { workspace = true }
 log         = { workspace = true }
 overwatch   = { features = ["derive"], workspace = true }
 serde       = { workspace = true }
-serde_json  = { default-features = false, features = ["alloc"], version = "1.0.133" }
-thiserror   = "1"
+serde_json  = { features = ["alloc"], workspace = true }
+thiserror   = { workspace = true }
 tracing     = { workspace = true }
 
 [dev-dependencies]
 overwatch-derive = { workspace = true }
 serde            = { features = ["derive"], workspace = true }
 tokio            = { workspace = true }
-tracing          = { default-features = false, version = "0.1" }
+tracing          = { workspace = true }

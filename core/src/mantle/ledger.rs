@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::LazyLock};
+use std::{collections::HashSet, slice, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
@@ -115,18 +115,40 @@ impl Outputs {
         }
         Ok(amount)
     }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> slice::Iter<'_, Note> {
+        <&Self as IntoIterator>::into_iter(self)
+    }
 }
 
-impl std::ops::Deref for Outputs {
-    type Target = Vec<Note>;
-    fn deref(&self) -> &Vec<Note> {
+impl AsRef<Vec<Note>> for Outputs {
+    fn as_ref(&self) -> &Vec<Note> {
         &self.0
     }
 }
 
-impl std::ops::DerefMut for Outputs {
-    fn deref_mut(&mut self) -> &mut Vec<Note> {
+impl AsMut<Vec<Note>> for Outputs {
+    fn as_mut(&mut self) -> &mut Vec<Note> {
         &mut self.0
+    }
+}
+
+impl<'output> IntoIterator for &'output Outputs {
+    type Item = <slice::Iter<'output, Note> as IntoIterator>::Item;
+    type IntoIter = slice::Iter<'output, Note>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
     }
 }
 
@@ -194,21 +216,37 @@ impl Inputs {
     }
 
     #[must_use]
-    pub const fn as_vec(&self) -> &Vec<NoteId> {
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn iter(&self) -> slice::Iter<'_, NoteId> {
+        <&Self as IntoIterator>::into_iter(self)
+    }
+}
+
+impl AsRef<Vec<NoteId>> for Inputs {
+    fn as_ref(&self) -> &Vec<NoteId> {
         &self.0
     }
 }
 
-impl std::ops::Deref for Inputs {
-    type Target = Vec<NoteId>;
-    fn deref(&self) -> &Vec<NoteId> {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for Inputs {
-    fn deref_mut(&mut self) -> &mut Vec<NoteId> {
+impl AsMut<Vec<NoteId>> for Inputs {
+    fn as_mut(&mut self) -> &mut Vec<NoteId> {
         &mut self.0
+    }
+}
+impl<'input> IntoIterator for &'input Inputs {
+    type Item = <slice::Iter<'input, NoteId> as IntoIterator>::Item;
+    type IntoIter = slice::Iter<'input, NoteId>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
     }
 }
 

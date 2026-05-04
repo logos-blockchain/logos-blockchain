@@ -28,6 +28,7 @@ use lb_key_management_system_service::{
     api::KmsServiceApi, keys::KeyOperators,
     operators::ed25519::exfiltrate_secret_key::LeakSecretKeyOperator,
 };
+use lb_log_targets::blend;
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use overwatch::{
@@ -59,7 +60,7 @@ use crate::{
     settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
-const LOG_TARGET: &str = "blend::service::edge";
+const LOG_TARGET: &str = blend::service::EDGE;
 
 type RunningSettings<Backend, NodeId, RuntimeServiceId> =
     RunningBlendConfig<<Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings>;

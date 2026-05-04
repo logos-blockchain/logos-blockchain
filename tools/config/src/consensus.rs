@@ -1,10 +1,11 @@
 use core::time::Duration;
+use std::sync::OnceLock;
 
 use lb_core::{
+    block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        MantleTx, Note, NoteId, OpProof, Utxo,
+        CryptarchiaParameter, MantleTx, Note, NoteId, OpProof, Utxo,
         genesis_tx::GenesisTx,
-        ledger::{Inputs, Outputs},
         ops::{
             Op, OpId as _,
             channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
@@ -13,12 +14,13 @@ use lb_core::{
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use lb_groth16::CompressedGroth16Proof;
+use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };
 use lb_node::{SignedMantleTx, Transaction as _};
 use num_bigint::BigUint;
+use time::OffsetDateTime;
 
 use crate::unique::unique_test_context;
 
@@ -79,6 +81,12 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
+static GENESIS_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
+
+fn get_or_init_genesis_time() -> OffsetDateTime {
+    *GENESIS_TIME.get_or_init(OffsetDateTime::now_utc)
+}
+
 pub struct BaseConsensusMaterial {
     pub regular_note_keys: Vec<ZkKey>,
     pub blend_notes: Vec<ServiceNote>,
@@ -91,34 +99,41 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
     println!("Genesis inscription: {owner}");
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
-        inscription: owner.into_bytes(),
+        inscription: CryptarchiaParameter {
+            chain_id: owner,
+            genesis_time: get_or_init_genesis_time(),
+            epoch_nonce: Fr::ZERO,
+        }
+        .encode(),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
     }
 }
 
 #[must_use]
-pub fn create_genesis_tx(utxos: &[Utxo], test_context: Option<&str>) -> GenesisTx {
-    let inscription = inscription_for_current_test(test_context);
-    let outputs: Vec<Note> = utxos.iter().map(|u| u.note).collect();
-
-    // Create the mantle transaction
-    let transfer_op = TransferOp::new(Inputs::new(vec![]), Outputs::new(outputs));
-    let mantle_tx = MantleTx(vec![
-        Op::Transfer(transfer_op),
-        Op::ChannelInscribe(inscription),
-    ]);
-    let signed_mantle_tx = SignedMantleTx {
-        mantle_tx,
-        ops_proofs: vec![
-            OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
-                &EMPTY_GROTH16_PROOF_BYTES,
-            ))),
-            OpProof::Ed25519Sig(Ed25519Signature::zero()),
-        ],
+pub fn create_genesis_block(utxos: &[Utxo], test_context: Option<&str>) -> GenesisBlock {
+    // Create transfer op with the utxos as outputs
+    let mut outputs = utxos.iter().map(|u| u.note);
+    #[expect(
+        clippy::option_if_let_else,
+        reason = "Moving notes inside of consuming lambda function is harder to read"
+    )]
+    let genesis_builder = if let Some(note) = outputs.next() {
+        let mut genesis_builder = GenesisBlockBuilder::new().add_note(note);
+        for note in outputs {
+            genesis_builder = genesis_builder.add_note(note);
+        }
+        genesis_builder
+    } else {
+        panic!("No outputs provided for genesis block")
     };
 
-    GenesisTx::from_tx(signed_mantle_tx).expect("Invalid genesis transaction")
+    let inscription = inscription_for_current_test(test_context);
+
+    genesis_builder
+        .set_inscription(inscription)
+        .build()
+        .expect("Genesis block shoudl build properly")
 }
 
 #[must_use]
@@ -126,9 +141,9 @@ pub fn create_consensus_configs(
     ids: &[[u8; 32]],
     prolonged_bootstrap_period: Duration,
     test_context: Option<&str>,
-) -> (Vec<GeneralConsensusConfig>, GenesisTx) {
+) -> (Vec<GeneralConsensusConfig>, GenesisBlock) {
     let material = create_base_consensus_material(ids);
-    let genesis_tx = create_genesis_tx(&material.utxos, test_context);
+    let genesis_block = create_genesis_block(&material.utxos, test_context);
 
     (
         material
@@ -150,7 +165,7 @@ pub fn create_consensus_configs(
                 }
             })
             .collect(),
-        genesis_tx,
+        genesis_block,
     )
 }
 
@@ -249,11 +264,11 @@ fn create_utxos(
 }
 
 #[must_use]
-pub fn create_genesis_tx_with_declarations(
+pub fn create_genesis_block_with_declarations(
     transfer_op: TransferOp,
     providers: Vec<ProviderInfo>,
     test_context: Option<&str>,
-) -> GenesisTx {
+) -> GenesisBlock {
     let inscription = inscription_for_current_test(test_context);
     let transfer_id = transfer_op.op_id();
 
@@ -302,5 +317,9 @@ pub fn create_genesis_tx_with_declarations(
         mantle_tx,
         ops_proofs,
     };
-    GenesisTx::from_tx(signed_mantle_tx).expect("Invalid genesis transaction with declarations")
+
+    // TODO: Maybe use the builder instead of trusting the signed mantle tx
+    GenesisBlockBuilder::new()
+        .with_genesis_tx(GenesisTx::from_tx(signed_mantle_tx).expect("Genesis tx should build"))
+        .build()
 }

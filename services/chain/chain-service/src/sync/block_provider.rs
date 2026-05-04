@@ -16,7 +16,7 @@ use overwatch::DynError;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::{mpsc::Sender, oneshot};
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::relays::StorageRelay;
 
@@ -140,6 +140,15 @@ where
         let path = self
             .find_path(cryptarchia, target_block, known_blocks)
             .await?;
+
+        if let (Some(start_block), Some(end_block)) = (path.first(), path.last()) {
+            debug!(
+                "Prepared block stream from {:?} to {:?} with {} path entries",
+                start_block,
+                end_block,
+                path.len()
+            );
+        }
 
         let stream = self.stream_blocks_from_path(path);
         Ok(stream)
