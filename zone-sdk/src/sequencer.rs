@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
-use lb_common_http_client::{ProcessedBlockEvent, Slot};
+use lb_common_http_client::{ChainServiceInfo, ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -715,12 +715,14 @@ where
             return true;
         }
         match self.node.consensus_info().await {
-            Ok(info) => {
+            Ok(ChainServiceInfo {
+                cryptarchia_info, ..
+            }) => {
                 info!(
                     "Sequencer connected: tip={:?}, lib={:?}",
-                    info.tip, info.lib
+                    cryptarchia_info.tip, cryptarchia_info.lib
                 );
-                self.state = Some(TxState::new(info.lib, MsgId::root()));
+                self.state = Some(TxState::new(cryptarchia_info.lib, MsgId::root()));
                 true
             }
             Err(e) => {
@@ -755,8 +757,10 @@ where
             return true;
         }
         match self.node.consensus_info().await {
-            Ok(info) => {
-                let network_lib_slot = info.lib_slot;
+            Ok(ChainServiceInfo {
+                cryptarchia_info, ..
+            }) => {
+                let network_lib_slot = cryptarchia_info.lib_slot;
                 let from: u64 = self.lib_slot.into();
                 let to: u64 = network_lib_slot.into();
                 if from < to {
@@ -1488,7 +1492,9 @@ fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use lb_common_http_client::{ApiBlock, ApiHeader, BlockInfo, CryptarchiaInfo, State};
+    use lb_common_http_client::{
+        ApiBlock, ApiHeader, BlockInfo, ChainServiceMode, CryptarchiaInfo, State,
+    };
     use lb_core::{
         header::ContentId,
         mantle::{Note, Utxo, ledger::Inputs, ops::channel::deposit::DepositOp},
@@ -1600,14 +1606,16 @@ mod tests {
 
     #[async_trait]
     impl adapter::Node for MockNode {
-        async fn consensus_info(&self) -> Result<CryptarchiaInfo, lb_common_http_client::Error> {
-            Ok(CryptarchiaInfo {
-                lib: HeaderId::from([0; 32]),
-                lib_slot: Slot::genesis(),
-                tip: HeaderId::from([0; 32]),
-                slot: Slot::genesis(),
-                height: 0,
-                mode: State::Online,
+        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
+            Ok(ChainServiceInfo {
+                cryptarchia_info: CryptarchiaInfo {
+                    lib: HeaderId::from([0; 32]),
+                    lib_slot: Slot::genesis(),
+                    tip: HeaderId::from([0; 32]),
+                    slot: Slot::genesis(),
+                    height: 0,
+                },
+                mode: ChainServiceMode::Started(State::Online),
             })
         }
 

@@ -8,7 +8,7 @@ use std::{
 use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
-use lb_chain_service::CryptarchiaInfo;
+use lb_chain_service::{ChainServiceMode, CryptarchiaInfo, State};
 use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
@@ -471,7 +471,7 @@ async fn all_local_nodes_match_sync_target(
         let Ok(consensus) = node_info.started_node.client.consensus_info().await else {
             return false;
         };
-        if SyncTargetStats::from_cryptarchia_info(&consensus) != target.stats {
+        if SyncTargetStats::from_cryptarchia_info(&consensus.cryptarchia_info) != target.stats {
             return false;
         }
     }
@@ -743,10 +743,10 @@ pub async fn start_node(
                 info!(
                     target: TARGET,
                     "Node `{node_name}` snapshot state - height: {}/{}, tip: {}, lib: {}",
-                    info.height,
-                    info.slot.into_inner(),
-                    truncate_hash(&info.tip.encode_hex::<String>(), 16),
-                    truncate_hash(&info.lib.encode_hex::<String>(), 16)
+                    info.cryptarchia_info.height,
+                    info.cryptarchia_info.slot.into_inner(),
+                    truncate_hash(&info.cryptarchia_info.tip.encode_hex::<String>(), 16),
+                    truncate_hash(&info.cryptarchia_info.lib.encode_hex::<String>(), 16)
                 );
             }
             Err(e) => {
@@ -1005,7 +1005,7 @@ async fn verify_online(
         let mut mode_online = false;
         match client.consensus_info().await {
             Ok(val) => {
-                if val.mode.is_online() {
+                if matches!(val.mode, ChainServiceMode::Started(State::Online)) {
                     mode_online = true;
                 }
             }
@@ -1427,8 +1427,8 @@ pub async fn ensure_all_nodes_agree_on_lib(
             let consensus = node.started_node.client.consensus_info().await?;
             Ok::<_, StepError>((
                 node.name.clone(),
-                consensus.height,
-                consensus.lib.encode_hex::<String>(),
+                consensus.cryptarchia_info.height,
+                consensus.cryptarchia_info.lib.encode_hex::<String>(),
             ))
         }))
         .await?;
@@ -1504,8 +1504,8 @@ pub async fn poll_all_nodes_and_update_consensus_cache<S: ::std::hash::BuildHash
         match result {
             Ok(info) => snapshots.push(ConsensusSnapshot {
                 node_name,
-                height: info.height,
-                header_hash: info.tip.encode_hex(),
+                height: info.cryptarchia_info.height,
+                header_hash: info.cryptarchia_info.tip.encode_hex(),
             }),
             Err(e) => {
                 // If both `consensus_info` and `network_info` fail, assume the node is no
@@ -1650,7 +1650,7 @@ pub(crate) async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: 
         };
         match node_info.started_node.client.consensus_info().await {
             Ok(consensus) => {
-                let mode = if consensus.mode.is_online() {
+                let mode = if matches!(consensus.mode, ChainServiceMode::Started(State::Online)) {
                     "Online"
                 } else {
                     "Bootstrapping"
@@ -1660,10 +1660,10 @@ pub(crate) async fn get_cryptarchia_info_all_nodes(world: &CucumberWorld, step: 
                     "cryptarchia/info - '{}', '{}', {}/{}, tip '{} ...', lib '{} ...'",
                     node_name,
                     mode,
-                    consensus.height,
-                    consensus.slot.into_inner(),
-                    truncate_hash(&consensus.tip.encode_hex::<String>(), 16),
-                    truncate_hash(&consensus.lib.encode_hex::<String>(), 16),
+                    consensus.cryptarchia_info.height,
+                    consensus.cryptarchia_info.slot.into_inner(),
+                    truncate_hash(&consensus.cryptarchia_info.tip.encode_hex::<String>(), 16),
+                    truncate_hash(&consensus.cryptarchia_info.lib.encode_hex::<String>(), 16),
                 );
             }
             Err(e) => {

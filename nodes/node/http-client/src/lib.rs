@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
-pub use lb_chain_service::{CryptarchiaInfo, Slot, State};
+pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
 use lb_core::{
     header::{ContentId, HeaderId},
     mantle::SignedMantleTx,
@@ -225,11 +225,11 @@ impl CommonHttpClient {
     }
 
     /// Get consensus info (tip, height, etc.)
-    pub async fn consensus_info(&self, base_url: Url) -> Result<CryptarchiaInfo, Error> {
+    pub async fn consensus_info(&self, base_url: Url) -> Result<ChainServiceInfo, Error> {
         let request_url = base_url
             .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
-        self.get::<(), CryptarchiaInfo>(request_url, None).await
+        self.get::<(), ChainServiceInfo>(request_url, None).await
     }
 
     /// Get blocks in a slot range.

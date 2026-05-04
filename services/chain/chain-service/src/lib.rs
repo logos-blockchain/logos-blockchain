@@ -195,7 +195,6 @@ pub struct CryptarchiaInfo {
     pub tip: HeaderId,
     pub slot: Slot,
     pub height: u64,
-    pub mode: State,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,7 +283,6 @@ impl Cryptarchia {
             tip: tip_branch.id(),
             slot: tip_branch.slot(),
             height: tip_branch.length(),
-            mode: *self.consensus.state(),
         }
     }
 
@@ -664,7 +662,7 @@ where
                         chain_start_timer = None;
 
                         // Just like in the Ibd case, the bootstrap timer is started after the chain
-                        // start time begun.
+                        // start time began.
                         prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
                             Instant::now() + bootstrap_config.prolonged_bootstrap_period,
                         )));
@@ -698,7 +696,7 @@ where
                                     Instant::now() + bootstrap_config.prolonged_bootstrap_period,
                                 )));
                             }
-                            // Blocks will be applied if chain start time didn't begun yet.
+                            // Blocks will be applied if chain start time didn't begin yet.
                             ConsensusMsg::ApplyBlock { block, tx } if chain_start_timer.is_none() => {
                                 // TODO: move this into the process_message() function after making the process_message async.
                                 match Self::process_block_and_update_state(
@@ -737,7 +735,7 @@ where
                                 let cryptarchia_info = cryptarchia.info();
                                 let mode = match chain_start_timer {
                                     Some(_) => ChainServiceMode::AwaitingStart,
-                                    None => ChainServiceMode::Started(cryptarchia_info.mode),
+                                    None => ChainServiceMode::Started(*cryptarchia.state()),
                                 };
                                 tx.send(ChainServiceInfo{cryptarchia_info, mode}).unwrap_or_else(|e| {
                                     error!("Could not send consensus info through channel: {:?}", e);
@@ -908,8 +906,8 @@ where
             }
             ConsensusMsg::Info { .. } => {
                 // Info is handled separately in the run loop where we have async
-                // context This should never be reached since we filter it out
-                // before calling process_message
+                // context. This should never be reached since we filter it out
+                // before calling process_message.
                 panic!("Info should be handled in the run loop, not in process_message");
             }
             ConsensusMsg::ApplyBlock { .. } => {

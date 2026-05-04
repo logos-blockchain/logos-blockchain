@@ -131,7 +131,7 @@ async fn print_node_snapshot(node_name: &str, client: &NodeHttpClient) {
 
     println!(
         "{node_name} height={} tip={} lib={}",
-        info.height, info.tip, info.lib
+        info.cryptarchia_info.height, info.cryptarchia_info.tip, info.cryptarchia_info.lib
     );
 }
 

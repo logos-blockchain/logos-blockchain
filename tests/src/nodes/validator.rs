@@ -9,7 +9,7 @@ use std::{
 
 use futures::Stream;
 use lb_chain_broadcast_service::BlockInfo;
-use lb_chain_service::CryptarchiaInfo;
+use lb_chain_service::ChainServiceInfo;
 use lb_common_http_client::{ApiBlock, CommonHttpClient};
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
@@ -299,7 +299,7 @@ impl Validator {
             loop {
                 let info = self.consensus_info(false).await;
                 println!("{info:?}");
-                if info.height >= target_height {
+                if info.cryptarchia_info.height >= target_height {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(500)).await;
@@ -422,7 +422,7 @@ impl Validator {
         res.unwrap().json::<Vec<HeaderId>>().await.unwrap()
     }
 
-    pub async fn consensus_info(&self, print: bool) -> CryptarchiaInfo {
+    pub async fn consensus_info(&self, print: bool) -> ChainServiceInfo {
         let res = self.get(CRYPTARCHIA_INFO).await;
         if print {
             println!("{res:?}");

@@ -565,7 +565,7 @@ pub async fn wait_for_transactions_inclusion(
     let deadline = Instant::now() + timeout;
 
     loop {
-        let mut current = client.consensus_info().await?.tip;
+        let mut current = client.consensus_info().await?.cryptarchia_info.tip;
         let mut found = HashSet::new();
 
         loop {
@@ -1708,7 +1708,7 @@ async fn collect_wallet_utxos(
             message: format!("Node '{wallet_node_name}' for wallet '{wallet_name}' not found"),
         })?;
     let consensus = node.started_node.client.consensus_info().await?;
-    let mut current = consensus.tip;
+    let mut current = consensus.cryptarchia_info.tip;
 
     // Get all blocks from the current tip walking backwards, but stop as soon as
     // we hit a header for which we already have cached wallet state.

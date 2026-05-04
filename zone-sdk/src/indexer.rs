@@ -64,7 +64,7 @@ where
         &self,
         last_zone_block: Option<(MsgId, Slot)>,
     ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_, Error> {
-        let lib_slot = self.node.consensus_info().await?.lib_slot;
+        let lib_slot = self.node.consensus_info().await?.cryptarchia_info.lib_slot;
         let current_slot = last_zone_block
             .as_ref()
             .map_or_else(Slot::genesis, |(_, slot)| *slot);
@@ -144,7 +144,10 @@ fn should_skip(message: &ZoneMessage, slot: Slot, skip_until: &mut Option<(MsgId
 #[cfg(test)]
 mod tests {
     use async_trait::async_trait;
-    use lb_common_http_client::{ApiBlock, BlockInfo, CryptarchiaInfo, ProcessedBlockEvent};
+    use lb_common_http_client::{
+        ApiBlock, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo,
+        ProcessedBlockEvent, State,
+    };
     use lb_core::{
         header::HeaderId,
         mantle::{NoteId, SignedMantleTx, ledger::Inputs},
@@ -364,14 +367,16 @@ mod tests {
 
     #[async_trait]
     impl adapter::Node for MockNode {
-        async fn consensus_info(&self) -> Result<CryptarchiaInfo, lb_common_http_client::Error> {
-            Ok(CryptarchiaInfo {
-                lib: HeaderId::from([0; 32]),
-                lib_slot: self.lib_slot,
-                tip: HeaderId::from([0; 32]),
-                slot: self.lib_slot,
-                height: 0,
-                mode: lb_common_http_client::State::Online,
+        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
+            Ok(ChainServiceInfo {
+                cryptarchia_info: CryptarchiaInfo {
+                    lib: HeaderId::from([0; 32]),
+                    lib_slot: self.lib_slot,
+                    tip: HeaderId::from([0; 32]),
+                    slot: self.lib_slot,
+                    height: 0,
+                },
+                mode: ChainServiceMode::Started(State::Online),
             })
         }
 

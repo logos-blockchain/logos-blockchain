@@ -174,7 +174,7 @@ pub async fn wait_for_height(
     tokio::time::timeout(duration, async {
         loop {
             if let Ok(info) = client.consensus_info().await
-                && info.height >= target_height
+                && info.cryptarchia_info.height >= target_height
             {
                 return;
             }

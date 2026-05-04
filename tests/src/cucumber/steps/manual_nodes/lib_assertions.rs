@@ -126,11 +126,11 @@ async fn fetch_lib_snapshots(world: &CucumberWorld) -> Result<Vec<LibSnapshot>, 
     for node_name in node_names {
         let client = world.resolve_node_http_client(&node_name)?;
         let consensus = client.consensus_info().await?;
-        let lib_height = resolve_lib_height(world, &node_name, &consensus).await?;
+        let lib_height = resolve_lib_height(world, &node_name, &consensus.cryptarchia_info).await?;
 
         snapshots.push(LibSnapshot {
             node_name,
-            lib_hash: consensus.lib.encode_hex::<String>(),
+            lib_hash: consensus.cryptarchia_info.lib.encode_hex::<String>(),
             lib_height,
         });
     }

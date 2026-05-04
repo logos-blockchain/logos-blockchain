@@ -427,11 +427,11 @@ struct ConsensusSnapshot {
     mode: String,
 }
 
-impl From<lb_chain_service::CryptarchiaInfo> for ConsensusSnapshot {
-    fn from(value: lb_chain_service::CryptarchiaInfo) -> Self {
+impl From<lb_chain_service::ChainServiceInfo> for ConsensusSnapshot {
+    fn from(value: lb_chain_service::ChainServiceInfo) -> Self {
         Self {
-            height: value.height,
-            slot: value.slot.into_inner(),
+            height: value.cryptarchia_info.height,
+            slot: value.cryptarchia_info.slot.into_inner(),
             mode: format!("{:?}", value.mode),
         }
     }

@@ -96,15 +96,16 @@ pub async fn sanitize_best_node_info<'a>(
             })?;
 
         let selected_tip = normalize_header_id_str(&node.tip);
-        let live_tip = consensus.tip.encode_hex::<String>();
-        let tip_or_height_changed = selected_tip != live_tip || consensus.height != node.height;
+        let live_tip = consensus.cryptarchia_info.tip.encode_hex::<String>();
+        let tip_or_height_changed =
+            selected_tip != live_tip || consensus.cryptarchia_info.height != node.height;
 
         if tip_or_height_changed
             && !is_tip_still_on_canonical_chain(
                 &node_info.started_node.client,
                 &node.tip,
                 node.height,
-                &consensus,
+                &consensus.cryptarchia_info,
             )
             .await?
         {
@@ -115,7 +116,7 @@ pub async fn sanitize_best_node_info<'a>(
         return Ok((
             node.node_name.clone(),
             &node_info.started_node.client,
-            consensus,
+            consensus.cryptarchia_info,
         ));
     }
 
@@ -156,7 +157,7 @@ async fn resolve_selected_best_node<'a>(
     Ok((
         selected.node_name.clone(),
         &node_info.started_node.client,
-        consensus,
+        consensus.cryptarchia_info,
     ))
 }
 
@@ -326,7 +327,7 @@ async fn collect_group_snapshots(
             match timeout(BEST_NODE_QUERY_TIMEOUT, client.consensus_info()).await {
                 Ok(Ok(consensus)) => Some(NodeConsensusSnapshot {
                     node_name,
-                    consensus,
+                    consensus: consensus.cryptarchia_info,
                 }),
                 Ok(Err(_)) | Err(_) => None,
             }

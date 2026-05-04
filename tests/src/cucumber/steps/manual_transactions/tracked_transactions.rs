@@ -164,7 +164,7 @@ async fn transaction_is_in_chain(
     let mut scanned_blocks = HashSet::new();
 
     scan_chain_until(
-        consensus.tip,
+        consensus.cryptarchia_info.tip,
         &mut scanned_blocks,
         async |header_id| client.block(&header_id).await.ok().flatten(),
         |block: &ApiBlock| {

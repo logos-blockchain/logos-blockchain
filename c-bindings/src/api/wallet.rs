@@ -272,7 +272,9 @@ pub unsafe extern "C" fn get_balance(
     return_error_if_null_pointer!("get_balance", wallet_address);
     let node = unsafe { &*node };
     let tip = if optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node)).tip
+        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+            .cryptarchia_info
+            .tip
     } else {
         lb_core::header::HeaderId::from(unsafe { *optional_tip })
     };
@@ -445,6 +447,7 @@ pub unsafe extern "C" fn transfer_funds(
         unwrap_or_return_error!(get_cryptarchia_info_sync(node), |_| {
             log::error!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
         })
+        .cryptarchia_info
         .tip
     } else {
         lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })

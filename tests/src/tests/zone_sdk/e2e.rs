@@ -1,6 +1,7 @@
 use std::{collections::HashSet, num::NonZero, time::Duration};
 
 use futures::{StreamExt as _, future::join_all};
+use lb_chain_service::{ChainServiceMode, State};
 use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
     block::genesis::GenesisBlock,
@@ -69,7 +70,7 @@ async fn wait_for_height(validator: &Validator, target_height: u64, duration: Du
     timeout(duration, async {
         loop {
             let info = validator.consensus_info(false).await;
-            if info.height >= target_height {
+            if info.cryptarchia_info.height >= target_height {
                 return;
             }
             sleep(Duration::from_millis(500)).await;
@@ -87,7 +88,7 @@ async fn wait_for_lib_advance(
     timeout(duration, async {
         loop {
             let info = validator.consensus_info(false).await;
-            if info.lib_slot > initial_lib_slot {
+            if info.cryptarchia_info.lib_slot > initial_lib_slot {
                 return;
             }
             sleep(Duration::from_millis(500)).await;
@@ -1168,7 +1169,11 @@ async fn test_sequencer_stale_checkpoint_resume() {
     );
     let (drive_task, _rx) = spawn_drive(sequencer);
     handle.wait_ready().await;
-    let phase2_ready_lib_slot = validator.consensus_info(false).await.lib_slot;
+    let phase2_ready_lib_slot = validator
+        .consensus_info(false)
+        .await
+        .cryptarchia_info
+        .lib_slot;
     assert!(
         wait_for_lib_advance(validator, phase2_ready_lib_slot, Duration::from_mins(2)).await,
         "Phase 2 sequencer failed to observe a new LIB advancement after startup"
@@ -1230,7 +1235,11 @@ async fn test_sequencer_stale_checkpoint_resume() {
     );
     let (drive_task, _rx) = spawn_drive(sequencer);
     handle.wait_ready().await;
-    let phase3_ready_lib_slot = validator.consensus_info(false).await.lib_slot;
+    let phase3_ready_lib_slot = validator
+        .consensus_info(false)
+        .await
+        .cryptarchia_info
+        .lib_slot;
     assert!(
         wait_for_lib_advance(validator, phase3_ready_lib_slot, Duration::from_mins(2)).await,
         "Phase 3 sequencer failed to observe a new LIB advancement after startup"
@@ -1660,7 +1669,7 @@ async fn spawn_validators_with_extra_funding_notes(
     );
     wait_for_validators_mode_and_height(
         &validators,
-        lb_cryptarchia_engine::State::Online,
+        ChainServiceMode::Started(State::Online),
         target_block,
         timeout_duration,
     )

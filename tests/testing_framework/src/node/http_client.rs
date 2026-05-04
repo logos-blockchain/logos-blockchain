@@ -5,7 +5,7 @@ use common_http_client::{
 };
 use futures::Stream;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
-use lb_chain_service::CryptarchiaInfo;
+use lb_chain_service::ChainServiceInfo;
 use lb_core::{header::HeaderId, mantle::SignedMantleTx, sdp::Declaration};
 use lb_http_api_common::{
     bodies::wallet::transfer_funds::{
@@ -57,7 +57,7 @@ impl NodeHttpClient {
         }
     }
 
-    pub async fn consensus_info(&self) -> Result<CryptarchiaInfo, Error> {
+    pub async fn consensus_info(&self) -> Result<ChainServiceInfo, Error> {
         self.http_client.consensus_info(self.base_url.clone()).await
     }
 

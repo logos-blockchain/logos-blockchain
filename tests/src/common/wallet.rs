@@ -41,7 +41,7 @@ pub async fn current_utxos_for_public_key(
         .consensus_info()
         .await
         .expect("fetching consensus info should succeed");
-    if consensus.height == 0 {
+    if consensus.cryptarchia_info.height == 0 {
         return owned.into_values().collect();
     }
 
@@ -49,7 +49,7 @@ pub async fn current_utxos_for_public_key(
     let mut scanned_blocks = std::collections::HashSet::new();
 
     let _: Option<()> = scan_chain_until(
-        consensus.tip,
+        consensus.cryptarchia_info.tip,
         &mut scanned_blocks,
         async |header_id| {
             client

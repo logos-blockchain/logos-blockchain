@@ -9,6 +9,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_api_service::http::consensus::leader::LeaderClaimResponseBody;
+use lb_chain_service::{ChainServiceMode, State};
 use lb_node::{
     Transaction as _, TxHash,
     config::{RunConfig, cryptarchia::deployment::EpochConfig},
@@ -158,8 +159,8 @@ async fn wait_for_nodes_slot(nodes: &[&NodeHttpClient], target_slot: u64, durati
                     .await
                     .expect("fetching consensus info should succeed");
 
-                if info.slot < target_slot.into()
-                    || info.mode != lb_cryptarchia_engine::State::Online
+                if info.cryptarchia_info.slot < target_slot.into()
+                    || matches!(info.mode, ChainServiceMode::Started(State::Online))
                 {
                     all_ready = false;
                     break;

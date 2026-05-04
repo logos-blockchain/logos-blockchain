@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fs, io, path::Path, time::Duration};
 
-use lb_common_http_client::CommonHttpClient;
+use lb_common_http_client::{ChainServiceInfo, CommonHttpClient};
 use lb_core::{
     header::HeaderId,
     mantle::{
@@ -285,19 +285,21 @@ impl Sequencer {
         expected: &InscriptionOp,
         checked_blocks: &mut HashSet<HeaderId>,
     ) -> Result<bool> {
-        let info = self
+        let ChainServiceInfo {
+            cryptarchia_info, ..
+        } = self
             .http_client
             .consensus_info(self.node_url.clone())
             .await?;
 
         tracing::debug!(
             "Polling: tip={}, height={}, checked_blocks={}",
-            info.tip,
-            info.height,
+            cryptarchia_info.tip,
+            cryptarchia_info.height,
             checked_blocks.len()
         );
 
-        self.check_blocks_for_inscription(expected, checked_blocks, info.tip)
+        self.check_blocks_for_inscription(expected, checked_blocks, cryptarchia_info.tip)
             .await
     }
 
