@@ -35,7 +35,7 @@ const LOG_TARGET: &str = "ledger::mantle::rewards::blend";
 
 /// Tracks Blend rewards based on activity proofs submitted by providers.
 /// Activity proofs for the session `s-1` must be submitted during session `s`.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Rewards<ProofsVerifier> {
     /// State before the first target session is finalized, or if the target
     /// session has less than the minimum required number of declarations.
