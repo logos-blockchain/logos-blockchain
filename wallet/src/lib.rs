@@ -838,7 +838,7 @@ mod tests {
 
         let funded_tx = funded_tx_builder.build();
 
-        if let Op::Transfer(transfer_op) = &funded_tx.0[funded_tx.0.len() - 1] {
+        if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
             // ensure alices utxo was used to pay the fee
             assert_eq!(transfer_op.inputs, Inputs::new(vec![utxo2.id()]));
             // ensure change was returned to alice
@@ -993,7 +993,9 @@ mod tests {
             .build(); // successfully funded the tx
 
         // verify that no change output was used.
-        if let Op::Transfer(transfer_op) = &funded_tx_wo_change.0[funded_tx_wo_change.0.len() - 1] {
+        if let Op::Transfer(transfer_op) =
+            &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
+        {
             assert_eq!(transfer_op.outputs, Outputs::new(vec![]));
         } else {
             panic!("last op must be a transfer")
@@ -1046,7 +1048,9 @@ mod tests {
             .build(); // successfully funded the tx
 
         // verify that indeed a change output was used.
-        if let Op::Transfer(transfer_op) = &funded_tx_wo_change.0[funded_tx_wo_change.0.len() - 1] {
+        if let Op::Transfer(transfer_op) =
+            &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
+        {
             assert_eq!(transfer_op.outputs, Outputs::new(vec![Note::new(1, alice)]));
         } else {
             panic!("the last operation must be a transfer")

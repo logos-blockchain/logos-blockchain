@@ -57,7 +57,7 @@ const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
     // SignedMantleTx = MantleTx OpsProofs
     let (input, mantle_tx) = decode_mantle_tx(input)?;
-    let (input, ops_proofs) = decode_ops_proofs(input, &mantle_tx.0)?;
+    let (input, ops_proofs) = decode_ops_proofs(input, mantle_tx.ops())?;
 
     let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
         .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Verify)))?;
@@ -892,7 +892,7 @@ fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
 #[must_use]
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend(encode_ops(&tx.0));
+    bytes.extend(encode_ops(tx.ops()));
     bytes
 }
 
@@ -900,7 +900,7 @@ pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
 pub fn encode_signed_mantle_tx(tx: &SignedMantleTx) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_mantle_tx(&tx.mantle_tx));
-    bytes.extend(encode_ops_proofs(&tx.ops_proofs, &tx.mantle_tx.0));
+    bytes.extend(encode_ops_proofs(&tx.ops_proofs, tx.mantle_tx.ops()));
     bytes
 }
 
@@ -908,7 +908,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
     let mantle_tx_size = encode_mantle_tx(tx).len();
 
     let ops_proofs_size = tx
-        .0
+        .ops()
         .iter()
         .map(|op| match op {
             // Ed25519SigProof = Ed25519Signature

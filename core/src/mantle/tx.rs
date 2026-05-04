@@ -226,7 +226,7 @@ impl GasCalculator for MantleTx {
         &self,
         _context: &Self::Context,
     ) -> Result<Gas, GasOverflow> {
-        self.0
+        self.ops()
             .iter()
             .map(Op::execution_gas::<Constants>)
             .try_fold(Gas::from(0), Gas::checked_add)
@@ -246,7 +246,7 @@ impl MantleTx {
     #[must_use]
     pub fn transfers(&self) -> Vec<TransferOp> {
         let mut transfers: Vec<TransferOp> = vec![];
-        for op in self.0.clone() {
+        for op in self.ops().clone() {
             if let Op::Transfer(transfer_op) = op {
                 transfers.push(transfer_op);
             }
@@ -390,9 +390,9 @@ impl SignedMantleTx {
     // TODO: might drop proofs after verification
     fn verify_ops_proofs(&self) -> Result<(), VerificationError> {
         // Check that we have the same number of proofs as ops
-        if self.mantle_tx.0.len() != self.ops_proofs.len() {
+        if self.mantle_tx.ops().len() != self.ops_proofs.len() {
             return Err(VerificationError::ProofCountMismatch {
-                ops_count: self.mantle_tx.0.len(),
+                ops_count: self.mantle_tx.ops().len(),
                 proofs_count: self.ops_proofs.len(),
             });
         }
@@ -402,7 +402,7 @@ impl SignedMantleTx {
 
         for (idx, (op, proof)) in self
             .mantle_tx
-            .0
+            .ops()
             .iter()
             .zip(self.ops_proofs.iter())
             .enumerate()
@@ -451,7 +451,7 @@ impl SignedMantleTx {
 
         for (idx, (op, proof)) in self
             .mantle_tx
-            .0
+            .ops()
             .iter()
             .zip(self.ops_proofs.iter())
             .enumerate()
@@ -550,7 +550,7 @@ impl AuthenticatedMantleTx for SignedMantleTx {
     }
 
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)> {
-        self.mantle_tx.0.iter().zip(self.ops_proofs.iter())
+        self.mantle_tx.ops().iter().zip(self.ops_proofs.iter())
     }
 
     fn total_gas_cost<Constants: GasConstants>(
@@ -614,7 +614,7 @@ impl GasCalculator for SignedMantleTx {
         _context: &Self::Context,
     ) -> Result<Gas, GasOverflow> {
         self.mantle_tx
-            .0
+            .ops()
             .iter()
             .map(Op::execution_gas::<Constants>)
             .try_fold(Gas::from(0), Gas::checked_add)

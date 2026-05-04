@@ -871,7 +871,7 @@ mod tests {
         assert!(!new_state.latest_utxos().contains(&utxo.id()));
 
         // Verify output was created
-        if let Op::Transfer(transfer_op) = &tx.mantle_tx.0[0] {
+        if let Op::Transfer(transfer_op) = &tx.mantle_tx.ops()[0] {
             let output_utxo = transfer_op.outputs.utxo_by_index(0, transfer_op).unwrap();
             assert!(new_state.latest_utxos().contains(&output_utxo.id()));
         } else {

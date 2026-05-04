@@ -748,7 +748,7 @@ where
         let tx_hash = mantle_tx.hash();
 
         let mut ops_proofs = Vec::new();
-        for (i, op) in mantle_tx.0.iter().enumerate() {
+        for (i, op) in mantle_tx.ops().iter().enumerate() {
             let proof = match op {
                 Op::ChannelInscribe(inscribe_op) => {
                     Self::sign_inscription(tx_hash, inscribe_op, kms).await?
