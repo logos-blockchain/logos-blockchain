@@ -46,7 +46,6 @@ Most of the template content is the same or very similar to what is in `release-
 ## Release publication
 
 - [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z`
-- [ ] Bump the version value for the C bindings (`logos-blockchain-c`) in the root `flake.nix` file to match the new release version `X.Y.Z`
 - [ ] Verify the HEAD of the release branch has green CI ✅
 - [ ] Tag the commit with `X.Y.Z` and push the tag
 - [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z` tag on GitHub with the `release` input to prepare the GitHub release draft with the build binaries
