@@ -194,23 +194,6 @@ struct ServiceState<R: Rewards> {
     pub rewards: R,
 }
 
-impl SessionState {
-    fn update<R: Rewards>(
-        &self,
-        service_state: &ServiceState<R>,
-        block_number: u64,
-        config: &ServiceParameters,
-    ) -> Self {
-        if self.session_n.saturating_sub(1) * config.session_duration > block_number {
-            return Self {
-                session_n: self.session_n,
-                declarations: service_state.declarations.clone(),
-            };
-        }
-        self.clone()
-    }
-}
-
 const fn is_active(
     declaration: &Declaration,
     current_block: u64,
@@ -269,11 +252,11 @@ impl<R: Rewards> ServiceState<R> {
             };
         } else {
             assert!(
-                current_session < self.active.session_n + 1,
-                "Logos blockchain isn't ready for time travel yet"
+                current_session == self.active.session_n,
+                "Logos blockchain isn't ready for time travel yet: session_of_block={current_session}, active_session={}",
+                self.active.session_n
             );
             self.rewards = self.rewards.update_epoch(epoch_state, rewards_params);
-            self.forming = self.forming.update(&self, block_number, service_params);
             reward_utxos = Vec::new();
         }
 
