@@ -23,6 +23,7 @@ lb-blend-scheduling           = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-libp2p                     = { workspace = true }
+lb-log-targets                = { workspace = true }
 libp2p                        = { workspace = true }
 tracing                       = { workspace = true }
 

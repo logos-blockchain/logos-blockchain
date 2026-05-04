@@ -10,6 +10,7 @@ use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use lb_blend::scheduling::session::UninitializedSessionEventStream;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
+use lb_log_targets::blend;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{
@@ -54,7 +55,7 @@ pub use self::service_components::ServiceComponents;
 #[cfg(test)]
 mod test_utils;
 
-const LOG_TARGET: &str = lb_log_targets::blend::service::ROOT;
+const LOG_TARGET: &str = blend::service::ROOT;
 
 pub struct BlendService<CoreService, EdgeService, RuntimeServiceId>
 where

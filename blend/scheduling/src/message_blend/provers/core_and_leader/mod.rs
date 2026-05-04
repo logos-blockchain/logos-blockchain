@@ -6,6 +6,7 @@ use lb_blend_proofs::quota::inputs::prove::{
     private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
 };
 use lb_cryptarchia_engine::Epoch;
+use lb_log_targets::blend;
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,
@@ -19,7 +20,7 @@ use crate::message_blend::{
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = "blend::scheduling::proofs::core-and-leader";
+const LOG_TARGET: &str = blend::scheduling::proofs::CORE_AND_LEADER;
 
 /// Proof generator for core and leader `PoQ` variants.
 ///

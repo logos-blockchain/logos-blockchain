@@ -7,7 +7,8 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/logos-blockchain-node
-  IMAGE_TAG: ${{ github.event.inputs.node_version || github.ref_name }}
+  VERSION_TAG: ${{ github.ref_name }}
+  LATEST_TAG: ${{ contains(github.ref_name, '-rc.') && 'latest-rc' || 'latest' }}
 
 jobs:
   push_to_registries:
@@ -55,15 +56,15 @@ jobs:
           platforms: linux/amd64,linux/arm64
           push: true
           build-args: |
-            LB_NODE_VERSION=${{ env.IMAGE_TAG }}
+            LB_NODE_VERSION=${{ env.VERSION_TAG }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
-            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Generate artifact attestation
         uses: actions/attest-build-provenance@9d3beef6515cb82652d066f999b94affc15acfac # Version 2.2.3
         with:
-          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME}}
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true

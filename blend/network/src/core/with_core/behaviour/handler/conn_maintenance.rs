@@ -4,7 +4,9 @@ use std::{
 };
 
 use futures::{Stream, StreamExt as _};
-const LOG_TARGET: &str = "blend::network::core::core::conn::maintenance";
+use lb_log_targets::blend;
+
+const LOG_TARGET: &str = blend::network::core::core::conn::MAINTENANCE;
 
 /// Counts the number of messages received from a peer during
 /// an interval.

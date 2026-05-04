@@ -22,6 +22,7 @@ lb-blend-proofs               = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-log-targets                = { workspace = true }
 lb-utils                      = { features = ["rng"], workspace = true }
 serde                         = { workspace = true }
 serde-big-array               = { workspace = true }

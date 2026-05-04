@@ -8,6 +8,7 @@ use futures::{
 use lb_blend::message::encap::validated::{
     EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
 };
+use lb_log_targets::blend;
 use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
@@ -28,7 +29,7 @@ use crate::{
     message::NetworkInfo,
 };
 
-const LOG_TARGET: &str = "blend::backend::libp2p";
+const LOG_TARGET: &str = blend::backend::LIBP2P;
 
 pub(crate) mod behaviour;
 pub mod settings;

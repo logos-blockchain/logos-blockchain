@@ -13,6 +13,7 @@ use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
 use lb_ledger::EpochState;
+use lb_log_targets::blend;
 use lb_time_service::SlotTick;
 use overwatch::overwatch::OverwatchHandle;
 
@@ -46,7 +47,7 @@ pub trait PolInfoProvider<RuntimeServiceId> {
     ) -> Option<Self::Stream>;
 }
 
-const LOG_TARGET: &str = lb_log_targets::blend::service::EPOCH;
+const LOG_TARGET: &str = blend::service::EPOCH;
 
 /// A trait that provides the needed functionalities for the epoch stream to
 /// fetch the epoch state for a given slot.
