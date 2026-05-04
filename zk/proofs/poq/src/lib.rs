@@ -19,7 +19,6 @@ use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
 pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use tracing::error;
 pub use wallet_inputs::{AgedNotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData};
-pub use witness::Witness;
 
 use crate::{inputs::PoQVerifierInputJson, proving_key::POQ_PROVING_KEY_PATH};
 
