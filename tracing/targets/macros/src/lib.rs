@@ -61,6 +61,7 @@ use syn::{
 /// - `blend::network::core::handler::CORE_EDGE`
 ///
 /// It also generates target collection helpers.
+/// The declared root must match the current Rust module name.
 ///
 /// Leaf identifiers are written in `SHOUTY_SNAKE_CASE`; leaf string segments
 /// are emitted in kebab-case.
@@ -341,7 +342,55 @@ fn emit_leaves(root_path: &str, leaves: &[TargetLeaf]) -> Vec<TokenStream2> {
 
 /// Emit the contents of the current root module.
 fn emit_root_contents(root_path: &str, node: &ModuleNode) -> TokenStream2 {
-    emit_module_body(root_path, node)
+    let root_check = emit_root_module_check(root_path);
+    let body = emit_module_body(root_path, node);
+
+    quote! {
+        #root_check
+        #body
+    }
+}
+
+fn emit_root_module_check(root_path: &str) -> TokenStream2 {
+    let root_literal = Literal::string(root_path);
+
+    quote! {
+        const _: () = {
+            const ROOT: &str = #root_literal;
+            const MODULE_PATH: &str = module_path!();
+
+            const fn module_path_matches_root(module_path: &str, root: &str) -> bool {
+                let module_path = module_path.as_bytes();
+                let root = root.as_bytes();
+                let mut module_start = module_path.len();
+
+                while module_start > 0 {
+                    if module_path[module_start - 1] == b':' {
+                        break;
+                    }
+                    module_start -= 1;
+                }
+
+                if module_path.len() - module_start != root.len() {
+                    return false;
+                }
+
+                let mut index = 0;
+                while index < root.len() {
+                    if module_path[module_start + index] != root[index] {
+                        return false;
+                    }
+                    index += 1;
+                }
+
+                true
+            }
+
+            if !module_path_matches_root(MODULE_PATH, ROOT) {
+                panic!("log target root must match the current module name");
+            }
+        };
+    }
 }
 
 fn emit_module_body(root_path: &str, node: &ModuleNode) -> TokenStream2 {
