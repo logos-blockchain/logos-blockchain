@@ -14,7 +14,7 @@ astro-float          = { workspace = true }
 lb-circuits-prover   = { workspace = true }
 lb-circuits-utils    = { workspace = true }
 lb-groth16           = { workspace = true }
-lb-utils             = { workspace = true }
+lb-utils             = { workspace = true, features = ["serde"] }
 lb-witness-generator = { workspace = true }
 lbp-error            = { workspace = true }
 num-bigint           = { workspace = true }
