@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 use lb_groth16::{fr_from_bytes_unchecked, fr_to_bytes};
 use lb_poq::{CORE_MERKLE_TREE_HEIGHT, CorePathAndSelectors};
+use lb_poseidon2::Digest;
 use rs_merkle_tree::{Node, stores::MemoryStore, tree::MerkleProof};
 use thiserror::Error;
 
@@ -31,14 +32,13 @@ struct InnerTreeZkHasher;
 
 impl rs_merkle_tree::hasher::Hasher for InnerTreeZkHasher {
     fn hash(&self, left: &Node, right: &Node) -> Node {
-        let mut hasher = ZkHasher::new();
-        hasher.compress(&[
-            // We use `unchecked` because we control the inputs, and poseidon hasher is guaranteed
-            // to always output valid `Fr` points.
+        let hash = <ZkHasher as Digest>::compress(&[
+            // We use `unchecked` because we control the inputs, and poseidon hasher is
+            // guaranteed to always output valid `Fr` points.
             fr_from_bytes_unchecked(left.as_ref()),
             fr_from_bytes_unchecked(right.as_ref()),
         ]);
-        fr_to_bytes(&hasher.finalize()).into()
+        fr_to_bytes(&hash).into()
     }
 }
 
