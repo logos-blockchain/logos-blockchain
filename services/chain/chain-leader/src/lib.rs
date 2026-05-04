@@ -733,7 +733,7 @@ where
     async fn get_tip_ledger_state(
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
     ) -> Result<(HeaderId, LedgerState), Error> {
-        let tip = cryptarchia.info().await?.tip;
+        let tip = cryptarchia.info().await?.cryptarchia_info.tip;
         let ledger_state = cryptarchia
             .get_ledger_state(tip)
             .await?

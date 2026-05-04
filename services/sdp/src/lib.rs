@@ -11,7 +11,10 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    ChainServiceInfo,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
     block::BlockNumber,
     header::HeaderId,
@@ -291,8 +294,10 @@ where
         declaration_id: DeclarationId,
     ) -> Result<Option<(RuntimeDeclaration, u64)>, DynError> {
         // Get current chain info to find the tip
-        let info = chain_api.info().await?;
-        let tip = info.tip;
+        let ChainServiceInfo {
+            cryptarchia_info, ..
+        } = chain_api.info().await?;
+        let tip = cryptarchia_info.tip;
         tracing::debug!(
             "Fetching declaration state for {declaration_id:?} from ledger tip {tip:?}"
         );
@@ -489,8 +494,10 @@ where
         if let Some(block_id) = block_id {
             Ok(block_id)
         } else {
-            let info = chain_api.info().await?;
-            Ok(info.tip)
+            let ChainServiceInfo {
+                cryptarchia_info, ..
+            } = chain_api.info().await?;
+            Ok(cryptarchia_info.tip)
         }
     }
 

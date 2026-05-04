@@ -50,7 +50,7 @@ where
     RuntimeServiceId: Send + Sync,
 {
     async fn info(&self) -> Result<CryptarchiaInfo, Error> {
-        Ok(self.cryptarchia.info().await?)
+        Ok(self.cryptarchia.info().await?.cryptarchia_info)
     }
 
     async fn process_block(&mut self, block: Block<Cryptarchia::Tx>) -> Result<(), Error> {

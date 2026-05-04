@@ -8,7 +8,7 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
-use crate::{ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
+use crate::{ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
 
 pub trait CryptarchiaServiceData:
     ServiceData<Message = ConsensusMsg<Self::Tx>> + Send + 'static
@@ -75,7 +75,7 @@ where
 
     /// Get the current consensus info including LIB, tip, slot, height, and
     /// mode
-    pub async fn info(&self) -> Result<CryptarchiaInfo, ApiError> {
+    pub async fn info(&self) -> Result<ChainServiceInfo, ApiError> {
         let (tx, rx) = oneshot::channel();
 
         self.relay

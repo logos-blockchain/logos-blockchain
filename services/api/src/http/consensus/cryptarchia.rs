@@ -28,7 +28,7 @@ where
         .await
         .map_err(|(e, _)| e)?;
 
-    Ok(receiver.await?)
+    Ok(receiver.await?.cryptarchia_info)
 }
 
 const HEADERS_LIMIT: usize = 512;

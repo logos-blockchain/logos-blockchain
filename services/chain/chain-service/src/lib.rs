@@ -115,7 +115,7 @@ pub enum Error {
 #[derivative(Debug)]
 pub enum ConsensusMsg<Tx> {
     Info {
-        tx: oneshot::Sender<CryptarchiaInfo>,
+        tx: oneshot::Sender<ChainServiceInfo>,
     },
     NewBlockSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<ProcessedBlockEvent>>,
@@ -171,6 +171,20 @@ pub enum ConsensusMsg<Tx> {
 
 pub(crate) type HeaderIdStream =
     Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send + 'static>>;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ChainServiceMode {
+    AwaitingStart,
+    Started(State),
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct ChainServiceInfo {
+    pub cryptarchia_info: CryptarchiaInfo,
+    pub mode: ChainServiceMode,
+}
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -719,6 +733,16 @@ where
                                     Self::reject_chain_sync_event(event).await;
                                 }
                             }
+                            ConsensusMsg::Info { tx } => {
+                                let cryptarchia_info = cryptarchia.info();
+                                let mode = match chain_start_timer {
+                                    Some(_) => ChainServiceMode::AwaitingStart,
+                                    None => ChainServiceMode::Started(cryptarchia_info.mode),
+                                };
+                                tx.send(ChainServiceInfo{cryptarchia_info, mode}).unwrap_or_else(|e| {
+                                    error!("Could not send consensus info through channel: {:?}", e);
+                                });
+                            }
                             msg => {
                                 Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter());
                             }
@@ -820,11 +844,6 @@ where
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) {
         match msg {
-            ConsensusMsg::Info { tx } => {
-                tx.send(cryptarchia.info()).unwrap_or_else(|e| {
-                    error!("Could not send consensus info through channel: {:?}", e);
-                });
-            }
             ConsensusMsg::NewBlockSubscribe { sender } => {
                 sender
                     .send(new_block_channel.subscribe())
@@ -886,6 +905,12 @@ where
                     .unwrap_or_else(|_| {
                         error!("Could not send epoch config through channel");
                     });
+            }
+            ConsensusMsg::Info { .. } => {
+                // Info is handled separately in the run loop where we have async
+                // context This should never be reached since we filter it out
+                // before calling process_message
+                panic!("Info should be handled in the run loop, not in process_message");
             }
             ConsensusMsg::ApplyBlock { .. } => {
                 // ApplyBlock is handled separately in the run loop where we have async
