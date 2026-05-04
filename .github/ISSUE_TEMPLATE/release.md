@@ -55,7 +55,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
 - [ ] Publish release
 - [ ] Post the link to the published release to this issue for easier review
-- [ ] Post the link to the Docker image building workflow as appearing in [node-docker-build-workflow][the Actions section]
+- [ ] Post the link to the Docker image building workflow as appearing in [the Actions section][node-docker-build-workflow]
 
 ## Testnet deployment
 
