@@ -29,6 +29,7 @@ impl Poseidon2Hasher {
     }
 
     fn update(&mut self, input: &[Fr]) {
+        assert!(!input.is_empty());
         for fr in input {
             self.update_one(fr);
         }
