@@ -115,8 +115,10 @@ impl LeaderProof for Groth16LeaderProof {
                 leader_pk,
             ),
         )
-        .inspect_err(|e| error!("Error verifying LeaderProof: {e:?}"))
-        .unwrap_or(false)
+        .unwrap_or_else(|e| {
+            error!("LeaderProof verification failed: {e:?}");
+            false
+        })
     }
 
     fn verify_genesis(&self) -> bool {
