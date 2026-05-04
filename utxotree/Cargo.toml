@@ -21,8 +21,7 @@ thiserror    = { workspace = true }
 [dev-dependencies]
 quickcheck        = { workspace = true }
 quickcheck_macros = { workspace = true }
-# TODO: Replace with unified workspace dependency
-rand = { default-features = false, features = ["thread_rng"], version = "0.9" }
+rand              = { workspace = true }
 
 [lints]
 workspace = true

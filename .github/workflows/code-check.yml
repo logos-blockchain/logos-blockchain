@@ -57,6 +57,15 @@ jobs:
       - name: Run cargo-deny
         run: cargo-deny --locked --all-features check --hide-inclusion-graph -c .cargo-deny.toml --show-stats -D warnings
 
+  workspace-deps:
+    name: Check for correctly declared dependencies in the workspace
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+      - name: Run workspace dependency policies check
+        run: scripts/check-workspace-dependency-policies.sh
+
   unused-deps:
     name: Check for unused dependencies
     strategy:

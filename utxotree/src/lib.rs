@@ -231,7 +231,7 @@ mod serde {
 mod tests {
     use quickcheck::{Arbitrary, Gen};
     use quickcheck_macros::quickcheck;
-    use rand::rng;
+    use rand::thread_rng;
 
     use super::*;
     use crate::test_fr::TestFr;
@@ -246,7 +246,7 @@ mod tests {
     #[test]
     fn test_single_insert() {
         let tree: UtxoTree<TestFr, TestFr, TestHash> = UtxoTree::new();
-        let item = TestFr::from_rng(&mut rng());
+        let item = TestFr::from_rng(&mut thread_rng());
         let key = item;
         let (tree_with_item, _pos) = tree.insert(key, item);
 
@@ -260,9 +260,9 @@ mod tests {
         let tree: UtxoTree<TestFr, TestFr, TestHash> = UtxoTree::new();
 
         let items = [
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
         ];
         let mut current_tree = tree;
 
@@ -281,7 +281,7 @@ mod tests {
     fn test_remove_existing_item() {
         let tree: UtxoTree<TestFr, TestFr, TestHash> = UtxoTree::new();
 
-        let item = TestFr::from_rng(&mut rng());
+        let item = TestFr::from_rng(&mut thread_rng());
         let key = item;
         let (tree_with_item, _) = tree.insert(key, item);
 
@@ -297,11 +297,11 @@ mod tests {
     fn test_remove_non_existing_item() {
         let tree: UtxoTree<TestFr, TestFr, TestHash> = UtxoTree::new();
 
-        let item = TestFr::from_rng(&mut rng());
+        let item = TestFr::from_rng(&mut thread_rng());
         let key = item;
         let (tree_with_item, _) = tree.insert(key, item);
 
-        let non_existing_key = TestFr::from_rng(&mut rng());
+        let non_existing_key = TestFr::from_rng(&mut thread_rng());
         let result = tree_with_item.remove(&non_existing_key);
         assert!(matches!(result, Err(Error::NotFound)));
     }
@@ -310,7 +310,7 @@ mod tests {
     fn test_remove_from_empty_tree() {
         let tree: UtxoTree<TestFr, TestFr, TestHash> = UtxoTree::new();
 
-        let key = TestFr::from_rng(&mut rng());
+        let key = TestFr::from_rng(&mut thread_rng());
         let result = tree.remove(&key);
         assert!(matches!(result, Err(Error::NotFound)));
     }
@@ -319,8 +319,8 @@ mod tests {
     fn test_structural_sharing() {
         let tree: UtxoTree<TestFr, TestFr, TestHash> = UtxoTree::new();
 
-        let item1 = TestFr::from_rng(&mut rng());
-        let item2 = TestFr::from_rng(&mut rng());
+        let item1 = TestFr::from_rng(&mut thread_rng());
+        let item2 = TestFr::from_rng(&mut thread_rng());
         let key1 = item1;
         let key2 = item2;
 
@@ -338,7 +338,7 @@ mod tests {
 
         let empty_root = tree.root();
 
-        let item = TestFr::from_rng(&mut rng());
+        let item = TestFr::from_rng(&mut thread_rng());
         let key = item;
         let (tree_with_item, _) = tree.insert(key, item);
         let root_with_item = tree_with_item.root();
@@ -357,9 +357,9 @@ mod tests {
         let tree2: UtxoTree<TestFr, TestFr, TestHash> = UtxoTree::new();
 
         let items = vec![
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
         ];
 
         let mut current_tree1 = tree1;
@@ -382,10 +382,10 @@ mod tests {
 
         let mut current_tree = tree;
         let items = vec![
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
         ];
 
         for item in &items {
@@ -401,7 +401,7 @@ mod tests {
         let (tree_after_removal2, _) = tree_after_removal.remove(&items[3]).unwrap();
         assert_eq!(tree_after_removal2.size(), 2);
 
-        let new_item = TestFr::from_rng(&mut rng());
+        let new_item = TestFr::from_rng(&mut thread_rng());
         let new_key = new_item;
         let (final_tree, _) = tree_after_removal2.insert(new_key, new_item);
         assert_eq!(final_tree.size(), 3);
@@ -420,9 +420,9 @@ mod tests {
         let tree: UtxoTree<TestFr, TestFr, TestHash> = UtxoTree::new();
 
         let items = vec![
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
-            TestFr::from_rng(&mut rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
+            TestFr::from_rng(&mut thread_rng()),
         ];
         let mut current_tree = tree;
         let mut positions = Vec::new();
