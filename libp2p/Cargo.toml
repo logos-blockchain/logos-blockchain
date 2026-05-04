@@ -48,5 +48,5 @@ zerocopy = { features = ["derive"], workspace = true }
 
 [dev-dependencies]
 libp2p-swarm-test  = { features = ["tokio"], workspace = true }
-serde_json         = { default-features = false, workspace = true }
+serde_json         = { workspace = true }
 tracing-subscriber = { features = ["env-filter", "fmt"], workspace = true }

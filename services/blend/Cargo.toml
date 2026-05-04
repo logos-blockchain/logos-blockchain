@@ -22,7 +22,7 @@ lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
-lb-groth16                       = { default-features = false, workspace = true }
+lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }

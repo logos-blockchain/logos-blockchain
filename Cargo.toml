@@ -214,7 +214,7 @@ humantime                          = { default-features = false, version = "2.1"
 hyper                              = { default-features = false, version = "1.0" }
 igd-next                           = { default-features = false, version = "0.16.1" }
 itertools                          = { default-features = false, version = "0.14" }
-kube                               = { default-features = false, features = ["client", "rustls-tls"], version = "0.87" }
+kube                               = { default-features = false, version = "0.87" }
 libp2p                             = { default-features = false, version = "0.55" }
 libp2p-stream                      = { default-features = false, version = "0.3.0-alpha" }
 libp2p-swarm-test                  = { default-features = false, version = "0.5" }
@@ -278,7 +278,7 @@ tokio-stream                       = { default-features = false, version = "0.1.
 tokio-util                         = { default-features = false, version = "0.7" }
 tonic                              = { default-features = false, version = "0.14.5" }
 tower                              = { default-features = false, version = "0.4" }
-tower-http                         = { default-features = true, version = "0.6.8" }
+tower-http                         = { default-features = false, version = "0.6.8" }
 tracing                            = { default-features = false, version = "0.1" }
 tracing-appender                   = { default-features = false, version = "0.2" }
 tracing-futures                    = { default-features = false, version = "0.2" }
