@@ -27,12 +27,8 @@ derivative                       = { workspace = true }
 ed25519                          = { workspace = true }
 futures                          = { workspace = true }
 futures-util                     = { workspace = true }
-<<<<<<< HEAD
-hex                              = { default-features = false, version = "0.4.3" }
-lb-api-service                   = { workspace = true }
-=======
 hex                              = { workspace = true }
->>>>>>> 025268c6c (Tests)
+lb-api-service                   = { workspace = true }
 lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
