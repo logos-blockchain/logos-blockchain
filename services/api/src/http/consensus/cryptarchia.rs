@@ -24,7 +24,9 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
-        .send(ConsensusMsg::Info { tx: sender })
+        .send(ConsensusMsg::Info {
+            reply_channel: sender,
+        })
         .await
         .map_err(|(e, _)| e)?;
 
@@ -48,7 +50,7 @@ where
         .send(ConsensusMsg::GetHeaders {
             from_descendant,
             to_ancestor,
-            tx: sender,
+            reply_channel: sender,
         })
         .await
         .map_err(|(e, _)| e)?;
@@ -73,7 +75,7 @@ where
     relay
         .send(ConsensusMsg::GetLedgerState {
             block_id: cryptarchia_info.tip,
-            tx: sender,
+            reply_channel: sender,
         })
         .await
         .map_err(|(e, _)| e)?;

@@ -625,7 +625,7 @@ where
 {
     match cryptarchia.info().await {
         Ok(info) => {
-            if !is_at_or_before_lib(block_slot, info.lib_slot) {
+            if !is_at_or_before_lib(block_slot, info.cryptarchia_info.lib_slot) {
                 return true;
             }
 
@@ -633,8 +633,8 @@ where
                 target: LOG_TARGET,
                 ?block_id,
                 ?block_slot,
-                lib = ?info.lib,
-                lib_slot = ?info.lib_slot,
+                lib = ?info.cryptarchia_info.lib,
+                lib_slot = ?info.cryptarchia_info.lib_slot,
                 "Ignoring block at or before local LIB"
             );
             false

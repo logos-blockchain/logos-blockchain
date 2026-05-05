@@ -500,7 +500,9 @@ where
     let (sender, receiver) = oneshot::channel();
 
     relay
-        .send(ConsensusMsg::GetSdpDeclarations { tx: sender })
+        .send(ConsensusMsg::GetSdpDeclarations {
+            reply_channel: sender,
+        })
         .await
         .map_err(|(e, _)| e)?;
 

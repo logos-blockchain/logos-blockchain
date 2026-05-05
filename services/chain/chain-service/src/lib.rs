@@ -115,7 +115,7 @@ pub enum Error {
 #[derivative(Debug)]
 pub enum ConsensusMsg<Tx> {
     Info {
-        tx: oneshot::Sender<ChainServiceInfo>,
+        reply_channel: oneshot::Sender<ChainServiceInfo>,
     },
     NewBlockSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<ProcessedBlockEvent>>,
@@ -127,21 +127,21 @@ pub enum ConsensusMsg<Tx> {
         from_descendant: Option<HeaderId>,
         to_ancestor: Option<HeaderId>,
         #[derivative(Debug = "ignore")]
-        tx: oneshot::Sender<HeaderIdStream>,
+        reply_channel: oneshot::Sender<HeaderIdStream>,
     },
     GetLedgerState {
         block_id: HeaderId,
-        tx: oneshot::Sender<Option<LedgerState>>,
+        reply_channel: oneshot::Sender<Option<LedgerState>>,
     },
     GetSdpDeclarations {
-        tx: oneshot::Sender<Vec<(DeclarationId, Declaration)>>,
+        reply_channel: oneshot::Sender<Vec<(DeclarationId, Declaration)>>,
     },
     GetEpochState {
         slot: Slot,
-        tx: oneshot::Sender<Result<EpochState, Error>>,
+        reply_channel: oneshot::Sender<Result<EpochState, Error>>,
     },
     GetEpochConfig {
-        tx: oneshot::Sender<(
+        reply_channel: oneshot::Sender<(
             lb_cryptarchia_engine::EpochConfig,
             lb_cryptarchia_engine::Config,
         )>,
@@ -150,7 +150,7 @@ pub enum ConsensusMsg<Tx> {
     /// and return the tip and reorged txs if successful.
     ApplyBlock {
         block: Box<Block<Tx>>,
-        tx: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
+        reply_channel: oneshot::Sender<Result<(HeaderId, Vec<Tx>), Error>>,
     },
     /// Forward chain sync events from the network to chain-service.
     /// Chain-service will handle these directly and respond via the embedded
@@ -698,7 +698,7 @@ where
                                 )));
                             }
                             // Blocks will be applied if chain start time didn't begin yet.
-                            ConsensusMsg::ApplyBlock { block, tx } if chain_start_timer.is_none() => {
+                            ConsensusMsg::ApplyBlock { block, reply_channel } if chain_start_timer.is_none() => {
                                 // TODO: move this into the process_message() function after making the process_message async.
                                 match Self::process_block_and_update_state(
                                         &mut cryptarchia,
@@ -712,14 +712,14 @@ where
                                     ).await {
                                     Ok((new_storage_blocks_to_remove, reorged_txs)) => {
                                         storage_blocks_to_remove = new_storage_blocks_to_remove;
-                                        tx.send(Ok((cryptarchia.tip(), reorged_txs))).unwrap_or_else(|_| {
+                                        reply_channel.send(Ok((cryptarchia.tip(), reorged_txs))).unwrap_or_else(|_| {
                                             error!("Could not send process block result through channel");
                                         });
                                     }
                                     Err(e) => {
                                         let error_msg = format!("Failed to process block: {e:?}");
                                         error!(target: LOG_TARGET, "{}", error_msg);
-                                        tx.send(Err(e)).unwrap_or_else(|_| {
+                                        reply_channel.send(Err(e)).unwrap_or_else(|_| {
                                             error!("Could not send process block error through channel");
                                         });
                                     }
@@ -732,13 +732,13 @@ where
                                     Self::reject_chain_sync_event(event).await;
                                 }
                             }
-                            ConsensusMsg::Info { tx } => {
+                            ConsensusMsg::Info { reply_channel } => {
                                 let cryptarchia_info = cryptarchia.info();
                                 let mode = match chain_start_timer {
                                     Some(_) => ChainServiceMode::AwaitingStart,
                                     None => ChainServiceMode::Started(*cryptarchia.state()),
                                 };
-                                tx.send(ChainServiceInfo{cryptarchia_info, mode}).unwrap_or_else(|e| {
+                                reply_channel.send(ChainServiceInfo{cryptarchia_info, mode}).unwrap_or_else(|e| {
                                     error!("Could not send consensus info through channel: {:?}", e);
                                 });
                             }
@@ -858,7 +858,7 @@ where
             ConsensusMsg::GetHeaders {
                 from_descendant,
                 to_ancestor,
-                tx,
+                reply_channel,
             } => {
                 // default to tip block if not present
                 let from_descendant = from_descendant.unwrap_or_else(|| cryptarchia.tip());
@@ -871,16 +871,20 @@ where
                     cryptarchia,
                     storage_adapter.clone(),
                 );
-                tx.send(stream)
+                reply_channel
+                    .send(stream)
                     .unwrap_or_else(|_| error!("could not send block stream through channel"));
             }
-            ConsensusMsg::GetLedgerState { block_id, tx } => {
+            ConsensusMsg::GetLedgerState {
+                block_id,
+                reply_channel,
+            } => {
                 let ledger_state = cryptarchia.ledger.state(&block_id).cloned();
-                tx.send(ledger_state).unwrap_or_else(|_| {
+                reply_channel.send(ledger_state).unwrap_or_else(|_| {
                     error!("Could not send ledger state through channel");
                 });
             }
-            ConsensusMsg::GetSdpDeclarations { tx } => {
+            ConsensusMsg::GetSdpDeclarations { reply_channel } => {
                 let tip = cryptarchia.tip();
                 let declarations = cryptarchia
                     .ledger
@@ -888,19 +892,23 @@ where
                     .map(LedgerState::sdp_declarations)
                     .unwrap_or_default();
 
-                tx.send(declarations).unwrap_or_else(|_| {
+                reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!("Could not send SDP declarations through channel");
                 });
             }
-            ConsensusMsg::GetEpochState { slot, tx } => {
+            ConsensusMsg::GetEpochState {
+                slot,
+                reply_channel,
+            } => {
                 let result = cryptarchia.epoch_state_for_slot(slot);
-                tx.send(result).unwrap_or_else(|_| {
+                reply_channel.send(result).unwrap_or_else(|_| {
                     error!("Could not send epoch state through channel");
                 });
             }
-            ConsensusMsg::GetEpochConfig { tx } => {
+            ConsensusMsg::GetEpochConfig { reply_channel } => {
                 let config = cryptarchia.ledger.config();
-                tx.send((config.epoch_config, config.consensus_config.clone()))
+                reply_channel
+                    .send((config.epoch_config, config.consensus_config.clone()))
                     .unwrap_or_else(|_| {
                         error!("Could not send epoch config through channel");
                     });
