@@ -94,7 +94,7 @@ impl TryFrom<PoCVerifierInputJson> for PoCVerifierInput {
     type Error = <Groth16Input as TryFrom<Groth16InputDeser>>::Error;
 
     fn try_from(value: PoCVerifierInputJson) -> Result<Self, Self::Error> {
-        let [voucher_nullifier, voucher_root, mantle_tx_hash] = value.0;
+        let [voucher_nullifier, mantle_tx_hash, voucher_root] = value.0;
         Ok(Self {
             voucher_nullifier: voucher_nullifier.try_into()?,
             voucher_root: voucher_root.try_into()?,
@@ -108,8 +108,8 @@ impl PoCVerifierInput {
     pub const fn to_inputs(&self) -> [Fr; 3] {
         [
             self.voucher_nullifier.into_inner(),
-            self.voucher_root.into_inner(),
             self.mantle_tx_hash.into_inner(),
+            self.voucher_root.into_inner(),
         ]
     }
 

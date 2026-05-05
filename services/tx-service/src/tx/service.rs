@@ -27,7 +27,7 @@ use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 
 use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
@@ -240,8 +240,6 @@ where
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
 
-        let (tx_broadcast, _) = broadcast::channel::<Pool::Item>(1000);
-
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
@@ -249,13 +247,8 @@ where
         )
         .await?;
 
-        self.run_event_loop(
-            &mut pool,
-            network_service_relay,
-            &mut network_items,
-            &tx_broadcast,
-        )
-        .await
+        self.run_event_loop(&mut pool, network_service_relay, &mut network_items)
+            .await
     }
 }
 
@@ -278,7 +271,6 @@ where
             BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>,
         >,
         network_items: &mut Box<dyn futures::Stream<Item = (Pool::Key, Pool::Item)> + Unpin + Send>,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
     ) -> Result<(), overwatch::DynError>
     where
         Pool::Settings: Send + Sync,
@@ -296,10 +288,10 @@ where
                         .get_updated_settings()
                         .network_adapter;
 
-                    Self::handle_mempool_message(pool, relay_msg, network_service_relay.clone(), state_updater, settings, tx_broadcast).await;
+                    Self::handle_mempool_message(pool, relay_msg, network_service_relay.clone(), state_updater, settings).await;
                 }
                 Some((key, item)) = network_items.next() => {
-                    Self::handle_network_item(pool, key, item, tx_broadcast, &self.service_resources_handle.state_updater).await;
+                    Self::handle_network_item(pool, key, item, &self.service_resources_handle.state_updater).await;
                 }
             }
         }
@@ -311,7 +303,6 @@ where
         network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
         state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         settings: NetworkAdapter::Settings,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
@@ -330,7 +321,6 @@ where
                     network_relay,
                     state_updater,
                     settings,
-                    tx_broadcast,
                 )
                 .await;
             }
@@ -362,19 +352,9 @@ where
             } => {
                 Self::handle_status_message(pool, &items, reply_channel);
             }
-            MempoolMsg::Subscribe { reply_channel } => {
-                let subscriber = tx_broadcast.subscribe();
-                if let Err(_e) = reply_channel.send(subscriber) {
-                    tracing::debug!("Failed to send subscriber");
-                }
-            }
         }
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "This helper needs both networking and storage handles; splitting it would obscure the call site."
-    )]
     async fn handle_add_message(
         pool: &mut Pool,
         key: Pool::Key,
@@ -383,7 +363,6 @@ where
         network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
         state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         settings: NetworkAdapter::Settings,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
@@ -399,7 +378,6 @@ where
                     network_relay,
                     item_for_broadcast,
                     reply_channel,
-                    tx_broadcast,
                 );
             }
             Err(MempoolError::ExistingItem) => {
@@ -498,17 +476,13 @@ where
         network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
         item_for_broadcast: Pool::Item,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
     ) {
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
-        let broadcast_clone = item_for_broadcast.clone();
         tokio::spawn(async move {
             let adapter = NetworkAdapter::new(settings, network_relay).await;
             adapter.send(item_for_broadcast).await;
         });
-
-        drop(tx_broadcast.send(broadcast_clone));
 
         if let Err(e) = reply_channel.send(Ok(())) {
             tracing::debug!("Failed to send add reply: {:?}", e);
@@ -529,18 +503,15 @@ where
         pool: &mut Pool,
         key: Pool::Key,
         item: Pool::Item,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
         state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
-        if let Err(e) = pool.add_item(key, item.clone()).await {
+        if let Err(e) = pool.add_item(key, item).await {
             tracing::debug!("could not add item to the pool due to: {e}");
             return;
         }
-
-        drop(tx_broadcast.send(item));
 
         tracing::trace!(counter.tx_mempool_pending_items = pool.pending_item_count());
 

@@ -13,7 +13,7 @@ use std::{
 
 use backend::{MempoolError, Status};
 use futures::Stream;
-use tokio::sync::{broadcast, oneshot::Sender};
+use tokio::sync::oneshot::Sender;
 pub use tx::{service::TxMempoolService, settings::TxMempoolSettings};
 
 /// Response for `GetTransactionsByHashes` request
@@ -77,9 +77,6 @@ pub enum MempoolMsg<BlockId, Payload, Item, Key> {
         items: Vec<Key>,
         reply_channel: Sender<Vec<Status>>,
     },
-    Subscribe {
-        reply_channel: Sender<broadcast::Receiver<Item>>,
-    },
 }
 
 impl<BlockId, Payload, Item, Key> Debug for MempoolMsg<BlockId, Payload, Item, Key>
@@ -104,7 +101,6 @@ where
             Self::Remove { ids } => write!(f, "MempoolMsg::Prune{{ids: {ids:?}}}"),
             Self::Metrics { .. } => write!(f, "MempoolMsg::Metrics"),
             Self::Status { items, .. } => write!(f, "MempoolMsg::Status{{items: {items:?}}}"),
-            Self::Subscribe { .. } => write!(f, "MempoolMsg::Subscribe"),
         }
     }
 }
