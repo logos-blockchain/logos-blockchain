@@ -64,6 +64,9 @@ pub(super) fn build_chunked_funded_tx(
     funding_utxos: &[Utxo],
     change_pk: ZkPublicKey,
 ) -> Result<Option<MantleTxBuilder>, WalletError> {
+    // This helper expects all funding inputs to arrive through `funding_utxos`.
+    // Preloaded builder inputs would be folded into the final pending transfer
+    // and break the deterministic <=32-input chunking contract.
     if funding_utxos.len() <= ZKSIGN_MAX_INPUTS || !tx_builder.ledger_inputs().is_empty() {
         return Ok(None);
     }

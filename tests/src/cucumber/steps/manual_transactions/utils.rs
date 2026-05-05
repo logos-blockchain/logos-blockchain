@@ -237,9 +237,25 @@ pub(crate) async fn prepare_user_wallet_built_transaction_submission(
 
     let mantle_tx = funded_builder.clone().build();
     let tx_hash = mantle_tx.hash();
-    let transfer_proofs = mantle_tx
-        .ops
-        .iter()
+    let transfer_proofs = build_transfer_proofs(step, &mantle_tx.ops, &tx_hash, &transfer_signers)?;
+
+    Ok(PreparedUserWalletSubmission {
+        wallet,
+        funded_builder,
+        tx_hash,
+        transfer_proofs,
+        newly_encumbered,
+        newly_encumbered_fee,
+    })
+}
+
+fn build_transfer_proofs(
+    step: &str,
+    ops: &[Op],
+    tx_hash: &TxHash,
+    transfer_signers: &HashMap<NoteId, ZkKey>,
+) -> Result<Vec<OpProof>, StepError> {
+    ops.iter()
         .filter_map(|op| match op {
             Op::Transfer(transfer_op) => Some(transfer_op),
             _ => None,
@@ -260,23 +276,14 @@ pub(crate) async fn prepare_user_wallet_built_transaction_submission(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let transfer_proof =
-                ZkKey::multi_sign(&signing_keys, tx_hash.as_ref()).inspect_err(|e| {
+            let transfer_proof = ZkKey::multi_sign(&signing_keys, tx_hash.as_ref())
+                .inspect_err(|e| {
                     warn!(target: TARGET, "Step `{}` error: {e}", step);
                 })?;
 
             Ok(OpProof::ZkSig(transfer_proof))
         })
-        .collect::<Result<Vec<_>, StepError>>()?;
-
-    Ok(PreparedUserWalletSubmission {
-        wallet,
-        funded_builder,
-        tx_hash,
-        transfer_proofs,
-        newly_encumbered,
-        newly_encumbered_fee,
-    })
+        .collect()
 }
 
 pub(crate) async fn submit_prepared_user_wallet_transaction(
@@ -1049,6 +1056,9 @@ fn validate_wait_conditions(
     min_token_value: Option<&u64>,
     max_token_value: Option<&u64>,
 ) -> StepResult {
+    // Supported shapes are: one bound, matching min/max pairs for exact checks,
+    // or all four bounds for exact count plus exact value. Exactly three bounds
+    // leaves one dimension half-specified and is ambiguous.
     if min_coin_count.is_none()
         && min_token_value.is_none()
         && max_coin_count.is_none()
@@ -1116,15 +1126,19 @@ pub async fn wait_for_wallet_or_encumbered_state(
         let (coin_count, value) =
             get_output_balances(world, step, &wallet, &wallet_name, wallet_state_type).await?;
 
-        if conditions_met(
-            &wallet_name,
-            &wallet.node_name,
-            coin_count,
-            value,
+        let observed_state = ObservedWalletState { coin_count, value };
+        let expected_bounds = WalletStateBounds {
             min_coin_count,
             max_coin_count,
             min_token_value,
             max_token_value,
+        };
+
+        if conditions_met(
+            &wallet_name,
+            &wallet.node_name,
+            observed_state,
+            expected_bounds,
             wallet_state_type,
         ) {
             return Ok(());
@@ -1154,130 +1168,167 @@ pub async fn wait_for_wallet_or_encumbered_state(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
-#[expect(clippy::too_many_lines, reason = "Test function")]
+#[derive(Copy, Clone)]
+struct ObservedWalletState {
+    coin_count: usize,
+    value: u64,
+}
+
+#[derive(Copy, Clone)]
+struct WalletStateBounds<'a> {
+    min_coin_count: Option<&'a usize>,
+    max_coin_count: Option<&'a usize>,
+    min_token_value: Option<&'a u64>,
+    max_token_value: Option<&'a u64>,
+}
+
 fn conditions_met(
     wallet_name: &str,
     wallet_node_name: &str,
-    coin_count: usize,
-    value: u64,
-    min_coin_count: Option<&usize>,
-    max_coin_count: Option<&usize>,
-    min_token_value: Option<&u64>,
-    max_token_value: Option<&u64>,
+    observed_state: ObservedWalletState,
+    expected_bounds: WalletStateBounds<'_>,
     wallet_state_type: WalletStateType,
 ) -> bool {
-    match (
-        min_coin_count,
-        min_token_value,
-        max_coin_count,
-        max_token_value,
+    if !bounds_match(
+        &observed_state.coin_count,
+        expected_bounds.min_coin_count,
+        expected_bounds.max_coin_count,
+    ) || !bounds_match(
+        &observed_state.value,
+        expected_bounds.min_token_value,
+        expected_bounds.max_token_value,
     ) {
-        (Some(min_count), None, Some(max_count), None) => {
-            if coin_count == *min_count && coin_count == *max_count {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
-                    {coin_count}",
-                );
-                return true;
-            }
-        }
-        (None, Some(min_value), None, Some(max_value)) => {
-            if value == *min_value && value == *max_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' token value: \
-                    {value}",
-                );
-                return true;
-            }
-        }
-        (Some(min_count), Some(min_value), Some(max_count), Some(max_value)) => {
-            if coin_count == *min_count
-                && coin_count == *max_count
-                && value == *min_value
-                && value == *max_value
-            {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
-                    {coin_count} and token value: {value}",
-                );
-                return true;
-            }
-        }
-        (Some(min_count), Some(min_value), None, None) => {
-            if coin_count >= *min_count && value >= *min_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
-                    {coin_count} >= {min_count}, token value: {value} >= {min_value}",
-                );
-                return true;
-            }
-        }
-        (Some(min_count), None, None, None) => {
-            if coin_count >= *min_count {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
-                    {coin_count} >= {min_count}",
-                );
-                return true;
-            }
-        }
-        (None, Some(min_value), None, None) => {
-            if value >= *min_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' token value: \
-                    {value} >= {min_value}",
-                );
-                return true;
-            }
-        }
-        (None, None, Some(max_count), Some(max_value)) => {
-            if coin_count <= *max_count && value <= *max_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
-                    {coin_count} <= {max_count}, token value: {value} <= {max_value}",
-                );
-                return true;
-            }
-        }
-        (None, None, Some(max_count), None) => {
-            if coin_count <= *max_count {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
-                    {coin_count} <= {max_count}",
-                );
-                return true;
-            }
-        }
-        (None, None, None, Some(max_value)) => {
-            if value <= *max_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' token value: \
-                    {value} <= {max_value}",
-                );
-                return true;
-            }
-        }
-        (_, _, _, _) => unreachable!(),
+        return false;
     }
 
-    false
+    log_condition_match(
+        wallet_name,
+        wallet_node_name,
+        observed_state,
+        expected_bounds,
+        wallet_state_type,
+    );
+
+    true
+}
+
+fn log_condition_match(
+    wallet_name: &str,
+    wallet_node_name: &str,
+    observed_state: ObservedWalletState,
+    expected_bounds: WalletStateBounds<'_>,
+    wallet_state_type: WalletStateType,
+) {
+    let exact_coin_count = expected_bounds
+        .min_coin_count
+        .zip(expected_bounds.max_coin_count)
+        .is_some_and(|(min, max)| min == max);
+    let exact_value = expected_bounds
+        .min_token_value
+        .zip(expected_bounds.max_token_value)
+        .is_some_and(|(min, max)| min == max);
+
+    if exact_coin_count || exact_value {
+        log_exact_condition_match(
+            wallet_name,
+            wallet_node_name,
+            observed_state,
+            wallet_state_type,
+            exact_coin_count,
+            exact_value,
+        );
+    } else {
+        log_ranged_condition_match(
+            wallet_name,
+            wallet_node_name,
+            observed_state,
+            expected_bounds,
+            wallet_state_type,
+        );
+    }
+}
+
+fn log_exact_condition_match(
+    wallet_name: &str,
+    wallet_node_name: &str,
+    observed_state: ObservedWalletState,
+    wallet_state_type: WalletStateType,
+    exact_coin_count: bool,
+    exact_value: bool,
+) {
+    match (exact_coin_count, exact_value) {
+        (true, true) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
+            {} and token value: {}",
+            observed_state.coin_count,
+            observed_state.value,
+        ),
+        (true, false) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
+            {}",
+            observed_state.coin_count,
+        ),
+        (false, true) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' token value: \
+            {}",
+            observed_state.value,
+        ),
+        (false, false) => unreachable!(),
+    }
+}
+
+fn log_ranged_condition_match(
+    wallet_name: &str,
+    wallet_node_name: &str,
+    observed_state: ObservedWalletState,
+    expected_bounds: WalletStateBounds<'_>,
+    wallet_state_type: WalletStateType,
+) {
+    let coin_count_message = bound_message(
+        &observed_state.coin_count,
+        expected_bounds.min_coin_count,
+        expected_bounds.max_coin_count,
+    );
+    let value_message = bound_message(
+        &observed_state.value,
+        expected_bounds.min_token_value,
+        expected_bounds.max_token_value,
+    );
+
+    match (coin_count_message, value_message) {
+        (Some(coin_count_message), Some(value_message)) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
+            {coin_count_message}, token value: {value_message}",
+        ),
+        (Some(coin_count_message), None) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
+            {coin_count_message}",
+        ),
+        (None, Some(value_message)) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' token value: \
+            {value_message}",
+        ),
+        (None, None) => unreachable!(),
+    }
+}
+
+fn bounds_match<T: Ord>(actual: &T, min: Option<&T>, max: Option<&T>) -> bool {
+    min.is_none_or(|min| actual >= min) && max.is_none_or(|max| actual <= max)
+}
+
+fn bound_message<T: Display>(actual: &T, min: Option<&T>, max: Option<&T>) -> Option<String> {
+    match (min, max) {
+        (Some(min), Some(max)) => Some(format!("{actual} >= {min} and <= {max}")),
+        (Some(min), None) => Some(format!("{actual} >= {min}")),
+        (None, Some(max)) => Some(format!("{actual} <= {max}")),
+        (None, None) => None,
+    }
 }
 
 fn record_header_height(
