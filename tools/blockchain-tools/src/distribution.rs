@@ -16,7 +16,8 @@ pub struct StakeHolderInfo {
 }
 
 /// `ProviderInfo` is used to register a service provider.
-/// A note matching the stake holder info by the `zk_pk` will be locked for this service.
+/// A note matching the stake holder info by the `zk_pk` will be locked for this
+/// service.
 #[derive(Clone, Debug, Deserialize)]
 pub struct ProviderInfo {
     pub provider_id: Ed25519PublicKey,
@@ -35,7 +36,8 @@ pub enum DistributionError {
 }
 
 /// `distribute` stake to stake holders.
-/// Provider has to be a stakeholder, because stake holders note id will be used as a locked note.
+/// Provider has to be a stakeholder, because stake holders note id will be used
+/// as a locked note.
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
@@ -89,8 +91,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use num_bigint::BigUint;
+
+    use super::*;
 
     fn mock_zk_pk(byte: u8) -> ZkPublicKey {
         ZkPublicKey::from(BigUint::from(byte))
