@@ -82,6 +82,10 @@ name = "test_cli_restart"
 path = "src/tests/cli/restart.rs"
 
 [[test]]
+name = "test_mantle_chain_start"
+path = "src/tests/mantle/chain_start.rs"
+
+[[test]]
 name = "test_mantle_channel"
 path = "src/tests/mantle/channel.rs"
 

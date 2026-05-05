@@ -687,15 +687,14 @@ where
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
                         // Handle ApplyBlock, ChainSync, and IbdCompleted separately since they need async context
                         match msg {
-                            // IbdCompleted is only relevant if the chain start time has begun. If
-                            // we receive completion event before chain start time, it will be
-                            // ignored.
-                            ConsensusMsg::IbdCompleted if chain_start_timer.is_none() => {
-                                info!("Received IBD completion notification. Starting prolonged bootstrap timer.");
-                                // Start the prolonged bootstrap timer now that IBD is complete
-                                prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
-                                    Instant::now() + bootstrap_config.prolonged_bootstrap_period,
-                                )));
+                            ConsensusMsg::IbdCompleted => {
+                                if chain_start_timer.is_none() {
+                                    info!("Received IBD completion notification. Starting prolonged bootstrap timer.");
+                                    // Start the prolonged bootstrap timer now that IBD is complete
+                                    prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
+                                        Instant::now() + bootstrap_config.prolonged_bootstrap_period,
+                                    )));
+                                }
                             }
                             // Blocks will be applied if chain start time didn't begin yet.
                             ConsensusMsg::ApplyBlock { block, reply_channel } if chain_start_timer.is_none() => {
