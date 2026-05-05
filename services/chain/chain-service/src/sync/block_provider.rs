@@ -491,8 +491,8 @@ where
             .map_err(|(e, _)| GetBlocksError::SendError(e.to_string()))?;
 
         match rx.await.map_err(|_| GetBlocksError::ChannelDropped)? {
-            Some(_) => Ok(Some(block)),
-            None => Ok(None),
+            Some(immutable_id) if immutable_id == id => Ok(Some(block)),
+            Some(_) | None => Ok(None),
         }
     }
 
@@ -630,6 +630,29 @@ mod tests {
 
         env.retrieve_and_validate_blocks(target_block, &known_blocks, &expected)
             .await;
+    }
+
+    #[tokio::test]
+    async fn test_storage_block_at_immutable_slot_must_match_immutable_id() {
+        let env = TestEnv::new().await;
+
+        let ids = env.create_storage_only_blocks(3).await;
+        let stale_block = env
+            .build_block_with_parent(ids[0], Slot::from(2))
+            .expect("stale block should be valid");
+
+        let stale_block_id = stale_block.header().id();
+        assert_ne!(stale_block_id, ids[2]);
+
+        env.store_block_only(&stale_block, stale_block_id).await;
+
+        let known_blocks = HashSet::from([ids[0]]);
+        env.test_error_scenario(
+            stale_block_id,
+            &known_blocks,
+            BlocksUnavailableReason::BlockNotFound(stale_block_id),
+        )
+        .await;
     }
 
     #[tokio::test]
