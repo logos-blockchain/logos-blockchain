@@ -3,13 +3,17 @@ use std::{
     io::Read,
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use ::tracing::{Level, warn};
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
-use lb_tracing::filter::envfilter::{default_envfilter_config, parse_filter_directives};
+use lb_tracing::{
+    filter::envfilter::{default_envfilter_config, parse_filter_directives},
+    logging::local::AppenderType,
+};
 use serde::Deserialize;
 use tracing::serde::filter::{EnvConfig, Layer};
 
@@ -193,6 +197,22 @@ impl From<LoggerLayerType> for OsStr {
     }
 }
 
+#[derive(ValueEnum, Clone, Debug, Default)]
+pub enum LogFileAppenderType {
+    #[default]
+    Rolling,
+    RollingCompressed,
+}
+
+impl From<LogFileAppenderType> for OsStr {
+    fn from(value: LogFileAppenderType) -> Self {
+        match value {
+            LogFileAppenderType::Rolling => "Rolling".into(),
+            LogFileAppenderType::RollingCompressed => "RollingCompressed".into(),
+        }
+    }
+}
+
 #[derive(Parser, Debug, Clone)]
 pub struct LogArgs {
     /// Address for the Gelf backend
@@ -230,6 +250,18 @@ pub struct LogArgs {
     /// `libp2p_gossipsub=info,h2=warn`
     #[clap(long = "log-filter", env = "LOG_FILTER")]
     filter: Option<String>,
+
+    #[clap(long = "log-file-appender", env = "LOG_APPENDER")]
+    file_appender: Option<LogFileAppenderType>,
+
+    #[clap(
+        long = "log-compression-interval",
+        env = "LOG_APPENDER_COMPRESSED_INTERVAL",
+        value_parser = humantime::parse_duration,
+        default_value = "1h",
+        required_if_eq("file_appender", LogFileAppenderType::RollingCompressed)
+    )]
+    compression_interval: Option<Duration>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -421,6 +453,8 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         prefix,
         level,
         filter,
+        file_appender: appender,
+        compression_interval,
     } = tracing_args;
 
     if let Some(backend_type) = backend {
@@ -435,10 +469,19 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                 });
             }
             LoggerLayerType::File => {
+                let appender_type = match appender {
+                    Some(LogFileAppenderType::Rolling) | None => AppenderType::Rolling,
+                    Some(LogFileAppenderType::RollingCompressed) => {
+                        AppenderType::RollingCompressed {
+                            compression_interval: compression_interval.unwrap(),
+                        }
+                    }
+                };
                 tracing.logger.file = Some(FileConfig {
                     directory: directory
                         .ok_or_else(|| eyre!("File backend requires a directory."))?,
                     prefix,
+                    appender_type,
                 });
             }
             LoggerLayerType::Stdout => {

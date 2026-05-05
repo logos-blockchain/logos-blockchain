@@ -4768,6 +4768,7 @@ dependencies = [
  "futures",
  "hex",
  "http 1.4.0",
+ "humantime",
  "libp2p",
  "logos-blockchain-api-service",
  "logos-blockchain-blend",
@@ -5032,6 +5033,7 @@ dependencies = [
 name = "logos-blockchain-tracing"
 version = "0.1.2"
 dependencies = [
+ "flate2",
  "logos-blockchain-log-targets",
  "opentelemetry",
  "opentelemetry-appender-tracing",

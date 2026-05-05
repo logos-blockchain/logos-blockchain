@@ -15,10 +15,13 @@ use lb_core::{
 use lb_key_management_system_service::keys::{Key, secured_key::SecuredKey as _};
 use lb_libp2p::Multiaddr;
 use lb_node::{
-    UserConfig, config,
+    UserConfig,
     config::{
-        RunConfig,
-        tracing::serde::{Level, logger},
+        self, RunConfig,
+        tracing::serde::{
+            Level,
+            logger::{self, AppenderType},
+        },
     },
 };
 use rand::Rng as _;
@@ -298,6 +301,7 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
                     file: Some(logger::FileConfig {
                         directory: log_dir,
                         prefix: Some(prefix.into()),
+                        appender_type: AppenderType::Rolling,
                     }),
                     loki: None,
                     gelf: None,
@@ -320,6 +324,7 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
         file: Some(logger::FileConfig {
             directory: base_dir.to_owned(),
             prefix: Some(prefix.into()),
+            appender_type: AppenderType::Rolling,
         }),
         loki: None,
         gelf: None,

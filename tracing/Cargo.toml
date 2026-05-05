@@ -20,6 +20,7 @@ ignored = [
 workspace = true
 
 [dependencies]
+flate2 = { features = ["rust_backend"], workspace = true }
 lb-log-targets = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry-appender-tracing = { workspace = true }

@@ -10,7 +10,7 @@ use lb_tracing::{
     filter::envfilter::{EnvFilterConfig, create_envfilter_layer, default_envfilter_config},
     logging::{
         gelf::{GelfConfig, create_gelf_layer},
-        local::{FileConfig, create_file_layer, create_writer_layer},
+        local::{AppenderType, FileConfig, create_file_layer, create_writer_layer},
         loki::{LokiConfig, create_loki_layer},
         otlp::{OtlpConfig, create_otlp_layer},
     },
@@ -178,6 +178,7 @@ impl Default for TracingSettings {
                 file: Some(FileConfig {
                     directory: PathBuf::from("."),
                     prefix: Some(date_prefix.into()),
+                    appender_type: AppenderType::Rolling,
                 }),
                 stdout: true,
                 stderr: false,

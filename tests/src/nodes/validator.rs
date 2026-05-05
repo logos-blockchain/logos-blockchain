@@ -27,8 +27,10 @@ use lb_node::{
         ApiConfig, CryptarchiaConfig, RunConfig, SdpConfig, StorageConfig, WalletConfig,
         api::serde::AxumBackendSettings,
         cryptarchia::serde::RequiredValues as CryptarchiaConfigRequiredValues,
-        deployment::DeploymentSettings, sdp::serde::RequiredValues as SdpConfigRequiredValues,
-        state::Config as StateConfig, tracing::serde as tracing,
+        deployment::DeploymentSettings,
+        sdp::serde::RequiredValues as SdpConfigRequiredValues,
+        state::Config as StateConfig,
+        tracing::serde::{self as tracing, logger::AppenderType},
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
@@ -213,6 +215,7 @@ impl Validator {
                 file: Some(tracing::logger::FileConfig {
                     directory: dir.path().to_owned(),
                     prefix: Some(LOGS_PREFIX.into()),
+                    appender_type: AppenderType::Rolling,
                 }),
                 loki: None,
                 gelf: None,
