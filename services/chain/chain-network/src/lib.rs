@@ -327,7 +327,13 @@ where
                         let header_id = block.header().id();
                         info!("Processing block from orphan downloader: {header_id:?}");
 
-                        if !should_process_block(relays.cryptarchia(), block.header().id()).await {
+                        if !should_process_block(
+                            relays.cryptarchia(),
+                            block.header().id(),
+                            block.header().slot(),
+                        )
+                        .await
+                        {
                             continue;
                         }
 
@@ -423,8 +429,9 @@ where
         RuntimeServiceId: Send + Sync + 'static,
     {
         let block_id = proposal.header().id();
+        let block_slot = proposal.header().slot();
 
-        if !should_process_block(relays.cryptarchia(), block_id).await {
+        if !should_process_block(relays.cryptarchia(), block_id, block_slot).await {
             return;
         }
 
@@ -581,12 +588,17 @@ where
 async fn should_process_block<Cryptarchia, RuntimeServiceId>(
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     block_id: HeaderId,
+    block_slot: Slot,
 ) -> bool
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
+    if !is_after_lib(cryptarchia, block_id, block_slot).await {
+        return false;
+    }
+
     match cryptarchia.get_ledger_state(block_id).await {
         Ok(Some(_)) => false,
         Ok(None) => {
@@ -599,6 +611,43 @@ where
             true
         }
     }
+}
+
+async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
+    cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    block_id: HeaderId,
+    block_slot: Slot,
+) -> bool
+where
+    Cryptarchia: CryptarchiaServiceData,
+    Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
+    RuntimeServiceId: Send + Sync,
+{
+    match cryptarchia.info().await {
+        Ok(info) => {
+            if !is_at_or_before_lib(block_slot, info.lib_slot) {
+                return true;
+            }
+
+            trace!(
+                target: LOG_TARGET,
+                ?block_id,
+                ?block_slot,
+                lib = ?info.lib,
+                lib_slot = ?info.lib_slot,
+                "Ignoring block at or before local LIB"
+            );
+            false
+        }
+        Err(err) => {
+            error!(target: LOG_TARGET, err = ?err, "Failure when checking local LIB");
+            true
+        }
+    }
+}
+
+fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
+    block_slot <= lib_slot
 }
 
 /// Retry applying a block when `Cryptarchia` reports it as a `FutureBlock`.
