@@ -10,12 +10,10 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-bn254 = { default-features = false, features = ["scalar_field"], version = "0.4" }
-ark-ff = "0.4"
-jf-poseidon2 = { default-features = false, features = [
-  "bn254",
-], git = "https://github.com/EspressoSystems/jellyfish.git", rev = "dc166cf0f803c3e5067f9dfcc21e3dade986a447" }
-num-bigint = { default-features = false, version = "0.4" }
+ark-bn254    = { features = ["scalar_field"], workspace = true }
+ark-ff       = { workspace = true }
+jf-poseidon2 = { features = ["bn254"], workspace = true }
+num-bigint   = { workspace = true }
 
 [lints]
 workspace = true

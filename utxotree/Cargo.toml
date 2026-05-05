@@ -10,21 +10,18 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-ff       = { default-features = false, version = "0.4" }
-lb-groth16   = { features = ["deser"], workspace = true }
+ark-ff       = { workspace = true }
+lb-groth16   = { workspace = true }
 lb-poseidon2 = { workspace = true }
-num-bigint   = { default-features = false, version = "0.4" }
-rpds         = { default-features = false, features = ["serde"], version = "1" }
-serde        = { features = ["alloc", "derive", "rc"], optional = true, workspace = true }
-thiserror    = "1.0"
+num-bigint   = { workspace = true }
+rpds         = { features = ["serde"], workspace = true }
+serde        = { features = ["alloc", "derive", "rc"], workspace = true }
+thiserror    = { workspace = true }
 
 [dev-dependencies]
-quickcheck        = { default-features = false, version = "1.0" }
-quickcheck_macros = "1.0"
-rand              = "0.9"
+quickcheck        = { workspace = true }
+quickcheck_macros = { workspace = true }
+rand              = { workspace = true }
 
 [lints]
 workspace = true
-
-[features]
-serde = ["dep:serde"]

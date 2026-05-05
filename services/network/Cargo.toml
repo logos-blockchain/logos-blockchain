@@ -13,15 +13,15 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait         = "0.1"
+async-trait         = { workspace = true }
 futures             = { workspace = true }
 lb-core             = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }
-lb-libp2p           = { optional = true, workspace = true }
+lb-libp2p           = { workspace = true }
 lb-tracing          = { workspace = true }
 overwatch           = { workspace = true }
-rand                = { features = ["std"], optional = true, workspace = true }
-rand_chacha         = { default-features = false, optional = true, version = "0.3" }
+rand                = { features = ["std"], workspace = true }
+rand_chacha         = { workspace = true }
 serde               = { features = ["derive"], workspace = true }
 tokio               = { features = ["macros", "sync"], workspace = true }
 tokio-stream        = { workspace = true }
@@ -29,12 +29,10 @@ tracing             = { workspace = true }
 utoipa              = { optional = true, workspace = true }
 
 [dev-dependencies]
-chrono             = { default-features = false, features = ["now"], version = "0.4" }
+chrono             = { features = ["now"], workspace = true }
 lb-utils           = { workspace = true }
-tracing-subscriber = { default-features = false, features = ["env-filter", "fmt", "std"], version = "0.3" }
+tracing-subscriber = { features = ["env-filter", "fmt", "std"], workspace = true }
 
 [features]
 default = []
-libp2p  = ["dep:lb-libp2p", "dep:rand", "dep:rand_chacha", "lb-cryptarchia-sync/libp2p"]
-mock    = ["dep:rand", "dep:rand_chacha"]
 openapi = ["dep:utoipa"]

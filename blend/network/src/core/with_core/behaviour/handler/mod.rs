@@ -5,6 +5,7 @@ use core::{
 use std::{collections::VecDeque, io};
 
 use futures::{FutureExt as _, future::BoxFuture};
+use lb_log_targets::blend;
 use libp2p::{
     PeerId, Stream, StreamProtocol,
     core::upgrade::ReadyUpgrade,
@@ -25,7 +26,7 @@ use crate::{
 
 pub(super) mod conn_maintenance;
 
-const LOG_TARGET: &str = "blend::network::core::core::conn::handler";
+const LOG_TARGET: &str = blend::network::core::core::conn::HANDLER;
 
 pub struct ConnectionHandler<ConnectionWindowClock> {
     inbound_substream: Option<InboundSubstreamState>,

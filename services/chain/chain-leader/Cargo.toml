@@ -13,7 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                      = "0.1"
+async-trait                      = { workspace = true }
 futures                          = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-network-service         = { workspace = true }
@@ -22,7 +22,7 @@ lb-chain-service-common          = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
-lb-ledger                        = { features = ["serde"], workspace = true }
+lb-ledger                        = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-time-service                  = { workspace = true }
 lb-tracing                       = { workspace = true }
@@ -31,10 +31,10 @@ lb-wallet-service                = { workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
-thiserror                        = "1.0"
+thiserror                        = { workspace = true }
 tokio                            = { workspace = true }
 tracing                          = { workspace = true }
-tracing-futures                  = { default-features = false, version = "0.2" }
+tracing-futures                  = { workspace = true }
 
 [dev-dependencies]
 lb-groth16 = { workspace = true }
@@ -42,4 +42,3 @@ lb-utils   = { workspace = true }
 
 [features]
 default = []
-libp2p  = ["lb-blend-service/libp2p"]

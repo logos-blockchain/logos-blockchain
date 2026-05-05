@@ -13,20 +13,20 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                             = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
-hex                              = "0.4"
+axum                             = { features = ["http1", "http2", "json", "tokio"], workspace = true }
+hex                              = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
-owo-colors                       = { default-features = false, version = "4.2.3" }
+owo-colors                       = { workspace = true }
 rand                             = { workspace = true }
-redb                             = "2.2"
+redb                             = { workspace = true }
 reqwest                          = { features = ["json", "rustls-tls"], workspace = true }
 serde                            = { features = ["derive"], workspace = true }
 serde_json                       = { workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { features = ["macros", "net", "rt-multi-thread", "signal", "sync"], workspace = true }
-tokio-util                       = { version = "0.7" }
-tower-http                       = { features = ["cors"], version = "0.6.8" }
+tokio-util                       = { workspace = true }
+tower-http                       = { features = ["cors"], workspace = true }
 tracing                          = { workspace = true }
-tracing-subscriber               = { features = ["env-filter"], version = "0.3" }
+tracing-subscriber               = { features = ["env-filter"], workspace = true }

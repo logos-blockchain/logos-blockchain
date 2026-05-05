@@ -9,6 +9,7 @@ use core::{
 
 use fork_stream::StreamExt as _;
 use futures::{Stream, StreamExt as _};
+use lb_log_targets::blend;
 use rand::RngCore;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_stream::wrappers::IntervalStream;
@@ -29,7 +30,7 @@ pub mod session_info;
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = "blend::scheduling";
+const LOG_TARGET: &str = blend::scheduling::ROOT;
 
 /// Trait for scheduling processed messages to be released in future rounds.
 pub trait ProcessedMessageScheduler<ProcessedMessage> {

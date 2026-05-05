@@ -1,3 +1,4 @@
+mod deser;
 pub mod genesis;
 
 use core::fmt::Debug;

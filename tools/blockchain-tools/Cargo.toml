@@ -1,0 +1,22 @@
+[package]
+categories.workspace  = true
+description.workspace = true
+edition.workspace     = true
+keywords.workspace    = true
+license.workspace     = true
+name                  = "logos-blockchain-tools"
+readme.workspace      = true
+repository.workspace  = true
+version.workspace     = true
+
+[dependencies]
+anyhow     = { workspace = true }
+clap       = { features = ["derive", "help", "std", "string"], workspace = true }
+lb-core    = { workspace = true }
+lb-node    = { workspace = true }
+serde      = { features = ["derive"], workspace = true }
+serde_json = { workspace = true }
+serde_yml  = { workspace = true }
+
+[lints]
+workspace = true

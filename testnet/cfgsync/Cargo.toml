@@ -13,29 +13,29 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-axum                             = { default-features = false, features = ["http1", "http2", "json", "tokio"], version = "0.7.5" }
+axum                             = { features = ["http1", "http2", "json", "tokio"], workspace = true }
 blake2                           = { workspace = true }
-clap                             = { default-features = false, features = ["derive", "env", "std"], version = "4" }
+clap                             = { features = ["derive", "env", "std"], workspace = true }
+lb-config                        = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-node                          = { workspace = true }
 lb-tests                         = { workspace = true }
 lb-utils                         = { workspace = true }
-lb_config                        = { workspace = true }
-num-bigint                       = { default-features = false, version = "0.4" }
+num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }
 serde                            = { workspace = true }
-serde_json                       = { default-features = false, version = "1.0" }
-serde_path_to_error              = "0.1"
-serde_yaml                       = "0.9"
-time                             = { default-features = false, version = "0.3" }
+serde_json                       = { workspace = true }
+serde_path_to_error              = { workspace = true }
+serde_yaml                       = { workspace = true }
+time                             = { workspace = true }
 tokio                            = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tracing                          = { workspace = true }
 
 [dev-dependencies]
-hex        = { default-features = false, features = ["alloc"], workspace = true }
+hex        = { features = ["alloc"], workspace = true }
 lb-groth16 = { workspace = true }
 
 [[bin]]

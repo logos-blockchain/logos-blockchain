@@ -13,28 +13,27 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait = "0.1"
-blake2      = { default-features = false, optional = true, version = "0.10" }
-cipher      = { version = "0.4" }
-const-hex   = { default-features = false, version = "1" }
+async-trait = { workspace = true }
+blake2      = { optional = true, workspace = true }
+cipher      = { workspace = true }
+const-hex   = { features = ["alloc"], workspace = true }
 futures     = { optional = true, workspace = true }
-humantime   = { optional = true, version = "2.1" }
+humantime   = { optional = true, workspace = true }
 overwatch   = { workspace = true }
 rand        = { features = ["getrandom"], workspace = true }
-serde       = { features = ["derive"], optional = true, workspace = true }
+serde       = { features = ["alloc", "derive"], workspace = true }
 serde_with  = { optional = true, workspace = true }
-time        = { default-features = false, features = ["serde-human-readable"], optional = true, version = "0.3" }
+time        = { features = ["serde-human-readable"], optional = true, workspace = true }
 tokio       = { optional = true, workspace = true }
 
 [features]
 rng   = ["dep:blake2"]
-serde = ["serde/alloc"]
-time  = ["dep:humantime", "dep:serde", "dep:serde_with", "dep:time"]
+serde = ["const-hex/alloc", "serde/alloc"]
+time  = ["dep:humantime", "dep:serde_with", "dep:time"]
 tokio = ["dep:futures", "dep:tokio"]
-types = []
 
 [dev-dependencies]
-nistrs      = "0.1.2"
-rand_chacha = { default-features = false, version = "0.3" }
-serde_json  = { default-features = false, features = ["alloc"], version = "1.0" }
+nistrs      = { workspace = true }
+rand_chacha = { workspace = true }
+serde_json  = { features = ["alloc"], workspace = true }
 serde_with  = { features = ["macros"], workspace = true }

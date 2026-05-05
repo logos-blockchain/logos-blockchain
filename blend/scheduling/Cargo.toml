@@ -13,8 +13,8 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                   = { default-features = false, version = "0.1" }
-derivative                    = "2"
+async-trait                   = { workspace = true }
+derivative                    = { workspace = true }
 fork_stream                   = { workspace = true }
 futures                       = { workspace = true }
 hex                           = { workspace = true }
@@ -24,11 +24,12 @@ lb-core                       = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-log-targets                = { workspace = true }
 lb-utils                      = { features = ["rng", "tokio"], workspace = true }
-multiaddr                     = { default-features = false, version = "0.18" }
+multiaddr                     = { workspace = true }
 rand                          = { features = ["alloc"], workspace = true }
 serde                         = { workspace = true }
-thiserror                     = { default-features = false, version = "1" }
+thiserror                     = { workspace = true }
 tokio                         = { workspace = true }
 tokio-stream                  = { workspace = true }
 tracing                       = { workspace = true }
@@ -38,7 +39,7 @@ lb-blend-message = { features = ["unsafe-test-functions"], workspace = true }
 lb-blend-proofs  = { features = ["unsafe-test-functions"], workspace = true }
 lb-groth16       = { workspace = true }
 libp2p           = { workspace = true }
-test-log         = { default-features = false, features = ["trace"], version = "0.2.18" }
+test-log         = { features = ["trace"], workspace = true }
 
 [features]
 unsafe-test-functions = []

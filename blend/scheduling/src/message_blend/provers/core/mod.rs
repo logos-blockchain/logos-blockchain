@@ -12,6 +12,7 @@ use lb_blend_proofs::{
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
+use lb_log_targets::blend;
 use lb_utils::tokio::stream::Buffered;
 use tokio::{task::spawn, time::Instant};
 
@@ -23,7 +24,7 @@ use crate::message_blend::{
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = "blend::scheduling::proofs::core";
+const LOG_TARGET: &str = blend::scheduling::proofs::CORE;
 
 /// Proof generator for core `PoQ` variants.
 #[async_trait]

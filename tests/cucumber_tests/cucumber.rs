@@ -27,7 +27,9 @@ use cucumber::{
     writer::Verbosity,
 };
 use lb_testing_framework::{
-    hash_str, is_truthy_env, reap_all_stale_port_blocks, release_reserved_port_block,
+    hash_str, is_truthy_env, reap_all_stale_port_blocks, record_system_monitor_event,
+    register_system_monitor_output_file, release_reserved_port_block,
+    unregister_system_monitor_output_file,
 };
 use logos_blockchain_tests::cucumber::{
     defaults::{
@@ -158,6 +160,10 @@ async fn main() {
                             println!("{e}");
                         }
                     }
+
+                    unregister_system_monitor_output_file(
+                        &world.scenario_base_dir.join("system_stats.ndjson"),
+                    );
                 }
             })
         })
@@ -220,6 +226,19 @@ fn prepare_world_for_scenario(
 
     let scenario_dir =
         scenario_output_dir(output_dir, scenario_attempts, feature_name, scenario_name);
+
+    if let Err(err) = std::fs::create_dir_all(&scenario_dir) {
+        println!(
+            "Failed to create scenario artifact directory '{}': {err}",
+            scenario_dir.display()
+        );
+    }
+
+    register_system_monitor_output_file(&scenario_dir.join("system_stats.ndjson"));
+    record_system_monitor_event(
+        "cucumber_scenario_prepared",
+        scenario_dir.display().to_string(),
+    );
 
     world.set_scenario_base_dir(&scenario_dir, &deployer);
     world.apply_deployment_config_override_path();

@@ -14,25 +14,27 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     path::PathBuf,
+    pin::Pin,
     time::Duration,
 };
 
 use bytes::Bytes;
-use futures::{FutureExt as _, StreamExt as _, future::join_all};
+use derivative::Derivative;
+use futures::{
+    FutureExt as _, Stream, StreamExt as _, TryStreamExt as _, future::join_all, stream,
+};
 use lb_chain_broadcast_service::{
     BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate,
 };
 use lb_core::{
-    block::Block,
+    block::{Block, genesis::GenesisBlock},
     header::HeaderId,
-    mantle::{
-        AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, genesis_tx::GenesisTx,
-    },
+    mantle::{AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants},
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
-use lb_cryptarchia_sync::{GetTipResponse, ProviderResponse};
+use lb_cryptarchia_sync::{BlocksUnavailableReason, GetTipResponse, ProviderResponse};
 pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
 use lb_network_service::message::ChainSyncEvent;
@@ -69,7 +71,6 @@ use crate::{
 };
 
 // Limit the number of blocks returned by GetHeaders
-const HEADERS_LIMIT: usize = 512;
 const SERVICE_ID: &str = "Chain";
 
 pub(crate) const LOG_TARGET: &str = "chain::service";
@@ -100,11 +101,14 @@ pub enum Error {
     Mempool(String),
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
+    #[error("Parent header ID not found for child={0}")]
+    ParentIdNotFound(HeaderId),
     #[error("Service session not found: {0:?}")]
     ServiceSessionNotFound(ServiceType),
 }
 
-#[derive(Debug)]
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub enum ConsensusMsg<Tx> {
     Info {
         tx: oneshot::Sender<CryptarchiaInfo>,
@@ -116,9 +120,10 @@ pub enum ConsensusMsg<Tx> {
         sender: oneshot::Sender<broadcast::Receiver<LibUpdate>>,
     },
     GetHeaders {
-        from: Option<HeaderId>,
-        to: Option<HeaderId>,
-        tx: oneshot::Sender<Vec<HeaderId>>,
+        from_descendant: Option<HeaderId>,
+        to_ancestor: Option<HeaderId>,
+        #[derivative(Debug = "ignore")]
+        tx: oneshot::Sender<HeaderIdStream>,
     },
     GetLedgerState {
         block_id: HeaderId,
@@ -130,6 +135,12 @@ pub enum ConsensusMsg<Tx> {
     GetEpochState {
         slot: Slot,
         tx: oneshot::Sender<Result<EpochState, Error>>,
+    },
+    GetEpochConfig {
+        tx: oneshot::Sender<(
+            lb_cryptarchia_engine::EpochConfig,
+            lb_cryptarchia_engine::Config,
+        )>,
     },
     /// Apply a block to the chain,
     /// and return the tip and reorged txs if successful.
@@ -153,6 +164,9 @@ pub enum ConsensusMsg<Tx> {
         sender: oneshot::Sender<watch::Receiver<bool>>,
     },
 }
+
+pub(crate) type HeaderIdStream =
+    Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send + 'static>>;
 
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -442,7 +456,7 @@ pub struct CryptarchiaSettings {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub enum StartingState {
     Genesis {
-        genesis_tx: GenesisTx,
+        genesis_block: Box<GenesisBlock>,
     },
     Lib {
         lib_id: HeaderId,
@@ -451,9 +465,11 @@ pub enum StartingState {
     },
 }
 
-impl From<GenesisTx> for StartingState {
-    fn from(value: GenesisTx) -> Self {
-        Self::Genesis { genesis_tx: value }
+impl From<GenesisBlock> for StartingState {
+    fn from(genesis_block: GenesisBlock) -> Self {
+        Self::Genesis {
+            genesis_block: Box::new(genesis_block),
+        }
     }
 }
 
@@ -588,7 +604,7 @@ where
         // The prolonged bootstrap timer will be started when chain-network notifies us
         // that IBD has completed. This ensures we don't transition to Online mode
         // before the node has caught up with the network.
-        let mut prolonged_bootstrap_timer: Option<std::pin::Pin<Box<tokio::time::Sleep>>> = None;
+        let mut prolonged_bootstrap_timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
 
         // Start the timer for periodic state recording for offline grace period
         let mut state_recording_timer = tokio::time::interval(
@@ -666,7 +682,7 @@ where
                                 }
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg);
+                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter());
                             }
                         }
                     }
@@ -718,7 +734,7 @@ where
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
     TimeBackend: lb_time_service::backends::TimeBackend,
-    RuntimeServiceId: Display + AsServiceId<Self>,
+    RuntimeServiceId: Display + AsServiceId<Self> + 'static,
 {
     fn notify_service_ready(&self) {
         self.service_resources_handle.status_updater.notify_ready();
@@ -763,6 +779,7 @@ where
         lib_channel: &broadcast::Sender<LibUpdate>,
         chain_online_notifier: &ChainOnlineNotifier,
         msg: ConsensusMsg<Tx>,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) {
         match msg {
             ConsensusMsg::Info { tx } => {
@@ -782,29 +799,24 @@ where
                     error!("Could not subscribe to LIB updates channel");
                 });
             }
-            ConsensusMsg::GetHeaders { from, to, tx } => {
+            ConsensusMsg::GetHeaders {
+                from_descendant,
+                to_ancestor,
+                tx,
+            } => {
                 // default to tip block if not present
-                let from = from.unwrap_or_else(|| cryptarchia.tip());
+                let from_descendant = from_descendant.unwrap_or_else(|| cryptarchia.tip());
                 // default to LIB block if not present
-                // TODO: for a full history, we should use genesis, but we don't want to
-                // keep it all in memory, headers past LIB should be fetched from storage
-                let to = to.unwrap_or_else(|| cryptarchia.lib());
+                let to_ancestor = to_ancestor.unwrap_or_else(|| cryptarchia.lib());
 
-                let mut res = Vec::new();
-                let mut cur = from;
-
-                let branches = cryptarchia.consensus.branches();
-                while let Some(h) = branches.get(&cur) {
-                    res.push(h.id());
-                    // limit the response size
-                    if cur == to || cur == cryptarchia.lib() || res.len() >= HEADERS_LIMIT {
-                        break;
-                    }
-                    cur = h.parent();
-                }
-
-                tx.send(res)
-                    .unwrap_or_else(|_| error!("could not send blocks through channel"));
+                let stream = Self::get_block_ids(
+                    from_descendant,
+                    to_ancestor,
+                    cryptarchia,
+                    storage_adapter.clone(),
+                );
+                tx.send(stream)
+                    .unwrap_or_else(|_| error!("could not send block stream through channel"));
             }
             ConsensusMsg::GetLedgerState { block_id, tx } => {
                 let ledger_state = cryptarchia.ledger.state(&block_id).cloned();
@@ -829,6 +841,13 @@ where
                 tx.send(result).unwrap_or_else(|_| {
                     error!("Could not send epoch state through channel");
                 });
+            }
+            ConsensusMsg::GetEpochConfig { tx } => {
+                let config = cryptarchia.ledger.config();
+                tx.send((config.epoch_config, config.consensus_config.clone()))
+                    .unwrap_or_else(|_| {
+                        error!("Could not send epoch config through channel");
+                    });
             }
             ConsensusMsg::ApplyBlock { .. } => {
                 // ApplyBlock is handled separately in the run loop where we have async
@@ -975,10 +994,17 @@ where
             }
         };
         if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
-            error!("Could not notify new block to services {e}");
+            warn!("No new-block subscribers to notify: {e}");
         }
 
         if prev_lib != new_lib {
+            debug!(
+                target: LOG_TARGET,
+                "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={}, immutable_blocks={}, reorged_blocks={}",
+                pruned_blocks.stale_blocks().count(),
+                pruned_blocks.immutable_blocks().len(),
+                reorged_blocks.len()
+            );
             let height = cryptarchia
                 .consensus
                 .branches()
@@ -990,7 +1016,7 @@ where
                 header_id: new_lib,
             };
             if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
-                error!("Could not notify block to services {e}");
+                warn!("Failed to notify finalized-block subscribers: {e}");
             }
 
             let lib_update = LibUpdate {
@@ -1002,7 +1028,7 @@ where
             };
 
             if let Err(e) = lib_broadcaster.send(lib_update) {
-                error!("Could not notify LIB update to services: {e}");
+                warn!("No LIB-update subscribers to notify: {e}");
             }
 
             Self::broadcast_session_updates_for_block(
@@ -1051,55 +1077,85 @@ where
             .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
     }
 
-    /// Retrieves the block IDs in the range from `from` (exclusive) to `to`
-    /// (inclusive) from the storage.
+    /// Returns block IDs from descendant (inclusive) to ancestor
+    /// (inclusive) in child-to-parent order.
+    ///
+    /// First tries to find blocks from memory. If any block is missing from
+    /// memory, it falls back to loading all subsequent blocks from storage.
+    fn get_block_ids(
+        from_descendant: HeaderId,
+        to_ancestor: HeaderId,
+        cryptarchia: &Cryptarchia,
+        storage_adapter: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send>> {
+        let branches = cryptarchia.consensus.branches();
+
+        let mut in_memory = Vec::new();
+        let mut current = from_descendant;
+        while let Some(branch) = branches.get(&current) {
+            in_memory.push(Ok(branch.id()));
+
+            if branch.id() == to_ancestor {
+                // All blocks are found in memory. Return immediately
+                return Box::pin(stream::iter(in_memory));
+            }
+            if current == branch.parent() {
+                debug!(target: LOG_TARGET, ?to_ancestor, "reached genesis while looking for ancestor from memory");
+                // Return collected blocks and an error since we couldn't reach `to_ancestor`.
+                return Box::pin(stream::iter(in_memory).chain(stream::once(async move {
+                    Err(Error::ParentIdNotFound(current))
+                })));
+            }
+
+            current = branch.parent();
+        }
+
+        let storage_stream = stream::once(async move {
+            Self::load_block_ids_from_storage(current, to_ancestor, storage_adapter)
+        })
+        .flatten();
+        Box::pin(stream::iter(in_memory).chain(storage_stream))
+    }
+
+    /// Retrieves the block IDs from descendant (inclusive) to ancestor
+    /// (inclusive) from the storage, in child-to-parent order.
+    ///
     /// This is implemented here, and not as a method of `StorageAdapter`, to
     /// simplify the panic and error message handling.
-    ///
-    /// # Panics
-    ///
-    /// Panics if any of the blocks in the range are not found in the storage.
-    ///
-    /// # Parameters
-    ///
-    /// * `from` - The header id of the first block in the range. Must be a
-    ///   valid header.
-    /// * `to` - The header id of the last block in the range. Must be a valid
-    ///   header.
-    ///
-    /// # Returns
-    ///
-    /// A vector of block IDs in the range from `from` (exclusive) to `to`
-    /// (inclusive), in lib-to-tip order.
-    /// If no blocks are found, returns an empty vector.
-    async fn get_block_ids_in_range(
-        from: HeaderId,
-        to: HeaderId,
-        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-    ) -> Vec<HeaderId> {
-        // Traverse from `to` back to `from`, reading only the parent index
-        // (a lightweight 32-byte lookup) instead of deserializing full blocks.
-        let mut ids = Vec::new();
-        let mut current = to;
-        while current != from {
-            let parent = storage_adapter
-                .get_block_parent(&current)
-                .await
-                .unwrap_or_else(|| {
-                    panic!(
-                        "Could not retrieve block parent for {current} from storage during recovery"
-                    )
-                });
-            debug!(
-                target: LOG_TARGET, id = ?current, parent = ?parent,
-                "loaded block parent from storage",
-            );
-            ids.push(current);
-            current = parent;
-        }
-        // Reverse so the order is the natural `(from..to]`
-        ids.reverse();
-        ids
+    #[expect(closure_returning_async_block, reason = "required by try_unfold")]
+    fn load_block_ids_from_storage(
+        from_descendant: HeaderId,
+        to_ancestor: HeaderId,
+        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> impl Stream<Item = Result<HeaderId, Error>> {
+        // Yield `from_descendant` first since we already know it,
+        // and yield subsequent parents by loading them from storage lazily.
+        stream::once(async move { Ok(from_descendant) }).chain(stream::try_unfold(
+            (from_descendant, storage),
+            move |(current, storage)| async move {
+                if current == to_ancestor {
+                    // Reached `to_ancestor`. Terminate the stream
+                    return Ok(None);
+                }
+
+                let parent = storage
+                    .get_block_parent(&current)
+                    .await
+                    .ok_or(Error::ParentIdNotFound(current))?;
+
+                if parent == current {
+                    debug!(target: LOG_TARGET, ?to_ancestor, "reached genesis while looking for ancestor from storage");
+                    // Terminate the stream with an error since we couldn't reach `to_ancestor`.
+                    return Err(Error::ParentIdNotFound(current));
+                }
+
+                debug!(
+                    target: LOG_TARGET, ?current, ?parent,
+                    "loaded block parent from storage",
+                );
+                Ok(Some((parent, (parent, storage))))
+            },
+        ))
     }
 
     /// Initialize cryptarchia
@@ -1160,23 +1216,33 @@ where
             }
         };
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
-            error!("Could not notify new block to services {e}");
+            warn!("No new-block subscribers to notify: {e}");
         }
         Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
 
-        // Phase 1: Collect only block IDs from LIB to tip.
+        // Phase 1: Collect only block IDs in (LIB, tip].
         info!(
             target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
             "loading block IDs from storage: (lib, tip]",
         );
-        let ids =
-            Self::get_block_ids_in_range(lib_id, self.state.tip, relays.storage_adapter()).await;
+        let ids: Vec<HeaderId> = Self::load_block_ids_from_storage(
+            self.state.tip,
+            lib_id,
+            relays.storage_adapter().clone(),
+        )
+        .try_collect()
+        .await
+        .unwrap_or_else(|e| {
+            panic!("Failed to load block IDs from storage during initialization: {e:?}");
+        });
+        // Reverse to get LIB->tip order, and skip LIB since we already have it
+        let ids = ids.into_iter().rev().skip(1);
         info!(target: LOG_TARGET, "collected {} block IDs from storage: (lib, tip]", ids.len());
 
         // Phase 2: Load each block individually (lib→tip order) and apply it.
         let mut pruned_blocks = PrunedBlocks::new();
         let n_blocks = ids.len();
-        for (i, id) in ids.into_iter().enumerate() {
+        for (i, id) in ids.enumerate() {
             let block = relays
                 .storage_adapter()
                 .get_block(&id)
@@ -1341,7 +1407,14 @@ where
         debug!(target: LOG_TARGET, "Received chainsync event while in bootstrapping state. Ignoring it.");
         match event {
             ChainSyncEvent::ProvideBlocksRequest { reply_sender, .. } => {
-                Self::send_chain_sync_rejection(reply_sender).await;
+                let response = ProviderResponse::Unavailable {
+                    reason: BlocksUnavailableReason::Unknown(
+                        "Node is not in online mode".to_owned(),
+                    ),
+                };
+                if let Err(e) = reply_sender.send(response).await {
+                    error!("Failed to send chain sync response: {e}");
+                }
             }
             ChainSyncEvent::ProvideTipRequest { reply_sender } => {
                 Self::send_chain_sync_rejection(reply_sender).await;

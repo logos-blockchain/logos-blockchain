@@ -9,7 +9,6 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
-#[cfg(feature = "serde")]
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
 use time::OffsetDateTime;
@@ -25,16 +24,15 @@ use crate::{
     },
 };
 
-#[cfg_attr(feature = "serde", cfg_eval::cfg_eval, serde_with::serde_as)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[derive(Clone, Debug)]
+#[serde_with::serde_as]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct NtpTimeBackendSettings {
     /// Ntp server address
     pub ntp_server: String,
     /// Ntp server settings
     pub ntp_client_settings: NTPClientSettings,
     /// Interval for the backend to contact the ntp server and update its time
-    #[cfg_attr(feature = "serde", serde_as(as = "MinimalBoundedDuration<1, NANO>"))]
+    #[serde_as(as = "MinimalBoundedDuration<1, NANO>")]
     pub update_interval: Duration,
 }
 
@@ -130,6 +128,10 @@ impl Stream for NtpStream {
 }
 
 impl NtpStream {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "Keep NTP update flow local in this PR"
+    )]
     fn handle_ntp_update(self: Pin<&mut Self>, cx: &mut Context<'_>) {
         let this = self.get_mut();
 
@@ -171,6 +173,10 @@ impl NtpStream {
             );
             return;
         }
+        tracing::debug!(
+            "Applying NTP clock update for slot {current_slot:?} with roundtrip {}us",
+            roundtrip.as_micros()
+        );
 
         let epoch_config = this.epoch_config;
         let base_period_length = this.base_period_length;
@@ -211,7 +217,7 @@ mod tests {
     fn test_configs() -> (SlotConfig, EpochConfig, NonZeroU64) {
         let slot_config = SlotConfig {
             slot_duration: Duration::from_secs(1),
-            chain_start_time: OffsetDateTime::UNIX_EPOCH,
+            genesis_time: OffsetDateTime::UNIX_EPOCH,
         };
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
@@ -497,7 +503,7 @@ mod tests {
         };
         let slot_config = SlotConfig {
             slot_duration: Duration::from_secs(1),
-            chain_start_time: OffsetDateTime::UNIX_EPOCH,
+            genesis_time: OffsetDateTime::UNIX_EPOCH,
         };
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
@@ -529,7 +535,7 @@ mod tests {
         };
         let slot_config = SlotConfig {
             slot_duration: Duration::from_secs(1),
-            chain_start_time: OffsetDateTime::UNIX_EPOCH,
+            genesis_time: OffsetDateTime::UNIX_EPOCH,
         };
         let epoch_config = EpochConfig {
             epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),

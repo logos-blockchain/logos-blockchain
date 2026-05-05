@@ -1,17 +1,17 @@
 use std::time::Duration;
 
-use lb_libp2p::Multiaddr;
-use lb_node::config::RunConfig;
+use lb_libp2p::{Multiaddr, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };
 use logos_blockchain_tests::common::manual_cluster::{
-    build_local_manual_cluster, override_node_initial_peers,
-    wait_for_height as wait_for_manual_cluster_height,
+    build_local_manual_cluster, wait_for_height as wait_for_manual_cluster_height,
 };
-use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions};
+use serial_test::serial;
+use testing_framework_core::scenario::{PeerSelection, StartNodeOptions};
 
 #[tokio::test]
+#[serial]
 #[expect(
     clippy::large_futures,
     reason = "Manual-cluster start operations return large futures in tests; boxing adds noise without improving the test"
@@ -25,9 +25,6 @@ async fn node_restart_with_initial_peer_override() {
                 .with_test_context(Some("node_restart_with_initial_peer_override".to_owned())),
         ),
     );
-
-    let node0_multiaddr = node_multiaddr(&base.deployment, 0);
-    let node1_multiaddr = node_multiaddr(&base.deployment, 1);
 
     let cluster = base.cluster;
 
@@ -55,14 +52,8 @@ async fn node_restart_with_initial_peer_override() {
         .start_node_with(
             "2",
             StartNodeOptions::default()
-                .with_peers(PeerSelection::None)
-                .with_persist_dir(base.scenario_base_dir.join("node-2"))
-                .create_patch(move |config| {
-                    Ok::<_, DynError>(override_initial_peers(
-                        config,
-                        vec![node0_multiaddr.clone()],
-                    ))
-                }),
+                .with_peers(PeerSelection::Named(vec![node0.name.clone()]))
+                .with_persist_dir(base.scenario_base_dir.join("node-2")),
         )
         .await
         .unwrap_or_else(|_| panic!("starting node-2 should succeed"));
@@ -71,6 +62,8 @@ async fn node_restart_with_initial_peer_override() {
         .wait_network_ready()
         .await
         .expect("manual cluster should become ready");
+
+    let node1_dial_addr = dial_addr(&node1.client).await;
 
     wait_for_manual_cluster_height(&node0.client, 1, Duration::from_mins(5))
         .await
@@ -84,45 +77,46 @@ async fn node_restart_with_initial_peer_override() {
         .await
         .expect("node-2 should bootstrap from node-0");
 
-    let restarted_node2 = restart_node_and_get_client(
-        &base.scenario_base_dir,
-        &cluster,
-        &node2.name,
-        vec![node1_multiaddr.clone()],
-    )
-    .await;
+    cluster
+        .stop_node(&node0.name)
+        .await
+        .unwrap_or_else(|_| panic!("node-0 should stop cleanly"));
+
+    let restarted_node2 =
+        restart_node_and_get_client(&cluster, &node2.name, vec![node1_dial_addr]).await;
 
     wait_for_manual_cluster_height(&restarted_node2, 2, Duration::from_mins(2))
         .await
-        .expect("node-2 should rejoin and reach height 2 after restart");
+        .expect("node-2 should reach node-1 through the CLI peer override after restart");
 }
 
-fn node_multiaddr(
-    deployment: &lb_testing_framework::internal::DeploymentPlan,
-    node_index: usize,
-) -> Multiaddr {
-    let port = deployment.nodes()[node_index]
-        .general
-        .network_config
-        .backend
-        .swarm
-        .port;
+async fn dial_addr(client: &NodeHttpClient) -> Multiaddr {
+    let network = client
+        .network_info()
+        .await
+        .expect("node should expose network info");
 
-    format!("/ip4/127.0.0.1/udp/{port}/quic-v1")
-        .parse()
-        .expect("node multiaddr should parse")
+    let mut addr = network
+        .listen_addresses
+        .into_iter()
+        .next()
+        .expect("network info should expose at least one listen address");
+
+    addr.push(Protocol::P2p(network.peer_id));
+
+    addr
 }
 
 async fn restart_node_and_get_client(
-    scenario_base_dir: &std::path::Path,
     cluster: &LbcManualCluster,
     node_name: &str,
     initial_peers: Vec<Multiaddr>,
 ) -> NodeHttpClient {
-    override_node_initial_peers(scenario_base_dir, node_name, initial_peers);
+    let mut args = vec!["--net-initial-peers".to_owned()];
+    args.extend(initial_peers.into_iter().map(|addr| addr.to_string()));
 
     cluster
-        .restart_node(node_name)
+        .restart_node_with(node_name, StartNodeOptions::default().with_args(args))
         .await
         .unwrap_or_else(|_| panic!("node `{node_name}` should restart"));
 
@@ -134,9 +128,4 @@ async fn restart_node_and_get_client(
     cluster
         .node_client(node_name)
         .unwrap_or_else(|| panic!("node `{node_name}` client should be available after restart"))
-}
-
-fn override_initial_peers(mut config: RunConfig, initial_peers: Vec<Multiaddr>) -> RunConfig {
-    config.user.network.backend.initial_peers = initial_peers;
-    config
 }

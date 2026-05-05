@@ -10,6 +10,7 @@ use std::{
 use either::Either;
 use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature;
 use lb_blend_scheduling::{deserialize_encapsulated_message, membership::Membership};
+use lb_log_targets::blend;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -27,7 +28,7 @@ mod handler;
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = "blend::network::core::edge::behaviour";
+const LOG_TARGET: &str = blend::network::core::edge::BEHAVIOUR;
 
 #[cfg_attr(
     test,

@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use redb::{
-    CommitError, Database, DatabaseError, ReadableDatabase as _, ReadableTable as _, StorageError,
-    TableDefinition, TableError, TransactionError,
+    CommitError, Database, DatabaseError, ReadableTable as _, StorageError, TableDefinition,
+    TableError, TransactionError,
 };
 use thiserror::Error;
 use tokio::sync::RwLock;

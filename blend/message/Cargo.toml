@@ -14,25 +14,25 @@ workspace = true
 
 [dependencies]
 blake2                        = { workspace = true }
-derivative                    = { default-features = false, version = "2" }
+derivative                    = { workspace = true }
 hex                           = { workspace = true }
-itertools                     = { default-features = false, version = "0.14" }
+itertools                     = { workspace = true }
 lb-blend-crypto               = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-
-lb-utils        = { features = ["rng"], workspace = true }
-serde           = { workspace = true }
-serde-big-array = { workspace = true }
-serde_with      = { default-features = false, features = ["alloc"], version = "3" }
-thiserror       = { default-features = false, version = "1.0.69" }
-tracing         = { workspace = true }
-zeroize         = { workspace = true }
+lb-log-targets                = { workspace = true }
+lb-utils                      = { features = ["rng"], workspace = true }
+serde                         = { workspace = true }
+serde-big-array               = { workspace = true }
+serde_with                    = { features = ["alloc"], workspace = true }
+thiserror                     = { workspace = true }
+tracing                       = { workspace = true }
+zeroize                       = { workspace = true }
 
 [dev-dependencies]
-test-log = { default-features = false, features = ["trace"], version = "0.2" }
+test-log = { features = ["trace"], workspace = true }
 
 [features]
 unsafe-test-functions = []

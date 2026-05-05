@@ -4,7 +4,6 @@ use std::{
 };
 
 use ark_ff::Field;
-#[cfg(feature = "serde")]
 use lb_groth16::serde::serde_fr;
 use lb_poseidon2::{Digest, Fr};
 use rpds::RedBlackTreeSetSync;
@@ -30,13 +29,12 @@ fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
     })[height]
 }
 
-#[cfg_attr(feature = "serde", derive(::serde::Serialize, ::serde::Deserialize))]
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(::serde::Serialize, ::serde::Deserialize, Clone, Debug, PartialEq, Eq)]
 enum Node<Item> {
     Inner {
         left: Arc<Self>,
         right: Arc<Self>,
-        #[cfg_attr(feature = "serde", serde(with = "serde_fr"))]
+        #[serde(with = "serde_fr")]
         value: Fr,
         right_subtree_size: usize,
         left_subtree_size: usize,
@@ -400,7 +398,6 @@ where
 {
 }
 
-#[cfg(feature = "serde")]
 pub mod serde {
     use std::{marker::PhantomData, sync::Arc};
 
@@ -493,7 +490,7 @@ mod tests {
     #[test]
     fn test_hole_management() {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let a = TestFr::from_rng(&mut rng);
         let b = TestFr::from_rng(&mut rng);
         let c = TestFr::from_rng(&mut rng);
@@ -513,7 +510,7 @@ mod tests {
     #[test]
     fn test_root_consistency() {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let a = TestFr::from_rng(&mut rng);
         let b = TestFr::from_rng(&mut rng);
         let (tree1, _) = tree.insert(a);
@@ -530,7 +527,7 @@ mod tests {
 
     #[test]
     fn test_deterministic_root() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let a = TestFr::from_rng(&mut rng);
         let b = TestFr::from_rng(&mut rng);
         let tree1: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
@@ -548,14 +545,14 @@ mod tests {
     #[should_panic(expected = "Index out of bounds")]
     fn test_remove_out_of_bounds() {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
-        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::rng()));
+        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
         tree.remove(1 << 32);
     }
 
     #[test]
     fn test_single_insert() {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
-        let item = TestFr::from_rng(&mut rand::rng());
+        let item = TestFr::from_rng(&mut rand::thread_rng());
         let (tree_with_item, index) = tree.insert(item);
 
         assert_eq!(tree_with_item.size(), 1);
@@ -568,9 +565,9 @@ mod tests {
     fn test_multiple_inserts() {
         let mut tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
         let items = [
-            TestFr::from_rng(&mut rand::rng()),
-            TestFr::from_rng(&mut rand::rng()),
-            TestFr::from_rng(&mut rand::rng()),
+            TestFr::from_rng(&mut rand::thread_rng()),
+            TestFr::from_rng(&mut rand::thread_rng()),
+            TestFr::from_rng(&mut rand::thread_rng()),
         ];
 
         for (i, item) in items.iter().enumerate() {
@@ -586,7 +583,7 @@ mod tests {
     #[test]
     fn test_remove_single_item() {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
-        let item = TestFr::from_rng(&mut rand::rng());
+        let item = TestFr::from_rng(&mut rand::thread_rng());
         let (tree_with_item, _) = tree.insert(item);
 
         let tree_after_removal = tree_with_item.remove(0);
@@ -598,9 +595,9 @@ mod tests {
     fn test_remove_and_reinsert() {
         let mut tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
         let items = vec![
-            TestFr::from_rng(&mut rand::rng()),
-            TestFr::from_rng(&mut rand::rng()),
-            TestFr::from_rng(&mut rand::rng()),
+            TestFr::from_rng(&mut rand::thread_rng()),
+            TestFr::from_rng(&mut rand::thread_rng()),
+            TestFr::from_rng(&mut rand::thread_rng()),
         ];
 
         for item in &items {
@@ -612,7 +609,7 @@ mod tests {
         assert_eq!(tree_after_removal.size(), 2);
 
         let (tree_after_reinsert, index) =
-            tree_after_removal.insert(TestFr::from_rng(&mut rand::rng()));
+            tree_after_removal.insert(TestFr::from_rng(&mut rand::thread_rng()));
         assert_eq!(tree_after_reinsert.size(), 3);
         assert_eq!(index, 1);
     }
@@ -620,8 +617,8 @@ mod tests {
     #[test]
     fn test_structural_sharing() {
         let tree1: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
-        let (tree2, _) = tree1.insert(TestFr::from_rng(&mut rand::rng()));
-        let (tree3, _) = tree2.insert(TestFr::from_rng(&mut rand::rng()));
+        let (tree2, _) = tree1.insert(TestFr::from_rng(&mut rand::thread_rng()));
+        let (tree3, _) = tree2.insert(TestFr::from_rng(&mut rand::thread_rng()));
 
         assert_eq!(tree1.size(), 0);
         assert_eq!(tree2.size(), 1);
@@ -637,11 +634,11 @@ mod tests {
         let tree: DynamicMerkleTree<TestFr, TestHash> = DynamicMerkleTree::new();
 
         // Insert items at positions 0, 1, 2, 3, 4
-        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::rng()));
-        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::rng()));
-        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::rng()));
-        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::rng()));
-        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::rng()));
+        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
+        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
+        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
+        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
+        let (tree, _) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
 
         // Remove items at positions 3, 1, 4 (creating holes in that order)
         let tree = tree.remove(3);
@@ -650,15 +647,15 @@ mod tests {
 
         // Now we have holes at positions 1, 3, 4
         // The smallest hole should be selected first (position 1)
-        let (tree, index1) = tree.insert(TestFr::from_rng(&mut rand::rng()));
+        let (tree, index1) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
         assert_eq!(index1, 1, "Should select smallest hole first");
 
         // Next insertion should use the next smallest hole (position 3)
-        let (tree, index2) = tree.insert(TestFr::from_rng(&mut rand::rng()));
+        let (tree, index2) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
         assert_eq!(index2, 3, "Should select next smallest hole");
 
         // Final insertion should use the last hole (position 4)
-        let (_, index3) = tree.insert(TestFr::from_rng(&mut rand::rng()));
+        let (_, index3) = tree.insert(TestFr::from_rng(&mut rand::thread_rng()));
         assert_eq!(index3, 4, "Should select remaining hole");
     }
 

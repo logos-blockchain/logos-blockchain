@@ -14,7 +14,7 @@ pub fn groth16_verify<E: Pairing>(
     Groth16::<E, LibsnarkReduction>::verify_proof(vk.as_ref(), &proof, public_inputs)
 }
 
-#[cfg(all(test, feature = "deser"))]
+#[cfg(test)]
 mod tests {
     use std::{ops::Deref as _, sync::LazyLock};
 

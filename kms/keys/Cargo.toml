@@ -13,23 +13,23 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                     = { default-features = false, version = "0.1" }
+async-trait                     = { workspace = true }
 bytes                           = { workspace = true }
 ed25519-dalek                   = { features = ["rand_core", "serde", "zeroize"], workspace = true }
-generic-array                   = { default-features = false, version = "1.2.0" }
+generic-array                   = { workspace = true }
 hex                             = { workspace = true }
 lb-groth16                      = { workspace = true }
 lb-key-management-system-macros = { workspace = true }
 lb-poseidon2                    = { workspace = true }
-lb-utils                        = { features = ["rng", "serde", "types"], workspace = true }
+lb-utils                        = { features = ["rng"], workspace = true }
 lb-zksign                       = { workspace = true }
-num-bigint                      = { default-features = false, version = "0.4.6" }
-rand_core                       = { default-features = false, version = "0.6.4" }
-serde                           = { default-features = false, features = ["derive"], version = "1" }
+num-bigint                      = { workspace = true }
+rand_core                       = { workspace = true }
+serde                           = { features = ["derive"], workspace = true }
 subtle                          = { workspace = true }
-thiserror                       = { default-features = false, version = "2" }
+thiserror                       = { workspace = true }
 tokio                           = { features = ["rt"], workspace = true }
-tracing                         = { default-features = false, version = "0.1" }
+tracing                         = { workspace = true }
 x25519-dalek                    = { features = ["serde", "static_secrets", "zeroize"], workspace = true }
 zeroize                         = { workspace = true }
 

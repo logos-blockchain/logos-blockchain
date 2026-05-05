@@ -35,6 +35,7 @@ where
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
     ) -> Self {
+        tracing::debug!("Subscribing tx adapter to pubsub topic {}", settings.topic);
         network_relay
             .send(NetworkMsg::Process(Command::PubSub(
                 PubSubCommand::Subscribe(settings.topic.clone()),

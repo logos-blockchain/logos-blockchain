@@ -12,6 +12,8 @@ ignore = [
   { id = "RUSTSEC-2024-0436", reason = "`paste` has a security vulnerability; consider using an alternative. Use `cargo tree -p paste -i > tmp.txt` to check the dependency tree." },
   { id = "RUSTSEC-2025-0055", reason = "`tracing-subscriber` v0.2.25 pulled in by ark-relations v0.4.0 - will be addressed before mainnet" },
   { id = "RUSTSEC-2025-0141", reason = "`bincode` is unmaintained but continuing to use it." },
+  { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` can enter an unbounded DNSSEC NSEC3 validation loop and exhaust memory; pulled in through libp2p." },
+  { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` DNS message compression can cause CPU exhaustion during encoding; pulled in through libp2p." },
 ]
 unused-ignored-advisory = "deny"
 yanked = "deny"

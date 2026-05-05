@@ -10,13 +10,14 @@ use lb_key_management_system_service::{
     api::KmsServiceApi, backend::preload::KeyId, keys::KeyOperators,
     operators::blend::poq::PoQOperator,
 };
+use lb_log_targets::blend;
 use lb_poq::CorePathAndSelectors;
 use overwatch::services::AsServiceId;
 use tokio::sync::oneshot;
 
 use crate::kms::PreloadKmsService;
 
-const LOG_TARGET: &str = "blend::service::core::kms-poq-generator";
+const LOG_TARGET: &str = blend::service::core::KMS_POQ_GENERATOR;
 
 #[async_trait]
 pub trait KmsPoQAdapter<RuntimeServiceId> {

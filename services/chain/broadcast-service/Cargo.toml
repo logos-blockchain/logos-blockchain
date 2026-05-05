@@ -13,8 +13,8 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait  = "0.1"
-derivative   = { default-features = false, version = "2" }
+async-trait  = { workspace = true }
+derivative   = { workspace = true }
 futures      = { workspace = true }
 lb-core      = { workspace = true }
 overwatch    = { workspace = true }

@@ -71,10 +71,12 @@ Feature: Cryptarchia
     Then all nodes share the same LIB at or above height 5 in 300 seconds
     Then I stop all nodes
 
-  @cryptarchia_ci @undefined_behaviour
+  @cryptarchia_ci
   Scenario: Orphan staggered fork start 1
-    Given I have a cluster with capacity of 7 nodes
+    Given I have a cluster with capacity of 8 nodes
+    And no nodes are declared as blend providers
     And I start node "NODE_A1"
+    And I start peer node "NODE_A1_BUDDY" connected to node "NODE_A1"
     When node "NODE_A1" is at height 1 in 300 seconds
     And I start peer node "NODE_A2" connected to node "NODE_A1"
     And I start peer node "NODE_A3" connected to node "NODE_A2"
@@ -87,10 +89,12 @@ Feature: Cryptarchia
     Then all nodes have at least 5 blocks and converged to within 1 blocks in 240 seconds
     Then I stop all nodes
 
-  @cryptarchia_ci @undefined_behaviour
+  @cryptarchia_ci
   Scenario: Orphan staggered fork start 2
-    Given I have a cluster with capacity of 7 nodes
+    Given I have a cluster with capacity of 8 nodes
+    And no nodes are declared as blend providers
     And I start node "NODE_A1"
+    And I start peer node "NODE_A1_BUDDY" connected to node "NODE_A1"
     When node "NODE_A1" is at height 1 in 360 seconds
     And I start peer node "NODE_A2" connected to node "NODE_A1"
     And I start peer node "NODE_A3" connected to node "NODE_A2"
