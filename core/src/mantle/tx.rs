@@ -87,7 +87,9 @@ impl TxHash {
 }
 
 #[derive(Serialize, Deserialize)]
-struct MantleTxDeSerImpl(pub Vec<Op>);
+struct MantleTxDeSerImpl {
+    pub ops: Vec<Op>,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct MantleTxContext {
@@ -158,14 +160,14 @@ impl MantleTxGasContext {
 pub struct MantleTx(pub Vec<Op>);
 
 impl From<MantleTxDeSerImpl> for MantleTx {
-    fn from(MantleTxDeSerImpl(ops): MantleTxDeSerImpl) -> Self {
+    fn from(MantleTxDeSerImpl { ops }: MantleTxDeSerImpl) -> Self {
         Self(ops)
     }
 }
 
 impl From<MantleTx> for MantleTxDeSerImpl {
     fn from(MantleTx(ops): MantleTx) -> Self {
-        Self(ops)
+        Self { ops }
     }
 }
 
