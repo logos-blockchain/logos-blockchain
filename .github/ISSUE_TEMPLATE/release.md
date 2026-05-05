@@ -39,10 +39,9 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Push to `testnet` branch to trigger the ceremony and generate a new genesis state
 - [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. Until ready, you should see a `502` error while the containers restart when visiting [https://testnet.blockchain.logos.co/web/cfgsync/deployment-settings](https://testnet.blockchain.logos.co/web/cfgsync/deployment-settings)
 - [ ] Download the new deployment configuration from the link above
-- [ ] Verify that the `time.chain_start_time` value in the deployment file indicates the right start time, which should be within the last few minutes
 - [ ] Copy-paste or attach the content of the deployment file to this issue for easier review
 - [ ] Override the existing testnet deployment settings with the generated ones on the release branch
-- [ ] Verify `git` shows a diff for the deployment file, otherwise it means something went wrong when downloading the new one from the deployment settings endpoint
+- [ ] Verify `git` shows a diff for the deployment file, specifically in the first operation of the genesis tx which includes the chain start time, otherwise it means something went wrong when downloading the new one from the deployment settings endpoint
 
 ## Release publication
 
@@ -56,9 +55,11 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
 - [ ] Publish release
 - [ ] Post the link to the published release to this issue for easier review
+- [ ] Post the link to the Docker image building workflow as appearing in [node-docker-build-workflow][the Actions section]
 
 ## Testnet deployment
 
+- [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z` tag.
 - [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml compose.static.yml`
 - [ ] Update `.env.testnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to latest version
 - [ ] Commit and push the changes to trigger environment re-deployment. Environment is now live.
@@ -81,3 +82,4 @@ Most of the template content is the same or very similar to what is in `release-
 [release-bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [testnet-deployment-section]: #testnet-deployment
 [github-release-section]: #release-publication
+[node-docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml

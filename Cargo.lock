@@ -4379,6 +4379,7 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
+ "logos-blockchain-log-targets",
  "logos-blockchain-network-service",
  "logos-blockchain-poq",
  "logos-blockchain-sdp-service",
@@ -4902,6 +4903,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "logos-blockchain-log-targets"
+version = "0.1.2"
+dependencies = [
+ "logos-blockchain-log-targets-macros",
+]
+
+[[package]]
+name = "logos-blockchain-log-targets-macros"
+version = "0.1.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "logos-blockchain-mmr"
 version = "0.1.2"
 dependencies = [
@@ -5215,6 +5232,7 @@ dependencies = [
 name = "logos-blockchain-tracing"
 version = "0.1.2"
 dependencies = [
+ "logos-blockchain-log-targets",
  "opentelemetry",
  "opentelemetry-appender-tracing",
  "opentelemetry-http",
