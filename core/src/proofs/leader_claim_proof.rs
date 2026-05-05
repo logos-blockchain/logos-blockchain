@@ -2,6 +2,7 @@ use lb_groth16::{Fr, serde::serde_fr};
 use lb_mmr::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::error;
 
 use crate::{
     mantle::ops::leader_claim::{VoucherNullifier, VoucherSecret},
@@ -67,7 +68,10 @@ impl LeaderClaimProof for Groth16LeaderClaimProof {
                 public_inputs.mantle_tx_hash,
             ),
         )
-        .is_ok()
+        .unwrap_or_else(|e| {
+            error!("Error verifying LeaderClaimProof: {e:?}");
+            false
+        })
     }
 
     fn voucher_nf(&self) -> &VoucherNullifier {
