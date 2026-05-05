@@ -6,7 +6,7 @@ use crate::{
     block::Block,
     header::Header,
     mantle::{
-        MantleTx, Note, Op, OpProof, SignedMantleTx,
+        Note, Op, OpProof, SignedMantleTx,
         genesis_tx::{self, GenesisTx},
         ledger::{Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
@@ -1094,7 +1094,7 @@ impl GenesisBlockBuilder<WithAll> {
         .collect();
         let n = ops.len();
         let signed_tx = SignedMantleTx::new_unverified(
-            MantleTx(ops),
+            ops.into(),
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
         );
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
@@ -1197,7 +1197,7 @@ mod tests {
         ops.extend(extra_ops);
         let n = ops.len();
         SignedMantleTx::new_unverified(
-            MantleTx(ops),
+            ops.into(),
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); n],
         )
     }

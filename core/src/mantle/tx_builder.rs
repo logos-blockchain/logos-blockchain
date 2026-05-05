@@ -29,7 +29,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new(context: MantleTxContext) -> Self {
         Self {
-            mantle_tx: MantleTx(vec![]),
+            mantle_tx: vec![].into(),
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
             channel_withdraw_proofs: HashMap::new(),

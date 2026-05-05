@@ -171,6 +171,12 @@ impl From<MantleTx> for MantleTxDeSerImpl {
     }
 }
 
+impl<T: IntoIterator<Item = Op>> From<T> for MantleTx {
+    fn from(ops: T) -> Self {
+        Self(ops.into_iter().collect())
+    }
+}
+
 impl Serialize for MantleTx {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -660,7 +666,7 @@ mod tests {
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
-        MantleTx(ops)
+        ops.into()
     }
 
     fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {

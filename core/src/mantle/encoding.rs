@@ -69,7 +69,7 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     // MantleTx = Ops ExecutionGasPrice StorageGasPrice
     let (input, ops) = decode_ops(input)?;
 
-    Ok((input, MantleTx(ops)))
+    Ok((input, ops.into()))
 }
 
 // ==============================================================================
@@ -891,9 +891,7 @@ fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
 /// Encode top-level transactions
 #[must_use]
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_ops(tx.ops()));
-    bytes
+    encode_ops(tx.ops())
 }
 
 #[must_use]

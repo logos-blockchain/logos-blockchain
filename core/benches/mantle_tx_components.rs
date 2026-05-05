@@ -46,12 +46,13 @@ const SIZES: &[usize] = &[
 // Helper fn to create an inscription `MantleTx`, no ledger inputs ot outputs.
 fn make_inscription_tx(payload_size: usize) -> MantleTx {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-    MantleTx(vec![Op::ChannelInscribe(InscriptionOp {
+    vec![Op::ChannelInscribe(InscriptionOp {
         channel_id: ChannelId::from([0xAA; 32]),
         inscription: vec![0xAB; payload_size],
         parent: MsgId::from([0xBB; 32]),
         signer: signing_key.public_key(),
-    })])
+    })]
+    .into()
 }
 
 // Helper fn to create a `SignedMantleTx`.
