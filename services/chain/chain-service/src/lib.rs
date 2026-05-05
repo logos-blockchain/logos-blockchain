@@ -618,8 +618,9 @@ where
         let sync_blocks_provider: BlockProvider<_, _> =
             BlockProvider::new(relays.storage_adapter().storage_relay.clone());
 
-        // Chain start timer will prevent the chain service to process and produce blocks if the
-        // starting state is GenesisBlock and has chain start time set in future.
+        // Chain start timer will prevent the chain service to process and produce
+        // blocks if the starting state is GenesisBlock and has chain start time
+        // set in future.
         let mut chain_start_timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
 
         if let StartingState::Genesis { genesis_block } = starting_state {

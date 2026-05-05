@@ -34,7 +34,6 @@ lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-config                        = { workspace = true }
 lb-core                          = { workspace = true }
-lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
