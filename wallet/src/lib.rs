@@ -578,10 +578,11 @@ mod tests {
         crypto::{Hash, ZkDigest as _},
         mantle::{
             Note,
+            channel::Channels,
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            tx::MantleTxContext,
+            tx::{GasPrices, MantleTxContext, MantleTxGasContext},
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };
@@ -822,7 +823,13 @@ mod tests {
         // Lock `utxo1` deliberately to ensure that `fund_tx` excludes locked notes
         wallet_state.locked_notes = wallet_state.locked_notes.insert(utxo1.id());
 
-        let tx_builder = MantleTxBuilder::new(ledger_state.tx_context());
+        let tx_builder = MantleTxBuilder::new(MantleTxContext {
+            gas_context: MantleTxGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+            ),
+            leader_reward_amount: 0,
+        });
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
@@ -830,10 +837,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            810,
+            794,
             funded_tx_builder.gas_cost::<Gas>().unwrap().into_inner()
         );
-        assert_eq!(810, funded_tx_builder.net_balance());
+        assert_eq!(794, funded_tx_builder.net_balance());
         assert_eq!(0, funded_tx_builder.funding_delta::<Gas>().unwrap());
 
         let funded_tx = funded_tx_builder.build();
@@ -845,7 +852,7 @@ mod tests {
             assert_eq!(
                 transfer_op.outputs,
                 Outputs::new(vec![Note {
-                    value: 4190,
+                    value: 4206,
                     pk: alice,
                 }])
             );
@@ -867,9 +874,17 @@ mod tests {
             &ledger_config(),
         );
 
+        let builder_context = MantleTxContext {
+            gas_context: MantleTxGasContext::from_channels(
+                ledger_state.mantle_ledger().channels(),
+                GasPrices::new(1, 1),
+            ),
+            leader_reward_amount: ledger_state.mantle_ledger().leader_reward_amount(),
+        };
+
         let wallet_state =
             WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
-        let mut tx_builder = MantleTxBuilder::new(ledger_state.tx_context());
+        let mut tx_builder = MantleTxBuilder::new(builder_context);
 
         // Add a costly inscription
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -964,11 +979,17 @@ mod tests {
     fn test_fund_tx_unfundable_region() {
         let alice = pk(1);
 
-        let tx_builder = MantleTxBuilder::new(MantleTxContext::default());
+        let tx_builder = MantleTxBuilder::new(MantleTxContext {
+            gas_context: MantleTxGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+            ),
+            leader_reward_amount: 0,
+        });
 
         // Determine gas cost without change note
         assert_eq!(
-            770,
+            754,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -982,7 +1003,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(770, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(754, alice))],
                 &ledger_config(),
             ),
         );
@@ -1003,7 +1024,7 @@ mod tests {
 
         // Determine gas cost with change note
         assert_eq!(
-            810,
+            794,
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
@@ -1013,7 +1034,7 @@ mod tests {
                 .into_inner()
         );
 
-        for value in 771..=810 {
+        for value in 755..=794 {
             // this region of note values will fail to fund the tx.
             // We can fund the tx if the note value is exactly the gas cost without change
             // note
@@ -1037,7 +1058,7 @@ mod tests {
         let wallet_state = WalletState::from_ledger(
             &HashMap::from_iter([(alice, 1)]),
             &LedgerState::from_utxos(
-                [Utxo::new(tx_hash(0), 0, Note::new(811, alice))],
+                [Utxo::new(tx_hash(0), 0, Note::new(795, alice))],
                 &ledger_config(),
             ),
         );

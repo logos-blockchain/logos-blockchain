@@ -583,7 +583,10 @@ impl TxState {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::{MantleTx, Transaction as _};
+    use lb_core::mantle::{
+        MantleTx, Op::ChannelInscribe, Transaction as _, ops::channel::inscribe::InscriptionOp,
+    };
+    use lb_key_management_system_service::keys::Ed25519PublicKey;
 
     use super::*;
 
@@ -593,8 +596,13 @@ mod tests {
         HeaderId::from(bytes)
     }
 
-    fn make_dummy_tx() -> SignedMantleTx {
-        let mantle_tx = MantleTx(vec![]);
+    fn make_dummy_tx(data: u8) -> SignedMantleTx {
+        let mantle_tx = MantleTx(vec![ChannelInscribe(InscriptionOp {
+            channel_id: [0u8; 32].into(),
+            inscription: vec![data],
+            parent: [0u8; 32].into(),
+            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        })]);
         SignedMantleTx {
             ops_proofs: vec![],
             mantle_tx,
@@ -605,7 +613,7 @@ mod tests {
     fn submit_and_query_pending() {
         let genesis = header_id(0);
         let mut state = TxState::new(genesis, MsgId::root());
-        let tx = make_dummy_tx();
+        let tx = make_dummy_tx(1);
 
         state.submit_other(tx);
         assert_eq!(state.unfinalized_count(), 1);
@@ -617,7 +625,7 @@ mod tests {
         let b1 = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
 
-        let tx = make_dummy_tx();
+        let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
         state.submit_other(tx);
 
@@ -638,7 +646,7 @@ mod tests {
         let b2 = header_id(2);
         let mut state = TxState::new(genesis, MsgId::root());
 
-        let tx = make_dummy_tx();
+        let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
         state.submit_other(tx);
 
@@ -666,8 +674,8 @@ mod tests {
         let b1 = header_id(1);
         let mut state = TxState::new(genesis, MsgId::root());
 
-        let tx1 = make_dummy_tx();
-        let tx2 = make_dummy_tx();
+        let tx1 = make_dummy_tx(1);
+        let tx2 = make_dummy_tx(2);
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
@@ -692,7 +700,7 @@ mod tests {
         let b2 = header_id(2);
         let mut state = TxState::new(genesis, MsgId::root());
 
-        let tx = make_dummy_tx();
+        let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
         state.submit_other(tx);
 
@@ -790,7 +798,7 @@ mod tests {
         parent_msg: MsgId,
         this_msg: MsgId,
     ) -> TxHash {
-        let tx = make_dummy_tx();
+        let tx = make_dummy_tx(data);
         let hash = tx.mantle_tx.hash();
         state.submit_inscription(tx, parent_msg, this_msg, vec![data]);
         hash
@@ -822,7 +830,7 @@ mod tests {
 
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
-            tx_hash: make_dummy_tx().mantle_tx.hash(),
+            tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: vec![99],
@@ -859,7 +867,7 @@ mod tests {
 
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
-            tx_hash: make_dummy_tx().mantle_tx.hash(),
+            tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: vec![99],
@@ -929,7 +937,7 @@ mod tests {
         // c1 lands, consuming root
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
-            tx_hash: make_dummy_tx().mantle_tx.hash(),
+            tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: vec![99],
@@ -952,8 +960,8 @@ mod tests {
         let b3 = header_id(3);
         let mut state = TxState::new(genesis, MsgId::root());
 
-        let tx1 = make_dummy_tx();
-        let tx2 = make_dummy_tx();
+        let tx1 = make_dummy_tx(1);
+        let tx2 = make_dummy_tx(2);
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
