@@ -5022,10 +5022,13 @@ dependencies = [
  "anyhow",
  "clap",
  "logos-blockchain-core",
+ "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
+ "num-bigint",
  "serde",
  "serde_json",
  "serde_yml",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

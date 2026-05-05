@@ -90,6 +90,12 @@ pub struct ProviderId(pub Ed25519PublicKey);
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
 
+impl From<Ed25519PublicKey> for ProviderId {
+    fn from(pk: Ed25519PublicKey) -> Self {
+        Self(pk)
+    }
+}
+
 impl TryFrom<[u8; 32]> for ProviderId {
     type Error = InvalidKeyBytesError;
 

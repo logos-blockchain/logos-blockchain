@@ -14,7 +14,10 @@ use lb_core::{
     },
 };
 use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
-use logos_blockchain_tools::{overwrite_yaml, value_from_dotted_kv};
+use logos_blockchain_tools::{
+    distribution::{self, ProviderInfo, StakeHolderInfo},
+    overwrite_yaml, value_from_dotted_kv,
+};
 use serde_yml::Value;
 
 // ── CLI definition
@@ -40,6 +43,10 @@ enum Commands {
     /// Build a genesis block from component files and optionally embed it into
     /// a deployment config under `cryptarchia.genesis_block`.
     Block(BlockArgs),
+
+    /// Calculate the distribution of notes and SDP declarations from
+    /// stakeholder and provider definitions.
+    Distribute(DistributeArgs),
 }
 
 // ── config subcommand
@@ -110,6 +117,28 @@ struct BlockArgs {
     output: Option<PathBuf>,
 }
 
+// ── distribute subcommand
+// ──────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+struct DistributeArgs {
+    /// YAML file containing stakeholder info.
+    #[arg(long, value_name = "FILE")]
+    stake_holders: PathBuf,
+
+    /// YAML file containing provider info.
+    #[arg(long, value_name = "FILE")]
+    providers: PathBuf,
+
+    /// Write notes output to FILE instead of stdout.
+    #[arg(long, short, value_name = "FILE")]
+    notes_output: Option<PathBuf>,
+
+    /// Write declarations output to FILE instead of stdout.
+    #[arg(long, short, value_name = "FILE")]
+    declarations_output: Option<PathBuf>,
+}
+
 // ── entry point
 // ───────────────────────────────────────────────────────────────
 
@@ -118,6 +147,7 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::Config(args) => run_config(&args),
         Commands::Block(args) => run_block(&args),
+        Commands::Distribute(args) => run_distribute(&args),
     }
 }
 
@@ -242,6 +272,26 @@ fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
     );
 
     Value::Mapping(outer)
+}
+
+// ── distribute implementation
+// ─────────────────────────────────────────────────────
+
+fn run_distribute(args: &DistributeArgs) -> Result<()> {
+    let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
+    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+
+    let (utxos, declarations) = distribution::distribute(stakeholders, providers)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to calculate distribution")?;
+
+    let utxos_value = struct_to_yaml_value(&utxos)?;
+    let declarations_value = struct_to_yaml_value(&declarations)?;
+
+    write_yaml(&utxos_value, args.notes_output.as_deref())?;
+    write_yaml(&declarations_value, args.declarations_output.as_deref())?;
+
+    Ok(())
 }
 
 // ── shared helpers
