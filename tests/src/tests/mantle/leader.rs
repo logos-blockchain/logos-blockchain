@@ -160,7 +160,7 @@ async fn wait_for_nodes_slot(nodes: &[&NodeHttpClient], target_slot: u64, durati
                     .expect("fetching consensus info should succeed");
 
                 if info.cryptarchia_info.slot < target_slot.into()
-                    || matches!(info.mode, ChainServiceMode::Started(State::Online))
+                    || !matches!(info.mode, ChainServiceMode::Started(State::Online))
                 {
                     all_ready = false;
                     break;
