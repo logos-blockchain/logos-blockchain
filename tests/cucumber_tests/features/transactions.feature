@@ -159,23 +159,27 @@ Feature: Transactions
       | 4             | 2           | 1400         |
       | 5             | 2           | 1400         |
       | 7             | 0           | 0            |
+      | 8             | 0           | 0            |
     And I have a cluster with capacity of 5 nodes
+    And no nodes are declared as blend providers
     And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
     And we will have distinct node groups to query wallet balances:
-      | group_name | node_name |
-      | FORK_A     | NODE_1    |
-      | FORK_A     | NODE_2    |
-      | FORK_B     | NODE_4    |
-      | FORK_B     | NODE_5    |
-      | FORK_BURN  | NODE_BURN |
+      | group_name | node_name       |
+      | FORK_A     | NODE_1          |
+      | FORK_A     | NODE_2          |
+      | FORK_B     | NODE_4          |
+      | FORK_B     | NODE_5          |
+      | FORK_BURN  | NODE_BURN       |
+      | FORK_BURN  | NODE_BURN_BUDDY |
     And I start nodes with wallet resources:
-      | node_name | account_index | wallet_name | connected_to |
-      | NODE_1    | 1             | WALLET_1A   |              |
-      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-      | NODE_4    | 4             | WALLET_4A   |              |
-      | NODE_5    | 5             | WALLET_5A   | NODE_4       |
-      | NODE_BURN | 7             | WALLET_BURN |              |
+      | node_name       | account_index | wallet_name       | connected_to |
+      | NODE_1          | 1             | WALLET_1A         |              |
+      | NODE_2          | 2             | WALLET_2A         | NODE_1       |
+      | NODE_4          | 4             | WALLET_4A         |              |
+      | NODE_5          | 5             | WALLET_5A         | NODE_4       |
+      | NODE_BURN       | 7             | WALLET_BURN       |              |
+      | NODE_BURN_BUDDY | 8             | WALLET_BURN_BUDDY | NODE_BURN    |
     When node "NODE_1" is at height 2 in 240 seconds
     And node "NODE_4" is at height 2 in 180 seconds
     # Fork A transfer: each wallet sends half its funds

@@ -74,6 +74,8 @@ members = [
   "tools/blockchain-tools",
   "tools/config",
   "tracing",
+  "tracing/targets",
+  "tracing/targets/macros",
   "utils",
   "utxotree",
   "wallet",
@@ -129,6 +131,8 @@ lb-key-management-system-operators = { default-features = false, package = "logo
 lb-key-management-system-service   = { default-features = false, package = "logos-blockchain-key-management-system-service", path = "./services/key-management-system" }
 lb-ledger                          = { default-features = false, package = "logos-blockchain-ledger", path = "./ledger" }
 lb-libp2p                          = { default-features = false, package = "logos-blockchain-libp2p", path = "./libp2p" }
+lb-log-targets                     = { default-features = false, package = "logos-blockchain-log-targets", path = "./tracing/targets" }
+lb-log-targets-macros              = { default-features = false, package = "logos-blockchain-log-targets-macros", path = "./tracing/targets/macros" }
 lb-mmr                             = { default-features = false, package = "logos-blockchain-mmr", path = "./mmr" }
 lb-network-service                 = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
 lb-node                            = { default-features = false, package = "logos-blockchain-node", path = "./nodes/node/binary" }
@@ -168,6 +172,7 @@ blake2            = { default-features = false, version = "0.10" }
 bytes             = { default-features = false, version = "1.3" }
 cached            = { default-features = false, version = "0.55.1" }
 cfg-if            = { default-features = false, version = "1.0.4" }
+const-str         = { default-features = false, version = "0.4.3" }
 divan             = { default-features = false, version = "0.1" }
 ed25519-dalek     = { default-features = false, version = "2" }
 fork_stream       = { default-features = false, version = "0.1.0" }
@@ -181,6 +186,8 @@ log               = { default-features = false, version = "0.4" }
 nutype            = { default-features = false, version = "0.6.2" }
 overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
 overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
+proc-macro2       = { default-features = false, version = "1" }
+quote             = { default-features = false, version = "1" }
 rand              = { default-features = false, version = "0.8" }
 reqwest           = { default-features = false, version = "0.12" }
 serde             = { default-features = false, version = "1.0" }
@@ -190,6 +197,7 @@ serde_json        = { default-features = false, version = "1.0" }
 serde_with        = { default-features = false, version = "3.14.0" }
 serde_yaml        = { default-features = false, version = "0.9.33" }
 subtle            = { default-features = false, version = "2.6.1" }
+syn               = { features = ["full"], version = "2" }
 tempfile          = { default-features = false, version = "3" }
 thiserror         = { default-features = false, version = "2.0" }
 time              = { default-features = false, version = "0.3" }

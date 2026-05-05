@@ -68,8 +68,10 @@ impl LeaderClaimProof for Groth16LeaderClaimProof {
                 public_inputs.mantle_tx_hash,
             ),
         )
-        .inspect_err(|e| error!("Error verifying LeaderClaimProof: {e:?}"))
-        .unwrap_or(false)
+        .unwrap_or_else(|e| {
+            error!("Error verifying LeaderClaimProof: {e:?}");
+            false
+        })
     }
 
     fn voucher_nf(&self) -> &VoucherNullifier {

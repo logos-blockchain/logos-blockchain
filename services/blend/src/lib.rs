@@ -54,7 +54,7 @@ pub use self::service_components::ServiceComponents;
 #[cfg(test)]
 mod test_utils;
 
-const LOG_TARGET: &str = "blend::service";
+const LOG_TARGET: &str = lb_log_targets::blend::service::ROOT;
 
 pub struct BlendService<CoreService, EdgeService, RuntimeServiceId>
 where
