@@ -20,6 +20,7 @@ lb-blend-crypto = { workspace = true }
 lb-groth16      = { workspace = true }
 lb-pol          = { workspace = true }
 lb-poq          = { workspace = true }
+lb-poseidon2    = { workspace = true }
 lb-utils        = { workspace = true }
 num-bigint      = { workspace = true }
 serde           = { workspace = true }

@@ -51,11 +51,12 @@
           rustToolchain = pkgs.rust-bin.stable.${rustVersion}.default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
           src = craneLib.cleanCargoSource ./.;
+          crateName = craneLib.crateNameFromCargoToml { inherit src; };
 
           commonArgs = {
             pname = "logos-blockchain-c";
             cargoExtraArgs = "-p logos-blockchain-c";
-            version = "0.1.2";
+            version = crateName.version;
 
             inherit src;
 

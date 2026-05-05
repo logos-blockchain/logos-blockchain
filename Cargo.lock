@@ -4107,6 +4107,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-pol",
  "logos-blockchain-poq",
+ "logos-blockchain-poseidon2",
  "logos-blockchain-utils",
  "num-bigint",
  "serde",

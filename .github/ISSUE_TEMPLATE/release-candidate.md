@@ -48,7 +48,6 @@ Most of the template content is the same or very similar to what is in `release.
 ## Release candidate publication
 
 - [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z-rc.N`
-- [ ] Bump the version value for the C bindings (`logos-blockchain-c`) in the root `flake.nix` file to match the new release version `X.Y.Z-rc.N`
 - [ ] Verify the HEAD of the release branch has green CI ✅
 - [ ] Tag the commit with `X.Y.Z-rc.N` and push the tag
 - [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z-rc.N` tag on GitHub with the `release-candidate` input to prepare the GitHub release draft with the build binaries
@@ -57,7 +56,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
 - [ ] Publish release
 - [ ] Post the link to the published release to this issue for easier review
-- [ ] Post the link to the Docker image building workflow as appearing in [node-docker-build-workflow][the Actions section]
+- [ ] Post the link to the Docker image building workflow as appearing in [the Actions section][node-docker-build-workflow]
 
 ## Devnet deployment
 

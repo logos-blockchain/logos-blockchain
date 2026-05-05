@@ -2,7 +2,7 @@ use std::sync::LazyLock;
 
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_poseidon2::{Fr, ZkHash};
+use lb_poseidon2::{Digest, Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -117,9 +117,10 @@ impl From<VoucherNullifier> for Fr {
 impl VoucherNullifier {
     #[must_use]
     pub fn from_secret(voucher_secret: VoucherSecret) -> Self {
-        let mut hash = ZkHasher::new();
-        hash.compress(&[*VOUCHER_NF, voucher_secret.into()]);
-        hash.finalize().into()
+        Self(<ZkHasher as Digest>::compress(&[
+            *VOUCHER_NF,
+            voucher_secret.into(),
+        ]))
     }
 }
 
@@ -137,9 +138,10 @@ impl VoucherCm {
 
     #[must_use]
     pub fn from_secret(voucher_secret: VoucherSecret) -> Self {
-        let mut hash = ZkHasher::new();
-        hash.compress(&[*REWARD_VOUCHER, voucher_secret.into()]);
-        hash.finalize().into()
+        Self(<ZkHasher as Digest>::compress(&[
+            *REWARD_VOUCHER,
+            voucher_secret.into(),
+        ]))
     }
 }
 
