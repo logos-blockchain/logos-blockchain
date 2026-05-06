@@ -26,6 +26,9 @@ pub type RewardAmount = u64;
 /// and can calculate expected rewards for each provider based on the service's
 /// internal logic.
 pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
+    /// Service-specific reward parameters.
+    type Params;
+
     /// Update rewards state when an active message is received.
     ///
     /// Called when a provider submits an active message with metadata
@@ -35,6 +38,7 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
         declaration_id: ProviderId,
         metadata: &ActivityMetadata,
         block_number: BlockNumber,
+        params: &Self::Params,
     ) -> Result<Self, Error>;
 
     /// Update rewards state when sessions transition and calculate rewards to
@@ -57,6 +61,7 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
         last_active: &SessionState,
         next_session_first_epoch_state: &EpochState,
         config: &ServiceParameters,
+        params: &Self::Params,
     ) -> (Self, Vec<Utxo>);
 
     /// Update rewards state when a new epoch begins while the session remains
@@ -65,7 +70,7 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     /// If the epoch has already been processed previously, this method performs
     /// no update and returns the current state unchanged.
     #[must_use]
-    fn update_epoch(&self, epoch_state: &EpochState) -> Self;
+    fn update_epoch(&self, epoch_state: &EpochState, params: &Self::Params) -> Self;
     #[must_use]
     fn add_income(&self, income: Value) -> Self;
 }

@@ -30,10 +30,8 @@ impl State {
         matches!(self, Self::Online)
     }
 
-    /// Runs the fork choice rule to select the new local chain.
-    /// Returns the new local chain and the lowest common ancestor with the
-    /// previous.
-    fn fork_choice<Id>(cryptarchia: &Cryptarchia<Id>) -> (Branch<Id>, Branch<Id>)
+    /// Runs the fork choice rule and returns the selected new local chain tip.
+    fn fork_choice<Id>(cryptarchia: &Cryptarchia<Id>) -> Branch<Id>
     where
         Id: Eq + Hash + Copy,
     {
@@ -71,20 +69,16 @@ impl State {
 /// paper k defines the forking depth of chain we accept without more
 /// analysis s defines the length of time (unit of slots) after the fork
 /// happened we will inspect for chain density
-///
-/// It returns the new local chain and the lowest common ancestor with the
-/// previous.
 fn maxvalid_bg<Id>(
     local_chain: Branch<Id>,
     branches: &Branches<Id>,
     k: u64,
     s_gen: NonZero<u64>,
-) -> (Branch<Id>, Branch<Id>)
+) -> Branch<Id>
 where
     Id: Eq + Hash + Copy,
 {
     let mut cmax = local_chain;
-    let mut lowest_common_ancestor_with_cmax = local_chain;
 
     let forks = branches.branches();
     for chain in forks {
@@ -94,7 +88,6 @@ where
             // Classic longest chain rule with parameter k
             if cmax.length < chain.length {
                 cmax = chain;
-                lowest_common_ancestor_with_cmax = lowest_common_ancestor;
             }
         } else {
             // The chain is forking too much, we need to pay a bit more attention
@@ -104,28 +97,19 @@ where
             let candidate_density = branches.walk_back_before(&chain, density_slot).length;
             if cmax_density < candidate_density {
                 cmax = chain;
-                lowest_common_ancestor_with_cmax = lowest_common_ancestor;
             }
         }
     }
-    (cmax, lowest_common_ancestor_with_cmax)
+    cmax
 }
 
 /// Implementation of the fork choice rule as defined in the Ouroboros Praos
 /// paper k defines the forking depth of chain we can accept.
-///
-/// It returns the new local chain and the lowest common ancestor with the
-/// previous.
-fn maxvalid_mc<Id>(
-    local_chain: Branch<Id>,
-    branches: &Branches<Id>,
-    k: u64,
-) -> (Branch<Id>, Branch<Id>)
+fn maxvalid_mc<Id>(local_chain: Branch<Id>, branches: &Branches<Id>, k: u64) -> Branch<Id>
 where
     Id: Eq + Hash + Copy,
 {
     let mut cmax = local_chain;
-    let mut lowest_common_ancestor_with_cmax = local_chain;
 
     let forks = branches.branches();
     for chain in forks {
@@ -134,10 +118,9 @@ where
         if m <= k && cmax.length < chain.length {
             // Classic longest chain rule with parameter k
             cmax = chain;
-            lowest_common_ancestor_with_cmax = lowest_common_ancestor;
         }
     }
-    (cmax, lowest_common_ancestor_with_cmax)
+    cmax
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -384,7 +367,7 @@ where
         let old_local_chain = self.local_chain;
 
         self.branches.apply_header(id, parent, slot)?;
-        let (new_local_chain, lca) = self.fork_choice();
+        let new_local_chain = self.fork_choice();
         self.local_chain = new_local_chain;
 
         // Before `update_lib` which may prune blocks,
@@ -392,6 +375,10 @@ where
         let reorged_blocks = if self.local_chain.id == old_local_chain.id {
             ReorgedBlocks::new()
         } else {
+            // It's safer to compute LCA here, not in `fork_choice`,
+            // because `fork_choice` may walk through multiple candidates
+            // whose pairwise LCAs don't lie on `old_local_chain`'s parent chain.
+            let lca = self.branches.lca(&old_local_chain, &new_local_chain);
             ReorgedBlocks(
                 self.branches
                     .walk_back_to_block(&old_local_chain, lca.id())
@@ -428,10 +415,8 @@ where
         }
     }
 
-    /// Runs the fork choice rule to select the new local chain.
-    /// Returns the new local chain and the lowest common ancestor with the
-    /// previous.
-    pub fn fork_choice(&self) -> (Branch<Id>, Branch<Id>) {
+    /// Runs the fork choice rule and returns the selected new local chain tip.
+    pub fn fork_choice(&self) -> Branch<Id> {
         State::fork_choice(self)
     }
 
@@ -853,9 +838,7 @@ pub mod tests {
             // however, if we set k to the fork length, it will be accepted
             let k = long_branch.length;
             assert_eq!(
-                maxvalid_bg(short_branch, engine.branches(), k, engine.config.s_gen())
-                    .0
-                    .id,
+                maxvalid_bg(short_branch, engine.branches(), k, engine.config.s_gen()).id,
                 long_p
             );
 

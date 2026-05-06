@@ -14,6 +14,7 @@ use lb_core::{
         AuthenticatedMantleTx as _, Note, NoteId, OpProof, SignedMantleTx, Transaction as _,
         TxHash, Utxo,
         gas::MainnetGasConstants,
+        ops::Op,
         tx::{MantleTxContext, MantleTxGasContext},
         tx_builder::MantleTxBuilder,
     },
@@ -32,7 +33,11 @@ use crate::cucumber::{
     fee_reserve::{DEFAULT_STORAGE_GAS_PRICE, SCENARIO_FEE_ACCOUNT_NAME},
     steps::{
         TARGET,
-        manual_transactions::{best_node::sanitize_best_node_info, faucet::FaucetTask},
+        manual_transactions::{
+            best_node::sanitize_best_node_info,
+            chunked_transfers::{build_chunked_funded_tx, select_sender_inputs_and_change},
+            faucet::FaucetTask,
+        },
     },
     world::{CucumberWorld, WalletInfo, WalletTokenMap, WalletType},
 };
@@ -79,37 +84,16 @@ struct PreparedUserWalletTransaction {
     funded_builder: MantleTxBuilder,
     newly_encumbered: Vec<Utxo>,
     newly_encumbered_fee: Vec<Utxo>,
-    signing_keys: Vec<ZkKey>,
+    transfer_signers: HashMap<NoteId, ZkKey>,
 }
 
 pub(crate) struct PreparedUserWalletSubmission {
     wallet: WalletInfo,
     funded_builder: MantleTxBuilder,
     pub(crate) tx_hash: TxHash,
-    transfer_proof: OpProof,
+    transfer_proofs: Vec<OpProof>,
     newly_encumbered: Vec<Utxo>,
     newly_encumbered_fee: Vec<Utxo>,
-}
-
-pub async fn submit_user_wallet_built_transaction(
-    world: &mut CucumberWorld,
-    step: &str,
-    sender_wallet_name: &str,
-    tx_builder: MantleTxBuilder,
-    sender_output_total: u64,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<TxHash, StepError> {
-    let prepared = prepare_user_wallet_built_transaction_submission(
-        world,
-        step,
-        sender_wallet_name,
-        tx_builder,
-        sender_output_total,
-        best_node_info,
-    )
-    .await?;
-
-    submit_prepared_user_wallet_transaction(world, step, prepared, Vec::new(), best_node_info).await
 }
 
 pub async fn create_and_submit_transaction(
@@ -241,7 +225,7 @@ pub(crate) async fn prepare_user_wallet_built_transaction_submission(
         funded_builder,
         newly_encumbered,
         newly_encumbered_fee,
-        signing_keys,
+        transfer_signers,
     } = prepare_built_user_wallet_transaction(
         step,
         tx_builder,
@@ -253,18 +237,53 @@ pub(crate) async fn prepare_user_wallet_built_transaction_submission(
 
     let mantle_tx = funded_builder.clone().build();
     let tx_hash = mantle_tx.hash();
-    let transfer_proof = ZkKey::multi_sign(&signing_keys, &tx_hash.to_fr()).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step);
-    })?;
+    let transfer_proofs = build_transfer_proofs(step, &mantle_tx.ops, &tx_hash, &transfer_signers)?;
 
     Ok(PreparedUserWalletSubmission {
         wallet,
         funded_builder,
         tx_hash,
-        transfer_proof: OpProof::ZkSig(transfer_proof),
+        transfer_proofs,
         newly_encumbered,
         newly_encumbered_fee,
     })
+}
+
+fn build_transfer_proofs(
+    step: &str,
+    ops: &[Op],
+    tx_hash: &TxHash,
+    transfer_signers: &HashMap<NoteId, ZkKey>,
+) -> Result<Vec<OpProof>, StepError> {
+    ops.iter()
+        .filter_map(|op| match op {
+            Op::Transfer(transfer_op) => Some(transfer_op),
+            _ => None,
+        })
+        .map(|transfer_op| {
+            let signing_keys = transfer_op
+                .inputs
+                .iter()
+                .map(|note_id| {
+                    transfer_signers
+                        .get(note_id)
+                        .cloned()
+                        .ok_or_else(|| StepError::LogicalError {
+                            message: format!(
+                                "Step `{step}` error: missing signing key for transfer input {note_id:?}"
+                            ),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let transfer_proof = ZkKey::multi_sign(&signing_keys, &tx_hash.to_fr())
+                .inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{}` error: {e}", step);
+                })?;
+
+            Ok(OpProof::ZkSig(transfer_proof))
+        })
+        .collect()
 }
 
 pub(crate) async fn submit_prepared_user_wallet_transaction(
@@ -278,14 +297,14 @@ pub(crate) async fn submit_prepared_user_wallet_transaction(
         wallet,
         funded_builder,
         tx_hash,
-        transfer_proof,
+        transfer_proofs,
         newly_encumbered,
         newly_encumbered_fee,
     } = prepared;
     let sender_wallet_name = wallet.wallet_name.as_str();
 
     let mantle_tx = funded_builder.build();
-    extra_op_proofs.push(transfer_proof);
+    extra_op_proofs.extend(transfer_proofs);
 
     let signed_tx = SignedMantleTx::new(mantle_tx, extra_op_proofs).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
@@ -339,49 +358,88 @@ fn prepare_built_user_wallet_transaction(
     wallet_account: &WalletAccount,
 ) -> Result<PreparedUserWalletTransaction, StepError> {
     let sender_pk = wallet_account.public_key();
-    let (funded_builder_result, fee_pk, fee_signing_key) = match scenario_fee_state {
-        Some((fee_wallet_account, fee_utxos)) => (
-            fund_sponsored_user_wallet_transaction(
-                tx_builder,
-                sender_output_total,
-                fee_utxos,
-                sender_utxos,
-                wallet_account,
-                &fee_wallet_account,
-            ),
-            Some(fee_wallet_account.public_key()),
-            Some(fee_wallet_account.secret_key.clone()),
+    let mut transfer_signers = HashMap::new();
+    for utxo in &sender_utxos {
+        transfer_signers.insert(utxo.id(), wallet_account.secret_key.clone());
+    }
+
+    let fee_pk = scenario_fee_state
+        .as_ref()
+        .map(|(fee_wallet_account, _)| fee_wallet_account.public_key());
+    if let Some((fee_wallet_account, fee_utxos)) = scenario_fee_state.as_ref() {
+        for utxo in fee_utxos {
+            transfer_signers.insert(utxo.id(), fee_wallet_account.secret_key.clone());
+        }
+    }
+
+    let input_utxos_by_note_id: HashMap<_, _> = sender_utxos
+        .iter()
+        .copied()
+        .chain(
+            scenario_fee_state
+                .as_ref()
+                .into_iter()
+                .flat_map(|(_, fee_utxos)| fee_utxos.iter().copied()),
+        )
+        .map(|utxo| (utxo.id(), utxo))
+        .collect();
+
+    let funded_builder_result = match scenario_fee_state {
+        Some((fee_wallet_account, fee_utxos)) => fund_sponsored_user_wallet_transaction(
+            tx_builder,
+            sender_output_total,
+            fee_utxos,
+            sender_utxos,
+            wallet_account,
+            &fee_wallet_account,
         ),
-        None => (
-            fund_unsponsored_user_wallet_transaction(&tx_builder, sender_utxos, wallet_account),
-            None,
-            None,
-        ),
+        None => fund_unsponsored_user_wallet_transaction(&tx_builder, sender_utxos, wallet_account),
     };
 
     let funded_builder = funded_builder_result.inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
     })?;
 
-    let (newly_encumbered, newly_encumbered_fee) = partition_transaction_inputs(
-        funded_builder.ledger_inputs(),
-        sender_pk,
-        fee_pk.unwrap_or(sender_pk),
-    );
-
-    let mut signing_keys = vec![wallet_account.secret_key.clone()];
-    if !newly_encumbered_fee.is_empty()
-        && let Some(fee_signing_key) = fee_signing_key
-    {
-        signing_keys.push(fee_signing_key);
-    }
+    let funding_inputs = funding_inputs_from_transfers(
+        &funded_builder.clone().build(),
+        &input_utxos_by_note_id,
+        step,
+    )?;
+    let (newly_encumbered, newly_encumbered_fee) =
+        partition_transaction_inputs(&funding_inputs, sender_pk, fee_pk.unwrap_or(sender_pk));
 
     Ok(PreparedUserWalletTransaction {
         funded_builder,
         newly_encumbered,
         newly_encumbered_fee,
-        signing_keys,
+        transfer_signers,
     })
+}
+
+fn funding_inputs_from_transfers(
+    mantle_tx: &lb_core::mantle::MantleTx,
+    input_utxos_by_note_id: &HashMap<NoteId, Utxo>,
+    step: &str,
+) -> Result<Vec<Utxo>, StepError> {
+    mantle_tx
+        .ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Transfer(transfer_op) => Some(transfer_op),
+            _ => None,
+        })
+        .flat_map(|transfer_op| transfer_op.inputs.iter())
+        .map(|note_id| {
+            input_utxos_by_note_id
+                .get(note_id)
+                .copied()
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!(
+                        "Step `{step}` error: missing funding UTXO for transfer input {note_id:?}"
+                    ),
+                })
+        })
+        .collect()
 }
 
 fn partition_transaction_inputs(
@@ -543,36 +601,6 @@ pub async fn wait_for_transactions_inclusion(
         }
 
         sleep(Duration::from_millis(500)).await;
-    }
-}
-
-pub async fn wait_for_exact_settled_wallet_balance(
-    world: &mut CucumberWorld,
-    step_value: &str,
-    wallet_name: &str,
-    nominal_token_value: u64,
-    time_out_seconds: u64,
-) -> StepResult {
-    let start = Instant::now();
-    let timeout = Duration::from_secs(time_out_seconds);
-
-    loop {
-        let (_, value) =
-            get_wallet_balances(world, step_value, wallet_name, WalletStateType::OnChain).await?;
-
-        if value == nominal_token_value {
-            return Ok(());
-        }
-
-        if start.elapsed() >= timeout {
-            return Err(StepError::StepFail {
-                message: format!(
-                    "Step `{step_value}` error: wallet '{wallet_name}' has settled LGO = {value}, expected exactly {nominal_token_value}"
-                ),
-            });
-        }
-
-        sleep(Duration::from_millis(100)).await;
     }
 }
 
@@ -787,109 +815,77 @@ fn fund_unsponsored_user_wallet_transaction(
     wallet_account: &WalletAccount,
 ) -> Result<MantleTxBuilder, WalletError> {
     sender_utxos.sort_by_key(|utxo| Reverse(utxo.note.value));
-    fund_builder_from_ordered_utxos(tx_builder, &sender_utxos, wallet_account.public_key())
+    fund_builder_from_ordered_utxos(tx_builder, &sender_utxos, &[], wallet_account.public_key())
 }
 
 fn fund_sponsored_user_wallet_transaction(
     tx_builder: MantleTxBuilder,
     output_total: u64,
-    fee_utxos: Vec<Utxo>,
+    mut fee_utxos: Vec<Utxo>,
     sender_utxos: Vec<Utxo>,
     wallet_account: &WalletAccount,
     fee_wallet_account: &WalletAccount,
 ) -> Result<MantleTxBuilder, WalletError> {
-    let builder_with_sender = add_sender_inputs_and_change(
+    let (builder_with_sender_outputs, sender_inputs) = select_sender_inputs_and_change(
         tx_builder,
         output_total,
         sender_utxos,
         wallet_account.public_key(),
     )?;
-
-    fund_with_fee_inputs(
-        builder_with_sender,
-        fee_utxos,
+    fee_utxos.sort_by_key(|utxo| utxo.note.value);
+    fund_builder_from_ordered_utxos(
+        &builder_with_sender_outputs,
+        &fee_utxos,
+        &sender_inputs,
         fee_wallet_account.public_key(),
     )
-}
-
-fn add_sender_inputs_and_change(
-    tx_builder: MantleTxBuilder,
-    output_total: u64,
-    mut sender_utxos: Vec<Utxo>,
-    sender_change_pk: ZkPublicKey,
-) -> Result<MantleTxBuilder, WalletError> {
-    sender_utxos.sort_by_key(|utxo| Reverse(utxo.note.value));
-
-    let mut sender_input_sum = 0u64;
-    let mut builder = tx_builder;
-
-    for utxo in sender_utxos.iter().copied() {
-        builder = builder.add_ledger_input(utxo);
-        sender_input_sum = sender_input_sum.saturating_add(utxo.note.value);
-        if sender_input_sum >= output_total {
-            break;
-        }
-    }
-
-    if sender_input_sum < output_total {
-        return Err(WalletError::InsufficientFunds {
-            available: sender_utxos.iter().map(|utxo| utxo.note.value).sum(),
-        });
-    }
-
-    let sender_change = sender_input_sum - output_total;
-    if sender_change > 0 {
-        builder = builder.add_ledger_output(Note::new(sender_change, sender_change_pk));
-    }
-
-    Ok(builder)
-}
-
-fn fund_with_fee_inputs(
-    builder: MantleTxBuilder,
-    mut fee_utxos: Vec<Utxo>,
-    fee_change_pk: ZkPublicKey,
-) -> Result<MantleTxBuilder, WalletError> {
-    if fee_utxos.is_empty() {
-        return if builder.funding_delta::<MainnetGasConstants>()? == 0 {
-            Ok(builder)
-        } else {
-            Err(WalletError::InsufficientFunds { available: 0 })
-        };
-    }
-
-    fee_utxos.sort_by_key(|utxo| utxo.note.value);
-    fund_builder_from_ordered_utxos(&builder, &fee_utxos, fee_change_pk)
 }
 
 fn fund_builder_from_ordered_utxos(
     builder: &MantleTxBuilder,
     ordered_utxos: &[Utxo],
+    base_inputs: &[Utxo],
     change_pk: ZkPublicKey,
 ) -> Result<MantleTxBuilder, WalletError> {
     for i in 0..ordered_utxos.len() {
-        let funded_builder = builder
-            .clone()
-            .extend_ledger_inputs(ordered_utxos[..=i].iter().copied());
+        let mut selected_inputs = base_inputs.to_vec();
+        selected_inputs.extend_from_slice(&ordered_utxos[..=i]);
 
-        match funded_builder
-            .funding_delta::<MainnetGasConstants>()?
-            .cmp(&0)
-        {
-            Ordering::Less => {}
-            Ordering::Equal => return Ok(funded_builder),
-            Ordering::Greater => {
-                if let Some(tx_with_change) =
-                    funded_builder.return_change::<MainnetGasConstants>(change_pk)?
-                {
-                    return Ok(tx_with_change);
+        if selected_inputs.len() <= 32 {
+            let funded_builder = builder
+                .clone()
+                .extend_ledger_inputs(selected_inputs.iter().copied());
+
+            match funded_builder
+                .funding_delta::<MainnetGasConstants>()?
+                .cmp(&0)
+            {
+                Ordering::Less => {}
+                Ordering::Equal => return Ok(funded_builder),
+                Ordering::Greater => {
+                    if let Some(tx_with_change) =
+                        funded_builder.return_change::<MainnetGasConstants>(change_pk)?
+                    {
+                        return Ok(tx_with_change);
+                    }
                 }
             }
+            continue;
+        }
+
+        if let Some(chunked_builder) =
+            build_chunked_funded_tx(builder, &selected_inputs, change_pk)?
+        {
+            return Ok(chunked_builder);
         }
     }
 
     Err(WalletError::InsufficientFunds {
-        available: ordered_utxos.iter().map(|utxo| utxo.note.value).sum(),
+        available: base_inputs
+            .iter()
+            .chain(ordered_utxos.iter())
+            .map(|utxo| utxo.note.value)
+            .sum(),
     })
 }
 
@@ -1060,6 +1056,9 @@ fn validate_wait_conditions(
     min_token_value: Option<&u64>,
     max_token_value: Option<&u64>,
 ) -> StepResult {
+    // Supported shapes are: one bound, matching min/max pairs for exact checks,
+    // or all four bounds for exact count plus exact value. Exactly three bounds
+    // leaves one dimension half-specified and is ambiguous.
     if min_coin_count.is_none()
         && min_token_value.is_none()
         && max_coin_count.is_none()
@@ -1072,19 +1071,16 @@ fn validate_wait_conditions(
             ),
         });
     }
-    if min_coin_count.is_some() && max_coin_count.is_some() {
+    if u8::from(min_coin_count.is_some())
+        + u8::from(max_coin_count.is_some())
+        + u8::from(min_token_value.is_some())
+        + u8::from(max_token_value.is_some())
+        == 3
+    {
         return Err(StepError::LogicalError {
             message: format!(
-                "Step `{step}` error: 'min_coin_count' and 'max_coin_count' cannot be used \
-                together"
-            ),
-        });
-    }
-    if min_token_value.is_some() && max_token_value.is_some() {
-        return Err(StepError::LogicalError {
-            message: format!(
-                "Step `{step}` error: 'min_token_value' and 'max_token_value' cannot be used \
-                together"
+                "Step `{step}` error: missing one of 'min_coin_count', 'max_coin_count', \
+                'min_token_value' or 'max_token_value'"
             ),
         });
     }
@@ -1130,15 +1126,19 @@ pub async fn wait_for_wallet_or_encumbered_state(
         let (coin_count, value) =
             get_output_balances(world, step, &wallet, &wallet_name, wallet_state_type).await?;
 
-        if conditions_met(
-            &wallet_name,
-            &wallet.node_name,
-            coin_count,
-            value,
+        let observed_state = ObservedWalletState { coin_count, value };
+        let expected_bounds = WalletStateBounds {
             min_coin_count,
             max_coin_count,
             min_token_value,
             max_token_value,
+        };
+
+        if conditions_met(
+            &wallet_name,
+            &wallet.node_name,
+            observed_state,
+            expected_bounds,
             wallet_state_type,
         ) {
             return Ok(());
@@ -1168,101 +1168,167 @@ pub async fn wait_for_wallet_or_encumbered_state(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
-)]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Singular fn with multiple branches to handle different events and futures."
-)]
+#[derive(Copy, Clone)]
+struct ObservedWalletState {
+    coin_count: usize,
+    value: u64,
+}
+
+#[derive(Copy, Clone)]
+struct WalletStateBounds<'a> {
+    min_coin_count: Option<&'a usize>,
+    max_coin_count: Option<&'a usize>,
+    min_token_value: Option<&'a u64>,
+    max_token_value: Option<&'a u64>,
+}
+
 fn conditions_met(
     wallet_name: &str,
     wallet_node_name: &str,
-    coin_count: usize,
-    value: u64,
-    min_coin_count: Option<&usize>,
-    max_coin_count: Option<&usize>,
-    min_token_value: Option<&u64>,
-    max_token_value: Option<&u64>,
+    observed_state: ObservedWalletState,
+    expected_bounds: WalletStateBounds<'_>,
     wallet_state_type: WalletStateType,
 ) -> bool {
-    match (
-        min_coin_count,
-        min_token_value,
-        max_coin_count,
-        max_token_value,
+    if !bounds_match(
+        &observed_state.coin_count,
+        expected_bounds.min_coin_count,
+        expected_bounds.max_coin_count,
+    ) || !bounds_match(
+        &observed_state.value,
+        expected_bounds.min_token_value,
+        expected_bounds.max_token_value,
     ) {
-        (Some(min_count), Some(min_value), _, _) => {
-            if coin_count >= *min_count && value >= *min_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} >= \
-                    {min_count}, token value: {value} >= {min_value}",
-                    wallet_node_name
-                );
-                return true;
-            }
-        }
-        (Some(min_count), None, _, _) => {
-            if coin_count >= *min_count {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} >= \
-                    {min_count}",
-                    wallet_node_name
-                );
-                return true;
-            }
-        }
-        (None, Some(min_value), _, _) => {
-            if value >= *min_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' token value: {value} >= \
-                    {min_value}",
-                    wallet_node_name
-                );
-                return true;
-            }
-        }
-        (_, _, Some(max_count), Some(max_value)) => {
-            if coin_count <= *max_count && value <= *max_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} <= \
-                    {max_count}, token value: {value} <= {max_value}",
-                    wallet_node_name
-                );
-                return true;
-            }
-        }
-        (_, _, Some(max_count), None) => {
-            if coin_count <= *max_count {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' coin count: {coin_count} <= \
-                    {max_count}",
-                    wallet_node_name
-                );
-                return true;
-            }
-        }
-        (_, _, None, Some(max_value)) => {
-            if value <= *max_value {
-                info!(
-                    target: TARGET,
-                    "Wallet '{wallet_name}/{}' has required '{wallet_state_type}' token value: {value} <= \
-                    {max_value}",
-                    wallet_node_name
-                );
-                return true;
-            }
-        }
-        (None, None, None, None) => unreachable!(),
+        return false;
     }
 
-    false
+    log_condition_match(
+        wallet_name,
+        wallet_node_name,
+        observed_state,
+        expected_bounds,
+        wallet_state_type,
+    );
+
+    true
+}
+
+fn log_condition_match(
+    wallet_name: &str,
+    wallet_node_name: &str,
+    observed_state: ObservedWalletState,
+    expected_bounds: WalletStateBounds<'_>,
+    wallet_state_type: WalletStateType,
+) {
+    let exact_coin_count = expected_bounds
+        .min_coin_count
+        .zip(expected_bounds.max_coin_count)
+        .is_some_and(|(min, max)| min == max);
+    let exact_value = expected_bounds
+        .min_token_value
+        .zip(expected_bounds.max_token_value)
+        .is_some_and(|(min, max)| min == max);
+
+    if exact_coin_count || exact_value {
+        log_exact_condition_match(
+            wallet_name,
+            wallet_node_name,
+            observed_state,
+            wallet_state_type,
+            exact_coin_count,
+            exact_value,
+        );
+    } else {
+        log_ranged_condition_match(
+            wallet_name,
+            wallet_node_name,
+            observed_state,
+            expected_bounds,
+            wallet_state_type,
+        );
+    }
+}
+
+fn log_exact_condition_match(
+    wallet_name: &str,
+    wallet_node_name: &str,
+    observed_state: ObservedWalletState,
+    wallet_state_type: WalletStateType,
+    exact_coin_count: bool,
+    exact_value: bool,
+) {
+    match (exact_coin_count, exact_value) {
+        (true, true) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
+            {} and token value: {}",
+            observed_state.coin_count,
+            observed_state.value,
+        ),
+        (true, false) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
+            {}",
+            observed_state.coin_count,
+        ),
+        (false, true) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' token value: \
+            {}",
+            observed_state.value,
+        ),
+        (false, false) => unreachable!(),
+    }
+}
+
+fn log_ranged_condition_match(
+    wallet_name: &str,
+    wallet_node_name: &str,
+    observed_state: ObservedWalletState,
+    expected_bounds: WalletStateBounds<'_>,
+    wallet_state_type: WalletStateType,
+) {
+    let coin_count_message = bound_message(
+        &observed_state.coin_count,
+        expected_bounds.min_coin_count,
+        expected_bounds.max_coin_count,
+    );
+    let value_message = bound_message(
+        &observed_state.value,
+        expected_bounds.min_token_value,
+        expected_bounds.max_token_value,
+    );
+
+    match (coin_count_message, value_message) {
+        (Some(coin_count_message), Some(value_message)) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
+            {coin_count_message}, token value: {value_message}",
+        ),
+        (Some(coin_count_message), None) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' coin count: \
+            {coin_count_message}",
+        ),
+        (None, Some(value_message)) => info!(
+            target: TARGET,
+            "Wallet '{wallet_name}/{wallet_node_name}' has required '{wallet_state_type}' token value: \
+            {value_message}",
+        ),
+        (None, None) => unreachable!(),
+    }
+}
+
+fn bounds_match<T: Ord>(actual: &T, min: Option<&T>, max: Option<&T>) -> bool {
+    min.is_none_or(|min| actual >= min) && max.is_none_or(|max| actual <= max)
+}
+
+fn bound_message<T: Display>(actual: &T, min: Option<&T>, max: Option<&T>) -> Option<String> {
+    match (min, max) {
+        (Some(min), Some(max)) => Some(format!("{actual} >= {min} and <= {max}")),
+        (Some(min), None) => Some(format!("{actual} >= {min}")),
+        (None, Some(max)) => Some(format!("{actual} <= {max}")),
+        (None, None) => None,
+    }
 }
 
 fn record_header_height(
