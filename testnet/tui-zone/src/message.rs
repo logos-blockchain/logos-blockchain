@@ -7,14 +7,14 @@ use uuid::Uuid;
 /// "same logical message re-published after a reorg". The `tx_uuid` field
 /// provides this: each user action gets a unique ID, and conflict resolution
 /// checks whether that ID is already on the canonical branch.
+///
+/// Authorship ("did we send this?") is tracked separately by the state layer
+/// (`my_submissions`), not on the message itself, so it survives reorgs that
+/// remove and re-add the message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppMessage {
     pub tx_uuid: Uuid,
     pub text: String,
-    /// Local-only flag: true when this sequencer created the message.
-    /// Not serialized over the wire (chain payload is just `tx_uuid` + `text`).
-    #[serde(skip)]
-    pub is_ours: bool,
 }
 
 impl AppMessage {
@@ -22,7 +22,6 @@ impl AppMessage {
         Self {
             tx_uuid: Uuid::new_v4(),
             text,
-            is_ours: true,
         }
     }
 
