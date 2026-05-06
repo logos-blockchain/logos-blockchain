@@ -3,6 +3,7 @@ mod blend;
 mod kms;
 mod leadership;
 mod mempool;
+mod metrics;
 mod relays;
 mod wallet;
 
@@ -461,6 +462,7 @@ where
                                     Self::publish_block_proposal(block, &blend_adapter).await;
                                 }
                                 Err(e) => {
+                                    metrics::consensus_proposals_create_failed();
                                     error!(target: LOG_TARGET, "{e}");
                                 }
                             }
@@ -657,6 +659,7 @@ where
         );
 
         blend_adapter.publish_proposal(block.to_proposal()).await;
+        metrics::consensus_proposals_created_local();
     }
 
     async fn handle_inbound_message(
