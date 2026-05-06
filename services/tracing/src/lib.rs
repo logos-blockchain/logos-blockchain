@@ -178,7 +178,7 @@ impl Default for TracingSettings {
                 file: Some(FileConfig {
                     directory: PathBuf::from("."),
                     prefix: Some(date_prefix.into()),
-                    appender_type: AppenderType::Rolling,
+                    appender_type: AppenderType::Simple,
                 }),
                 stdout: true,
                 stderr: false,

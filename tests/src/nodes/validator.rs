@@ -215,7 +215,7 @@ impl Validator {
                 file: Some(tracing::logger::FileConfig {
                     directory: dir.path().to_owned(),
                     prefix: Some(LOGS_PREFIX.into()),
-                    appender_type: AppenderType::Rolling,
+                    appender_type: AppenderType::Simple,
                 }),
                 loki: None,
                 gelf: None,

@@ -10,7 +10,7 @@ use std::{
 };
 
 use flate2::{Compression, write::GzEncoder};
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_appender::rolling::RollingFileAppender;
 
 struct CompressionGuard(Arc<AtomicBool>);
 impl Drop for CompressionGuard {
@@ -24,34 +24,29 @@ pub struct CompressedRollingAppender {
     directory: PathBuf,
     prefix: String,
     last_compression: Instant,
-    compression_interval: Duration,
+    compression_threshold: Duration,
     is_compressing: Arc<AtomicBool>,
 }
 
 impl CompressedRollingAppender {
-    pub fn new(directory: PathBuf, prefix: &Path, compression_interval: Duration) -> Self {
-        let prefix_str = prefix.to_string_lossy().to_string();
-        let symlink_name = format!("{prefix_str}.latest");
-
-        let inner = RollingFileAppender::builder()
-            .rotation(Rotation::HOURLY)
-            .filename_prefix(&prefix_str)
-            .latest_symlink(&symlink_name)
-            .build(&directory)
-            .expect("Failed to initialize rolling appender");
-
+    pub fn new(
+        rolling_appender: RollingFileAppender,
+        directory: PathBuf,
+        prefix_str: String,
+        compression_threshold: Duration,
+    ) -> Self {
         Self {
-            inner,
+            inner: rolling_appender,
             directory,
             prefix: prefix_str,
-            last_compression: Instant::now() - compression_interval,
-            compression_interval,
+            last_compression: Instant::now() - compression_threshold,
+            compression_threshold,
             is_compressing: Arc::new(AtomicBool::new(false)),
         }
     }
 
     fn try_spawn_compression(&mut self) {
-        if self.last_compression.elapsed() >= self.compression_interval
+        if self.last_compression.elapsed() >= self.compression_threshold
             && self
                 .is_compressing
                 .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -67,6 +62,7 @@ impl CompressedRollingAppender {
         let prefix = self.prefix.clone();
         let is_compressing = Arc::clone(&self.is_compressing);
         let symlink_path = dir.join(format!("{prefix}.latest"));
+        let compression_threshold = self.compression_threshold;
 
         std::thread::spawn(move || {
             let _guard = CompressionGuard(is_compressing);
@@ -82,6 +78,11 @@ impl CompressedRollingAppender {
 
             for entry in read_dir.flatten() {
                 let path = entry.path();
+                let metadata = entry.metadata().ok();
+
+                let is_old_enough = metadata
+                    .and_then(|m| m.modified().ok())
+                    .is_some_and(|t| t.elapsed().unwrap_or_default() >= compression_threshold);
 
                 let is_log = path
                     .file_name()
@@ -96,7 +97,13 @@ impl CompressedRollingAppender {
                     .as_ref()
                     .is_some_and(|active| active == &path);
 
-                if path.is_file() && is_log && !is_compressed && !is_symlink && !is_active {
+                if path.is_file()
+                    && is_log
+                    && !is_compressed
+                    && !is_symlink
+                    && !is_active
+                    && is_old_enough
+                {
                     if let Err(e) = compress_file_gzip(&path) {
                         eprintln!("failed to compress {}: {e}", path.display());
                     } else {
