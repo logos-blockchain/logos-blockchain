@@ -18,7 +18,7 @@ impl From<lb_cryptarchia_engine::State> for State {
         match value {
             lb_cryptarchia_engine::State::Bootstrapping => Self::Bootstrapping,
             lb_cryptarchia_engine::State::Online => Self::Online,
-            lb_cryptarchia_engine::State::NotStarted => Self::NotStarted,
+            lb_cryptarchia_engine::State::AwaitingStart => Self::NotStarted,
         }
     }
 }

@@ -29,7 +29,10 @@ use lb_chain_broadcast_service::{
 use lb_core::{
     block::{Block, genesis::GenesisBlock},
     header::HeaderId,
-    mantle::{AuthenticatedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, tx::GasPrices},
+    mantle::{
+        AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
+        tx::GasPrices,
+    },
     sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
@@ -53,6 +56,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_with::serde_as;
 use strum::IntoEnumIterator as _;
 use thiserror::Error;
+use time::OffsetDateTime;
 use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
     time::Instant,
@@ -404,11 +408,20 @@ impl Cryptarchia {
         (cryptarchia, pruned_blocks)
     }
 
-    const fn is_not_started(&self) -> bool {
-        self.consensus.state().is_not_started()
+    fn awaiting(self) -> Self {
+        let consensus = self.consensus.awaiting();
+        Self {
+            ledger: self.ledger,
+            consensus,
+            genesis_id: self.genesis_id,
+        }
     }
 
-    const fn is_boostrapping(&self) -> bool {
+    const fn is_awaiting_start(&self) -> bool {
+        self.consensus.state().is_awaiting_start()
+    }
+
+    const fn is_bootstrapping(&self) -> bool {
         self.consensus.state().is_bootstrapping()
     }
 
@@ -567,6 +580,7 @@ where
         let CryptarchiaSettings {
             config: ledger_config,
             bootstrap: bootstrap_config,
+            starting_state,
             ..
         } = self
             .service_resources_handle
@@ -605,6 +619,26 @@ where
         let sync_blocks_provider: BlockProvider<_, _> =
             BlockProvider::new(relays.storage_adapter().storage_relay.clone());
 
+        // Chain start timer will prevent the chain service to process and produce blocks if the
+        // starting state is GenesisBlock and has chain start time set in future.
+        let mut chain_start_timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
+
+        if let StartingState::Genesis { genesis_block } = starting_state {
+            let genesis_time = genesis_block
+                .genesis_tx()
+                .cryptarchia_parameter()
+                .genesis_time;
+            let now = OffsetDateTime::now_utc();
+
+            if genesis_time > now {
+                let delay = (genesis_time - now).try_into().unwrap_or_default();
+                info!("Chain configured to start in the future: {genesis_time}");
+                chain_start_timer = Some(Box::pin(tokio::time::sleep(delay)));
+            }
+
+            cryptarchia = cryptarchia.awaiting();
+        }
+
         // The prolonged bootstrap timer will be started when chain-network notifies us
         // that IBD has completed. This ensures we don't transition to Online mode
         // before the node has caught up with the network.
@@ -626,7 +660,12 @@ where
         let async_loop = async {
             loop {
                 tokio::select! {
-                    () = async { prolonged_bootstrap_timer.as_mut().unwrap().as_mut().await }, if prolonged_bootstrap_timer.is_some() && cryptarchia.is_boostrapping() => {
+                    () = async { if let Some(timer) = chain_start_timer.as_mut() { timer.await; } }, if chain_start_timer.is_some() && cryptarchia.is_awaiting_start() => {
+                        info!("Genesis time reached. Chain is now starting...");
+                        chain_start_timer = None;
+                    }
+
+                    () = async { prolonged_bootstrap_timer.as_mut().unwrap().as_mut().await }, if prolonged_bootstrap_timer.is_some() && cryptarchia.is_bootstrapping() => {
                         info!("Prolonged Bootstrap Period has passed. Switching to Online.");
                         (cryptarchia, storage_blocks_to_remove) = Self::switch_to_online(
                             cryptarchia,
@@ -641,7 +680,7 @@ where
                         );
                     }
 
-                    Some(msg) = self.service_resources_handle.inbound_relay.next() => {
+                    Some(msg) = self.service_resources_handle.inbound_relay.next(), if !cryptarchia.is_awaiting_start() => {
                         // Handle ApplyBlock, ChainSync, and IbdCompleted separately since they need async context
                         match msg {
                             ConsensusMsg::IbdCompleted => {
@@ -1195,7 +1234,6 @@ where
             lib_id,
             genesis_id,
             bootstrap_config,
-            current_slot,
             self.state.last_engine_state.as_ref(),
         );
         let mut cryptarchia = Cryptarchia::from_lib(

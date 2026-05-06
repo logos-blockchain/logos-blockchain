@@ -15,15 +15,15 @@ pub(crate) const LOG_TARGET: &str = "cryptarchia::engine";
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum State {
-    NotStarted,
+    AwaitingStart,
     Bootstrapping,
     Online,
 }
 
 impl State {
     #[must_use]
-    pub const fn is_not_started(&self) -> bool {
-        matches!(self, Self::NotStarted)
+    pub const fn is_awaiting_start(&self) -> bool {
+        matches!(self, Self::AwaitingStart)
     }
 
     #[must_use]
@@ -42,7 +42,7 @@ impl State {
         Id: Eq + Hash + Copy,
     {
         match cryptarchia.state {
-            Self::NotStarted => (cryptarchia.local_chain, cryptarchia.local_chain),
+            Self::AwaitingStart => (cryptarchia.local_chain, cryptarchia.local_chain),
             Self::Bootstrapping => {
                 let k = cryptarchia.config.security_param().get().into();
                 let s_gen = cryptarchia.config.s_gen();
@@ -60,7 +60,7 @@ impl State {
         Id: Eq + Hash + Copy,
     {
         match cryptarchia.state {
-            Self::Bootstrapping | Self::NotStarted => cryptarchia.branches.lib,
+            Self::Bootstrapping | Self::AwaitingStart => cryptarchia.branches.lib,
             Self::Online => cryptarchia
                 .branches
                 .nth_ancestor(
@@ -356,7 +356,7 @@ where
             },
             branches: Branches::from_lib(genesis_id, 0.into(), 0),
             config,
-            state: State::NotStarted,
+            state: State::AwaitingStart,
         }
     }
 
@@ -587,6 +587,12 @@ where
         let pruned_blocks = self.update_lib();
         self.shrink();
         (self, pruned_blocks)
+    }
+
+    #[must_use]
+    pub const fn awaiting(mut self) -> Self {
+        self.state = State::Online;
+        self
     }
 
     pub const fn config(&self) -> &Config {
