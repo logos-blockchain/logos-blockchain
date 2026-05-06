@@ -309,6 +309,7 @@ fn spawn_drive_republish(
                 orphaned,
                 adopted,
                 pending,
+                has_conflict,
             }) = sequencer.next_event().await
             else {
                 continue;
@@ -319,6 +320,10 @@ fn spawn_drive_republish(
             }
             for a in &adopted {
                 state.insert(a.payload.clone());
+            }
+
+            if !has_conflict {
+                continue;
             }
 
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
@@ -813,6 +818,7 @@ fn spawn_sequencer_sorted_policy(
                 orphaned,
                 adopted,
                 pending,
+                has_conflict,
             }) = sequencer.next_event().await
             else {
                 continue;
@@ -827,6 +833,10 @@ fn spawn_sequencer_sorted_policy(
                 if max_seen_on_chain.as_ref().is_none_or(|m| a.payload > *m) {
                     max_seen_on_chain = Some(a.payload.clone());
                 }
+            }
+
+            if !has_conflict {
+                continue;
             }
 
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();

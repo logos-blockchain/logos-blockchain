@@ -102,8 +102,9 @@ async fn handle_event(
             orphaned,
             adopted,
             pending,
+            has_conflict,
         } => {
-            handle_channel_update(state, handle, &orphaned, &adopted, &pending).await;
+            handle_channel_update(state, handle, &orphaned, &adopted, &pending, has_conflict).await;
         }
         Event::TxsFinalized { inscriptions, .. } => {
             finalize_inscriptions(state, &inscriptions, true);
@@ -151,8 +152,9 @@ async fn handle_channel_update(
     orphaned: &[lb_zone_sdk::state::InscriptionInfo],
     adopted: &[lb_zone_sdk::state::InscriptionInfo],
     pending: &[lb_zone_sdk::state::InscriptionInfo],
+    has_conflict: bool,
 ) {
-    if orphaned.is_empty() && adopted.is_empty() {
+    if orphaned.is_empty() && adopted.is_empty() && !has_conflict {
         return;
     }
 
@@ -160,10 +162,11 @@ async fn handle_channel_update(
         orphaned = orphaned.len(),
         adopted = adopted.len(),
         pending = pending.len(),
+        has_conflict,
         "Channel update"
     );
 
-    let to_republish = resolve_conflicts(state, orphaned, adopted, pending);
+    let to_republish = resolve_conflicts(state, orphaned, adopted, pending, has_conflict);
     republish(handle, to_republish).await;
 
     ui::render_state(state);

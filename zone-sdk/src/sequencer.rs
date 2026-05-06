@@ -93,12 +93,13 @@ pub enum Event {
     ///
     /// Consumer pattern:
     /// 1. Apply `orphaned` and `adopted` to state (revert / add).
-    /// 2. Iterate your own tracked submissions. For each whose payload is not
-    ///    in state and not in `pending`, decide whether to republish. Consumers
-    ///    are expected to remember payloads they submitted (e.g. on
-    ///    `Event::Published`) since not every dropped pending appears in
-    ///    `orphaned` (an item that was never included in a block but whose
-    ///    lineage broke is silently dropped by the SDK).
+    /// 2. If `has_conflict`, iterate your own tracked submissions and for each
+    ///    whose payload is not in state and not in `pending`, decide whether to
+    ///    republish. When `has_conflict` is false, the SDK is still retrying
+    ///    everything you've submitted — no decision needed. Consumers are
+    ///    expected to remember payloads they submitted (e.g. on
+    ///    `Event::Published`) since pending items whose lineage broke are
+    ///    silently dropped by the SDK and won't appear in `orphaned`.
     ChannelUpdate {
         /// Removed from the canonical branch (revert from state).
         orphaned: Vec<InscriptionInfo>,
@@ -107,6 +108,10 @@ pub enum Event {
         /// Our pending inscriptions still valid on this branch — SDK is
         /// retrying these, don't republish.
         pending: Vec<InscriptionInfo>,
+        /// True iff at least one of our pending items had its lineage
+        /// broken by this update (SDK dropped it from internal retry).
+        /// When false, consumers can skip the republish-decision loop.
+        has_conflict: bool,
     },
     /// Batch of finalized inscriptions discovered during backfill catch-up.
     /// Emitted incrementally when the sequencer catches up from a checkpoint.
@@ -848,11 +853,15 @@ where
     /// retrying them); the consumer is responsible for noticing that one of
     /// their submissions has gone missing and deciding whether to republish.
     fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
-        if let (Some(s), Some(tip)) = (self.state.as_mut(), self.current_tip) {
-            // Drop pending whose lineage broke so SDK stops retrying. Result
-            // is discarded — consumers track their own submissions.
-            drop(s.shed_off_branch_pending(tip));
-        }
+        let has_conflict = if let (Some(s), Some(tip)) = (self.state.as_mut(), self.current_tip) {
+            // Drop pending whose lineage broke so SDK stops retrying. Items
+            // are discarded — consumers track their own submissions — but
+            // we surface whether anything was shed so consumers can skip the
+            // republish-decision loop when nothing of theirs went off-branch.
+            !s.shed_off_branch_pending(tip).is_empty()
+        } else {
+            false
+        };
         let pending = match (self.state.as_ref(), self.current_tip) {
             (Some(s), Some(tip)) => s.pending_on_branch(tip),
             _ => Vec::new(),
@@ -872,6 +881,7 @@ where
             orphaned: u.orphaned,
             adopted: u.adopted,
             pending,
+            has_conflict,
         }
     }
 

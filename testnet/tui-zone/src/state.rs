@@ -116,17 +116,15 @@ impl ZoneState for InMemoryZoneState {
 ///
 /// 1. Revert orphaned from state.
 /// 2. Apply adopted to state.
-/// 3. Iterate our submissions; return any that aren't currently in state and
-///    aren't being retried by the SDK (`pending`).
-///
-/// This pattern handles every reorg shape — including pending we submitted
-/// that never made it on chain — because we drive republish decisions from
-/// our own submission set, not from SDK-side filtering.
+/// 3. If `has_conflict`, iterate our submissions and return any that aren't
+///    currently in state and aren't being retried by the SDK (`pending`).
+///    Otherwise return early — the SDK is still retrying everything we sent.
 pub fn resolve_conflicts(
     state: &mut InMemoryZoneState,
     orphaned: &[InscriptionInfo],
     adopted: &[InscriptionInfo],
     pending: &[InscriptionInfo],
+    has_conflict: bool,
 ) -> Vec<AppMessage> {
     for inv in orphaned {
         if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
@@ -138,6 +136,10 @@ pub fn resolve_conflicts(
         if let Some(msg) = AppMessage::from_bytes(&adp.payload) {
             state.apply(msg);
         }
+    }
+
+    if !has_conflict {
+        return Vec::new();
     }
 
     let pending_uuids: HashSet<Uuid> = pending
