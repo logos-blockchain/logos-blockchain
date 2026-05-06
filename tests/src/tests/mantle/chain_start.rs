@@ -1,9 +1,10 @@
 use std::{num::NonZero, time::Duration};
 
 use lb_chain_service::{ChainServiceMode, State};
-use lb_core::block::genesis::GenesisBlockBuilder;
-use lb_core::mantle::GenesisTx as _;
-use lb_core::mantle::ops::channel::inscribe::InscriptionOp;
+use lb_core::{
+    block::genesis::GenesisBlockBuilder,
+    mantle::{GenesisTx as _, ops::channel::inscribe::InscriptionOp},
+};
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
