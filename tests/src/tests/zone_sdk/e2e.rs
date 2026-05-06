@@ -294,8 +294,8 @@ fn spawn_drive(
 /// On each `ChannelUpdate`:
 /// 1. remove `orphaned` from local state,
 /// 2. apply `adopted` to local state,
-/// 3. republish each `invalidated` entry that is ours, not in state, and not in
-///    `pending`.
+/// 3. iterate our own submissions; for each not in state and not in `pending`,
+///    republish.
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
@@ -309,8 +309,6 @@ fn spawn_drive_republish(
                 orphaned,
                 adopted,
                 pending,
-                invalidated,
-                ..
             }) = sequencer.next_event().await
             else {
                 continue;
@@ -324,16 +322,10 @@ fn spawn_drive_republish(
             }
 
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
-            for inv in &invalidated {
-                if own_payloads.contains(&inv.payload)
-                    && !state.contains(&inv.payload)
-                    && !pending_payloads.contains(&inv.payload)
-                {
-                    debug!(
-                        "Re-publishing invalidated: {:?}",
-                        String::from_utf8_lossy(&inv.payload)
-                    );
-                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+            for payload in &own_payloads {
+                if !state.contains(payload) && !pending_payloads.contains(payload) {
+                    debug!("Re-publishing: {:?}", String::from_utf8_lossy(payload));
+                    if let Err(e) = handle.publish_message(payload.clone()).await {
                         debug!("Failed to re-publish: {e}");
                     }
                 }
@@ -809,6 +801,7 @@ type DiscardedSet = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
 fn spawn_sequencer_sorted_policy(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
+    own_payloads: HashSet<Vec<u8>>,
     discarded: DiscardedSet,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -820,8 +813,6 @@ fn spawn_sequencer_sorted_policy(
                 orphaned,
                 adopted,
                 pending,
-                invalidated,
-                ..
             }) = sequencer.next_event().await
             else {
                 continue;
@@ -840,33 +831,34 @@ fn spawn_sequencer_sorted_policy(
 
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
 
-            for inv in &invalidated {
-                if state.contains(&inv.payload) || pending_payloads.contains(&inv.payload) {
+            for payload in &own_payloads {
+                if state.contains(payload)
+                    || pending_payloads.contains(payload)
+                    || discarded.lock().await.contains(payload)
+                {
                     continue;
                 }
-                let larger_or_equal = max_seen_on_chain
-                    .as_ref()
-                    .is_some_and(|m| inv.payload >= *m);
+                let larger_or_equal = max_seen_on_chain.as_ref().is_some_and(|m| payload >= m);
                 if larger_or_equal {
                     debug!(
                         "Sorted policy: re-publishing {:?} (>= max {:?})",
-                        String::from_utf8_lossy(&inv.payload),
+                        String::from_utf8_lossy(payload),
                         max_seen_on_chain
                             .as_ref()
                             .map(|m| String::from_utf8_lossy(m).to_string()),
                     );
-                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                    if let Err(e) = handle.publish_message(payload.clone()).await {
                         debug!("Failed to re-publish: {e}");
                     }
                 } else {
                     debug!(
                         "Sorted policy: dropping {:?} (< max {:?})",
-                        String::from_utf8_lossy(&inv.payload),
+                        String::from_utf8_lossy(payload),
                         max_seen_on_chain
                             .as_ref()
                             .map(|m| String::from_utf8_lossy(m).to_string()),
                     );
-                    discarded.lock().await.insert(inv.payload.clone());
+                    discarded.lock().await.insert(payload.clone());
                 }
             }
         }
@@ -1022,10 +1014,18 @@ async fn test_sorted_conflict_resolution() {
     );
 
     let discarded: DiscardedSet = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
-    let poll_a =
-        spawn_sequencer_sorted_policy(seq_a, handle_a.clone(), DiscardedSet::clone(&discarded));
-    let poll_b =
-        spawn_sequencer_sorted_policy(seq_b, handle_b.clone(), DiscardedSet::clone(&discarded));
+    let poll_a = spawn_sequencer_sorted_policy(
+        seq_a,
+        handle_a.clone(),
+        data_a.iter().cloned().collect(),
+        DiscardedSet::clone(&discarded),
+    );
+    let poll_b = spawn_sequencer_sorted_policy(
+        seq_b,
+        handle_b.clone(),
+        data_b.iter().cloned().collect(),
+        DiscardedSet::clone(&discarded),
+    );
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;

@@ -93,18 +93,20 @@ pub enum Event {
     ///
     /// Consumer pattern:
     /// 1. Apply `orphaned` and `adopted` to state (revert / add).
-    /// 2. For each entry in `invalidated`, decide whether to republish.
+    /// 2. Iterate your own tracked submissions. For each whose payload is not
+    ///    in state and not in `pending`, decide whether to republish. Consumers
+    ///    are expected to remember payloads they submitted (e.g. on
+    ///    `Event::Published`) since not every dropped pending appears in
+    ///    `orphaned` (an item that was never included in a block but whose
+    ///    lineage broke is silently dropped by the SDK).
     ChannelUpdate {
         /// Removed from the canonical branch (revert from state).
         orphaned: Vec<InscriptionInfo>,
         /// Added to the canonical branch (apply to state).
         adopted: Vec<InscriptionInfo>,
-        /// Pending tx on this branch.
+        /// Our pending inscriptions still valid on this branch — SDK is
+        /// retrying these, don't republish.
         pending: Vec<InscriptionInfo>,
-        /// Submitted tx that is not valid on this branch anymore.
-        invalidated: Vec<InscriptionInfo>,
-        /// The new channel tip `MsgId`.
-        new_channel_tip: MsgId,
     },
     /// Batch of finalized inscriptions discovered during backfill catch-up.
     /// Emitted incrementally when the sequencer catches up from a checkpoint.
@@ -841,28 +843,20 @@ where
         }
     }
 
-    /// Build the `ChannelUpdate` event. `invalidated` = orphaned blocks ∪
-    /// pending shed because lineage no longer reaches the new channel tip.
-    /// Shed runs here (only when there's a canonical change) — pre-event
-    /// state is preserved so shed can correctly identify what just went
-    /// off-branch.
+    /// Build the `ChannelUpdate` event. Sheds our pending whose lineage no
+    /// longer reaches the new channel tip as a side effect (so SDK stops
+    /// retrying them); the consumer is responsible for noticing that one of
+    /// their submissions has gone missing and deciding whether to republish.
     fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
-        let shed = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
-            _ => Vec::new(),
-        };
+        if let (Some(s), Some(tip)) = (self.state.as_mut(), self.current_tip) {
+            // Drop pending whose lineage broke so SDK stops retrying. Result
+            // is discarded — consumers track their own submissions.
+            drop(s.shed_off_branch_pending(tip));
+        }
         let pending = match (self.state.as_ref(), self.current_tip) {
             (Some(s), Some(tip)) => s.pending_on_branch(tip),
             _ => Vec::new(),
         };
-
-        let orphaned_hashes: std::collections::HashSet<TxHash> =
-            u.orphaned.iter().map(|i| i.tx_hash).collect();
-        let mut invalidated = u.orphaned.clone();
-        invalidated.extend(
-            shed.into_iter()
-                .filter(|i| !orphaned_hashes.contains(&i.tx_hash)),
-        );
 
         for inv in &pending {
             debug!(
@@ -873,21 +867,11 @@ where
                 inv.parent_msg,
             );
         }
-        for inv in &invalidated {
-            debug!(
-                "  invalidated: payload={:?}, tx={:?}, msg_id={:?}",
-                String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
-            );
-        }
 
         Event::ChannelUpdate {
             orphaned: u.orphaned,
             adopted: u.adopted,
             pending,
-            invalidated,
-            new_channel_tip: u.new_channel_tip,
         }
     }
 
