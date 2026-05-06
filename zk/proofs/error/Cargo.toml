@@ -11,6 +11,7 @@ version.workspace     = true
 
 [dependencies]
 lb-groth16 = { workspace = true }
+lbc-types  = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }
 

@@ -56,17 +56,13 @@ impl PoQWitnessInputs {
     }
 }
 
-impl<'a> TryInto<lbc_poq_sys::PoqWitnessInput<'a>> for PoQWitnessInputs {
-    type Error = std::io::Error;
+impl TryFrom<PoQWitnessInputs> for lbc_poq_sys::PoqWitnessInput<'_> {
+    type Error = lbp_error::Error;
 
-    fn try_into(self) -> Result<lbc_poq_sys::PoqWitnessInput<'a>, Self::Error> {
-        let poq_inputs_json: PoQInputsJson = self.into();
-        let str_inputs: String = serde_json::to_string(&poq_inputs_json).map_err(|error| {
-            std::io::Error::other(format!("Failed to serialize inputs: {error}"))
-        })?;
-        let witness_input = lbc_poq_sys::PoqWitnessInput::new(str_inputs).map_err(|error| {
-            std::io::Error::other(format!("Failed to create witness input: {error}"))
-        })?;
+    fn try_from(value: PoQWitnessInputs) -> Result<Self, Self::Error> {
+        let inputs_json: PoQInputsJson = value.into();
+        let inputs_str: String = serde_json::to_string(&inputs_json)?;
+        let witness_input = lbc_poq_sys::PoqWitnessInput::new(inputs_str)?;
         Ok(witness_input)
     }
 }
