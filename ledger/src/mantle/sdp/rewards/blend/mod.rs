@@ -35,13 +35,12 @@ const LOG_TARGET: &str = "ledger::mantle::rewards::blend";
 
 /// Tracks Blend rewards based on activity proofs submitted by providers.
 /// Activity proofs for the session `s-1` must be submitted during session `s`.
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Rewards<ProofsVerifier> {
     /// State before the first target session is finalized, or if the target
     /// session has less than the minimum required number of declarations.
     /// No activity messages are accepted in this state.
     WithoutTargetSession {
-        settings: RewardsParameters,
         current_session_tracker: CurrentSessionTracker,
     },
     /// State after a new target session `s-1` is finalized.
@@ -52,7 +51,6 @@ pub enum Rewards<ProofsVerifier> {
         target_session_tracker: Box<TargetSessionTracker>,
         current_session_state: CurrentSessionState,
         current_session_tracker: CurrentSessionTracker,
-        settings: RewardsParameters,
     },
 }
 
@@ -60,11 +58,14 @@ impl<ProofsVerifier> super::Rewards for Rewards<ProofsVerifier>
 where
     ProofsVerifier: ProofsVerifierTrait + Clone + Debug + PartialEq + Send + Sync,
 {
+    type Params = RewardsParameters;
+
     fn update_active(
         &self,
         provider_id: ProviderId,
         metadata: &ActivityMetadata,
         _block_number: BlockNumber,
+        params: &Self::Params,
     ) -> Result<Self, Error> {
         match self {
             Self::WithoutTargetSession { .. } => {
@@ -76,7 +77,6 @@ where
                 target_session_tracker,
                 current_session_state,
                 current_session_tracker,
-                settings,
             } => {
                 let ActivityMetadata::Blend(proof) = metadata;
 
@@ -84,7 +84,7 @@ where
                     &provider_id,
                     proof,
                     current_session_state,
-                    settings,
+                    params,
                 )?;
 
                 let target_session_tracker = target_session_tracker.insert(
@@ -99,7 +99,6 @@ where
                     target_session_tracker: Box::new(target_session_tracker),
                     current_session_state: current_session_state.clone(),
                     current_session_tracker: current_session_tracker.clone(),
-                    settings: settings.clone(),
                 })
             }
         }
@@ -110,20 +109,19 @@ where
         last_active: &SessionState,
         next_session_first_epoch_state: &EpochState,
         _config: &ServiceParameters,
+        params: &Self::Params,
     ) -> (Self, Vec<Utxo>) {
         match self {
             Self::WithoutTargetSession {
-                settings,
                 current_session_tracker,
             } => (
                 Self::from_current_session_tracker_output(
                     current_session_tracker.finalize(
                         last_active,
                         next_session_first_epoch_state,
-                        settings,
+                        params,
                     ),
                     TargetSessionTracker::new(),
-                    settings.clone(),
                 ),
                 Vec::new(),
             ),
@@ -131,7 +129,6 @@ where
                 target_session_state,
                 target_session_tracker,
                 current_session_tracker,
-                settings,
                 ..
             } => {
                 let (target_session_tracker, rewards) = target_session_tracker.finalize(
@@ -143,10 +140,9 @@ where
                     current_session_tracker.finalize(
                         last_active,
                         next_session_first_epoch_state,
-                        settings,
+                        params,
                     ),
                     target_session_tracker,
-                    settings.clone(),
                 );
 
                 (new_state, rewards)
@@ -154,29 +150,23 @@ where
         }
     }
 
-    fn update_epoch(&self, epoch_state: &EpochState) -> Self {
+    fn update_epoch(&self, epoch_state: &EpochState, params: &Self::Params) -> Self {
         match self {
             Self::WithoutTargetSession {
-                settings,
                 current_session_tracker,
             } => Self::WithoutTargetSession {
-                settings: settings.clone(),
-                current_session_tracker: current_session_tracker
-                    .collect_epoch(epoch_state, settings),
+                current_session_tracker: current_session_tracker.collect_epoch(epoch_state, params),
             },
             Self::WithTargetSession {
                 target_session_state,
                 target_session_tracker,
                 current_session_state,
                 current_session_tracker,
-                settings,
             } => Self::WithTargetSession {
                 target_session_state: target_session_state.clone(),
                 target_session_tracker: target_session_tracker.clone(),
                 current_session_state: current_session_state.clone(),
-                current_session_tracker: current_session_tracker
-                    .collect_epoch(epoch_state, settings),
-                settings: settings.clone(),
+                current_session_tracker: current_session_tracker.collect_epoch(epoch_state, params),
             },
         }
     }
@@ -184,10 +174,8 @@ where
     fn add_income(&self, income: Value) -> Self {
         match self {
             Self::WithoutTargetSession {
-                settings,
                 current_session_tracker,
             } => Self::WithoutTargetSession {
-                settings: settings.clone(),
                 current_session_tracker: current_session_tracker.add_block_rewards(income),
             },
             Self::WithTargetSession {
@@ -195,13 +183,11 @@ where
                 target_session_tracker,
                 current_session_state,
                 current_session_tracker,
-                settings,
             } => Self::WithTargetSession {
                 target_session_state: target_session_state.clone(),
                 target_session_tracker: target_session_tracker.clone(),
                 current_session_state: current_session_state.clone(),
                 current_session_tracker: current_session_tracker.add_block_rewards(income),
-                settings: settings.clone(),
             },
         }
     }
@@ -211,10 +197,9 @@ impl<ProofsVerifier> Rewards<ProofsVerifier> {
     /// Create a new uninitialized [`Rewards`] that doesn't accept activity
     /// messages until the first session update.
     #[must_use]
-    pub fn new(settings: RewardsParameters, epoch_state: &EpochState) -> Self {
-        let current_session_tracker = CurrentSessionTracker::new(epoch_state, &settings);
+    pub fn new(settings: &RewardsParameters, epoch_state: &EpochState) -> Self {
+        let current_session_tracker = CurrentSessionTracker::new(epoch_state, settings);
         Self::WithoutTargetSession {
-            settings,
             current_session_tracker,
         }
     }
@@ -227,7 +212,6 @@ where
     fn from_current_session_tracker_output(
         current_session_output: CurrentSessionTrackerOutput<ProofsVerifier>,
         target_session_tracker: TargetSessionTracker,
-        settings: RewardsParameters,
     ) -> Self {
         match current_session_output {
             CurrentSessionTrackerOutput::WithTargetSession {
@@ -239,11 +223,9 @@ where
                 target_session_tracker: Box::new(target_session_tracker),
                 current_session_state,
                 current_session_tracker,
-                settings,
             },
             CurrentSessionTrackerOutput::WithoutTargetSession(current_session_tracker) => {
                 Self::WithoutTargetSession {
-                    settings,
                     current_session_tracker,
                 }
             }
@@ -350,10 +332,8 @@ mod tests {
     fn test_blend_no_reward_calculated_after_session_0() {
         // Create a reward tracker
         let epoch_state = dummy_epoch_state();
-        let rewards_tracker = Rewards::<AlwaysSuccessProofsVerifier>::new(
-            create_blend_rewards_params(864_000, 1),
-            &epoch_state,
-        );
+        let params = create_blend_rewards_params(864_000, 1);
+        let rewards_tracker = Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch_state);
 
         // Create session_0 with providers
         let session_0 = create_test_session_state(
@@ -367,6 +347,7 @@ mod tests {
             &session_0,
             &dummy_epoch_state(),
             &create_service_parameters(),
+            &params,
         );
 
         // No rewards should be returned yet because session0 just ended,
@@ -379,19 +360,18 @@ mod tests {
         // Create a reward tracker, and update session from 0 to 1.
         let config = create_service_parameters();
         let epoch_state = dummy_epoch_state();
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(
-            create_blend_rewards_params(864_000, 1),
-            &epoch_state,
-        )
-        .update_session(
-            &create_test_session_state(
-                &[create_provider_id(1), create_provider_id(2)],
-                ServiceType::BlendNetwork,
-                0,
-            ),
-            &epoch_state,
-            &config,
-        );
+        let params = create_blend_rewards_params(864_000, 1);
+        let (rewards_tracker, _) =
+            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch_state).update_session(
+                &create_test_session_state(
+                    &[create_provider_id(1), create_provider_id(2)],
+                    ServiceType::BlendNetwork,
+                    0,
+                ),
+                &epoch_state,
+                &config,
+                &params,
+            );
 
         // Update session from 1 to 2 without any activity proofs submitted.
         let (_, rewards) = rewards_tracker.update_session(
@@ -402,6 +382,7 @@ mod tests {
             ),
             &epoch_state,
             &config,
+            &params,
         );
         assert_eq!(rewards.len(), 0);
     }
@@ -417,20 +398,20 @@ mod tests {
         // and update session from 0 to 1.
         let config = create_service_parameters();
         let epoch_state = dummy_epoch_state();
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(
-            create_blend_rewards_params(864_000, 1),
-            &epoch_state,
-        )
-        .add_income(1000)
-        .update_session(
-            &create_test_session_state(
-                &[provider1, provider2, provider3, provider4],
-                ServiceType::BlendNetwork,
-                0,
-            ),
-            &epoch_state,
-            &config,
-        );
+        let params = create_blend_rewards_params(864_000, 1);
+        let (rewards_tracker, _) =
+            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch_state)
+                .add_income(1000)
+                .update_session(
+                    &create_test_session_state(
+                        &[provider1, provider2, provider3, provider4],
+                        ServiceType::BlendNetwork,
+                        0,
+                    ),
+                    &epoch_state,
+                    &config,
+                    &params,
+                );
 
         // provider1 submits an activity proof
         let rewards_tracker = rewards_tracker
@@ -443,6 +424,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap();
 
@@ -458,6 +440,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(2),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap();
 
@@ -473,6 +456,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap();
 
@@ -487,6 +471,7 @@ mod tests {
             ),
             &epoch_state,
             &config,
+            &params,
         );
 
         assert_eq!(reward_utxos.len(), 3); // except provider4
@@ -532,15 +517,14 @@ mod tests {
         // Create a reward tracker, and update session from 0 to 1.
         let config = create_service_parameters();
         let epoch_state = dummy_epoch_state();
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(
-            create_blend_rewards_params(864_000, 1),
-            &epoch_state,
-        )
-        .update_session(
-            &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
-            &epoch_state,
-            &config,
-        );
+        let params = create_blend_rewards_params(864_000, 1);
+        let (rewards_tracker, _) =
+            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch_state).update_session(
+                &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
+                &epoch_state,
+                &config,
+                &params,
+            );
 
         // provider1 submits an activity proof.
         let rewards_tracker = rewards_tracker
@@ -553,6 +537,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap();
 
@@ -568,6 +553,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(2),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap_err();
         assert_eq!(
@@ -586,15 +572,14 @@ mod tests {
         // Create a reward tracker, and update session from 0 to 1.
         let config = create_service_parameters();
         let epoch_state = dummy_epoch_state();
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(
-            create_blend_rewards_params(864_000, 1),
-            &epoch_state,
-        )
-        .update_session(
-            &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
-            &epoch_state,
-            &config,
-        );
+        let params = create_blend_rewards_params(864_000, 1);
+        let (rewards_tracker, _) =
+            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch_state).update_session(
+                &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
+                &epoch_state,
+                &config,
+                &params,
+            );
 
         // provider1 submits an activity proof with invalid session.
         let err = rewards_tracker
@@ -607,6 +592,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap_err();
         assert_eq!(
@@ -622,6 +608,7 @@ mod tests {
             &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 1),
             &epoch_state,
             &config,
+            &params,
         );
         assert_eq!(rewards.len(), 0);
     }
@@ -633,16 +620,15 @@ mod tests {
         // Create a reward tracker, and update session from 0 to 1.
         let config = create_service_parameters();
         let epoch_state = dummy_epoch_state();
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(
-            // Set minimum network size to 2
-            create_blend_rewards_params(864_000, 2),
-            &epoch_state,
-        )
-        .update_session(
-            &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
-            &epoch_state,
-            &config,
-        );
+        // Set minimum network size to 2
+        let params = create_blend_rewards_params(864_000, 2);
+        let (rewards_tracker, _) =
+            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch_state).update_session(
+                &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
+                &epoch_state,
+                &config,
+                &params,
+            );
 
         // provider1 submits an activity proof, but it should be rejected
         // since the network is too small.
@@ -656,6 +642,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap_err();
         assert_eq!(err, Error::TargetSessionNotSet);
@@ -665,6 +652,7 @@ mod tests {
             &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 1),
             &epoch_state,
             &config,
+            &params,
         );
         assert_eq!(rewards.len(), 0);
     }
@@ -676,15 +664,14 @@ mod tests {
         // Create a reward tracker, and update session from 0 to 1.
         let config = create_service_parameters();
         let epoch_state = dummy_epoch_state_with(0, 9999);
-        let (rewards_tracker, _) = Rewards::<AlwaysSuccessProofsVerifier>::new(
-            create_blend_rewards_params(10, 1),
-            &epoch_state,
-        )
-        .update_session(
-            &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
-            &epoch_state,
-            &config,
-        );
+        let params = create_blend_rewards_params(10, 1);
+        let (rewards_tracker, _) =
+            Rewards::<AlwaysSuccessProofsVerifier>::new(&params, &epoch_state).update_session(
+                &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
+                &epoch_state,
+                &config,
+                &params,
+            );
 
         // provider1 submits an activity proof that is larger than activity threshold.
         let err = rewards_tracker
@@ -697,6 +684,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(2),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap_err();
         assert_eq!(err, Error::InvalidProof);
@@ -706,6 +694,7 @@ mod tests {
             &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 1),
             &epoch_state,
             &config,
+            &params,
         );
         assert_eq!(rewards.len(), 0);
     }
@@ -717,15 +706,14 @@ mod tests {
         // Create a reward tracker, and update session from 0 to 1.
         let config = create_service_parameters();
         let epoch_state = dummy_epoch_state();
-        let (rewards_tracker, _) = Rewards::<AlwaysFailureProofsVerifier>::new(
-            create_blend_rewards_params(1000, 1),
-            &epoch_state,
-        )
-        .update_session(
-            &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 1),
-            &epoch_state,
-            &config,
-        );
+        let params = create_blend_rewards_params(1000, 1);
+        let (rewards_tracker, _) =
+            Rewards::<AlwaysFailureProofsVerifier>::new(&params, &epoch_state).update_session(
+                &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 1),
+                &epoch_state,
+                &config,
+                &params,
+            );
 
         // provider1 submits an activity proof, but PoQ/PoSel verification fails.
         let err = rewards_tracker
@@ -738,6 +726,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
                 config.session_duration,
+                &params,
             )
             .unwrap_err();
         assert_eq!(err, Error::InvalidProof);
@@ -747,6 +736,7 @@ mod tests {
             &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 2),
             &dummy_epoch_state(),
             &config,
+            &params,
         );
         assert_eq!(rewards.len(), 0);
     }
@@ -754,8 +744,9 @@ mod tests {
     #[test]
     fn test_blend_epoch_updates() {
         // Create a reward tracker, and update session from 0 to 1.
+        let params = create_blend_rewards_params(1000, 1);
         let rewards_tracker = Rewards::<ZeroNonceFailureProofsVerifier>::new(
-            create_blend_rewards_params(1000, 1),
+            &params,
             // Set 0 to epoch nonce, to make a proof verifier that always fails.
             &dummy_epoch_state_with(0, 0),
         );
@@ -772,7 +763,7 @@ mod tests {
         // A new epoch received before a new session starts.
         // Set non-zero to epoch nonce, to make a proof verifier that always succeed.
         let new_epoch = dummy_epoch_state_with(1, 1);
-        let rewards_tracker = rewards_tracker.update_epoch(&new_epoch);
+        let rewards_tracker = rewards_tracker.update_epoch(&new_epoch, &params);
         if let Rewards::WithoutTargetSession {
             current_session_tracker,
             ..
@@ -790,6 +781,7 @@ mod tests {
             &create_test_session_state(&[provider1], ServiceType::BlendNetwork, 0),
             &new_epoch,
             &config,
+            &params,
         );
         if let Rewards::WithTargetSession {
             current_session_tracker,
@@ -811,6 +803,7 @@ mod tests {
                     proof_of_selection: new_proof_of_selection_unchecked(1),
                 })),
                 config.session_duration,
+                &params,
             )
             .expect("Proofs must be successfully verified");
     }

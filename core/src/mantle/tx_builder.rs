@@ -9,7 +9,7 @@ use crate::{
         gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
-        tx::MantleTxContext,
+        tx::{GasPrices, MantleTxContext},
     },
     proofs::channel_withdraw_proof::ChannelWithdrawProof,
 };
@@ -35,6 +35,11 @@ impl MantleTxBuilder {
             channel_withdraw_proofs: HashMap::new(),
             context,
         }
+    }
+
+    #[must_use]
+    pub fn get_gas_prices(&self) -> GasPrices {
+        self.context.gas_context.get_gas_prices()
     }
 
     #[must_use]
@@ -207,7 +212,7 @@ mod tests {
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
             },
-            tx::{GasPrices, MantleTxGasContext},
+            tx::MantleTxGasContext,
         },
         sdp::{DeclarationId, ProviderId, ServiceType},
     };

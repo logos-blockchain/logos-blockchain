@@ -154,6 +154,11 @@ impl MantleTxGasContext {
             .collect();
         Self::new(withdraw_thresholds, base_prices)
     }
+
+    #[must_use]
+    pub fn get_gas_prices(&self) -> GasPrices {
+        self.gas_prices.clone()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

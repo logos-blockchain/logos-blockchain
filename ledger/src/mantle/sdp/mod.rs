@@ -38,10 +38,16 @@ impl Service {
         block_number: BlockNumber,
         epoch_state: &EpochState,
         config: &ServiceParameters,
+        rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>) {
         match self {
             Self::BlendNetwork(state) => {
-                let (new_state, utxos) = state.try_apply_header(block_number, epoch_state, config);
+                let (new_state, utxos) = state.try_apply_header(
+                    block_number,
+                    epoch_state,
+                    config,
+                    &rewards_params.blend,
+                );
                 (Self::BlendNetwork(new_state), utxos)
             }
         }
@@ -89,12 +95,16 @@ impl Service {
         provider_id: ProviderId,
         metadata: &ActivityMetadata,
         block_number: BlockNumber,
+        rewards_params: &ServiceRewardsParameters,
     ) -> Result<(), Error> {
         match self {
             Self::BlendNetwork(state) => {
-                state.rewards = state
-                    .rewards
-                    .update_active(provider_id, metadata, block_number)?;
+                state.rewards = state.rewards.update_active(
+                    provider_id,
+                    metadata,
+                    block_number,
+                    &rewards_params.blend,
+                )?;
                 Ok(())
             }
         }
@@ -216,9 +226,10 @@ impl<R: Rewards> ServiceState<R> {
         mut self,
         block_number: u64,
         epoch_state: &EpochState,
-        config: &ServiceParameters,
+        service_params: &ServiceParameters,
+        rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
-        let current_session = config.session_for_block(block_number);
+        let current_session = service_params.session_for_block(block_number);
         let reward_utxos;
 
         // shift all session!
@@ -230,7 +241,7 @@ impl<R: Rewards> ServiceState<R> {
                 .declarations
                 .iter()
                 .filter(|(_id, declaration)| {
-                    let active = is_active(declaration, block_number, config);
+                    let active = is_active(declaration, block_number, service_params);
                     if !active {
                         warn!(
                             provider_id = ?declaration.provider_id,
@@ -245,9 +256,12 @@ impl<R: Rewards> ServiceState<R> {
                 .collect();
 
             // Update rewards with current session state and distribute rewards
-            (self.rewards, reward_utxos) =
-                self.rewards
-                    .update_session(&self.active, epoch_state, config);
+            (self.rewards, reward_utxos) = self.rewards.update_session(
+                &self.active,
+                epoch_state,
+                service_params,
+                rewards_params,
+            );
             self.active = self.forming.clone();
             self.forming = SessionState {
                 declarations: self.declarations.clone(),
@@ -258,8 +272,8 @@ impl<R: Rewards> ServiceState<R> {
                 current_session < self.active.session_n + 1,
                 "Logos blockchain isn't ready for time travel yet"
             );
-            self.rewards = self.rewards.update_epoch(epoch_state);
-            self.forming = self.forming.update(&self, block_number, config);
+            self.rewards = self.rewards.update_epoch(epoch_state, rewards_params);
+            self.forming = self.forming.update(&self, block_number, service_params);
             reward_utxos = Vec::new();
         }
 
@@ -303,8 +317,8 @@ impl SdpLedger {
         tx_hash: TxHash,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
     ) -> Result<Self, Error> {
-        let mut sdp = Self::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), epoch_state);
+        let mut sdp =
+            Self::new().with_blend_service(&config.service_rewards_params.blend, epoch_state);
 
         for (op, proof) in ops {
             let OpProof::ZkAndEd25519Sigs {
@@ -333,7 +347,7 @@ impl SdpLedger {
     #[must_use]
     pub fn with_blend_service(
         mut self,
-        rewards_settings: blend::RewardsParameters,
+        rewards_settings: &blend::RewardsParameters,
         epoch_state: &EpochState,
     ) -> Self {
         let service = Service::BlendNetwork(Self::new_service_state(blend::Rewards::new(
@@ -373,14 +387,16 @@ impl SdpLedger {
             .services
             .iter()
             .map(|(service, service_state)| {
-                let config = config
+                let service_params = config
                     .service_params
                     .get(service)
                     .ok_or(Error::SessionParamsNotFound(*service))?;
-                let (new_state, reward_utxos) =
-                    service_state
-                        .clone()
-                        .try_apply_header(block_number, epoch_state, config);
+                let (new_state, reward_utxos) = service_state.clone().try_apply_header(
+                    block_number,
+                    epoch_state,
+                    service_params,
+                    &config.service_rewards_params,
+                );
                 all_reward_utxos.extend(reward_utxos);
                 Ok::<_, Error>((*service, new_state))
             })
@@ -466,7 +482,12 @@ impl SdpLedger {
             .provider_id;
 
         service_state.update_declarations(result.declarations);
-        service_state.update_rewards(provider_id, &op.metadata, self.block_number)?;
+        service_state.update_rewards(
+            provider_id,
+            &op.metadata,
+            self.block_number,
+            &config.service_rewards_params,
+        )?;
 
         Ok(self)
     }
@@ -735,8 +756,8 @@ mod tests {
 
         // Initialize ledger with service config
         let epoch_state = dummy_epoch_state();
-        let sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Apply declare at block 0
         let utxo_tree = utxo_tree(vec![utxo]);
@@ -780,8 +801,8 @@ mod tests {
 
         // Initialize ledger with service config and declare
         let epoch_state = dummy_epoch_state();
-        let sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         let utxo_tree = utxo_tree(vec![utxo]);
         let sdp_ledger =
@@ -833,8 +854,8 @@ mod tests {
 
         // Initialize ledger with service config
         let epoch_state = dummy_epoch_state();
-        let sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Declare at block 0
         let utxo_tree = utxo_tree(vec![utxo]);
@@ -876,8 +897,8 @@ mod tests {
 
         // Initialize ledger with service config
         let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let mut sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Apply headers to reach block 9 (still in session 0, promotion happens at
         // block 10)
@@ -902,8 +923,8 @@ mod tests {
 
         // Initialize ledger with Blend service
         let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let mut sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Apply headers to reach block 10 (session boundary for BlendNetwork)
         for _ in 0..10 {
@@ -926,8 +947,8 @@ mod tests {
 
         // Initialize ledger
         let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let mut sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // SESSION 0: Add a declaration at block 5
         for _ in 0..5 {
@@ -999,8 +1020,8 @@ mod tests {
         let zk_key_1 = create_zk_key(1);
 
         let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let mut sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Add declaration at block 0
         let utxo_1 = utxo();
@@ -1091,8 +1112,8 @@ mod tests {
         let zk_key = create_zk_key(0);
 
         let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let mut sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Add declaration at block 3
         for _ in 0..3 {
@@ -1145,8 +1166,8 @@ mod tests {
         let zk_key_1 = create_zk_key(1);
 
         let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let mut sdp_ledger =
+            SdpLedger::new().with_blend_service(&config.service_rewards_params.blend, &epoch_state);
 
         // Move to block 9 (last block of session 0)
         for _ in 0..9 {

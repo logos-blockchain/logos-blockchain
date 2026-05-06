@@ -18,8 +18,8 @@ use crate::{
                 utils,
                 utils::{
                     WalletStateType, assert_tracked_wallet_fees_equal_sponsored_fee_account_spend,
-                    create_and_submit_transaction, wait_for_exact_settled_wallet_balance,
-                    wait_for_transactions_inclusion, wait_for_wallet_or_encumbered_state,
+                    create_and_submit_transaction, wait_for_transactions_inclusion,
+                    wait_for_wallet_or_encumbered_state,
                 },
             },
         },
@@ -108,6 +108,29 @@ async fn step_wallet_has_at_most_coins(
     .await
 }
 
+#[when(expr = "wallet {string} has exactly {int} outputs in {int} seconds")]
+#[then(expr = "wallet {string} has exactly {int} outputs in {int} seconds")]
+async fn step_wallet_has_exact_coins(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: String,
+    coin_count: usize,
+    time_out_seconds: u64,
+) -> StepResult {
+    wait_for_wallet_or_encumbered_state(
+        world,
+        &step.value,
+        wallet_name,
+        Some(&coin_count),
+        Some(&coin_count),
+        None,
+        None,
+        time_out_seconds,
+        WalletStateType::OnChain,
+    )
+    .await
+}
+
 #[when(expr = "wallet {string} has {int} or less encumbered outputs in {int} seconds")]
 #[then(expr = "wallet {string} has {int} or less encumbered outputs in {int} seconds")]
 async fn step_wallet_has_at_most_encumbered_coins(
@@ -148,6 +171,29 @@ async fn step_wallet_has_at_least_value(
         None,
         Some(&min_token_value),
         None,
+        time_out_seconds,
+        WalletStateType::OnChain,
+    )
+    .await
+}
+
+#[when(expr = "wallet {string} has exactly {int} LGO in {int} seconds")]
+#[then(expr = "wallet {string} has exactly {int} LGO in {int} seconds")]
+async fn step_wallet_has_exact_value(
+    world: &mut CucumberWorld,
+    step: &Step,
+    wallet_name: String,
+    token_value: u64,
+    time_out_seconds: u64,
+) -> StepResult {
+    wait_for_wallet_or_encumbered_state(
+        world,
+        &step.value,
+        wallet_name,
+        None,
+        None,
+        Some(&token_value),
+        Some(&token_value),
         time_out_seconds,
         WalletStateType::OnChain,
     )
@@ -225,21 +271,26 @@ async fn step_wallet_has_at_most_coins_and_value(
     .await
 }
 
-#[when(expr = "wallet {string} has exact settled balance of {int} LGO in {int} seconds")]
-#[then(expr = "wallet {string} has exact settled balance of {int} LGO in {int} seconds")]
-async fn step_wallet_has_exact_settled_balance(
+#[when(expr = "wallet {string} has exactly {int} outputs and {int} LGO in {int} seconds")]
+#[then(expr = "wallet {string} has exactly {int} outputs and {int} LGO in {int} seconds")]
+async fn step_wallet_has_exact_coins_and_value(
     world: &mut CucumberWorld,
     step: &Step,
     wallet_name: String,
-    nominal_token_value: u64,
+    coin_count: usize,
+    token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_exact_settled_wallet_balance(
+    wait_for_wallet_or_encumbered_state(
         world,
         &step.value,
-        &wallet_name,
-        nominal_token_value,
+        wallet_name,
+        Some(&coin_count),
+        Some(&coin_count),
+        Some(&token_value),
+        Some(&token_value),
         time_out_seconds,
+        WalletStateType::OnChain,
     )
     .await
 }
