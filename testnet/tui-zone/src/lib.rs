@@ -72,7 +72,6 @@ pub async fn run(args: InscribeArgs) {
 
                 let msg = AppMessage::new(text);
                 debug!(tx_uuid = %msg.tx_uuid, text = %msg.text, "Publishing message");
-                state.mark_ours(msg.tx_uuid);
                 if let Err(e) = handle.publish_message(msg.to_bytes()).await {
                     error!("failed to publish: {e}");
                     break;
@@ -118,8 +117,7 @@ async fn handle_event(
         } => {
             debug!("Inscription published, checkpoint saved");
             if let Some(msg) = AppMessage::from_bytes(&payload) {
-                // Authorship was already recorded via mark_ours when we
-                // submitted; just apply optimistically.
+                state.mark_ours(msg.tx_uuid);
                 state.apply(msg);
                 ui::render_state(state);
                 ui::prompt();
