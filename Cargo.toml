@@ -87,6 +87,7 @@ members = [
   "zk/circuits/witness-generator",
   "zk/groth16",
   "zk/poseidon2",
+  "zk/proofs/error",
   "zk/proofs/poc",
   "zk/proofs/pol",
   "zk/proofs/poq",
@@ -164,6 +165,7 @@ lb-wallet-service                  = { default-features = false, package = "logo
 lb-witness-generator               = { default-features = false, package = "logos-blockchain-witness-generator", path = "./zk/circuits/witness-generator" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
+lbp-error                          = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
 testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
 testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
 testing-framework-runner-k8s       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }

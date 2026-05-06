@@ -4825,11 +4825,11 @@ dependencies = [
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-utils",
  "logos-blockchain-groth16",
+ "logos-blockchain-proofs-error",
  "logos-blockchain-witness-generator",
  "num-bigint",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -4841,13 +4841,13 @@ dependencies = [
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-utils",
  "logos-blockchain-groth16",
+ "logos-blockchain-proofs-error",
  "logos-blockchain-utils",
  "logos-blockchain-witness-generator",
  "num-bigint",
  "num-traits",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -4859,6 +4859,7 @@ dependencies = [
  "logos-blockchain-circuits-utils",
  "logos-blockchain-groth16",
  "logos-blockchain-pol",
+ "logos-blockchain-proofs-error",
  "logos-blockchain-utils",
  "logos-blockchain-witness-generator",
  "num-bigint",
@@ -4876,6 +4877,15 @@ dependencies = [
  "ark-ff 0.4.2",
  "jf-poseidon2",
  "num-bigint",
+]
+
+[[package]]
+name = "logos-blockchain-proofs-error"
+version = "0.1.2"
+dependencies = [
+ "logos-blockchain-groth16",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5224,6 +5234,7 @@ dependencies = [
  "logos-blockchain-circuits-utils",
  "logos-blockchain-groth16",
  "logos-blockchain-poseidon2",
+ "logos-blockchain-proofs-error",
  "logos-blockchain-witness-generator",
  "num-bigint",
  "rand 0.8.6",

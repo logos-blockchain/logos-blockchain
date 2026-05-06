@@ -15,11 +15,8 @@ pub use blend_inputs::{
 pub use chain_inputs::{PoQChainInputs, PoQChainInputsData, PoQInputsFromDataError};
 pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData};
 pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
-use lb_groth16::{
-    CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
-};
+use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
 pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
-use thiserror::Error;
 use tracing::error;
 pub use wallet_inputs::{AgedNotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData};
 pub use witness::Witness;
@@ -27,18 +24,7 @@ pub use witness::Witness;
 use crate::{inputs::PoQVerifierInputJson, proving_key::POQ_PROVING_KEY_PATH};
 
 pub type PoQProof = CompressedGroth16Proof;
-
-#[derive(Debug, Error)]
-pub enum ProveError {
-    #[error(transparent)]
-    Io(std::io::Error),
-    #[error(transparent)]
-    Json(serde_json::Error),
-    #[error("Error parsing Groth16 input: {0:?}")]
-    Groth16JsonInput(<Groth16Input as TryFrom<Groth16InputDeser>>::Error),
-    #[error(transparent)]
-    Groth16JsonProof(<Groth16Proof as TryFrom<Groth16ProofJsonDeser>>::Error),
-}
+pub type ProveError = lbp_error::Error;
 
 ///
 /// This function generates a proof for the given set of inputs.
@@ -60,13 +46,11 @@ pub enum ProveError {
 /// - Returns a `ProveError::Json` if there is an error during JSON
 ///   serialization or deserialization.
 pub fn prove(inputs: PoQWitnessInputs) -> Result<(PoQProof, PoQVerifierInput), ProveError> {
-    let witness = witness::generate_witness(inputs).map_err(ProveError::Io)?;
+    let witness = witness::generate_witness(inputs)?;
     let (proof, verifier_inputs) =
-        lb_circuits_prover::prover_from_contents(POQ_PROVING_KEY_PATH.as_path(), witness.as_ref())
-            .map_err(ProveError::Io)?;
-    let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof).map_err(ProveError::Json)?;
-    let verifier_inputs: PoQVerifierInputJson =
-        serde_json::from_slice(&verifier_inputs).map_err(ProveError::Json)?;
+        lb_circuits_prover::prover_from_contents(POQ_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
+    let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof)?;
+    let verifier_inputs: PoQVerifierInputJson = serde_json::from_slice(&verifier_inputs)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {

@@ -14,10 +14,10 @@ lb-circuits-prover   = { workspace = true }
 lb-circuits-utils    = { workspace = true }
 lb-groth16           = { workspace = true }
 lb-witness-generator = { workspace = true }
+lbp-error            = { workspace = true }
 num-bigint           = { workspace = true }
 serde                = { features = ["derive", "std"], workspace = true }
 serde_json           = { workspace = true }
-thiserror            = { workspace = true }
 tracing              = { workspace = true }
 
 [build-dependencies]

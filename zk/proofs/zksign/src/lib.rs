@@ -8,9 +8,7 @@ mod witness;
 use std::error::Error;
 
 pub use inputs::ZkSignWitnessInputs;
-use lb_groth16::{
-    CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
-};
+use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
 pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
 use tracing::error;
@@ -31,13 +29,7 @@ pub enum ZkSignError {
 #[derive(Debug, thiserror::Error)]
 pub enum ProveError {
     #[error(transparent)]
-    Io(std::io::Error),
-    #[error(transparent)]
-    Json(serde_json::Error),
-    #[error("Error parsing Groth16 input: {0:?}")]
-    Groth16JsonInput(<Groth16Input as TryFrom<Groth16InputDeser>>::Error),
-    #[error(transparent)]
-    Groth16JsonProof(<Groth16Proof as TryFrom<Groth16ProofJsonDeser>>::Error),
+    Prove(#[from] lbp_error::Error),
     #[error(transparent)]
     VerifierInputsJson(ZkSignVerifierInputsJsonTryFromError),
 }
@@ -64,16 +56,19 @@ pub enum ProveError {
 pub fn prove(
     inputs: &ZkSignWitnessInputs,
 ) -> Result<(ZkSignProof, ZkSignVerifierInputs), ProveError> {
-    let witness = witness::generate_witness(inputs).map_err(ProveError::Io)?;
+    let witness = witness::generate_witness(inputs).map_err(lbp_error::Error::from)?;
     let (proof, verifier_inputs) = lb_circuits_prover::prover_from_contents(
         ZKSIGN_PROVING_KEY_PATH.as_path(),
         witness.as_ref(),
     )
-    .map_err(ProveError::Io)?;
-    let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof).map_err(ProveError::Json)?;
+    .map_err(lbp_error::Error::from)?;
+    let proof: Groth16ProofJsonDeser =
+        serde_json::from_slice(&proof).map_err(lbp_error::Error::from)?;
     let verifier_inputs: ZkSignVerifierInputsJson =
-        serde_json::from_slice(&verifier_inputs).map_err(ProveError::Json)?;
-    let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
+        serde_json::from_slice(&verifier_inputs).map_err(lbp_error::Error::from)?;
+    let proof: Groth16Proof = proof
+        .try_into()
+        .map_err(lbp_error::Error::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
             error!("Fatal CompressedGroth16Proof::try_from: {e}");

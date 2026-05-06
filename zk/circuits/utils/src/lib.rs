@@ -12,12 +12,12 @@ const BINARY_NAME: &str = "witness_generator";
 /// Get the logos-blockchain-circuits base directory.
 ///
 /// This function checks the `LOGOS_BLOCKCHAIN_CIRCUITS` environment variable
-/// first, and falls back to `~/.logos-blockchain-circuits/` if not set.
+/// first and falls back to `~/.logos-blockchain-circuits/` if not set.
 ///
 /// # Panics
 ///
 /// Panics if a logos-blockchain-circuits directory is not found or if the
-/// circuits version does not match the expected one.
+/// circuits' version does not match the expected one.
 #[must_use]
 pub fn circuits_dir() -> PathBuf {
     // Check LOGOS_BLOCKCHAIN_CIRCUITS env var first
