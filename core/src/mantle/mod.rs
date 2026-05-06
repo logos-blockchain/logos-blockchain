@@ -16,7 +16,6 @@ pub mod tx_builder;
 
 pub use gas::{GasCalculator, GasConstants};
 pub use genesis_tx::CryptarchiaParameter;
-use lb_groth16::Fr;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
@@ -41,12 +40,12 @@ pub trait Transaction {
     fn hash(&self) -> Self::Hash {
         Self::HASHER(self)
     }
-    /// Returns the Fr's that are used to form a signature of a transaction.
+    /// Returns the bytes' that are used to form a signature of a transaction.
     ///
-    /// The resulting Fr's are then used by the `HASHER`
+    /// The resulting bytes' are then used by the `HASHER`
     /// to produce the transaction's unique hash, which is what is typically
     /// signed by the transaction originator.
-    fn as_signing_frs(&self) -> Vec<Fr>;
+    fn as_signing(&self) -> Vec<u8>;
 }
 
 pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + StorageSize {
@@ -94,8 +93,8 @@ impl<T: Transaction> Transaction for &T {
     const HASHER: TransactionHasher<Self> = |tx| T::HASHER(tx);
     type Hash = T::Hash;
 
-    fn as_signing_frs(&self) -> Vec<Fr> {
-        T::as_signing_frs(self)
+    fn as_signing(&self) -> Vec<u8> {
+        T::as_signing(self)
     }
 }
 

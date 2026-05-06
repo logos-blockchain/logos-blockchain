@@ -71,14 +71,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::Fr;
 
     use super::*;
     use crate::mantle::TxHash;
 
     #[test]
     fn test_root_two_elements() {
-        let elements = vec![TxHash::from(Fr::from(1u64)), TxHash::from(Fr::from(2u64))];
+        let elements = vec![TxHash::from([1u8; 32]), TxHash::from([2u8; 32])];
         let result = calculate_merkle_root(&elements, Some(2));
 
         let bytes1: [u8; 32] = elements[0].into();
@@ -92,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_root_with_padding() {
-        let elements = vec![TxHash::from(Fr::from(1u64)), TxHash::from(Fr::from(2u64))];
+        let elements = vec![TxHash::from([1u8; 32]), TxHash::from([2u8; 32])];
         let result = calculate_merkle_root(&elements, Some(4));
 
         let bytes1: [u8; 32] = elements[0].into();
@@ -114,7 +113,7 @@ mod tests {
 
     #[test]
     fn test_root_without_padding() {
-        let elements = vec![TxHash::from(Fr::from(1u64)), TxHash::from(Fr::from(2u64))];
+        let elements = vec![TxHash::from([1u8; 32]), TxHash::from([2u8; 32])];
         let result = calculate_merkle_root(&elements, None);
 
         let bytes1: [u8; 32] = elements[0].into();
@@ -128,7 +127,7 @@ mod tests {
 
     #[test]
     fn test_root_single_element() {
-        let elements = vec![TxHash::from(Fr::from(42u64))];
+        let elements = vec![TxHash::from([42u8; 32])];
         let result = calculate_merkle_root(&elements, None);
 
         let bytes: [u8; 32] = elements[0].into();

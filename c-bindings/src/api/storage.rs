@@ -188,9 +188,7 @@ pub unsafe extern "C" fn get_transaction(
     return_error_if_null_pointer!("get_transaction", tx_hash);
 
     let node = unsafe { &*node };
-    let tx_hash = unwrap_or_return_error!(unsafe { into_tx_hash(tx_hash) }, |_| {
-        log::error!("[get_transaction] Invalid `tx_hash`. Exiting.");
-    });
+    let tx_hash = unsafe { into_tx_hash(tx_hash) };
     let json_cstring = unwrap_or_return_error!(get_transaction_sync(node, tx_hash));
     FfiGetTransactionResult::ok(json_cstring.into_raw())
 }

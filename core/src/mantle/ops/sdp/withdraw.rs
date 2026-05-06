@@ -76,7 +76,7 @@ impl Operation for SDPWithdrawOp {
             .expect("The Operation has been checked above");
         if !ZkPublicKey::verify_multi(
             &[note.pk, declaration.zk_id],
-            &ctx.tx_hash.0,
+            &ctx.tx_hash.to_fr(),
             ctx.sdp_withdraw_sig,
         ) {
             return Err(SdpError::InvalidZkSignature);

@@ -56,7 +56,7 @@ impl Operation for DepositOp {
 
         // Check the signature
         let pks = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.0, ctx.deposit_sig) {
+        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.to_fr(), ctx.deposit_sig) {
             return Err(Error::InvalidSignature);
         }
 

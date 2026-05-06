@@ -1559,7 +1559,7 @@ mod tests {
             tx.clone(),
             vec![
                 OpProof::ZkSig(
-                    ZkKey::multi_sign(std::slice::from_ref(&sk), tx.clone().hash().as_ref())
+                    ZkKey::multi_sign(std::slice::from_ref(&sk), &tx.clone().hash().to_fr())
                         .unwrap(),
                 ),
                 OpProof::Ed25519Sig(inscription_sig),

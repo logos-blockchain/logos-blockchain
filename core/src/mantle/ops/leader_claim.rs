@@ -194,7 +194,7 @@ impl Operation for LeaderClaimOp {
         // Check the proof of claim
         if !ctx.proof_of_claim.verify(&LeaderClaimPublic {
             voucher_root: ctx.claimable_vouchers_root.0,
-            mantle_tx_hash: ctx.tx_hash.0,
+            mantle_tx_hash: ctx.tx_hash.to_fr(),
         }) {
             return Err(LeaderClaimError::InvalidPoC);
         }
@@ -235,9 +235,9 @@ mod tests {
             .push_with_paths(voucher_cm, &mut [])
             .expect("MMR shouldn't be full");
         let voucher_root = RewardsRoot::from(mmr.frontier_root());
-        let tx_hash = TxHash::from(Fr::from(11u64));
+        let tx_hash = TxHash::from([11u8; 32]);
         let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
-            LeaderClaimPublic::new(voucher_root.into(), tx_hash.0),
+            LeaderClaimPublic::new(voucher_root.into(), tx_hash.to_fr()),
             &voucher_path,
             voucher_secret,
         ))

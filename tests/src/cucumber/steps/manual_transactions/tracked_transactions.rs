@@ -185,7 +185,7 @@ fn create_invalid_transaction() -> SignedMantleTx {
 
     let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
 
-    let transfer_proof = ZkKey::multi_sign(&[], mantle_tx.hash().as_ref())
+    let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");
 
     SignedMantleTx {

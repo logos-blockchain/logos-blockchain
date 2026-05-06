@@ -731,7 +731,7 @@ mod tests {
         let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
         SignedMantleTx {
             ops_proofs: vec![OpProof::ZkSig(
-                ZkKey::multi_sign(sks, mantle_tx.hash().as_ref()).unwrap(),
+                ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
             )],
             mantle_tx,
         }
@@ -785,9 +785,9 @@ mod tests {
                     OpProof::Ed25519Sig(key.sign_payload(tx_hash.as_signing_bytes().as_ref()))
                 }
                 Key::Zk(key) => OpProof::ZkSig(
-                    ZkKey::multi_sign(std::slice::from_ref(key), tx_hash.as_ref()).unwrap(),
+                    ZkKey::multi_sign(std::slice::from_ref(key), &tx_hash.to_fr()).unwrap(),
                 ),
-                Key::EmptyZk => OpProof::ZkSig(ZkKey::multi_sign(&[], tx_hash.as_ref()).unwrap()),
+                Key::EmptyZk => OpProof::ZkSig(ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap()),
                 Key::Withdraw(proof) => OpProof::ChannelWithdrawProof(proof.clone()),
             })
             .collect();

@@ -305,7 +305,7 @@ fn build_wallet_transaction(
 
     let signature = ZkKey::multi_sign(
         slice::from_ref(&input.account.secret_key),
-        tx.hash().as_ref(),
+        &tx.hash().to_fr(),
     )
     .map_err(|err| format!("failed to sign transaction: {err}"))?;
 

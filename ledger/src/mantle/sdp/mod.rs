@@ -703,8 +703,8 @@ mod tests {
         config: &Config,
     ) -> Result<SdpLedger, Error> {
         let (note_sk, _) = utxo_with_sk();
-        let tx_hash = TxHash(Fr::from(0u8));
-        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_sk.clone()], &tx_hash.0).unwrap();
+        let tx_hash = TxHash([0u8; 32]);
+        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_sk.clone()], &tx_hash.to_fr()).unwrap();
 
         let signing_key = create_signing_key();
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
@@ -719,8 +719,8 @@ mod tests {
         zk_key: ZkKey,
         config: &Config,
     ) -> Result<SdpLedger, Error> {
-        let tx_hash = TxHash(Fr::from(1u8));
-        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.0).unwrap();
+        let tx_hash = TxHash([1u8; 32]);
+        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.to_fr()).unwrap();
 
         sdp_ledger.apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
     }

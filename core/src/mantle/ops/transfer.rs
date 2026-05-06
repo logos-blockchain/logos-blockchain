@@ -88,7 +88,7 @@ impl Operation for TransferOp {
         self.outputs.validate()?;
         // Check the transfer Proof
         let pks = self.inputs.get_pk(ctx.utxos)?;
-        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.0, ctx.transfer_sig) {
+        if !ZkPublicKey::verify_multi(&pks, &ctx.tx_hash.to_fr(), ctx.transfer_sig) {
             return Err(TransferError::InvalidProof);
         }
         Ok(())

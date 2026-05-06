@@ -47,7 +47,7 @@ impl Operation for SDPActiveOp {
         }
 
         // Check the signature over the `zk_id`
-        if !ZkPublicKey::verify_multi(&[declaration.zk_id], &ctx.tx_hash.0, ctx.active_sig) {
+        if !ZkPublicKey::verify_multi(&[declaration.zk_id], &ctx.tx_hash.to_fr(), ctx.active_sig) {
             return Err(SdpError::InvalidZkSignature);
         }
 

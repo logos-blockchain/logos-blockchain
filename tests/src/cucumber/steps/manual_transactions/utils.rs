@@ -277,7 +277,7 @@ fn build_transfer_proofs(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let transfer_proof = ZkKey::multi_sign(&signing_keys, tx_hash.as_ref())
+            let transfer_proof = ZkKey::multi_sign(&signing_keys, &tx_hash.to_fr())
                 .inspect_err(|e| {
                     warn!(target: TARGET, "Step `{}` error: {e}", step);
                 })?;

@@ -1,5 +1,3 @@
-use lb_groth16::fr_from_bytes;
-
 use crate::{
     LogosBlockchainNode,
     api::free,
@@ -43,13 +41,8 @@ pub type TxHash = Hash;
 /// This function is unsafe because it dereferences a raw pointer.
 /// The caller must ensure that the pointer is valid and points to a properly
 /// initialized `TxHash`.
-pub(crate) unsafe fn into_tx_hash(
-    tx_hash: *const TxHash,
-) -> Result<lb_core::mantle::TxHash, OperationStatus> {
-    let tx_hash = unsafe { *tx_hash };
-    fr_from_bytes(&tx_hash)
-        .map(lb_core::mantle::TxHash::from)
-        .map_err(|_| OperationStatus::ValidationError)
+pub(crate) unsafe fn into_tx_hash(tx_hash: *const TxHash) -> lb_core::mantle::TxHash {
+    lb_core::mantle::TxHash::from(unsafe { *tx_hash })
 }
 
 #[repr(C)]
