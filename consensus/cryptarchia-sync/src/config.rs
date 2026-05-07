@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{num::NonZeroUsize, time::Duration};
 
 use serde::{Deserialize, Serialize};
 use serde_with::{DurationMilliSeconds, serde_as};
@@ -13,5 +13,5 @@ pub struct Config {
     /// The maximum number of inbound requests that can be handled concurrently,
     /// including requests waiting to be processed and requests currently being
     /// processed.
-    pub max_inbound_requests: usize,
+    pub max_inbound_requests: NonZeroUsize,
 }

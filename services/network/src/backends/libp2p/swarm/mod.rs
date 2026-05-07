@@ -351,7 +351,7 @@ mod tests {
             identify_config: lb_libp2p::IdentifySettings::default(),
             chain_sync_config: lb_cryptarchia_sync::Config {
                 peer_response_timeout: Duration::from_secs(5),
-                max_inbound_requests: 10,
+                max_inbound_requests: 10.try_into().unwrap(),
             },
             nat_config: lb_libp2p::NatSettings::Traversal(lb_libp2p::TraversalSettings {
                 autonat: lb_libp2p::AutonatClientSettings {

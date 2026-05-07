@@ -284,7 +284,7 @@ impl Behaviour {
             + self.sending_block_responses.len()
             + self.sending_tip_responses.len();
 
-        if concurrent_requests >= self.config.max_inbound_requests {
+        if concurrent_requests >= self.config.max_inbound_requests.into() {
             self.incoming_streams_to_close.push(
                 async move {
                     drop(stream.close().await);
@@ -550,7 +550,7 @@ mod tests {
     async fn test_block_sync_between_two_swarms() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4,
+            max_inbound_requests: 4.try_into().unwrap(),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(200, config).await;
@@ -577,14 +577,14 @@ mod tests {
     async fn test_reject_excess_download_requests() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4,
+            max_inbound_requests: 4.try_into().unwrap(),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(1, config.clone()).await;
 
         let streams = request_download(
             &mut downloader_swarm,
-            config.max_inbound_requests + 1,
+            config.max_inbound_requests.get() + 1,
             HeaderId::from([0; 32]),
             HeaderId::from([0; 32]),
             HeaderId::from([0; 32]),
@@ -596,7 +596,7 @@ mod tests {
 
         let (blocks, errors) = wait_block_messages(streams).await;
 
-        assert_eq!(blocks.len(), config.max_inbound_requests);
+        assert_eq!(blocks.len(), config.max_inbound_requests.get());
         assert_eq!(errors.len(), 1);
     }
 
@@ -604,7 +604,7 @@ mod tests {
     async fn test_reject_protocol_violation_too_many_additional_blocks() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4,
+            max_inbound_requests: 4.try_into().unwrap(),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(1, config).await;
@@ -631,7 +631,7 @@ mod tests {
     async fn test_get_tip() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4,
+            max_inbound_requests: 4.try_into().unwrap(),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_and_downloader(0, config).await;
@@ -653,7 +653,7 @@ mod tests {
     async fn test_timeout() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4,
+            max_inbound_requests: 4.try_into().unwrap(),
         };
         let mut provider_swarm = new_swarm_with_quic(config.clone());
         let provider_swarm_peer_id = *provider_swarm.local_peer_id();
@@ -699,7 +699,7 @@ mod tests {
     async fn test_tip_request_rejection() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4,
+            max_inbound_requests: 4.try_into().unwrap(),
         };
         let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
@@ -716,7 +716,7 @@ mod tests {
     async fn test_block_request_rejection() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4,
+            max_inbound_requests: 4.try_into().unwrap(),
         };
         let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
@@ -742,7 +742,7 @@ mod tests {
     async fn test_block_stream_error_during_transmission() {
         let config = Config {
             peer_response_timeout: Duration::from_secs(1),
-            max_inbound_requests: 4,
+            max_inbound_requests: 4.try_into().unwrap(),
         };
         let (mut downloader_swarm, provider_peer_id) =
             start_provider_with_stream_error(config).await;
