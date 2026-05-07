@@ -117,6 +117,8 @@ impl ServiceConfig {
                         .ibd
                         .delay_before_new_download,
                     peers: self.user.network.bootstrap.ibd.peers,
+                    max_retries: self.user.network.bootstrap.ibd.max_retries,
+                    initial_retry_delay: self.user.network.bootstrap.ibd.initial_retry_delay,
                 },
             },
             network: LibP2pAdapterSettings {

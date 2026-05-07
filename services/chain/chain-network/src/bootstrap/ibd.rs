@@ -901,6 +901,8 @@ mod tests {
         IbdConfig {
             peers,
             delay_before_new_download: std::time::Duration::from_millis(1),
+            max_retries: 0, // no retries in unit tests
+            initial_retry_delay: std::time::Duration::from_millis(1),
         }
     }
 

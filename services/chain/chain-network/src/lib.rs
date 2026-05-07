@@ -38,7 +38,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::{sync::oneshot, time::sleep};
-use tracing::{Level, debug, error, info, instrument, span, trace};
+use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
 pub use crate::{
@@ -258,39 +258,69 @@ where
 
         let network_adapter = NetAdapter::new(network_config, relays.network_relay().clone()).await;
 
-        let initial_block_download = InitialBlockDownload::new(
-            ChainNetworkIbdBlockProcessor::<_, Mempool, _> {
-                cryptarchia: relays.cryptarchia().clone(),
-                mempool_adapter: relays.mempool_adapter().clone(),
-            },
-            network_adapter.clone(),
-        );
+        let ibd_config = &bootstrap_config.ibd;
+        let mut attempts: usize = 0;
+        let mut retry_delay = ibd_config.initial_retry_delay;
+        let max_attempts = ibd_config.max_retries.saturating_add(1); // initial + retries
 
-        match initial_block_download.run(bootstrap_config.ibd).await {
-            Ok(_) => {
-                info!("Initial Block Download completed successfully");
-                // Notify chain-service that IBD is complete so it can start the prolonged
-                // bootstrap timer
-                if let Err(e) = relays.cryptarchia().notify_ibd_completed().await {
-                    error!("Failed to notify chain-service of IBD completion: {e:?}");
-                }
-            }
-            Err(e) => {
-                error!(
-                    "Initial Block Download failed: {e:?}. Initiating graceful shutdown. Retry with different bootstrap peers"
-                );
-                if let Err(shutdown_err) = self
-                    .service_resources_handle
-                    .overwatch_handle
-                    .shutdown()
-                    .await
-                {
-                    error!("Failed to shutdown overwatch: {shutdown_err:?}");
-                }
+        loop {
+            // Rebuild the IBD processor on each attempt since it consumes self
+            let initial_block_download = InitialBlockDownload::new(
+                ChainNetworkIbdBlockProcessor::<_, Mempool, _> {
+                    cryptarchia: relays.cryptarchia().clone(),
+                    mempool_adapter: relays.mempool_adapter().clone(),
+                },
+                network_adapter.clone(),
+            );
 
-                return Err(DynError::from(format!(
-                    "Initial Block Download failed: {e:?}"
-                )));
+            match initial_block_download.run(ibd_config.clone()).await {
+                Ok(_) => {
+                    info!("Initial Block Download completed successfully");
+                    if attempts > 0 {
+                        metrics::ibd_completed_after_retries(attempts as u64);
+                    }
+                    // Notify chain-service that IBD is complete so it can start the prolonged
+                    // bootstrap timer
+                    if let Err(e) = relays.cryptarchia().notify_ibd_completed().await {
+                        error!(target: LOG_TARGET, "Failed to notify chain-service of IBD completion: {e:?}");
+                    }
+                    break;
+                }
+                Err(e) if attempts < ibd_config.max_retries => {
+                    metrics::ibd_retry_attempt(
+                        (attempts + 1) as u64,
+                        ibd_config.max_retries as u64,
+                    );
+                    warn!(
+                        target: LOG_TARGET,
+                        attempt = attempts + 1,
+                        max_retries = ibd_config.max_retries,
+                        delay_secs = retry_delay.as_secs(),
+                        "Initial Block Download failed, retrying after delay: {e:?}"
+                    );
+                    sleep(retry_delay).await;
+                    attempts += 1;
+                    retry_delay *= 2; // exponential backoff
+                }
+                Err(e) => {
+                    error!(
+                        target: LOG_TARGET,
+                        total_attempts = max_attempts,
+                        "Initial Block Download failed after {max_attempts} attempt(s): {e:?}. Initiating shutdown."
+                    );
+                    if let Err(shutdown_err) = self
+                        .service_resources_handle
+                        .overwatch_handle
+                        .shutdown()
+                        .await
+                    {
+                        error!(target: LOG_TARGET, "Failed to shutdown overwatch: {shutdown_err:?}");
+                    }
+
+                    return Err(DynError::from(format!(
+                        "Initial Block Download failed after {max_attempts} attempt(s): {e:?}"
+                    )));
+                }
             }
         }
 

@@ -136,3 +136,13 @@ pub fn chainsync_observe_request_tip<T>(
     }
     result
 }
+
+pub fn ibd_retry_attempt(attempt: u64, max_retries: u64) {
+    lb_tracing::increase_counter_u64!(ibd_retries_total, 1);
+    lb_tracing::metric_gauge_u64!(ibd_retry_attempt_current, attempt);
+    lb_tracing::metric_gauge_u64!(ibd_retry_max, max_retries);
+}
+
+pub fn ibd_completed_after_retries(attempts: u64) {
+    lb_tracing::metric_histogram_u64!(ibd_total_attempts, attempts);
+}

@@ -23,8 +23,24 @@ where
     /// when no download is needed at the moment from a peer.
     #[serde(default = "default_delay_before_new_download")]
     pub delay_before_new_download: Duration,
+    /// Maximum number of retry attempts when all peers fail during IBD.
+    /// Set to 0 to disable retries (previous behaviour: immediate shutdown).
+    #[serde(default = "default_max_retries")]
+    pub max_retries: usize,
+    /// Initial delay before the first retry attempt.
+    /// Subsequent retries use exponential backoff (delay doubles each attempt).
+    #[serde(default = "default_initial_retry_delay")]
+    pub initial_retry_delay: Duration,
 }
 
 const fn default_delay_before_new_download() -> Duration {
     Duration::from_secs(10)
+}
+
+const fn default_max_retries() -> usize {
+    10
+}
+
+const fn default_initial_retry_delay() -> Duration {
+    Duration::from_secs(5)
 }

@@ -28,6 +28,12 @@ pub struct IbdConfig {
     /// Delay before attempting the next download
     /// when no download is needed at the moment from a peer.
     pub delay_before_new_download: Duration,
+    /// Maximum number of retry attempts when all peers fail during IBD.
+    /// Set to 0 to disable retries (immediate shutdown on failure).
+    pub max_retries: usize,
+    /// Initial delay before the first retry attempt.
+    /// Subsequent retries use exponential backoff (delay doubles each attempt).
+    pub initial_retry_delay: Duration,
 }
 
 impl Default for IbdConfig {
@@ -35,6 +41,8 @@ impl Default for IbdConfig {
         Self {
             peers: HashSet::default(),
             delay_before_new_download: Duration::from_secs(10),
+            max_retries: 10,
+            initial_retry_delay: Duration::from_secs(5),
         }
     }
 }
