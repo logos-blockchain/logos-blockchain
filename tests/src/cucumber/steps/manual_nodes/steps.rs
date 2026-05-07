@@ -1046,7 +1046,7 @@ async fn step_send_multiple_transactions_to_blend_core_zk_key(
             warn!(target: TARGET, "Step `{}` error: {error}", step.value);
         })?;
 
-        wait_for_transactions_inclusion(&sender_node_client, &tx_hashes, Duration::from_secs(120))
+        wait_for_transactions_inclusion(&sender_node_client, &tx_hashes, Duration::from_mins(2))
             .await
             .inspect_err(|error| {
                 warn!(target: TARGET, "Step `{}` error: {error}", step.value);
@@ -1077,6 +1077,11 @@ fn blend_zk_pk_for_node(world: &CucumberWorld, node_name: &str) -> Result<ZkPubl
     Ok(blend_zk_pk)
 }
 
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Required to be mutable by cucumber step function signature"
+)]
+#[expect(unused_variables, reason = "Cucumber step function signature")]
 #[then(expr = "I declare node {string} as blend core node via the CLI binary")]
 async fn step_run_blend_sdp_declaration_cli(
     world: &mut CucumberWorld,
@@ -1132,7 +1137,7 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg("--user-config-path")
         .arg(user_config_path)
         .arg("--locked-note-id")
-        .arg(locked_note_id_hex)
+        .arg(locked_note_id)
         .arg("--node-address")
         .arg(declarer_api_base_url.to_string())
         .output()
@@ -1162,6 +1167,14 @@ fn node_user_config_path(world: &CucumberWorld, node_name: &str) -> Result<PathB
     Ok(node_info.runtime_dir.join(USER_CONFIG_FILE))
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: Address this at some point."
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Required to be mutable by cucumber step function signature"
+)]
 #[then(expr = "blend core SDP declaration for node {string} is included on node {string}")]
 async fn step_verify_blend_sdp_declaration_included(
     world: &mut CucumberWorld,

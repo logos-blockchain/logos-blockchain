@@ -199,10 +199,12 @@ async fn extract_values(
 
     let provider_id = config
         .blend_provider_id()
+        .map_err(|e| anyhow!(e))
         .with_context(|| "Failed to extract provider ID from provided config.")?;
 
     let zk_id = config
         .blend_zk_key()
+        .map_err(|e| anyhow!(e))
         .with_context(|| "Failed to extract zk ID from provided config.")?;
 
     verify_locked_note_id_value(client, node_address, zk_id, locked_note_id).await?;

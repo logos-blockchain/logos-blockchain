@@ -471,13 +471,13 @@ impl UserConfig {
         Ok(ProviderId(secret_key.public_key()))
     }
 
-    pub fn blend_zk_key(&self) -> Result<ZkPublicKey, &'static str> {
+    pub fn blend_zk_key(&self) -> Result<ZkPublicKey, String> {
         let key_id = &self.blend.core.zk.secret_key_kms_id;
         let Some(key) = self.kms.backend.keys.get(key_id) else {
-            return Err("Blend ZK signing key not found in KMS");
+            return Err(format!("Blend ZK signing key '{key_id}' not found in KMS"));
         };
         let Key::Zk(secret_key) = key else {
-            return Err("Blend ZK signing key must be Zk");
+            return Err("Blend ZK signing key must be Zk".to_owned());
         };
         Ok(secret_key.to_public_key())
     }
