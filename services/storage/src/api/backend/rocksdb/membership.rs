@@ -15,7 +15,7 @@ use crate::{
 };
 
 pub const MEMBERSHIP_ACTIVE_SESSION_PREFIX: &str = "membership/active/";
-pub const MEMBERSHIP_FORMING_SESSION_PREFIX: &str = "membership/forming/";
+pub const MEMBERSHIP_NEXT_SESSION_PREFIX: &str = "membership/next/";
 pub const MEMBERSHIP_LATEST_BLOCK_KEY: &str = "membership/latest_block";
 
 type MembershipProviders = (SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>);
@@ -128,7 +128,7 @@ impl StorageMembershipApi for RocksBackend {
         }
     }
 
-    async fn save_forming_session(
+    async fn save_next_session(
         &mut self,
         service_type: ServiceType,
         session_id: SessionNumber,
@@ -137,7 +137,7 @@ impl StorageMembershipApi for RocksBackend {
         let service_bytes = service_type
             .to_bytes()
             .expect("Serialization of ServiceType should not fail");
-        let key = key_bytes(MEMBERSHIP_FORMING_SESSION_PREFIX, service_bytes);
+        let key = key_bytes(MEMBERSHIP_NEXT_SESSION_PREFIX, service_bytes);
 
         let session_data = (session_id, providers);
         let serialized_data = session_data
@@ -147,44 +147,44 @@ impl StorageMembershipApi for RocksBackend {
         match self.store(key, serialized_data).await {
             Ok(()) => {
                 debug!(
-                    "Successfully stored forming session {} for service {:?}",
+                    "Successfully stored next session {} for service {:?}",
                     session_id, service_type
                 );
                 Ok(())
             }
             Err(e) => {
-                error!("Failed to store forming session: {:?}", e);
+                error!("Failed to store next session: {:?}", e);
                 Err(e.into())
             }
         }
     }
 
-    async fn load_forming_session(
+    async fn load_next_session(
         &mut self,
         service_type: ServiceType,
     ) -> Result<Option<MembershipProviders>, DynError> {
         let service_bytes = service_type
             .to_bytes()
             .expect("Serialization of ServiceType should not fail");
-        let key = key_bytes(MEMBERSHIP_FORMING_SESSION_PREFIX, service_bytes);
+        let key = key_bytes(MEMBERSHIP_NEXT_SESSION_PREFIX, service_bytes);
 
         let data = self.load(&key).await?;
 
         data.map_or_else(
             || {
-                debug!("No forming session found for service {:?}", service_type);
+                debug!("No next session found for service {:?}", service_type);
                 Ok(None)
             },
             |bytes| match <MembershipProviders>::from_bytes(&bytes) {
                 Ok(session_data) => {
                     debug!(
-                        "Successfully loaded forming session for service {:?}",
+                        "Successfully loaded next session for service {:?}",
                         service_type
                     );
                     Ok(Some(session_data))
                 }
                 Err(e) => {
-                    error!("Failed to deserialize forming session: {:?}", e);
+                    error!("Failed to deserialize next session: {:?}", e);
                     Ok(None)
                 }
             },

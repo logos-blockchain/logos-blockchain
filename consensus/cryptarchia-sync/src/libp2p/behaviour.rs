@@ -31,8 +31,6 @@ use crate::{
     messages::{GetTipResponse, SerialisedBlock},
 };
 
-const MAX_INCOMING_REQUESTS: usize = 4;
-
 type SendingBlocksRequestsFuture = BoxFuture<'static, Result<BlocksRequestStream, ChainSyncError>>;
 
 type SendingTipRequestFuture = BoxFuture<'static, Result<TipRequestStream, ChainSyncError>>;
@@ -286,7 +284,7 @@ impl Behaviour {
             + self.sending_block_responses.len()
             + self.sending_tip_responses.len();
 
-        if concurrent_requests >= MAX_INCOMING_REQUESTS {
+        if concurrent_requests >= self.config.max_inbound_requests.into() {
             self.incoming_streams_to_close.push(
                 async move {
                     drop(stream.close().await);
@@ -541,7 +539,7 @@ mod tests {
         ProviderResponse, TipResponse,
         config::Config,
         libp2p::{
-            behaviour::{Behaviour, BoxedStream, Event, MAX_INCOMING_REQUESTS},
+            behaviour::{Behaviour, BoxedStream, Event},
             errors::{ChainSyncError, ChainSyncErrorKind},
             provider::MAX_ADDITIONAL_BLOCKS,
         },
@@ -550,7 +548,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_sync_between_two_swarms() {
-        let (mut downloader_swarm, provider_peer_id) = start_provider_and_downloader(200).await;
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let (mut downloader_swarm, provider_peer_id) =
+            start_provider_and_downloader(200, config).await;
 
         let streams = request_download(
             &mut downloader_swarm,
@@ -572,11 +575,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_reject_excess_download_requests() {
-        let (mut downloader_swarm, provider_peer_id) = start_provider_and_downloader(1).await;
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let (mut downloader_swarm, provider_peer_id) =
+            start_provider_and_downloader(1, config.clone()).await;
 
         let streams = request_download(
             &mut downloader_swarm,
-            MAX_INCOMING_REQUESTS + 1,
+            config.max_inbound_requests.get() + 1,
             HeaderId::from([0; 32]),
             HeaderId::from([0; 32]),
             HeaderId::from([0; 32]),
@@ -588,13 +596,18 @@ mod tests {
 
         let (blocks, errors) = wait_block_messages(streams).await;
 
-        assert_eq!(blocks.len(), MAX_INCOMING_REQUESTS);
+        assert_eq!(blocks.len(), config.max_inbound_requests.get());
         assert_eq!(errors.len(), 1);
     }
 
     #[tokio::test]
     async fn test_reject_protocol_violation_too_many_additional_blocks() {
-        let (mut downloader_swarm, provider_peer_id) = start_provider_and_downloader(1).await;
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let (mut downloader_swarm, provider_peer_id) =
+            start_provider_and_downloader(1, config).await;
 
         let streams = request_download(
             &mut downloader_swarm,
@@ -616,7 +629,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_tip() {
-        let (mut downloader_swarm, provider_peer_id) = start_provider_and_downloader(0).await;
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let (mut downloader_swarm, provider_peer_id) =
+            start_provider_and_downloader(0, config).await;
 
         let receiver = request_tip(&mut downloader_swarm, provider_peer_id);
 
@@ -633,7 +651,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_timeout() {
-        let mut provider_swarm = new_swarm_with_quic();
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let mut provider_swarm = new_swarm_with_quic(config.clone());
         let provider_swarm_peer_id = *provider_swarm.local_peer_id();
 
         let provider_addr: Multiaddr = format!(
@@ -653,7 +675,7 @@ mod tests {
             }
         });
 
-        let mut downloader_swarm = new_swarm_with_quic();
+        let mut downloader_swarm = new_swarm_with_quic(config);
         downloader_swarm.dial_and_wait(provider_addr).await;
 
         let streams = request_download(
@@ -675,7 +697,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_tip_request_rejection() {
-        let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider().await;
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
         let receiver = request_tip(&mut downloader_swarm, provider_peer_id);
 
@@ -688,7 +714,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_request_rejection() {
-        let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider().await;
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let (mut downloader_swarm, provider_peer_id) = start_rejecting_provider(config).await;
 
         let streams = request_download(
             &mut downloader_swarm,
@@ -710,7 +740,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_block_stream_error_during_transmission() {
-        let (mut downloader_swarm, provider_peer_id) = start_provider_with_stream_error().await;
+        let config = Config {
+            peer_response_timeout: Duration::from_secs(1),
+            max_inbound_requests: 4.try_into().unwrap(),
+        };
+        let (mut downloader_swarm, provider_peer_id) =
+            start_provider_with_stream_error(config).await;
 
         let streams = request_download(
             &mut downloader_swarm,
@@ -730,24 +765,11 @@ mod tests {
         assert_eq!(errors.len(), 1);
     }
 
-    fn setup_provider_swarm() -> (Swarm<Behaviour>, PeerId, Multiaddr) {
-        let mut provider_swarm = new_swarm_with_quic();
-        let provider_peer_id = *provider_swarm.local_peer_id();
-
-        let provider_addr: Multiaddr = format!(
-            "/ip4/127.0.0.1/udp/{}/quic-v1",
-            thread_rng().gen_range(10000..60000)
-        )
-        .parse()
-        .unwrap();
-
-        provider_swarm.listen_on(provider_addr.clone()).unwrap();
-
-        (provider_swarm, provider_peer_id, provider_addr)
-    }
-
-    async fn setup_downloader_and_connect(provider_addr: Multiaddr) -> Swarm<Behaviour> {
-        let mut downloader_swarm = new_swarm_with_quic();
+    async fn setup_downloader_and_connect(
+        provider_addr: Multiaddr,
+        config: Config,
+    ) -> Swarm<Behaviour> {
+        let mut downloader_swarm = new_swarm_with_quic(config);
         downloader_swarm.dial_and_wait(provider_addr).await;
         downloader_swarm
     }
@@ -848,37 +870,60 @@ mod tests {
         }
     }
 
-    async fn start_provider_and_downloader(blocks_count: usize) -> (Swarm<Behaviour>, PeerId) {
-        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm();
+    async fn start_provider_and_downloader(
+        blocks_count: usize,
+        config: Config,
+    ) -> (Swarm<Behaviour>, PeerId) {
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
 
         tokio::spawn(run_provider(
             provider_swarm,
             StandardProvider { blocks_count },
         ));
 
-        let downloader_swarm = setup_downloader_and_connect(provider_addr).await;
+        let downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
         (downloader_swarm, provider_peer_id)
     }
 
-    async fn start_rejecting_provider() -> (Swarm<Behaviour>, PeerId) {
-        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm();
+    async fn start_rejecting_provider(config: Config) -> (Swarm<Behaviour>, PeerId) {
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
 
         tokio::spawn(run_provider(provider_swarm, RejectingProvider));
 
-        let downloader_swarm = setup_downloader_and_connect(provider_addr).await;
+        let downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
         (downloader_swarm, provider_peer_id)
     }
 
-    async fn start_provider_with_stream_error() -> (Swarm<Behaviour>, PeerId) {
-        let (provider_swarm, provider_peer_id, provider_addr) = setup_provider_swarm();
+    async fn start_provider_with_stream_error(config: Config) -> (Swarm<Behaviour>, PeerId) {
+        let (provider_swarm, provider_peer_id, provider_addr) =
+            setup_provider_swarm(config.clone());
 
         tokio::spawn(run_provider(
             provider_swarm,
             ErrorStreamProvider { success_count: 1 },
         ));
 
-        let downloader_swarm = setup_downloader_and_connect(provider_addr).await;
+        let downloader_swarm = setup_downloader_and_connect(provider_addr, config).await;
         (downloader_swarm, provider_peer_id)
+    }
+
+    #[cfg(test)]
+    fn setup_provider_swarm(config: Config) -> (Swarm<Behaviour>, PeerId, Multiaddr) {
+        let mut provider_swarm = new_swarm_with_quic(config);
+        let provider_peer_id = *provider_swarm.local_peer_id();
+
+        let provider_addr: Multiaddr = format!(
+            "/ip4/127.0.0.1/udp/{}/quic-v1",
+            thread_rng().gen_range(10000..60000)
+        )
+        .parse()
+        .unwrap();
+
+        provider_swarm.listen_on(provider_addr.clone()).unwrap();
+
+        (provider_swarm, provider_peer_id, provider_addr)
     }
 
     fn request_download(
@@ -952,10 +997,7 @@ mod tests {
         (blocks, errors)
     }
 
-    fn new_swarm_with_quic() -> Swarm<Behaviour> {
-        let config = Config {
-            peer_response_timeout: Duration::from_secs(1),
-        };
+    fn new_swarm_with_quic(config: Config) -> Swarm<Behaviour> {
         let keypair = libp2p::identity::Keypair::generate_ed25519();
         libp2p::SwarmBuilder::with_existing_identity(keypair)
             .with_tokio()

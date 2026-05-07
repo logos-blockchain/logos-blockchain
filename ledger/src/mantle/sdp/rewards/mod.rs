@@ -45,7 +45,7 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
     /// distribute.
     ///
     /// Called during session boundaries when active, `past_session`, and
-    /// forming sessions are updated. Returns a map of `ProviderId` to
+    /// next sessions are updated. Returns a map of `ProviderId` to
     /// reward amounts for providers eligible for rewards in this session
     /// transition.
     ///
