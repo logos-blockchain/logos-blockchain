@@ -947,6 +947,7 @@ mod tests {
     use ark_ff::Field as _;
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use multiaddr::Multiaddr;
     use num_bigint::BigUint;
 
     use super::*;
@@ -2055,7 +2056,7 @@ mod tests {
 
     #[test]
     fn decode_reject_invalid_locator() {
-        let invalid_locator: multiaddr::Multiaddr = "/ip4/0.0.0.0/udp/3000/quic-v1"
+        let invalid_locator: Multiaddr = "/ip4/0.0.0.0/udp/3000/quic-v1"
             .parse()
             .expect("locator should parse as multiaddr");
         let op = SDPDeclareOp {
@@ -2070,7 +2071,7 @@ mod tests {
         let result = decode_sdp_declare(&encoded);
 
         match result {
-            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::Verify),
+            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::Fail),
             _ => panic!("Expected Verify error for invalid locator"),
         }
     }
