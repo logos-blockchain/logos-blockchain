@@ -23,7 +23,9 @@ use lb_http_api_common::bodies::{
         sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
+use lb_key_management_system_service::keys::{
+    Ed25519Key, Ed25519PublicKey, ZkPublicKey, ZkSignature,
+};
 use lb_node::{SignedMantleTx, Transaction as _, config::RunConfig};
 use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::{
@@ -299,7 +301,7 @@ fn spawn_drive(
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
-    own_payloads: HashSet<Vec<u8>>,
+    my_signer: Ed25519PublicKey,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut state: HashSet<Vec<u8>> = HashSet::new();
@@ -322,11 +324,8 @@ fn spawn_drive_republish(
             }
 
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
-            for inv in &orphaned {
-                if own_payloads.contains(&inv.payload)
-                    && !state.contains(&inv.payload)
-                    && !pending_payloads.contains(&inv.payload)
-                {
+            for inv in orphaned.iter().filter(|i| i.signer == my_signer) {
+                if !state.contains(&inv.payload) && !pending_payloads.contains(&inv.payload) {
                     debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
                     if let Err(e) = handle.publish_message(inv.payload.clone()).await {
                         debug!("Failed to re-publish: {e}");
@@ -734,9 +733,9 @@ async fn test_concurrent_multi_sequencer() {
         sequencer_config,
     );
 
-    let poll_a = spawn_drive_republish(seq_a, handle_a.clone(), data_a.iter().cloned().collect());
-    let poll_b = spawn_drive_republish(seq_b, handle_b.clone(), data_b.iter().cloned().collect());
-    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), data_c.iter().cloned().collect());
+    let poll_a = spawn_drive_republish(seq_a, handle_a.clone(), admin_pk);
+    let poll_b = spawn_drive_republish(seq_b, handle_b.clone(), seq_b_pk);
+    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), seq_c_pk);
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -804,7 +803,7 @@ type DiscardedSet = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
 fn spawn_sequencer_sorted_policy(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
-    own_payloads: HashSet<Vec<u8>>,
+    my_signer: Ed25519PublicKey,
     discarded: DiscardedSet,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -834,9 +833,8 @@ fn spawn_sequencer_sorted_policy(
 
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
 
-            for inv in &orphaned {
-                if !own_payloads.contains(&inv.payload)
-                    || state.contains(&inv.payload)
+            for inv in orphaned.iter().filter(|i| i.signer == my_signer) {
+                if state.contains(&inv.payload)
                     || pending_payloads.contains(&inv.payload)
                     || discarded.lock().await.contains(&inv.payload)
                 {
@@ -1023,13 +1021,13 @@ async fn test_sorted_conflict_resolution() {
     let poll_a = spawn_sequencer_sorted_policy(
         seq_a,
         handle_a.clone(),
-        data_a.iter().cloned().collect(),
+        admin_pk,
         DiscardedSet::clone(&discarded),
     );
     let poll_b = spawn_sequencer_sorted_policy(
         seq_b,
         handle_b.clone(),
-        data_b.iter().cloned().collect(),
+        seq_b_pk,
         DiscardedSet::clone(&discarded),
     );
 

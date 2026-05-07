@@ -480,6 +480,7 @@ where
                             inscribe.parent,
                             inscribe.id(),
                             inscribe.inscription.clone(),
+                            inscribe.signer,
                         );
                         is_inscription = true;
                         break;
@@ -972,7 +973,13 @@ where
             String::from_utf8_lossy(&data),
         );
 
-        s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data.clone());
+        s.submit_inscription(
+            signed_tx.clone(),
+            parent,
+            new_msg_id,
+            data.clone(),
+            self.signing_key.public_key(),
+        );
         self.last_msg_id = new_msg_id;
 
         // Post to network (best effort, resubmit timer retries if needed)
@@ -1381,6 +1388,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
                         parent_msg: inscribe.parent,
                         this_msg: inscribe.id(),
                         payload: inscribe.inscription.clone(),
+                        signer: inscribe.signer,
                     })
                 } else {
                     None

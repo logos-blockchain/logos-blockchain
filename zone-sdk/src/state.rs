@@ -2,7 +2,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction as _, ops::channel::MsgId, tx::TxHash},
+    mantle::{
+        SignedMantleTx, Transaction as _,
+        ops::channel::{Ed25519PublicKey, MsgId},
+        tx::TxHash,
+    },
 };
 use rpds::HashTrieSetSync;
 
@@ -17,6 +21,10 @@ pub struct InscriptionInfo {
     pub this_msg: MsgId,
     /// The opaque inscription payload.
     pub payload: Vec<u8>,
+    /// The public key that signed this inscription (channel sequencer key).
+    /// Consumers compare against their own signing key's public key to
+    /// determine ownership.
+    pub signer: Ed25519PublicKey,
 }
 
 /// Result of channel update detection — the linear block-level delta
@@ -54,6 +62,7 @@ pub struct PendingInscription {
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
     pub payload: Vec<u8>,
+    pub signer: Ed25519PublicKey,
 }
 
 /// Transaction state tracker.
@@ -111,6 +120,7 @@ impl TxState {
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Vec<u8>,
+        signer: Ed25519PublicKey,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
         self.pending_by_parent
@@ -125,6 +135,7 @@ impl TxState {
                 parent_msg,
                 this_msg,
                 payload,
+                signer,
             },
         );
     }
@@ -542,6 +553,7 @@ impl TxState {
                     parent_msg: pending.parent_msg,
                     this_msg: pending.this_msg,
                     payload: pending.payload.clone(),
+                    signer: pending.signer,
                 });
                 queue.push_back(pending.this_msg);
             }
@@ -791,6 +803,10 @@ mod tests {
         MsgId::from(bytes)
     }
 
+    fn dummy_signer() -> Ed25519PublicKey {
+        Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()
+    }
+
     /// Submit a fake pending inscription with lineage metadata.
     fn submit_fake_inscription(
         state: &mut TxState,
@@ -800,7 +816,7 @@ mod tests {
     ) -> TxHash {
         let tx = make_dummy_tx(data);
         let hash = tx.mantle_tx.hash();
-        state.submit_inscription(tx, parent_msg, this_msg, vec![data]);
+        state.submit_inscription(tx, parent_msg, this_msg, vec![data], dummy_signer());
         hash
     }
 
@@ -834,6 +850,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: vec![99],
+            signer: dummy_signer(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
@@ -871,6 +888,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: vec![99],
+            signer: dummy_signer(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
@@ -941,6 +959,7 @@ mod tests {
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: vec![99],
+            signer: dummy_signer(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 

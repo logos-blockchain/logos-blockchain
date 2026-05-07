@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use lb_key_management_system_service::keys::Ed25519PublicKey;
 use lb_zone_sdk::{sequencer::SequencerCheckpoint, state::InscriptionInfo};
 use uuid::Uuid;
 
@@ -10,9 +11,9 @@ use crate::message::AppMessage;
 /// The sequencer surfaces chain events (reorgs, finalization); the application
 /// maintains its own view of the world by implementing this trait.
 ///
-/// Authorship ("did we send this?") is tracked independently of the
-/// canonical/finalized stores via `mark_ours` / `is_ours`. This decoupling
-/// keeps authorship durable across reorgs that revert and re-apply messages.
+/// Ownership of an inscription is determined by comparing the SDK-supplied
+/// `signer` field on each `InscriptionInfo` against our own signing key's
+/// public key — no app-side tracking is required.
 ///
 /// A production implementation might use a database. This demo uses in-memory
 /// vecs.
@@ -41,13 +42,6 @@ pub trait ZoneState {
 
     /// Load the last saved checkpoint.
     fn load_checkpoint(&self) -> Option<&SequencerCheckpoint>;
-
-    /// Record that this `tx_uuid` was locally created.
-    fn mark_ours(&mut self, tx_uuid: Uuid);
-
-    /// Whether this `tx_uuid` was locally created, regardless of whether it
-    /// currently exists in canonical/finalized state.
-    fn is_ours(&self, tx_uuid: &Uuid) -> bool;
 }
 
 /// In-memory implementation of [`ZoneState`].
@@ -55,7 +49,6 @@ pub trait ZoneState {
 pub struct InMemoryZoneState {
     canonical: Vec<AppMessage>,
     finalized: Vec<AppMessage>,
-    my_submissions: HashSet<Uuid>,
     checkpoint: Option<SequencerCheckpoint>,
 }
 
@@ -105,14 +98,6 @@ impl ZoneState for InMemoryZoneState {
     fn load_checkpoint(&self) -> Option<&SequencerCheckpoint> {
         self.checkpoint.as_ref()
     }
-
-    fn mark_ours(&mut self, tx_uuid: Uuid) {
-        self.my_submissions.insert(tx_uuid);
-    }
-
-    fn is_ours(&self, tx_uuid: &Uuid) -> bool {
-        self.my_submissions.contains(tx_uuid)
-    }
 }
 
 /// Process a channel update event.
@@ -120,14 +105,15 @@ impl ZoneState for InMemoryZoneState {
 /// 1. Revert orphaned from state (no-op for shed-pending entries that were
 ///    never applied).
 /// 2. Apply adopted to state.
-/// 3. Iterate orphaned, return ours that are not on the new canonical chain and
-///    not still in flight via `pending` — those are the republish candidates
-///    the user must decide on (their original signed tx is dead).
+/// 3. Iterate orphaned filtered by `my_signer`, return entries that aren't on
+///    the new canonical chain and aren't still in flight via `pending` — those
+///    are the republish candidates the user must decide on.
 pub fn resolve_conflicts(
     state: &mut InMemoryZoneState,
     orphaned: &[InscriptionInfo],
     adopted: &[InscriptionInfo],
     pending: &[InscriptionInfo],
+    my_signer: &Ed25519PublicKey,
 ) -> Vec<AppMessage> {
     for inv in orphaned {
         if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
@@ -148,8 +134,8 @@ pub fn resolve_conflicts(
 
     orphaned
         .iter()
+        .filter(|inv| &inv.signer == my_signer)
         .filter_map(|inv| AppMessage::from_bytes(&inv.payload))
-        .filter(|m| state.is_ours(&m.tx_uuid))
         .filter(|m| !state.contains(&m.tx_uuid))
         .filter(|m| !pending_uuids.contains(&m.tx_uuid))
         .collect()

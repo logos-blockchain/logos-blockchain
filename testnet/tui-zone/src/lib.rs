@@ -6,7 +6,9 @@ use std::{fs, path::Path};
 
 use clap::Parser;
 use lb_core::mantle::ops::channel::ChannelId;
-use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use lb_key_management_system_service::keys::{
+    ED25519_SECRET_KEY_SIZE, Ed25519Key, Ed25519PublicKey,
+};
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
@@ -47,6 +49,7 @@ pub async fn run(args: InscribeArgs) {
     let mut state = InMemoryZoneState::default();
     let checkpoint = state.load_checkpoint().cloned();
 
+    let my_signer = signing_key.public_key();
     let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
     let (mut sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
 
@@ -60,7 +63,7 @@ pub async fn run(args: InscribeArgs) {
         tokio::select! {
             event = sequencer.next_event() => {
                 if let Some(event) = event {
-                    handle_event(event, &mut state, &handle, &mut ready_tx).await;
+                    handle_event(event, &mut state, &handle, &my_signer, &mut ready_tx).await;
                 }
             }
 
@@ -94,6 +97,7 @@ async fn handle_event(
     event: Event,
     state: &mut InMemoryZoneState,
     handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
+    my_signer: &Ed25519PublicKey,
     ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     match event {
@@ -103,7 +107,7 @@ async fn handle_event(
             adopted,
             pending,
         } => {
-            handle_channel_update(state, handle, &orphaned, &adopted, &pending).await;
+            handle_channel_update(state, handle, &orphaned, &adopted, &pending, my_signer).await;
         }
         Event::TxsFinalized { inscriptions, .. } => {
             finalize_inscriptions(state, &inscriptions, true);
@@ -115,7 +119,6 @@ async fn handle_event(
         } => {
             debug!("Inscription published, checkpoint saved");
             if let Some(msg) = AppMessage::from_bytes(&payload) {
-                state.mark_ours(msg.tx_uuid);
                 state.apply(msg);
                 ui::render_state(state);
                 ui::prompt();
@@ -151,6 +154,7 @@ async fn handle_channel_update(
     orphaned: &[lb_zone_sdk::state::InscriptionInfo],
     adopted: &[lb_zone_sdk::state::InscriptionInfo],
     pending: &[lb_zone_sdk::state::InscriptionInfo],
+    my_signer: &Ed25519PublicKey,
 ) {
     if orphaned.is_empty() && adopted.is_empty() {
         return;
@@ -163,7 +167,7 @@ async fn handle_channel_update(
         "Channel update"
     );
 
-    let to_republish = resolve_conflicts(state, orphaned, adopted, pending);
+    let to_republish = resolve_conflicts(state, orphaned, adopted, pending, my_signer);
     republish(handle, to_republish).await;
 
     ui::render_state(state);
