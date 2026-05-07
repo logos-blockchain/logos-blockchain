@@ -24,8 +24,10 @@ use lb_core::{
 };
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{metrics::http_metrics_middleware, paths};
-use lb_sdp_service::state::SdpStateStorage as SdpStateStorageTrait;
-use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
+use lb_sdp_service::{
+    mempool::SdpMempoolAdapter, state::SdpStateStorage as SdpStateStorageTrait,
+    wallet::SdpWalletAdapter,
+};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};

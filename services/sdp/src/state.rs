@@ -1,13 +1,12 @@
 use std::convert::Infallible;
 
 use lb_core::sdp::DeclarationId;
+pub use lb_services_utils::overwatch::recovery::operators::RecoveryBackend as SdpStateStorage;
 use overwatch::services::state::ServiceState;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::SdpSettings;
-
-pub use lb_services_utils::overwatch::recovery::operators::RecoveryBackend as SdpStateStorage;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SdpState {

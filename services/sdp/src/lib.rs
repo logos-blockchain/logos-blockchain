@@ -508,11 +508,13 @@ where
             .await
         else {
             tracing::error!("Can't find declaration. Cannot post activity without declaration.");
+            metrics::withdrawal_validation_failures_total();
             return;
         };
 
         let Some(nonce) = declaration.nonce.checked_add(1) else {
             tracing::error!("Can't bump nonce");
+            metrics::withdrawal_validation_failures_total();
             return;
         };
 
