@@ -12,6 +12,6 @@ Feature: API CLI
       | NODE_1    | 1             | WALLET_1A   |              |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 180 seconds
     And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to blend core zk key of node "NODE_1"
-    Then I run blend core SDP declaration CLI for node "NODE_1"
+    Then I declare node "NODE_1" as blend core node via the CLI binary
     And blend core SDP declaration for node "NODE_1" is included on node "NODE_1"
     And I stop all nodes

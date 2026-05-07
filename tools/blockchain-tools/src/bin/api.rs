@@ -8,7 +8,7 @@ use lb_core::{
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
 use lb_http_api_common::bodies::wallet::balance::WalletBalanceResponseBody;
-use lb_key_management_system_keys::keys::{Key, ZkPublicKey};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::config::{OnUnknownKeys, UserConfig, deserialize_config_at_path};
 use serde::{Deserialize, de::IntoDeserializer as _};
 use url::Url;
@@ -197,10 +197,12 @@ async fn extract_values(
         extract_blend_locator(config)?
     };
 
-    let provider_id = extract_blend_provider_id(config)
+    let provider_id = config
+        .blend_provider_id()
         .with_context(|| "Failed to extract provider ID from provided config.")?;
 
-    let zk_id = extract_blend_zk_id(config)
+    let zk_id = config
+        .blend_zk_key()
         .with_context(|| "Failed to extract zk ID from provided config.")?;
 
     verify_locked_note_id_value(client, node_address, zk_id, locked_note_id).await?;
@@ -228,32 +230,6 @@ fn extract_blend_locator(config: &UserConfig) -> Result<Locator> {
                 config.blend.core.backend.listening_address
             )
         })
-}
-
-fn extract_blend_provider_id(config: &UserConfig) -> Result<ProviderId> {
-    let key_id = &config.blend.non_ephemeral_signing_key_id;
-    let key =
-        config.kms.backend.keys.get(key_id).with_context(|| {
-            format!("Blend non-ephemeral signing key '{key_id}' not found in KMS")
-        })?;
-    let Key::Ed25519(secret_key) = key else {
-        bail!("Blend non-ephemeral signing key must be Ed25519");
-    };
-    Ok(ProviderId(secret_key.public_key()))
-}
-
-fn extract_blend_zk_id(config: &UserConfig) -> Result<ZkPublicKey> {
-    let key_id = &config.blend.core.zk.secret_key_kms_id;
-    let key = config
-        .kms
-        .backend
-        .keys
-        .get(key_id)
-        .with_context(|| format!("Blend ZK signing key '{key_id}' not found in KMS"))?;
-    let Key::Zk(secret_key) = key else {
-        bail!("Blend ZK signing key must be Zk");
-    };
-    Ok(secret_key.to_public_key())
 }
 
 async fn verify_locked_note_id_value(

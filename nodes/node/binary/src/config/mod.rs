@@ -9,6 +9,8 @@ use std::{
 use ::tracing::{Level, warn};
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
+use lb_core::sdp::ProviderId;
+use lb_key_management_system_service::keys::{Key, ZkPublicKey};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
@@ -454,6 +456,30 @@ impl UserConfig {
             time: TimeConfig::default(),
             tracing: TracingConfig::default(),
         }
+    }
+
+    pub fn blend_provider_id(&self) -> Result<ProviderId, String> {
+        let key_id = &self.blend.non_ephemeral_signing_key_id;
+        let Some(key) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!(
+                "Blend non-ephemeral signing key '{key_id}' not found in KMS"
+            ));
+        };
+        let Key::Ed25519(secret_key) = key else {
+            return Err("Blend non-ephemeral signing key must be Ed25519".to_owned());
+        };
+        Ok(ProviderId(secret_key.public_key()))
+    }
+
+    pub fn blend_zk_key(&self) -> Result<ZkPublicKey, &'static str> {
+        let key_id = &self.blend.core.zk.secret_key_kms_id;
+        let Some(key) = self.kms.backend.keys.get(key_id) else {
+            return Err("Blend ZK signing key not found in KMS");
+        };
+        let Key::Zk(secret_key) = key else {
+            return Err("Blend ZK signing key must be Zk");
+        };
+        Ok(secret_key.to_public_key())
     }
 }
 
