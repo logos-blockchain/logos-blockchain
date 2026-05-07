@@ -97,7 +97,7 @@ struct PostBlendDeclarationArgs {
     locked_note_id: NoteId,
 
     /// Base node URL, for example `http://localhost:8080`.
-    #[arg(long, value_name = "NODE_URL")]
+    #[arg(long, value_name = "NODE_URL", default_value = "http://localhost:8080")]
     node_address: Url,
 
     /// Optional basic auth username for the API.
