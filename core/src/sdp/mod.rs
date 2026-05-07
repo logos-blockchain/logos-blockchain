@@ -1,11 +1,12 @@
 pub mod blend;
 pub mod locked_notes;
 
+use core::str::FromStr;
 use std::hash::Hash;
 
 use blake2::{Blake2b, Digest as _};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use multiaddr::Multiaddr;
+use multiaddr::{Multiaddr, Protocol};
 use nom::{IResult, Parser as _, bytes::complete::take};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
@@ -44,19 +45,65 @@ impl ServiceParameters {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Locator(pub Multiaddr);
+#[serde(try_from = "Multiaddr")]
+pub struct Locator(Multiaddr);
 
 impl Locator {
     #[must_use]
-    pub const fn new(addr: Multiaddr) -> Self {
+    pub const fn new_unchecked(addr: Multiaddr) -> Self {
         Self(addr)
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> Multiaddr {
+        self.0
     }
 }
 
 impl AsRef<Multiaddr> for Locator {
     fn as_ref(&self) -> &Multiaddr {
         &self.0
+    }
+}
+
+impl TryFrom<Multiaddr> for Locator {
+    type Error = String;
+
+    fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
+        for protocol in &value {
+            match protocol {
+                Protocol::Ip4(ip) if ip.is_unspecified() => {
+                    return Err(format!(
+                        "Locator multiaddr must not contain an unspecified IPv4 address: {value}"
+                    ));
+                }
+                Protocol::Ip6(ip) if ip.is_unspecified() => {
+                    return Err(format!(
+                        "Locator multiaddr must not contain an unspecified IPv6 address: {value}"
+                    ));
+                }
+                Protocol::P2p(_) => {
+                    return Err(format!(
+                        "Locator multiaddr must not contain a peer ID: {value}"
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl FromStr for Locator {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let multiaddr = s
+            .parse::<Multiaddr>()
+            .map_err(|e| format!("Invalid multiaddr: {e}"))?;
+        println!("Multiaddr: {multiaddr}");
+        Self::try_from(multiaddr)
     }
 }
 
@@ -265,5 +312,39 @@ mod tests {
                 .to_string()
                 .contains("Unknown metadata type")
         );
+    }
+
+    #[test]
+    fn locator_rejects_multiaddr_with_peer_id() {
+        assert!("/ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8".parse::<Locator>().unwrap_err().contains("must not contain a peer ID"));
+    }
+
+    #[test]
+    fn locator_rejects_multiaddr_with_unspecified_ipv4() {
+        assert!(
+            "/ip4/0.0.0.0/udp/3000/quic-v1"
+                .parse::<Locator>()
+                .unwrap_err()
+                .contains("must not contain an unspecified IPv4 address")
+        );
+    }
+
+    #[test]
+    fn locator_rejects_multiaddr_with_unspecified_ipv6() {
+        assert!(
+            "/ip6/::/udp/3000/quic-v1"
+                .parse::<Locator>()
+                .unwrap_err()
+                .contains("must not contain an unspecified IPv6 address")
+        );
+    }
+
+    #[test]
+    fn locator_accepts_specific_ip_without_peer_id() {
+        let addr: Multiaddr = "/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap();
+
+        let result = Locator::try_from(addr.clone()).unwrap();
+
+        assert_eq!(result.into_inner(), addr);
     }
 }

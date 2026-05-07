@@ -1705,7 +1705,9 @@ fn add_extra_funding_notes_to_genesis(
                 service_type: ServiceType::BlendNetwork,
                 provider_sk: provider_sk.clone(),
                 zk_sk: zk_sk.clone(),
-                locator: Locator(blend_config.core.backend.listening_address.clone()),
+                locator: Locator::new_unchecked(
+                    blend_config.core.backend.listening_address.clone(),
+                ),
                 note: config.consensus_config.blend_note.clone(),
             }
         })
