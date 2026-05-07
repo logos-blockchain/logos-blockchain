@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod backend;
 pub mod handlers;
 mod openapi;

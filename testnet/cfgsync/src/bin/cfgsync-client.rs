@@ -46,6 +46,7 @@ async fn main() {
         network_port: get_optional_u16("CFG_NETWORK_PORT"),
         blend_port: get_optional_u16("CFG_BLEND_PORT"),
         api_port: get_optional_u16("CFG_API_PORT"),
+        admin_api_port: get_optional_u16("CFG_ADMIN_API_PORT"),
     };
 
     let endpoint = format!("{server_addr}/init-with-node");

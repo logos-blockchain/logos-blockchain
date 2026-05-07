@@ -4761,7 +4761,6 @@ version = "0.1.2"
 dependencies = [
  "async-trait",
  "axum",
- "cfg-if",
  "clap",
  "color-eyre",
  "dhat",
@@ -5061,7 +5060,9 @@ dependencies = [
  "logos-blockchain-tracing",
  "overwatch",
  "serde",
+ "thiserror 2.0.18",
  "time",
+ "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber 0.3.23",
