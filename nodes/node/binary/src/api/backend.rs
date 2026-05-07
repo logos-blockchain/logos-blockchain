@@ -50,7 +50,7 @@ use crate::{
     api::{
         handlers::{
             channel, channel_deposit, leader_claim, post_activity, post_declaration,
-            post_withdrawal,
+            post_set_declaration_id, post_withdrawal,
         },
         openapi::ApiDoc,
     },
@@ -262,6 +262,18 @@ where
                 paths::SDP_POST_WITHDRAWAL,
                 routing::post(
                     post_withdrawal::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
+                        RuntimeServiceId,
+                    >,
+                ),
+            )
+            .route(
+                paths::SDP_POST_SET_DECLARATION_ID,
+                routing::post(
+                    post_set_declaration_id::<
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,

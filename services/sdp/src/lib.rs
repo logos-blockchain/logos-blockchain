@@ -206,7 +206,7 @@ where
         let chain_api: CryptarchiaServiceApi<ChainService, RuntimeServiceId> =
             CryptarchiaServiceApi::new(chain_relay);
 
-        self.resolve_declaration_status(&chain_api).await?;
+        self.validate_initial_declaration_status(&chain_api).await?;
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
@@ -352,7 +352,7 @@ where
         }))
     }
 
-    async fn resolve_declaration_status(
+    async fn validate_initial_declaration_status(
         &self,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) -> Result<(), DynError> {
@@ -387,7 +387,7 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn handle_post_declaration(
-        &self,
+        &mut self,
         declaration: Box<DeclarationMessage>,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
@@ -425,9 +425,10 @@ where
             metrics::declaration_success_total();
         }
 
+        self.declaration_id = Some(declaration_id);
         self.service_resources_handle
             .state_updater
-            .update(Some(SdpState::from(Some(declaration_id))));
+            .update(Some(SdpState::from(self.declaration_id)));
     }
 
     #[expect(
@@ -496,7 +497,7 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn handle_post_withdrawal(
-        &self,
+        &mut self,
         declaration_id: DeclarationId,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
@@ -547,9 +548,10 @@ where
 
         metrics::withdrawal_success_total();
 
+        self.declaration_id = None;
         self.service_resources_handle
             .state_updater
-            .update(Some(SdpState::from(None)));
+            .update(Some(SdpState::from(self.declaration_id)));
     }
 
     async fn handle_set_current_declaration_id(

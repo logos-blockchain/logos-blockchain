@@ -623,6 +623,56 @@ where
 
 #[utoipa::path(
     post,
+    path = paths::SDP_POST_SET_DECLARATION_ID,
+    responses(
+        (status = 200, description = "Post declaration to SDP service to be set as current", body = lb_core::sdp::DeclarationId),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn post_set_declaration_id<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(declaration): Json<Option<lb_core::sdp::DeclarationId>>,
+) -> Response
+where
+    MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
+    WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
+    ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
+    RuntimeServiceId: Debug
+        + Sync
+        + Send
+        + Display
+        + 'static
+        + AsServiceId<ChainService>
+        + AsServiceId<
+            lb_sdp_service::SdpService<
+                MempoolAdapter,
+                WalletAdapter,
+                ChainService,
+                StateStorage,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(
+        lb_api_service::http::sdp::post_set_declaration_id_handler::<
+            MempoolAdapter,
+            WalletAdapter,
+            ChainService,
+            StateStorage,
+            RuntimeServiceId,
+        >(handle, declaration)
+    )
+}
+
+#[utoipa::path(
+    post,
     path = paths::LEADER_CLAIM,
     responses(
         (status = 200, description = "Leader claim transaction submitted", body = lb_api_service::http::consensus::leader::LeaderClaimResponseBody),
