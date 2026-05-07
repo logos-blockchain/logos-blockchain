@@ -1,5 +1,8 @@
 use core::str::FromStr as _;
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::{Path, PathBuf},
+};
 
 use color_eyre::eyre::{Result, eyre};
 use lb_groth16::fr_to_bytes;
@@ -98,11 +101,56 @@ pub fn run(args: &InitArgs) -> Result<()> {
 
     let user_config = build_user_config(args, network_key, keys, blend_listening_address);
 
-    let yaml = serde_yaml::to_string(&user_config)?;
+    let kms_path = kms_output_path(args);
+    let kms_yaml = serde_yaml::to_string(&user_config.kms)?;
+    std::fs::write(&kms_path, &kms_yaml)?;
+
+    let kms_include = kms_include_str(args, &kms_path);
+    let yaml = serialize_with_kms_include(&user_config, &kms_include)?;
     std::fs::write(&args.output, &yaml)?;
 
     println!("Config written to {}", args.output.display());
+    println!("KMS config written to {}", kms_path.display());
     Ok(())
+}
+
+fn kms_output_path(args: &InitArgs) -> PathBuf {
+    args.kms_file.clone().unwrap_or_else(|| {
+        args.output
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("kms.yaml")
+    })
+}
+
+/// Returns the path string to use in `!include <path>` inside the main config.
+///
+/// If the KMS file is in the same directory as the main config, only the
+/// filename is used so the include stays portable when the directory is moved.
+fn kms_include_str(args: &InitArgs, kms_path: &Path) -> String {
+    if let Some(ref kms_file) = args.kms_file {
+        return kms_file.to_string_lossy().into_owned();
+    }
+    // Default: same directory as the output file → reference by filename only.
+    kms_path.file_name().map_or_else(
+        || kms_path.to_string_lossy().into_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+fn serialize_with_kms_include(config: &UserConfig, kms_include: &str) -> Result<String> {
+    use serde_yaml::value::{Tag, TaggedValue};
+    let mut value = serde_yaml::to_value(config)?;
+    if let serde_yaml::Value::Mapping(ref mut map) = value {
+        map.insert(
+            serde_yaml::Value::String("kms".into()),
+            serde_yaml::Value::Tagged(Box::new(TaggedValue {
+                tag: Tag::new("include"),
+                value: serde_yaml::Value::String(kms_include.into()),
+            })),
+        );
+    }
+    Ok(serde_yaml::to_string(&value)?)
 }
 
 fn build_user_config(
@@ -245,6 +293,7 @@ mod tests {
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
             state_path: None,
+            kms_file: None,
             no_ibd,
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();

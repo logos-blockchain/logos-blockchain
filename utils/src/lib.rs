@@ -3,6 +3,7 @@ pub mod math;
 pub mod net;
 pub mod noop_service;
 pub mod types;
+pub mod yaml;
 
 #[cfg(feature = "rng")]
 pub mod blake_rng;

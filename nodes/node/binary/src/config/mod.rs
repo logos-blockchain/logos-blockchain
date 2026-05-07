@@ -156,6 +156,11 @@ pub struct InitArgs {
     /// empty, regardless of any peers passed via `--initial-peers`/`-p`.
     #[clap(long = "no-ibd", default_value_t = false)]
     pub no_ibd: bool,
+
+    /// Path for the generated KMS keys YAML file.
+    /// Defaults to 'kms.yaml' in the same directory as --output.
+    #[clap(long = "kms-file")]
+    pub kms_file: Option<PathBuf>,
 }
 
 #[cfg(feature = "config-gen")]
@@ -607,11 +612,24 @@ pub enum ConfigDeserializationError<Config> {
     IoError(#[from] std::io::Error),
     #[error(transparent)]
     SerdeError(#[from] serde_yaml::Error),
+    #[error("YAML include error: {0}")]
+    IncludeError(String),
 }
 
 pub enum OnUnknownKeys {
     Fail,
     Warn,
+}
+
+impl<C> From<lb_utils::yaml::YamlIncludeError> for ConfigDeserializationError<C> {
+    fn from(e: lb_utils::yaml::YamlIncludeError) -> Self {
+        use lb_utils::yaml::YamlIncludeError as E;
+        match e {
+            E::Io(e) => Self::IoError(e),
+            E::Serde(e) => Self::SerdeError(e),
+            E::InvalidInclude(msg) => Self::IncludeError(msg),
+        }
+    }
 }
 
 pub fn deserialize_config_at_path<Config>(
@@ -621,8 +639,30 @@ pub fn deserialize_config_at_path<Config>(
 where
     Config: for<'de> Deserialize<'de>,
 {
+    let base_dir = config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let file = std::fs::File::open(config_path)?;
-    deserialize_config_from_reader(file, unknown_keys_strategy)
+    let raw: serde_yaml::Value = serde_yaml::from_reader(file)?;
+    let resolved = lb_utils::yaml::resolve_includes(raw, &base_dir)
+        .map_err(ConfigDeserializationError::from)?;
+    deserialize_from_value(resolved, unknown_keys_strategy)
+}
+
+fn deserialize_from_value<Config>(
+    value: serde_yaml::Value,
+    unknown_keys_strategy: OnUnknownKeys,
+) -> Result<Config, ConfigDeserializationError<Config>>
+where
+    Config: for<'de> Deserialize<'de>,
+{
+    use serde::de::IntoDeserializer as _;
+    let mut ignored_fields = Vec::new();
+    let config = serde_ignored::deserialize::<_, _, Config>(value.into_deserializer(), |path| {
+        ignored_fields.push(path.to_string());
+    })?;
+    apply_unknown_keys_strategy(config, ignored_fields, unknown_keys_strategy)
 }
 
 pub fn deserialize_config_from_reader<Config, Reader>(
@@ -640,8 +680,15 @@ where
             ignored_fields.push(path.to_string());
         },
     )?;
+    apply_unknown_keys_strategy(config, ignored_fields, unknown_keys_strategy)
+}
 
-    match (ignored_fields, unknown_keys_strategy) {
+fn apply_unknown_keys_strategy<Config>(
+    config: Config,
+    ignored_fields: Vec<String>,
+    strategy: OnUnknownKeys,
+) -> Result<Config, ConfigDeserializationError<Config>> {
+    match (ignored_fields, strategy) {
         (ignored_fields, _) if ignored_fields.is_empty() => Ok(config),
         (ignored_fields, OnUnknownKeys::Warn) => {
             warn!(
