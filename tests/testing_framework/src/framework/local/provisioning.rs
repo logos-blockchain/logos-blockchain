@@ -605,6 +605,8 @@ fn build_cryptarchia_user_config(
                 ibd: network::IbdConfig {
                     delay_before_new_download: Duration::from_secs(10),
                     peers: HashSet::new(),
+                    max_retries: 0,
+                    initial_retry_delay: Duration::from_secs(5),
                 },
             },
             network: network::NetworkConfig {
