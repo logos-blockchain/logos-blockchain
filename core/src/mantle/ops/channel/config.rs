@@ -66,7 +66,7 @@ impl Operation for ChannelConfigOp {
         // index. This is enforced by the proof structure that enforces it.
 
         // Check config wellformness
-        if self.configuration_threshold == 0 || self.withdraw_threshold == 0 || self.keys.len() == 0
+        if self.configuration_threshold == 0 || self.withdraw_threshold == 0 || self.keys.is_empty()
         {
             return Err(Error::InvalidChannelConfig);
         }
