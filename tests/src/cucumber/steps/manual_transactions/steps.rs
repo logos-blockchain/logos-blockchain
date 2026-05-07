@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{str::FromStr as _, time::Duration};
 
 use cucumber::{gherkin::Step, given, then, when};
 use tracing::{info, warn};
@@ -10,10 +10,12 @@ use crate::{
             TARGET,
             manual_transactions::{
                 best_node::get_best_node_info,
+                command_file_parsing::ManualCommand,
                 command_file_utils::{
-                    execute_coin_splits_all_user_wallets, execute_continuous_user_wallets,
-                    execute_stress_continuous_next_wallet_cycles, perform_manual_step_control,
-                    verify_min_on_chain_outputs_all_user_wallets,
+                    execute_coin_splits_all_user_wallets,
+                    execute_continuous_next_wallet_user_wallet,
+                    execute_continuous_round_robin_user_wallets, perform_manual_step_control,
+                    verify_min_outputs_all_user_wallets,
                 },
                 tracked_transactions::{
                     submit_funded_transfer_transaction, submit_invalid_transfer_transaction,
@@ -509,7 +511,7 @@ async fn step_continuous_user_wallets(
         "Starting continuous user wallet transactions: coin_split_outputs={coin_split_outputs}, coin_split_value={coin_split_value}, transactions={transactions}, value={value}, cycles={cycles}"
     );
 
-    execute_continuous_user_wallets(
+    execute_continuous_round_robin_user_wallets(
         world,
         &step.value,
         coin_split_outputs,
@@ -547,18 +549,27 @@ async fn step_coin_split_transactions_for_each_user_wallet(
     Ok(())
 }
 
-#[when(expr = "I verify each wallet has minimum {int} outputs available on-chain in {int} seconds")]
-async fn step_verify_each_wallet_minimum_outputs_available_on_chain(
+#[when(expr = "I verify each wallet has minimum {int} outputs {string} in {int} seconds")]
+async fn step_verify_each_wallet_minimum_outputs(
     world: &mut CucumberWorld,
     step: &Step,
     min_outputs: usize,
+    wallet_state_type: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    verify_min_on_chain_outputs_all_user_wallets(world, &step.value, min_outputs, timeout_seconds)
-        .await
-        .inspect_err(|e| {
+    verify_min_outputs_all_user_wallets(
+        world,
+        &step.value,
+        min_outputs,
+        timeout_seconds,
+        WalletStateType::from_str(&wallet_state_type).inspect_err(|e| {
             warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?;
+        })?,
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
 
     Ok(())
 }
@@ -573,12 +584,14 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
     transactions_per_wallet: usize,
     value: u64,
 ) -> StepResult {
-    execute_stress_continuous_next_wallet_cycles(
+    execute_continuous_next_wallet_user_wallet(
         world,
         &step.value,
-        cycles,
-        transactions_per_wallet,
-        value,
+        &ManualCommand::ContinuousNextWalletUserWallets {
+            cycles,
+            transactions_per_wallet,
+            value,
+        },
     )
     .await
     .inspect_err(|e| {

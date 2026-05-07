@@ -121,7 +121,7 @@ Feature: Transactions
     Then I stop all nodes
 
   @transactions_ci
-  Scenario: Continuous coin split transactions version 1
+  Scenario: Continuous coin split transactions round robin
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 3           | 100000       |
@@ -136,38 +136,38 @@ Feature: Transactions
     Then I stop all nodes
 
   @local_transactions
-  Scenario: Local continuous coin split transactions version 1
+  Scenario: Local continuous coin split transactions round robin
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 3           | 100000       |
       | 2             | 3           | 100000       |
-      | 3             | 3           | 100000      |
-      | 4             | 3           | 100000      |
-      | 5             | 3           | 100000      |
-      | 6             | 3           | 100000      |
-      | 7             | 3           | 100000      |
-      | 8             | 3           | 100000      |
-      | 9             | 3           | 100000      |
-      | 10            | 3           | 100000      |
+      | 3             | 3           | 100000       |
+      | 4             | 3           | 100000       |
+      | 5             | 3           | 100000       |
+      | 6             | 3           | 100000       |
+      | 7             | 3           | 100000       |
+      | 8             | 3           | 100000       |
+      | 9             | 3           | 100000       |
+      | 10            | 3           | 100000       |
     And I have a cluster with capacity of 10 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
-      | NODE_1    | 1             | WALLET_1A   |              |
-      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-      | NODE_3    | 3             | WALLET_3A   | NODE_1       |
-      | NODE_4    | 4             | WALLET_4A   | NODE_1       |
-      | NODE_5    | 5             | WALLET_5A   | NODE_1       |
-      | NODE_6    | 6             | WALLET_6A   | NODE_5       |
-      | NODE_7    | 7             | WALLET_7A   | NODE_6       |
-      | NODE_8    | 8             | WALLET_8A   | NODE_7       |
-      | NODE_9    | 9             | WALLET_9A   | NODE_8       |
+      | NODE_1    | 1             | WALLET_01A  |              |
+      | NODE_2    | 2             | WALLET_02A  | NODE_1       |
+      | NODE_3    | 3             | WALLET_03A  | NODE_1       |
+      | NODE_4    | 4             | WALLET_04A  | NODE_1       |
+      | NODE_5    | 5             | WALLET_05A  | NODE_1       |
+      | NODE_6    | 6             | WALLET_06A  | NODE_5       |
+      | NODE_7    | 7             | WALLET_07A  | NODE_6       |
+      | NODE_8    | 8             | WALLET_08A  | NODE_7       |
+      | NODE_9    | 9             | WALLET_09A  | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
     When node "NODE_1" is at height 2 in 300 seconds
     When I perform continuous transactions on user wallets with 10 coin split outputs of 100 LGO, 5 transactions of 50 LGO each for 3 cycles
     Then I stop all nodes
 
   @transactions_ci
-  Scenario: Continuous coin split transactions version 2
+  Scenario: Continuous transactions next wallet with coin split
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 3           | 1000000      |
@@ -179,12 +179,12 @@ Feature: Transactions
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
     And I perform 2 coin split transactions for each user wallet with 10 outputs of 100 LGO each
-    And I verify each wallet has minimum 20 outputs available on-chain in 300 seconds
+    And I verify each wallet has minimum 20 outputs "available" in 300 seconds
     And I perform 3 stress continuous cycles with 20 transactions of 100 LGO to the next user wallet
     Then I stop all nodes
 
   @local_transactions
-  Scenario: Local continuous coin split transactions version 2
+  Scenario: Local continuous transactions next wallet with coin split
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 3           | 1000000      |
@@ -200,20 +200,20 @@ Feature: Transactions
     And I have a cluster with capacity of 10 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
-      | NODE_1    | 1             | WALLET_1A   |              |
-      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-      | NODE_3    | 3             | WALLET_3A   | NODE_1       |
-      | NODE_4    | 4             | WALLET_4A   | NODE_1       |
-      | NODE_5    | 5             | WALLET_5A   | NODE_1       |
-      | NODE_6    | 6             | WALLET_6A   | NODE_5       |
-      | NODE_7    | 7             | WALLET_7A   | NODE_6       |
-      | NODE_8    | 8             | WALLET_8A   | NODE_7       |
-      | NODE_9    | 9             | WALLET_9A   | NODE_8       |
+      | NODE_1    | 1             | WALLET_01A  |              |
+      | NODE_2    | 2             | WALLET_02A  | NODE_1       |
+      | NODE_3    | 3             | WALLET_03A  | NODE_1       |
+      | NODE_4    | 4             | WALLET_04A  | NODE_1       |
+      | NODE_5    | 5             | WALLET_05A  | NODE_1       |
+      | NODE_6    | 6             | WALLET_06A  | NODE_5       |
+      | NODE_7    | 7             | WALLET_07A  | NODE_6       |
+      | NODE_8    | 8             | WALLET_08A  | NODE_7       |
+      | NODE_9    | 9             | WALLET_09A  | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
-    And I perform 3 coin split transactions for each user wallet with 10 outputs of 100 LGO each
-    And I verify each wallet has minimum 30 outputs available on-chain in 300 seconds
-    And I perform 3 stress continuous cycles with 30 transactions of 100 LGO to the next user wallet
+    And I perform 3 coin split transactions for each user wallet with 20 outputs of 100 LGO each
+    And I verify each wallet has minimum 60 outputs "available" in 300 seconds
+    And I perform 3 stress continuous cycles with 60 transactions of 100 LGO to the next user wallet
     Then I stop all nodes
 
   @transactions_ci
