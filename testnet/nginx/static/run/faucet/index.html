@@ -59,9 +59,6 @@
                     respDiv.innerHTML = `
                         <strong>Success!</strong><br>
                         <p>Transaction hash: <code>${hash.substring(0, 8)}...</code></p>
-                        <a href="${explorerUrl}" target="_blank" rel="noopener noreferrer">
-                            View in Explorer
-                        </a>
                     `;
                 } else {
                     respDiv.className = 'error';
