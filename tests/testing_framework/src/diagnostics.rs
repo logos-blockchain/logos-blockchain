@@ -373,37 +373,42 @@ impl NodeDiagnostic {
 
     fn format_blend(&self, peer_labels: &BTreeMap<String, String>) -> String {
         match &self.blend {
-            Ok(Some(info)) => {
-                let current = info
-                    .current_session_peers
-                    .iter()
-                    .map(|(peer, healthy)| {
-                        let suffix = if *healthy { "healthy" } else { "unhealthy" };
-                        format!("{}:{suffix}", resolve_peer_label(peer_labels, peer))
-                    })
-                    .collect::<Vec<_>>();
-                let old = info.old_session_peers.as_ref().map_or_else(
-                    || "none".to_owned(),
-                    |peers| {
-                        peers
-                            .iter()
-                            .map(|peer| resolve_peer_label(peer_labels, peer))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    },
-                );
-
-                format!(
-                    "ok session_peers={} unhealthy={} old_session=[{}] current_session=[{}]",
-                    info.current_session_peers.len(),
-                    info.current_session_peers
+            Ok(Some(info)) => info.core_info.as_ref().map_or_else(|| format!(
+                    "ok node_id={} mode=edge",
+                    resolve_peer_label(peer_labels, &info.node_id)
+                ), |core_info| {
+                    let current = core_info
+                        .current_session_peers
                         .iter()
-                        .filter(|(_, healthy)| !healthy)
-                        .count(),
-                    old,
-                    current.join(", ")
-                )
-            }
+                        .map(|(peer, healthy)| {
+                            let suffix = if *healthy { "healthy" } else { "unhealthy" };
+                            format!("{}:{suffix}", resolve_peer_label(peer_labels, peer))
+                        })
+                        .collect::<Vec<_>>();
+                    let old = core_info.old_session_peers.as_ref().map_or_else(
+                        || "none".to_owned(),
+                        |peers| {
+                            peers
+                                .iter()
+                                .map(|peer| resolve_peer_label(peer_labels, peer))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        },
+                    );
+
+                    format!(
+                        "ok node_id={} mode=core session_peers={} unhealthy={} old_session=[{}] current_session=[{}]",
+                        resolve_peer_label(peer_labels, &info.node_id),
+                        core_info.current_session_peers.len(),
+                        core_info
+                            .current_session_peers
+                            .iter()
+                            .filter(|(_, healthy)| !healthy)
+                            .count(),
+                        old,
+                        current.join(", ")
+                    )
+                }),
             Ok(None) => "unavailable".to_owned(),
             Err(error) => format!("error={error}"),
         }
@@ -469,31 +474,44 @@ impl From<lb_network_service::backends::libp2p::Libp2pInfo> for NetworkSnapshot 
 
 #[derive(Clone)]
 struct BlendSnapshot {
+    node_id: String,
+    core_info: Option<BlendCoreSnapshot>,
+}
+
+#[derive(Clone)]
+struct BlendCoreSnapshot {
     current_session_peers: Vec<(String, bool)>,
     old_session_peers: Option<Vec<String>>,
 }
 
 impl From<BlendNetworkInfo<lb_network_service::backends::libp2p::PeerId>> for BlendSnapshot {
     fn from(value: BlendNetworkInfo<lb_network_service::backends::libp2p::PeerId>) -> Self {
-        let mut current_session_peers = value
-            .current_session_peers
-            .into_iter()
-            .map(|(peer, healthy)| (peer.to_string(), healthy))
-            .collect::<Vec<_>>();
-        current_session_peers.sort_by(|left, right| left.0.cmp(&right.0));
-
-        let old_session_peers = value.old_session_peers.map(|peers| {
-            let mut peers = peers
+        let core_info = value.core_info.map(|core_info| {
+            let mut current_session_peers = core_info
+                .current_session_peers
                 .into_iter()
-                .map(|peer| peer.to_string())
+                .map(|(peer, healthy)| (peer.to_string(), healthy))
                 .collect::<Vec<_>>();
-            peers.sort();
-            peers
+            current_session_peers.sort_by(|left, right| left.0.cmp(&right.0));
+
+            let old_session_peers = core_info.old_session_peers.map(|peers| {
+                let mut peers = peers
+                    .into_iter()
+                    .map(|peer| peer.to_string())
+                    .collect::<Vec<_>>();
+                peers.sort();
+                peers
+            });
+
+            BlendCoreSnapshot {
+                current_session_peers,
+                old_session_peers,
+            }
         });
 
         Self {
-            current_session_peers,
-            old_session_peers,
+            node_id: value.node_id.to_string(),
+            core_info,
         }
     }
 }
@@ -536,6 +554,7 @@ struct ClusterSummary {
 }
 
 impl ClusterSummary {
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn build(
         cluster_control_profile: &str,
         node_count: usize,
@@ -572,6 +591,12 @@ impl ClusterSummary {
             .filter_map(|node| match &node.blend {
                 Ok(Some(info)) => Some((&node.label, info)),
                 _ => None,
+            })
+            .collect::<Vec<_>>();
+        let blend_core_snapshots = blend_snapshots
+            .iter()
+            .filter_map(|(label, info)| {
+                info.core_info.as_ref().map(|core_info| (*label, core_info))
             })
             .collect::<Vec<_>>();
 
@@ -613,12 +638,12 @@ impl ClusterSummary {
                 .map(|snapshot| u64::from(snapshot.n_pending_connections))
                 .sum(),
             blend_session_peer_range: format_range_usize(
-                &blend_snapshots
+                &blend_core_snapshots
                     .iter()
                     .map(|(_, info)| info.current_session_peers.len())
                     .collect::<Vec<_>>(),
             ),
-            blend_unhealthy_total: blend_snapshots
+            blend_unhealthy_total: blend_core_snapshots
                 .iter()
                 .map(|(_, info)| {
                     info.current_session_peers
@@ -627,7 +652,7 @@ impl ClusterSummary {
                         .count()
                 })
                 .sum(),
-            blend_transitioning_nodes: blend_snapshots
+            blend_transitioning_nodes: blend_core_snapshots
                 .iter()
                 .filter(|(_, info)| info.old_session_peers.is_some())
                 .map(|(label, _)| (*label).clone())

@@ -528,7 +528,7 @@ where
     get,
     path = paths::BLEND_NETWORK_INFO,
     responses(
-        (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::BlendNetworkInfo>),
+        (status = 200, description = "Query the blend network information", body = Option<lb_blend_service::message::NetworkInfo<PeerId>>),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
