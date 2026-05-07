@@ -5049,7 +5049,6 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
- "logos-blockchain-libp2p",
  "logos-blockchain-node",
  "num-bigint",
  "serde",
