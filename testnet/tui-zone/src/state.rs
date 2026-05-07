@@ -20,9 +20,6 @@ pub trait ZoneState {
     /// Apply a message to the canonical (unfinalized) state.
     fn apply(&mut self, msg: AppMessage);
 
-    /// Revert a message from canonical state (orphaned by reorg).
-    fn revert(&mut self, tx_uuid: &Uuid);
-
     /// Check if a message with this `tx_uuid` exists in canonical or finalized
     /// state.
     fn contains(&self, tx_uuid: &Uuid) -> bool;
@@ -56,10 +53,6 @@ impl ZoneState for InMemoryZoneState {
         if !self.contains(&msg.tx_uuid) {
             self.canonical.push(msg);
         }
-    }
-
-    fn revert(&mut self, tx_uuid: &Uuid) {
-        self.canonical.retain(|m| &m.tx_uuid != tx_uuid);
     }
 
     fn contains(&self, tx_uuid: &Uuid) -> bool {
@@ -101,25 +94,21 @@ impl ZoneState for InMemoryZoneState {
 
 /// Process a channel update event.
 ///
-/// 1. Revert orphaned from state — these are our own pending whose original
-///    signed tx is permanently invalid (SDK has given up on them; by SDK
-///    contract, all entries in `orphaned` are ours).
-/// 2. Apply adopted to state.
-/// 3. Iterate orphaned, return entries that aren't on the new canonical chain
-///    and aren't still in flight via `pending` — those are the republish
-///    candidates the user must decide on.
+/// State here represents "messages that have been published" (ours via
+/// `Event::Published` optimistic apply, others' via `adopted`) — it does NOT
+/// track current canonical membership. Once a message is added it stays;
+/// there is no revert. Reorgs and bouncing don't change what was published,
+/// only where it lives on chain.
+///
+/// 1. Apply adopted to state (others' new inscriptions).
+/// 2. Iterate orphaned and return entries not in `pending` — those are
+///    republish candidates the user must decide on.
 pub fn resolve_conflicts(
     state: &mut InMemoryZoneState,
     orphaned: &[InscriptionInfo],
     adopted: &[InscriptionInfo],
     pending: &[InscriptionInfo],
 ) -> Vec<AppMessage> {
-    for inv in orphaned {
-        if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
-            state.revert(&msg.tx_uuid);
-        }
-    }
-
     for adp in adopted {
         if let Some(msg) = AppMessage::from_bytes(&adp.payload) {
             state.apply(msg);
@@ -134,7 +123,6 @@ pub fn resolve_conflicts(
     orphaned
         .iter()
         .filter_map(|inv| AppMessage::from_bytes(&inv.payload))
-        .filter(|m| !state.contains(&m.tx_uuid))
         .filter(|m| !pending_uuids.contains(&m.tx_uuid))
         .collect()
 }

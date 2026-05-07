@@ -291,49 +291,30 @@ fn spawn_drive(
 
 /// Drive the sequencer with republish-on-conflict behavior.
 ///
-/// On each `ChannelUpdate`:
-/// 1. remove `orphaned` from local state (mine that SDK has given up on),
-/// 2. apply `adopted` to local state (block-delta on the new canonical),
-/// 3. iterate `orphaned`, filter to ours, republish those not in state and not
-///    in `pending`.
+/// On each `ChannelUpdate`, republish each entry in `orphaned` (mine that the
+/// SDK has given up on) that isn't already in flight via `pending`. No local
+/// state mirror needed — the SDK's `pending` field is the dedup signal.
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut state: HashSet<Vec<u8>> = HashSet::new();
-
         loop {
-            match sequencer.next_event().await {
-                Some(Event::Published { payload, .. }) => {
-                    // Optimistic apply: we just published this, mirror locally.
-                    state.insert(payload);
-                }
-                Some(Event::ChannelUpdate {
-                    orphaned,
-                    adopted,
-                    pending,
-                }) => {
-                    for o in &orphaned {
-                        state.remove(&o.payload);
-                    }
-                    for a in &adopted {
-                        state.insert(a.payload.clone());
-                    }
+            let Some(Event::ChannelUpdate {
+                orphaned, pending, ..
+            }) = sequencer.next_event().await
+            else {
+                continue;
+            };
 
-                    let pending_payloads: HashSet<&Vec<u8>> =
-                        pending.iter().map(|p| &p.payload).collect();
-                    for inv in &orphaned {
-                        if !state.contains(&inv.payload) && !pending_payloads.contains(&inv.payload)
-                        {
-                            debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
-                            if let Err(e) = handle.publish_message(inv.payload.clone()).await {
-                                debug!("Failed to re-publish: {e}");
-                            }
-                        }
+            let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
+            for inv in &orphaned {
+                if !pending_payloads.contains(&inv.payload) {
+                    debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
+                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                        debug!("Failed to re-publish: {e}");
                     }
                 }
-                _ => {}
             }
         }
     })
@@ -821,13 +802,11 @@ fn spawn_sequencer_sorted_policy(
     discarded: DiscardedSet,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut state: HashSet<Vec<u8>> = HashSet::new();
         let mut max_seen_on_chain: Option<Vec<u8>> = None;
 
         loop {
             let event = sequencer.next_event().await;
             if let Some(Event::Published { payload, .. }) = event {
-                state.insert(payload.clone());
                 if max_seen_on_chain.as_ref().is_none_or(|m| payload > *m) {
                     max_seen_on_chain = Some(payload);
                 }
@@ -842,11 +821,7 @@ fn spawn_sequencer_sorted_policy(
                 continue;
             };
 
-            for o in &orphaned {
-                state.remove(&o.payload);
-            }
             for a in &adopted {
-                state.insert(a.payload.clone());
                 discarded.lock().await.remove(&a.payload);
                 if max_seen_on_chain.as_ref().is_none_or(|m| a.payload > *m) {
                     max_seen_on_chain = Some(a.payload.clone());
@@ -856,8 +831,7 @@ fn spawn_sequencer_sorted_policy(
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
 
             for inv in &orphaned {
-                if state.contains(&inv.payload)
-                    || pending_payloads.contains(&inv.payload)
+                if pending_payloads.contains(&inv.payload)
                     || discarded.lock().await.contains(&inv.payload)
                 {
                     continue;
