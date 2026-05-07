@@ -1,5 +1,6 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use multiaddr::Multiaddr;
 use nom::{
     IResult, Parser as _,
     bytes::complete::take,
@@ -213,7 +214,7 @@ fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
     ))
 }
 
-fn decode_locator(input: &[u8]) -> IResult<&[u8], multiaddr::Multiaddr> {
+fn decode_locator(input: &[u8]) -> IResult<&[u8], Multiaddr> {
     // Locator = 2Byte *BYTE
     let (input, len_bytes) = take(2usize).parse(input)?;
     let len = u16::from_le_bytes([len_bytes[0], len_bytes[1]]) as usize;
@@ -221,8 +222,7 @@ fn decode_locator(input: &[u8]) -> IResult<&[u8], multiaddr::Multiaddr> {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::LengthValue)));
     }
     map_res(take(len), |bytes: &[u8]| {
-        multiaddr::Multiaddr::try_from(bytes.to_vec())
-            .map_err(|_| Error::new(bytes, ErrorKind::Fail))
+        Multiaddr::try_from(bytes.to_vec()).map_err(|_| Error::new(bytes, ErrorKind::Fail))
     })
     .parse(input)
 }
@@ -668,7 +668,7 @@ pub fn encode_channel_withdraw(op: &ChannelWithdrawOp) -> Vec<u8> {
 }
 
 /// Encode SDP operations
-fn encode_locator(locator: &multiaddr::Multiaddr) -> Vec<u8> {
+fn encode_locator(locator: &Multiaddr) -> Vec<u8> {
     let locator_bytes = locator.to_vec();
     assert!(
         locator_bytes.len() <= LOCATOR_BYTES_SIZE_LIMIT,
@@ -947,7 +947,6 @@ mod tests {
     use ark_ff::Field as _;
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use multiaddr::Multiaddr;
     use num_bigint::BigUint;
 
     use super::*;
@@ -1327,8 +1326,8 @@ mod tests {
 
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let zk_sk = ZkKey::zero();
-        let locator1: multiaddr::Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
-        let locator2: multiaddr::Multiaddr = "/ip6/::1/tcp/9090".parse().unwrap();
+        let locator1: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
+        let locator2: Multiaddr = "/ip6/::1/tcp/9090".parse().unwrap();
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
         let locked_note = crate::mantle::Utxo {
@@ -1565,7 +1564,7 @@ mod tests {
             outputs: Outputs::new(vec![Note::new(5000, locked_note_sk.to_public_key())]),
         };
 
-        let locator: multiaddr::Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
+        let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
         let zk_sk = ZkKey::zero();
         let sdp_declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
@@ -1933,7 +1932,7 @@ mod tests {
 
     #[test]
     fn test_encode_reject_excessive_sdp_declare() {
-        let locator: multiaddr::Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
+        let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
         let sdp_declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locators: vec![Locator::new_unchecked(locator); u8::MAX as usize + 1], /* excessive locator count */

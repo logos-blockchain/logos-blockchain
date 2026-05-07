@@ -70,23 +70,25 @@ impl TryFrom<Multiaddr> for Locator {
     type Error = String;
 
     fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
-        match value.iter().next() {
-            Some(Protocol::Ip4(ip)) if ip.is_unspecified() => {
-                return Err(format!(
-                    "Locator multiaddr must not contain an unspecified IPv4 address: {value}"
-                ));
+        for protocol in &value {
+            match protocol {
+                Protocol::Ip4(ip) if ip.is_unspecified() => {
+                    return Err(format!(
+                        "Locator multiaddr must not contain an unspecified IPv4 address: {value}"
+                    ));
+                }
+                Protocol::Ip6(ip) if ip.is_unspecified() => {
+                    return Err(format!(
+                        "Locator multiaddr must not contain an unspecified IPv6 address: {value}"
+                    ));
+                }
+                Protocol::P2p(_) => {
+                    return Err(format!(
+                        "Locator multiaddr must not contain a peer ID: {value}"
+                    ));
+                }
+                _ => {}
             }
-            Some(Protocol::Ip6(ip)) if ip.is_unspecified() => {
-                return Err(format!(
-                    "Locator multiaddr must not contain an unspecified IPv6 address: {value}"
-                ));
-            }
-            Some(Protocol::P2p(_)) => {
-                return Err(format!(
-                    "Locator multiaddr must not contain a peer ID: {value}"
-                ));
-            }
-            _ => {}
         }
 
         Ok(Self(value))
@@ -100,6 +102,7 @@ impl FromStr for Locator {
         let multiaddr = s
             .parse::<Multiaddr>()
             .map_err(|e| format!("Invalid multiaddr: {e}"))?;
+        println!("Multiaddr: {multiaddr}");
         Self::try_from(multiaddr)
     }
 }
