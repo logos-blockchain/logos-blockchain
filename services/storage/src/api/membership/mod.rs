@@ -27,14 +27,14 @@ pub trait StorageMembershipApi {
 
     async fn load_latest_block(&mut self) -> Result<Option<BlockNumber>, DynError>;
 
-    async fn save_forming_session(
+    async fn save_next_session(
         &mut self,
         service_type: ServiceType,
         session_id: SessionNumber,
         providers: &HashMap<ProviderId, BTreeSet<Locator>>,
     ) -> Result<(), DynError>;
 
-    async fn load_forming_session(
+    async fn load_next_session(
         &mut self,
         service_type: ServiceType,
     ) -> Result<Option<(SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>)>, DynError>;
