@@ -145,7 +145,7 @@ mod tests {
     fn include_resolves_relative_to_included_file_directory() {
         let dir = TempDir::new().unwrap();
         let sub_dir = dir.path().join("sub");
-        fs::create_dir(&sub_dir).unwrap();
+        fs::create_dir_all(&sub_dir).unwrap();
 
         fs::write(sub_dir.join("leaf.yaml"), "x: 1\n").unwrap();
         fs::write(sub_dir.join("inner.yaml"), "data: !include leaf.yaml\n").unwrap();
