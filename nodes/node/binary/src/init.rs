@@ -93,25 +93,102 @@ pub fn run(args: &InitArgs) -> Result<()> {
     }
 
     let network_key = lb_libp2p::ed25519::SecretKey::generate();
-    let keys = generate_keys();
 
     let blend_listening_address =
         Multiaddr::from_str(&format!("/ip4/0.0.0.0/udp/{}/quic-v1", args.blend_port))
             .map_err(|e| eyre!("Invalid blend listening address: {e}"))?;
 
+    // If --kms-file points to an existing file, reuse its keys instead of
+    // generating new ones.
+    let (keys, kms_path, write_kms) = match &args.kms_file {
+        Some(path) if path.exists() => {
+            let contents = std::fs::read_to_string(path)?;
+            let kms_config: KmsConfig = serde_yaml::from_str(&contents)?;
+            let keys = keys_from_kms_config(&kms_config)?;
+            (keys, path.clone(), false)
+        }
+        _ => {
+            let keys = generate_keys();
+            let path = kms_output_path(args);
+            (keys, path, true)
+        }
+    };
+
     let user_config = build_user_config(args, network_key, keys, blend_listening_address);
 
-    let kms_path = kms_output_path(args);
-    let kms_yaml = serde_yaml::to_string(&user_config.kms)?;
-    std::fs::write(&kms_path, &kms_yaml)?;
+    if write_kms {
+        let kms_yaml = serde_yaml::to_string(&user_config.kms)?;
+        std::fs::write(&kms_path, &kms_yaml)?;
+        println!("KMS config written to {}", kms_path.display());
+    }
 
     let kms_include = kms_include_str(args, &kms_path);
     let yaml = serialize_with_kms_include(&user_config, &kms_include)?;
     std::fs::write(&args.output, &yaml)?;
 
     println!("Config written to {}", args.output.display());
-    println!("KMS config written to {}", kms_path.display());
     Ok(())
+}
+
+/// Extracts key material from a parsed KMS config so it can be used to
+/// populate the rest of the node config without generating new keys.
+///
+/// Assumes the KMS config was produced by `init` and follows the layout:
+/// - exactly one Ed25519 key  → blend signing key
+/// - one Zk key derived from the Ed25519 public bytes → blend Zk key
+/// - remaining Zk keys sorted by ID: first → leader, second → funding
+fn keys_from_kms_config(kms_config: &KmsConfig) -> Result<GeneratedKeys> {
+    let (blend_signing_key_id, blend_signing_key) = kms_config
+        .backend
+        .keys
+        .iter()
+        .find_map(|(id, key)| match key {
+            Key::Ed25519(k) => Some((id.clone(), k.clone())),
+            Key::Zk(_) => None,
+        })
+        .ok_or_else(|| eyre!("KMS file contains no Ed25519 key"))?;
+
+    let blend_zk_key = ZkKey::from(BigUint::from_bytes_le(
+        blend_signing_key.public_key().as_bytes(),
+    ));
+    let blend_zk_key_id = key_id(&Key::Zk(blend_zk_key.clone()));
+
+    let mut other_zk: Vec<(KeyId, ZkKey)> = kms_config
+        .backend
+        .keys
+        .iter()
+        .filter_map(|(id, key)| match key {
+            Key::Zk(k) if *id != blend_zk_key_id => Some((id.clone(), k.clone())),
+            _ => None,
+        })
+        .collect();
+
+    other_zk.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    if other_zk.len() < 2 {
+        return Err(eyre!(
+            "KMS file must contain at least 3 Zk keys (blend, leader, funding), found {}",
+            other_zk.len() + 1
+        ));
+    }
+
+    let (leader_key_id, leader_key) = other_zk.remove(0);
+    let (funding_key_id, funding_key) = other_zk.remove(0);
+    let leader_pk = leader_key.as_public_key();
+    let funding_pk = funding_key.as_public_key();
+
+    Ok(GeneratedKeys {
+        blend_signing_key,
+        blend_zk_key,
+        leader_key,
+        funding_key,
+        blend_signing_key_id,
+        blend_zk_key_id,
+        leader_key_id,
+        funding_key_id,
+        leader_pk,
+        funding_pk,
+    })
 }
 
 fn kms_output_path(args: &InitArgs) -> PathBuf {
