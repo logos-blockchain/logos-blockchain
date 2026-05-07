@@ -6,6 +6,7 @@ use std::{
 
 use hex::ToHex as _;
 use lb_core::codec::SerializeOp as _;
+use lb_key_management_system_service::keys::Key;
 use lb_libp2p::{PeerId, identity, identity::ed25519};
 use lb_node::UserConfig;
 use lb_testing_framework::{CoreBuilderExt as _, ScenarioBuilder};
@@ -182,6 +183,30 @@ fn user_config_from_node_yaml(path: &Path) -> Result<UserConfig, StepError> {
 pub fn funding_wallet_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
     let config = user_config_from_node_yaml(path)?;
     Ok(config.sdp.wallet.funding_pk.to_bytes()?.encode_hex())
+}
+
+/// Reads a node YAML user config file and extracts the configured Blend core
+/// ZK wallet public key.
+pub fn blend_core_zk_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
+    let config = user_config_from_node_yaml(path)?;
+
+    let key_id = &config.blend.core.zk.secret_key_kms_id;
+    let key = config
+        .kms
+        .backend
+        .keys
+        .get(key_id)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Blend ZK signing key '{key_id}' not found in KMS"),
+        })?;
+
+    let Key::Zk(secret_key) = key else {
+        return Err(StepError::LogicalError {
+            message: "Blend ZK signing key must be Zk".to_owned(),
+        });
+    };
+
+    Ok(secret_key.to_public_key().to_bytes()?.encode_hex())
 }
 
 /// Extracts the child directory name that starts with a known prefix,

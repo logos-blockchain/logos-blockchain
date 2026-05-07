@@ -130,7 +130,7 @@ async fn post_blend_declaration(
     }: PostBlendDeclarationArgs,
 ) -> Result<()> {
     let user_config =
-        deserialize_config_at_path::<UserConfig>(&user_config_path, OnUnknownKeys::Fail)
+        deserialize_config_at_path::<UserConfig>(&user_config_path, OnUnknownKeys::Warn)
             .with_context(|| {
                 format!(
                     "Failed to read user config at '{}'",
