@@ -7,7 +7,11 @@ mod relays;
 mod sync;
 
 use core::fmt::Debug;
-use std::{fmt::Display, hash::Hash, time::Duration};
+use std::{
+    fmt::Display,
+    hash::Hash,
+    time::{Duration, Instant},
+};
 
 use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
@@ -66,6 +70,8 @@ pub enum Error {
     Serialisation(#[from] lb_core::codec::Error),
     #[error("Invalid block: {0}")]
     InvalidBlock(String),
+    #[error("Failed to reconstruct block: {0} mempool transactions not found")]
+    MissingMempoolTransactions(usize),
     #[error("Mempool error: {0}")]
     Mempool(String),
     #[error("Block header id not found: {0}")]
@@ -430,15 +436,24 @@ where
     {
         let block_id = proposal.header().id();
         let block_slot = proposal.header().slot();
+        metrics::consensus_proposals_received_total("network");
 
         if !should_process_block(relays.cryptarchia(), block_id, block_slot).await {
+            metrics::consensus_proposals_ignored_total("already_processed", "network");
             return;
         }
 
+        let reconstruct_started_at = Instant::now();
         let block = match reconstruct_block_from_proposal(proposal, relays.mempool_adapter()).await
         {
-            Ok(block) => block,
+            Ok(block) => {
+                metrics::consensus_observe_proposal_reconstruct_ok(
+                    reconstruct_started_at.elapsed(),
+                );
+                block
+            }
             Err(e) => {
+                metrics::consensus_observe_proposal_reconstruct_err("network", &e);
                 error!(
                     target: LOG_TARGET,
                     "Failed to reconstruct block from proposal: {:?}",
@@ -498,13 +513,16 @@ where
         Self::log_received_block(&block);
 
         let block_id = block.header().id();
+        let started_at = Instant::now();
 
         match Self::apply_block_with_future_block_retry(block, relays).await {
             Ok(()) => {
+                metrics::consensus_observe_apply_block_ok(started_at.elapsed());
                 orphan_downloader.remove_orphan(&block_id);
                 trace!(counter.consensus_processed_blocks = 1);
             }
             Err(err) => {
+                metrics::consensus_observe_apply_block_err(&err);
                 Self::handle_proposal_processing_error(err, block_id, orphan_downloader);
             }
         }
@@ -785,10 +803,9 @@ where
         })?;
 
     if !mempool_response.all_found() {
-        return Err(Error::InvalidBlock(format!(
-            "Failed to reconstruct block: {:?} mempool transactions not found",
-            mempool_response.not_found()
-        )));
+        let missing_count = mempool_response.not_found().len();
+        metrics::consensus_observe_proposal_missing_txs(missing_count);
+        return Err(Error::MissingMempoolTransactions(missing_count));
     }
 
     let reconstructed_transactions = mempool_response.into_found();

@@ -1,12 +1,9 @@
-#![allow(
-    dead_code,
-    reason = "metrics are defined incrementally and may be wired in follow-up changes"
-)]
-
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lb_chain_service::api::ApiError;
 use overwatch::DynError;
+
+use crate::Error;
 
 pub fn consensus_proposals_received_total(origin: &'static str) {
     lb_tracing::increase_counter_u64!(consensus_proposals_received_total, 1, origin = origin);
@@ -29,9 +26,9 @@ pub fn consensus_observe_apply_block_ok(duration: Duration) {
     lb_tracing::metric_histogram_f64!(consensus_apply_block_seconds, duration.as_secs_f64());
 }
 
-pub fn consensus_observe_apply_block_err(err: &ApiError) {
+pub fn consensus_observe_apply_block_err(err: &Error) {
     let reason = match err {
-        ApiError::ParentMissing { .. } => "parent_missing",
+        Error::Cryptarchia(ApiError::ParentMissing { .. }) => "parent_missing",
         _ => "other",
     };
     consensus_apply_block_failed_total(reason);
@@ -44,7 +41,14 @@ pub fn consensus_observe_proposal_reconstruct_ok(duration: Duration) {
     );
 }
 
-pub fn consensus_observe_proposal_reconstruct_err(origin: &'static str, reason: &'static str) {
+pub fn consensus_observe_proposal_reconstruct_err(origin: &'static str, err: &Error) {
+    let reason = match err {
+        Error::MissingMempoolTransactions(_) => "missing_txs",
+        Error::Mempool(_) => "mempool",
+        Error::InvalidBlock(_) => "invalid_block",
+        _ => "other",
+    };
+
     lb_tracing::increase_counter_u64!(
         consensus_proposal_reconstruct_failed_total,
         1,
@@ -87,23 +91,6 @@ pub fn orphan_blocks_received_total() {
 
 pub fn orphan_blocks_fetch_failed_total() {
     lb_tracing::increase_counter_u64!(orphan_blocks_fetch_failed_total, 1);
-}
-
-pub fn consensus_block_blob_validation_failed_total(mode: &'static str, reason: &'static str) {
-    lb_tracing::increase_counter_u64!(
-        consensus_block_blob_validation_failed_total,
-        1,
-        mode = mode,
-        reason = reason
-    );
-}
-
-pub fn consensus_observe_block_blob_validation_ok(started_at: Instant, mode: &'static str) {
-    lb_tracing::metric_histogram_f64!(
-        consensus_block_blob_validation_seconds,
-        started_at.elapsed().as_secs_f64(),
-        mode = mode
-    );
 }
 
 pub fn chainsync_observe_download_blocks_ok(duration: Duration, blocks_downloaded: u64) {
