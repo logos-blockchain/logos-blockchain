@@ -6,19 +6,17 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use lb_cryptarchia_engine::Slot;
 use lb_core::{
     block::{BlockNumber, SessionNumber},
     header::HeaderId,
     sdp::{Locator, ProviderId, ServiceType},
 };
+use lb_cryptarchia_engine::Slot;
 use overwatch::DynError;
 use thiserror::Error;
 
 use super::{StorageBackend, StorageTransaction};
-use crate::api::{
-    StorageBackendApi, chain::StorageChainApi, membership::StorageMembershipApi,
-};
+use crate::api::{StorageBackendApi, chain::StorageChainApi, membership::StorageMembershipApi};
 
 #[derive(Debug, Error)]
 #[error("Errors in MockStorage should not happen")]
@@ -190,7 +188,7 @@ impl StorageMembershipApi for MockStorage {
         unimplemented!()
     }
 
-    async fn save_forming_session(
+    async fn save_next_session(
         &mut self,
         _service_type: ServiceType,
         _session_id: SessionNumber,
@@ -199,7 +197,7 @@ impl StorageMembershipApi for MockStorage {
         unimplemented!()
     }
 
-    async fn load_forming_session(
+    async fn load_next_session(
         &mut self,
         _service_type: ServiceType,
     ) -> Result<Option<(SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>)>, DynError> {

@@ -30,12 +30,12 @@ pub enum MembershipApiRequest {
     LoadLatestBlock {
         response_tx: Sender<Option<BlockNumber>>,
     },
-    SaveFormingSession {
+    SaveNextSession {
         service_type: ServiceType,
         session_id: SessionNumber,
         providers: HashMap<ProviderId, BTreeSet<Locator>>,
     },
-    LoadFormingSession {
+    LoadNextSession {
         service_type: ServiceType,
         response_tx: SessionSender,
     },
@@ -62,15 +62,15 @@ where
             Self::LoadLatestBlock { response_tx } => {
                 handle_load_latest_block(backend, response_tx).await
             }
-            Self::SaveFormingSession {
+            Self::SaveNextSession {
                 service_type,
                 session_id,
                 providers,
-            } => handle_save_forming_session(backend, service_type, session_id, providers).await,
-            Self::LoadFormingSession {
+            } => handle_save_next_session(backend, service_type, session_id, providers).await,
+            Self::LoadNextSession {
                 service_type,
                 response_tx,
-            } => handle_load_forming_session(backend, service_type, response_tx).await,
+            } => handle_load_next_session(backend, service_type, response_tx).await,
         }
     }
 }
@@ -132,31 +132,31 @@ async fn handle_load_latest_block<Backend: StorageBackend + StorageMembershipApi
     Ok(())
 }
 
-async fn handle_save_forming_session<Backend: StorageBackend + StorageMembershipApi>(
+async fn handle_save_next_session<Backend: StorageBackend + StorageMembershipApi>(
     backend: &mut Backend,
     service_type: ServiceType,
     session_id: SessionNumber,
     providers: HashMap<ProviderId, BTreeSet<Locator>>,
 ) -> Result<(), StorageServiceError> {
     backend
-        .save_forming_session(service_type, session_id, &providers)
+        .save_next_session(service_type, session_id, &providers)
         .await
         .map_err(StorageServiceError::BackendError)
 }
 
-async fn handle_load_forming_session<Backend: StorageBackend + StorageMembershipApi>(
+async fn handle_load_next_session<Backend: StorageBackend + StorageMembershipApi>(
     backend: &mut Backend,
     service_type: ServiceType,
     response_tx: SessionSender,
 ) -> Result<(), StorageServiceError> {
     let result = backend
-        .load_forming_session(service_type)
+        .load_next_session(service_type)
         .await
         .map_err(StorageServiceError::BackendError)?;
 
     if response_tx.send(result).is_err() {
         return Err(StorageServiceError::ReplyError {
-            message: "Failed to send reply for load forming session request".to_owned(),
+            message: "Failed to send reply for load next session request".to_owned(),
         });
     }
     Ok(())

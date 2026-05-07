@@ -193,13 +193,13 @@ impl<Backend: StorageBackend> StorageMsg<Backend> {
     }
 
     #[must_use]
-    pub const fn save_forming_session_request(
+    pub const fn save_next_session_request(
         service_type: ServiceType,
         session_id: SessionNumber,
         providers: HashMap<ProviderId, BTreeSet<Locator>>,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::SaveFormingSession {
+            request: StorageApiRequest::Membership(MembershipApiRequest::SaveNextSession {
                 service_type,
                 session_id,
                 providers,
@@ -208,12 +208,12 @@ impl<Backend: StorageBackend> StorageMsg<Backend> {
     }
 
     #[must_use]
-    pub const fn load_forming_session_request(
+    pub const fn load_next_session_request(
         service_type: ServiceType,
         response_tx: SessionSender,
     ) -> Self {
         Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::LoadFormingSession {
+            request: StorageApiRequest::Membership(MembershipApiRequest::LoadNextSession {
                 service_type,
                 response_tx,
             }),
