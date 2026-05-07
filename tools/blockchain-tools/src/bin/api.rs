@@ -62,7 +62,8 @@ enum SdpSubCommand {
     /// The command derives the following from `--user-config-path`:
     /// - `provider_id` (from Blend non-ephemeral signing key)
     /// - `zk_id` (from Blend core ZK key)
-    /// - `locator` (from Blend core listening address)
+    /// - `locator` (from Blend core listening address, unless overridden by
+    ///   `--blend-addr`)
     ///
     /// It then validates that `--locked-note-id` exists for that ZK key before
     /// submitting the declaration.
@@ -209,8 +210,7 @@ async fn extract_values(
     })
 }
 
-// Validate and return the overridden address, if provided, or else validates
-// and returns the address in the provided config file.
+// Validate and return the Blend listening address from the provided config.
 fn extract_blend_locator(config: &UserConfig) -> Result<Locator> {
     config
         .blend
