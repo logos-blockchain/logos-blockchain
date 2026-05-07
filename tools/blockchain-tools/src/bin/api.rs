@@ -85,7 +85,10 @@ struct PostBlendDeclarationArgs {
     user_config_path: PathBuf,
 
     /// Address of the Blend service to use in the declaration that overrides
-    /// the one present in the config file.
+    /// the one present in the config file. This is useful for the case in which
+    /// a node is listening on the `0.0.0.0` address, and the declaration needs
+    /// to be posted with the externally reachable address, since `0.0.0.0` is
+    /// not a valid `Locator` value.
     #[arg(long, value_name = "BLEND_ADDR")]
     blend_addr: Option<Locator>,
 
