@@ -8,6 +8,7 @@ use lb_core::{
     header::{ContentId, HeaderId},
     mantle::SignedMantleTx,
     proofs::leader_proof::Groth16LeaderProof,
+    sdp::{DeclarationId, DeclarationMessage},
 };
 use lb_groth16::fr_to_bytes;
 use lb_http_api_common::{
@@ -18,7 +19,7 @@ use lb_http_api_common::{
     },
     paths::{
         BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CRYPTARCHIA_INFO,
-        CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX,
+        CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     settings::default_max_body_size,
@@ -264,6 +265,18 @@ impl CommonHttpClient {
             .join(MEMPOOL_ADD_TX.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, &transaction).await
+    }
+
+    /// Post a service declaration to the SDP endpoint.
+    pub async fn post_declaration(
+        &self,
+        base_url: Url,
+        declaration: &DeclarationMessage,
+    ) -> Result<DeclarationId, Error> {
+        let request_url = base_url
+            .join(SDP_POST_DECLARATION.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.post(request_url, declaration).await
     }
 
     /// Get consensus info (tip, height, etc.)
