@@ -188,7 +188,7 @@ pub fn funding_wallet_pk_from_node_yaml(path: &Path) -> Result<String, StepError
 /// ZK wallet public key.
 pub fn blend_core_zk_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
     let config = user_config_from_node_yaml(path)?;
-    let zk_key = config.blend_zk_key().map_err(StepError::ConfigError)?;
+    let zk_key = config.blend_zk_key().map_err(StepError::UserConfigError)?;
     Ok(zk_key.to_bytes()?.encode_hex())
 }
 
