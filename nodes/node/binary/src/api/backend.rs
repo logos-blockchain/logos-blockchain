@@ -24,6 +24,7 @@ use lb_core::{
 };
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{metrics::http_metrics_middleware, paths};
+use lb_sdp_service::state::SdpStateStorage as SdpStateStorageTrait;
 use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{TxMempoolService, backend::Mempool};
@@ -64,6 +65,7 @@ pub struct AxumBackend<
     MempoolStorageAdapter,
     SdpMempool,
     SdpWallet,
+    SdpStateStorage,
     ChainLeader,
 > {
     settings: AxumBackendSettings,
@@ -73,6 +75,7 @@ pub struct AxumBackend<
         MempoolStorageAdapter,
         SdpMempool,
         SdpWallet,
+        SdpStateStorage,
         ChainLeader,
     )>,
 }
@@ -84,6 +87,7 @@ impl<
     MempoolStorageAdapter,
     SdpMempool,
     SdpWallet,
+    SdpStateStorage,
     ChainLeader,
     RuntimeServiceId,
 > Backend<RuntimeServiceId>
@@ -93,6 +97,7 @@ impl<
         MempoolStorageAdapter,
         SdpMempool,
         SdpWallet,
+        SdpStateStorage,
         ChainLeader,
     >
 where
@@ -112,6 +117,7 @@ where
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
     SdpWallet: SdpWalletAdapter + Send + Sync + 'static,
     ChainLeader: ChainLeaderServiceData,
+    SdpStateStorage: SdpStateStorageTrait + Send + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -150,6 +156,7 @@ where
                 SdpMempool,
                 SdpWallet,
                 Cryptarchia<RuntimeServiceId>,
+                SdpStateStorage,
                 RuntimeServiceId,
             >,
         >
@@ -234,6 +241,7 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),
@@ -245,6 +253,7 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),
@@ -256,6 +265,7 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),

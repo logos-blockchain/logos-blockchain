@@ -2,13 +2,14 @@ use std::fmt::{Debug, Display};
 
 use lb_chain_service::api::CryptarchiaServiceData;
 use lb_core::sdp::{ActivityMetadata, DeclarationId, DeclarationMessage};
-use lb_sdp_service::{SdpService, mempool::SdpMempoolAdapter};
+use lb_sdp_service::{SdpService, mempool::SdpMempoolAdapter, state::SdpStateStorage};
 use overwatch::{DynError, overwatch::OverwatchHandle};
 
 pub async fn post_declaration_handler<
     MempoolAdapter,
     WalletAdapter,
     ChainService,
+    StateStorage,
     RuntimeServiceId,
 >(
     handle: OverwatchHandle<RuntimeServiceId>,
@@ -17,13 +18,14 @@ pub async fn post_declaration_handler<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Send
         + Sync
         + Debug
         + Display
         + 'static
         + overwatch::services::AsServiceId<
-            SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>,
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
         >,
 {
     let relay = handle.relay().await?;
@@ -40,20 +42,27 @@ where
     reply_rx.await?
 }
 
-pub async fn post_activity_handler<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
+pub async fn post_activity_handler<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
     handle: OverwatchHandle<RuntimeServiceId>,
     metadata: ActivityMetadata,
 ) -> Result<(), DynError>
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Send
         + Sync
         + Debug
         + Display
         + 'static
         + overwatch::services::AsServiceId<
-            SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>,
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
         >,
 {
     let relay = handle.relay().await?;
@@ -70,6 +79,7 @@ pub async fn post_withdrawal_handler<
     MempoolAdapter,
     WalletAdapter,
     ChainService,
+    StateStorage,
     RuntimeServiceId,
 >(
     handle: OverwatchHandle<RuntimeServiceId>,
@@ -78,13 +88,14 @@ pub async fn post_withdrawal_handler<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Send
         + Sync
         + Debug
         + Display
         + 'static
         + overwatch::services::AsServiceId<
-            SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>,
+            SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>,
         >,
 {
     let relay = handle.relay().await?;

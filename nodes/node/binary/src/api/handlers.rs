@@ -37,7 +37,9 @@ use lb_http_api_common::{
 };
 use lb_libp2p::libp2p::bytes::Bytes;
 use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
-use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
+use lb_sdp_service::{
+    mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
+};
 use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
@@ -483,7 +485,13 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_declaration<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
+pub async fn post_declaration<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration): Json<lb_core::sdp::DeclarationMessage>,
 ) -> Response
@@ -491,6 +499,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -502,6 +511,7 @@ where
                 MempoolAdapter,
                 WalletAdapter,
                 ChainService,
+                StateStorage,
                 RuntimeServiceId,
             >,
         >,
@@ -510,6 +520,7 @@ where
         MempoolAdapter,
         WalletAdapter,
         ChainService,
+        StateStorage,
         RuntimeServiceId,
     >(handle, declaration))
 }
@@ -522,7 +533,13 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_activity<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
+pub async fn post_activity<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(metadata): Json<lb_core::sdp::ActivityMetadata>,
 ) -> Response
@@ -530,6 +547,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -541,6 +559,7 @@ where
                 MempoolAdapter,
                 WalletAdapter,
                 ChainService,
+                StateStorage,
                 RuntimeServiceId,
             >,
         >,
@@ -549,6 +568,7 @@ where
         MempoolAdapter,
         WalletAdapter,
         ChainService,
+        StateStorage,
         RuntimeServiceId,
     >(handle, metadata))
 }
@@ -561,7 +581,13 @@ where
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn post_withdrawal<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>(
+pub async fn post_withdrawal<
+    MempoolAdapter,
+    WalletAdapter,
+    ChainService,
+    StateStorage,
+    RuntimeServiceId,
+>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(declaration_id): Json<lb_core::sdp::DeclarationId>,
 ) -> Response
@@ -569,6 +595,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
+    StateStorage: SdpStateStorage,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -580,6 +607,7 @@ where
                 MempoolAdapter,
                 WalletAdapter,
                 ChainService,
+                StateStorage,
                 RuntimeServiceId,
             >,
         >,
@@ -588,6 +616,7 @@ where
         MempoolAdapter,
         WalletAdapter,
         ChainService,
+        StateStorage,
         RuntimeServiceId,
     >(handle, declaration_id))
 }

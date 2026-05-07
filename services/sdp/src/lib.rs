@@ -1,11 +1,13 @@
 pub mod api;
 pub mod mempool;
 mod metrics;
+pub mod state;
 pub mod wallet;
 
 use std::{
     collections::BTreeSet,
     fmt::{Debug, Display},
+    path::PathBuf,
     pin::Pin,
 };
 
@@ -25,12 +27,10 @@ use lb_core::{
     },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_services_utils::overwatch::{RecoveryOperator, recovery::backends::FileBackendSettings};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{
-        AsServiceId, ServiceCore, ServiceData,
-        state::{NoOperator, NoState},
-    },
+    services::{AsServiceId, ServiceCore, ServiceData},
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
@@ -38,6 +38,7 @@ use tokio::sync::oneshot;
 pub use crate::api::SdpServiceApi;
 use crate::{
     mempool::SdpMempoolAdapter,
+    state::{SdpState, SdpStateStorage},
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
 
@@ -71,10 +72,17 @@ pub struct SdpSettings {
     /// will be fetched from the ledger.
     pub declaration_id: Option<DeclarationId>,
     pub wallet_config: SdpWalletConfig,
+    pub recovery_path: PathBuf,
+}
+
+impl FileBackendSettings for SdpSettings {
+    fn recovery_file(&self) -> &PathBuf {
+        &self.recovery_path
+    }
 }
 
 /// Runtime declaration info fetched from ledger on startup.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeDeclaration {
     pub id: DeclarationId,
     pub zk_id: ZkPublicKey,
@@ -94,7 +102,10 @@ pub enum SdpMessage {
     },
 }
 
-pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> {
+pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
+where
+    StateStorage: SdpStateStorage,
+{
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     /// Declaration ID from settings - will be resolved to full declaration on
     /// `run()`.
@@ -103,25 +114,29 @@ pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServic
     current_declaration: Option<RuntimeDeclaration>,
     nonce: u64,
     wallet_config: SdpWalletConfig,
-    _chain_service: std::marker::PhantomData<ChainService>,
+    _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
 }
 
-impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> ServiceData
-    for SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId> ServiceData
+    for SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
+where
+    StateStorage: SdpStateStorage,
 {
     type Settings = SdpSettings;
-    type State = NoState<Self::Settings>;
-    type StateOperator = NoOperator<Self::State>;
+    type State = SdpState;
+    type StateOperator = RecoveryOperator<StateStorage>;
     type Message = SdpMessage;
 }
 
 #[async_trait]
-impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
+    ServiceCore<RuntimeServiceId>
+    for SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
+    StateStorage: SdpStateStorage + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
@@ -148,7 +163,7 @@ where
             service_resources_handle,
             nonce: 0, // Will be fetched from ledger in run()
             wallet_config: settings.wallet_config,
-            _chain_service: std::marker::PhantomData,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -229,12 +244,13 @@ where
     }
 }
 
-impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
-    SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
+    SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
+    StateStorage: SdpStateStorage + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
