@@ -122,7 +122,9 @@ pub enum Command {
 #[cfg(feature = "config-gen")]
 #[derive(Parser, Debug)]
 pub struct InitArgs {
-    /// Trusted peers to bootstrap from (multiaddr format)
+    /// Trusted peers to bootstrap from (multiaddr format).
+    /// If `--no-ibd` is not set, peers whose multiaddrs include a `PeerId`
+    /// are also used as IBD peers.
     #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',')]
     pub initial_peers: Vec<Multiaddr>,
 
@@ -149,6 +151,11 @@ pub struct InitArgs {
 
     #[clap(long = "state-path")]
     pub state_path: Option<PathBuf>,
+
+    /// Disable Initial Block Download (IBD) by leaving the IBD peer list
+    /// empty, regardless of any peers passed via `--initial-peers`/`-p`.
+    #[clap(long = "no-ibd", default_value_t = false)]
+    pub no_ibd: bool,
 }
 
 #[cfg(feature = "config-gen")]
