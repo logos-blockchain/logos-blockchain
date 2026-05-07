@@ -91,26 +91,31 @@ pub enum Event {
     },
     /// Channel state changed.
     ///
+    /// Emitted when at least one of `orphaned` or `adopted` is non-empty —
+    /// either an extension (only `adopted`), a conflict (`orphaned`
+    /// non-empty, optionally with new `adopted`), or both. Not emitted
+    /// when the channel tip didn't move.
+    ///
+    /// `orphaned` covers items that left the canonical branch (block-delta
+    /// reorg) and our own pending whose lineage was broken by something in
+    /// `adopted` (shed). Both need state revert; revert is a no-op for shed
+    /// items that were never applied.
+    ///
     /// Consumer pattern:
-    /// 1. Revert `orphaned` from your local state (state-diff).
-    /// 2. Apply `adopted` to your local state (state-diff).
+    /// 1. Revert `orphaned` from local state.
+    /// 2. Apply `adopted` to local state.
     /// 3. For each entry in `orphaned` that is yours and not in `pending`,
     ///    decide whether to republish — its original signed tx may be
-    ///    permanently invalid (parent slot claimed by an adopted inscription)
+    ///    permanently invalid (parent slot claimed by something in `adopted`)
     ///    and re-creation requires your signing key. Items in `pending` are
-    ///    still being retried by the SDK — don't republish those.
+    ///    still being retried by the SDK — don't republish.
     ChannelUpdate {
-        /// Anything that left the relevant chain: block-delta orphaned
-        /// (items on old canonical not on new, theirs + mine) plus our
-        /// pending whose lineage no longer reaches the new channel tip
-        /// (shed-pending — never on canonical but parent slot now taken).
-        /// Both kinds need state revert (no-op for shed-pending which was
-        /// never applied) and may need a republish decision when ours.
+        /// Items off the relevant chain: block-delta orphans (theirs + mine)
+        /// plus our shed pending.
         orphaned: Vec<InscriptionInfo>,
-        /// Added to the canonical branch (apply to state).
+        /// Items newly on the canonical branch.
         adopted: Vec<InscriptionInfo>,
-        /// Our pending inscriptions still valid on this branch — SDK is
-        /// retrying these, don't republish.
+        /// Our pending still valid on the new tip — SDK is retrying.
         pending: Vec<InscriptionInfo>,
     },
     /// Batch of finalized inscriptions discovered during backfill catch-up.
