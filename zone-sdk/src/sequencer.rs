@@ -91,29 +91,36 @@ pub enum Event {
     },
     /// Channel state changed.
     ///
-    /// Emitted when at least one of `orphaned` or `adopted` is non-empty —
-    /// either an extension (only `adopted`), a conflict (`orphaned`
-    /// non-empty, optionally with new `adopted`), or both. Not emitted
-    /// when the channel tip didn't move.
+    /// Emitted when at least one of `orphaned` or `adopted` is non-empty.
+    /// `safe → pending` transitions whose original signed tx is still valid
+    /// (parent unchanged on the new branch) are not surfaced — the SDK
+    /// keeps retrying them internally.
     ///
-    /// `orphaned` covers items that left the canonical branch (block-delta
-    /// reorg) and our own pending whose lineage was broken by something in
-    /// `adopted` (shed). Both need state revert; revert is a no-op for shed
-    /// items that were never applied.
+    /// `orphaned` contains only items the SDK has given up on: our own
+    /// pending whose original signed tx is permanently invalid because a
+    /// competing inscription claimed the parent slot (or because the parent
+    /// is now off the canonical chain transitively). These need a user
+    /// decision — re-creation requires your signing key.
+    ///
+    /// `adopted` is the block-delta of inscriptions newly on the canonical
+    /// branch, filtered to **exclude items signed by us**. Consumers learn
+    /// about their own publishes via `Event::Published` (optimistic apply
+    /// pattern) — those don't need to be re-surfaced here.
     ///
     /// Consumer pattern:
-    /// 1. Revert `orphaned` from local state.
-    /// 2. Apply `adopted` to local state.
-    /// 3. For each entry in `orphaned` that is yours and not in `pending`,
-    ///    decide whether to republish — its original signed tx may be
-    ///    permanently invalid (parent slot claimed by something in `adopted`)
-    ///    and re-creation requires your signing key. Items in `pending` are
-    ///    still being retried by the SDK — don't republish.
+    /// 1. On `Event::Published`: optimistically apply your own inscription to
+    ///    local state.
+    /// 2. On `ChannelUpdate`: apply `adopted` (others' new inscriptions) to
+    ///    local state, revert `orphaned` (yours that can no longer land).
+    /// 3. For each entry in `orphaned` not in `pending`, decide whether to
+    ///    republish (with a fresh parent — SDK handles parent selection).
     ChannelUpdate {
-        /// Items off the relevant chain: block-delta orphans (theirs + mine)
-        /// plus our shed pending.
+        /// Our pending whose original signed tx is permanently invalid
+        /// (parent slot claimed by something in `adopted`, or parent
+        /// transitively off canonical). Need user decision to re-create.
         orphaned: Vec<InscriptionInfo>,
-        /// Items newly on the canonical branch.
+        /// Others' inscriptions newly on the canonical branch (block-delta,
+        /// excluding our own — see `Event::Published` for those).
         adopted: Vec<InscriptionInfo>,
         /// Our pending still valid on the new tip — SDK is retrying.
         pending: Vec<InscriptionInfo>,
@@ -854,13 +861,16 @@ where
         }
     }
 
-    /// Build the `ChannelUpdate` event. Folds shed-pending (our pending whose
-    /// lineage no longer reaches the new channel tip) into `orphaned` so the
-    /// consumer sees a single field for "things that left the relevant chain
-    /// and may need attention." Shed runs here — pre-event state is preserved
-    /// so it can correctly identify what just went off-branch.
+    /// Build the `ChannelUpdate` event. `orphaned` contains only our own
+    /// pending whose original signed tx is permanently invalid — items the
+    /// SDK has given up on (parent slot claimed by a competing inscription,
+    /// or parent transitively off canonical). Block-delta orphans whose
+    /// original tx is still valid (the SDK keeps retrying them) are not
+    /// surfaced. `adopted` is filtered to exclude inscriptions signed by us
+    /// — consumers learn about their own publishes via `Event::Published`
+    /// (optimistic apply pattern).
     fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
-        let shed = match (self.state.as_mut(), self.current_tip) {
+        let orphaned = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
             _ => Vec::new(),
         };
@@ -869,16 +879,12 @@ where
             _ => Vec::new(),
         };
 
-        // Fold shed-pending into orphaned, deduplicating against block-delta
-        // orphaned entries that are also in shed (mine, on-chain, then knocked
-        // off with parent claimed).
-        let orphaned_hashes: std::collections::HashSet<TxHash> =
-            u.orphaned.iter().map(|i| i.tx_hash).collect();
-        let mut orphaned = u.orphaned;
-        orphaned.extend(
-            shed.into_iter()
-                .filter(|i| !orphaned_hashes.contains(&i.tx_hash)),
-        );
+        let my_signer = self.signing_key.public_key();
+        let adopted: Vec<InscriptionInfo> = u
+            .adopted
+            .into_iter()
+            .filter(|i| i.signer != my_signer)
+            .collect();
 
         for inv in &pending {
             debug!(
@@ -900,7 +906,7 @@ where
 
         Event::ChannelUpdate {
             orphaned,
-            adopted: u.adopted,
+            adopted,
             pending,
         }
     }

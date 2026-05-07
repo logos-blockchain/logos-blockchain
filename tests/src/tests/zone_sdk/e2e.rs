@@ -23,9 +23,7 @@ use lb_http_api_common::bodies::{
         sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
     },
 };
-use lb_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, ZkPublicKey, ZkSignature,
-};
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
 use lb_node::{SignedMantleTx, Transaction as _, config::RunConfig};
 use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::{
@@ -294,43 +292,48 @@ fn spawn_drive(
 /// Drive the sequencer with republish-on-conflict behavior.
 ///
 /// On each `ChannelUpdate`:
-/// 1. remove `orphaned` from local state,
-/// 2. apply `adopted` to local state,
+/// 1. remove `orphaned` from local state (mine that SDK has given up on),
+/// 2. apply `adopted` to local state (block-delta on the new canonical),
 /// 3. iterate `orphaned`, filter to ours, republish those not in state and not
 ///    in `pending`.
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
-    my_signer: Ed25519PublicKey,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut state: HashSet<Vec<u8>> = HashSet::new();
 
         loop {
-            let Some(Event::ChannelUpdate {
-                orphaned,
-                adopted,
-                pending,
-            }) = sequencer.next_event().await
-            else {
-                continue;
-            };
+            match sequencer.next_event().await {
+                Some(Event::Published { payload, .. }) => {
+                    // Optimistic apply: we just published this, mirror locally.
+                    state.insert(payload);
+                }
+                Some(Event::ChannelUpdate {
+                    orphaned,
+                    adopted,
+                    pending,
+                }) => {
+                    for o in &orphaned {
+                        state.remove(&o.payload);
+                    }
+                    for a in &adopted {
+                        state.insert(a.payload.clone());
+                    }
 
-            for o in &orphaned {
-                state.remove(&o.payload);
-            }
-            for a in &adopted {
-                state.insert(a.payload.clone());
-            }
-
-            let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
-            for inv in orphaned.iter().filter(|i| i.signer == my_signer) {
-                if !state.contains(&inv.payload) && !pending_payloads.contains(&inv.payload) {
-                    debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
-                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
-                        debug!("Failed to re-publish: {e}");
+                    let pending_payloads: HashSet<&Vec<u8>> =
+                        pending.iter().map(|p| &p.payload).collect();
+                    for inv in &orphaned {
+                        if !state.contains(&inv.payload) && !pending_payloads.contains(&inv.payload)
+                        {
+                            debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
+                            if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                                debug!("Failed to re-publish: {e}");
+                            }
+                        }
                     }
                 }
+                _ => {}
             }
         }
     })
@@ -461,7 +464,7 @@ async fn spawn_competing_validators(n: usize) -> (Vec<Validator>, reqwest::Url) 
                 .service
                 .bootstrap
                 .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(10).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
@@ -708,9 +711,17 @@ async fn test_concurrent_multi_sequencer() {
     .await;
 
     // Prepare payloads before starting sequencers
-    let data_a: Vec<Vec<u8>> = vec![tag_payload("a1"), tag_payload("a2"), tag_payload("a3")];
-    let data_b: Vec<Vec<u8>> = vec![tag_payload("b1"), tag_payload("b2"), tag_payload("b3")];
-    let data_c: Vec<Vec<u8>> = vec![tag_payload("c1"), tag_payload("c2"), tag_payload("c3")];
+    const N_PER_SEQUENCER: usize = 20;
+    let data_a: Vec<Vec<u8>> = (1..=N_PER_SEQUENCER)
+        .map(|i| tag_payload(&format!("a{i}")))
+        .collect();
+    let data_b: Vec<Vec<u8>> = (1..=N_PER_SEQUENCER)
+        .map(|i| tag_payload(&format!("b{i}")))
+        .collect();
+    let data_c: Vec<Vec<u8>> = (1..=N_PER_SEQUENCER)
+        .map(|i| tag_payload(&format!("c{i}")))
+        .collect();
+    let total = N_PER_SEQUENCER * 3;
 
     // --- Phase 2: Start all three sequencers with intent tracking ---
     debug!("Phase 2: Starting 3 sequencers concurrently");
@@ -733,9 +744,9 @@ async fn test_concurrent_multi_sequencer() {
         sequencer_config,
     );
 
-    let poll_a = spawn_drive_republish(seq_a, handle_a.clone(), admin_pk);
-    let poll_b = spawn_drive_republish(seq_b, handle_b.clone(), seq_b_pk);
-    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), seq_c_pk);
+    let poll_a = spawn_drive_republish(seq_a, handle_a.clone());
+    let poll_b = spawn_drive_republish(seq_b, handle_b.clone());
+    let poll_c = spawn_drive_republish(seq_c, handle_c.clone());
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -743,7 +754,7 @@ async fn test_concurrent_multi_sequencer() {
     debug!("Phase 2: All 3 sequencers ready");
 
     // Phase 3: Publish initial inscriptions concurrently.
-    debug!("Phase 3: Publishing 9 inscriptions concurrently");
+    debug!("Phase 3: Publishing {total} inscriptions concurrently");
     publish_concurrently(vec![
         (handle_a, data_a.clone()),
         (handle_b, data_b.clone()),
@@ -751,8 +762,8 @@ async fn test_concurrent_multi_sequencer() {
     ])
     .await;
 
-    // Phase 4: Wait for all 9 inscriptions to appear on chain
-    debug!("Phase 4: Waiting for all 9 inscriptions in indexer");
+    // Phase 4: Wait for all inscriptions to appear on chain
+    debug!("Phase 4: Waiting for all {total} inscriptions in indexer");
     let indexer = ZoneIndexer::new(
         channel_id,
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
@@ -763,14 +774,14 @@ async fn test_concurrent_multi_sequencer() {
         .chain(&data_c)
         .cloned()
         .collect();
-    assert_eq!(expected_all.len(), 9);
+    assert_eq!(expected_all.len(), total);
 
-    wait_for_indexer_unordered(&indexer, &expected_all, Duration::from_mins(20)).await;
+    wait_for_indexer_unordered(&indexer, &expected_all, Duration::from_mins(30)).await;
 
     // Wait for enough blocks so any late re-published duplicates would have
-    // landed. With k=3 and 1s slots, finality is ~3 blocks. We wait 30s
+    // landed. With k=10 and 1s slots, finality is ~10 blocks. We wait 60s
     // to be safe — enough for resubmit cycles and in-flight txs to settle.
-    sleep(Duration::from_secs(30)).await;
+    sleep(Duration::from_secs(60)).await;
 
     let all_payloads = scan_indexer_for_payloads(&indexer, &expected_all).await;
 
@@ -782,7 +793,11 @@ async fn test_concurrent_multi_sequencer() {
         unique.len(),
         all_payloads.len(),
     );
-    assert_eq!(unique.len(), 9, "Expected exactly 9 inscriptions on chain");
+    assert_eq!(
+        unique.len(),
+        total,
+        "Expected exactly {total} inscriptions on chain"
+    );
 
     // Clean up
     poll_a.abort();
@@ -803,7 +818,6 @@ type DiscardedSet = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
 fn spawn_sequencer_sorted_policy(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
-    my_signer: Ed25519PublicKey,
     discarded: DiscardedSet,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -811,11 +825,19 @@ fn spawn_sequencer_sorted_policy(
         let mut max_seen_on_chain: Option<Vec<u8>> = None;
 
         loop {
+            let event = sequencer.next_event().await;
+            if let Some(Event::Published { payload, .. }) = event {
+                state.insert(payload.clone());
+                if max_seen_on_chain.as_ref().is_none_or(|m| payload > *m) {
+                    max_seen_on_chain = Some(payload);
+                }
+                continue;
+            }
             let Some(Event::ChannelUpdate {
                 orphaned,
                 adopted,
                 pending,
-            }) = sequencer.next_event().await
+            }) = event
             else {
                 continue;
             };
@@ -833,7 +855,7 @@ fn spawn_sequencer_sorted_policy(
 
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
 
-            for inv in orphaned.iter().filter(|i| i.signer == my_signer) {
+            for inv in &orphaned {
                 if state.contains(&inv.payload)
                     || pending_payloads.contains(&inv.payload)
                     || discarded.lock().await.contains(&inv.payload)
@@ -882,7 +904,7 @@ async fn wait_until_settled(
     let start = std::time::Instant::now();
     loop {
         assert!(
-            start.elapsed() <= Duration::from_mins(10),
+            start.elapsed() <= Duration::from_mins(20),
             "Timeout waiting for inscriptions to finalize"
         );
         let expected_count = total - discarded.lock().await.len();
@@ -1018,18 +1040,10 @@ async fn test_sorted_conflict_resolution() {
     );
 
     let discarded: DiscardedSet = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
-    let poll_a = spawn_sequencer_sorted_policy(
-        seq_a,
-        handle_a.clone(),
-        admin_pk,
-        DiscardedSet::clone(&discarded),
-    );
-    let poll_b = spawn_sequencer_sorted_policy(
-        seq_b,
-        handle_b.clone(),
-        seq_b_pk,
-        DiscardedSet::clone(&discarded),
-    );
+    let poll_a =
+        spawn_sequencer_sorted_policy(seq_a, handle_a.clone(), DiscardedSet::clone(&discarded));
+    let poll_b =
+        spawn_sequencer_sorted_policy(seq_b, handle_b.clone(), DiscardedSet::clone(&discarded));
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -1047,6 +1061,252 @@ async fn test_sorted_conflict_resolution() {
 
     poll_a.abort();
     poll_b.abort();
+}
+
+/// Encode a balance-affecting transaction as `"<tx_uuid>:<account>:<delta>"`
+/// bytes.
+fn make_balance_tx(uuid: &str, account: &str, delta: i64) -> Vec<u8> {
+    format!("{uuid}:{account}:{delta}").into_bytes()
+}
+
+/// Parse a balance-affecting transaction from the inscription payload.
+fn parse_balance_tx(bytes: &[u8]) -> Option<(String, String, i64)> {
+    let s = std::str::from_utf8(bytes).ok()?;
+    let parts: Vec<&str> = s.splitn(3, ':').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let delta = parts[2].parse::<i64>().ok()?;
+    Some((parts[0].to_string(), parts[1].to_string(), delta))
+}
+
+/// Spawn a sequencer that conditions republish decisions on the current
+/// canonical balance state per account.
+///
+/// Each inscription has the form `"<tx_uuid>:<account>:<delta>"`. The
+/// sequencer maintains per-account balances from the SDK's
+/// Published/adopted/orphaned events and only republishes when the resulting
+/// balance for that account after applying its own delta would stay
+/// non-negative.
+fn spawn_balance_aware(
+    mut sequencer: ZoneSequencer<Node>,
+    handle: SequencerHandle<Node>,
+    initial_balances: std::collections::HashMap<String, i64>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // applied[account][uuid] = delta
+        let mut applied: std::collections::HashMap<String, std::collections::HashMap<String, i64>> =
+            std::collections::HashMap::new();
+
+        loop {
+            let event = sequencer.next_event().await;
+            if let Some(Event::Published { payload, .. }) = event {
+                // Optimistic apply: we just published this.
+                if let Some((uuid, account, delta)) = parse_balance_tx(&payload) {
+                    applied.entry(account).or_default().insert(uuid, delta);
+                }
+                continue;
+            }
+            let Some(Event::ChannelUpdate {
+                orphaned,
+                adopted,
+                pending,
+            }) = event
+            else {
+                continue;
+            };
+
+            for o in &orphaned {
+                if let Some((uuid, account, _)) = parse_balance_tx(&o.payload)
+                    && let Some(account_map) = applied.get_mut(&account)
+                {
+                    account_map.remove(&uuid);
+                }
+            }
+            for a in &adopted {
+                if let Some((uuid, account, delta)) = parse_balance_tx(&a.payload) {
+                    applied.entry(account).or_default().insert(uuid, delta);
+                }
+            }
+
+            let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
+            for inv in &orphaned {
+                let Some((uuid, account, delta)) = parse_balance_tx(&inv.payload) else {
+                    continue;
+                };
+                let account_map = applied.entry(account.clone()).or_default();
+                if account_map.contains_key(&uuid) || pending_payloads.contains(&inv.payload) {
+                    continue;
+                }
+                let initial = initial_balances.get(&account).copied().unwrap_or(0);
+                let current_applied: i64 = account_map.values().sum();
+                let balance = initial + current_applied;
+                if balance + delta >= 0 {
+                    debug!("Balance OK ({account} = {balance} + {delta}), re-publishing {uuid}",);
+                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                        debug!("Failed to re-publish: {e}");
+                    }
+                } else {
+                    debug!(
+                        "Balance insufficient ({account} = {balance} + {delta} < 0), dropping {uuid}",
+                    );
+                }
+            }
+        }
+    })
+}
+
+/// Three sequencers each publish burns against three accounts (alice, bob,
+/// charlie), each starting with balance 10. Republish policy: only republish
+/// if the burn would still keep the affected account's balance non-negative.
+///
+/// Per-sequencer payloads (payload format `"<tx_uuid>:<account>:<delta>"`):
+///   SeqA: burn 6 alice, burn 3 bob, burn 2 charlie
+///   SeqB: burn 5 alice, burn 4 bob, burn 8 charlie
+///   SeqC: burn 4 alice, burn 7 bob, burn 1 charlie
+///
+/// Per-account totals if all 9 burns landed:
+///   alice: -15  (initial 10 → would go to -5)
+///   bob:   -14  (initial 10 → would go to -4)
+///   charlie: -11 (initial 10 → would go to -1)
+///
+/// So some burns must be dropped per account. Each sequencer's policy
+/// computes per-account balance from its local view and decides republish vs
+/// drop accordingly.
+///
+/// Test invariant: every account's final balance computed from on-chain
+/// inscriptions must be non-negative. If state mirror drifts, a sequencer can
+/// republish when it shouldn't and an account's balance goes negative —
+/// this is the failure case the test catches.
+#[tokio::test]
+async fn test_balance_conditioned_republish() {
+    init_tracing();
+    let (_validators, node_url) = spawn_competing_validators(2).await;
+
+    let sequencer_config = SequencerConfig {
+        resubmit_interval: Duration::from_secs(3),
+        ..SequencerConfig::default()
+    };
+
+    let signing_key_a = keygen();
+    let admin_pk = signing_key_a.public_key();
+    let channel_id = channel_id_from_key(&signing_key_a);
+    let signing_key_b = keygen();
+    let seq_b_pk = signing_key_b.public_key();
+    let signing_key_c = keygen();
+    let seq_c_pk = signing_key_c.public_key();
+
+    authorize_keys(
+        channel_id,
+        signing_key_a.clone(),
+        vec![admin_pk, seq_b_pk, seq_c_pk],
+        node_url.clone(),
+        sequencer_config.clone(),
+    )
+    .await;
+
+    let initial_balances: std::collections::HashMap<String, i64> = [
+        ("alice".to_string(), 10i64),
+        ("bob".to_string(), 10i64),
+        ("charlie".to_string(), 10i64),
+    ]
+    .into_iter()
+    .collect();
+
+    let payloads_a = vec![
+        make_balance_tx("a-alice", "alice", -6),
+        make_balance_tx("a-bob", "bob", -3),
+        make_balance_tx("a-charlie", "charlie", -2),
+    ];
+    let payloads_b = vec![
+        make_balance_tx("b-alice", "alice", -5),
+        make_balance_tx("b-bob", "bob", -4),
+        make_balance_tx("b-charlie", "charlie", -8),
+    ];
+    let payloads_c = vec![
+        make_balance_tx("c-alice", "alice", -4),
+        make_balance_tx("c-bob", "bob", -7),
+        make_balance_tx("c-charlie", "charlie", -1),
+    ];
+
+    let (seq_a, mut handle_a) = init_sequencer(
+        channel_id,
+        signing_key_a,
+        node_url.clone(),
+        sequencer_config.clone(),
+    );
+    let (seq_b, mut handle_b) = init_sequencer(
+        channel_id,
+        signing_key_b,
+        node_url.clone(),
+        sequencer_config.clone(),
+    );
+    let (seq_c, mut handle_c) = init_sequencer(
+        channel_id,
+        signing_key_c,
+        node_url.clone(),
+        sequencer_config,
+    );
+
+    let poll_a = spawn_balance_aware(seq_a, handle_a.clone(), initial_balances.clone());
+    let poll_b = spawn_balance_aware(seq_b, handle_b.clone(), initial_balances.clone());
+    let poll_c = spawn_balance_aware(seq_c, handle_c.clone(), initial_balances.clone());
+
+    handle_a.wait_ready().await;
+    handle_b.wait_ready().await;
+    handle_c.wait_ready().await;
+
+    publish_concurrently(vec![
+        (handle_a, payloads_a.clone()),
+        (handle_b, payloads_b.clone()),
+        (handle_c, payloads_c.clone()),
+    ])
+    .await;
+
+    // Wait for things to settle. With k=10 and 1s slots, finality is ~10s
+    // per block. We wait long enough for retry cycles + finality.
+    sleep(Duration::from_secs(180)).await;
+
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+    );
+    let expected: HashSet<Vec<u8>> = payloads_a
+        .iter()
+        .chain(&payloads_b)
+        .chain(&payloads_c)
+        .cloned()
+        .collect();
+    let on_chain = scan_indexer_for_payloads(&indexer, &expected).await;
+
+    // Compute per-account final balance from on-chain inscriptions.
+    let mut final_balances: std::collections::HashMap<String, i64> = initial_balances.clone();
+    for payload in &on_chain {
+        if let Some((_, account, delta)) = parse_balance_tx(payload) {
+            *final_balances.entry(account).or_insert(0) += delta;
+        }
+    }
+
+    debug!(
+        "On-chain {} inscriptions, final balances: {:?}",
+        on_chain.len(),
+        final_balances
+    );
+
+    for (account, balance) in &final_balances {
+        assert!(
+            *balance >= 0,
+            "Account {account} balance went negative: {balance}. On-chain payloads: {:?}",
+            on_chain
+                .iter()
+                .map(|p| String::from_utf8_lossy(p).to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    poll_a.abort();
+    poll_b.abort();
+    poll_c.abort();
 }
 
 /// Test that resuming from a stale checkpoint works correctly.

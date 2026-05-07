@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 
-use lb_key_management_system_service::keys::Ed25519PublicKey;
 use lb_zone_sdk::{sequencer::SequencerCheckpoint, state::InscriptionInfo};
 use uuid::Uuid;
 
@@ -102,18 +101,18 @@ impl ZoneState for InMemoryZoneState {
 
 /// Process a channel update event.
 ///
-/// 1. Revert orphaned from state (no-op for shed-pending entries that were
-///    never applied).
+/// 1. Revert orphaned from state — these are our own pending whose original
+///    signed tx is permanently invalid (SDK has given up on them; by SDK
+///    contract, all entries in `orphaned` are ours).
 /// 2. Apply adopted to state.
-/// 3. Iterate orphaned filtered by `my_signer`, return entries that aren't on
-///    the new canonical chain and aren't still in flight via `pending` — those
-///    are the republish candidates the user must decide on.
+/// 3. Iterate orphaned, return entries that aren't on the new canonical chain
+///    and aren't still in flight via `pending` — those are the republish
+///    candidates the user must decide on.
 pub fn resolve_conflicts(
     state: &mut InMemoryZoneState,
     orphaned: &[InscriptionInfo],
     adopted: &[InscriptionInfo],
     pending: &[InscriptionInfo],
-    my_signer: &Ed25519PublicKey,
 ) -> Vec<AppMessage> {
     for inv in orphaned {
         if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
@@ -134,7 +133,6 @@ pub fn resolve_conflicts(
 
     orphaned
         .iter()
-        .filter(|inv| &inv.signer == my_signer)
         .filter_map(|inv| AppMessage::from_bytes(&inv.payload))
         .filter(|m| !state.contains(&m.tx_uuid))
         .filter(|m| !pending_uuids.contains(&m.tx_uuid))
