@@ -131,12 +131,11 @@ async fn step_send_multiple_transactions_to_blend_core_zk_key(
     Ok(())
 }
 
-#[then(expr = "I run blend core SDP declaration CLI for node {string} against node {string}")]
+#[then(expr = "I run blend core SDP declaration CLI for node {string}")]
 async fn step_run_blend_sdp_declaration_cli(
     world: &mut CucumberWorld,
     step: &Step,
     declarer_node_name: String,
-    api_node_name: String,
 ) -> StepResult {
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
@@ -218,10 +217,66 @@ async fn step_run_blend_sdp_declaration_cli(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(StepError::StepFail {
             message: format!(
-                "Blend declaration CLI failed for node '{declarer_node_name}' against '{api_node_name}'\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                "Blend declaration CLI failed for node '{declarer_node_name}'\nstdout:\n{stdout}\nstderr:\n{stderr}"
             ),
         });
     }
+
+    Ok(())
+}
+
+#[then(expr = "blend core SDP declaration for node {string} is included on node {string}")]
+async fn step_verify_blend_sdp_declaration_included(
+    world: &mut CucumberWorld,
+    step: &Step,
+    declarer_node_name: String,
+    api_node_name: String,
+) -> StepResult {
+    let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
+
+    let declarer_api_base_url = world
+        .nodes_info
+        .get(&declarer_node_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Node '{declarer_node_name}' not found in world state"),
+        })?
+        .started_node
+        .client
+        .base_url()
+        .clone();
+
+    let note_lookup_timeout = Duration::from_secs(30);
+    let note_lookup_started = Instant::now();
+    let mut last_lookup_error: Option<String> = None;
+    let locked_note_id = loop {
+        match CommonHttpClient::new(None)
+            .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
+            .await
+        {
+            Ok(wallet_balance) => {
+                if let Some(note_id) = wallet_balance.notes.keys().next().copied() {
+                    break note_id;
+                }
+                last_lookup_error = Some("wallet has no notes yet".to_owned());
+            }
+            Err(error) => {
+                last_lookup_error = Some(error.to_string());
+                warn!(target: TARGET, "Step `{}` transient lookup error: {error}", step.value);
+            }
+        }
+
+        if note_lookup_started.elapsed() >= note_lookup_timeout {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "Timed out waiting for a funded note on Blend ZK key of '{declarer_node_name}' via '{}' (last error: {})",
+                    declarer_api_base_url,
+                    last_lookup_error.unwrap_or_else(|| "unknown".to_owned())
+                ),
+            });
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    };
 
     let step_timeout = Duration::from_secs(30);
     let start_time = Instant::now();
