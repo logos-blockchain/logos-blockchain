@@ -294,8 +294,8 @@ fn spawn_drive(
 /// On each `ChannelUpdate`:
 /// 1. remove `orphaned` from local state,
 /// 2. apply `adopted` to local state,
-/// 3. iterate our own submissions; for each not in state and not in `pending`,
-///    republish.
+/// 3. iterate `orphaned`, filter to ours, republish those not in state and not
+///    in `pending`.
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
@@ -309,7 +309,6 @@ fn spawn_drive_republish(
                 orphaned,
                 adopted,
                 pending,
-                has_conflict,
             }) = sequencer.next_event().await
             else {
                 continue;
@@ -322,15 +321,14 @@ fn spawn_drive_republish(
                 state.insert(a.payload.clone());
             }
 
-            if !has_conflict {
-                continue;
-            }
-
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
-            for payload in &own_payloads {
-                if !state.contains(payload) && !pending_payloads.contains(payload) {
-                    debug!("Re-publishing: {:?}", String::from_utf8_lossy(payload));
-                    if let Err(e) = handle.publish_message(payload.clone()).await {
+            for inv in &orphaned {
+                if own_payloads.contains(&inv.payload)
+                    && !state.contains(&inv.payload)
+                    && !pending_payloads.contains(&inv.payload)
+                {
+                    debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
+                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
                         debug!("Failed to re-publish: {e}");
                     }
                 }
@@ -818,7 +816,6 @@ fn spawn_sequencer_sorted_policy(
                 orphaned,
                 adopted,
                 pending,
-                has_conflict,
             }) = sequencer.next_event().await
             else {
                 continue;
@@ -835,40 +832,39 @@ fn spawn_sequencer_sorted_policy(
                 }
             }
 
-            if !has_conflict {
-                continue;
-            }
-
             let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
 
-            for payload in &own_payloads {
-                if state.contains(payload)
-                    || pending_payloads.contains(payload)
-                    || discarded.lock().await.contains(payload)
+            for inv in &orphaned {
+                if !own_payloads.contains(&inv.payload)
+                    || state.contains(&inv.payload)
+                    || pending_payloads.contains(&inv.payload)
+                    || discarded.lock().await.contains(&inv.payload)
                 {
                     continue;
                 }
-                let larger_or_equal = max_seen_on_chain.as_ref().is_some_and(|m| payload >= m);
+                let larger_or_equal = max_seen_on_chain
+                    .as_ref()
+                    .is_some_and(|m| inv.payload >= *m);
                 if larger_or_equal {
                     debug!(
                         "Sorted policy: re-publishing {:?} (>= max {:?})",
-                        String::from_utf8_lossy(payload),
+                        String::from_utf8_lossy(&inv.payload),
                         max_seen_on_chain
                             .as_ref()
                             .map(|m| String::from_utf8_lossy(m).to_string()),
                     );
-                    if let Err(e) = handle.publish_message(payload.clone()).await {
+                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
                         debug!("Failed to re-publish: {e}");
                     }
                 } else {
                     debug!(
                         "Sorted policy: dropping {:?} (< max {:?})",
-                        String::from_utf8_lossy(payload),
+                        String::from_utf8_lossy(&inv.payload),
                         max_seen_on_chain
                             .as_ref()
                             .map(|m| String::from_utf8_lossy(m).to_string()),
                     );
-                    discarded.lock().await.insert(payload.clone());
+                    discarded.lock().await.insert(inv.payload.clone());
                 }
             }
         }

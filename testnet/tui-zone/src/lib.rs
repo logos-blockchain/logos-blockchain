@@ -102,9 +102,8 @@ async fn handle_event(
             orphaned,
             adopted,
             pending,
-            has_conflict,
         } => {
-            handle_channel_update(state, handle, &orphaned, &adopted, &pending, has_conflict).await;
+            handle_channel_update(state, handle, &orphaned, &adopted, &pending).await;
         }
         Event::TxsFinalized { inscriptions, .. } => {
             finalize_inscriptions(state, &inscriptions, true);
@@ -116,7 +115,7 @@ async fn handle_event(
         } => {
             debug!("Inscription published, checkpoint saved");
             if let Some(msg) = AppMessage::from_bytes(&payload) {
-                state.mark_ours(&msg);
+                state.mark_ours(msg.tx_uuid);
                 state.apply(msg);
                 ui::render_state(state);
                 ui::prompt();
@@ -152,9 +151,8 @@ async fn handle_channel_update(
     orphaned: &[lb_zone_sdk::state::InscriptionInfo],
     adopted: &[lb_zone_sdk::state::InscriptionInfo],
     pending: &[lb_zone_sdk::state::InscriptionInfo],
-    has_conflict: bool,
 ) {
-    if orphaned.is_empty() && adopted.is_empty() && !has_conflict {
+    if orphaned.is_empty() && adopted.is_empty() {
         return;
     }
 
@@ -162,11 +160,10 @@ async fn handle_channel_update(
         orphaned = orphaned.len(),
         adopted = adopted.len(),
         pending = pending.len(),
-        has_conflict,
         "Channel update"
     );
 
-    let to_republish = resolve_conflicts(state, orphaned, adopted, pending, has_conflict);
+    let to_republish = resolve_conflicts(state, orphaned, adopted, pending);
     republish(handle, to_republish).await;
 
     ui::render_state(state);

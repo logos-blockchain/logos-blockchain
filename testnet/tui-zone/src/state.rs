@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use lb_zone_sdk::{sequencer::SequencerCheckpoint, state::InscriptionInfo};
 use uuid::Uuid;
@@ -10,10 +10,9 @@ use crate::message::AppMessage;
 /// The sequencer surfaces chain events (reorgs, finalization); the application
 /// maintains its own view of the world by implementing this trait.
 ///
-/// Submissions ("things we sent and might still need to retry") are tracked
-/// independently of the canonical/finalized stores via `mark_ours`. The SDK
-/// does not surface payloads of pending items it has dropped, so we remember
-/// our own payloads to drive republish decisions across reorgs.
+/// Authorship ("did we send this?") is tracked independently of the
+/// canonical/finalized stores via `mark_ours` / `is_ours`. This decoupling
+/// keeps authorship durable across reorgs that revert and re-apply messages.
 ///
 /// A production implementation might use a database. This demo uses in-memory
 /// vecs.
@@ -28,8 +27,7 @@ pub trait ZoneState {
     /// state.
     fn contains(&self, tx_uuid: &Uuid) -> bool;
 
-    /// Move inscriptions to finalized state by their payload. Also clears the
-    /// finalized entries from the local submission set.
+    /// Move inscriptions to finalized state by their payload.
     fn finalize(&mut self, payloads: &[Vec<u8>]);
 
     /// Current canonical (unfinalized) messages.
@@ -44,9 +42,12 @@ pub trait ZoneState {
     /// Load the last saved checkpoint.
     fn load_checkpoint(&self) -> Option<&SequencerCheckpoint>;
 
-    /// Remember a locally-created submission so we can iterate to make
-    /// republish decisions even if the SDK silently drops it.
-    fn mark_ours(&mut self, msg: &AppMessage);
+    /// Record that this `tx_uuid` was locally created.
+    fn mark_ours(&mut self, tx_uuid: Uuid);
+
+    /// Whether this `tx_uuid` was locally created, regardless of whether it
+    /// currently exists in canonical/finalized state.
+    fn is_ours(&self, tx_uuid: &Uuid) -> bool;
 }
 
 /// In-memory implementation of [`ZoneState`].
@@ -54,7 +55,7 @@ pub trait ZoneState {
 pub struct InMemoryZoneState {
     canonical: Vec<AppMessage>,
     finalized: Vec<AppMessage>,
-    my_submissions: HashMap<Uuid, AppMessage>,
+    my_submissions: HashSet<Uuid>,
     checkpoint: Option<SequencerCheckpoint>,
 }
 
@@ -77,16 +78,14 @@ impl ZoneState for InMemoryZoneState {
     fn finalize(&mut self, payloads: &[Vec<u8>]) {
         for payload in payloads {
             if let Some(msg) = AppMessage::from_bytes(payload) {
-                let tx_uuid = msg.tx_uuid;
                 let existing = self
                     .canonical
                     .iter()
-                    .position(|m| m.tx_uuid == tx_uuid)
+                    .position(|m| m.tx_uuid == msg.tx_uuid)
                     .map(|i| self.canonical.remove(i));
-                if !self.finalized.iter().any(|m| m.tx_uuid == tx_uuid) {
+                if !self.finalized.iter().any(|m| m.tx_uuid == msg.tx_uuid) {
                     self.finalized.push(existing.unwrap_or(msg));
                 }
-                self.my_submissions.remove(&tx_uuid);
             }
         }
     }
@@ -107,24 +106,28 @@ impl ZoneState for InMemoryZoneState {
         self.checkpoint.as_ref()
     }
 
-    fn mark_ours(&mut self, msg: &AppMessage) {
-        self.my_submissions.insert(msg.tx_uuid, msg.clone());
+    fn mark_ours(&mut self, tx_uuid: Uuid) {
+        self.my_submissions.insert(tx_uuid);
+    }
+
+    fn is_ours(&self, tx_uuid: &Uuid) -> bool {
+        self.my_submissions.contains(tx_uuid)
     }
 }
 
 /// Process a channel update event.
 ///
-/// 1. Revert orphaned from state.
+/// 1. Revert orphaned from state (no-op for shed-pending entries that were
+///    never applied).
 /// 2. Apply adopted to state.
-/// 3. If `has_conflict`, iterate our submissions and return any that aren't
-///    currently in state and aren't being retried by the SDK (`pending`).
-///    Otherwise return early — the SDK is still retrying everything we sent.
+/// 3. Iterate orphaned, return ours that are not on the new canonical chain and
+///    not still in flight via `pending` — those are the republish candidates
+///    the user must decide on (their original signed tx is dead).
 pub fn resolve_conflicts(
     state: &mut InMemoryZoneState,
     orphaned: &[InscriptionInfo],
     adopted: &[InscriptionInfo],
     pending: &[InscriptionInfo],
-    has_conflict: bool,
 ) -> Vec<AppMessage> {
     for inv in orphaned {
         if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
@@ -138,20 +141,16 @@ pub fn resolve_conflicts(
         }
     }
 
-    if !has_conflict {
-        return Vec::new();
-    }
-
     let pending_uuids: HashSet<Uuid> = pending
         .iter()
         .filter_map(|inv| AppMessage::from_bytes(&inv.payload).map(|m| m.tx_uuid))
         .collect();
 
-    state
-        .my_submissions
-        .values()
+    orphaned
+        .iter()
+        .filter_map(|inv| AppMessage::from_bytes(&inv.payload))
+        .filter(|m| state.is_ours(&m.tx_uuid))
         .filter(|m| !state.contains(&m.tx_uuid))
         .filter(|m| !pending_uuids.contains(&m.tx_uuid))
-        .cloned()
         .collect()
 }

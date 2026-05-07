@@ -92,26 +92,26 @@ pub enum Event {
     /// Channel state changed.
     ///
     /// Consumer pattern:
-    /// 1. Apply `orphaned` and `adopted` to state (revert / add).
-    /// 2. If `has_conflict`, iterate your own tracked submissions and for each
-    ///    whose payload is not in state and not in `pending`, decide whether to
-    ///    republish. When `has_conflict` is false, the SDK is still retrying
-    ///    everything you've submitted — no decision needed. Consumers are
-    ///    expected to remember payloads they submitted (e.g. on
-    ///    `Event::Published`) since pending items whose lineage broke are
-    ///    silently dropped by the SDK and won't appear in `orphaned`.
+    /// 1. Revert `orphaned` from your local state (state-diff).
+    /// 2. Apply `adopted` to your local state (state-diff).
+    /// 3. For each entry in `orphaned` that is yours and not in `pending`,
+    ///    decide whether to republish — its original signed tx may be
+    ///    permanently invalid (parent slot claimed by an adopted inscription)
+    ///    and re-creation requires your signing key. Items in `pending` are
+    ///    still being retried by the SDK — don't republish those.
     ChannelUpdate {
-        /// Removed from the canonical branch (revert from state).
+        /// Anything that left the relevant chain: block-delta orphaned
+        /// (items on old canonical not on new, theirs + mine) plus our
+        /// pending whose lineage no longer reaches the new channel tip
+        /// (shed-pending — never on canonical but parent slot now taken).
+        /// Both kinds need state revert (no-op for shed-pending which was
+        /// never applied) and may need a republish decision when ours.
         orphaned: Vec<InscriptionInfo>,
         /// Added to the canonical branch (apply to state).
         adopted: Vec<InscriptionInfo>,
         /// Our pending inscriptions still valid on this branch — SDK is
         /// retrying these, don't republish.
         pending: Vec<InscriptionInfo>,
-        /// True iff at least one of our pending items had its lineage
-        /// broken by this update (SDK dropped it from internal retry).
-        /// When false, consumers can skip the republish-decision loop.
-        has_conflict: bool,
     },
     /// Batch of finalized inscriptions discovered during backfill catch-up.
     /// Emitted incrementally when the sequencer catches up from a checkpoint.
@@ -848,24 +848,31 @@ where
         }
     }
 
-    /// Build the `ChannelUpdate` event. Sheds our pending whose lineage no
-    /// longer reaches the new channel tip as a side effect (so SDK stops
-    /// retrying them); the consumer is responsible for noticing that one of
-    /// their submissions has gone missing and deciding whether to republish.
+    /// Build the `ChannelUpdate` event. Folds shed-pending (our pending whose
+    /// lineage no longer reaches the new channel tip) into `orphaned` so the
+    /// consumer sees a single field for "things that left the relevant chain
+    /// and may need attention." Shed runs here — pre-event state is preserved
+    /// so it can correctly identify what just went off-branch.
     fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
-        let has_conflict = if let (Some(s), Some(tip)) = (self.state.as_mut(), self.current_tip) {
-            // Drop pending whose lineage broke so SDK stops retrying. Items
-            // are discarded — consumers track their own submissions — but
-            // we surface whether anything was shed so consumers can skip the
-            // republish-decision loop when nothing of theirs went off-branch.
-            !s.shed_off_branch_pending(tip).is_empty()
-        } else {
-            false
+        let shed = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
+            _ => Vec::new(),
         };
         let pending = match (self.state.as_ref(), self.current_tip) {
             (Some(s), Some(tip)) => s.pending_on_branch(tip),
             _ => Vec::new(),
         };
+
+        // Fold shed-pending into orphaned, deduplicating against block-delta
+        // orphaned entries that are also in shed (mine, on-chain, then knocked
+        // off with parent claimed).
+        let orphaned_hashes: std::collections::HashSet<TxHash> =
+            u.orphaned.iter().map(|i| i.tx_hash).collect();
+        let mut orphaned = u.orphaned;
+        orphaned.extend(
+            shed.into_iter()
+                .filter(|i| !orphaned_hashes.contains(&i.tx_hash)),
+        );
 
         for inv in &pending {
             debug!(
@@ -876,12 +883,19 @@ where
                 inv.parent_msg,
             );
         }
+        for inv in &orphaned {
+            debug!(
+                "  orphaned: payload={:?}, tx={:?}, msg_id={:?}",
+                String::from_utf8_lossy(&inv.payload),
+                inv.tx_hash,
+                inv.this_msg,
+            );
+        }
 
         Event::ChannelUpdate {
-            orphaned: u.orphaned,
+            orphaned,
             adopted: u.adopted,
             pending,
-            has_conflict,
         }
     }
 
