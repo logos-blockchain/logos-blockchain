@@ -1,5 +1,5 @@
 use core::str::FromStr as _;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use color_eyre::eyre::{Result, eyre};
 use lb_groth16::fr_to_bytes;
@@ -160,14 +160,19 @@ fn build_user_config(
     let cryptarchia_config = {
         let mut base_config =
             CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
-        base_config.network.bootstrap.ibd.peers = args
-            .initial_peers
-            .iter()
-            .filter_map(|addr| match addr.iter().last() {
-                Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
-                _ => None,
-            })
-            .collect();
+        base_config.network.bootstrap.ibd.peers = if args.no_ibd {
+            HashSet::new()
+        } else {
+            args.initial_peers
+                .iter()
+                .filter_map(|addr| match addr.iter().last() {
+                    Some(lb_libp2p::Protocol::P2p(bytes)) => {
+                        PeerId::from_multihash(bytes.into()).ok()
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
         base_config
     };
 
@@ -228,6 +233,10 @@ mod tests {
     use super::*;
 
     fn build_config_from_peers(initial_peers: Vec<Multiaddr>) -> UserConfig {
+        build_config(initial_peers, false)
+    }
+
+    fn build_config(initial_peers: Vec<Multiaddr>, no_ibd: bool) -> UserConfig {
         let args = InitArgs {
             initial_peers,
             output: "test_output.yaml".into(),
@@ -236,6 +245,7 @@ mod tests {
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
             state_path: None,
+            no_ibd,
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();
         let keys = generate_keys();
@@ -270,6 +280,18 @@ mod tests {
         let addr: Multiaddr = "/ip4/1.2.3.4/udp/3000/quic-v1".parse().unwrap();
 
         let config = build_config_from_peers(vec![addr]);
+
+        assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
+    }
+
+    #[test]
+    fn no_ibd_flag_clears_ibd_peers_even_with_initial_peers() {
+        let peer = PeerId::random();
+        let addr_with_p2p: Multiaddr = format!("/ip4/1.2.3.4/udp/3000/quic-v1/p2p/{peer}")
+            .parse()
+            .unwrap();
+
+        let config = build_config(vec![addr_with_p2p], true);
 
         assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
     }
