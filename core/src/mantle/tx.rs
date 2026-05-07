@@ -24,7 +24,7 @@ use crate::{
         },
     },
     proofs::{
-        channel_withdraw_proof::ChannelWithdrawProof,
+        channel_withdraw_proof::ChannelMultiSequencerProof,
         leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
     },
 };
@@ -466,7 +466,7 @@ impl SignedMantleTx {
             match (op, proof) {
                 (
                     Op::ChannelWithdraw(channel_withdraw_op),
-                    OpProof::ChannelWithdrawProof(proof),
+                    OpProof::ChannelMultiSequencerProof(proof),
                 ) => {
                     verify_channel_withdraw(
                         channel_withdraw_op,
@@ -494,7 +494,7 @@ impl SignedMantleTx {
 
 fn verify_channel_withdraw(
     operation: &ChannelWithdrawOp,
-    proof: &ChannelWithdrawProof,
+    proof: &ChannelMultiSequencerProof,
     tx_hash_bytes: &Bytes,
     helper: &impl OperationVerificationHelper,
     op_index: usize,
@@ -660,7 +660,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{Note, ledger::Outputs, ops::channel::inscribe::InscriptionOp},
-        proofs::channel_withdraw_proof::WithdrawSignature,
+        proofs::channel_withdraw_proof::MultiSequencerSignature,
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
@@ -735,14 +735,14 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, key)| {
-                WithdrawSignature::new(
+                MultiSequencerSignature::new(
                     index as ChannelKeyIndex,
                     key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
                 )
             })
             .collect();
-        let proof = ChannelWithdrawProof::new(signatures).unwrap();
-        SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelWithdrawProof(proof)]).unwrap()
+        let proof = ChannelMultiSequencerProof::new(signatures).unwrap();
+        SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSequencerProof(proof)]).unwrap()
     }
 
     #[test]

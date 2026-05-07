@@ -9,11 +9,13 @@ use lb_core::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId, config::ChannelConfigOp,
+                inscribe::InscriptionOp,
             },
         },
         tx::TxHash,
     },
+    proofs::channel_withdraw_proof::{ChannelMultiSequencerProof, MultiSequencerSignature},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc};
@@ -146,7 +148,7 @@ enum ActorRequest {
         msg_id: MsgId,
         reply: tokio::sync::oneshot::Sender<Result<PublishResult, Error>>,
     },
-    SetKeys {
+    ChannelConfig {
         keys: Vec<Ed25519PublicKey>,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
@@ -292,7 +294,7 @@ where
         Ok(result)
     }
 
-    /// Update the channel's accredited keys.
+    /// Update the channel's config.
     ///
     /// The sequencer's signing key must be the channel administrator
     /// (`keys[0]`). This overwrites the entire key list — include the admin
@@ -306,7 +308,7 @@ where
     /// save_checkpoint(&result.checkpoint);
     /// finalized.await?; // wait for finalization
     /// ```
-    pub async fn set_keys(
+    pub async fn channel_config(
         &self,
         keys: Vec<Ed25519PublicKey>,
     ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
@@ -314,7 +316,7 @@ where
         let mut event_rx = self.event_tx.subscribe();
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::SetKeys {
+        let request = ActorRequest::ChannelConfig {
             keys,
             reply: reply_tx,
         };
@@ -923,10 +925,18 @@ where
                 drop(reply.send(Ok(result)));
                 None
             }
-            ActorRequest::SetKeys { keys, reply } => {
+            ActorRequest::ChannelConfig { keys, reply } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
-                let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
+                let signed_tx = create_channel_config_tx(
+                    self.channel_id,
+                    &[&self.signing_key],
+                    keys,
+                    0,
+                    0,
+                    1,
+                    1,
+                );
                 s.submit_other(signed_tx.clone());
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
                 let result = PublishResult {
@@ -986,7 +996,7 @@ fn reject_not_ready(request: ActorRequest) {
         ActorRequest::PublishMessage { .. } => {
             warn!("Publish dropped: sequencer not yet ready");
         }
-        ActorRequest::SetKeys { reply, .. } => drop(reply.send(Err(err()))),
+        ActorRequest::ChannelConfig { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::PrepareTx { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::SignTx { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::SubmitSignedTx { reply, .. } => drop(reply.send(Err(err()))),
@@ -1404,7 +1414,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
     tx.mantle_tx.ops().iter().any(|op| match op {
         Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        Op::ChannelSetKeys(set_keys) => set_keys.channel == channel_id,
+        Op::ChannelConfig(set_keys) => set_keys.channel == channel_id,
         _ => false,
     })
 }
@@ -1439,25 +1449,43 @@ fn create_inscribe_tx(
     (signed_tx, msg_id)
 }
 
-fn create_set_keys_tx(
+fn create_channel_config_tx(
     channel_id: ChannelId,
-    signing_key: &Ed25519Key,
+    signing_keys: &[&Ed25519Key],
     keys: Vec<Ed25519PublicKey>,
+    posting_timeframe: u32,
+    posting_timeout: u32,
+    configuration_threshold: u16,
+    withdraw_threshold: u16,
 ) -> SignedMantleTx {
-    let set_keys_op = SetKeysOp {
+    let config_op = ChannelConfigOp {
         channel: channel_id,
         keys,
+        posting_timeframe,
+        posting_timeout,
+        configuration_threshold,
+        withdraw_threshold,
     };
 
     // TODO: fund tx
-    let set_keys_tx = MantleTx(vec![Op::ChannelSetKeys(set_keys_op)]);
+    let config_tx = MantleTx(vec![Op::ChannelConfig(config_op)]);
 
-    let tx_hash = set_keys_tx.hash();
-    let signature = sign_tx(tx_hash, signing_key);
+    let tx_hash = config_tx.hash();
+    let signatures = signing_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            MultiSequencerSignature::new(
+                index as ChannelKeyIndex,
+                key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            )
+        })
+        .collect();
+    let proof = ChannelMultiSequencerProof::new(signatures).unwrap();
 
     SignedMantleTx {
-        ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        mantle_tx: set_keys_tx,
+        ops_proofs: vec![OpProof::ChannelMultiSequencerProof(proof)],
+        mantle_tx: config_tx,
     }
 }
 

@@ -11,7 +11,7 @@ use crate::{
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         tx::{GasPrices, MantleTxContext},
     },
-    proofs::channel_withdraw_proof::ChannelWithdrawProof,
+    proofs::channel_withdraw_proof::ChannelMultiSequencerProof,
 };
 
 #[derive(Debug, Clone)]
@@ -20,7 +20,7 @@ pub struct MantleTxBuilder {
     ledger_inputs: Vec<Utxo>,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
-    channel_withdraw_proofs: HashMap<usize, ChannelWithdrawProof>,
+    channel_withdraw_proofs: HashMap<usize, ChannelMultiSequencerProof>,
     context: MantleTxContext,
 }
 
@@ -54,7 +54,11 @@ impl MantleTxBuilder {
     }
 
     #[must_use]
-    pub fn push_channel_withdraw(self, op: ChannelWithdrawOp, proof: ChannelWithdrawProof) -> Self {
+    pub fn push_channel_withdraw(
+        self,
+        op: ChannelWithdrawOp,
+        proof: ChannelMultiSequencerProof,
+    ) -> Self {
         let mut builder = self.push_op(Op::ChannelWithdraw(op));
         let index = builder.mantle_tx.ops().len() - 1;
         builder.channel_withdraw_proofs.insert(index, proof);
@@ -187,7 +191,7 @@ impl MantleTxBuilder {
     }
 
     #[must_use]
-    pub const fn channel_withdraw_proofs(&self) -> &HashMap<usize, ChannelWithdrawProof> {
+    pub const fn channel_withdraw_proofs(&self) -> &HashMap<usize, ChannelMultiSequencerProof> {
         &self.channel_withdraw_proofs
     }
 

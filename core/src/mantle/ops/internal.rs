@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Op,
-    channel::{deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp},
+    channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
     leader_claim::LeaderClaimOp,
     opcode::{
-        CHANNEL_DEPOSIT, CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE,
-        SDP_WITHDRAW, SET_CHANNEL_KEYS, TRANSFER,
+        CHANNEL_CONFIG, CHANNEL_DEPOSIT, CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE,
+        SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
     },
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_,
@@ -22,11 +22,11 @@ pub enum OpSer<'a> {
         #[serde(serialize_with = "serde_::serialize_op_variant::<{INSCRIBE}, InscriptionOp, _>")]
         &'a InscriptionOp,
     ),
-    ChannelSetKeys(
+    ChannelConfig(
         #[serde(
-            serialize_with = "serde_::serialize_op_variant::<{SET_CHANNEL_KEYS}, SetKeysOp, _>"
+            serialize_with = "serde_::serialize_op_variant::<{CHANNEL_CONFIG}, ChannelConfigOp, _>"
         )]
-        &'a SetKeysOp,
+        &'a ChannelConfigOp,
     ),
     ChannelDeposit(
         #[serde(
@@ -70,7 +70,7 @@ impl<'a> From<&'a Op> for OpSer<'a> {
     fn from(value: &'a Op) -> Self {
         match value {
             Op::ChannelInscribe(op) => OpSer::ChannelInscribe(op),
-            Op::ChannelSetKeys(op) => OpSer::ChannelSetKeys(op),
+            Op::ChannelConfig(op) => OpSer::ChannelConfig(op),
             Op::ChannelDeposit(op) => OpSer::ChannelDeposit(op),
             Op::ChannelWithdraw(op) => OpSer::ChannelWithdraw(op),
             Op::SDPDeclare(op) => OpSer::SDPDeclare(op),
@@ -92,11 +92,11 @@ pub enum OpDe {
         )]
         InscriptionOp,
     ),
-    ChannelSetKeys(
+    ChannelConfig(
         #[serde(
-            deserialize_with = "serde_::deserialize_op_variant::<{SET_CHANNEL_KEYS}, SetKeysOp, _>"
+            deserialize_with = "serde_::deserialize_op_variant::<{CHANNEL_CONFIG}, ChannelConfigOp, _>"
         )]
-        SetKeysOp,
+        ChannelConfigOp,
     ),
     ChannelDeposit(
         #[serde(
@@ -144,7 +144,7 @@ impl From<OpDe> for Op {
     fn from(value: OpDe) -> Self {
         match value {
             OpDe::ChannelInscribe(inscribe) => Self::ChannelInscribe(inscribe),
-            OpDe::ChannelSetKeys(channel_set_keys) => Self::ChannelSetKeys(channel_set_keys),
+            OpDe::ChannelConfig(channel_set_keys) => Self::ChannelConfig(channel_set_keys),
             OpDe::ChannelDeposit(channel_deposit) => Self::ChannelDeposit(channel_deposit),
             OpDe::ChannelWithdraw(channel_withdraw) => Self::ChannelWithdraw(channel_withdraw),
             OpDe::SDPDeclare(sdp_declare) => Self::SDPDeclare(sdp_declare),

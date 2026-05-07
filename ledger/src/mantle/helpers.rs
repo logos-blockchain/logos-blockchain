@@ -42,7 +42,7 @@ impl OperationVerificationHelper for MantleOperationVerificationHelper<'_> {
             .ok_or(VerificationError::ChannelNotFound {
                 channel_id: *channel_id,
             })?
-            .keys
+            .accredited_keys
             .get(*key_index as usize)
             .ok_or(VerificationError::KeyNotFound {
                 channel_id: *channel_id,

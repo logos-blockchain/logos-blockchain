@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
+use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 
 use crate::mantle::{
     Value, ledger,
     ledger::Operation as _,
     ops::channel::{
-        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, inscribe::InscriptionOp,
+        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId,
+        inscribe::{InscriptionExecutionContext, InscriptionOp},
     },
 };
 
@@ -25,8 +27,6 @@ pub enum Error {
     },
     #[error("Invalid signature")]
     InvalidSignature,
-    #[error("Invalid keys for channel {channel_id:?}")]
-    EmptyKeys { channel_id: ChannelId },
     #[error("Channel {channel_id:?} not found")]
     ChannelNotFound { channel_id: ChannelId },
     #[error("Insufficient funds")]
@@ -35,6 +35,8 @@ pub enum Error {
     BalanceOverflow,
     #[error("The withdraw nonce doesn't correspond to the channel state")]
     InvalidWithdrawNonce,
+    #[error("The Channel Config isn't well formed")]
+    InvalidChannelConfig,
     #[error("Withdraw Nonce overflow")]
     WithdrawNonceOverflow,
     #[error("Inputs error: {0}")]
@@ -44,7 +46,7 @@ pub enum Error {
     #[error(
         "Invalid number of signatures (treshold:?) for channel {channel_id:?}, expected {actual:?}"
     )]
-    WithdrawThresholdUnmet {
+    ThresholdUnmet {
         channel_id: ChannelId,
         threshold: u16,
         actual: usize,
@@ -58,15 +60,29 @@ pub struct Channels {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelState {
-    pub tip: MsgId,
-    // avoid cloning the keys every new message
-    #[serde(with = "arc_slice")]
-    pub keys: Arc<[PublicKey]>, // keys.len() <= ChannelKeyIndex::MAX
+    // Channel Configuration
+    pub accredited_keys: Arc<[PublicKey]>, // keys.len() <= ChannelKeyIndex::MAX
+    pub configuration_threshold: u16,      /* indicating how many keys are required to update
+                                            * the
+                                            * configuration */
+
+    // Message Ordering
+    pub tip_message: MsgId,
+
+    // Decentralized Sequencing
+    pub tip_slot: Slot,
+    pub tip_sequencer: u16, /* indicating the actual sequencer position in the list of
+                             * accredited keys */
+    pub tip_sequencer_starting_slot: Slot,
+    pub posting_timeframe: u32, // number of slots (0 = infinity)
+    pub posting_timeout: u32,   // number of slots (0 = no timeout)
+
+    // Bridging
     pub balance: Value,
-    // Indicating how many accredited keys are required to withdraw
-    // funds from the channel.
-    pub withdraw_threshold: ChannelKeyIndex,
     pub withdrawal_nonce: u32,
+    pub withdraw_threshold: ChannelKeyIndex, /* indicating how many keys are required to
+                                              * withdraw
+                                              * funds from the channel */
 }
 
 pub(crate) const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
@@ -79,8 +95,11 @@ impl Default for Channels {
 
 impl Channels {
     pub fn from_genesis(op: &InscriptionOp) -> Result<Self, Error> {
-        let channels = op.execute(Self::default())?;
-        Ok(channels)
+        let ctx = op.execute(InscriptionExecutionContext {
+            channels: Self::default(),
+            block_slot: Slot::default(),
+        })?;
+        Ok(ctx.channels)
     }
 
     #[must_use]
@@ -96,19 +115,43 @@ impl Channels {
     }
 }
 
-mod arc_slice {
-    use std::sync::Arc;
+impl ChannelState {
+    // Returns the new sequencer index and its starting slot
+    #[must_use]
+    pub fn round_robin(&self, block_slot: Slot) -> (u16, Slot) {
+        let elapsed_slots = block_slot - self.tip_slot;
+        let index: u16 = if u64::from(elapsed_slots) >= u64::from(self.posting_timeframe)
+            && self.posting_timeout != 0
+            && self.posting_timeframe != 0
+        {
+            ((u64::from(self.tip_sequencer)
+                + (u64::from(elapsed_slots) / u64::from(self.posting_timeout)))
+                % self.accredited_keys.len() as u64) as u16
+        } else if self.posting_timeframe != 0 {
+            ((u64::from(self.tip_sequencer)
+                + (u64::from(block_slot - self.tip_sequencer_starting_slot)
+                    / u64::from(self.posting_timeframe)))
+                % self.accredited_keys.len() as u64) as u16
+        } else {
+            self.tip_sequencer
+        };
 
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+        let starting_slot: Slot = if u64::from(elapsed_slots) >= u64::from(self.posting_timeframe)
+            && self.posting_timeout != 0
+        {
+            self.tip_slot
+                + (u64::from(elapsed_slots) / u64::from(self.posting_timeout))
+                    * u64::from(self.posting_timeout)
+        } else if self.posting_timeframe != 0 {
+            self.tip_sequencer_starting_slot
+                + (u64::from(block_slot - self.tip_sequencer_starting_slot)
+                    / u64::from(self.posting_timeframe))
+                    * u64::from(self.posting_timeframe)
+        } else {
+            self.tip_sequencer_starting_slot
+        };
 
-    pub fn serialize<T: Serialize, S: Serializer>(v: &Arc<[T]>, s: S) -> Result<S::Ok, S::Error> {
-        v.as_ref().serialize(s)
-    }
-
-    pub fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
-        d: D,
-    ) -> Result<Arc<[T]>, D::Error> {
-        Vec::<T>::deserialize(d).map(Into::into)
+        (index, starting_slot)
     }
 }
 
@@ -165,11 +208,17 @@ mod tests {
                 channels: rpds::HashTrieMapSync::new_sync().insert(
                     channel_id,
                     ChannelState {
-                        tip: MsgId::root(),
-                        keys: vec![test_public_key(7)].into(),
+                        accredited_keys: vec![test_public_key(7)].into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0,
                         balance,
                         withdraw_threshold: 1,
                         withdrawal_nonce: 0,
+                        posting_timeout: 0,
                     },
                 ),
             }
@@ -187,21 +236,33 @@ mod tests {
                 .insert(
                     first_id,
                     ChannelState {
-                        tip: MsgId::root(),
-                        keys: vec![test_public_key(11)].into(),
+                        accredited_keys: vec![test_public_key(11)].into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0,
                         balance: 5,
                         withdraw_threshold: 1,
                         withdrawal_nonce: 0,
+                        posting_timeout: 0,
                     },
                 )
                 .insert(
                     second_id,
                     ChannelState {
-                        tip: MsgId::root(),
-                        keys: vec![test_public_key(22), test_public_key(23)].into(),
+                        accredited_keys: vec![test_public_key(22), test_public_key(23)].into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0,
                         balance: 9,
                         withdraw_threshold: 2,
                         withdrawal_nonce: 0,
+                        posting_timeout: 0,
                     },
                 ),
         };

@@ -17,8 +17,8 @@ use crate::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
-                set_keys::SetKeysOp,
+                ChannelId, Ed25519PublicKey, MsgId, config::ChannelConfigOp, deposit::DepositOp,
+                inscribe::InscriptionOp,
             },
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
@@ -89,7 +89,7 @@ pub fn decode_op(input: &[u8]) -> IResult<&[u8], Op> {
 
     match opcode {
         opcode::INSCRIBE => map(decode_channel_inscribe, Op::ChannelInscribe).parse(input),
-        opcode::SET_CHANNEL_KEYS => map(decode_channel_set_keys, Op::ChannelSetKeys).parse(input),
+        opcode::CHANNEL_CONFIG => map(decode_channel_config, Op::ChannelConfig).parse(input),
         opcode::CHANNEL_DEPOSIT => map(decode_channel_deposit, Op::ChannelDeposit).parse(input),
         opcode::CHANNEL_WITHDRAW => map(decode_channel_withdraw, Op::ChannelWithdraw).parse(input),
         opcode::SDP_DECLARE => map(decode_sdp_declare, Op::SDPDeclare).parse(input),
@@ -133,14 +133,30 @@ fn decode_channel_inscribe(input: &[u8]) -> IResult<&[u8], InscriptionOp> {
     ))
 }
 
-fn decode_channel_set_keys(input: &[u8]) -> IResult<&[u8], SetKeysOp> {
-    // ChannelSetKeys = ChannelId KeyCount *Ed25519PublicKey
+fn decode_channel_config(input: &[u8]) -> IResult<&[u8], ChannelConfigOp> {
+    // ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
+    // PostingTimeout ConfigThreshold WithdrawThreshold
     let (input, channel) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, key_count) = decode_byte(input)?;
 
     let (input, keys) = count(decode_ed25519_public_key, key_count as usize).parse(input)?;
 
-    Ok((input, SetKeysOp { channel, keys }))
+    let (input, posting_timeframe) = decode_uint32(input)?;
+    let (input, posting_timeout) = decode_uint32(input)?;
+    let (input, configuration_threshold) = decode_uint16(input)?;
+    let (input, withdraw_threshold) = decode_uint16(input)?;
+
+    Ok((
+        input,
+        ChannelConfigOp {
+            channel,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            withdraw_threshold,
+        },
+    ))
 }
 
 fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
@@ -347,7 +363,7 @@ fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], Vec<O
 fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
     match op {
         // Ed25519SigProof = Ed25519Signature
-        Op::ChannelInscribe(_) | Op::ChannelSetKeys(_) => {
+        Op::ChannelInscribe(_) | Op::ChannelConfig(_) => {
             map(decode_ed25519_signature, OpProof::Ed25519Sig).parse(input)
         }
 
@@ -379,9 +395,11 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         .parse(input),
 
         // ChannelWithdrawProof
-        Op::ChannelWithdraw(_) => {
-            map(decode_channel_withdraw_proof, OpProof::ChannelWithdrawProof).parse(input)
-        }
+        Op::ChannelWithdraw(_) => map(
+            decode_channel_withdraw_proof,
+            OpProof::ChannelMultiSequencerProof,
+        )
+        .parse(input),
     }
 }
 
@@ -437,7 +455,7 @@ const fn calculate_channel_withdraw_proof_byte_size(
     (channel_withdraw_threshold as usize) * (ED25519_SIG_BYTES + 4)
 }
 
-fn decode_channel_withdraw_proof(input: &[u8]) -> IResult<&[u8], ChannelWithdrawProof> {
+fn decode_channel_withdraw_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSequencerProof> {
     // ChannelWithdrawProof = SignatureCount *WithdrawSignature
     // WithdrawSignature = Ed25519Signature Index
     let (input, signatures) = length_count(
@@ -446,12 +464,12 @@ fn decode_channel_withdraw_proof(input: &[u8]) -> IResult<&[u8], ChannelWithdraw
     )
     .parse(input)?;
 
-    let signatures: Vec<WithdrawSignature> = signatures
+    let signatures: Vec<MultiSequencerSignature> = signatures
         .into_iter()
-        .map(|(signature, index)| WithdrawSignature::from((index, signature)))
+        .map(|(signature, index)| MultiSequencerSignature::from((index, signature)))
         .collect();
 
-    ChannelWithdrawProof::new(signatures)
+    ChannelMultiSequencerProof::new(signatures)
         .map(|proof| (input, proof))
         .map_err(|_| nom::Err::Failure(Error::new(input, ErrorKind::Verify)))
 }
@@ -536,7 +554,7 @@ use crate::{
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
     },
-    proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature},
+    proofs::channel_withdraw_proof::{ChannelMultiSequencerProof, MultiSequencerSignature},
 };
 // Encode primitives
 
@@ -600,7 +618,7 @@ fn encode_groth16_proof(proof: &CompressedGroth16Proof) -> Vec<u8> {
     proof.to_bytes().to_vec()
 }
 
-fn encode_channel_withdraw_proof(proof: &ChannelWithdrawProof) -> Vec<u8> {
+fn encode_channel_withdraw_proof(proof: &ChannelMultiSequencerProof) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_uint16(proof.signatures().len() as ChannelKeyIndex));
     bytes.extend(proof.signatures().iter().flat_map(|signature| {
@@ -629,10 +647,11 @@ pub fn encode_channel_inscribe(op: &InscriptionOp) -> Vec<u8> {
     bytes
 }
 
-fn encode_channel_set_keys(op: &SetKeysOp) -> Vec<u8> {
+#[must_use]
+pub fn encode_channel_config(op: &ChannelConfigOp) -> Vec<u8> {
     assert!(
         u8::try_from(op.keys.len()).is_ok(),
-        "Fatal error in 'encode_channel_set_keys' - {} keys clipped to {}",
+        "Fatal error in 'encode_channel_config' - {} keys clipped to {}",
         op.keys.len(),
         u8::MAX
     );
@@ -642,6 +661,12 @@ fn encode_channel_set_keys(op: &SetKeysOp) -> Vec<u8> {
     for key in &op.keys {
         bytes.extend(encode_ed25519_public_key(key));
     }
+
+    bytes.extend(encode_uint32(op.posting_timeframe));
+    bytes.extend(encode_uint32(op.posting_timeout));
+    bytes.extend(encode_uint16(op.configuration_threshold));
+    bytes.extend(encode_uint16(op.withdraw_threshold));
+
     bytes
 }
 
@@ -798,9 +823,9 @@ pub fn encode_op(op: &Op) -> Vec<u8> {
             bytes.extend(encode_byte(opcode::INSCRIBE));
             bytes.extend(encode_channel_inscribe(op));
         }
-        Op::ChannelSetKeys(op) => {
-            bytes.extend(encode_byte(opcode::SET_CHANNEL_KEYS));
-            bytes.extend(encode_channel_set_keys(op));
+        Op::ChannelConfig(op) => {
+            bytes.extend(encode_byte(opcode::CHANNEL_CONFIG));
+            bytes.extend(encode_channel_config(op));
         }
         Op::ChannelDeposit(op) => {
             bytes.extend(encode_byte(opcode::CHANNEL_DEPOSIT));
@@ -852,10 +877,10 @@ fn encode_ops(ops: &[Op]) -> Vec<u8> {
 /// Encode proofs
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     match (proof, op) {
-        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_) | Op::ChannelSetKeys(_)) => {
+        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_) | Op::ChannelConfig(_)) => {
             encode_ed25519_signature(sig)
         }
-        (OpProof::ChannelWithdrawProof(proof), Op::ChannelWithdraw(_)) => {
+        (OpProof::ChannelMultiSequencerProof(proof), Op::ChannelWithdraw(_)) => {
             encode_channel_withdraw_proof(proof)
         }
         (
@@ -910,7 +935,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
         .iter()
         .map(|op| match op {
             // Ed25519SigProof = Ed25519Signature
-            Op::ChannelInscribe(_) | Op::ChannelSetKeys(_) => ED25519_SIG_BYTES,
+            Op::ChannelInscribe(_) | Op::ChannelConfig(_) => ED25519_SIG_BYTES,
 
             // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
             Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
@@ -1100,9 +1125,13 @@ mod tests {
                 parent: MsgId::from([0x00; 32]),
                 signer: signing_key.public_key(),
             }),
-            Op::ChannelSetKeys(SetKeysOp {
+            Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
                 keys: vec![signing_key.public_key()],
+                posting_timeframe: 1,
+                posting_timeout: 2,
+                configuration_threshold: 3,
+                withdraw_threshold: 4,
             }),
         ]);
 
@@ -1291,16 +1320,20 @@ mod tests {
         let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
         let signing_key3 = Ed25519Key::from_bytes(&[3; 32]);
 
-        let set_keys_op = SetKeysOp {
+        let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xFF; 32]),
             keys: vec![
                 signing_key1.public_key(),
                 signing_key2.public_key(),
                 signing_key3.public_key(),
             ],
+            posting_timeframe: 0,
+            posting_timeout: 0,
+            configuration_threshold: 0,
+            withdraw_threshold: 0,
         };
 
-        let mantle_tx = MantleTx(vec![Op::ChannelSetKeys(set_keys_op)]);
+        let mantle_tx = MantleTx(vec![Op::ChannelConfig(config_op)]);
 
         // Predict size
         let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
@@ -1449,9 +1482,13 @@ mod tests {
             signer: signing_key.public_key(),
         };
 
-        let set_keys_op = SetKeysOp {
+        let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xCC; 32]),
             keys: vec![signing_key.public_key()],
+            posting_timeframe: 0,
+            posting_timeout: 0,
+            configuration_threshold: 0,
+            withdraw_threshold: 0,
         };
 
         let blend_proof = ActivityProof {
@@ -1469,7 +1506,7 @@ mod tests {
 
         let mantle_tx = MantleTx(vec![
             Op::ChannelInscribe(inscribe_op),
-            Op::ChannelSetKeys(set_keys_op),
+            Op::ChannelConfig(config_op),
             Op::SDPActive(sdp_active_op),
         ]);
 
@@ -1546,9 +1583,13 @@ mod tests {
             signer: signing_key1.public_key(),
         };
 
-        let set_keys_op = SetKeysOp {
+        let config_op = ChannelConfigOp {
             channel: ChannelId::from([0x33; 32]),
             keys: vec![signing_key1.public_key(), signing_key2.public_key()],
+            posting_timeframe: 0,
+            posting_timeout: 0,
+            configuration_threshold: 0,
+            withdraw_threshold: 0,
         };
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
@@ -1573,7 +1614,7 @@ mod tests {
 
         let mantle_tx = MantleTx(vec![
             Op::ChannelInscribe(inscribe_op),
-            Op::ChannelSetKeys(set_keys_op),
+            Op::ChannelConfig(config_op),
             Op::SDPDeclare(sdp_declare_op),
             Op::Transfer(transfer_op),
         ]);
@@ -1696,13 +1737,14 @@ mod tests {
             withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();
-        let proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+        let proof = ChannelMultiSequencerProof::new(vec![MultiSequencerSignature::new(
             0,
             signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
         )])
         .unwrap();
         let signed_tx =
-            SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelWithdrawProof(proof)]).unwrap();
+            SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSequencerProof(proof)])
+                .unwrap();
 
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded).unwrap();
@@ -1794,9 +1836,13 @@ mod tests {
     #[test]
     fn test_encode_reject_excessive_op_count() {
         let ops = vec![
-            Op::ChannelSetKeys(SetKeysOp {
+            Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
                 keys: vec![Ed25519Key::from_bytes(&[1; 32]).public_key()],
+                posting_timeframe: 0,
+                posting_timeout: 0,
+                configuration_threshold: 0,
+                withdraw_threshold: 0,
             });
             u8::MAX as usize + 1
         ];
@@ -1886,15 +1932,17 @@ mod tests {
 
     #[test]
     fn test_encode_reject_excessive_key_count() {
-        let set_keys_op = SetKeysOp {
+        let config_op = ChannelConfigOp {
             channel: ChannelId::from([0x22; 32]),
             keys: vec![Ed25519Key::from_bytes(&[1; 32]).public_key(); u8::MAX as usize + 1],
+            posting_timeframe: 0,
+            posting_timeout: 0,
+            configuration_threshold: 0,
+            withdraw_threshold: 0,
         };
 
         // Should panic
-        let result = panic::catch_unwind(|| {
-            encode_channel_set_keys(&set_keys_op);
-        });
+        let result = panic::catch_unwind(|| encode_channel_config(&config_op));
         assert!(result.is_err(), "Should reject excessive output count");
     }
 
@@ -1916,7 +1964,19 @@ mod tests {
             valid_input.extend_from_slice(&pk.to_bytes());
         }
 
-        let result = decode_channel_set_keys(&valid_input);
+        // Posting Timeframe (32 bytes)
+        valid_input.extend_from_slice(&[0; 32]);
+
+        // Posting Timeout (32 bytes)
+        valid_input.extend_from_slice(&[0; 32]);
+
+        // Configuration Threshold (16 bytes)
+        valid_input.extend_from_slice(&[0; 16]);
+
+        // Withdraw Threshold (16 bytes)
+        valid_input.extend_from_slice(&[0; 16]);
+
+        let result = decode_channel_config(&valid_input);
         assert!(result.is_ok(), "Should accept max key count: {result:?}");
 
         let (_, set_keys_op) = result.unwrap();
