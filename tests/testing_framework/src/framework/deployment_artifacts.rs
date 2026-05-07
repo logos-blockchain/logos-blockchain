@@ -161,5 +161,5 @@ fn runtime_blend_locator(hostname: &str, port: u16) -> Locator {
     multiaddr.push(Protocol::Udp(port));
     multiaddr.push(Protocol::QuicV1);
 
-    Locator::new(multiaddr)
+    Locator::new_unchecked(multiaddr)
 }

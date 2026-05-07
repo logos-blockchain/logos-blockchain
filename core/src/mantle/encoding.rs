@@ -190,7 +190,11 @@ fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
     let (input, locator_count) = decode_byte(input)?;
 
     let (input, multiaddrs) = count(decode_locator, locator_count as usize).parse(input)?;
-    let locators = multiaddrs.into_iter().map(Locator::new).collect();
+    let locators = multiaddrs
+        .into_iter()
+        .map(Locator::try_from)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
     let (input, provider_key) = decode_ed25519_public_key(input)?;
     let provider_id = ProviderId(provider_key);
     let (input, zk_fr) = decode_field_element(input)?;
@@ -1336,7 +1340,10 @@ mod tests {
         };
         let sdp_declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            locators: vec![Locator::new(locator1), Locator::new(locator2)],
+            locators: vec![
+                Locator::new_unchecked(locator1),
+                Locator::new_unchecked(locator2),
+            ],
             provider_id: ProviderId(signing_key.public_key()),
             zk_id: zk_sk.to_public_key(),
             locked_note_id: locked_note.id(),
@@ -1561,7 +1568,7 @@ mod tests {
         let zk_sk = ZkKey::zero();
         let sdp_declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            locators: vec![Locator::new(locator)],
+            locators: vec![Locator::new_unchecked(locator)],
             provider_id: ProviderId(signing_key1.public_key()),
             zk_id: zk_sk.to_public_key(),
             locked_note_id: transfer_op
@@ -1928,7 +1935,7 @@ mod tests {
         let locator: multiaddr::Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
         let sdp_declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
-            locators: vec![Locator::new(locator); u8::MAX as usize + 1], // excessive locator count
+            locators: vec![Locator::new_unchecked(locator); u8::MAX as usize + 1], /* excessive locator count */
             provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
             zk_id: ZkKey::zero().to_public_key(),
             locked_note_id: NoteId(BigUint::from(111u64).into()),
@@ -2044,6 +2051,28 @@ mod tests {
             );
         }
         assert!(result.is_err(), "Should reject invalid declaration");
+    }
+
+    #[test]
+    fn decode_reject_invalid_locator() {
+        let invalid_locator: multiaddr::Multiaddr = "/ip4/0.0.0.0/udp/3000/quic-v1"
+            .parse()
+            .expect("locator should parse as multiaddr");
+        let op = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locators: vec![Locator::new_unchecked(invalid_locator)],
+            provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
+            zk_id: ZkKey::zero().to_public_key(),
+            locked_note_id: NoteId(BigUint::from(111u64).into()),
+        };
+
+        let encoded = encode_sdp_declare(&op);
+        let result = decode_sdp_declare(&encoded);
+
+        match result {
+            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::Verify),
+            _ => panic!("Expected Verify error for invalid locator"),
+        }
     }
 
     #[test]
