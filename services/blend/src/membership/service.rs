@@ -13,7 +13,7 @@ use overwatch::{
     services::{ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::oneshot;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::membership::{MembershipInfo, MembershipStream, ServiceMessage, ZkInfo, node_id};
 

@@ -1079,6 +1079,10 @@ async fn retire<
 /// expiration event and returns the previous cryptographic processor as is.
 #[expect(clippy::too_many_arguments, reason = "necessary for session handling")]
 #[expect(clippy::too_many_lines, reason = "necessary for session handling")]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "necessary for session handling"
+)]
 async fn handle_session_event<
     NodeId,
     ProofsGenerator,
