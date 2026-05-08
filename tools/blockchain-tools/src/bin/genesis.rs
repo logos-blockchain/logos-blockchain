@@ -40,6 +40,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Orchestrate the full genesis ceremony: inscribe, distribute, and build
+    /// the final deployment configuration.
+    Ceremony(CeremonyArgs),
+
     /// Generate a deployment config YAML from a well-known deployment or file,
     /// with optional field overrides.
     Config(ConfigArgs),
@@ -54,6 +58,36 @@ enum Commands {
 
     /// Generate a genesis `InscriptionOp` using entropy sources.
     Inscribe(InscribeArgs),
+}
+
+// ── ceremony subcommand
+// ──────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+pub struct CeremonyArgs {
+    /// Genesis parameters for the `InscriptionOp`.
+    #[arg(long, value_name = "FILE")]
+    pub inscription_params: PathBuf,
+
+    /// Stakeholder definitions for note distribution.
+    #[arg(long, value_name = "FILE")]
+    pub stake_holders: PathBuf,
+
+    /// Provider definitions for SDP declarations.
+    #[arg(long, value_name = "FILE")]
+    pub providers: PathBuf,
+
+    /// The base deployment config (e.g., 'devnet' or path/to/config.yaml).
+    #[arg(long, value_name = "NAME_OR_PATH")]
+    pub deployment: String,
+
+    /// Optional overrides for the deployment config.
+    #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
+    pub overrides: Vec<String>,
+
+    /// Write the final deployment config to FILE instead of stdout.
+    #[arg(long, short, value_name = "FILE")]
+    pub output: Option<PathBuf>,
 }
 
 // ── config subcommand
@@ -169,11 +203,51 @@ struct InscribeArgs {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Commands::Ceremony(args) => run_ceremony(&args),
         Commands::Config(args) => run_config(&args),
         Commands::Block(args) => run_block(&args),
         Commands::Distribute(args) => run_distribute(&args),
         Commands::Inscribe(args) => run_inscribe(&args),
     }
+}
+
+// ── ceremony implementation
+// ─────────────────────────────────────────────────────
+
+fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
+    let inscribe_params: InscribeParams = load_yaml_file(&args.inscription_params)?;
+    let inscription_op = inscription::inscribe::<ZkHasher>(
+        inscribe_params.chain_id,
+        inscribe_params.genesis_time,
+        inscribe_params.entropy_sources,
+    );
+
+    let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
+    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to calculate distribution during ceremony")?;
+    let notes: Vec<Note> = transfer_op.notes().collect();
+
+    let mut config_value = load_base_config(&args.deployment)?;
+    for raw in &args.overrides {
+        let patch = resolve_override(raw)?;
+        config_value = overwrite_yaml(config_value, patch);
+    }
+
+    if notes.is_empty() {
+        bail!("Ceremony failed: distribution resulted in zero notes");
+    }
+    if declarations.is_empty() {
+        bail!("Ceremony failed: distribution resulted in zero declarations");
+    }
+    let genesis_block = build_genesis_block(notes, inscription_op, declarations)?;
+
+    let block_value = struct_to_yaml_value(&genesis_block)?;
+    let patch = wrap_as_cryptarchia_genesis_block(block_value);
+    let final_config = overwrite_yaml(config_value, patch);
+
+    write_yaml(&final_config, args.output.as_deref())
 }
 
 // ── config implementation
