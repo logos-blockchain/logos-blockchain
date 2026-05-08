@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use lb_key_management_system_service::keys::Ed25519PublicKey;
 use lb_zone_sdk::{sequencer::SequencerCheckpoint, state::InscriptionInfo};
 use uuid::Uuid;
 
@@ -108,7 +109,16 @@ pub fn resolve_conflicts(
     orphaned: &[InscriptionInfo],
     adopted: &[InscriptionInfo],
     pending: &[InscriptionInfo],
+    my_signer: &Ed25519PublicKey,
 ) -> Vec<AppMessage> {
+    // SDK contract: every entry in `orphaned` is one of our own pending items.
+    for inv in orphaned {
+        debug_assert_eq!(
+            &inv.signer, my_signer,
+            "orphaned entry signer mismatch - SDK should only surface our own pending"
+        );
+    }
+
     for adp in adopted {
         if let Some(msg) = AppMessage::from_bytes(&adp.payload) {
             state.apply(msg);

@@ -23,7 +23,9 @@ use lb_http_api_common::bodies::{
         sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
+use lb_key_management_system_service::keys::{
+    Ed25519Key, Ed25519PublicKey, ZkPublicKey, ZkSignature,
+};
 use lb_node::{SignedMantleTx, Transaction as _, config::RunConfig};
 use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::{
@@ -31,6 +33,7 @@ use lb_zone_sdk::{
     adapter::NodeHttpClient,
     indexer::ZoneIndexer,
     sequencer::{Event, SequencerConfig, SequencerHandle, ZoneSequencer},
+    state::InscriptionInfo,
 };
 
 type Node = NodeHttpClient;
@@ -294,27 +297,51 @@ fn spawn_drive(
 /// On each `ChannelUpdate`, republish each entry in `orphaned` (mine that the
 /// SDK has given up on) that isn't already in flight via `pending`. No local
 /// state mirror needed — the SDK's `pending` field is the dedup signal.
+///
+/// If `finalized_tx` is provided, every finalized inscription seen via
+/// `Event::TxsFinalized` or `Event::FinalizedInscriptions` is forwarded so
+/// the test can deterministically wait for finality of expected payloads
+/// instead of using a fixed sleep.
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
+    my_signer: Ed25519PublicKey,
+    finalized_tx: Option<tokio::sync::mpsc::UnboundedSender<InscriptionInfo>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let Some(Event::ChannelUpdate {
-                orphaned, pending, ..
-            }) = sequencer.next_event().await
-            else {
-                continue;
-            };
-
-            let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
-            for inv in &orphaned {
-                if !pending_payloads.contains(&inv.payload) {
-                    debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
-                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
-                        debug!("Failed to re-publish: {e}");
+            match sequencer.next_event().await {
+                Some(
+                    Event::TxsFinalized { inscriptions, .. }
+                    | Event::FinalizedInscriptions { inscriptions },
+                ) => {
+                    if let Some(tx) = finalized_tx.as_ref() {
+                        for ins in inscriptions {
+                            drop(tx.send(ins));
+                        }
                     }
                 }
+                Some(Event::ChannelUpdate {
+                    orphaned, pending, ..
+                }) => {
+                    for inv in &orphaned {
+                        assert_eq!(
+                            inv.signer, my_signer,
+                            "orphaned entry signer mismatch - SDK should only surface our own"
+                        );
+                    }
+                    let pending_payloads: HashSet<&Vec<u8>> =
+                        pending.iter().map(|p| &p.payload).collect();
+                    for inv in &orphaned {
+                        if !pending_payloads.contains(&inv.payload) {
+                            debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
+                            if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                                debug!("Failed to re-publish: {e}");
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     })
@@ -373,6 +400,46 @@ async fn wait_for_indexer_unordered(
 
         sleep(Duration::from_millis(500)).await;
     }
+}
+
+/// Wait until at least `expected_count` distinct finalizations whose payload
+/// is in `expected` have been observed via `finalized_rx`. The receiver is
+/// fed by sequencer handlers forwarding `Event::TxsFinalized` /
+/// `Event::FinalizedInscriptions` inscriptions; multiple sequencers can share
+/// the same sender so deduplication by `tx_hash` is needed (each finalization
+/// is reported once per sequencer).
+///
+/// Returns the set of distinct `tx_hash`es observed as finalized.
+async fn wait_for_finalized(
+    finalized_rx: &mut tokio::sync::mpsc::UnboundedReceiver<InscriptionInfo>,
+    expected: &HashSet<Vec<u8>>,
+    expected_count: usize,
+    timeout_duration: Duration,
+) -> HashSet<lb_core::mantle::tx::TxHash> {
+    let start = std::time::Instant::now();
+    let mut seen_tx_hashes: HashSet<lb_core::mantle::tx::TxHash> = HashSet::new();
+    let mut matched_count: usize = 0;
+
+    while matched_count < expected_count {
+        assert!(
+            start.elapsed() <= timeout_duration,
+            "Timeout: only {matched_count}/{expected_count} expected finalizations seen"
+        );
+
+        match timeout(Duration::from_secs(5), finalized_rx.recv()).await {
+            Ok(Some(ins)) => {
+                if expected.contains(&ins.payload) && seen_tx_hashes.insert(ins.tx_hash) {
+                    matched_count += 1;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                // 5s heartbeat — re-check timeout.
+            }
+        }
+    }
+
+    seen_tx_hashes
 }
 
 /// Wait for expected payloads to appear in the indexer in exact order.
@@ -445,7 +512,7 @@ async fn spawn_competing_validators(n: usize) -> (Vec<Validator>, reqwest::Url) 
                 .service
                 .bootstrap
                 .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(10).unwrap();
+            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
             config.deployment.cryptarchia.slot_activation_coeff =
                 NonNegativeRatio::new(1, 2.try_into().unwrap());
             config
@@ -660,6 +727,12 @@ async fn test_sequential_multi_sequencer() {
     poll_a.abort();
 }
 
+const CONCURRENT_TEST_N_PER_SEQUENCER: usize = 20;
+
+#[expect(
+    clippy::too_many_lines,
+    reason = "End-to-end test covering full setup, publish, finality wait, and assertions"
+)]
 #[tokio::test]
 async fn test_concurrent_multi_sequencer() {
     init_tracing();
@@ -692,17 +765,16 @@ async fn test_concurrent_multi_sequencer() {
     .await;
 
     // Prepare payloads before starting sequencers
-    const N_PER_SEQUENCER: usize = 20;
-    let data_a: Vec<Vec<u8>> = (1..=N_PER_SEQUENCER)
+    let data_a: Vec<Vec<u8>> = (1..=CONCURRENT_TEST_N_PER_SEQUENCER)
         .map(|i| tag_payload(&format!("a{i}")))
         .collect();
-    let data_b: Vec<Vec<u8>> = (1..=N_PER_SEQUENCER)
+    let data_b: Vec<Vec<u8>> = (1..=CONCURRENT_TEST_N_PER_SEQUENCER)
         .map(|i| tag_payload(&format!("b{i}")))
         .collect();
-    let data_c: Vec<Vec<u8>> = (1..=N_PER_SEQUENCER)
+    let data_c: Vec<Vec<u8>> = (1..=CONCURRENT_TEST_N_PER_SEQUENCER)
         .map(|i| tag_payload(&format!("c{i}")))
         .collect();
-    let total = N_PER_SEQUENCER * 3;
+    let total = CONCURRENT_TEST_N_PER_SEQUENCER * 3;
 
     // --- Phase 2: Start all three sequencers with intent tracking ---
     debug!("Phase 2: Starting 3 sequencers concurrently");
@@ -725,9 +797,22 @@ async fn test_concurrent_multi_sequencer() {
         sequencer_config,
     );
 
-    let poll_a = spawn_drive_republish(seq_a, handle_a.clone());
-    let poll_b = spawn_drive_republish(seq_b, handle_b.clone());
-    let poll_c = spawn_drive_republish(seq_c, handle_c.clone());
+    // Aggregate finalization reports from all sequencers into one channel —
+    // dedup by tx_hash since each finalization is reported once per sequencer.
+    let (finalized_tx, mut finalized_rx) = tokio::sync::mpsc::unbounded_channel();
+    let poll_a = spawn_drive_republish(
+        seq_a,
+        handle_a.clone(),
+        admin_pk,
+        Some(finalized_tx.clone()),
+    );
+    let poll_b = spawn_drive_republish(
+        seq_b,
+        handle_b.clone(),
+        seq_b_pk,
+        Some(finalized_tx.clone()),
+    );
+    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), seq_c_pk, Some(finalized_tx));
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -743,8 +828,10 @@ async fn test_concurrent_multi_sequencer() {
     ])
     .await;
 
-    // Phase 4: Wait for all inscriptions to appear on chain
-    debug!("Phase 4: Waiting for all {total} inscriptions in indexer");
+    // Phase 4: Wait deterministically for all expected payloads to be
+    // finalized (i.e., below LIB and immutable). Once finalized, no more
+    // changes possible to those slots.
+    debug!("Phase 4: Waiting for all {total} expected payloads to finalize");
     let indexer = ZoneIndexer::new(
         channel_id,
         NodeHttpClient::new(CommonHttpClient::new(None), node_url),
@@ -757,12 +844,13 @@ async fn test_concurrent_multi_sequencer() {
         .collect();
     assert_eq!(expected_all.len(), total);
 
-    wait_for_indexer_unordered(&indexer, &expected_all, Duration::from_mins(30)).await;
-
-    // Wait for enough blocks so any late re-published duplicates would have
-    // landed. With k=10 and 1s slots, finality is ~10 blocks. We wait 60s
-    // to be safe — enough for resubmit cycles and in-flight txs to settle.
-    sleep(Duration::from_secs(60)).await;
+    wait_for_finalized(
+        &mut finalized_rx,
+        &expected_all,
+        total,
+        Duration::from_mins(20),
+    )
+    .await;
 
     let all_payloads = scan_indexer_for_payloads(&indexer, &expected_all).await;
 
@@ -799,6 +887,7 @@ type DiscardedSet = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
 fn spawn_sequencer_sorted_policy(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
+    my_signer: Ed25519PublicKey,
     discarded: DiscardedSet,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -820,6 +909,13 @@ fn spawn_sequencer_sorted_policy(
             else {
                 continue;
             };
+
+            for inv in &orphaned {
+                assert_eq!(
+                    inv.signer, my_signer,
+                    "orphaned entry signer mismatch - SDK should only surface our own"
+                );
+            }
 
             for a in &adopted {
                 discarded.lock().await.remove(&a.payload);
@@ -878,7 +974,7 @@ async fn wait_until_settled(
     let start = std::time::Instant::now();
     loop {
         assert!(
-            start.elapsed() <= Duration::from_mins(20),
+            start.elapsed() <= Duration::from_mins(10),
             "Timeout waiting for inscriptions to finalize"
         );
         let expected_count = total - discarded.lock().await.len();
@@ -1014,10 +1110,18 @@ async fn test_sorted_conflict_resolution() {
     );
 
     let discarded: DiscardedSet = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
-    let poll_a =
-        spawn_sequencer_sorted_policy(seq_a, handle_a.clone(), DiscardedSet::clone(&discarded));
-    let poll_b =
-        spawn_sequencer_sorted_policy(seq_b, handle_b.clone(), DiscardedSet::clone(&discarded));
+    let poll_a = spawn_sequencer_sorted_policy(
+        seq_a,
+        handle_a.clone(),
+        admin_pk,
+        DiscardedSet::clone(&discarded),
+    );
+    let poll_b = spawn_sequencer_sorted_policy(
+        seq_b,
+        handle_b.clone(),
+        seq_b_pk,
+        DiscardedSet::clone(&discarded),
+    );
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -1051,7 +1155,7 @@ fn parse_balance_tx(bytes: &[u8]) -> Option<(String, String, i64)> {
         return None;
     }
     let delta = parts[2].parse::<i64>().ok()?;
-    Some((parts[0].to_string(), parts[1].to_string(), delta))
+    Some((parts[0].to_owned(), parts[1].to_owned(), delta))
 }
 
 /// Spawn a sequencer that conditions republish decisions on the current
@@ -1065,6 +1169,7 @@ fn parse_balance_tx(bytes: &[u8]) -> Option<(String, String, i64)> {
 fn spawn_balance_aware(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
+    my_signer: Ed25519PublicKey,
     initial_balances: std::collections::HashMap<String, i64>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -1089,6 +1194,13 @@ fn spawn_balance_aware(
             else {
                 continue;
             };
+
+            for inv in &orphaned {
+                assert_eq!(
+                    inv.signer, my_signer,
+                    "orphaned entry signer mismatch - SDK should only surface our own"
+                );
+            }
 
             for o in &orphaned {
                 if let Some((uuid, account, _)) = parse_balance_tx(&o.payload)
@@ -1135,9 +1247,9 @@ fn spawn_balance_aware(
 /// if the burn would still keep the affected account's balance non-negative.
 ///
 /// Per-sequencer payloads (payload format `"<tx_uuid>:<account>:<delta>"`):
-///   SeqA: burn 6 alice, burn 3 bob, burn 2 charlie
-///   SeqB: burn 5 alice, burn 4 bob, burn 8 charlie
-///   SeqC: burn 4 alice, burn 7 bob, burn 1 charlie
+///   `SeqA`: burn 6 alice, burn 3 bob, burn 2 charlie
+///   `SeqB`: burn 5 alice, burn 4 bob, burn 8 charlie
+///   `SeqC`: burn 4 alice, burn 7 bob, burn 1 charlie
 ///
 /// Per-account totals if all 9 burns landed:
 ///   alice: -15  (initial 10 → would go to -5)
@@ -1152,6 +1264,10 @@ fn spawn_balance_aware(
 /// inscriptions must be non-negative. If state mirror drifts, a sequencer can
 /// republish when it shouldn't and an account's balance goes negative —
 /// this is the failure case the test catches.
+#[expect(
+    clippy::too_many_lines,
+    reason = "End-to-end test covering full setup, publish, settle, and per-account assertions"
+)]
 #[tokio::test]
 async fn test_balance_conditioned_republish() {
     init_tracing();
@@ -1180,9 +1296,9 @@ async fn test_balance_conditioned_republish() {
     .await;
 
     let initial_balances: std::collections::HashMap<String, i64> = [
-        ("alice".to_string(), 10i64),
-        ("bob".to_string(), 10i64),
-        ("charlie".to_string(), 10i64),
+        ("alice".to_owned(), 10i64),
+        ("bob".to_owned(), 10i64),
+        ("charlie".to_owned(), 10i64),
     ]
     .into_iter()
     .collect();
@@ -1222,9 +1338,9 @@ async fn test_balance_conditioned_republish() {
         sequencer_config,
     );
 
-    let poll_a = spawn_balance_aware(seq_a, handle_a.clone(), initial_balances.clone());
-    let poll_b = spawn_balance_aware(seq_b, handle_b.clone(), initial_balances.clone());
-    let poll_c = spawn_balance_aware(seq_c, handle_c.clone(), initial_balances.clone());
+    let poll_a = spawn_balance_aware(seq_a, handle_a.clone(), admin_pk, initial_balances.clone());
+    let poll_b = spawn_balance_aware(seq_b, handle_b.clone(), seq_b_pk, initial_balances.clone());
+    let poll_c = spawn_balance_aware(seq_c, handle_c.clone(), seq_c_pk, initial_balances.clone());
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -1237,9 +1353,9 @@ async fn test_balance_conditioned_republish() {
     ])
     .await;
 
-    // Wait for things to settle. With k=10 and 1s slots, finality is ~10s
+    // Wait for things to settle. With k=3 and 1s slots, finality is ~3s
     // per block. We wait long enough for retry cycles + finality.
-    sleep(Duration::from_secs(180)).await;
+    sleep(Duration::from_mins(1)).await;
 
     let indexer = ZoneIndexer::new(
         channel_id,
@@ -1277,6 +1393,125 @@ async fn test_balance_conditioned_republish() {
                 .collect::<Vec<_>>()
         );
     }
+
+    poll_a.abort();
+    poll_b.abort();
+    poll_c.abort();
+}
+
+/// Three sequencers concurrently publish the **same** payload bytes. They
+/// race for the `parent_msg` slot; whoever loses gets an `orphaned` event and
+/// republishes (with a fresh parent picked by the SDK). Eventually each
+/// sequencer's inscription lands at a different position on chain.
+///
+/// Test invariant: exactly N (= number of sequencers) inscriptions with the
+/// shared payload appear on chain — one per sequencer, no extras from
+/// runaway republishes, none silently lost.
+///
+/// This exercises the simplified orphaned semantics (mine that's permanently
+/// invalidated) on the dedup edge case where payload bytes alone can't
+/// distinguish "mine vs theirs vs new republish" — only signer + `parent_msg`
+/// + `msg_id` can.
+#[tokio::test]
+async fn test_concurrent_identical_payloads() {
+    init_tracing();
+    let (_validators, node_url) = spawn_competing_validators(2).await;
+
+    let sequencer_config = SequencerConfig {
+        resubmit_interval: Duration::from_secs(3),
+        ..SequencerConfig::default()
+    };
+
+    let signing_key_a = keygen();
+    let admin_pk = signing_key_a.public_key();
+    let channel_id = channel_id_from_key(&signing_key_a);
+    let signing_key_b = keygen();
+    let seq_b_pk = signing_key_b.public_key();
+    let signing_key_c = keygen();
+    let seq_c_pk = signing_key_c.public_key();
+
+    authorize_keys(
+        channel_id,
+        signing_key_a.clone(),
+        vec![admin_pk, seq_b_pk, seq_c_pk],
+        node_url.clone(),
+        sequencer_config.clone(),
+    )
+    .await;
+
+    // All three sequencers will publish this exact payload.
+    let payload: Vec<u8> = b"shared-message".to_vec();
+
+    let (seq_a, mut handle_a) = init_sequencer(
+        channel_id,
+        signing_key_a,
+        node_url.clone(),
+        sequencer_config.clone(),
+    );
+    let (seq_b, mut handle_b) = init_sequencer(
+        channel_id,
+        signing_key_b,
+        node_url.clone(),
+        sequencer_config.clone(),
+    );
+    let (seq_c, mut handle_c) = init_sequencer(
+        channel_id,
+        signing_key_c,
+        node_url.clone(),
+        sequencer_config,
+    );
+
+    let (finalized_tx, mut finalized_rx) = tokio::sync::mpsc::unbounded_channel();
+    let poll_a = spawn_drive_republish(
+        seq_a,
+        handle_a.clone(),
+        admin_pk,
+        Some(finalized_tx.clone()),
+    );
+    let poll_b = spawn_drive_republish(
+        seq_b,
+        handle_b.clone(),
+        seq_b_pk,
+        Some(finalized_tx.clone()),
+    );
+    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), seq_c_pk, Some(finalized_tx));
+
+    handle_a.wait_ready().await;
+    handle_b.wait_ready().await;
+    handle_c.wait_ready().await;
+
+    publish_concurrently(vec![
+        (handle_a, vec![payload.clone()]),
+        (handle_b, vec![payload.clone()]),
+        (handle_c, vec![payload.clone()]),
+    ])
+    .await;
+
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url),
+    );
+
+    let n_seqs: usize = 3;
+    let expected: HashSet<Vec<u8>> = std::iter::once(payload.clone()).collect();
+
+    // Deterministic wait: 3 distinct tx_hashes with our payload finalized.
+    wait_for_finalized(
+        &mut finalized_rx,
+        &expected,
+        n_seqs,
+        Duration::from_mins(10),
+    )
+    .await;
+
+    // Re-scan indexer to verify the on-chain count matches.
+    let on_chain = scan_indexer_for_payloads(&indexer, &expected).await;
+    let final_count = on_chain.iter().filter(|p| **p == payload).count();
+
+    assert_eq!(
+        final_count, n_seqs,
+        "Expected exactly {n_seqs} inscriptions with identical payload, got {final_count}"
+    );
 
     poll_a.abort();
     poll_b.abort();
