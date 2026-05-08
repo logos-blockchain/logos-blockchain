@@ -54,7 +54,6 @@ use overwatch::{
 use relays::BroadcastRelay;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_with::serde_as;
-use strum::IntoEnumIterator as _;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::{
@@ -433,31 +432,25 @@ impl Cryptarchia {
         self.consensus.branches().get(block_id).is_some()
     }
 
-    fn active_session_providers(
+    /// Returns the snapshotted session providers for `target_epoch` from the
+    /// ledger state at `block_id`. Reads from `epoch_state` if its epoch
+    /// matches (a block in `target_epoch` has been applied), otherwise from
+    /// `next_epoch_state` if its epoch matches (the chain hasn't transitioned
+    /// into `target_epoch` yet). Returns `None` if the ledger state for
+    /// `block_id` is unknown or neither slot of the EpochState ring matches.
+    fn epoch_session_providers(
         &self,
         block_id: &HeaderId,
-        service_type: ServiceType,
-    ) -> Result<HashMap<ProviderId, ProviderInfo>, Error> {
-        let ledger = self
-            .ledger
-            .state(block_id)
-            .ok_or(Error::HeaderIdNotFound(*block_id))?;
-
-        ledger
-            .active_session_providers(service_type)
-            .ok_or(Error::ServiceSessionNotFound(service_type))
-    }
-
-    fn active_sessions_numbers(
-        &self,
-        block_id: &HeaderId,
-    ) -> Result<HashMap<ServiceType, u64>, Error> {
-        let ledger = self
-            .ledger
-            .state(block_id)
-            .ok_or(Error::HeaderIdNotFound(*block_id))?;
-
-        Ok(ledger.active_sessions())
+        target_epoch: Epoch,
+    ) -> Option<HashMap<ServiceType, HashMap<ProviderId, ProviderInfo>>> {
+        let ledger = self.ledger.state(block_id)?;
+        if ledger.epoch_state().epoch == target_epoch {
+            Some(ledger.epoch_state().active_session_providers.clone())
+        } else if ledger.next_epoch_state().epoch == target_epoch {
+            Some(ledger.next_epoch_state().active_session_providers.clone())
+        } else {
+            None
+        }
     }
 }
 
@@ -596,7 +589,11 @@ where
         )
         .await?;
 
-        let (mut current_slot, mut slot_timer) = Self::get_slot_timer(&relays).await?;
+        let (mut current_slot, mut current_epoch, mut slot_timer) =
+            Self::get_slot_timer(&relays).await?;
+        // Tracks the last epoch for which we broadcast SDP session updates so we
+        // emit at most once per epoch, on its first slot tick.
+        let mut last_session_broadcast_epoch: Option<Epoch> = None;
 
         let (mut cryptarchia, pruned_blocks) = self
             .initialize_cryptarchia(
@@ -747,8 +744,32 @@ where
                         }
                     }
 
-                    Some(lb_time_service::SlotTick { slot, .. }) = slot_timer.next() => {
+                    Some(lb_time_service::SlotTick { slot, epoch }) = slot_timer.next() => {
                         current_slot = slot;
+                        current_epoch = epoch;
+
+                        // Per the SDP 1.0.0 spec, on the first slot of a new
+                        // epoch N we yield the snapshot from the just-finalized
+                        // epoch N-2. The snapshot lives on the LIB ledger's
+                        // `epoch_state.active_session_providers` (or
+                        // `next_epoch_state` if the chain hasn't applied a
+                        // block in N yet). Independent of block application.
+                        //
+                        // Skip while bootstrapping: the LIB is stale until the
+                        // chain has caught up, so any snapshot we'd yield would
+                        // be for the wrong epoch. Once `switch_to_online` runs,
+                        // the next slot tick fires the (still-pending) broadcast
+                        // for the current epoch.
+                        if !cryptarchia.is_bootstrapping() {
+                            Self::broadcast_session_updates_for_epoch(
+                                &cryptarchia,
+                                &cryptarchia.lib(),
+                                &relays,
+                                current_epoch,
+                                &mut last_session_broadcast_epoch,
+                            )
+                            .await;
+                        }
                     }
 
                     _ = state_recording_timer.tick() => {
@@ -804,10 +825,10 @@ where
         );
     }
 
-    /// Get current slot and slot timer from time service.
+    /// Get current slot/epoch and slot timer from time service.
     async fn get_slot_timer(
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-    ) -> Result<(Slot, lb_time_service::EpochSlotTickStream), DynError> {
+    ) -> Result<(Slot, Epoch, lb_time_service::EpochSlotTickStream), DynError> {
         let slot_timer = {
             let (sender, receiver) = oneshot::channel();
             relays
@@ -820,17 +841,17 @@ where
 
         // TODO: Improve Subscribe API to return current slot immediately,
         // so we don't need to call CurrentSlot API separately.
-        let current_slot = {
+        let lb_time_service::SlotTick { slot, epoch } = {
             let (sender, receiver) = oneshot::channel();
             relays
                 .time_relay()
                 .send(lb_time_service::TimeServiceMessage::CurrentSlot { sender })
                 .await
                 .expect("Request current slot from time service should succeed");
-            receiver.await?.slot
+            receiver.await?
         };
 
-        Ok((current_slot, slot_timer))
+        Ok((slot, epoch, slot_timer))
     }
 
     fn process_message(
@@ -1022,14 +1043,6 @@ where
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
-        let previous_session_numbers = match cryptarchia.active_sessions_numbers(&prev_lib) {
-            Ok(session_numbers) => session_numbers,
-            Err(e) => {
-                warn!("Error getting previous session numbers: {e}");
-                ServiceType::iter().map(|s| (s, 0)).collect()
-            }
-        };
-
         let (pruned_blocks, reorged_blocks) = cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
 
@@ -1099,14 +1112,6 @@ where
             if let Err(e) = lib_broadcaster.send(lib_update) {
                 warn!("No LIB-update subscribers to notify: {e}");
             }
-
-            Self::broadcast_session_updates_for_block(
-                cryptarchia,
-                &new_lib,
-                relays,
-                Some(&previous_session_numbers),
-            )
-            .await;
         }
 
         let reorged_txs: Vec<_> = join_all(
@@ -1287,7 +1292,6 @@ where
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
             warn!("No new-block subscribers to notify: {e}");
         }
-        Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
 
         // Phase 1: Collect only block IDs in (LIB, tip].
         info!(
@@ -1535,72 +1539,53 @@ where
         (cryptarchia, storage_blocks_to_remove)
     }
 
-    async fn broadcast_session_updates_for_block(
+    /// Yield the SDP snapshot for the new epoch on its first slot tick. Per
+    /// the SDP 1.0.0 spec, the snapshot for epoch N is the registry as of the
+    /// last block of epoch N-2 — that data lives on the LIB ledger's
+    /// `epoch_state.active_session_providers` once a block in epoch N has
+    /// been applied, or on `next_epoch_state.active_session_providers` if the
+    /// chain hasn't yet transitioned. Broadcasts at most once per epoch.
+    async fn broadcast_session_updates_for_epoch(
         cryptarchia: &Cryptarchia,
         block_id: &HeaderId,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        previous_sessions: Option<&HashMap<ServiceType, u64>>,
+        current_epoch: Epoch,
+        last_broadcast_epoch: &mut Option<Epoch>,
     ) {
-        let Ok(new_sessions) = cryptarchia.active_sessions_numbers(block_id) else {
-            error!("Could not get active session numbers for block {block_id:?}");
+        if *last_broadcast_epoch == Some(current_epoch) {
+            return;
+        }
+
+        let Some(providers_by_service) =
+            cryptarchia.epoch_session_providers(block_id, current_epoch)
+        else {
+            warn!(
+                target: LOG_TARGET,
+                "No session providers snapshot available for epoch {current_epoch:?} on block {block_id:?}",
+            );
             return;
         };
 
-        for (service, new_session_number) in &new_sessions {
-            Self::handle_service_update(
-                cryptarchia,
-                block_id,
-                relays,
-                previous_sessions,
-                service,
-                new_session_number,
-            )
-            .await;
-        }
-    }
+        let session_number = u64::from(u32::from(current_epoch));
+        let broadcast_relay = relays.broadcast_relay();
+        for (service_type, providers) in providers_by_service {
+            let update = SessionUpdate {
+                session_number,
+                providers,
+            };
 
-    async fn handle_service_update(
-        cryptarchia: &Cryptarchia,
-        block_id: &HeaderId,
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        previous_sessions: Option<&HashMap<ServiceType, u64>>,
-        service: &ServiceType,
-        new_session_number: &u64,
-    ) {
-        // If `previous_sessions` is provided, check if the session number has changed.
-        // Otherwise, always broadcast (for initialization).
-        if previous_sessions.is_some_and(|prev| {
-            prev.get(service)
-                .copied()
-                .expect("previous session number is set")
-                == *new_session_number
-        }) {
-            return;
-        }
-
-        match cryptarchia.active_session_providers(block_id, *service) {
-            Ok(providers) => {
-                let update = SessionUpdate {
-                    session_number: *new_session_number,
-                    providers,
-                };
-
-                let broadcast_relay = relays.broadcast_relay();
-
-                let broadcast_future = match service {
-                    ServiceType::BlendNetwork => {
-                        broadcast_blend_session(broadcast_relay, update).boxed()
-                    }
-                };
-
-                if let Err(e) = broadcast_future.await {
-                    error!("Failed to broadcast session update for {service:?}: {e}");
+            let broadcast_future = match service_type {
+                ServiceType::BlendNetwork => {
+                    broadcast_blend_session(broadcast_relay, update).boxed()
                 }
-            }
-            Err(e) => {
-                error!("Could not get session providers for service {service:?}: {e}");
+            };
+
+            if let Err(e) = broadcast_future.await {
+                error!("Failed to broadcast session update for {service_type:?}: {e}");
             }
         }
+
+        *last_broadcast_epoch = Some(current_epoch);
     }
 }
 

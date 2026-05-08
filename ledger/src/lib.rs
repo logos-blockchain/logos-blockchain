@@ -441,6 +441,11 @@ impl LedgerState {
             cryptarchia_ledger.latest_utxos(),
             cryptarchia_ledger.epoch_state(),
         )?;
+        // Seed the genesis epoch_state(0) and next_epoch_state(1) with the
+        // initial SDP providers so epochs 0 and 1 broadcast the genesis
+        // snapshot rather than an empty set.
+        let cryptarchia_ledger = cryptarchia_ledger
+            .with_genesis_session_providers(mantle_ledger.all_active_session_providers());
         Ok(Self {
             block_number: 0,
             cryptarchia_ledger,

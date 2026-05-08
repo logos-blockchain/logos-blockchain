@@ -439,6 +439,22 @@ impl LedgerState {
         self
     }
 
+    /// Seed `epoch_state` and `next_epoch_state` with the genesis SDP
+    /// providers. Per the SDP 1.0.0 spec ("Epochs 0, 1 and 2 read the
+    /// snapshot at genesis block 0"), the rolling 2-epoch lookback can't
+    /// reach back further than genesis, so the first two epochs use the
+    /// genesis snapshot directly. From epoch 2 onwards, the rolling
+    /// snapshot rule populates `next_epoch_state` correctly.
+    #[must_use]
+    pub fn with_genesis_session_providers(
+        mut self,
+        providers: HashMap<ServiceType, HashMap<ProviderId, ProviderInfo>>,
+    ) -> Self {
+        self.epoch_state.active_session_providers = providers.clone();
+        self.next_epoch_state.active_session_providers = providers;
+        self
+    }
+
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
         locked_notes: &LockedNotes,
