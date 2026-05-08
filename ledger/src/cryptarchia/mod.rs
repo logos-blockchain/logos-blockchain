@@ -418,6 +418,27 @@ impl LedgerState {
             .increment_block_density(slot))
     }
 
+    /// Snapshot the SDP service providers into `next_epoch_state` using the
+    /// same rule as `utxos`: capture the providers from the *previous* block
+    /// state when the previous slot is still before
+    /// `stake_distribution_snapshot(next_epoch_state.epoch)`.
+    ///
+    /// Per the SDP 1.0.0 spec, this means `epoch_state.active_session_providers`
+    /// for epoch N reflects the registry as of the last block of epoch N-2.
+    #[must_use]
+    pub fn snapshot_session_providers(
+        mut self,
+        previous_slot: Slot,
+        previous_providers: HashMap<ServiceType, HashMap<ProviderId, ProviderInfo>>,
+        config: &Config,
+    ) -> Self {
+        let snapshot_slot = config.stake_distribution_snapshot(self.next_epoch_state.epoch);
+        if previous_slot < snapshot_slot {
+            self.next_epoch_state.active_session_providers = previous_providers;
+        }
+        self
+    }
+
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
         locked_notes: &LockedNotes,

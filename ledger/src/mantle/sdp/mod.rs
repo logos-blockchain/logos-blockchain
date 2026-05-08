@@ -557,6 +557,32 @@ impl SdpLedger {
     }
 
     #[must_use]
+    pub fn all_active_session_providers(
+        &self,
+    ) -> HashMap<ServiceType, HashMap<ProviderId, ProviderInfo>> {
+        self.services
+            .iter()
+            .map(|(service_type, service)| {
+                let providers = service
+                    .active_session()
+                    .declarations
+                    .iter()
+                    .map(|(_, declaration)| {
+                        (
+                            declaration.provider_id,
+                            ProviderInfo {
+                                locators: declaration.locators.clone(),
+                                zk_id: declaration.zk_id,
+                            },
+                        )
+                    })
+                    .collect();
+                (*service_type, providers)
+            })
+            .collect()
+    }
+
+    #[must_use]
     pub fn declarations(&self) -> Vec<(DeclarationId, Declaration)> {
         self.services
             .iter()

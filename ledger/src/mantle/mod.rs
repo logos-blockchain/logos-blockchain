@@ -128,6 +128,13 @@ impl LedgerState {
     }
 
     #[must_use]
+    pub fn all_active_session_providers(
+        &self,
+    ) -> HashMap<ServiceType, HashMap<ProviderId, ProviderInfo>> {
+        self.sdp.all_active_session_providers()
+    }
+
+    #[must_use]
     pub fn sdp_declarations(&self) -> Vec<(DeclarationId, Declaration)> {
         self.sdp.declarations()
     }

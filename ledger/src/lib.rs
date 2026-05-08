@@ -241,6 +241,9 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
+        let previous_slot = self.cryptarchia_ledger.slot;
+        let previous_providers = self.mantle_ledger.all_active_session_providers();
+
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
@@ -254,6 +257,12 @@ impl LedgerState {
         for utxo in reward_utxos {
             cryptarchia_ledger.utxos = cryptarchia_ledger.utxos.insert(utxo.id(), utxo).0;
         }
+
+        let cryptarchia_ledger = cryptarchia_ledger.snapshot_session_providers(
+            previous_slot,
+            previous_providers,
+            config,
+        );
 
         Ok(Self {
             block_number: self
