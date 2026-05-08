@@ -1104,6 +1104,9 @@ async fn step_run_blend_sdp_declaration_cli(
 
     // Query notes from the declarer node API so wallet ownership lookups use
     // the same node config as the key source.
+    let note_lookup_timeout = Duration::from_secs(30);
+    let note_lookup_started = Instant::now();
+    let mut last_lookup_error: Option<String>;
     let locked_note_id = loop {
         let Ok(wallet_balance) = CommonHttpClient::new(None)
             .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
@@ -1118,6 +1121,17 @@ async fn step_run_blend_sdp_declaration_cli(
                 })?;
             let locked_note_id_hex = locked_note_id_json.trim_matches('"').to_owned();
             break locked_note_id_hex;
+        }
+        last_lookup_error = Some("wallet has no notes yet".to_owned());
+
+        if note_lookup_started.elapsed() >= note_lookup_timeout {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "Timed out waiting for a funded note on Blend ZK key of '{declarer_node_name}' via '{}' (last error: {})",
+                    declarer_api_base_url,
+                    last_lookup_error.unwrap_or_else(|| "unknown".to_owned())
+                ),
+            });
         }
 
         sleep(Duration::from_millis(250)).await;

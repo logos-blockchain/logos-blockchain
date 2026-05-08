@@ -1,6 +1,6 @@
-Feature: API CLI
+Feature: CLI
 
-  @api_cli_ci
+  @cli_ci
   Scenario: Join Blend via CLI declaration
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
