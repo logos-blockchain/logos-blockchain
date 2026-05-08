@@ -16,7 +16,7 @@ use overwatch::DynError;
 use serde::Serialize;
 use thiserror::Error;
 use tokio::sync::{mpsc::Sender, oneshot};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::relays::StorageRelay;
 
@@ -82,7 +82,7 @@ where
         known_blocks: &HashSet<HeaderId>,
         reply_sender: Sender<BlocksResponse>,
     ) {
-        info!(
+        debug!(
             "Providing blocks:
             target_block={target_block:?},
             known_blocks={known_blocks:?},"

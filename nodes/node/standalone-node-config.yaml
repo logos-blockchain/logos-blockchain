@@ -212,6 +212,6 @@ tracing:
       hyper_util: WARN
   metrics: None
   console: None
-  level: DEBUG
+  level: "INFO"
 state:
   base_folder: ./state

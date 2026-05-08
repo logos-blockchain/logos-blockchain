@@ -391,7 +391,7 @@ pub fn update_tracing_level_and_filter(
     if let Some(filter) = filter {
         tracing.filter = parse_log_filter_layer(filter)?;
     } else {
-        apply_default_debug_log_filter(tracing);
+        apply_default_log_filter(tracing);
     }
 
     Ok(())
@@ -424,7 +424,7 @@ fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
 
 /// Applies the built-in verbose filter policy only when no explicit filter was
 /// configured.
-fn apply_default_debug_log_filter(tracing: &mut TracingConfig) {
+fn apply_default_log_filter(tracing: &mut TracingConfig) {
     if !matches!(tracing.filter, Layer::None) {
         return;
     }

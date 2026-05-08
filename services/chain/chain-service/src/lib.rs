@@ -691,7 +691,9 @@ where
                     }
 
                     () = async { prolonged_bootstrap_timer.as_mut().unwrap().as_mut().await }, if prolonged_bootstrap_timer.is_some() && cryptarchia.is_bootstrapping() => {
-                        info!("Prolonged Bootstrap Period has passed. Switching to Online.");
+                        info!(
+                            "Prolonged Bootstrap Period finished. Switching chain to online mode."
+                        );
                         (cryptarchia, storage_blocks_to_remove) = Self::switch_to_online(
                             cryptarchia,
                             &storage_blocks_to_remove,
@@ -710,7 +712,7 @@ where
                         match msg {
                             ConsensusMsg::IbdCompleted => {
                                 if chain_start_timer.is_none() {
-                                    info!("Received IBD completion notification. Starting prolonged bootstrap timer.");
+                                    info!("Initial Block Download completed. Starting Prolonged Bootstrap Period before going online.");
                                     // Start the prolonged bootstrap timer now that IBD is complete
                                     prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
                                         Instant::now() + bootstrap_config.prolonged_bootstrap_period,
@@ -1052,7 +1054,7 @@ where
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
     ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
-        trace!("Received proposal with ID: {:?}", block.header().id());
+        debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
@@ -1119,6 +1121,7 @@ where
                 height,
                 header_id: new_lib,
             };
+
             if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
                 warn!("Failed to notify finalized-block subscribers: {e}");
             }
@@ -1352,7 +1355,7 @@ where
     ) -> InitializedCryptarchia {
         info!(
             target: LOG_TARGET, tip = ?self.state.tip, lib = ?self.state.lib, lib_height = self.state.lib_block_length, genesis = ?self.state.genesis_id,
-            "initializing cryptarchia from state recovery",
+            "recovering chain state",
         );
 
         let lib_id = self.state.lib;
@@ -1392,7 +1395,7 @@ where
         // Phase 1: Collect and load blocks in (LIB, tip].
         info!(
             target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
-            "loading blocks from storage: (lib, tip]",
+            "loading stored blocks for chain recovery",
         );
         let RecoveryBlocks {
             blocks,
@@ -1403,7 +1406,11 @@ where
             relays.storage_adapter().clone(),
         )
         .await;
-        info!(target: LOG_TARGET, "loaded {} blocks from storage: (lib, tip]", blocks.len());
+        info!(
+            target: LOG_TARGET,
+            "found {} stored blocks to replay during chain recovery",
+            blocks.len()
+        );
 
         // Phase 2: Apply each block in lib->tip order.
         let mut pruned_blocks = PrunedBlocks::new();
@@ -1431,7 +1438,7 @@ where
 
         info!(
             target: LOG_TARGET, tip_height = cryptarchia.consensus.tip_branch().length(), lib_height = cryptarchia.consensus.lib_branch().length(),
-            "{n_blocks} blocks recovered. finishing initialization",
+            "{n_blocks} blocks replayed. Chain recovery finished",
         );
 
         InitializedCryptarchia {
@@ -1603,7 +1610,7 @@ where
         chain_online_notifier: &ChainOnlineNotifier,
     ) -> (Cryptarchia, HashSet<HeaderId>) {
         let (cryptarchia, pruned_blocks) = cryptarchia.online();
-        info!("Chain switched to Online mode");
+        info!("Node is online and following the chain");
 
         chain_online_notifier.notify();
 

@@ -400,12 +400,12 @@ where
 
         // Wait until the chain becomes Online mode.
         // We should not propose blocks while the chain is in Bootstrapping mode.
-        info!("Waiting for chain to become Online mode");
+        info!("Waiting for chain to become online");
         cryptarchia_api
             .wait_until_chain_becomes_online()
             .await
             .expect("Waiting for chain to be online should succeed");
-        info!("Chain is now Online. Starting block proposals.");
+        info!("Chain is online. Starting block proposals.");
 
         self.service_resources_handle.status_updater.notify_ready();
         info!(
@@ -644,7 +644,7 @@ where
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
         info!(
-            "proposed block with id {:?} containing {} transactions ({} removed)",
+            "proposed block {:?} with {} transactions ({} removed)",
             block.header().id(),
             block.transactions().len(),
             invalid_tx_hashes.len()
