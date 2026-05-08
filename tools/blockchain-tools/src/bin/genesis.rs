@@ -306,14 +306,14 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
 
-    let (utxos, declarations) = distribution::distribute(stakeholders, providers)
+    let (notes, declarations) = distribution::distribute(stakeholders, providers)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution")?;
 
-    let utxos_value = struct_to_yaml_value(&utxos)?;
+    let notes_value = struct_to_yaml_value(&notes)?;
     let declarations_value = struct_to_yaml_value(&declarations)?;
 
-    write_yaml(&utxos_value, args.notes_output.as_deref())?;
+    write_yaml(&notes_value, args.notes_output.as_deref())?;
     write_yaml(&declarations_value, args.declarations_output.as_deref())?;
 
     Ok(())

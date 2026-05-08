@@ -41,7 +41,7 @@ pub enum DistributionError {
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
-) -> Result<(Vec<Utxo>, Vec<SDPDeclareOp>), DistributionError>
+) -> Result<(Vec<Note>, Vec<SDPDeclareOp>), DistributionError>
 where
     S: IntoIterator<Item = StakeHolderInfo> + Clone,
     P: IntoIterator<Item = ProviderInfo>,
@@ -86,7 +86,7 @@ where
         }
     }
 
-    Ok((utxos, declarations))
+    Ok((utxos.iter().map(|u| u.note).collect(), declarations))
 }
 
 #[cfg(test)]

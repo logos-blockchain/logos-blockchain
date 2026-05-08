@@ -4621,7 +4621,7 @@ dependencies = [
  "logos-blockchain-utils",
  "logos-blockchain-zksign",
  "num-bigint",
- "rand 0.8.5",
+ "rand 0.8.6",
  "rand_core 0.6.4",
  "serde",
  "serde_json",
