@@ -301,7 +301,7 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
                     file: Some(logger::FileConfig {
                         directory: log_dir,
                         prefix: Some(prefix.into()),
-                        appender_type: AppenderType::Rolling,
+                        appender_type: AppenderType::Simple,
                     }),
                     loki: None,
                     gelf: None,
@@ -324,7 +324,7 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
         file: Some(logger::FileConfig {
             directory: base_dir.to_owned(),
             prefix: Some(prefix.into()),
-            appender_type: AppenderType::Rolling,
+            appender_type: AppenderType::Simple,
         }),
         loki: None,
         gelf: None,

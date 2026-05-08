@@ -9,10 +9,12 @@ use std::{
 use ::tracing::{Level, warn};
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
+use lb_core::sdp::ProviderId;
+use lb_key_management_system_service::keys::{Key, ZkPublicKey};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
-    logging::local::AppenderType,
+    logging::local::{AppenderType, CompressionType, RetentionType, RollingConfig, RotationType},
 };
 use serde::Deserialize;
 use tracing::serde::filter::{EnvConfig, Layer};
@@ -212,15 +214,19 @@ impl From<LoggerLayerType> for OsStr {
 #[derive(ValueEnum, Clone, Debug, Default)]
 pub enum LogFileAppenderType {
     #[default]
+    Simple,
     Rolling,
     RollingCompressed,
+    RollingMaxFiles,
 }
 
 impl From<LogFileAppenderType> for OsStr {
     fn from(value: LogFileAppenderType) -> Self {
         match value {
+            LogFileAppenderType::Simple => "Simple".into(),
             LogFileAppenderType::Rolling => "Rolling".into(),
             LogFileAppenderType::RollingCompressed => "RollingCompressed".into(),
+            LogFileAppenderType::RollingMaxFiles => "RollingMaxFiles".into(),
         }
     }
 }
@@ -267,13 +273,11 @@ pub struct LogArgs {
     file_appender: Option<LogFileAppenderType>,
 
     #[clap(
-        long = "log-compression-interval",
-        env = "LOG_APPENDER_COMPRESSED_INTERVAL",
-        value_parser = humantime::parse_duration,
-        default_value = "1h",
-        required_if_eq("file_appender", LogFileAppenderType::RollingCompressed)
+        long = "log-max-files",
+        env = "LOG_APPENDER_MAX_FILES",
+        required_if_eq("file_appender", LogFileAppenderType::RollingMaxFiles)
     )]
-    compression_interval: Option<Duration>,
+    max_files: Option<usize>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -455,6 +459,30 @@ impl UserConfig {
             tracing: TracingConfig::default(),
         }
     }
+
+    pub fn blend_provider_id(&self) -> Result<ProviderId, String> {
+        let key_id = &self.blend.non_ephemeral_signing_key_id;
+        let Some(key) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!(
+                "Blend non-ephemeral signing key '{key_id}' not found in KMS"
+            ));
+        };
+        let Key::Ed25519(secret_key) = key else {
+            return Err("Blend non-ephemeral signing key must be Ed25519".to_owned());
+        };
+        Ok(ProviderId(secret_key.public_key()))
+    }
+
+    pub fn blend_zk_key(&self) -> Result<(String, ZkPublicKey), String> {
+        let key_id = &self.blend.core.zk.secret_key_kms_id;
+        let Some(key) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!("Blend ZK signing key '{key_id}' not found in KMS"));
+        };
+        let Key::Zk(secret_key) = key else {
+            return Err("Blend ZK signing key must be Zk".to_owned());
+        };
+        Ok((key_id.to_owned(), secret_key.to_public_key()))
+    }
 }
 
 pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Result<()> {
@@ -465,8 +493,8 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         prefix,
         level,
         filter,
-        file_appender: appender,
-        compression_interval,
+        file_appender,
+        max_files,
     } = tracing_args;
 
     if let Some(backend_type) = backend {
@@ -481,12 +509,30 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                 });
             }
             LoggerLayerType::File => {
-                let appender_type = match appender {
-                    Some(LogFileAppenderType::Rolling) | None => AppenderType::Rolling,
+                let appender_type = match file_appender {
+                    Some(LogFileAppenderType::Simple) | None => AppenderType::Simple,
+                    Some(LogFileAppenderType::Rolling) => AppenderType::Rolling(RollingConfig {
+                        rotation: RotationType::Hourly,
+                        retention: RetentionType::None,
+                        compression: CompressionType::None,
+                    }),
                     Some(LogFileAppenderType::RollingCompressed) => {
-                        AppenderType::RollingCompressed {
-                            compression_interval: compression_interval.unwrap(),
-                        }
+                        AppenderType::Rolling(RollingConfig {
+                            rotation: RotationType::Hourly,
+                            retention: RetentionType::None,
+                            compression: CompressionType::Gzip {
+                                compression_threshold: Duration::from_hours(2),
+                            },
+                        })
+                    }
+                    Some(LogFileAppenderType::RollingMaxFiles) => {
+                        AppenderType::Rolling(RollingConfig {
+                            rotation: RotationType::Hourly,
+                            retention: RetentionType::MaxFiles {
+                                max_files: max_files.expect("Max files should be set"),
+                            },
+                            compression: CompressionType::None,
+                        })
                     }
                 };
                 tracing.logger.file = Some(FileConfig {

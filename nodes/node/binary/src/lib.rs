@@ -57,7 +57,7 @@ use crate::{
         sdp::ServiceConfig as SdpConfig, storage::ServiceConfig as StorageConfig,
         time::ServiceConfig as TimeConfig, wallet::ServiceConfig as WalletConfig,
     },
-    generic_services::{SdpMempoolAdapter, SdpService, SdpWalletAdapter},
+    generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
 };
 
@@ -108,6 +108,7 @@ pub type ApiService = lb_api_service::ApiService<
         RocksStorageAdapter<SignedMantleTx, TxHash>,
         SdpMempoolAdapter<RuntimeServiceId>,
         SdpWalletAdapter<RuntimeServiceId>,
+        SdpRecoveryBackend,
         CryptarchiaLeaderService,
     >,
     RuntimeServiceId,
@@ -204,7 +205,7 @@ pub fn run_node_from_config(
     let sdp_config = SdpConfig {
         user: config.user.sdp,
     }
-    .into();
+    .into_sdp_service_settings(&config.user.state);
 
     #[cfg(feature = "tracing")]
     let tracing_config = config::tracing::ServiceConfig {

@@ -63,7 +63,7 @@ where
             > + Send
                                 + Sync
                                 + 'static,
-            NodeId: Eq + Hash + Send + Sync,
+            NodeId: Clone + Eq + Hash + Send + Sync,
         > + 'static,
     EdgeService: ServiceData<Message = CoreService::Message> + 'static,
     RuntimeServiceId: AsServiceId<CoreService>
@@ -83,13 +83,14 @@ where
     /// Initializes a new instance in the specified mode.
     pub async fn new(
         mode: Mode,
+        local_node_id: CoreService::NodeId,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Result<Self, modes::Error> {
         match mode {
             Mode::Core => Ok(Self::Core(Self::new_core_mode(overwatch_handle).await?)),
             Mode::Edge => Ok(Self::Edge(Self::new_edge_mode(overwatch_handle).await?)),
             Mode::Broadcast => Ok(Self::Broadcast(
-                Self::new_broadcast_mode(overwatch_handle).await?,
+                Self::new_broadcast_mode(overwatch_handle, local_node_id).await?,
             )),
         }
     }
@@ -108,6 +109,7 @@ where
 
     async fn new_broadcast_mode(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        local_node_id: CoreService::NodeId,
     ) -> Result<
         BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>,
         modes::Error,
@@ -117,7 +119,7 @@ where
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
                 RuntimeServiceId,
             >,
-        >(overwatch_handle)
+        >(overwatch_handle, local_node_id)
         .await
     }
 
@@ -143,12 +145,14 @@ where
         event: SessionEvent<MembershipInfo<CoreService::NodeId>>,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
         minimal_network_size: usize,
+        local_node_id: CoreService::NodeId,
     ) -> Result<Self, modes::Error> {
         match event {
             SessionEvent::NewSession(MembershipInfo { membership, .. }) => {
                 self.transition(
                     Mode::choose(&membership, minimal_network_size),
                     overwatch_handle,
+                    local_node_id,
                 )
                 .await
             }
@@ -163,11 +167,15 @@ where
         self,
         to_mode: Mode,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        local_node_id: CoreService::NodeId,
     ) -> Result<Self, modes::Error> {
         match to_mode {
             Mode::Core => self.transition_to_core(overwatch_handle).await,
             Mode::Edge => self.transition_to_edge(overwatch_handle).await,
-            Mode::Broadcast => self.transition_to_broadcast(overwatch_handle).await,
+            Mode::Broadcast => {
+                self.transition_to_broadcast(overwatch_handle, local_node_id)
+                    .await
+            }
         }
     }
 
@@ -221,10 +229,11 @@ where
     async fn transition_to_broadcast(
         self,
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        local_node_id: CoreService::NodeId,
     ) -> Result<Self, modes::Error> {
         match self {
             Self::Core(mode) => Ok(Self::BroadcastAfterCore {
-                mode: Self::new_broadcast_mode(overwatch_handle).await?,
+                mode: Self::new_broadcast_mode(overwatch_handle, local_node_id).await?,
                 prev: mode,
             }),
             Self::Broadcast(mode) => Ok(Self::Broadcast(mode)),
@@ -235,7 +244,7 @@ where
             mode => {
                 mode.wait_until_stopped_or_kill().await;
                 Ok(Self::Broadcast(
-                    Self::new_broadcast_mode(overwatch_handle).await?,
+                    Self::new_broadcast_mode(overwatch_handle, local_node_id).await?,
                 ))
             }
         }
@@ -323,6 +332,8 @@ mod tests {
     use super::*;
     use crate::modes::broadcast_tests::{TestMessage, TestNetworkAdapter, TestNetworkBackend};
 
+    const LOCAL_NODE_ID: u8 = 99;
+
     /// Check if the instance is initialized successfully for each mode.
     #[test]
     fn test_new() {
@@ -335,17 +346,23 @@ mod tests {
             start_network_service(handle).await;
 
             // Check if the Core instance is created successfully.
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Core(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // Check if the Edge instance is created successfully.
-            let instance = TestInstance::new(Mode::Edge, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Edge, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Edge(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // Check if the Broadcast instance is created successfully.
-            let instance = TestInstance::new(Mode::Broadcast, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Broadcast, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Broadcast(_)));
             instance.wait_until_stopped_or_kill().await;
         });
@@ -364,36 +381,67 @@ mod tests {
             start_network_service(handle).await;
 
             // Core -> Core
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Core, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Core, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Core(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // Edge -> Core
-            let instance = TestInstance::new(Mode::Edge, handle).await.unwrap();
-            let instance = instance.transition(Mode::Core, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Edge, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Core, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Core(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // EdgeAfterCore -> Core
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Edge, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::EdgeAfterCore { .. }));
-            let instance = instance.transition(Mode::Core, handle).await.unwrap();
+            let instance = instance
+                .transition(Mode::Core, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Core(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // Broadcast -> Core
-            let instance = TestInstance::new(Mode::Broadcast, handle).await.unwrap();
-            let instance = instance.transition(Mode::Core, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Broadcast, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Core, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Core(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // BroadcastAfterCore -> Core
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Broadcast, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::BroadcastAfterCore { .. }));
-            let instance = instance.transition(Mode::Core, handle).await.unwrap();
+            let instance = instance
+                .transition(Mode::Core, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Core(_)));
             instance.wait_until_stopped_or_kill().await;
         });
@@ -412,36 +460,67 @@ mod tests {
             start_network_service(handle).await;
 
             // Core -> EdgeAfterCore
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Edge, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::EdgeAfterCore { .. }));
             instance.wait_until_stopped_or_kill().await;
 
             // Edge -> Edge
-            let instance = TestInstance::new(Mode::Edge, handle).await.unwrap();
-            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Edge, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Edge, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Edge(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // EdgeAfterCore -> Edge
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Edge, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::EdgeAfterCore { .. }));
-            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+            let instance = instance
+                .transition(Mode::Edge, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Edge(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // Broadcast -> Edge
-            let instance = TestInstance::new(Mode::Broadcast, handle).await.unwrap();
-            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Broadcast, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Edge, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Edge(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // BroadcastAfterCore -> Edge
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Broadcast, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::BroadcastAfterCore { .. }));
-            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+            let instance = instance
+                .transition(Mode::Edge, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Edge(_)));
             instance.wait_until_stopped_or_kill().await;
         });
@@ -460,36 +539,67 @@ mod tests {
             start_network_service(handle).await;
 
             // Core -> BroadcastAfterCore
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Broadcast, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::BroadcastAfterCore { .. }));
             instance.wait_until_stopped_or_kill().await;
 
             // Edge -> Broadcast
-            let instance = TestInstance::new(Mode::Edge, handle).await.unwrap();
-            let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Edge, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Broadcast, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Broadcast(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // EdgeAfterCore -> Broadcast
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Edge, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Edge, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::EdgeAfterCore { .. }));
-            let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
+            let instance = instance
+                .transition(Mode::Broadcast, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Broadcast(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // Broadcast -> Broadcast
-            let instance = TestInstance::new(Mode::Broadcast, handle).await.unwrap();
-            let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Broadcast, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Broadcast, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Broadcast(_)));
             instance.wait_until_stopped_or_kill().await;
 
             // BroadcastAfterCore -> Broadcast
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
-            let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
+            let instance = instance
+                .transition(Mode::Broadcast, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::BroadcastAfterCore { .. }));
-            let instance = instance.transition(Mode::Broadcast, handle).await.unwrap();
+            let instance = instance
+                .transition(Mode::Broadcast, handle, LOCAL_NODE_ID)
+                .await
+                .unwrap();
             assert!(matches!(instance, Instance::Broadcast(_)));
             instance.wait_until_stopped_or_kill().await;
         });
@@ -507,10 +617,12 @@ mod tests {
             start_network_service(handle).await;
 
             // Start with the Core instance.
-            let instance = TestInstance::new(Mode::Core, handle).await.unwrap();
+            let instance = TestInstance::new(Mode::Core, LOCAL_NODE_ID, handle)
+                .await
+                .unwrap();
 
             // Core -> BroadcastAfterCore
-            let local_node = 99;
+            let local_node = LOCAL_NODE_ID;
             let minimal_network_size = 1;
             let instance = instance
                 .handle_session_event(
@@ -521,6 +633,7 @@ mod tests {
                     )),
                     handle,
                     minimal_network_size,
+                    LOCAL_NODE_ID,
                 )
                 .await
                 .unwrap();
@@ -532,6 +645,7 @@ mod tests {
                     SessionEvent::TransitionPeriodExpired,
                     handle,
                     minimal_network_size,
+                    LOCAL_NODE_ID,
                 )
                 .await
                 .unwrap();
@@ -546,6 +660,7 @@ mod tests {
                     )),
                     handle,
                     minimal_network_size,
+                    LOCAL_NODE_ID,
                 )
                 .await
                 .unwrap();
@@ -560,6 +675,7 @@ mod tests {
                     )),
                     handle,
                     minimal_network_size,
+                    LOCAL_NODE_ID,
                 )
                 .await
                 .unwrap();
@@ -574,6 +690,7 @@ mod tests {
                     )),
                     handle,
                     minimal_network_size,
+                    LOCAL_NODE_ID,
                 )
                 .await
                 .unwrap();

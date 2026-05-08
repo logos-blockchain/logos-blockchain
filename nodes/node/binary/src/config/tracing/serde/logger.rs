@@ -25,7 +25,7 @@ impl Default for Layers {
             file: Some(FileConfig {
                 directory: PathBuf::from("."),
                 prefix: Some(date_prefix.into()),
-                appender_type: AppenderType::Rolling,
+                appender_type: AppenderType::Simple,
             }),
             stdout: true,
             stderr: false,
@@ -89,7 +89,7 @@ impl Default for FileConfig {
         Self {
             directory: "./logs".into(),
             prefix: None,
-            appender_type: AppenderType::Rolling,
+            appender_type: AppenderType::Simple,
         }
     }
 }

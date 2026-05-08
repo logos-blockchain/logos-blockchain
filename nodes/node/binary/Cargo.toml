@@ -9,13 +9,6 @@ readme      = { workspace = true }
 repository  = { workspace = true }
 version     = { workspace = true }
 
-[package.metadata.cargo-machete]
-# False positives.
-ignored = [
-  # Required by `wait_until_services_are_ready` macro.
-  "futures",
-]
-
 [lints]
 workspace = true
 
@@ -28,7 +21,6 @@ dhat                             = { optional = true, workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
 http                             = { workspace = true }
-humantime                        = { workspace = true }
 lb-api-service                   = { workspace = true }
 lb-blend                         = { workspace = true }
 lb-blend-service                 = { workspace = true }
@@ -82,6 +74,7 @@ axum       = { features = ["http1", "http2", "json", "query", "tokio"], workspac
 time       = { workspace = true }
 tower      = { features = ["limit"], workspace = true }
 tower-http = { features = ["cors", "limit", "timeout", "trace"], workspace = true }
+validator  = { features = ["derive"], workspace = true }
 
 # Jemalloc
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

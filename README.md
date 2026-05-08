@@ -31,7 +31,7 @@ This node represents the reference implementation of the Logos Blockchain specif
 ### 1. Clone and install ZK circuits
 
 ```bash
-git clone https://github.com/logos-co/logos-blockchain.git
+git clone https://github.com/logos-blockchain/logos-blockchain.git
 cd logos-blockchain
 ```
 

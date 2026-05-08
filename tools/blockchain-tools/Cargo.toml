@@ -12,13 +12,17 @@ version.workspace     = true
 [dependencies]
 anyhow                        = { workspace = true }
 clap                          = { features = ["derive", "help", "std", "string"], workspace = true }
+lb-common-http-client         = { workspace = true }
 lb-core                       = { workspace = true }
+lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 serde_json                    = { workspace = true }
 serde_yml                     = { workspace = true }
 thiserror                     = { workspace = true }
+tokio                         = { features = ["macros", "rt-multi-thread"], workspace = true }
+url                           = { workspace = true }
 
 [dev-dependencies]
 num-bigint = { workspace = true }

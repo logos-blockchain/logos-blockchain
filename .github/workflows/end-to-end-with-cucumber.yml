@@ -187,6 +187,16 @@ jobs:
           artifact_subdir: Transactions
           verbose_console: "true"
 
+      # Feature: CLI utility binary (@cli_ci)
+      - name: Run cucumber suite - CLI utilities
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@cli_ci"
+          suite_name: CLI
+          artifact_subdir: Cli
+
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}

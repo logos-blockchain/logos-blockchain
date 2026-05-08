@@ -69,6 +69,8 @@ pub enum StepError {
     Error(#[from] Error),
     #[error(transparent)]
     IoError(#[from] IoError),
+    #[error("User configuration error: {0}")]
+    UserConfigError(String),
 }
 
 pub type StepResult = Result<(), StepError>;

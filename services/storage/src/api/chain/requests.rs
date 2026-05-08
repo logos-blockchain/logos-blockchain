@@ -13,7 +13,13 @@ use tokio::sync::oneshot::Sender;
 
 use crate::{
     StorageMsg, StorageServiceError,
-    api::{StorageApiRequest, StorageBackendApi, StorageOperation, chain::StorageChainApi},
+    api::{
+        StorageApiRequest, StorageBackendApi, StorageOperation,
+        backend::rocksdb::chain::{
+            streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec,
+        },
+        chain::StorageChainApi,
+    },
     backends::StorageBackend,
 };
 
@@ -43,6 +49,11 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         response_tx: Sender<Option<HeaderId>>,
     },
     ScanImmutableBlockIds {
+        slot_range: RangeInclusive<Slot>,
+        limit: NonZeroUsize,
+        response_tx: Sender<Vec<HeaderId>>,
+    },
+    ScanImmutableBlockIdsReverse {
         slot_range: RangeInclusive<Slot>,
         limit: NonZeroUsize,
         response_tx: Sender<Vec<HeaderId>>,
@@ -93,6 +104,14 @@ where
                 limit,
                 response_tx,
             } => handle_scan_immutable_block_ids(backend, slot_range, limit, response_tx).await,
+            Self::ScanImmutableBlockIdsReverse {
+                slot_range,
+                limit,
+                response_tx,
+            } => {
+                handle_scan_immutable_block_ids_reverse(backend, slot_range, limit, response_tx)
+                    .await
+            }
             Self::StoreTransactions { transactions } => {
                 handle_store_transactions(backend, transactions).await
             }
@@ -219,14 +238,27 @@ async fn handle_scan_immutable_block_ids<Backend: StorageBackend>(
     limit: NonZeroUsize,
     response_tx: Sender<Vec<HeaderId>>,
 ) -> Result<(), StorageServiceError> {
-    let result = backend
-        .scan_immutable_block_ids(slot_range, limit)
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
+    let result = streamed_immutable_block_ids_vec(backend, slot_range, limit).await?;
 
     if response_tx.send(result).is_err() {
         return Err(StorageServiceError::ReplyError {
             message: "Failed to send reply for scan_immutable_block_ids request".into(),
+        });
+    }
+
+    Ok(())
+}
+async fn handle_scan_immutable_block_ids_reverse<Backend: StorageBackend>(
+    backend: &mut Backend,
+    slot_range: RangeInclusive<Slot>,
+    limit: NonZeroUsize,
+    response_tx: Sender<Vec<HeaderId>>,
+) -> Result<(), StorageServiceError> {
+    let result = streamed_immutable_block_ids_reverse_vec(backend, slot_range, limit).await?;
+
+    if response_tx.send(result).is_err() {
+        return Err(StorageServiceError::ReplyError {
+            message: "Failed to send reply for scan_immutable_block_ids_reverse request".into(),
         });
     }
 
@@ -315,6 +347,21 @@ impl<Api: StorageBackend> StorageMsg<Api> {
     ) -> Self {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIds {
+                slot_range,
+                limit,
+                response_tx,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn scan_immutable_block_ids_request_reverse(
+        slot_range: RangeInclusive<Slot>,
+        limit: NonZeroUsize,
+        response_tx: Sender<Vec<HeaderId>>,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIdsReverse {
                 slot_range,
                 limit,
                 response_tx,

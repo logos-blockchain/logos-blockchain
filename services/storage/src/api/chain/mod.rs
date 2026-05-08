@@ -14,6 +14,8 @@ use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 
+use crate::api::backend::rocksdb::chain::HeaderIdStream;
+
 #[async_trait]
 pub trait StorageChainApi {
     type Error: Error + Send + Sync + Debug + 'static;
@@ -51,7 +53,13 @@ pub trait StorageChainApi {
         &mut self,
         slot_range: RangeInclusive<Slot>,
         limit: NonZeroUsize,
-    ) -> Result<Vec<HeaderId>, Self::Error>;
+    ) -> Result<HeaderIdStream, Self::Error>;
+
+    async fn scan_immutable_block_ids_reverse(
+        &mut self,
+        slot_range: RangeInclusive<Slot>,
+        limit: NonZeroUsize,
+    ) -> Result<HeaderIdStream, Self::Error>;
 
     async fn store_transactions(
         &mut self,

@@ -14,7 +14,7 @@ use strum::EnumIter;
 use crate::{
     block::BlockNumber,
     mantle::{NoteId, ops::channel::Ed25519PublicKey},
-    utils::serde_bytes_newtype,
+    utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
 pub type SessionNumber = u64;
@@ -168,6 +168,7 @@ impl Ord for ProviderId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
+display_hex_bytes_newtype!(DeclarationId);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {

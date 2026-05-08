@@ -1,4 +1,5 @@
 pub mod backend;
+mod errors;
 pub mod handlers;
 mod openapi;
 mod queries;

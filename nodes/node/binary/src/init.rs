@@ -55,6 +55,7 @@ struct GeneratedKeys {
     funding_key_id: KeyId,
     leader_pk: ZkPublicKey,
     funding_pk: ZkPublicKey,
+    blend_zk_pk: ZkPublicKey,
 }
 
 fn generate_keys() -> GeneratedKeys {
@@ -72,6 +73,7 @@ fn generate_keys() -> GeneratedKeys {
 
     let leader_pk: ZkPublicKey = leader_key.as_public_key();
     let funding_pk: ZkPublicKey = funding_key.as_public_key();
+    let blend_zk_pk: ZkPublicKey = blend_zk_key.as_public_key();
 
     GeneratedKeys {
         blend_signing_key,
@@ -84,6 +86,7 @@ fn generate_keys() -> GeneratedKeys {
         funding_key_id,
         leader_pk,
         funding_pk,
+        blend_zk_pk,
     }
 }
 
@@ -176,6 +179,7 @@ fn keys_from_kms_config(kms_config: &KmsConfig) -> Result<GeneratedKeys> {
     let (funding_key_id, funding_key) = other_zk.remove(0);
     let leader_pk = leader_key.as_public_key();
     let funding_pk = funding_key.as_public_key();
+    let blend_zk_pk = blend_zk_key.as_public_key();
 
     Ok(GeneratedKeys {
         blend_signing_key,
@@ -188,6 +192,7 @@ fn keys_from_kms_config(kms_config: &KmsConfig) -> Result<GeneratedKeys> {
         funding_key_id,
         leader_pk,
         funding_pk,
+        blend_zk_pk,
     })
 }
 
@@ -247,6 +252,7 @@ fn build_user_config(
         funding_key_id,
         leader_pk,
         funding_pk,
+        blend_zk_pk,
     } = keys;
 
     let state_config = args
@@ -256,22 +262,7 @@ fn build_user_config(
             base_folder: path.clone(),
         });
 
-    let network_config = {
-        let mut base_config = NetworkConfig::default();
-        base_config.backend.swarm.port = args.net_port;
-        base_config.backend.swarm.node_key = network_key;
-        base_config
-            .backend
-            .initial_peers
-            .clone_from(&args.initial_peers);
-        if let Some(external_address) = &args.external_address {
-            base_config.backend.swarm.nat = nat::Config::Static {
-                external_address: external_address.clone(),
-            };
-        }
-
-        base_config
-    };
+    let network_config = build_network_config(args, network_key);
 
     let blend_config = {
         let mut base_config = BlendConfig::with_required_values(BlendConfigRequiredValues {
@@ -282,24 +273,7 @@ fn build_user_config(
         base_config
     };
 
-    let cryptarchia_config = {
-        let mut base_config =
-            CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
-        base_config.network.bootstrap.ibd.peers = if args.no_ibd {
-            HashSet::new()
-        } else {
-            args.initial_peers
-                .iter()
-                .filter_map(|addr| match addr.iter().last() {
-                    Some(lb_libp2p::Protocol::P2p(bytes)) => {
-                        PeerId::from_multihash(bytes.into()).ok()
-                    }
-                    _ => None,
-                })
-                .collect()
-        };
-        base_config
-    };
+    let cryptarchia_config = build_cryptarchia_config(args, funding_pk);
 
     let time_config = TimeConfig::default();
 
@@ -319,7 +293,7 @@ fn build_user_config(
         let mut base_config = KmsConfig::default();
         base_config.backend.keys = HashMap::from([
             (blend_signing_key_id, blend_signing_key.into()),
-            (blend_zk_key_id, blend_zk_key.into()),
+            (blend_zk_key_id.clone(), blend_zk_key.into()),
             (leader_key_id.clone(), leader_key.into()),
             (funding_key_id.clone(), funding_key.into()),
         ]);
@@ -330,9 +304,14 @@ fn build_user_config(
         let mut base_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
             voucher_master_key_id: leader_key_id.clone(),
         });
-        base_config.known_keys = [(leader_key_id, leader_pk), (funding_key_id, funding_pk)]
-            .into_iter()
-            .collect();
+        base_config.known_keys = [
+            (leader_key_id, leader_pk),
+            (funding_key_id, funding_pk),
+            (blend_zk_key_id, blend_zk_pk),
+        ]
+        .into_iter()
+        .collect();
+
         base_config
     };
 
@@ -349,6 +328,40 @@ fn build_user_config(
         wallet: wallet_config,
         state: state_config,
     }
+}
+
+fn build_network_config(args: &InitArgs, node_key: lb_libp2p::ed25519::SecretKey) -> NetworkConfig {
+    let mut base_config = NetworkConfig::default();
+    base_config.backend.swarm.port = args.net_port;
+    base_config.backend.swarm.node_key = node_key;
+    base_config
+        .backend
+        .initial_peers
+        .clone_from(&args.initial_peers);
+
+    if let Some(external_address) = &args.external_address {
+        base_config.backend.swarm.nat = nat::Config::Static {
+            external_address: external_address.clone(),
+        };
+    }
+    base_config
+}
+
+fn build_cryptarchia_config(args: &InitArgs, funding_pk: ZkPublicKey) -> CryptarchiaConfig {
+    let mut base_config =
+        CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
+    base_config.network.bootstrap.ibd.peers = if args.no_ibd {
+        HashSet::new()
+    } else {
+        args.initial_peers
+            .iter()
+            .filter_map(|addr| match addr.iter().last() {
+                Some(lb_libp2p::Protocol::P2p(bytes)) => PeerId::from_multihash(bytes.into()).ok(),
+                _ => None,
+            })
+            .collect()
+    };
+    base_config
 }
 
 #[cfg(test)]

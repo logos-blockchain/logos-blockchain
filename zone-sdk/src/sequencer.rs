@@ -21,6 +21,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     adapter,
+    adapter::BoxStream,
     state::{InscriptionInfo, TxState},
 };
 
@@ -383,7 +384,7 @@ pub struct ZoneSequencer<Node> {
     last_msg_id: MsgId,
 
     // Block stream
-    blocks_stream: Option<adapter::BoxStream<ProcessedBlockEvent>>,
+    blocks_stream: Option<BoxStream<ProcessedBlockEvent>>,
 
     // Resubmission
     resubmit_interval: tokio::time::Interval,
@@ -1184,7 +1185,7 @@ where
     };
 
     match node
-        .blocks(Slot::from(from_slot), Slot::from(to_slot))
+        .immutable_blocks(Slot::from(from_slot), Slot::from(to_slot))
         .await
     {
         Ok(blocks) => {
@@ -1491,6 +1492,8 @@ fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZero;
+
     use async_trait::async_trait;
     use lb_common_http_client::{
         ApiBlock, ApiHeader, BlockInfo, ChainServiceMode, CryptarchiaInfo, State,
@@ -1621,7 +1624,7 @@ mod tests {
 
         async fn block_stream(
             &self,
-        ) -> Result<adapter::BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
             Ok(Box::pin(
                 futures::stream::once(async {
                     ProcessedBlockEvent {
@@ -1645,9 +1648,19 @@ mod tests {
             ))
         }
 
-        async fn lib_stream(
+        async fn blocks_range_stream(
             &self,
-        ) -> Result<adapter::BoxStream<BlockInfo>, lb_common_http_client::Error> {
+            _blocks_limit: Option<NonZero<usize>>,
+            _slot_from: Option<u64>,
+            _slot_to: Option<u64>,
+            _descending: Option<bool>,
+            _server_batch_size: Option<NonZero<usize>>,
+            _immutable_only: Option<bool>,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
             Ok(Box::pin(futures::stream::pending()))
         }
 
@@ -1658,7 +1671,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn blocks(
+        async fn immutable_blocks(
             &self,
             _slot_from: Slot,
             _slot_to: Slot,
@@ -1670,7 +1683,7 @@ mod tests {
             &self,
             _id: HeaderId,
             _channel_id: ChannelId,
-        ) -> Result<adapter::BoxStream<ZoneMessage>, lb_common_http_client::Error> {
+        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
             Ok(Box::pin(futures::stream::pending()))
         }
 
@@ -1679,7 +1692,7 @@ mod tests {
             _slot_from: Slot,
             _slot_to: Slot,
             _channel_id: ChannelId,
-        ) -> Result<adapter::BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
             Ok(Box::pin(futures::stream::pending()))
         }
 
