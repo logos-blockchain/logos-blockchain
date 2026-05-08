@@ -13,7 +13,7 @@ use overwatch::{
     services::{ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::oneshot;
-use tracing::info;
+use tracing::debug;
 
 use crate::membership::{MembershipInfo, MembershipStream, ServiceMessage, ZkInfo, node_id};
 
@@ -106,8 +106,8 @@ where
                                 let Some(proof) =
                                     zk_tree.get_proof_for_key(zk_public_key.as_fr())
                                 else {
-                                    info!(
-                                        "Local node's ZK public key not found in membership Merkle tree: node is no longer a core member."
+                                    debug!(
+                                        "Local node's ZK public key not found in membership Merkle tree: node is not a core member."
                                     );
                                     return None;
                                 };

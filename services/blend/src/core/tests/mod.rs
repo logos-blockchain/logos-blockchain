@@ -469,7 +469,7 @@ async fn test_handle_session_event() {
                     session: session + 1,
                     poq_core_public_inputs: public_info.session.core_public_inputs,
                 },
-                core_poq_generator: (),
+                core_poq_generator: Some(()),
             }
             .into(),
         ),
@@ -568,7 +568,7 @@ async fn test_handle_session_event() {
                     session: session + 2,
                     poq_core_public_inputs: current_public_info.session.core_public_inputs,
                 },
-                core_poq_generator: (),
+                core_poq_generator: Some(()),
             }
             .into(),
         ),
@@ -663,6 +663,83 @@ async fn test_handle_session_event_empty_session_retires() {
     };
     // The old processor/info should be from the session we were on before
     // the empty session arrived.
+    assert_eq!(old_crypto_processor.verifier().session_number(), session);
+    assert_eq!(old_public_info.session.session_number, session);
+}
+
+/// Handle a `NewSession(NonEmpty)` event where membership exists but the local
+/// node is not part of it (`core_poq_generator = None`), expecting `Retiring`
+/// output.
+#[test_log::test(tokio::test)]
+async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    let session = 0;
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let public_info = new_public_info(session, membership.clone(), &settings);
+    let crypto_processor = new_crypto_processor(
+        SessionCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+    let scheduler = SessionMessageScheduler::new(
+        scheduler_session_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings(&settings.time, settings.num_blend_layers),
+    );
+    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+        settings.clone(),
+        overwatch_handle.clone(),
+        public_info.clone(),
+        BlakeRng::from_entropy(),
+    );
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    let output = handle_session_event(
+        SessionEvent::NewSession(
+            CoreSessionInfo {
+                public: CoreSessionPublicInfo {
+                    membership,
+                    session: session + 1,
+                    poq_core_public_inputs: public_info.session.core_public_inputs,
+                },
+                core_poq_generator: None,
+            }
+            .into(),
+        ),
+        &settings,
+        crypto_processor,
+        scheduler,
+        public_info.clone(),
+        ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
+        &mut backend,
+        &sdp_relay,
+        Epoch::new(0),
+        None,
+    )
+    .await;
+
+    let HandleSessionEventOutput::Retiring {
+        old_crypto_processor,
+        old_public_info,
+        ..
+    } = output
+    else {
+        panic!("expected Retiring output for NonEmpty session without local core path");
+    };
+
     assert_eq!(old_crypto_processor.verifier().session_number(), session);
     assert_eq!(old_public_info.session.session_number, session);
 }
@@ -1012,6 +1089,176 @@ async fn stop_on_empty_session() {
     join_handle
         .await
         .expect("the service should stop without panic on empty session");
+}
+
+/// Check that the service handles a non-empty new session where the local node
+/// has no core path (`core_poq_generator = None`) without panicking. It should
+/// retire gracefully.
+#[test_log::test(tokio::test)]
+async fn stop_on_non_empty_session_without_local_core_path() {
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+
+    // Create settings.
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+
+    // Prepare streams.
+    let (inbound_relay, _inbound_message_sender) = new_stream();
+    let (mut blend_message_stream, _blend_message_sender) = new_stream();
+    let (membership_stream, membership_sender) = new_stream();
+    let (clock_stream, clock_sender) = new_stream();
+
+    // Send the initial membership info that the service will expect to receive
+    // immediately.
+    let initial_session = 0;
+    let membership_info = MembershipInfo {
+        membership: membership.clone(),
+        zk: Some(ZkInfo {
+            root: ZkHash::ZERO,
+            core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+        }),
+        session_number: initial_session,
+    };
+    membership_sender
+        .send(membership_info.clone())
+        .await
+        .unwrap();
+
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    // Send the initial slot tick that the service will expect to receive
+    // immediately.
+    clock_sender
+        .send(SlotTick {
+            epoch: 0.into(),
+            slot: 0.into(),
+        })
+        .await
+        .unwrap();
+
+    // Prepare an epoch handler with the mock chain service that always returns the
+    // same epoch state.
+    let mut epoch_handler = EpochHandler::new(
+        TestChainService,
+        settings.time.epoch_transition_period_in_slots,
+    );
+
+    // Prepare dummy Overwatch resources.
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources();
+
+    // Initialize the service.
+    let (
+        mut remaining_session_stream,
+        mut remaining_clock_stream,
+        current_public_info,
+        _,
+        crypto_processor,
+        current_recovery_checkpoint,
+        message_scheduler,
+        mut backend,
+        mut rng,
+    ) = initialize::<
+        NodeId,
+        TestBlendBackend,
+        TestNetworkAdapter,
+        TestChainService,
+        MockCoreAndLeaderProofsGenerator,
+        MockProofsVerifier,
+        MockKmsAdapter,
+        RuntimeServiceId,
+    >(
+        settings.clone(),
+        membership_stream,
+        clock_stream,
+        &mut epoch_handler,
+        overwatch_handle.clone(),
+        MockKmsAdapter,
+        &sdp_relay,
+        None,
+        state_updater,
+    )
+    .await;
+
+    let mut backend_event_receiver = backend.subscribe_to_events();
+    // Run the event loop of the service in a separate task.
+    let settings_cloned = settings.clone();
+    let join_handle = tokio::spawn(async move {
+        let secret_pol_info_stream =
+            post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
+
+        let (
+            old_session_crypto_processor,
+            old_session_message_scheduler,
+            old_session_blending_token_collector,
+            old_session_public_info,
+            _,
+        ) = run_event_loop(
+            inbound_relay,
+            &mut blend_message_stream,
+            &mut remaining_clock_stream,
+            secret_pol_info_stream,
+            &mut remaining_session_stream,
+            &settings_cloned,
+            &mut backend,
+            &TestNetworkAdapter,
+            &sdp_relay,
+            &mut epoch_handler,
+            message_scheduler.into(),
+            &mut rng,
+            crypto_processor,
+            current_public_info,
+            Epoch::new(0),
+            current_recovery_checkpoint,
+        )
+        .await;
+
+        retire(
+            blend_message_stream.map(|(msg, _)| msg),
+            remaining_clock_stream,
+            remaining_session_stream,
+            &settings_cloned,
+            backend,
+            TestNetworkAdapter,
+            sdp_relay,
+            epoch_handler,
+            old_session_message_scheduler,
+            rng,
+            old_session_blending_token_collector,
+            old_session_crypto_processor,
+            old_session_public_info,
+            Epoch::new(0),
+        )
+        .await;
+    });
+
+    // Send a new non-empty session without local core path.
+    membership_sender
+        .send(MembershipInfo {
+            membership,
+            zk: Some(ZkInfo {
+                root: ZkHash::ZERO,
+                core_and_path_selectors: None,
+            }),
+            session_number: initial_session + 1,
+        })
+        .await
+        .unwrap();
+
+    wait_for_blend_backend_event(
+        &mut backend_event_receiver,
+        TestBlendBackendEvent::SessionTransitionCompleted,
+    )
+    .await;
+    // The service should stop without panicking.
+    join_handle
+        .await
+        .expect("the service should stop without panic when local core path is missing");
 }
 
 /// Verify that the proof generator produces proofs for the correct session,
