@@ -202,10 +202,7 @@ async fn extract_values(
         .map_err(|e| anyhow!(e))
         .with_context(|| "Failed to extract provider ID from provided config.")?;
 
-    let zk_id = config
-        .blend_zk_key()
-        .map_err(|e| anyhow!(e))
-        .with_context(|| "Failed to extract zk ID from provided config.")?;
+    let zk_id = extract_blend_zk_key(config)?;
 
     verify_locked_note_id_value(client, node_address, zk_id, locked_note_id).await?;
 
@@ -232,6 +229,24 @@ fn extract_blend_locator(config: &UserConfig) -> Result<Locator> {
                 config.blend.core.backend.listening_address
             )
         })
+}
+
+fn extract_blend_zk_key(config: &UserConfig) -> Result<ZkPublicKey> {
+    let (zk_public_key_id, zk_public_key) = config
+        .blend_zk_key()
+        .map_err(|e| anyhow!(e))
+        .with_context(|| "Failed to extract zk ID from provided config.")?;
+    let Some(wallet_key) = config.wallet.known_keys.get(&zk_public_key_id) else {
+        bail!(
+            "ZK ID '{zk_public_key_id}' extracted from config was not found in wallet known keys"
+        );
+    };
+    if wallet_key != &zk_public_key {
+        bail!(
+            "ZK ID '{zk_public_key_id}' extracted from config does not match the corresponding public key in wallet known keys"
+        );
+    }
+    Ok(zk_public_key)
 }
 
 async fn verify_locked_note_id_value(
