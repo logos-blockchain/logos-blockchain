@@ -257,8 +257,6 @@ where
                     declaration_id,
                     reply_channel,
                 } => {
-                    metrics::set_declaration_id_total();
-
                     self.handle_set_current_declaration_id(
                         declaration_id,
                         reply_channel,
@@ -562,8 +560,6 @@ where
         reply_channel: oneshot::Sender<Result<(), SdpError>>,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        metrics::set_declaration_id_total();
-
         let result = self
             .validate_declaration_id(declaration_id, chain_api)
             .await;

@@ -62,7 +62,3 @@ pub fn withdrawal_mempool_failures_total() {
 pub fn withdrawal_success_total() {
     lb_tracing::increase_counter_u64!(sdp_withdrawal_success_total, 1);
 }
-
-pub fn set_declaration_id_total() {
-    lb_tracing::increase_counter_u64!(sdp_set_declaration_id_total, 1);
-}
