@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use ::tracing::{Level, warn};
+use ::tracing::warn;
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
@@ -156,6 +156,11 @@ pub struct InitArgs {
     /// empty, regardless of any peers passed via `--initial-peers`/`-p`.
     #[clap(long = "no-ibd", default_value_t = false)]
     pub no_ibd: bool,
+
+    /// Log filter directives to write into the generated config, e.g.
+    /// `warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error`.
+    #[clap(long = "log-filter")]
+    pub log_filter: Option<String>,
 
     /// Path for the generated KMS keys YAML file.
     /// Defaults to 'kms.yaml' in the same directory as --output.
@@ -505,22 +510,45 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         }
     }
 
-    if let Some(level_str) = level {
-        tracing.level = match level_str.to_uppercase().as_str() {
-            "TRACE" => Level::TRACE,
-            "DEBUG" => Level::DEBUG,
-            "INFO" => Level::INFO,
-            "ERROR" => Level::ERROR,
-            "WARN" => Level::WARN,
-            _ => return Err(eyre!("Invalid log level provided: {}", level_str)),
-        };
+    update_tracing_level_and_filter(tracing, level.as_deref(), filter.as_deref())?;
+
+    Ok(())
+}
+
+pub fn update_tracing_level_and_filter(
+    tracing: &mut TracingConfig,
+    level: Option<&str>,
+    filter: Option<&str>,
+) -> Result<()> {
+    if let Some(level) = level {
+        tracing.level = level
+            .parse()
+            .map_err(|_| eyre!("Invalid log level provided: {level}"))?;
     }
 
-    if let Some(filter_string) = filter {
-        tracing.filter = parse_log_filter_layer(&filter_string)?;
+    if let Some(filter) = filter {
+        tracing.filter = parse_log_filter_layer(filter)?;
     } else {
         apply_default_debug_log_filter(tracing);
     }
+
+    Ok(())
+}
+
+pub fn update_tracing_filter_and_derive_level(
+    tracing: &mut TracingConfig,
+    filter: &str,
+) -> Result<()> {
+    let layer = parse_log_filter_layer(filter)?;
+    let Layer::Env(EnvConfig { ref filters }) = layer else {
+        unreachable!("parse_log_filter_layer always returns an env filter");
+    };
+
+    if let Some(level) = filters.values().copied().max() {
+        tracing.level = level;
+    }
+
+    tracing.filter = layer;
 
     Ok(())
 }

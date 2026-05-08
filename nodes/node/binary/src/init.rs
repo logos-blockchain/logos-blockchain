@@ -26,6 +26,7 @@ use crate::{
         network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
+        update_tracing_filter_and_derive_level,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
@@ -114,7 +115,14 @@ pub fn run(args: &InitArgs) -> Result<()> {
         }
     };
 
-    let user_config = build_user_config(args, network_key, keys, blend_listening_address);
+    let tracing_config = build_tracing_config(args)?;
+    let user_config = build_user_config(
+        args,
+        network_key,
+        keys,
+        blend_listening_address,
+        tracing_config,
+    );
 
     if write_kms {
         let kms_yaml = serde_yaml::to_string(&user_config.kms)?;
@@ -230,11 +238,22 @@ fn serialize_with_kms_include(config: &UserConfig, kms_include: &str) -> Result<
     Ok(serde_yaml::to_string(&value)?)
 }
 
+fn build_tracing_config(args: &InitArgs) -> Result<TracingConfig> {
+    let mut tracing_config = TracingConfig::default();
+
+    if let Some(filter) = &args.log_filter {
+        update_tracing_filter_and_derive_level(&mut tracing_config, filter)?;
+    }
+
+    Ok(tracing_config)
+}
+
 fn build_user_config(
     args: &InitArgs,
     network_key: lb_libp2p::ed25519::SecretKey,
     keys: GeneratedKeys,
     blend_listening_address: Multiaddr,
+    tracing_config: TracingConfig,
 ) -> UserConfig {
     let GeneratedKeys {
         blend_signing_key,
@@ -303,8 +322,6 @@ fn build_user_config(
 
     let time_config = TimeConfig::default();
 
-    let tracing_config = TracingConfig::default();
-
     let sdp_config = SdpConfig::with_required_values(SdpRequiredValues { funding_pk });
 
     let api_config = {
@@ -356,6 +373,10 @@ mod tests {
     use std::net::SocketAddr;
 
     use super::*;
+    use crate::config::tracing::serde::{
+        Level,
+        filter::{EnvConfig, Layer},
+    };
 
     fn build_config_from_peers(initial_peers: Vec<Multiaddr>) -> UserConfig {
         build_config(initial_peers, false)
@@ -370,13 +391,16 @@ mod tests {
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
             state_path: None,
-            kms_file: None,
             no_ibd,
+            log_filter: None,
+            kms_file: None,
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();
         let keys = generate_keys();
         let blend_addr = Multiaddr::from_str("/ip4/0.0.0.0/udp/3400/quic-v1").unwrap();
-        build_user_config(&args, network_key, keys, blend_addr)
+        let tracing_config = build_tracing_config(&args).unwrap();
+
+        build_user_config(&args, network_key, keys, blend_addr, tracing_config)
     }
 
     #[test]
@@ -420,5 +444,36 @@ mod tests {
         let config = build_config(vec![addr_with_p2p], true);
 
         assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
+    }
+
+    #[test]
+    fn log_flags_write_env_filter_config() {
+        let args = InitArgs {
+            initial_peers: Vec::new(),
+            output: "test_output.yaml".into(),
+            net_port: 3000,
+            blend_port: 3400,
+            http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
+            external_address: None,
+            state_path: None,
+            no_ibd: false,
+            log_filter: Some(
+                "warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error".to_owned(),
+            ),
+            kms_file: None,
+        };
+
+        let tracing_config = build_tracing_config(&args).unwrap();
+        let Layer::Env(EnvConfig { filters }) = tracing_config.filter else {
+            panic!("expected env filter config");
+        };
+
+        assert_eq!(tracing_config.level, Level::DEBUG);
+        assert_eq!(filters.get("*"), Some(&Level::WARN));
+        assert_eq!(filters.get("logos_blockchain"), Some(&Level::DEBUG));
+        assert_eq!(
+            filters.get("libp2p_gossipsub::behaviour"),
+            Some(&Level::ERROR)
+        );
     }
 }
