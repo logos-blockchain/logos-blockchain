@@ -52,7 +52,7 @@ enum Commands {
     /// stakeholder and provider definitions.
     Distribute(DistributeArgs),
 
-    /// Generate a genesis InscriptionOp using entropy sources.
+    /// Generate a genesis `InscriptionOp` using entropy sources.
     Inscribe(InscribeArgs),
 }
 
@@ -151,12 +151,14 @@ struct DistributeArgs {
 
 #[derive(Parser, Debug)]
 struct InscribeArgs {
-    /// YAML file containing genesis parameters (chain_id, genesis_time, and entropy_sources).
-    /// entropy_sources should be a list of hex-encoded 32-byte strings.
+    /// YAML file containing genesis parameters (`chain_id`, `genesis_time`, and
+    /// `entropy_sources`). `entropy_sources` should be a list of hex-encoded
+    /// 32-byte strings.
+
     #[arg(long, value_name = "FILE")]
     params: PathBuf,
 
-    /// Write the serialized InscriptionOp to FILE instead of stdout.
+    /// Write the serialized `InscriptionOp` to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
     output: Option<PathBuf>,
 }
