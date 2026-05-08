@@ -203,6 +203,7 @@ pub enum LogFileAppenderType {
     Simple,
     Rolling,
     RollingCompressed,
+    RollingMaxFiles,
 }
 
 impl From<LogFileAppenderType> for OsStr {
@@ -211,6 +212,7 @@ impl From<LogFileAppenderType> for OsStr {
             LogFileAppenderType::Simple => "Simple".into(),
             LogFileAppenderType::Rolling => "Rolling".into(),
             LogFileAppenderType::RollingCompressed => "RollingCompressed".into(),
+            LogFileAppenderType::RollingMaxFiles => "RollingMaxFiles".into(),
         }
     }
 }
@@ -255,6 +257,13 @@ pub struct LogArgs {
 
     #[clap(long = "log-file-appender", env = "LOG_APPENDER")]
     file_appender: Option<LogFileAppenderType>,
+
+    #[clap(
+        long = "log-max-files",
+        env = "LOG_APPENDER_MAX_FILES",
+        required_if_eq("file_appender", LogFileAppenderType::RollingMaxFiles)
+    )]
+    max_files: Option<usize>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -446,7 +455,8 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         prefix,
         level,
         filter,
-        file_appender: appender,
+        file_appender,
+        max_files,
     } = tracing_args;
 
     if let Some(backend_type) = backend {
@@ -461,7 +471,7 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                 });
             }
             LoggerLayerType::File => {
-                let appender_type = match appender {
+                let appender_type = match file_appender {
                     Some(LogFileAppenderType::Simple) | None => AppenderType::Simple,
                     Some(LogFileAppenderType::Rolling) => AppenderType::Rolling(RollingConfig {
                         rotation: RotationType::Hourly,
@@ -475,6 +485,15 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                             compression: CompressionType::Gzip {
                                 compression_threshold: Duration::from_hours(2),
                             },
+                        })
+                    }
+                    Some(LogFileAppenderType::RollingMaxFiles) => {
+                        AppenderType::Rolling(RollingConfig {
+                            rotation: RotationType::Hourly,
+                            retention: RetentionType::MaxFiles {
+                                max_files: max_files.expect("Max files should be set"),
+                            },
+                            compression: CompressionType::None,
                         })
                     }
                 };
