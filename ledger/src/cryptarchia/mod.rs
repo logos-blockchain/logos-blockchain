@@ -1,7 +1,10 @@
 mod block_density;
 mod stake;
 
-use std::sync::{Arc, LazyLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock},
+};
 
 use derivative::Derivative;
 use lb_core::{
@@ -14,7 +17,7 @@ use lb_core::{
         ops::transfer::{TransferOp, TransferValidationContext},
     },
     proofs::leader_proof::{self, LeaderPublic},
-    sdp::locked_notes::LockedNotes,
+    sdp::{ProviderId, ProviderInfo, ServiceType, locked_notes::LockedNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
@@ -68,6 +71,13 @@ pub struct EpochState {
     pub lottery_0: Fr,
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_1: Fr,
+    /// SDP service providers active for this epoch.
+    ///
+    /// Per the SDP 1.0.0 spec, the active set for epoch N is the registry as
+    /// of the last block of `current_epoch - 2`. Population at the matching
+    /// snapshot point lives in a follow-up; for now this is empty.
+    #[serde(default)]
+    pub active_session_providers: HashMap<ServiceType, HashMap<ProviderId, ProviderInfo>>,
 }
 
 impl EpochState {
@@ -92,6 +102,7 @@ impl EpochState {
             total_stake: self.total_stake,
             lottery_0: self.lottery_0,
             lottery_1: self.lottery_1,
+            active_session_providers: self.active_session_providers,
         }
     }
 
@@ -252,6 +263,7 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
+                active_session_providers: HashMap::new(),
             };
             let (new_price, new_ema) = update_storage_market(
                 self.storage_gas_price,
@@ -315,6 +327,7 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
+                active_session_providers: HashMap::new(),
             };
             let next_epoch_state = EpochState {
                 epoch: new_epoch + 1,
@@ -323,6 +336,7 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
+                active_session_providers: HashMap::new(),
             };
             Ok(Self {
                 slot,
@@ -583,6 +597,7 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
+                active_session_providers: HashMap::new(),
             },
             epoch_state: EpochState {
                 epoch: 0.into(),
@@ -591,6 +606,7 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
+                active_session_providers: HashMap::new(),
             },
             block_density,
             stake_inference,
