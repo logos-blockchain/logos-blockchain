@@ -29,3 +29,11 @@ num-bigint = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "logos-blockchain-tools-genesis"
+path = "src/bin/genesis.rs"
+
+[[bin]]
+name = "logos-blockchain-tools-api"
+path = "src/bin/api.rs"
