@@ -597,6 +597,14 @@ where
                         session: session_number,
                     };
                 };
+                let Some(core_and_path_selectors) = core_and_path_selectors else {
+                    // The local node has a ZK key but is not part of this session's
+                    // membership (e.g. it was removed). Treat as empty so the node
+                    // skips core participation for this session.
+                    return MaybeEmptyCoreSessionInfo::Empty {
+                        session: session_number,
+                    };
+                };
                 CoreSessionInfo {
                     public: CoreSessionPublicInfo {
                         poq_core_public_inputs: CoreInputs {
@@ -606,13 +614,8 @@ where
                         membership,
                         session: session_number,
                     },
-                    core_poq_generator: kms_adapter.core_poq_generator(
-                        zk_sk_id.clone(),
-                        Box::new(
-                            core_and_path_selectors
-                                .expect("Core merkle path should be present for a core node."),
-                        ),
-                    ),
+                    core_poq_generator: kms_adapter
+                        .core_poq_generator(zk_sk_id.clone(), Box::new(core_and_path_selectors)),
                 }
                 .into()
             },
