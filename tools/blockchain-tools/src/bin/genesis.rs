@@ -8,6 +8,7 @@ use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
+    crypto::ZkHasher,
     mantle::{
         Note,
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp},
@@ -15,7 +16,10 @@ use lb_core::{
 };
 use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
 use logos_blockchain_tools::{
-    distribution::{self, ProviderInfo, StakeHolderInfo},
+    genesis::{
+        distribution::{self, ProviderInfo, StakeHolderInfo},
+        inscription::{self, InscribeParams},
+    },
     overwrite_yaml, value_from_dotted_kv,
 };
 use serde_yml::Value;
@@ -47,6 +51,9 @@ enum Commands {
     /// Calculate the distribution of notes and SDP declarations from
     /// stakeholder and provider definitions.
     Distribute(DistributeArgs),
+
+    /// Generate a genesis InscriptionOp using entropy sources.
+    Inscribe(InscribeArgs),
 }
 
 // ── config subcommand
@@ -139,6 +146,21 @@ struct DistributeArgs {
     declarations_output: Option<PathBuf>,
 }
 
+// ── inscribe subcommand
+// ──────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+struct InscribeArgs {
+    /// YAML file containing genesis parameters (chain_id, genesis_time, and entropy_sources).
+    /// entropy_sources should be a list of hex-encoded 32-byte strings.
+    #[arg(long, value_name = "FILE")]
+    params: PathBuf,
+
+    /// Write the serialized InscriptionOp to FILE instead of stdout.
+    #[arg(long, short, value_name = "FILE")]
+    output: Option<PathBuf>,
+}
+
 // ── entry point
 // ───────────────────────────────────────────────────────────────
 
@@ -148,6 +170,7 @@ fn main() -> Result<()> {
         Commands::Config(args) => run_config(&args),
         Commands::Block(args) => run_block(&args),
         Commands::Distribute(args) => run_distribute(&args),
+        Commands::Inscribe(args) => run_inscribe(&args),
     }
 }
 
@@ -292,6 +315,22 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
     write_yaml(&declarations_value, args.declarations_output.as_deref())?;
 
     Ok(())
+}
+
+// ── inscribe implementation
+// ─────────────────────────────────────────────────────
+
+fn run_inscribe(args: &InscribeArgs) -> Result<()> {
+    let params: InscribeParams = load_yaml_file(&args.params)?;
+
+    let op = inscription::inscribe::<ZkHasher>(
+        params.chain_id,
+        params.genesis_time,
+        params.entropy_sources,
+    );
+
+    let op_value = struct_to_yaml_value(&op)?;
+    write_yaml(&op_value, args.output.as_deref())
 }
 
 // ── shared helpers
