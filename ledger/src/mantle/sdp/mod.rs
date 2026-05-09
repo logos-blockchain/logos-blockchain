@@ -297,22 +297,13 @@ impl SdpLedger {
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
-        tx_hash: TxHash,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
     ) -> Result<Self, Error> {
         let mut sdp =
             Self::new().with_blend_service(&config.service_rewards_params.blend, epoch_state);
 
-        for (op, proof) in ops {
-            let OpProof::ZkAndEd25519Sigs {
-                zk_sig,
-                ed25519_sig,
-            } = proof
-            else {
-                return Err(Error::InvalidProof);
-            };
-            sdp =
-                sdp.try_apply_sdp_declaration(utxo_tree, op, zk_sig, ed25519_sig, tx_hash, config)?;
+        for (op, _) in ops {
+            sdp = sdp.try_apply_sdp_genesis_declaration(utxo_tree, op, config)?;
         }
 
         let blend = sdp
@@ -393,6 +384,60 @@ impl SdpLedger {
             },
             all_reward_utxos,
         ))
+    }
+
+    pub fn try_apply_sdp_genesis_declaration(
+        mut self,
+        utxo_tree: &UtxoTree,
+        op: &SDPDeclareOp,
+        config: &Config,
+    ) -> Result<Self, Error> {
+        let Some(service_state) = self.services.get_mut(&op.service_type) else {
+            return Err(Error::ServiceNotFound(op.service_type));
+        };
+
+        let Some((utxo, _)) = utxo_tree.utxos().get(&op.locked_note_id) else {
+            return Err(
+                lb_core::mantle::ops::sdp::SdpError::InexistingNote(op.locked_note_id).into(),
+            );
+        };
+        if service_state.contains(&op.id()) {
+            return Err(Error::DuplicateDeclaration(op.id()));
+        }
+
+        if utxo.note.value < config.min_stake.threshold {
+            return Err(lb_core::mantle::ops::sdp::SdpError::NoteInsufficientValue {
+                note_id: op.locked_note_id,
+                value: utxo.note.value,
+            }
+            .into());
+        }
+
+        if self
+            .locked_notes
+            .is_locked_for_service(&op.locked_note_id, &op.service_type)
+        {
+            return Err(
+                lb_core::mantle::ops::sdp::SdpError::NoteAlreadyUsedForService {
+                    note_id: op.locked_note_id,
+                    service_type: op.service_type,
+                }
+                .into(),
+            );
+        }
+
+        // Execute SDP Declare
+        let result = op.execute(SDPDeclareExecutionContext {
+            utxo_tree: utxo_tree.clone(),
+            block_number: self.block_number,
+            declarations: service_state.declarations_clone(),
+            locked_notes: self.locked_notes.clone(),
+            min_stake: config.min_stake,
+        })?;
+
+        self.locked_notes = result.locked_notes;
+        service_state.update_declarations(result.declarations);
+        Ok(self)
     }
 
     pub fn try_apply_sdp_declaration(
