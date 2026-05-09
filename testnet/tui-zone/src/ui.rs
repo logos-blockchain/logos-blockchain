@@ -1,25 +1,23 @@
 use std::io::Write as _;
 
-use crate::state::ZoneState;
+use crate::{message::Msg, state::ZoneState};
 
-/// Print current state.
+/// Print current state as three sections: Finalized, Adopted, Published.
 pub fn render_state(state: &dyn ZoneState) {
-    let canonical: Vec<&str> = state.canonical().iter().map(|m| m.text.as_str()).collect();
-    let finalized = state.finalized();
+    eprintln!();
+    print_section("Finalized", state.finalized());
+    print_section("Adopted", state.adopted());
+    print_section("Published", state.published());
+}
 
-    if canonical.is_empty() {
-        eprintln!("  Canonical: (empty)");
-    } else {
-        eprintln!("  Canonical: [{}]", canonical.join(", "));
+fn print_section(label: &str, msgs: &[Msg]) {
+    if msgs.is_empty() {
+        return;
     }
-
-    if !finalized.is_empty() {
-        eprintln!("  Finalized:");
-        for msg in finalized {
-            eprintln!("    {}", msg.text);
-        }
+    eprintln!("=== {label} ===");
+    for m in msgs {
+        eprintln!("  {}", m.text);
     }
-
     eprintln!();
 }
 

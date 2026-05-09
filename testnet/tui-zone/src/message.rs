@@ -1,35 +1,20 @@
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use lb_core::mantle::ops::channel::MsgId;
 
-/// A structured application message with a unique ID for deduplication.
+/// A single message tracked by the TUI.
 ///
-/// Real sequencers need to distinguish "same content published twice" from
-/// "same logical message re-published after a reorg". The `tx_uuid` field
-/// provides this: each user action gets a unique ID, and conflict resolution
-/// checks whether that ID is already on the canonical branch.
-///
-/// Authorship ("did we send this?") is tracked separately by the state layer
-/// (`my_submissions`), not on the message itself, so it survives reorgs that
-/// remove and re-add the message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppMessage {
-    pub tx_uuid: Uuid,
+/// `msg_id` is SDK-provided lineage anchor; `text` is the raw payload bytes
+/// interpreted as UTF-8.
+#[derive(Debug, Clone)]
+pub struct Msg {
+    pub msg_id: MsgId,
     pub text: String,
 }
 
-impl AppMessage {
-    pub fn new(text: String) -> Self {
+impl Msg {
+    pub fn from_payload(msg_id: MsgId, payload: &[u8]) -> Self {
         Self {
-            tx_uuid: Uuid::new_v4(),
-            text,
+            msg_id,
+            text: String::from_utf8_lossy(payload).into_owned(),
         }
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        serde_json::to_vec(self).expect("AppMessage serialization should not fail")
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        serde_json::from_slice(bytes).ok()
     }
 }
