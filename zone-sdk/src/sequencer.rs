@@ -188,7 +188,10 @@ enum InFlight {
 pub struct SequencerHandle<Node> {
     request_tx: mpsc::Sender<ActorRequest>,
     node: Node,
-    event_tx: broadcast::Sender<Event>,
+    /// Internal broadcast of every channel-related `tx_hash` observed in any
+    /// block (canonical or side branch) — used by `set_keys` to await
+    /// "seen on chain" without waiting for finalization. Not exposed.
+    tx_seen_tx: broadcast::Sender<TxHash>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -322,19 +325,22 @@ where
     /// key if it should remain authorized.
     ///
     /// Returns the publish result (with checkpoint) and a future that
-    /// resolves when the transaction is finalized:
+    /// resolves when the transaction is first observed in any block (the
+    /// ledger validates inscriptions against current canonical channel keys,
+    /// so seen-on-chain is sufficient to start using the new keys; full
+    /// finalization is not required and would be much slower):
     ///
     /// ```ignore
-    /// let (result, finalized) = handle.set_keys(vec![admin_pk]).await?;
+    /// let (result, on_chain) = handle.set_keys(vec![admin_pk]).await?;
     /// save_checkpoint(&result.checkpoint);
-    /// finalized.await?; // wait for finalization
+    /// on_chain.await?; // wait until set_keys lands in some block
     /// ```
     pub async fn set_keys(
         &self,
         keys: Vec<Ed25519PublicKey>,
     ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
-        // Subscribe BEFORE submitting to avoid missing finalization events.
-        let mut event_rx = self.event_tx.subscribe();
+        // Subscribe BEFORE submitting to avoid missing the seen-on-chain event.
+        let mut tx_seen_rx = self.tx_seen_tx.subscribe();
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::SetKeys {
@@ -362,14 +368,10 @@ where
             warn!("Failed to post set_keys transaction: {e}");
         }
 
-        let finalized = async move {
+        let on_chain = async move {
             loop {
-                match event_rx.recv().await {
-                    Ok(Event::TxsFinalized { ref tx_hashes, .. })
-                        if tx_hashes.contains(&tx_hash) =>
-                    {
-                        return Ok(());
-                    }
+                match tx_seen_rx.recv().await {
+                    Ok(seen) if seen == tx_hash => return Ok(()),
                     Ok(_) => {}
                     Err(_) => {
                         return Err(Error::Unavailable {
@@ -380,7 +382,7 @@ where
             }
         };
 
-        Ok((publish_result, finalized))
+        Ok((publish_result, on_chain))
     }
 }
 
@@ -423,6 +425,10 @@ pub struct ZoneSequencer<Node> {
 
     // Broadcast channel for events — handles subscribe to receive events
     event_tx: broadcast::Sender<Event>,
+
+    // Internal broadcast of tx_hashes seen on any block — drives the
+    // `set_keys` "seen on chain" wait. Mirrors `SequencerHandle::tx_seen_tx`.
+    tx_seen_tx: broadcast::Sender<TxHash>,
 
     // Readiness signal — set to true when connected and backfill is complete
     ready_tx: tokio::sync::watch::Sender<bool>,
@@ -509,12 +515,13 @@ where
 
         let resubmit_interval = tokio::time::interval(config.resubmit_interval);
         let (event_tx, _) = broadcast::channel(256);
+        let (tx_seen_tx, _) = broadcast::channel(256);
         let (ready_tx, ready_rx) = tokio::sync::watch::channel(false);
 
         let handle = SequencerHandle {
             request_tx,
             node: node.clone(),
-            event_tx: event_tx.clone(),
+            tx_seen_tx: tx_seen_tx.clone(),
             ready_rx,
         };
 
@@ -536,6 +543,7 @@ where
             backfill_from: None,
             backfill_to: None,
             event_tx,
+            tx_seen_tx,
             ready_tx,
         };
 
@@ -806,6 +814,10 @@ where
     /// Process a `BlockEventResult`: apply channel updates to local state
     /// and emit events. Returns at most one event; a second is buffered.
     fn apply_block_result(&mut self, result: BlockEventResult) -> Option<Event> {
+        for tx_hash in &result.seen_tx_hashes {
+            drop(self.tx_seen_tx.send(*tx_hash));
+        }
+
         if let Some(update) = result.channel_update.as_ref() {
             Self::log_channel_update(update);
             let has_pending = self
@@ -1061,6 +1073,10 @@ struct BlockEventResult {
     finalized_tx_hashes: Vec<TxHash>,
     finalized_inscriptions: Vec<InscriptionInfo>,
     channel_update: Option<crate::state::ChannelUpdateInfo>,
+    /// Tx hashes belonging to our channel observed in this block event
+    /// (incl. backfilled blocks). Used for the internal "tx seen" signal —
+    /// no canonical filtering, just "we saw it on some block".
+    seen_tx_hashes: Vec<TxHash>,
 }
 
 /// Process a block event. Returns finalized tx hashes and optional channel
@@ -1091,6 +1107,7 @@ where
             finalized_tx_hashes: Vec::new(),
             finalized_inscriptions: Vec::new(),
             channel_update: None,
+            seen_tx_hashes: Vec::new(),
         };
     };
 
@@ -1125,6 +1142,9 @@ where
         .filter(|tx| matches_channel(tx, channel_id))
         .map(|tx| tx.mantle_tx.hash())
         .collect();
+
+    let mut seen_tx_hashes = our_txs.clone();
+    seen_tx_hashes.extend(lib_finalized.iter().copied());
 
     let inscriptions = extract_inscriptions(&event.block.transactions, channel_id);
 
@@ -1180,6 +1200,7 @@ where
         finalized_tx_hashes,
         finalized_inscriptions,
         channel_update,
+        seen_tx_hashes,
     }
 }
 
