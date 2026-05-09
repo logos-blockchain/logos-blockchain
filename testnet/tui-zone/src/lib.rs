@@ -112,13 +112,9 @@ async fn handle_event(
         Event::TxsFinalized { inscriptions, .. } => {
             finalize_inscriptions(state, &inscriptions, true);
         }
-        Event::Published {
-            payload,
-            checkpoint,
-            ..
-        } => {
+        Event::Published { info, checkpoint } => {
             debug!("Inscription published, checkpoint saved");
-            if let Some(msg) = AppMessage::from_bytes(&payload) {
+            if let Some(msg) = AppMessage::from_bytes(&info.payload) {
                 state.apply(msg);
                 ui::render_state(state);
                 ui::prompt();

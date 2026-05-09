@@ -131,9 +131,13 @@ pub enum Event {
     /// Sequencer is connected, backfill complete, ready to accept publishes.
     Ready,
     /// An inscription was created and submitted to the network.
+    ///
+    /// `info.this_msg` is the lineage key — store it to correlate later
+    /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.inscriptions`
+    /// entries back to the originating publish call. This is the only
+    /// reliable lineage signal when payloads are not unique.
     Published {
-        inscription_id: InscriptionId,
-        payload: Vec<u8>,
+        info: Box<InscriptionInfo>,
         checkpoint: SequencerCheckpoint,
     },
 }
@@ -838,25 +842,25 @@ where
 
     fn log_channel_update(update: &crate::state::ChannelUpdateInfo) {
         debug!(
-            "ChannelUpdate: orphaned={}, adopted={}, new_tip={:?}",
+            "ChannelUpdate: orphaned={}, adopted={}, new_tip={}",
             update.orphaned.len(),
             update.adopted.len(),
-            update.new_channel_tip,
+            hex::encode(update.new_channel_tip.as_ref()),
         );
         for inv in &update.orphaned {
             debug!(
-                "  orphaned: payload={:?}, tx={:?}, msg_id={:?}",
+                "  orphaned: payload={:?}, tx={}, msg_id={}",
                 String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
+                hex::encode(inv.tx_hash.0),
+                hex::encode(inv.this_msg.as_ref()),
             );
         }
         for inv in &update.adopted {
             debug!(
-                "  adopted: payload={:?}, tx={:?}, msg_id={:?}",
+                "  adopted: payload={:?}, tx={}, msg_id={}",
                 String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
+                hex::encode(inv.tx_hash.0),
+                hex::encode(inv.this_msg.as_ref()),
             );
         }
     }
@@ -888,19 +892,19 @@ where
 
         for inv in &pending {
             debug!(
-                "  pending: payload={:?}, tx={:?}, msg_id={:?}, parent={:?}",
+                "  pending: payload={:?}, tx={}, msg_id={}, parent={}",
                 String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
-                inv.parent_msg,
+                hex::encode(inv.tx_hash.0),
+                hex::encode(inv.this_msg.as_ref()),
+                hex::encode(inv.parent_msg.as_ref()),
             );
         }
         for inv in &orphaned {
             debug!(
-                "  orphaned: payload={:?}, tx={:?}, msg_id={:?}",
+                "  orphaned: payload={:?}, tx={}, msg_id={}",
                 String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
+                hex::encode(inv.tx_hash.0),
+                hex::encode(inv.this_msg.as_ref()),
             );
         }
 
@@ -975,8 +979,11 @@ where
         let id = signed_tx.mantle_tx.hash();
 
         debug!(
-            "Publishing: payload={:?}, parent={parent:?}, msg_id={new_msg_id:?}, tx={id:?}",
+            "Publishing: payload={:?}, parent={}, msg_id={}, tx={}",
             String::from_utf8_lossy(&data),
+            hex::encode(parent.as_ref()),
+            hex::encode(new_msg_id.as_ref()),
+            hex::encode(id.0),
         );
 
         s.submit_inscription(
@@ -994,11 +1001,14 @@ where
         }
 
         let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
-        let event = Event::Published {
-            inscription_id: id,
+        let info = Box::new(InscriptionInfo {
+            tx_hash: id,
+            parent_msg: parent,
+            this_msg: new_msg_id,
             payload: data,
-            checkpoint,
-        };
+            signer: self.signing_key.public_key(),
+        });
+        let event = Event::Published { info, checkpoint };
         drop(self.event_tx.send(event.clone()));
         event
     }
@@ -1135,9 +1145,9 @@ where
     let finalized_inscriptions = lib_inscriptions;
     for info in &finalized_inscriptions {
         tracing::trace!(
-            " Backfill-finalized: payload={:?}, tx={:?}",
+            " Backfill-finalized: payload={:?}, tx={}",
             String::from_utf8_lossy(&info.payload),
-            info.tx_hash
+            hex::encode(info.tx_hash.0),
         );
     }
     *current_tip = Some(tip);
@@ -1355,7 +1365,10 @@ fn enqueue_resubmit<Node>(
                 }
             })
             .collect();
-        debug!("  resubmit: tx={id:?}, payloads={payloads:?}");
+        debug!(
+            "  resubmit: tx={}, payloads={payloads:?}",
+            hex::encode(id.0)
+        );
     }
 
     debug!("Resubmitting {} pending inscription(s)", pending.len());

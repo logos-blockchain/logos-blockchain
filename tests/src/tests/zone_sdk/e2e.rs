@@ -294,9 +294,12 @@ fn spawn_drive(
 
 /// Drive the sequencer with republish-on-conflict behavior.
 ///
-/// On each `ChannelUpdate`, republish each entry in `orphaned` (mine that the
-/// SDK has given up on) that isn't already in flight via `pending`. No local
-/// state mirror needed — the SDK's `pending` field is the dedup signal.
+/// Maintains a local pending set keyed by `msg_id`, populated on
+/// `Event::Published` and pruned on finalize/orphan. On each `ChannelUpdate`,
+/// republishes any `orphaned` entry whose `msg_id` is in local pending —
+/// this is the only correct dedup when payloads are not unique (the SDK's
+/// `pending` field happens to work for unique payloads but breaks when
+/// multiple in-flight publishes share the same bytes).
 ///
 /// If `finalized_tx` is provided, every finalized inscription seen via
 /// `Event::TxsFinalized` or `Event::FinalizedInscriptions` is forwarded so
@@ -309,31 +312,34 @@ fn spawn_drive_republish(
     finalized_tx: Option<tokio::sync::mpsc::UnboundedSender<InscriptionInfo>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut local_pending: HashSet<lb_core::mantle::ops::channel::MsgId> = HashSet::new();
         loop {
             match sequencer.next_event().await {
+                Some(Event::Published { info, .. }) => {
+                    local_pending.insert(info.this_msg);
+                }
                 Some(
                     Event::TxsFinalized { inscriptions, .. }
                     | Event::FinalizedInscriptions { inscriptions },
                 ) => {
+                    for ins in &inscriptions {
+                        local_pending.remove(&ins.this_msg);
+                    }
                     if let Some(tx) = finalized_tx.as_ref() {
                         for ins in inscriptions {
                             drop(tx.send(ins));
                         }
                     }
                 }
-                Some(Event::ChannelUpdate {
-                    orphaned, pending, ..
-                }) => {
+                Some(Event::ChannelUpdate { orphaned, .. }) => {
                     for inv in &orphaned {
                         assert_eq!(
                             inv.signer, my_signer,
                             "orphaned entry signer mismatch - SDK should only surface our own"
                         );
                     }
-                    let pending_payloads: HashSet<&Vec<u8>> =
-                        pending.iter().map(|p| &p.payload).collect();
                     for inv in &orphaned {
-                        if !pending_payloads.contains(&inv.payload) {
+                        if local_pending.remove(&inv.this_msg) {
                             debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
                             if let Err(e) = handle.publish_message(inv.payload.clone()).await {
                                 debug!("Failed to re-publish: {e}");
@@ -895,9 +901,9 @@ fn spawn_sequencer_sorted_policy(
 
         loop {
             let event = sequencer.next_event().await;
-            if let Some(Event::Published { payload, .. }) = event {
-                if max_seen_on_chain.as_ref().is_none_or(|m| payload > *m) {
-                    max_seen_on_chain = Some(payload);
+            if let Some(Event::Published { info, .. }) = event {
+                if max_seen_on_chain.as_ref().is_none_or(|m| info.payload > *m) {
+                    max_seen_on_chain = Some(info.payload);
                 }
                 continue;
             }
@@ -1179,9 +1185,9 @@ fn spawn_balance_aware(
 
         loop {
             let event = sequencer.next_event().await;
-            if let Some(Event::Published { payload, .. }) = event {
+            if let Some(Event::Published { info, .. }) = event {
                 // Optimistic apply: we just published this.
-                if let Some((uuid, account, delta)) = parse_balance_tx(&payload) {
+                if let Some((uuid, account, delta)) = parse_balance_tx(&info.payload) {
                     applied.entry(account).or_default().insert(uuid, delta);
                 }
                 continue;
@@ -1480,10 +1486,12 @@ async fn test_concurrent_identical_payloads() {
     handle_b.wait_ready().await;
     handle_c.wait_ready().await;
 
+    let publishes_per_seq: usize = 10;
+    let payloads: Vec<Vec<u8>> = vec![payload.clone(); publishes_per_seq];
     publish_concurrently(vec![
-        (handle_a, vec![payload.clone()]),
-        (handle_b, vec![payload.clone()]),
-        (handle_c, vec![payload.clone()]),
+        (handle_a, payloads.clone()),
+        (handle_b, payloads.clone()),
+        (handle_c, payloads),
     ])
     .await;
 
@@ -1493,13 +1501,15 @@ async fn test_concurrent_identical_payloads() {
     );
 
     let n_seqs: usize = 3;
+    let expected_total: usize = n_seqs * publishes_per_seq;
     let expected: HashSet<Vec<u8>> = std::iter::once(payload.clone()).collect();
 
-    // Deterministic wait: 3 distinct tx_hashes with our payload finalized.
+    // Deterministic wait: expected_total distinct tx_hashes with our payload
+    // finalized.
     wait_for_finalized(
         &mut finalized_rx,
         &expected,
-        n_seqs,
+        expected_total,
         Duration::from_mins(10),
     )
     .await;
@@ -1509,8 +1519,8 @@ async fn test_concurrent_identical_payloads() {
     let final_count = on_chain.iter().filter(|p| **p == payload).count();
 
     assert_eq!(
-        final_count, n_seqs,
-        "Expected exactly {n_seqs} inscriptions with identical payload, got {final_count}"
+        final_count, expected_total,
+        "Expected exactly {expected_total} inscriptions with identical payload, got {final_count}"
     );
 
     poll_a.abort();
