@@ -36,8 +36,7 @@ use crate::{
         },
     },
     proofs::{
-        channel_withdraw_proof::ChannelMultiSequencerProof,
-        leader_claim_proof::Groth16LeaderClaimProof,
+        channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
 };
 
@@ -86,7 +85,7 @@ pub enum OpProof {
         ed25519_sig: Ed25519Signature,
     },
     PoC(Groth16LeaderClaimProof),
-    ChannelMultiSequencerProof(ChannelMultiSequencerProof),
+    ChannelMultiSigProof(ChannelMultiSigProof),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.

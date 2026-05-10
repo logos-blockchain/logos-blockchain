@@ -110,7 +110,7 @@ pub enum WalletServiceError {
     TaskJoin(#[from] JoinError),
 
     #[error("Failed to fetch Channel Withdraw proof for op index {0} from the TxBuilder")]
-    ChannelWithdrawProofNotFound(usize),
+    ChannelMultiSigProofNotFound(usize),
 }
 
 #[derive(Debug)]
@@ -747,7 +747,7 @@ where
         wallet: &Wallet,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
-        let mut channel_withdraw_proofs = tx_builder.channel_withdraw_proofs().clone();
+        let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
         let mantle_tx = tx_builder.clone().build();
         let tx_hash = mantle_tx.hash();
 
@@ -770,10 +770,10 @@ where
                     .await?
                 }
                 Op::ChannelWithdraw(_channel_withdraw_op) => {
-                    let proof = channel_withdraw_proofs
+                    let proof = channel_multi_sig_proofs
                         .remove(&i)
-                        .ok_or(WalletServiceError::ChannelWithdrawProofNotFound(i))?;
-                    OpProof::ChannelMultiSequencerProof(proof)
+                        .ok_or(WalletServiceError::ChannelMultiSigProofNotFound(i))?;
+                    OpProof::ChannelMultiSigProof(proof)
                 }
                 Op::SDPDeclare(declare_op) => {
                     Self::sign_sdp_declare(tx_hash, declare_op, &tip_leader, kms).await?

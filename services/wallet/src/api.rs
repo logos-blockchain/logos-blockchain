@@ -304,6 +304,7 @@ mod tests {
                     let context = MantleTxContext {
                         gas_context: MantleTxGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
+                            std::collections::HashMap::new(),
                             expected_gas_prices,
                         ),
                         leader_reward_amount: 0,

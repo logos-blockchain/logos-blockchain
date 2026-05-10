@@ -363,9 +363,7 @@ fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], Vec<O
 fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
     match op {
         // Ed25519SigProof = Ed25519Signature
-        Op::ChannelInscribe(_) | Op::ChannelConfig(_) => {
-            map(decode_ed25519_signature, OpProof::Ed25519Sig).parse(input)
-        }
+        Op::ChannelInscribe(_) => map(decode_ed25519_signature, OpProof::Ed25519Sig).parse(input),
 
         // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
         Op::SDPDeclare(_) => {
@@ -394,10 +392,10 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         })
         .parse(input),
 
-        // ChannelWithdrawProof
-        Op::ChannelWithdraw(_) => map(
-            decode_channel_withdraw_proof,
-            OpProof::ChannelMultiSequencerProof,
+        // ChannelMultiSigProof — also used by ChannelConfig (threshold sigs)
+        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => map(
+            decode_channel_multi_sig_proof,
+            OpProof::ChannelMultiSigProof,
         )
         .parse(input),
     }
@@ -449,14 +447,13 @@ fn decode_ed25519_signature(input: &[u8]) -> IResult<&[u8], Ed25519Signature> {
     .parse(input)
 }
 
-const fn calculate_channel_withdraw_proof_byte_size(
-    channel_withdraw_threshold: ChannelKeyIndex,
-) -> usize {
-    (channel_withdraw_threshold as usize) * (ED25519_SIG_BYTES + 4)
+const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex) -> usize {
+    // Encoding: u16 signature count + N * (Ed25519 sig + u16 key index)
+    2 + (threshold as usize) * (ED25519_SIG_BYTES + 2)
 }
 
-fn decode_channel_withdraw_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSequencerProof> {
-    // ChannelWithdrawProof = SignatureCount *WithdrawSignature
+fn decode_channel_multi_sig_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSigProof> {
+    // ChannelMultiSigProof = SignatureCount *WithdrawSignature
     // WithdrawSignature = Ed25519Signature Index
     let (input, signatures) = length_count(
         map(decode_uint16, |n: ChannelKeyIndex| n as usize),
@@ -464,12 +461,12 @@ fn decode_channel_withdraw_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSeq
     )
     .parse(input)?;
 
-    let signatures: Vec<MultiSequencerSignature> = signatures
+    let signatures: Vec<IndexedSignature> = signatures
         .into_iter()
-        .map(|(signature, index)| MultiSequencerSignature::from((index, signature)))
+        .map(|(signature, index)| IndexedSignature::from((index, signature)))
         .collect();
 
-    ChannelMultiSequencerProof::new(signatures)
+    ChannelMultiSigProof::new(signatures)
         .map(|proof| (input, proof))
         .map_err(|_| nom::Err::Failure(Error::new(input, ErrorKind::Verify)))
 }
@@ -554,7 +551,7 @@ use crate::{
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
     },
-    proofs::channel_withdraw_proof::{ChannelMultiSequencerProof, MultiSequencerSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 // Encode primitives
 
@@ -618,7 +615,7 @@ fn encode_groth16_proof(proof: &CompressedGroth16Proof) -> Vec<u8> {
     proof.to_bytes().to_vec()
 }
 
-fn encode_channel_withdraw_proof(proof: &ChannelMultiSequencerProof) -> Vec<u8> {
+fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_uint16(proof.signatures().len() as ChannelKeyIndex));
     bytes.extend(proof.signatures().iter().flat_map(|signature| {
@@ -877,11 +874,9 @@ fn encode_ops(ops: &[Op]) -> Vec<u8> {
 /// Encode proofs
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     match (proof, op) {
-        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_) | Op::ChannelConfig(_)) => {
-            encode_ed25519_signature(sig)
-        }
-        (OpProof::ChannelMultiSequencerProof(proof), Op::ChannelWithdraw(_)) => {
-            encode_channel_withdraw_proof(proof)
+        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_)) => encode_ed25519_signature(sig),
+        (OpProof::ChannelMultiSigProof(proof), Op::ChannelWithdraw(_) | Op::ChannelConfig(_)) => {
+            encode_channel_multi_sig_proof(proof)
         }
         (
             OpProof::ZkAndEd25519Sigs {
@@ -935,7 +930,18 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
         .iter()
         .map(|op| match op {
             // Ed25519SigProof = Ed25519Signature
-            Op::ChannelInscribe(_) | Op::ChannelConfig(_) => ED25519_SIG_BYTES,
+            Op::ChannelInscribe(_) => ED25519_SIG_BYTES,
+
+            // ChannelMultiSigProof — for an existing channel, threshold sigs;
+            // for a new channel (just-in-time created here), no sigs required.
+            // TODO: under-predicts if there is a non-empty proof for a new
+            // channel. Tighten before enabling non-zero storage gas prices.
+            Op::ChannelConfig(operation) => {
+                let threshold = context
+                    .configuration_threshold(&operation.channel)
+                    .unwrap_or(0);
+                calculate_channel_multi_sig_proof_byte_size(threshold)
+            }
 
             // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
             Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
@@ -945,12 +951,12 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
                 GROTH16_BYTES
             }
 
-            // WithdrawProof
+            // ChannelMultiSigProof
             Op::ChannelWithdraw(operation) => {
                 let channel_withdraw_threshold = context.withdraw_threshold(&operation.channel_id).expect(
                     "Operation should have been verified before reaching this point, so the channel must exist in the context."
                 );
-                calculate_channel_withdraw_proof_byte_size(channel_withdraw_threshold)
+                calculate_channel_multi_sig_proof_byte_size(channel_withdraw_threshold)
             }
 
             // None
@@ -1138,11 +1144,18 @@ mod tests {
         let txhash = mantle_tx.hash();
         let sig = signing_key.sign_payload(&txhash.as_signing_bytes());
 
+        // ChannelConfig creates the channel just-in-time, so no signatures are
+        // required for validation — empty proof is well-formed.
+        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+
         // Encode and decode roundtrip test (no hardcoded test vector since signatures
         // are deterministic)
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
-            vec![OpProof::Ed25519Sig(sig), OpProof::Ed25519Sig(sig)],
+            vec![
+                OpProof::Ed25519Sig(sig),
+                OpProof::ChannelMultiSigProof(config_proof),
+            ],
         )
         .unwrap();
 
@@ -1184,7 +1197,8 @@ mod tests {
 
                 let encoded = encode_signed_mantle_tx(&signed_tx);
 
-                let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+                let gas_context =
+                    MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
                 let predicted_size =
                     predict_signed_mantle_tx_size(&signed_tx.mantle_tx, &gas_context);
                 assert_eq!(
@@ -1277,7 +1291,8 @@ mod tests {
         let mantle_tx = MantleTx(vec![]);
 
         // Predict size
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -1301,7 +1316,8 @@ mod tests {
         let mantle_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
 
         // Predict size
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -1336,13 +1352,16 @@ mod tests {
         let mantle_tx = MantleTx(vec![Op::ChannelConfig(config_op)]);
 
         // Predict size
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
-        // Create a signed tx and encode it to get actual size
-        let dummy_ed25519_sig = Ed25519Signature::from_bytes(&[0; 64]);
+        // Create a signed tx and encode it to get actual size. New channel
+        // → empty proof (no signatures required for just-in-time create).
+        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
         let signed_tx =
-            SignedMantleTx::new(mantle_tx, vec![OpProof::Ed25519Sig(dummy_ed25519_sig)]).unwrap();
+            SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(config_proof)])
+                .unwrap();
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let actual_size = encoded.len();
 
@@ -1378,7 +1397,8 @@ mod tests {
         let mantle_tx = MantleTx(vec![Op::SDPDeclare(sdp_declare_op)]);
 
         // Predict size
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -1412,7 +1432,8 @@ mod tests {
         let txhash = mantle_tx.hash();
 
         // Predict size
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -1451,7 +1472,8 @@ mod tests {
 
         let mantle_tx = MantleTx(vec![Op::SDPActive(sdp_active_op)]);
 
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         let txhash = mantle_tx.hash();
@@ -1511,17 +1533,20 @@ mod tests {
         ]);
 
         // Predict size
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         let txhash = mantle_tx.hash();
         let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-        // Create a signed tx and encode it to get actual size
+        // Create a signed tx and encode it to get actual size. ChannelConfig
+        // creates the channel here, so its proof has no signatures.
+        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![
                 OpProof::Ed25519Sig(op_sig),
-                OpProof::Ed25519Sig(op_sig),
+                OpProof::ChannelMultiSigProof(config_proof),
                 OpProof::ZkSig(ZkKey::zero().sign_payload(&txhash.to_fr()).unwrap()),
             ],
         )
@@ -1554,7 +1579,8 @@ mod tests {
         let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
 
         // Predict size
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
         // Create a signed tx and encode it to get actual size
@@ -1620,17 +1646,20 @@ mod tests {
         ]);
 
         // Predict size
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
-        // Create a signed tx and encode it to get actual size
+        // Create a signed tx and encode it to get actual size. ChannelConfig
+        // creates the channel here, so its proof has no signatures.
         let txhash = mantle_tx.hash();
         let op_ed25519_sig = signing_key1.sign_payload(&txhash.as_signing_bytes());
+        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![
                 OpProof::Ed25519Sig(op_ed25519_sig),
-                OpProof::Ed25519Sig(op_ed25519_sig),
+                OpProof::ChannelMultiSigProof(config_proof),
                 OpProof::ZkAndEd25519Sigs {
                     zk_sig: ZkKey::multi_sign(&[locked_note_sk, zk_sk], &txhash.to_fr()).unwrap(),
                     ed25519_sig: op_ed25519_sig,
@@ -1657,7 +1686,8 @@ mod tests {
 
         let mantle_tx = MantleTx(vec![Op::LeaderClaim(leader_claim_op.clone())]);
 
-        let empty_gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let empty_gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &empty_gas_context);
 
         let poc_proof = Groth16LeaderClaimProof::new(
@@ -1737,14 +1767,13 @@ mod tests {
             withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();
-        let proof = ChannelMultiSequencerProof::new(vec![MultiSequencerSignature::new(
+        let proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
             signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
         )])
         .unwrap();
         let signed_tx =
-            SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSequencerProof(proof)])
-                .unwrap();
+            SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(proof)]).unwrap();
 
         let encoded = encode_signed_mantle_tx(&signed_tx);
         let (remaining, decoded_tx) = decode_signed_mantle_tx(&encoded).unwrap();

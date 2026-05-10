@@ -567,7 +567,7 @@ impl LedgerState {
                         self.cryptarchia_ledger.slot,
                     )?;
                 }
-                (Op::ChannelConfig(op), OpProof::ChannelMultiSequencerProof(sig)) => {
+                (Op::ChannelConfig(op), OpProof::ChannelMultiSigProof(sig)) => {
                     self.mantle_ledger = self.mantle_ledger.try_apply_channel_set_keys(
                         op,
                         sig,
@@ -601,7 +601,7 @@ impl LedgerState {
                     self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
                     self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
                 }
-                (Op::ChannelWithdraw(op), OpProof::ChannelMultiSequencerProof(sigs)) => {
+                (Op::ChannelWithdraw(op), OpProof::ChannelMultiSigProof(sigs)) => {
                     let channels = self.mantle_ledger.channels();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
@@ -718,7 +718,7 @@ mod tests {
                 transfer::TransferOp,
             },
         },
-        proofs::channel_withdraw_proof::{ChannelMultiSequencerProof, MultiSequencerSignature},
+        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
@@ -772,7 +772,7 @@ mod tests {
         Ed25519(Ed25519Key),
         Zk(ZkKey),
         EmptyZk,
-        MultiSequencer(ChannelMultiSequencerProof),
+        MultiSequencer(ChannelMultiSigProof),
     }
 
     fn create_signed_tx(op: Op, signing_key: &Key) -> SignedMantleTx {
@@ -794,7 +794,7 @@ mod tests {
                     ZkKey::multi_sign(std::slice::from_ref(key), &tx_hash.to_fr()).unwrap(),
                 ),
                 Key::EmptyZk => OpProof::ZkSig(ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap()),
-                Key::MultiSequencer(proof) => OpProof::ChannelMultiSequencerProof(proof.clone()),
+                Key::MultiSequencer(proof) => OpProof::ChannelMultiSigProof(proof.clone()),
             })
             .collect();
 
@@ -931,7 +931,7 @@ mod tests {
 
         let config_tx = MantleTx(vec![Op::ChannelConfig(config_op.clone())]);
         let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSequencerProof::new(vec![MultiSequencerSignature::new(
+        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
             signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
         )])
@@ -1069,7 +1069,7 @@ mod tests {
         };
         let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
         let withdraw_tx_hash = withdraw_tx.hash();
-        let withdraw_proof = ChannelMultiSequencerProof::new(vec![MultiSequencerSignature::new(
+        let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
             signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
         )])
@@ -1154,7 +1154,7 @@ mod tests {
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
         let withdraw_tx_hash = withdraw_tx.hash();
-        let invalid_proof = ChannelMultiSequencerProof::new(vec![MultiSequencerSignature::new(
+        let invalid_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
             wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
         )])
@@ -1171,7 +1171,7 @@ mod tests {
         assert_eq!(
             result,
             Err(LedgerError::VerificationError(
-                VerificationError::ChannelWithdrawProofInvalidSignature {
+                VerificationError::ChannelMultiSigProofInvalidSignature {
                     op_index: 0,
                     signature_index: 0,
                 }
@@ -1334,7 +1334,7 @@ mod tests {
 
         let config_tx = MantleTx(vec![Op::ChannelConfig(config_op.clone())]);
         let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSequencerProof::new(vec![MultiSequencerSignature::new(
+        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
             signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
         )])
@@ -1407,7 +1407,7 @@ mod tests {
         ];
         let config_tx = MantleTx(ops.clone());
         let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSequencerProof::new(vec![MultiSequencerSignature::new(
+        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
             sk1.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
         )])
@@ -1416,7 +1416,7 @@ mod tests {
         let tx = create_multi_signed_tx(
             ops,
             vec![
-                &Key::Ed25519(sk1.clone()),
+                &Key::Ed25519(sk1),
                 &Key::Ed25519(sk2),
                 &Key::MultiSequencer(config_proof),
                 &Key::Ed25519(sk3),

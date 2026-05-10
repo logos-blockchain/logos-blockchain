@@ -8,7 +8,7 @@ use crate::{
         ledger::{Operation, Outputs, Utxos},
         ops::{OpId, channel::ChannelId},
     },
-    proofs::channel_withdraw_proof::ChannelMultiSequencerProof,
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -27,7 +27,7 @@ impl OpId for ChannelWithdrawOp {
 pub struct WithdrawValidationContext<'a> {
     pub channels: &'a Channels,
     pub tx_hash: &'a TxHash,
-    pub withdraw_sigs: &'a ChannelMultiSequencerProof,
+    pub withdraw_sigs: &'a ChannelMultiSigProof,
 }
 
 pub struct WithdrawExecutionContext {

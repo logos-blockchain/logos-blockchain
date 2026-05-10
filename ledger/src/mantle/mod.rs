@@ -24,7 +24,7 @@ use lb_core::{
             transfer::TransferError,
         },
     },
-    proofs::channel_withdraw_proof::ChannelMultiSequencerProof,
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::{
         Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber,
         locked_notes::LockedNotes,
@@ -199,7 +199,7 @@ impl LedgerState {
     pub fn try_apply_channel_set_keys(
         mut self,
         config_op: &ChannelConfigOp,
-        config_sigs: &ChannelMultiSequencerProof,
+        config_sigs: &ChannelMultiSigProof,
         tx_hash: &TxHash,
         block_slot: Slot,
     ) -> Result<Self, Error> {
