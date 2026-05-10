@@ -42,7 +42,7 @@ use crate::{
         },
         settings::RunningBlendConfig as BlendConfig,
     },
-    message::NetworkInfo,
+    message::{CoreInfo, NetworkInfo},
     metrics,
 };
 
@@ -261,9 +261,13 @@ where
         let old_session_peers = core_behaviour
             .old_session_peer_ids()
             .map(|peers| peers.copied().collect());
-        NetworkInfo {
+        let core_info = CoreInfo {
             current_session_peers,
             old_session_peers,
+        };
+        NetworkInfo {
+            node_id: *self.swarm.local_peer_id(),
+            core_info: Some(core_info),
         }
     }
 

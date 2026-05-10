@@ -18,9 +18,11 @@ futures                       = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-services-utils             = { workspace = true }
 lb-tracing                    = { workspace = true }
 overwatch                     = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
 thiserror                     = { workspace = true }
+time                          = { workspace = true }
 tokio                         = { workspace = true }
 tracing                       = { workspace = true }

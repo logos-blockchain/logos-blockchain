@@ -349,7 +349,10 @@ mod tests {
             identify_protocol_name: StreamProtocol::new("/identify/test"),
             chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
             identify_config: lb_libp2p::IdentifySettings::default(),
-            chain_sync_config: lb_cryptarchia_sync::Config::default(),
+            chain_sync_config: lb_cryptarchia_sync::Config {
+                peer_response_timeout: Duration::from_secs(5),
+                max_inbound_requests: 10.try_into().unwrap(),
+            },
             nat_config: lb_libp2p::NatSettings::Traversal(lb_libp2p::TraversalSettings {
                 autonat: lb_libp2p::AutonatClientSettings {
                     probe_interval_millisecs: Some(1000),

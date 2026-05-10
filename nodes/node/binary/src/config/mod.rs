@@ -6,13 +6,15 @@ use std::{
     time::Duration,
 };
 
-use ::tracing::{Level, warn};
+use ::tracing::warn;
 use clap::{Parser, Subcommand, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
+use lb_core::sdp::ProviderId;
+use lb_key_management_system_service::keys::{Key, ZkPublicKey};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
-    logging::local::AppenderType,
+    logging::local::{AppenderType, CompressionType, RetentionType, RollingConfig, RotationType},
 };
 use serde::Deserialize;
 use tracing::serde::filter::{EnvConfig, Layer};
@@ -122,7 +124,9 @@ pub enum Command {
 #[cfg(feature = "config-gen")]
 #[derive(Parser, Debug)]
 pub struct InitArgs {
-    /// Trusted peers to bootstrap from (multiaddr format)
+    /// Trusted peers to bootstrap from (multiaddr format).
+    /// If `--no-ibd` is not set, peers whose multiaddrs include a `PeerId`
+    /// are also used as IBD peers.
     #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',')]
     pub initial_peers: Vec<Multiaddr>,
 
@@ -149,6 +153,21 @@ pub struct InitArgs {
 
     #[clap(long = "state-path")]
     pub state_path: Option<PathBuf>,
+
+    /// Disable Initial Block Download (IBD) by leaving the IBD peer list
+    /// empty, regardless of any peers passed via `--initial-peers`/`-p`.
+    #[clap(long = "no-ibd", default_value_t = false)]
+    pub no_ibd: bool,
+
+    /// Log filter directives to write into the generated config, e.g.
+    /// `warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error`.
+    #[clap(long = "log-filter")]
+    pub log_filter: Option<String>,
+
+    /// Path for the generated KMS keys YAML file.
+    /// Defaults to 'kms.yaml' in the same directory as --output.
+    #[clap(long = "kms-file")]
+    pub kms_file: Option<PathBuf>,
 }
 
 #[cfg(feature = "config-gen")]
@@ -200,15 +219,19 @@ impl From<LoggerLayerType> for OsStr {
 #[derive(ValueEnum, Clone, Debug, Default)]
 pub enum LogFileAppenderType {
     #[default]
+    Simple,
     Rolling,
     RollingCompressed,
+    RollingMaxFiles,
 }
 
 impl From<LogFileAppenderType> for OsStr {
     fn from(value: LogFileAppenderType) -> Self {
         match value {
+            LogFileAppenderType::Simple => "Simple".into(),
             LogFileAppenderType::Rolling => "Rolling".into(),
             LogFileAppenderType::RollingCompressed => "RollingCompressed".into(),
+            LogFileAppenderType::RollingMaxFiles => "RollingMaxFiles".into(),
         }
     }
 }
@@ -255,13 +278,11 @@ pub struct LogArgs {
     file_appender: Option<LogFileAppenderType>,
 
     #[clap(
-        long = "log-compression-interval",
-        env = "LOG_APPENDER_COMPRESSED_INTERVAL",
-        value_parser = humantime::parse_duration,
-        default_value = "1h",
-        required_if_eq("file_appender", LogFileAppenderType::RollingCompressed)
+        long = "log-max-files",
+        env = "LOG_APPENDER_MAX_FILES",
+        required_if_eq("file_appender", LogFileAppenderType::RollingMaxFiles)
     )]
-    compression_interval: Option<Duration>,
+    max_files: Option<usize>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -443,6 +464,30 @@ impl UserConfig {
             tracing: TracingConfig::default(),
         }
     }
+
+    pub fn blend_provider_id(&self) -> Result<ProviderId, String> {
+        let key_id = &self.blend.non_ephemeral_signing_key_id;
+        let Some(key) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!(
+                "Blend non-ephemeral signing key '{key_id}' not found in KMS"
+            ));
+        };
+        let Key::Ed25519(secret_key) = key else {
+            return Err("Blend non-ephemeral signing key must be Ed25519".to_owned());
+        };
+        Ok(ProviderId(secret_key.public_key()))
+    }
+
+    pub fn blend_zk_key(&self) -> Result<(String, ZkPublicKey), String> {
+        let key_id = &self.blend.core.zk.secret_key_kms_id;
+        let Some(key) = self.kms.backend.keys.get(key_id) else {
+            return Err(format!("Blend ZK signing key '{key_id}' not found in KMS"));
+        };
+        let Key::Zk(secret_key) = key else {
+            return Err("Blend ZK signing key must be Zk".to_owned());
+        };
+        Ok((key_id.to_owned(), secret_key.to_public_key()))
+    }
 }
 
 pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Result<()> {
@@ -453,8 +498,8 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         prefix,
         level,
         filter,
-        file_appender: appender,
-        compression_interval,
+        file_appender,
+        max_files,
     } = tracing_args;
 
     if let Some(backend_type) = backend {
@@ -469,12 +514,30 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                 });
             }
             LoggerLayerType::File => {
-                let appender_type = match appender {
-                    Some(LogFileAppenderType::Rolling) | None => AppenderType::Rolling,
+                let appender_type = match file_appender {
+                    Some(LogFileAppenderType::Simple) | None => AppenderType::Simple,
+                    Some(LogFileAppenderType::Rolling) => AppenderType::Rolling(RollingConfig {
+                        rotation: RotationType::Hourly,
+                        retention: RetentionType::None,
+                        compression: CompressionType::None,
+                    }),
                     Some(LogFileAppenderType::RollingCompressed) => {
-                        AppenderType::RollingCompressed {
-                            compression_interval: compression_interval.unwrap(),
-                        }
+                        AppenderType::Rolling(RollingConfig {
+                            rotation: RotationType::Hourly,
+                            retention: RetentionType::None,
+                            compression: CompressionType::Gzip {
+                                compression_threshold: Duration::from_hours(2),
+                            },
+                        })
+                    }
+                    Some(LogFileAppenderType::RollingMaxFiles) => {
+                        AppenderType::Rolling(RollingConfig {
+                            rotation: RotationType::Hourly,
+                            retention: RetentionType::MaxFiles {
+                                max_files: max_files.expect("Max files should be set"),
+                            },
+                            compression: CompressionType::None,
+                        })
                     }
                 };
                 tracing.logger.file = Some(FileConfig {
@@ -493,22 +556,45 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
         }
     }
 
-    if let Some(level_str) = level {
-        tracing.level = match level_str.to_uppercase().as_str() {
-            "TRACE" => Level::TRACE,
-            "DEBUG" => Level::DEBUG,
-            "INFO" => Level::INFO,
-            "ERROR" => Level::ERROR,
-            "WARN" => Level::WARN,
-            _ => return Err(eyre!("Invalid log level provided: {}", level_str)),
-        };
+    update_tracing_level_and_filter(tracing, level.as_deref(), filter.as_deref())?;
+
+    Ok(())
+}
+
+pub fn update_tracing_level_and_filter(
+    tracing: &mut TracingConfig,
+    level: Option<&str>,
+    filter: Option<&str>,
+) -> Result<()> {
+    if let Some(level) = level {
+        tracing.level = level
+            .parse()
+            .map_err(|_| eyre!("Invalid log level provided: {level}"))?;
     }
 
-    if let Some(filter_string) = filter {
-        tracing.filter = parse_log_filter_layer(&filter_string)?;
+    if let Some(filter) = filter {
+        tracing.filter = parse_log_filter_layer(filter)?;
     } else {
         apply_default_debug_log_filter(tracing);
     }
+
+    Ok(())
+}
+
+pub fn update_tracing_filter_and_derive_level(
+    tracing: &mut TracingConfig,
+    filter: &str,
+) -> Result<()> {
+    let layer = parse_log_filter_layer(filter)?;
+    let Layer::Env(EnvConfig { ref filters }) = layer else {
+        unreachable!("parse_log_filter_layer always returns an env filter");
+    };
+
+    if let Some(level) = filters.values().copied().max() {
+        tracing.level = level;
+    }
+
+    tracing.filter = layer;
 
     Ok(())
 }
@@ -600,11 +686,24 @@ pub enum ConfigDeserializationError<Config> {
     IoError(#[from] std::io::Error),
     #[error(transparent)]
     SerdeError(#[from] serde_yaml::Error),
+    #[error("YAML include error: {0}")]
+    IncludeError(String),
 }
 
 pub enum OnUnknownKeys {
     Fail,
     Warn,
+}
+
+impl<C> From<lb_utils::yaml::YamlIncludeError> for ConfigDeserializationError<C> {
+    fn from(e: lb_utils::yaml::YamlIncludeError) -> Self {
+        use lb_utils::yaml::YamlIncludeError as E;
+        match e {
+            E::Io(e) => Self::IoError(e),
+            E::Serde(e) => Self::SerdeError(e),
+            E::InvalidInclude(msg) => Self::IncludeError(msg),
+        }
+    }
 }
 
 pub fn deserialize_config_at_path<Config>(
@@ -614,8 +713,30 @@ pub fn deserialize_config_at_path<Config>(
 where
     Config: for<'de> Deserialize<'de>,
 {
+    let base_dir = config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let file = std::fs::File::open(config_path)?;
-    deserialize_config_from_reader(file, unknown_keys_strategy)
+    let raw: serde_yaml::Value = serde_yaml::from_reader(file)?;
+    let resolved = lb_utils::yaml::resolve_includes(raw, &base_dir)
+        .map_err(ConfigDeserializationError::from)?;
+    deserialize_from_value(resolved, unknown_keys_strategy)
+}
+
+fn deserialize_from_value<Config>(
+    value: serde_yaml::Value,
+    unknown_keys_strategy: OnUnknownKeys,
+) -> Result<Config, ConfigDeserializationError<Config>>
+where
+    Config: for<'de> Deserialize<'de>,
+{
+    use serde::de::IntoDeserializer as _;
+    let mut ignored_fields = Vec::new();
+    let config = serde_ignored::deserialize::<_, _, Config>(value.into_deserializer(), |path| {
+        ignored_fields.push(path.to_string());
+    })?;
+    apply_unknown_keys_strategy(config, ignored_fields, unknown_keys_strategy)
 }
 
 pub fn deserialize_config_from_reader<Config, Reader>(
@@ -633,8 +754,15 @@ where
             ignored_fields.push(path.to_string());
         },
     )?;
+    apply_unknown_keys_strategy(config, ignored_fields, unknown_keys_strategy)
+}
 
-    match (ignored_fields, unknown_keys_strategy) {
+fn apply_unknown_keys_strategy<Config>(
+    config: Config,
+    ignored_fields: Vec<String>,
+    strategy: OnUnknownKeys,
+) -> Result<Config, ConfigDeserializationError<Config>> {
+    match (ignored_fields, strategy) {
         (ignored_fields, _) if ignored_fields.is_empty() => Ok(config),
         (ignored_fields, OnUnknownKeys::Warn) => {
             warn!(

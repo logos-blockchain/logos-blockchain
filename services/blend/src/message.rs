@@ -7,6 +7,12 @@ use tokio::sync::oneshot;
 /// Information about the current Blend network peers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkInfo<NodeId> {
+    pub node_id: NodeId,
+    pub core_info: Option<CoreInfo<NodeId>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoreInfo<NodeId> {
     /// Negotiated peers for the current session, with a flag indicating whether
     /// they are healthy (`true`) or not (`false`).
     pub current_session_peers: Vec<(NodeId, bool)>,
@@ -21,7 +27,6 @@ pub enum ServiceMessage<BroadcastSettings, NodeId> {
     /// the [`NetworkService`].
     Blend(NetworkMessage<BroadcastSettings>),
     /// Request the current blend network info (connected peers).
-    /// The reply will be `None` if the node is not in core mode.
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<NodeId>>>,
     },

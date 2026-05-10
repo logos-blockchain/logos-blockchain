@@ -196,7 +196,7 @@ pub unsafe extern "C" fn get_transaction(
 /// Gets blocks in a slot range as a JSON array string.
 ///
 /// This is a synchronous wrapper around the asynchronous
-/// [`get_blocks`](lb_api_service::http::mantle::get_blocks) function.
+/// [`get_blocks`](lb_api_service::http::mantle::get_immutable_blocks) function.
 ///
 /// # Arguments
 ///
@@ -217,7 +217,7 @@ pub(crate) fn get_blocks_sync(
     let overwatch_handle = node.get_overwatch_handle();
 
     let blocks = runtime_handle
-        .block_on(lb_api_service::http::mantle::get_blocks::<
+        .block_on(lb_api_service::http::mantle::get_immutable_blocks::<
             SignedMantleTx,
             RocksBackend,
             RuntimeServiceId,

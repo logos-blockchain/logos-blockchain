@@ -67,7 +67,7 @@ pub fn apply_wallet_genesis_overrides(
             service_type: ServiceType::BlendNetwork,
             provider_sk: private_key.clone(),
             zk_sk: secret_zk_key.clone(),
-            locator: Locator(blend_conf.core.backend.listening_address.clone()),
+            locator: Locator::new_unchecked(blend_conf.core.backend.listening_address.clone()),
             note: general_configs[idx].consensus_config.blend_note.clone(),
         });
     }
