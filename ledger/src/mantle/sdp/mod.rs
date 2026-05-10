@@ -7,16 +7,18 @@ use lb_core::{
     block::BlockNumber,
     mantle::{
         NoteId, OpProof, TxHash, Utxo, Value,
-        ledger::Operation as _,
+        ledger::Operation,
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPActiveValidationContext,
             SDPDeclareExecutionContext, SDPDeclareOp, SDPDeclareValidationContext,
             SDPWithdrawExecutionContext, SDPWithdrawOp, SDPWithdrawValidationContext,
+            declare::SDPDeclareGenesisValidationContext,
         },
     },
     sdp::{
         ActivityMetadata, Declaration, DeclarationId, MinStake, Nonce, ProviderId, ProviderInfo,
-        ServiceParameters, ServiceType, SessionNumber, locked_notes, locked_notes::LockedNotes,
+        ServiceParameters, ServiceType, SessionNumber,
+        locked_notes::{self, LockedNotes},
     },
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -297,29 +299,13 @@ impl SdpLedger {
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
-        tx_hash: TxHash,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
     ) -> Result<Self, Error> {
         let mut sdp =
             Self::new().with_blend_service(&config.service_rewards_params.blend, epoch_state);
 
-        for (op, proof) in ops {
-            let OpProof::ZkAndEd25519Sigs {
-                zk_sig,
-                ed25519_sig,
-            } = proof
-            else {
-                return Err(Error::InvalidProof);
-            };
-            sdp = sdp.try_apply_sdp_declaration(
-                utxo_tree,
-                op,
-                zk_sig,
-                ed25519_sig,
-                tx_hash,
-                config,
-                true,
-            )?;
+        for (op, _) in ops {
+            sdp = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
         }
 
         let blend = sdp
@@ -402,10 +388,41 @@ impl SdpLedger {
         ))
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "Temporary until we refactor how genesis TXs are handled."
-    )]
+    pub fn try_apply_genesis_sdp_declaration(
+        mut self,
+        utxo_tree: &UtxoTree,
+        op: &SDPDeclareOp,
+        config: &Config,
+    ) -> Result<Self, Error> {
+        let Some(service_state) = self.services.get_mut(&op.service_type) else {
+            return Err(Error::ServiceNotFound(op.service_type));
+        };
+
+        // Validate SDP Declare
+        op.validate(&SDPDeclareGenesisValidationContext {
+            utxo_tree,
+            locked_notes: &self.locked_notes,
+            declarations: service_state.declarations(),
+            min_stake: &config.min_stake,
+        })?;
+
+        // Execute SDP Declare
+        let result = <SDPDeclareOp as Operation<SDPDeclareGenesisValidationContext>>::execute(
+            op,
+            SDPDeclareExecutionContext {
+                utxo_tree: utxo_tree.clone(),
+                block_number: self.block_number,
+                declarations: service_state.declarations_clone(),
+                locked_notes: self.locked_notes.clone(),
+                min_stake: config.min_stake,
+            },
+        )?;
+
+        self.locked_notes = result.locked_notes;
+        service_state.update_declarations(result.declarations);
+        Ok(self)
+    }
+
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
@@ -414,34 +431,33 @@ impl SdpLedger {
         ed25519_sig: &Ed25519Signature,
         tx_hash: TxHash,
         config: &Config,
-        is_genesis: bool,
     ) -> Result<Self, Error> {
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
         // Validate SDP Declare
-        if !is_genesis {
-            op.validate(&SDPDeclareValidationContext {
-                utxo_tree,
-                locked_notes: &self.locked_notes,
-                tx_hash: &tx_hash,
-                declare_zk_sig: zk_sig,
-                declare_eddsa_sig: ed25519_sig,
-                declarations: service_state.declarations(),
-                min_stake: &config.min_stake,
-            })?;
-        }
+        op.validate(&SDPDeclareValidationContext {
+            utxo_tree,
+            locked_notes: &self.locked_notes,
+            tx_hash: &tx_hash,
+            declare_zk_sig: zk_sig,
+            declare_eddsa_sig: ed25519_sig,
+            declarations: service_state.declarations(),
+            min_stake: &config.min_stake,
+        })?;
 
         // Execute SDP Declare
-        let result = op.execute(SDPDeclareExecutionContext {
-            utxo_tree: utxo_tree.clone(),
-            block_number: self.block_number,
-            declarations: service_state.declarations_clone(),
-            locked_notes: self.locked_notes.clone(),
-            min_stake: config.min_stake,
-            is_genesis,
-        })?;
+        let result = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
+            op,
+            SDPDeclareExecutionContext {
+                utxo_tree: utxo_tree.clone(),
+                block_number: self.block_number,
+                declarations: service_state.declarations_clone(),
+                locked_notes: self.locked_notes.clone(),
+                min_stake: config.min_stake,
+            },
+        )?;
 
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
@@ -705,15 +721,7 @@ mod tests {
         let signing_key = create_signing_key();
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-        sdp_ledger.try_apply_sdp_declaration(
-            utxos,
-            op,
-            &zk_sig,
-            &ed25519_sig,
-            tx_hash,
-            config,
-            false,
-        )
+        sdp_ledger.try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
     }
 
     fn apply_withdraw_with_dummies(

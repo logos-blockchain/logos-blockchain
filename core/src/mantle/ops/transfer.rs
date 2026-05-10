@@ -66,18 +66,14 @@ pub struct TransferValidationContext<'a> {
     pub transfer_sig: &'a ZkSignature,
 }
 
-impl Operation for TransferOp {
-    type ValidationContext<'a>
-        = TransferValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<TransferValidationContext<'_>> for TransferOp {
     type ExecutionContext<'a>
         = Utxos
     where
         Self: 'a;
     type Error = TransferError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &TransferValidationContext<'_>) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
             return Err(TransferError::NoInputTransfer);
