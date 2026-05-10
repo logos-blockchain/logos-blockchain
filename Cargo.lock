@@ -5073,7 +5073,6 @@ dependencies = [
  "logos-blockchain-node",
  "num-bigint",
  "serde",
- "serde_json",
  "serde_yml",
  "thiserror 2.0.18",
  "time",

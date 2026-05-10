@@ -423,15 +423,15 @@ fn run_inscribe(args: &InscribeArgs) -> Result<()> {
 /// 2. Some types (e.g. `PoLProof`) call `serializer.serialize_bytes`
 ///    unconditionally; `serde_yml::to_string` rejects those with an error.
 ///
-/// Using `serde_json` as an intermediate format avoids both problems: JSON is
-/// a human-readable format (fixing pitfall 1), and its `serialize_bytes`
-/// implementation emits a JSON array of integers (fixing pitfall 2). JSON is
-/// a strict subset of YAML, so `serde_yml::from_str` can parse the resulting
-/// JSON string transparently, and YAML's human-readable deserializer correctly
-/// interprets all field formats.
+/// Using `serde_yaml::to_string` as an intermediate format avoids both
+/// problems: is a human-readable format (fixing pitfall 1).
+/// Regarding (fixing pitfall 2): The error doesn't appear when using template
+/// from `testnet/ceremony` directory, but if it happens, settings override code
+/// should be refactored to use concrete genesis related types instead of
+/// operating at YAML level.
 fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
-    let json = serde_json::to_string(value)?;
-    serde_yml::from_str(&json).map_err(Into::into)
+    let yaml_string = serde_yml::to_string(value)?;
+    serde_yml::from_str(&yaml_string).map_err(Into::into)
 }
 
 fn load_yaml_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
