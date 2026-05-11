@@ -20,18 +20,14 @@ pub struct SetKeysValidationContext<'a> {
 }
 
 // TODO: Replace with CHANNEL_CONFIG op: https://github.com/logos-blockchain/logos-blockchain/issues/2461
-impl Operation for SetKeysOp {
-    type ValidationContext<'a>
-        = SetKeysValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<SetKeysValidationContext<'_>> for SetKeysOp {
     type ExecutionContext<'a>
         = Channels
     where
         Self: 'a;
     type Error = Error;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &SetKeysValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the list of key isn't empty
         if self.keys.is_empty() {
             return Err(Error::EmptyKeys {

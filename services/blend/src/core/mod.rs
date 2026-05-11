@@ -597,6 +597,11 @@ where
                         session: session_number,
                     };
                 };
+                // `None` when the local node is not part of the session membership. This can
+                // happen when the node transitions from core to edge mode.
+                let core_poq_generator = core_and_path_selectors.map(|selectors| {
+                    kms_adapter.core_poq_generator(zk_sk_id.clone(), Box::new(selectors))
+                });
                 CoreSessionInfo {
                     public: CoreSessionPublicInfo {
                         poq_core_public_inputs: CoreInputs {
@@ -606,13 +611,7 @@ where
                         membership,
                         session: session_number,
                     },
-                    core_poq_generator: kms_adapter.core_poq_generator(
-                        zk_sk_id.clone(),
-                        Box::new(
-                            core_and_path_selectors
-                                .expect("Core merkle path should be present for a core node."),
-                        ),
-                    ),
+                    core_poq_generator,
                 }
                 .into()
             },
@@ -697,7 +696,9 @@ where
             num_blend_layers: blend_config.num_blend_layers,
         },
         current_public_info.clone().into(),
-        current_membership_info.core_poq_generator,
+        current_membership_info
+            .core_poq_generator
+            .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
         current_epoch,
     )
     .expect("The initial membership should satisfy the core node condition");
@@ -1078,6 +1079,10 @@ async fn retire<
 /// expiration event and returns the previous cryptographic processor as is.
 #[expect(clippy::too_many_arguments, reason = "necessary for session handling")]
 #[expect(clippy::too_many_lines, reason = "necessary for session handling")]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "necessary for session handling"
+)]
 async fn handle_session_event<
     NodeId,
     ProofsGenerator,
@@ -1164,6 +1169,18 @@ where
                 session: new_session_info.clone(),
                 ..current_public_info
             };
+            let Some(core_poq_generator) = core_poq_generator else {
+                tracing::info!(target: LOG_TARGET, "Local node is not part of new membership. Retiring from core.");
+                return HandleSessionEventOutput::Retiring {
+                    old_crypto_processor: current_cryptographic_processor,
+                    old_scheduler: current_scheduler
+                        .rotate_session(new_scheduler_session_info, settings.scheduler_settings())
+                        .1,
+                    old_token_collector: old_session_blending_token_collector,
+                    old_public_info: current_public_info,
+                };
+            };
+
             let new_processor = match CoreCryptographicProcessor::try_new_with_core_condition_check(
                 new_membership,
                 settings.minimum_network_size,

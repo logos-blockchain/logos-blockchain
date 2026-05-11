@@ -1144,7 +1144,7 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg("-p")
         .arg("logos-blockchain-tools")
         .arg("--bin")
-        .arg("api")
+        .arg("logos-blockchain-tools-api")
         .arg("--")
         .arg("sdp")
         .arg("post-blend-declaration")

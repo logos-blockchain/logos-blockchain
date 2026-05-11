@@ -509,7 +509,14 @@ where
         NetworkAdapter::Settings: Send + Sync,
     {
         if let Err(e) = pool.add_item(key, item).await {
-            tracing::debug!("could not add item to the pool due to: {e}");
+            match e {
+                MempoolError::ExistingItem => {
+                    tracing::trace!("network item already exists in the mempool");
+                }
+                err => {
+                    tracing::debug!("could not add item to the pool due to: {err}");
+                }
+            }
             return;
         }
 

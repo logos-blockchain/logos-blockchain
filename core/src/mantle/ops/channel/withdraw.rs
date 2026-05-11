@@ -35,18 +35,14 @@ pub struct WithdrawExecutionContext {
     pub utxos: Utxos,
 }
 
-impl Operation for ChannelWithdrawOp {
-    type ValidationContext<'a>
-        = WithdrawValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     type ExecutionContext<'a>
         = WithdrawExecutionContext
     where
         Self: 'a;
     type Error = Error;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the outputs are valid
         self.outputs.validate()?;
 

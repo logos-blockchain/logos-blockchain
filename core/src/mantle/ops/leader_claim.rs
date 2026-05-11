@@ -169,18 +169,14 @@ pub struct LeaderClaimExecutionContext {
     pub utxos: Utxos,
 }
 
-impl Operation for LeaderClaimOp {
-    type ValidationContext<'a>
-        = LeaderClaimValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
     type ExecutionContext<'a>
         = LeaderClaimExecutionContext
     where
         Self: 'a;
     type Error = LeaderClaimError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &LeaderClaimValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the nullifier isn't in the set
         if ctx.nullifiers.contains(&self.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
