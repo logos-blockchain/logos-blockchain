@@ -116,8 +116,8 @@ pub enum Event {
     ///    local state.
     /// 2. On `ChannelUpdate`: apply `adopted` (others' new inscriptions) to
     ///    local state, revert `orphaned` (yours that can no longer land).
-    /// 3. For each entry in `orphaned` not in `pending`, decide whether to
-    ///    republish (with a fresh parent — SDK handles parent selection).
+    /// 3. For each entry in `orphaned`, decide whether to republish (with a
+    ///    fresh parent — SDK handles parent selection).
     ChannelUpdate {
         /// Our pending whose original signed tx is permanently invalid
         /// (parent slot claimed by something in `adopted`, or parent
@@ -127,8 +127,6 @@ pub enum Event {
         /// excluding entries this instance submitted — matched by `this_msg`
         /// against the internal outbox. See `Event::Published` for our own).
         adopted: Vec<InscriptionInfo>,
-        /// Our pending still valid on the new tip — SDK is retrying.
-        pending: Vec<InscriptionInfo>,
     },
     /// Batch of finalized inscriptions discovered during backfill catch-up.
     /// Emitted incrementally when the sequencer catches up from a checkpoint.
@@ -897,10 +895,6 @@ where
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
             _ => Vec::new(),
         };
-        let pending = match (self.state.as_ref(), self.current_tip) {
-            (Some(s), Some(tip)) => s.pending_on_branch(tip),
-            _ => Vec::new(),
-        };
 
         let adopted: Vec<InscriptionInfo> = match self.state.as_ref() {
             Some(s) => u
@@ -911,15 +905,6 @@ where
             None => u.adopted,
         };
 
-        for inv in &pending {
-            debug!(
-                "  pending: payload={:?}, tx={}, msg_id={}, parent={}",
-                String::from_utf8_lossy(&inv.payload),
-                hex::encode(inv.tx_hash.0),
-                hex::encode(inv.this_msg.as_ref()),
-                hex::encode(inv.parent_msg.as_ref()),
-            );
-        }
         for inv in &orphaned {
             debug!(
                 "  orphaned: payload={:?}, tx={}, msg_id={}",
@@ -929,11 +914,7 @@ where
             );
         }
 
-        Event::ChannelUpdate {
-            orphaned,
-            adopted,
-            pending,
-        }
+        Event::ChannelUpdate { orphaned, adopted }
     }
 
     async fn handle_request(&mut self, request: ActorRequest) -> Option<Event> {

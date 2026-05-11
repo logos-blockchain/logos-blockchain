@@ -859,12 +859,7 @@ fn spawn_sequencer_sorted_policy(
                 }
                 continue;
             }
-            let Some(Event::ChannelUpdate {
-                orphaned,
-                adopted,
-                pending,
-            }) = event
-            else {
+            let Some(Event::ChannelUpdate { orphaned, adopted }) = event else {
                 continue;
             };
 
@@ -875,12 +870,8 @@ fn spawn_sequencer_sorted_policy(
                 }
             }
 
-            let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
-
             for inv in &orphaned {
-                if pending_payloads.contains(&inv.payload)
-                    || discarded.lock().await.contains(&inv.payload)
-                {
+                if discarded.lock().await.contains(&inv.payload) {
                     continue;
                 }
                 let larger_or_equal = max_seen_on_chain
@@ -1128,12 +1119,7 @@ fn spawn_balance_aware(
                 }
                 continue;
             }
-            let Some(Event::ChannelUpdate {
-                orphaned,
-                adopted,
-                pending,
-            }) = event
-            else {
+            let Some(Event::ChannelUpdate { orphaned, adopted }) = event else {
                 continue;
             };
 
@@ -1150,13 +1136,12 @@ fn spawn_balance_aware(
                 }
             }
 
-            let pending_payloads: HashSet<&Vec<u8>> = pending.iter().map(|p| &p.payload).collect();
             for inv in &orphaned {
                 let Some((uuid, account, delta)) = parse_balance_tx(&inv.payload) else {
                     continue;
                 };
                 let account_map = applied.entry(account.clone()).or_default();
-                if account_map.contains_key(&uuid) || pending_payloads.contains(&inv.payload) {
+                if account_map.contains_key(&uuid) {
                     continue;
                 }
                 let initial = initial_balances.get(&account).copied().unwrap_or(0);
