@@ -22,8 +22,9 @@ pub struct InscriptionInfo {
     /// The opaque inscription payload.
     pub payload: Vec<u8>,
     /// The public key that signed this inscription (channel sequencer key).
-    /// Consumers compare against their own signing key's public key to
-    /// determine ownership.
+    /// Note: this is not a reliable ownership signal when multiple sequencer
+    /// instances share a signing key. The SDK identifies "ours" internally
+    /// by matching `this_msg` against its own outbox.
     pub signer: Ed25519PublicKey,
 }
 
@@ -295,6 +296,15 @@ impl TxState {
     #[must_use]
     pub fn has_pending_inscriptions(&self) -> bool {
         !self.pending.is_empty()
+    }
+
+    /// Whether `msg_id` matches the `this_msg` of any inscription currently
+    /// in our outbox. Used to identify chain-observed inscriptions that
+    /// originated from this sequencer instance — robust to shared signing
+    /// keys (each instance's outbox is independent).
+    #[must_use]
+    pub fn outbox_contains(&self, msg_id: MsgId) -> bool {
+        self.pending.values().any(|p| p.this_msg == msg_id)
     }
 
     /// Pending inscriptions valid to be added at the current channel tip:

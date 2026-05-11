@@ -23,9 +23,7 @@ use lb_http_api_common::bodies::{
         sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
     },
 };
-use lb_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, ZkPublicKey, ZkSignature,
-};
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
 use lb_node::{SignedMantleTx, Transaction as _, config::RunConfig};
 use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::{
@@ -308,7 +306,6 @@ fn spawn_drive(
 fn spawn_drive_republish(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
-    my_signer: Ed25519PublicKey,
     finalized_tx: Option<tokio::sync::mpsc::UnboundedSender<InscriptionInfo>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -332,12 +329,6 @@ fn spawn_drive_republish(
                     }
                 }
                 Some(Event::ChannelUpdate { orphaned, .. }) => {
-                    for inv in &orphaned {
-                        assert_eq!(
-                            inv.signer, my_signer,
-                            "orphaned entry signer mismatch - SDK should only surface our own"
-                        );
-                    }
                     for inv in &orphaned {
                         if local_pending.remove(&inv.this_msg) {
                             debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
@@ -633,6 +624,10 @@ async fn scan_indexer_for_payloads(
     all_payloads
 }
 
+/// Two sequencer instances sharing a single signing key, running sequentially.
+/// This exercises the "horizontally scaled sequencer" deployment: each
+/// instance has its own outbox, but they sign with the same key. Inscription
+/// uniqueness comes from the payload, not the signer.
 #[tokio::test]
 async fn test_sequential_multi_sequencer() {
     init_tracing();
@@ -643,18 +638,14 @@ async fn test_sequential_multi_sequencer() {
         ..SequencerConfig::default()
     };
 
-    // Create two signing keys — SeqA is the channel creator/admin
-    let signing_key_a = keygen();
-    let admin_pk = signing_key_a.public_key();
-    let channel_id = channel_id_from_key(&signing_key_a);
+    // Single shared signing key — both sequencer instances sign with it.
+    let signing_key = keygen();
+    let channel_id = channel_id_from_key(&signing_key);
 
-    let signing_key_b = keygen();
-    let seq_b_pk = signing_key_b.public_key();
-
-    // --- Phase 1: SeqA publishes a1, a2, a3 ---
+    // --- Phase 1: SeqA (instance #1) publishes a1, a2, a3 ---
     let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
         channel_id,
-        signing_key_a.clone(),
+        signing_key.clone(),
         NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config.clone(),
         None,
@@ -671,24 +662,14 @@ async fn test_sequential_multi_sequencer() {
     let expected_phase1: HashSet<Vec<u8>> = phase1_data.iter().cloned().collect();
     wait_for_indexer_unordered(&indexer, &expected_phase1, Duration::from_mins(6)).await;
 
-    // --- SeqA adds SeqB's key via set_keys ---
-    let (_result, finalized) = handle_a
-        .set_keys(vec![admin_pk, seq_b_pk])
-        .await
-        .expect("set_keys should succeed");
-    timeout(Duration::from_mins(6), finalized)
-        .await
-        .expect("Timeout waiting for set_keys to finalize")
-        .expect("set_keys finalization failed");
-
     // Stop SeqA
     poll_a.abort();
     drop(handle_a);
 
-    // --- Phase 2: SeqB publishes b1, b2, b3 ---
+    // --- Phase 2: SeqB (instance #2, same key) publishes b1, b2, b3 ---
     let (sequencer_b, mut handle_b) = ZoneSequencer::init_with_config(
         channel_id,
-        signing_key_b,
+        signing_key.clone(),
         NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config.clone(),
         None, // Fresh start — SeqB discovers channel tip from chain
@@ -706,11 +687,11 @@ async fn test_sequential_multi_sequencer() {
     poll_b.abort();
     drop(handle_b);
 
-    // --- Phase 3: SeqA resumes and publishes a4, a5, a6 ---
-    // SeqA starts fresh (no checkpoint) — must discover current channel tip
+    // --- Phase 3: SeqA resumes (instance #3, same key) and publishes a4, a5, a6
+    // ---
     let (sequencer_a, mut handle_a) = ZoneSequencer::init_with_config(
         channel_id,
-        signing_key_a,
+        signing_key,
         NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
         sequencer_config,
         None, // Fresh start — discovers current channel tip
@@ -721,7 +702,7 @@ async fn test_sequential_multi_sequencer() {
     publish_all(&mut handle_a, &phase3_data).await;
 
     // Verify all 9 inscriptions on chain in expected order:
-    // a1, a2, a3 (SeqA phase1), b1, b2, b3 (SeqB phase2), a4, a5, a6 (SeqA phase3)
+    // a1, a2, a3 (phase1), b1, b2, b3 (phase2), a4, a5, a6 (phase3)
     let expected_order: Vec<Vec<u8>> = phase1_data
         .into_iter()
         .chain(phase2_data)
@@ -806,19 +787,9 @@ async fn test_concurrent_multi_sequencer() {
     // Aggregate finalization reports from all sequencers into one channel —
     // dedup by tx_hash since each finalization is reported once per sequencer.
     let (finalized_tx, mut finalized_rx) = tokio::sync::mpsc::unbounded_channel();
-    let poll_a = spawn_drive_republish(
-        seq_a,
-        handle_a.clone(),
-        admin_pk,
-        Some(finalized_tx.clone()),
-    );
-    let poll_b = spawn_drive_republish(
-        seq_b,
-        handle_b.clone(),
-        seq_b_pk,
-        Some(finalized_tx.clone()),
-    );
-    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), seq_c_pk, Some(finalized_tx));
+    let poll_a = spawn_drive_republish(seq_a, handle_a.clone(), Some(finalized_tx.clone()));
+    let poll_b = spawn_drive_republish(seq_b, handle_b.clone(), Some(finalized_tx.clone()));
+    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), Some(finalized_tx));
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -893,7 +864,6 @@ type DiscardedSet = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
 fn spawn_sequencer_sorted_policy(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
-    my_signer: Ed25519PublicKey,
     discarded: DiscardedSet,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -915,13 +885,6 @@ fn spawn_sequencer_sorted_policy(
             else {
                 continue;
             };
-
-            for inv in &orphaned {
-                assert_eq!(
-                    inv.signer, my_signer,
-                    "orphaned entry signer mismatch - SDK should only surface our own"
-                );
-            }
 
             for a in &adopted {
                 discarded.lock().await.remove(&a.payload);
@@ -1116,18 +1079,10 @@ async fn test_sorted_conflict_resolution() {
     );
 
     let discarded: DiscardedSet = std::sync::Arc::new(tokio::sync::Mutex::new(HashSet::new()));
-    let poll_a = spawn_sequencer_sorted_policy(
-        seq_a,
-        handle_a.clone(),
-        admin_pk,
-        DiscardedSet::clone(&discarded),
-    );
-    let poll_b = spawn_sequencer_sorted_policy(
-        seq_b,
-        handle_b.clone(),
-        seq_b_pk,
-        DiscardedSet::clone(&discarded),
-    );
+    let poll_a =
+        spawn_sequencer_sorted_policy(seq_a, handle_a.clone(), DiscardedSet::clone(&discarded));
+    let poll_b =
+        spawn_sequencer_sorted_policy(seq_b, handle_b.clone(), DiscardedSet::clone(&discarded));
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -1175,7 +1130,6 @@ fn parse_balance_tx(bytes: &[u8]) -> Option<(String, String, i64)> {
 fn spawn_balance_aware(
     mut sequencer: ZoneSequencer<Node>,
     handle: SequencerHandle<Node>,
-    my_signer: Ed25519PublicKey,
     initial_balances: std::collections::HashMap<String, i64>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -1200,13 +1154,6 @@ fn spawn_balance_aware(
             else {
                 continue;
             };
-
-            for inv in &orphaned {
-                assert_eq!(
-                    inv.signer, my_signer,
-                    "orphaned entry signer mismatch - SDK should only surface our own"
-                );
-            }
 
             for o in &orphaned {
                 if let Some((uuid, account, _)) = parse_balance_tx(&o.payload)
@@ -1344,9 +1291,9 @@ async fn test_balance_conditioned_republish() {
         sequencer_config,
     );
 
-    let poll_a = spawn_balance_aware(seq_a, handle_a.clone(), admin_pk, initial_balances.clone());
-    let poll_b = spawn_balance_aware(seq_b, handle_b.clone(), seq_b_pk, initial_balances.clone());
-    let poll_c = spawn_balance_aware(seq_c, handle_c.clone(), seq_c_pk, initial_balances.clone());
+    let poll_a = spawn_balance_aware(seq_a, handle_a.clone(), initial_balances.clone());
+    let poll_b = spawn_balance_aware(seq_b, handle_b.clone(), initial_balances.clone());
+    let poll_c = spawn_balance_aware(seq_c, handle_c.clone(), initial_balances.clone());
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;
@@ -1468,19 +1415,9 @@ async fn test_concurrent_identical_payloads() {
     );
 
     let (finalized_tx, mut finalized_rx) = tokio::sync::mpsc::unbounded_channel();
-    let poll_a = spawn_drive_republish(
-        seq_a,
-        handle_a.clone(),
-        admin_pk,
-        Some(finalized_tx.clone()),
-    );
-    let poll_b = spawn_drive_republish(
-        seq_b,
-        handle_b.clone(),
-        seq_b_pk,
-        Some(finalized_tx.clone()),
-    );
-    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), seq_c_pk, Some(finalized_tx));
+    let poll_a = spawn_drive_republish(seq_a, handle_a.clone(), Some(finalized_tx.clone()));
+    let poll_b = spawn_drive_republish(seq_b, handle_b.clone(), Some(finalized_tx.clone()));
+    let poll_c = spawn_drive_republish(seq_c, handle_c.clone(), Some(finalized_tx));
 
     handle_a.wait_ready().await;
     handle_b.wait_ready().await;

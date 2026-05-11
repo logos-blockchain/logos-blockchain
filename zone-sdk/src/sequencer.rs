@@ -103,9 +103,13 @@ pub enum Event {
     /// decision — re-creation requires your signing key.
     ///
     /// `adopted` is the block-delta of inscriptions newly on the canonical
-    /// branch, filtered to **exclude items signed by us**. Consumers learn
-    /// about their own publishes via `Event::Published` (optimistic apply
-    /// pattern) — those don't need to be re-surfaced here.
+    /// branch, filtered to **exclude items that originated from this
+    /// sequencer instance** (matched by `this_msg` against the internal
+    /// outbox). Consumers learn about their own publishes via
+    /// `Event::Published` (optimistic apply pattern) — those don't need to
+    /// be re-surfaced here. The outbox-based filter works correctly even
+    /// when multiple sequencer instances share a signing key: each
+    /// instance's outbox only contains what it itself submitted.
     ///
     /// Consumer pattern:
     /// 1. On `Event::Published`: optimistically apply your own inscription to
@@ -120,7 +124,8 @@ pub enum Event {
         /// transitively off canonical). Need user decision to re-create.
         orphaned: Vec<InscriptionInfo>,
         /// Others' inscriptions newly on the canonical branch (block-delta,
-        /// excluding our own — see `Event::Published` for those).
+        /// excluding entries this instance submitted — matched by `this_msg`
+        /// against the internal outbox. See `Event::Published` for our own).
         adopted: Vec<InscriptionInfo>,
         /// Our pending still valid on the new tip — SDK is retrying.
         pending: Vec<InscriptionInfo>,
@@ -882,9 +887,11 @@ where
     /// SDK has given up on (parent slot claimed by a competing inscription,
     /// or parent transitively off canonical). Block-delta orphans whose
     /// original tx is still valid (the SDK keeps retrying them) are not
-    /// surfaced. `adopted` is filtered to exclude inscriptions signed by us
-    /// — consumers learn about their own publishes via `Event::Published`
-    /// (optimistic apply pattern).
+    /// surfaced. `adopted` is filtered against our internal outbox (by
+    /// `this_msg`) to exclude inscriptions this instance submitted —
+    /// consumers learn about those via `Event::Published`. This outbox match
+    /// works under shared-signing-key deployments: each sequencer instance
+    /// only tracks what it itself submitted.
     fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
         let orphaned = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
@@ -895,12 +902,14 @@ where
             _ => Vec::new(),
         };
 
-        let my_signer = self.signing_key.public_key();
-        let adopted: Vec<InscriptionInfo> = u
-            .adopted
-            .into_iter()
-            .filter(|i| i.signer != my_signer)
-            .collect();
+        let adopted: Vec<InscriptionInfo> = match self.state.as_ref() {
+            Some(s) => u
+                .adopted
+                .into_iter()
+                .filter(|i| !s.outbox_contains(i.this_msg))
+                .collect(),
+            None => u.adopted,
+        };
 
         for inv in &pending {
             debug!(
