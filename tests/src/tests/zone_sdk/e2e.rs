@@ -723,9 +723,11 @@ const CONCURRENT_TEST_N_PER_SEQUENCER: usize = 20;
 #[tokio::test]
 async fn test_concurrent_multi_sequencer() {
     init_tracing();
-    // Three sequencers publish concurrently on the same channel via set_keys
-    // authorization. Each sequencer's inscriptions maintain their internal
-    // order but may be interleaved with each other on chain.
+    // Three sequencer instances sharing a single signing key, publishing
+    // concurrently — the horizontally-scaled-sequencer deployment. Each
+    // instance has its own outbox; uniqueness comes from distinct payloads.
+    // Validates that ownership classification (own writes vs others') stays
+    // correct under shared-key contention.
     let (_validators, node_url) = spawn_competing_validators(2).await;
 
     let sequencer_config = SequencerConfig {
@@ -733,23 +735,11 @@ async fn test_concurrent_multi_sequencer() {
         ..SequencerConfig::default()
     };
 
-    let signing_key_a = keygen();
-    let admin_pk = signing_key_a.public_key();
-    let channel_id = channel_id_from_key(&signing_key_a);
-    let signing_key_b = keygen();
-    let seq_b_pk = signing_key_b.public_key();
-    let signing_key_c = keygen();
-    let seq_c_pk = signing_key_c.public_key();
-
-    // Phase 1: bootstrap the channel by authorizing all three keys.
-    authorize_keys(
-        channel_id,
-        signing_key_a.clone(),
-        vec![admin_pk, seq_b_pk, seq_c_pk],
-        node_url.clone(),
-        sequencer_config.clone(),
-    )
-    .await;
+    // Single shared signing key for all three instances. The channel is
+    // implicitly created by the first inscription, so no separate
+    // authorization step is needed.
+    let signing_key = keygen();
+    let channel_id = channel_id_from_key(&signing_key);
 
     // Prepare payloads before starting sequencers
     let data_a: Vec<Vec<u8>> = (1..=CONCURRENT_TEST_N_PER_SEQUENCER)
@@ -763,26 +753,22 @@ async fn test_concurrent_multi_sequencer() {
         .collect();
     let total = CONCURRENT_TEST_N_PER_SEQUENCER * 3;
 
-    // --- Phase 2: Start all three sequencers with intent tracking ---
-    debug!("Phase 2: Starting 3 sequencers concurrently");
+    // --- Phase 2: Start three sequencer instances sharing the signing key ---
+    debug!("Phase 2: Starting 3 shared-key sequencer instances concurrently");
     let (seq_a, mut handle_a) = init_sequencer(
         channel_id,
-        signing_key_a,
+        signing_key.clone(),
         node_url.clone(),
         sequencer_config.clone(),
     );
     let (seq_b, mut handle_b) = init_sequencer(
         channel_id,
-        signing_key_b,
+        signing_key.clone(),
         node_url.clone(),
         sequencer_config.clone(),
     );
-    let (seq_c, mut handle_c) = init_sequencer(
-        channel_id,
-        signing_key_c,
-        node_url.clone(),
-        sequencer_config,
-    );
+    let (seq_c, mut handle_c) =
+        init_sequencer(channel_id, signing_key, node_url.clone(), sequencer_config);
 
     // Aggregate finalization reports from all sequencers into one channel —
     // dedup by tx_hash since each finalization is reported once per sequencer.
