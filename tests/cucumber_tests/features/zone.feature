@@ -1,0 +1,324 @@
+Feature: Zone SDK
+
+  @zone_ci
+  Scenario: Publish messages and read them from the zone indexer
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data           |
+      | MSG_1 | Hello, Zone!   |
+      | MSG_2 | Second message |
+      | MSG_3 | Third message  |
+    Then all zone messages are safe in 120 seconds
+    And all zone messages are finalized in 180 seconds
+    And the zone indexer returns messages in this order:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
+    When sequencer "SEQ_A" submits zone channel config transaction "CHANNEL_CONFIG_1" authorizing:
+      | alias |
+      | SEQ_B |
+    Then zone transaction "CHANNEL_CONFIG_1" is included in 180 seconds
+    And zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Resume zone sequencer from checkpoint
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data      |
+      | MSG_1 | Message 1 |
+      | MSG_2 | Message 2 |
+    And I save current checkpoint of sequencer "SEQ_A" as "CHECKPOINT_1"
+    And I restart zone sequencer "SEQ_A" from checkpoint "CHECKPOINT_1"
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data      |
+      | MSG_3 | Message 3 |
+      | MSG_4 | Message 4 |
+    Then all zone messages are safe in 120 seconds
+    And all zone messages are finalized in 180 seconds
+    And the zone indexer returns messages in this order:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
+      | MSG_4 |
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Resume zone sequencer from stale checkpoint
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data  |
+      | MSG_1 | msg-1 |
+      | MSG_2 | msg-2 |
+    And I save current checkpoint of sequencer "SEQ_A" as "STALE_CHECKPOINT"
+    Then all zone messages are finalized in 180 seconds
+    When I restart zone sequencer "SEQ_A" fresh
+    And the zone LIB advances in 120 seconds
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data  |
+      | MSG_3 | msg-3 |
+      | MSG_4 | msg-4 |
+    Then all zone messages are finalized in 180 seconds
+    When I restart zone sequencer "SEQ_A" from checkpoint "STALE_CHECKPOINT"
+    And the zone LIB advances in 120 seconds
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data  |
+      | MSG_5 | msg-5 |
+    Then all zone messages are finalized in 180 seconds
+    And the zone indexer returns each of these messages exactly once in this order:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
+      | MSG_4 |
+      | MSG_5 |
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Sequential multi-sequencer publishing keeps channel order
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+    And the following zone sequencers share the signing key of "SEQ_A":
+      | alias |
+      | SEQ_B |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data |
+      | MSG_1 | a1   |
+      | MSG_2 | a2   |
+      | MSG_3 | a3   |
+    Then the zone indexer returns messages in any order in 360 seconds:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
+    When I stop zone sequencer "SEQ_A"
+    And I start zone sequencer "SEQ_B"
+    And sequencer "SEQ_B" publishes the following zone messages:
+      | alias | data |
+      | MSG_4 | b1   |
+      | MSG_5 | b2   |
+      | MSG_6 | b3   |
+    Then the zone indexer returns messages in any order in 360 seconds:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
+      | MSG_4 |
+      | MSG_5 |
+      | MSG_6 |
+    When I stop zone sequencer "SEQ_B"
+    And I start zone sequencer "SEQ_A"
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data |
+      | MSG_7 | a4   |
+      | MSG_8 | a5   |
+      | MSG_9 | a6   |
+    Then the zone indexer returns messages in this order:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
+      | MSG_4 |
+      | MSG_5 |
+      | MSG_6 |
+      | MSG_7 |
+      | MSG_8 |
+      | MSG_9 |
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Concurrent multi-sequencer publishing converges without duplicates
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+    And the following zone sequencers share the signing key of "SEQ_A":
+      | alias |
+      | SEQ_B |
+      | SEQ_C |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    When I stop zone sequencer "SEQ_A"
+    And each listed zone sequencer publishes 20 generated zone messages concurrently with republish policy:
+      | sequencer | data_prefix |
+      | SEQ_A     | a           |
+      | SEQ_B     | b           |
+      | SEQ_C     | c           |
+    Then the zone indexer returns all zone messages exactly once in any order in 1200 seconds
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Sorted conflict policy converges to a sorted chain
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" submits zone channel config transaction "CHANNEL_CONFIG_1" with posting timeframe 10 and posting timeout 0 authorizing:
+      | alias |
+      | SEQ_B |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When I stop zone sequencer "SEQ_A"
+    And the following zone messages are published concurrently with sorted conflict policy:
+      | sequencer | alias  | data |
+      | SEQ_A     | MSG_1  | aa   |
+      | SEQ_A     | MSG_2  | cc   |
+      | SEQ_A     | MSG_3  | ee   |
+      | SEQ_A     | MSG_4  | gg   |
+      | SEQ_A     | MSG_5  | ii   |
+      | SEQ_B     | MSG_6  | bb   |
+      | SEQ_B     | MSG_7  | dd   |
+      | SEQ_B     | MSG_8  | ff   |
+      | SEQ_B     | MSG_9  | hh   |
+      | SEQ_B     | MSG_10 | jj   |
+    Then the zone indexer returns a sorted zone conflict outcome in 600 seconds
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Balance-aware republish policy drops unaffordable zone updates
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+      | SEQ_C |
+    And the following zone account balances exist:
+      | account | balance |
+      | alice   | 10      |
+      | bob     | 10      |
+      | charlie | 10      |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" submits zone channel config transaction "CHANNEL_CONFIG_1" with posting timeframe 60 and posting timeout 0 authorizing:
+      | alias |
+      | SEQ_B |
+      | SEQ_C |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When I stop zone sequencer "SEQ_A"
+    And the following zone balance updates are published concurrently with balance-aware policy:
+      | sequencer | alias     | account | delta |
+      | SEQ_A     | a-alice   | alice   | -6    |
+      | SEQ_A     | a-bob     | bob     | -3    |
+      | SEQ_A     | a-charlie | charlie | -2    |
+      | SEQ_B     | b-alice   | alice   | -5    |
+      | SEQ_B     | b-bob     | bob     | -4    |
+      | SEQ_B     | b-charlie | charlie | -8    |
+      | SEQ_C     | c-alice   | alice   | -4    |
+      | SEQ_C     | c-bob     | bob     | -7    |
+      | SEQ_C     | c-charlie | charlie | -1    |
+    Then zone balance updates keep all accounts non-negative after 60 seconds
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Concurrent identical payloads converge to one inscription per publish
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+      | SEQ_C |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" submits zone channel config transaction "CHANNEL_CONFIG_1" with posting timeframe 60 and posting timeout 0 authorizing:
+      | alias |
+      | SEQ_B |
+      | SEQ_C |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When I stop zone sequencer "SEQ_A"
+    And each listed zone sequencer publishes 10 copies of zone message "shared-message" concurrently with republish policy:
+      | sequencer |
+      | SEQ_A     |
+      | SEQ_B     |
+      | SEQ_C     |
+    Then the zone indexer returns 30 copies of zone message "shared-message" in 600 seconds
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Finalized deposits are returned by the zone indexer
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data                |
+      | MSG_1 | initial inscription |
+    Then all zone messages are safe in 120 seconds
+    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 1 with metadata "Mint 1 to Alice in Zone"
+    Then zone transaction "DEPOSIT_1" is included in 120 seconds
+    And zone transaction "DEPOSIT_1" is finalized in 120 seconds
+    And the zone indexer returns finalized deposit "DEPOSIT_1" in 120 seconds
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Atomic deposit and inscription are finalized together
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data                |
+      | MSG_1 | initial inscription |
+    Then all zone messages are finalized in 120 seconds
+    When sequencer "SEQ_A" submits atomic zone deposit transaction "ATOMIC_1" with inscription "MSG_2" of 1 with metadata "Mint 1 to Alice in Zone"
+    Then zone transaction "ATOMIC_1" is included in 120 seconds
+    And zone transaction "ATOMIC_1" is finalized in 120 seconds
+    And the zone indexer returns finalized deposit "ATOMIC_1" in 120 seconds
+    And the zone indexer returns messages in this order:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Finalized withdraws are returned by the zone indexer
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias | data                |
+      | MSG_1 | initial inscription |
+    Then all zone messages are finalized in 120 seconds
+    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 3 with metadata "Mint 3 to Alice in Zone"
+    Then zone transaction "DEPOSIT_1" is included in 120 seconds
+    And zone transaction "DEPOSIT_1" is finalized in 120 seconds
+    And the zone indexer returns finalized deposit "DEPOSIT_1" in 120 seconds
+    When sequencer "SEQ_A" submits zone withdraw transaction "WITHDRAW_1" with inscription "MSG_2" of 2
+    Then zone transaction "WITHDRAW_1" is included in 120 seconds
+    And zone transaction "WITHDRAW_1" is finalized in 120 seconds
+    And the zone indexer returns finalized withdraw "WITHDRAW_1" in 120 seconds
+    And the zone indexer returns messages in this order:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+    And I stop all nodes

@@ -143,10 +143,6 @@ name              = "cucumber"
 path              = "cucumber_tests/cucumber.rs"
 required-features = ["cucumber"]
 
-[[test]]
-name = "test_zone_sdk_e2e"
-path = "src/tests/zone_sdk/e2e.rs"
-
 [[bench]]
 harness = false
 name    = "voucher"
