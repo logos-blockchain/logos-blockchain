@@ -16,7 +16,10 @@ use reqwest::Url;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-use crate::state::{InMemoryZoneState, ZoneState};
+use crate::{
+    message::AppMessage,
+    state::{InMemoryZoneState, ZoneState},
+};
 
 #[derive(Parser, Debug)]
 #[command(about = "Terminal UI zone sequencer - publish text inscriptions")]
@@ -67,8 +70,9 @@ pub async fn run(args: InscribeArgs) {
                     break;
                 };
 
-                debug!(text = %text, "Publishing message");
-                if let Err(e) = handle.publish_message(text.into_bytes()).await {
+                let msg = AppMessage::new(text);
+                debug!(tx_uuid = %msg.tx_uuid, text = %msg.text, "Publishing message");
+                if let Err(e) = handle.publish_message(msg.to_bytes()).await {
                     error!("failed to publish: {e}");
                     break;
                 }
