@@ -1,6 +1,9 @@
 use lb_core::{
     crypto::ZkHash,
-    sdp::{Declaration, DeclarationId, ProviderId, ServiceParameters, ServiceType, SessionNumber},
+    sdp::{
+        Declaration, DeclarationId, Locator, ProviderId, ServiceParameters, ServiceType,
+        SessionNumber,
+    },
 };
 use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
@@ -19,7 +22,7 @@ pub fn create_test_session_state(
             service_type,
             provider_id: *provider_id,
             locked_note_id: Fr::from(i as u64).into(),
-            locators: vec![],
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
             zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
             created: 0,
             active: 0,

@@ -214,7 +214,7 @@ mod tests {
             },
             tx::MantleTxGasContext,
         },
-        sdp::{DeclarationId, ProviderId, ServiceType},
+        sdp::{DeclarationId, Locator, ProviderId, ServiceType},
     };
 
     #[test]
@@ -413,7 +413,7 @@ mod tests {
             }))
             .push_op(Op::SDPDeclare(SDPDeclareOp {
                 service_type: ServiceType::BlendNetwork,
-                locators: vec![],
+                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 provider_id: ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key()),
                 zk_id: ZkPublicKey::zero(),
                 locked_note_id: declare_locked,

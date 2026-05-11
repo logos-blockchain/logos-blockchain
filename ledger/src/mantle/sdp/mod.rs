@@ -651,7 +651,7 @@ impl SdpLedger {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos};
+    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
@@ -762,7 +762,7 @@ mod tests {
             locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = op.id();
 
@@ -807,7 +807,7 @@ mod tests {
             locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
 
@@ -860,7 +860,7 @@ mod tests {
             locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = op.id();
 
@@ -973,7 +973,7 @@ mod tests {
             locked_note_id: utxo.id(),
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
 
@@ -1042,7 +1042,7 @@ mod tests {
             locked_note_id: utxo_1.id(),
             zk_id: zk_key_1.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id_1 = declare_op_1.id();
 
@@ -1070,7 +1070,7 @@ mod tests {
             locked_note_id: utxo_2.id(),
             zk_id: zk_key_2.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id_2 = declare_op_2.id();
 
@@ -1138,7 +1138,7 @@ mod tests {
             locked_note_id: utxo.id(),
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
 
@@ -1202,7 +1202,7 @@ mod tests {
             locked_note_id: utxo_1.id(),
             zk_id: zk_key_1.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id_1 = declare_op_1.id();
 
@@ -1233,7 +1233,7 @@ mod tests {
             locked_note_id: utxo_2.id(),
             zk_id: zk_key_2.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id_2 = declare_op_2.id();
 

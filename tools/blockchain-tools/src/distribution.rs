@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use lb_core::{
     mantle::{Note, Utxo, Value as NoteValue, ops::sdp::SDPDeclareOp},
-    sdp::{Locator, ServiceType},
+    sdp::{Locators, ServiceType},
 };
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
 use serde::Deserialize;
@@ -22,7 +22,7 @@ pub struct StakeHolderInfo {
 pub struct ProviderInfo {
     pub provider_id: Ed25519PublicKey,
     pub zk_id: ZkPublicKey,
-    pub locators: Vec<Locator>,
+    pub locators: Locators,
     pub service_type: ServiceType,
 }
 
@@ -91,6 +91,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    use lb_core::sdp::Locator;
     use num_bigint::BigUint;
 
     use super::*;
@@ -122,7 +123,7 @@ mod tests {
         let providers = vec![ProviderInfo {
             provider_id: mock_ed_pk(10),
             zk_id: zk_id_1,
-            locators: vec![],
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
             service_type: ServiceType::BlendNetwork,
         }];
 
@@ -150,7 +151,7 @@ mod tests {
         let providers = vec![ProviderInfo {
             provider_id: mock_ed_pk(10),
             zk_id: mock_zk_pk(2),
-            locators: vec![],
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
             service_type: ServiceType::BlendNetwork,
         }];
 
@@ -176,13 +177,13 @@ mod tests {
             ProviderInfo {
                 provider_id: mock_ed_pk(10),
                 zk_id,
-                locators: vec![],
+                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 service_type: ServiceType::BlendNetwork,
             },
             ProviderInfo {
                 provider_id: mock_ed_pk(11),
                 zk_id,
-                locators: vec![],
+                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 service_type: ServiceType::BlendNetwork,
             },
         ];

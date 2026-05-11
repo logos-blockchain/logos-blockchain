@@ -164,7 +164,7 @@ where
     NodeId: node_id::TryFrom,
 {
     let provider_id = provider_id.0.as_bytes();
-    let address = locators.first()?.clone();
+    let address = locators.first().clone();
     let id = NodeId::try_from_provider_id(provider_id)
         .map_err(|e| {
             warn!("Failed to decode provider_id to node ID: {e:?}");
