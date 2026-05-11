@@ -240,6 +240,43 @@ impl PrunedBlocksInfo {
     }
 }
 
+fn log_pruned_ledger_states(pruned_states_count: usize) {
+    if pruned_states_count <= 1 {
+        tracing::trace!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+    } else {
+        tracing::debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+    }
+}
+
+fn log_process_block_error(error: &Error) {
+    let error_msg = format!("Failed to process block: {error:?}");
+    if matches!(error, Error::FutureBlock { .. }) {
+        trace!(target: LOG_TARGET, "{}", error_msg);
+    } else {
+        error!(target: LOG_TARGET, "{}", error_msg);
+    }
+}
+
+fn log_lib_advanced(
+    prev_lib: &HeaderId,
+    new_lib: &HeaderId,
+    stale_blocks_count: usize,
+    immutable_blocks_count: usize,
+    reorged_blocks_count: usize,
+) {
+    if stale_blocks_count == 0 && immutable_blocks_count == 1 && reorged_blocks_count == 0 {
+        trace!(
+            target: LOG_TARGET,
+            "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={stale_blocks_count}, immutable_blocks={immutable_blocks_count}, reorged_blocks={reorged_blocks_count}",
+        );
+    } else {
+        debug!(
+            target: LOG_TARGET,
+            "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={stale_blocks_count}, immutable_blocks={immutable_blocks_count}, reorged_blocks={reorged_blocks_count}",
+        );
+    }
+}
+
 #[derive(Clone)]
 pub struct Cryptarchia {
     pub ledger: lb_ledger::Ledger<HeaderId>,
@@ -391,7 +428,7 @@ impl Cryptarchia {
                 );
             }
         }
-        tracing::debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+        log_pruned_ledger_states(pruned_states_count);
     }
 
     /// Shrinks the memory held by the ledger states.
@@ -716,8 +753,7 @@ where
                                         });
                                     }
                                     Err(e) => {
-                                        let error_msg = format!("Failed to process block: {e:?}");
-                                        error!(target: LOG_TARGET, "{}", error_msg);
+                                        log_process_block_error(&e);
                                         reply_channel.send(Err(e)).unwrap_or_else(|_| {
                                             error!("Could not send process block error through channel");
                                         });
@@ -1018,7 +1054,7 @@ where
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
     ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
-        debug!("Received proposal with ID: {:?}", block.header().id());
+        trace!("Received proposal with ID: {:?}", block.header().id());
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
@@ -1067,13 +1103,14 @@ where
         }
 
         if prev_lib != new_lib {
-            debug!(
-                target: LOG_TARGET,
-                "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={}, immutable_blocks={}, reorged_blocks={}",
+            log_lib_advanced(
+                &prev_lib,
+                &new_lib,
                 pruned_blocks.stale_blocks().count(),
                 pruned_blocks.immutable_blocks().len(),
-                reorged_blocks.len()
+                reorged_blocks.len(),
             );
+
             let height = cryptarchia
                 .consensus
                 .branches()

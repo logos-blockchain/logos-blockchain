@@ -85,6 +85,16 @@ impl StorageBackend for MockStorage {
         unimplemented!()
     }
 
+    async fn load_prefix_reverse(
+        &mut self,
+        _key: &[u8],
+        _start_key: Option<&[u8]>,
+        _end_key: Option<&[u8]>,
+        _limit: Option<NonZeroUsize>,
+    ) -> Result<Vec<Bytes>, <Self as StorageBackend>::Error> {
+        unimplemented!()
+    }
+
     async fn remove(
         &mut self,
         key: &[u8],
@@ -151,6 +161,14 @@ impl StorageChainApi for MockStorage {
     }
 
     async fn scan_immutable_block_ids(
+        &mut self,
+        _slot_range: RangeInclusive<Slot>,
+        _limit: NonZeroUsize,
+    ) -> Result<Vec<HeaderId>, Self::Error> {
+        unimplemented!()
+    }
+
+    async fn scan_immutable_block_ids_reverse(
         &mut self,
         _slot_range: RangeInclusive<Slot>,
         _limit: NonZeroUsize,

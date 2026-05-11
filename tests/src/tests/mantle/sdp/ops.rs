@@ -13,7 +13,7 @@ use lb_core::{
         tx::{GasPrices, MantleTxGasContext},
         tx_builder::MantleTxBuilder,
     },
-    sdp::{Declaration, DeclarationMessage, Locator, ServiceType, WithdrawMessage},
+    sdp::{Declaration, DeclarationMessage, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::RunConfig;
@@ -85,11 +85,9 @@ async fn sdp_ops_e2e() {
     let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let provider_zk_key = ZkKey::from(BigUint::from(7u64));
     let zk_id = provider_zk_key.to_public_key();
-    let locator = Locator(
-        "/ip4/127.0.0.1/tcp/9100"
-            .parse()
-            .expect("Valid locator multiaddr"),
-    );
+    let locator = "/ip4/127.0.0.1/tcp/9100"
+        .parse()
+        .expect("Valid locator multiaddr");
 
     let declaration = DeclarationMessage {
         service_type: ServiceType::BlendNetwork,

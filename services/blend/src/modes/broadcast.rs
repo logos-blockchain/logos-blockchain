@@ -13,11 +13,13 @@ use overwatch::{
 
 use crate::{
     core::{network::NetworkAdapter, service_components::MessageComponents},
+    message::NetworkInfo,
     modes::Error,
 };
 
 pub struct BroadcastMode<Adapter, NodeId, RuntimeServiceId> {
     adapter: Adapter,
+    node_id: NodeId,
     _phantom: PhantomData<(NodeId, RuntimeServiceId)>,
 }
 
@@ -27,6 +29,7 @@ where
 {
     pub async fn new<NetworkService>(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
+        node_id: NodeId,
     ) -> Result<Self, Error>
     where
         NetworkService:
@@ -43,6 +46,7 @@ where
         let adapter = Adapter::new(relay);
         Ok(Self {
             adapter,
+            node_id,
             _phantom: PhantomData,
         })
     }
@@ -51,7 +55,7 @@ where
 impl<Adapter, NodeId, RuntimeServiceId> BroadcastMode<Adapter, NodeId, RuntimeServiceId>
 where
     Adapter: NetworkAdapter<RuntimeServiceId> + Send + Sync + 'static,
-    NodeId: Send + Sync,
+    NodeId: Clone + Send + Sync,
     RuntimeServiceId: Send + Sync + 'static,
 {
     pub async fn handle_inbound_message<Message>(&self, message: Message) -> Result<(), Error>
@@ -64,11 +68,12 @@ where
             + Sync
             + 'static,
     {
-        // If this is a network info request, respond with None (broadcast mode
-        // has no blend peers).
         match message.try_into_network_info_request() {
             Ok(reply) => {
-                drop(reply.send(None));
+                drop(reply.send(Some(NetworkInfo {
+                    node_id: self.node_id.clone(),
+                    core_info: None,
+                })));
                 Ok(())
             }
             Err(message) => {
@@ -100,7 +105,6 @@ pub mod tests {
     use tracing::{debug, info};
 
     use super::*;
-    use crate::message::NetworkInfo;
 
     #[test_log::test(test)]
     fn broadcast_mode() {
@@ -119,7 +123,7 @@ pub mod tests {
             // Create the BroadcastMode
             let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
                 TestNetworkService,
-            >(app.handle())
+            >(app.handle(), ())
             .await
             .unwrap();
 
@@ -139,7 +143,7 @@ pub mod tests {
             // Check if the mode can be created again.
             let mut mode = BroadcastMode::<TestNetworkAdapter, (), RuntimeServiceId>::new::<
                 TestNetworkService,
-            >(app.handle())
+            >(app.handle(), ())
             .await
             .unwrap();
             mode.handle_inbound_message(TestMessage(b"world".to_vec()))

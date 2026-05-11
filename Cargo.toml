@@ -293,6 +293,7 @@ url                                = { default-features = false, version = "2" }
 utoipa                             = { default-features = false, version = "4.0" }
 utoipa-swagger-ui                  = { default-features = false, version = "7.0" }
 uuid                               = { default-features = false, version = "1" }
+validator                          = { default-features = false, version = "0.20.0" }
 x25519-dalek                       = { default-features = false, version = "2" }
 zerocopy                           = { default-features = false, version = "0.8.26" }
 zeroize                            = { default-features = false, version = "1" }

@@ -23,6 +23,8 @@ overwatch   = { workspace = true }
 rand        = { features = ["getrandom"], workspace = true }
 serde       = { features = ["alloc", "derive"], workspace = true }
 serde_with  = { optional = true, workspace = true }
+serde_yaml  = { workspace = true }
+thiserror   = { workspace = true }
 time        = { features = ["serde-human-readable"], optional = true, workspace = true }
 tokio       = { optional = true, workspace = true }
 
@@ -37,3 +39,4 @@ nistrs      = { workspace = true }
 rand_chacha = { workspace = true }
 serde_json  = { features = ["alloc"], workspace = true }
 serde_with  = { features = ["macros"], workspace = true }
+tempfile    = { workspace = true }

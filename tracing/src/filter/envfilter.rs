@@ -13,6 +13,7 @@ const DEFAULT_DEBUG_TARGETS: &[&str] = &[
     "cryptarchia",
     "ledger",
 ];
+const DEFAULT_QUIET_TARGETS: &[(&str, Level)] = &[("libp2p_gossipsub", Level::ERROR)];
 const ENVFILTER_GLOBAL_TARGET: &str = "*";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,6 +49,11 @@ pub fn default_debug_log_filter(level: Level) -> HashMap<String, Level> {
         DEFAULT_DEBUG_TARGETS
             .iter()
             .map(|target| ((*target).to_owned(), level)),
+    );
+    filters.extend(
+        DEFAULT_QUIET_TARGETS
+            .iter()
+            .map(|(target, level)| ((*target).to_owned(), *level)),
     );
     filters
 }
@@ -183,8 +189,8 @@ mod tests {
     use tracing::Level;
 
     use super::{
-        ENVFILTER_GLOBAL_TARGET, EnvFilterConfig, create_envfilter_layer, parse_filter_directives,
-        validate_log_filter_target,
+        ENVFILTER_GLOBAL_TARGET, EnvFilterConfig, create_envfilter_layer, default_debug_log_filter,
+        parse_filter_directives, validate_log_filter_target,
     };
 
     #[test]
@@ -198,6 +204,13 @@ mod tests {
         };
 
         assert!(create_envfilter_layer(&config).is_ok());
+    }
+
+    #[test]
+    fn default_debug_log_filter_quiets_noisy_gossipsub_internals() {
+        let filters = default_debug_log_filter(Level::DEBUG);
+
+        assert_eq!(filters.get("libp2p_gossipsub"), Some(&Level::ERROR));
     }
 
     #[test]

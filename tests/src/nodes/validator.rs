@@ -1,6 +1,7 @@
 use std::{
     ffi::OsStr,
     net::SocketAddr,
+    num::NonZero,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     str::FromStr as _,
@@ -10,7 +11,7 @@ use std::{
 use futures::Stream;
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::ChainServiceInfo;
-use lb_common_http_client::{ApiBlock, CommonHttpClient};
+use lb_common_http_client::{ApiBlock, CommonHttpClient, ProcessedBlockEvent};
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     mantle::{Transaction as _, TxHash},
@@ -215,7 +216,7 @@ impl Validator {
                 file: Some(tracing::logger::FileConfig {
                     directory: dir.path().to_owned(),
                     prefix: Some(LOGS_PREFIX.into()),
-                    appender_type: AppenderType::Rolling,
+                    appender_type: AppenderType::Simple,
                 }),
                 loki: None,
                 gelf: None,
@@ -440,9 +441,80 @@ impl Validator {
     pub async fn get_lib_stream(
         &self,
     ) -> Result<impl Stream<Item = BlockInfo>, lb_common_http_client::Error> {
+        self.http_client.get_lib_stream(self.base_url()?).await
+    }
+
+    pub async fn get_blocks_stream(
+        &self,
+        blocks_limit: Option<NonZero<usize>>,
+        slot_from: Option<u64>,
+        slot_to: Option<u64>,
+        descending: Option<bool>,
+        server_batch_size: Option<NonZero<usize>>,
+        immutable_only: Option<bool>,
+    ) -> Result<impl Stream<Item = ProcessedBlockEvent>, lb_common_http_client::Error> {
         self.http_client
-            .get_lib_stream(Url::from_str(&format!("http://{}", self.addr))?)
+            .get_blocks_range_stream(
+                self.base_url()?,
+                blocks_limit,
+                slot_from,
+                slot_to,
+                descending,
+                server_batch_size,
+                immutable_only,
+            )
             .await
+    }
+
+    pub async fn get_blocks_stream_in_range(
+        &self,
+        blocks_limit: Option<NonZero<usize>>,
+        slot_from: Option<u64>,
+        slot_to: Option<u64>,
+        descending: Option<bool>,
+    ) -> Result<impl Stream<Item = ProcessedBlockEvent>, lb_common_http_client::Error> {
+        self.get_blocks_stream_in_range_with_chunk_size(
+            blocks_limit,
+            slot_from,
+            slot_to,
+            descending,
+            None,
+            None,
+        )
+        .await
+    }
+
+    pub async fn get_blocks_stream_in_range_with_chunk_size(
+        &self,
+        blocks_limit: Option<NonZero<usize>>,
+        slot_from: Option<u64>,
+        slot_to: Option<u64>,
+        descending: Option<bool>,
+        chunk_size: Option<NonZero<usize>>,
+        immutable_only: Option<bool>,
+    ) -> Result<impl Stream<Item = ProcessedBlockEvent>, lb_common_http_client::Error> {
+        self.http_client
+            .get_blocks_range_stream(
+                self.base_url()?,
+                blocks_limit,
+                slot_from,
+                slot_to,
+                descending,
+                chunk_size,
+                immutable_only,
+            )
+            .await
+    }
+
+    pub fn base_url(&self) -> Result<Url, lb_common_http_client::Error> {
+        Ok(Url::from_str(&format!("http://{}", self.addr))?)
+    }
+
+    pub async fn get_api_block(
+        &self,
+        id: HeaderId,
+    ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
+        self.http_client.get_block_by_id(self.base_url()?, id).await
     }
 
     /// Wait for a list of transactions to be included in blocks

@@ -173,7 +173,7 @@ impl NtpStream {
             );
             return;
         }
-        tracing::debug!(
+        tracing::trace!(
             "Applying NTP clock update for slot {current_slot:?} with roundtrip {}us",
             roundtrip.as_micros()
         );
