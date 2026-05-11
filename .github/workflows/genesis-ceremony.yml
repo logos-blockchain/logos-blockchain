@@ -52,13 +52,10 @@ jobs:
 
       - name: Commit and Push changes
         run: |
-          NEW_BRANCH="genesis-ceremony-$LB_TARGET_ENV-$LB_VERSION"
-
           # Configure git with a generic bot identity
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          git checkout -b $NEW_BRANCH
           git add nodes/node/binary/src/config/deployment/devnet/deployment.yaml
 
           # Only commit and push if there are actual changes
@@ -67,9 +64,12 @@ jobs:
             exit 1
           else
             git commit -m "chore: genesis ceremony for $LB_TARGET_ENV version $LB_VERSION"
-            git push -u origin "$NEW_BRANCH"
+            git push
 
-            PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/new/$NEW_BRANCH"
-            echo "### Branch Created Successfully" >> $GITHUB_STEP_SUMMARY
-            echo "[Click here to create your Pull Request]($PR_URL)" >> $GITHUB_STEP_SUMMARY
+            COMMIT_SHA=$(git rev-parse HEAD)
+            COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/$COMMIT_SHA"
+
+            echo "### Deployment Updated Successfully" >> $GITHUB_STEP_SUMMARY
+            echo "The changes have been pushed directly to the current branch." >> $GITHUB_STEP_SUMMARY
+            echo "[View Commit on GitHub]($COMMIT_URL)" >> $GITHUB_STEP_SUMMARY
           fi
