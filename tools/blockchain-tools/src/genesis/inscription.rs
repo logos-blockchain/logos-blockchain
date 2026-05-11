@@ -8,13 +8,16 @@ use lb_core::{
 };
 use lb_groth16::{FrBytes, fr_from_bytes};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use serde_with::{hex::Hex, serde_as};
 use time::OffsetDateTime;
 
+#[serde_as]
 #[derive(serde::Deserialize)]
 pub struct InscribeParams {
     pub chain_id: String,
     #[serde(with = "time::serde::iso8601")]
     pub genesis_time: OffsetDateTime,
+    #[serde_as(as = "Vec<Hex>")]
     pub entropy_sources: Vec<FrBytes>,
 }
 
