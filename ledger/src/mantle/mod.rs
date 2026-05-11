@@ -83,7 +83,6 @@ impl LedgerState {
             &config.sdp_config,
             utxo_tree,
             epoch_state,
-            tx.hash(),
             tx.sdp_declarations(),
         )?;
 
@@ -221,7 +220,6 @@ impl LedgerState {
                 sdp_declare_ed_sig,
                 tx_hash,
                 &config.sdp_config,
-                false,
             )
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"),
