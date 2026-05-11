@@ -28,6 +28,11 @@ pub fn inscribe<D: ZkDigest>(
 ) -> InscriptionOp {
     let mut hasher = D::new();
 
+    let mut entropy_sources = entropy_sources.into_iter().peekable();
+    assert!(
+        entropy_sources.peek().is_some(),
+        "Entropy sources must contain at least one item"
+    );
     for bytes in entropy_sources {
         let fr = fr_from_bytes(&bytes).expect("Invalid entropy source for Fr conversion");
         hasher.update(&fr);
