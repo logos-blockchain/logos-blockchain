@@ -148,10 +148,7 @@ pub(crate) fn take_next_command(path: &Path) -> Result<Option<ManualCommand>, St
     Ok(selected)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "Match statement to cover all arms."
-)]
+#[expect(clippy::too_many_lines, reason = "Match statement to cover all arms.")]
 fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
     let parts: Vec<String> = raw
         .split(',')
