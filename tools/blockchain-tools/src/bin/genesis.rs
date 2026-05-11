@@ -424,7 +424,7 @@ fn run_inscribe(args: &InscribeArgs) -> Result<()> {
 ///    unconditionally; `serde_yml::to_string` rejects those with an error.
 ///
 /// Using `serde_yaml::to_string` as an intermediate format avoids both
-/// problems: is a human-readable format (fixing pitfall 1).
+/// problems: YAML is a human-readable format (fixing pitfall 1).
 /// Regarding (fixing pitfall 2): The error doesn't appear when using template
 /// from `testnet/ceremony` directory, but if it happens, settings override code
 /// should be refactored to use concrete genesis related types instead of
