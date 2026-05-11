@@ -716,10 +716,6 @@ async fn test_sequential_multi_sequencer() {
 
 const CONCURRENT_TEST_N_PER_SEQUENCER: usize = 20;
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "End-to-end test covering full setup, publish, finality wait, and assertions"
-)]
 #[tokio::test]
 async fn test_concurrent_multi_sequencer() {
     init_tracing();
