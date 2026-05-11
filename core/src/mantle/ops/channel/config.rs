@@ -11,7 +11,7 @@ use crate::{
         encoding::encode_channel_config,
         ledger::Operation,
     },
-    proofs::channel_withdraw_proof::ChannelMultiSequencerProof,
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -41,7 +41,7 @@ impl ChannelConfigOp {
 pub struct ChannelConfigValidationContext<'a> {
     pub channels: &'a Channels,
     pub tx_hash: &'a TxHash,
-    pub config_sigs: &'a ChannelMultiSequencerProof,
+    pub config_sigs: &'a ChannelMultiSigProof,
 }
 
 pub struct ChannelConfigExecutionContext {

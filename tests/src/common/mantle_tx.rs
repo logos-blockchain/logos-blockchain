@@ -10,7 +10,7 @@ use lb_core::{
         },
         tx::TxHash,
     },
-    proofs::channel_withdraw_proof::{ChannelMultiSequencerProof, MultiSequencerSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
     sdp::{ActiveMessage, DeclarationMessage, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{
@@ -80,15 +80,15 @@ pub fn create_channel_config_tx(
         .iter()
         .enumerate()
         .map(|(index, key)| {
-            MultiSequencerSignature::new(
+            IndexedSignature::new(
                 index as ChannelKeyIndex,
                 key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
         })
         .collect();
-    let proof = ChannelMultiSequencerProof::new(signatures).unwrap();
+    let proof = ChannelMultiSigProof::new(signatures).unwrap();
     SignedMantleTx {
-        ops_proofs: vec![OpProof::ChannelMultiSequencerProof(proof)],
+        ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],
         mantle_tx: set_keys_tx,
     }
 }

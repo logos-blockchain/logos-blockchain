@@ -13,7 +13,7 @@ use lb_core::{
             transfer::TransferOp,
         },
     },
-    proofs::channel_withdraw_proof::{ChannelMultiSequencerProof, MultiSequencerSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
     sdp::{Locator, ServiceType},
 };
 use lb_http_api_common::bodies::{
@@ -156,16 +156,16 @@ async fn test_sequencer_publish_and_indexer_read() {
 
     wait_for_indexer_ordered(&indexer, &test_data, Duration::from_mins(6)).await;
 
-    // Test set_keys: update channel's accredited keys
+    // Test channel_config: update channel's accredited keys
     let second_pk = keygen().public_key();
     let (_result, finalized) = handle
-        .channel_config(vec![admin_pk, second_pk])
+        .channel_config(vec![admin_pk, second_pk], 0, 0, 1, 1)
         .await
-        .expect("set_keys should succeed");
+        .expect("channel_config should succeed");
     timeout(Duration::from_mins(6), finalized)
         .await
-        .expect("Timeout waiting for set_keys to finalize")
-        .expect("set_keys finalization failed");
+        .expect("Timeout waiting for channel_config to finalize")
+        .expect("channel_config finalization failed");
 
     drive_task.abort();
 }
@@ -488,12 +488,15 @@ async fn spawn_competing_validators(n: usize) -> (Vec<Validator>, reqwest::Url) 
     (validators, node_url)
 }
 
-/// Bootstrap the channel by submitting `set_keys` from a transient sequencer
-/// using `admin_key`. Waits for finalization, then drops the sequencer.
+/// Bootstrap the channel by submitting `channel_config` from a transient
+/// sequencer using `admin_key`. Waits for finalization, then drops the
+/// sequencer.
 async fn authorize_keys(
     channel_id: ChannelId,
     admin_key: Ed25519Key,
     keys: Vec<lb_core::mantle::ops::channel::Ed25519PublicKey>,
+    posting_timeframe: u32,
+    posting_timeout: u32,
     node_url: reqwest::Url,
     sequencer_config: SequencerConfig,
 ) {
@@ -507,13 +510,13 @@ async fn authorize_keys(
     let (poll, _rx) = spawn_drive(sequencer);
     handle.wait_ready().await;
     let (_result, finalized) = handle
-        .channel_config(keys)
+        .channel_config(keys, posting_timeframe, posting_timeout, 1, 1)
         .await
-        .expect("set_keys should succeed");
+        .expect("channel_config should succeed");
     timeout(Duration::from_mins(6), finalized)
         .await
-        .expect("Timeout waiting for set_keys to finalize")
-        .expect("set_keys finalization failed");
+        .expect("Timeout waiting for channel_config to finalize")
+        .expect("channel_config finalization failed");
     poll.abort();
 }
 
@@ -582,8 +585,7 @@ async fn scan_indexer_for_payloads(
     all_payloads
 }
 
-// TODO: update this because it's not expected to work this way anymore
-/*#[tokio::test]
+#[tokio::test]
 async fn test_sequential_multi_sequencer() {
     init_tracing();
     let (_validators, node_url) = spawn_competing_validators(2).await;
@@ -621,15 +623,18 @@ async fn test_sequential_multi_sequencer() {
     let expected_phase1: HashSet<Vec<u8>> = phase1_data.iter().cloned().collect();
     wait_for_indexer_unordered(&indexer, &expected_phase1, Duration::from_mins(6)).await;
 
-    // --- SeqA adds SeqB's key via set_keys ---
+    // --- SeqA adds SeqB's key via channel_config ---
+    // posting_timeframe=60 → A owns slots 0..60 from config, B owns 60..120,
+    // then back to A. Phase 2 waits for B's window; Phase 3 waits for A's
+    // next window.
     let (_result, finalized) = handle_a
-        .channel_config(vec![admin_pk, seq_b_pk])
+        .channel_config(vec![admin_pk, seq_b_pk], 60, 0, 1, 1)
         .await
-        .expect("set_keys should succeed");
+        .expect("channel_config should succeed");
     timeout(Duration::from_mins(6), finalized)
         .await
-        .expect("Timeout waiting for set_keys to finalize")
-        .expect("set_keys finalization failed");
+        .expect("Timeout waiting for channel_config to finalize")
+        .expect("channel_config finalization failed");
 
     // Stop SeqA
     poll_a.abort();
@@ -705,10 +710,14 @@ async fn test_concurrent_multi_sequencer() {
     let seq_c_pk = signing_key_c.public_key();
 
     // Phase 1: bootstrap the channel by authorizing all three keys.
+    // posting_timeframe=60 → 60-slot window per sequencer; with 3 keys one
+    // full rotation is ~180s. Resubmit picks each key up when its turn comes.
     authorize_keys(
         channel_id,
         signing_key_a.clone(),
         vec![admin_pk, seq_b_pk, seq_c_pk],
+        60,
+        0,
         node_url.clone(),
         sequencer_config.clone(),
     )
@@ -795,7 +804,7 @@ async fn test_concurrent_multi_sequencer() {
     poll_a.abort();
     poll_b.abort();
     poll_c.abort();
-}*/
+}
 
 /// Spawn a sequencer with a "smallest wins" conflict resolution policy.
 ///
@@ -987,11 +996,15 @@ async fn test_sorted_conflict_resolution() {
     let signing_key_b = keygen();
     let seq_b_pk = signing_key_b.public_key();
 
-    // Phase 1: SeqA creates channel and authorizes SeqB
+    // Phase 1: SeqA creates channel and authorizes SeqB.
+    // posting_timeframe=10 → each sequencer has ~10s windows in turn so both
+    // can land their messages within the test.
     authorize_keys(
         channel_id,
         signing_key_a.clone(),
         vec![admin_pk, seq_b_pk],
+        10,
+        0,
         node_url.clone(),
         sequencer_config.clone(),
     )
@@ -1591,7 +1604,7 @@ async fn test_subscribe_to_finalized_withdraw() {
     // because withdraw_threshold is 1.
     // We can actually reuse `inscription_proof`, but here we use
     // `SequencerHandle::sign_tx` to show how to sign tx built by other sequencers.
-    let withdraw_proof = ChannelMultiSequencerProof::new(vec![MultiSequencerSignature::new(
+    let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
         0,
         handle.sign_tx(&tx).await.unwrap(),
     )])
@@ -1601,7 +1614,7 @@ async fn test_subscribe_to_finalized_withdraw() {
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
-            OpProof::ChannelMultiSequencerProof(withdraw_proof),
+            OpProof::ChannelMultiSigProof(withdraw_proof),
             OpProof::Ed25519Sig(inscription_proof),
         ],
     )

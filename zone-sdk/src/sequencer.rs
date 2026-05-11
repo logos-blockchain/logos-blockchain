@@ -15,7 +15,7 @@ use lb_core::{
         },
         tx::TxHash,
     },
-    proofs::channel_withdraw_proof::{ChannelMultiSequencerProof, MultiSequencerSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc};
@@ -150,6 +150,10 @@ enum ActorRequest {
     },
     ChannelConfig {
         keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: u32,
+        posting_timeout: u32,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
 }
@@ -300,17 +304,19 @@ where
     /// (`keys[0]`). This overwrites the entire key list — include the admin
     /// key if it should remain authorized.
     ///
-    /// Returns the publish result (with checkpoint) and a future that
-    /// resolves when the transaction is finalized:
+    /// `posting_timeframe` and `posting_timeout` control round-robin
+    /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a
+    /// single fixed sequencer at index 0.
     ///
-    /// ```ignore
-    /// let (result, finalized) = handle.set_keys(vec![admin_pk]).await?;
-    /// save_checkpoint(&result.checkpoint);
-    /// finalized.await?; // wait for finalization
-    /// ```
+    /// Returns the publish result (with checkpoint) and a future that
+    /// resolves when the transaction is finalized.
     pub async fn channel_config(
         &self,
         keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: u32,
+        posting_timeout: u32,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
     ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
         // Subscribe BEFORE submitting to avoid missing finalization events.
         let mut event_rx = self.event_tx.subscribe();
@@ -318,6 +324,10 @@ where
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::ChannelConfig {
             keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            withdraw_threshold,
             reply: reply_tx,
         };
 
@@ -925,17 +935,24 @@ where
                 drop(reply.send(Ok(result)));
                 None
             }
-            ActorRequest::ChannelConfig { keys, reply } => {
+            ActorRequest::ChannelConfig {
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                withdraw_threshold,
+                reply,
+            } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
                 let signed_tx = create_channel_config_tx(
                     self.channel_id,
                     &[&self.signing_key],
                     keys,
-                    0,
-                    0,
-                    1,
-                    1,
+                    posting_timeframe,
+                    posting_timeout,
+                    configuration_threshold,
+                    withdraw_threshold,
                 );
                 s.submit_other(signed_tx.clone());
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
@@ -1366,25 +1383,44 @@ fn enqueue_resubmit<Node>(
 /// form a single linear chain — that would be a protocol-level invariant
 /// violation.
 fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
-    let items: Vec<InscriptionInfo> = txs
-        .iter()
-        .flat_map(|tx| {
-            tx.mantle_tx.ops().iter().filter_map(|op| {
-                if let Op::ChannelInscribe(inscribe) = op
-                    && inscribe.channel_id == channel_id
-                {
-                    Some(InscriptionInfo {
-                        tx_hash: tx.mantle_tx.hash(),
+    // Also tracks ChannelConfig as a synthetic tip-update entry so the SDK's
+    // channel_tip stays in sync with the chain. Per spec, ChannelConfig sets
+    // `chan.tip_hash = hash(encode(config))`, replacing whatever was there.
+    // Synthetic entries have empty payload so app-layer consumers (which key
+    // off payload bytes) ignore them naturally.
+    let mut items: Vec<InscriptionInfo> = Vec::new();
+    let mut last_in_block: Option<MsgId> = None;
+    for tx in txs {
+        let tx_hash = tx.mantle_tx.hash();
+        for op in tx.mantle_tx.ops() {
+            match op {
+                Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                    let info = InscriptionInfo {
+                        tx_hash,
                         parent_msg: inscribe.parent,
                         this_msg: inscribe.id(),
                         payload: inscribe.inscription.clone(),
-                    })
-                } else {
-                    None
+                    };
+                    last_in_block = Some(info.this_msg);
+                    items.push(info);
                 }
-            })
-        })
-        .collect();
+                Op::ChannelConfig(config) if config.channel == channel_id => {
+                    // Chain off the previous in-block tip (or root) so the
+                    // topological sort below can stitch it into a single chain.
+                    let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
+                    let info = InscriptionInfo {
+                        tx_hash,
+                        parent_msg,
+                        this_msg: config.id(),
+                        payload: Vec::new(),
+                    };
+                    last_in_block = Some(info.this_msg);
+                    items.push(info);
+                }
+                _ => {}
+            }
+        }
+    }
 
     if items.len() <= 1 {
         return items;
@@ -1475,16 +1511,16 @@ fn create_channel_config_tx(
         .iter()
         .enumerate()
         .map(|(index, key)| {
-            MultiSequencerSignature::new(
+            IndexedSignature::new(
                 index as ChannelKeyIndex,
                 key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
         })
         .collect();
-    let proof = ChannelMultiSequencerProof::new(signatures).unwrap();
+    let proof = ChannelMultiSigProof::new(signatures).unwrap();
 
     SignedMantleTx {
-        ops_proofs: vec![OpProof::ChannelMultiSequencerProof(proof)],
+        ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],
         mantle_tx: config_tx,
     }
 }
