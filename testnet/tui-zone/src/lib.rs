@@ -125,12 +125,7 @@ async fn handle_channel_update(
     adopted: &[lb_zone_sdk::state::InscriptionInfo],
     orphaned: &[lb_zone_sdk::state::InscriptionInfo],
 ) {
-    if adopted.is_empty() && orphaned.is_empty() {
-        return;
-    }
-    if !adopted.is_empty() {
-        state.on_adopted(adopted);
-    }
+    state.on_adopted(adopted);
     for inv in orphaned {
         state.on_orphaned(&inv.this_msg);
         debug!(msg_id = %hex::encode(inv.this_msg.as_ref()), "Auto-republishing orphan");
