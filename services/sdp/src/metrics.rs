@@ -1,16 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "metrics are defined incrementally and may be wired in follow-up changes"
-)]
-
-pub fn subscriptions_total() {
-    lb_tracing::increase_counter_u64!(sdp_subscriptions_total, 1);
-}
-
-pub fn subscription_errors_total() {
-    lb_tracing::increase_counter_u64!(sdp_subscription_errors_total, 1);
-}
-
 pub fn activity_posts_total() {
     lb_tracing::increase_counter_u64!(sdp_activity_posts_total, 1);
 }

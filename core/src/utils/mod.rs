@@ -38,12 +38,12 @@ macro_rules! serde_bytes_newtype {
                 D: serde::Deserializer<'de>,
             {
                 if deserializer.is_human_readable() {
-                    let s = <String>::deserialize(deserializer)?;
-                    const_hex::decode_to_array(s)
+                    let hex = String::deserialize(deserializer)?;
+                    const_hex::decode_to_array(hex)
                         .map(Self)
                         .map_err(serde::de::Error::custom)
                 } else {
-                    <[u8; $len] as serde::Deserialize>::deserialize(deserializer).map(Self)
+                    <[u8; $len]>::deserialize(deserializer).map(Self)
                 }
             }
         }

@@ -45,7 +45,6 @@ pub struct SwarmConfig {
     pub identify_config: identify::Settings,
 
     /// Chain sync config
-    #[serde(default)]
     pub chain_sync_config: ChainSyncSettings,
 
     /// Nat config
@@ -78,6 +77,8 @@ pub mod secret_key_serde {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     impl Default for SwarmConfig {
@@ -92,7 +93,10 @@ mod tests {
                 chain_sync_protocol_name: StreamProtocol::new("/chainsync/test"),
                 kademlia_config: kademlia::Settings::default(),
                 identify_config: identify::Settings::default(),
-                chain_sync_config: ChainSyncSettings::default(),
+                chain_sync_config: ChainSyncSettings {
+                    peer_response_timeout: Duration::from_secs(5),
+                    max_inbound_requests: 10.try_into().unwrap(),
+                },
                 nat_config: nat::Settings::default(),
             }
         }

@@ -1124,12 +1124,7 @@ where
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         state: &mut ServiceState<'_>,
     ) {
-        debug!(
-            new_lib = ?lib_update.new_lib,
-            stale_blocks_count = lib_update.pruned_blocks.stale_blocks.len(),
-            immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len(),
-            "Received LIB update"
-        );
+        log_lib_update(lib_update);
 
         state.advance_lib(
             lib_update.new_lib,
@@ -1271,6 +1266,26 @@ where
         if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context())) {
             error!(err = ?e, "Failed to send gas context response");
         }
+    }
+}
+
+fn log_lib_update(lib_update: &LibUpdate) {
+    let stale_blocks_count = lib_update.pruned_blocks.stale_blocks.len();
+    let immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len();
+    if stale_blocks_count == 0 && immutable_blocks_count == 1 {
+        trace!(
+            new_lib = ?lib_update.new_lib,
+            stale_blocks_count,
+            immutable_blocks_count,
+            "Received LIB update"
+        );
+    } else {
+        debug!(
+            new_lib = ?lib_update.new_lib,
+            stale_blocks_count,
+            immutable_blocks_count,
+            "Received LIB update"
+        );
     }
 }
 

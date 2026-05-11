@@ -119,6 +119,9 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                         .unwrap_or_else(|_| tracing::error!("could not schedule retry"));
                 });
             }
+            Err(gossipsub::PublishError::Duplicate) => {
+                tracing::trace!("not publishing duplicate message to topic: {topic}");
+            }
             Err(e) => {
                 tracing::error!("failed to broadcast message to topic: {topic} {e:?}");
             }

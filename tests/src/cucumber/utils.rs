@@ -184,6 +184,14 @@ pub fn funding_wallet_pk_from_node_yaml(path: &Path) -> Result<String, StepError
     Ok(config.sdp.wallet.funding_pk.to_bytes()?.encode_hex())
 }
 
+/// Reads a node YAML user config file and extracts the configured Blend core
+/// ZK wallet public key.
+pub fn blend_core_zk_pk_from_node_yaml(path: &Path) -> Result<String, StepError> {
+    let config = user_config_from_node_yaml(path)?;
+    let (zk_key_id, _) = config.blend_zk_key().map_err(StepError::UserConfigError)?;
+    Ok(zk_key_id)
+}
+
 /// Extracts the child directory name that starts with a known prefix,
 /// considering the ignore list.
 pub fn extract_child_dir_name(

@@ -24,7 +24,10 @@ use lb_core::{
 };
 pub use lb_http_api_common::settings::AxumBackendSettings;
 use lb_http_api_common::{metrics::http_metrics_middleware, paths};
-use lb_sdp_service::{mempool::SdpMempoolAdapter, wallet::SdpWalletAdapter};
+use lb_sdp_service::{
+    mempool::SdpMempoolAdapter, state::SdpStateStorage as SdpStateStorageTrait,
+    wallet::SdpWalletAdapter,
+};
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
 use lb_tx_service::{TxMempoolService, backend::Mempool};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
@@ -41,15 +44,16 @@ use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
-    add_tx, blend_info, block, blocks, blocks_stream, cryptarchia_headers, cryptarchia_info,
-    cryptarchia_lib_stream, libp2p_info, mantle_metrics, mantle_status, transaction, wallet,
+    add_tx, blend_info, block, blocks_range_stream, blocks_stream, cryptarchia_headers,
+    cryptarchia_info, cryptarchia_lib_stream, immutable_blocks, libp2p_info, mantle_metrics,
+    mantle_status, transaction, wallet,
 };
 use crate::{
     BlendBroadcastSettings, BlendService, WalletService,
     api::{
         handlers::{
             channel, channel_deposit, leader_claim, post_activity, post_declaration,
-            post_withdrawal,
+            post_set_declaration_id, post_withdrawal,
         },
         openapi::ApiDoc,
     },
@@ -64,6 +68,7 @@ pub struct AxumBackend<
     MempoolStorageAdapter,
     SdpMempool,
     SdpWallet,
+    SdpStateStorage,
     ChainLeader,
 > {
     settings: AxumBackendSettings,
@@ -73,6 +78,7 @@ pub struct AxumBackend<
         MempoolStorageAdapter,
         SdpMempool,
         SdpWallet,
+        SdpStateStorage,
         ChainLeader,
     )>,
 }
@@ -84,6 +90,7 @@ impl<
     MempoolStorageAdapter,
     SdpMempool,
     SdpWallet,
+    SdpStateStorage,
     ChainLeader,
     RuntimeServiceId,
 > Backend<RuntimeServiceId>
@@ -93,6 +100,7 @@ impl<
         MempoolStorageAdapter,
         SdpMempool,
         SdpWallet,
+        SdpStateStorage,
         ChainLeader,
     >
 where
@@ -112,6 +120,7 @@ where
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
     SdpWallet: SdpWalletAdapter + Send + Sync + 'static,
     ChainLeader: ChainLeaderServiceData,
+    SdpStateStorage: SdpStateStorageTrait + Send + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -150,6 +159,7 @@ where
                 SdpMempool,
                 SdpWallet,
                 Cryptarchia<RuntimeServiceId>,
+                SdpStateStorage,
                 RuntimeServiceId,
             >,
         >
@@ -234,6 +244,7 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),
@@ -245,6 +256,7 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),
@@ -256,6 +268,19 @@ where
                         SdpMempool,
                         SdpWallet,
                         Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
+                        RuntimeServiceId,
+                    >,
+                ),
+            )
+            .route(
+                paths::SDP_POST_SET_DECLARATION_ID,
+                routing::post(
+                    post_set_declaration_id::<
+                        SdpMempool,
+                        SdpWallet,
+                        Cryptarchia<RuntimeServiceId>,
+                        SdpStateStorage,
                         RuntimeServiceId,
                     >,
                 ),
@@ -298,10 +323,15 @@ where
             ),
         );
 
+        let app = app.route(
+            paths::BLOCKS_RANGE_STREAM,
+            routing::get(blocks_range_stream::<BlockStorageBackend, RuntimeServiceId>),
+        );
+
         let app = app
             .route(
                 paths::BLOCKS,
-                routing::get(blocks::<BlockStorageBackend, RuntimeServiceId>),
+                routing::get(immutable_blocks::<BlockStorageBackend, RuntimeServiceId>),
             )
             .route(
                 paths::BLOCKS_DETAIL,

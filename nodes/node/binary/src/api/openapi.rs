@@ -18,7 +18,7 @@ use utoipa::OpenApi;
         crate::api::handlers::post_activity,
         crate::api::handlers::post_withdrawal,
         crate::api::handlers::leader_claim,
-        crate::api::handlers::blocks,
+        crate::api::handlers::immutable_blocks,
         crate::api::handlers::block,
         crate::api::handlers::blocks_stream,
         crate::api::handlers::transaction,

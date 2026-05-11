@@ -12,9 +12,11 @@ pub const CHANNEL_DEPOSIT: &str = "/channel/deposit";
 pub const SDP_POST_DECLARATION: &str = "/sdp/declaration";
 pub const SDP_POST_ACTIVITY: &str = "/sdp/activity";
 pub const SDP_POST_WITHDRAWAL: &str = "/sdp/withdrawal";
+pub const SDP_POST_SET_DECLARATION_ID: &str = "/sdp/set-declaration-id";
 pub const LEADER_CLAIM: &str = "/leader/claim";
 
 pub const BLOCKS: &str = "/cryptarchia/blocks";
+pub const BLOCKS_RANGE_STREAM: &str = "/cryptarchia/blocks_range";
 pub const BLOCKS_DETAIL: &str = "/cryptarchia/blocks/:id";
 pub const BLOCKS_STREAM: &str = "/cryptarchia/events/blocks/stream";
 

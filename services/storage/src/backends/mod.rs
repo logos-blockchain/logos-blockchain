@@ -44,6 +44,15 @@ pub trait StorageBackend: StorageBackendApi + Sized {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<Vec<Bytes>, <Self as StorageBackend>::Error>;
+    /// Loads all values whose keys start with the given prefix in reverse
+    /// order.
+    async fn load_prefix_reverse(
+        &mut self,
+        prefix: &[u8],
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<Vec<Bytes>, <Self as StorageBackend>::Error>;
     async fn remove(
         &mut self,
         key: &[u8],

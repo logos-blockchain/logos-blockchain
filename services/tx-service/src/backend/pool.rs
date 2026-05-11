@@ -150,10 +150,7 @@ where
             self.pending_items.remove(key);
             self.removed_items.insert(key.clone(), removed_at);
         }
-        tracing::debug!(
-            "Removed {removed_count} items from mempool; pending_items={}",
-            self.pending_items.len()
-        );
+        log_removed_items(removed_count, self.pending_items.len());
 
         metrics::mempool_transactions_removed(removed_count);
         metrics::mempool_transactions_pending(self.pending_items.len());
@@ -259,4 +256,16 @@ fn current_timestamp_millis() -> u64 {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64
+}
+
+fn log_removed_items(removed_count: usize, pending_items: usize) {
+    if removed_count == 0 {
+        tracing::trace!(
+            "Removed {removed_count} items from mempool; pending_items={pending_items}"
+        );
+    } else {
+        tracing::debug!(
+            "Removed {removed_count} items from mempool; pending_items={pending_items}"
+        );
+    }
 }

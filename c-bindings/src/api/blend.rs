@@ -6,7 +6,6 @@ use lb_core::{
 };
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use multiaddr::Multiaddr;
 
 use crate::{
     LogosBlockchainNode,
@@ -67,11 +66,11 @@ unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult
             log::error!("[blend_join_as_core_node] `locators[{i}]` is not valid UTF-8.");
             return Err(OperationStatus::ValidationError);
         };
-        let Ok(addr) = s.parse::<Multiaddr>() else {
-            log::error!("[blend_join_as_core_node] `locators[{i}]` is not a valid multiaddr.");
+        let Ok(addr) = s.parse::<Locator>() else {
+            log::error!("[blend_join_as_core_node] `locators[{i}]` is not a valid locator.");
             return Err(OperationStatus::ValidationError);
         };
-        parsed.push(Locator(addr));
+        parsed.push(addr);
     }
     Ok(parsed)
 }
@@ -86,7 +85,7 @@ unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult
 /// - `zk_id`: A non-null pointer to 32 bytes representing the ZK public key.
 /// - `locked_note_id`: A non-null pointer to 32 bytes representing the locked
 ///   note ID.
-/// - `locators`: A pointer to an array of multiaddr C strings. May be null if
+/// - `locators`: A pointer to an array of locator C strings. May be null if
 ///   `locators_len` is 0.
 /// - `locators_len`: Number of entries in the `locators` array.
 ///

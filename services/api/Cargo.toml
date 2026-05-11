@@ -34,6 +34,7 @@ lb-tx-service              = { features = ["openapi"], workspace = true }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
 serde_json                 = { workspace = true }
+thiserror                  = { workspace = true }
 tokio                      = { features = ["net"], workspace = true }
 tokio-stream               = { workspace = true }
 tracing                    = { workspace = true }

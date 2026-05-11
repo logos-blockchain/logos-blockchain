@@ -234,7 +234,7 @@ fn create_providers(
             service_type: ServiceType::BlendNetwork,
             provider_sk: private_key.clone(),
             zk_sk: secret_zk_key.clone(),
-            locator: Locator(
+            locator: Locator::new_unchecked(
                 Multiaddr::from_str(&format!(
                     "/ip4/{}/udp/{}{}",
                     hosts[i].ip, hosts[i].blend_port, LIBP2P_QUIC_PROTOCOL_SUFFIX

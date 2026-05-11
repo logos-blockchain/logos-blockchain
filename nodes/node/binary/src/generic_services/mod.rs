@@ -6,6 +6,8 @@ use lb_core::{
     mantle::{SignedMantleTx, Transaction, TxHash},
 };
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
+use lb_sdp_service::{SdpSettings, state::SdpState};
+use lb_services_utils::overwatch::JsonFileBackend;
 use lb_storage_service::backends::rocksdb::RocksBackend;
 use lb_time_service::backends::NtpTimeBackend;
 use lb_tx_service::{backend::pool::Mempool, storage::adapters::rocksdb::RocksStorageAdapter};
@@ -106,9 +108,12 @@ pub type SdpWalletAdapter<RuntimeServiceId> = sdp::wallet::SdpWalletAdapter<
     RuntimeServiceId,
 >;
 
+pub type SdpRecoveryBackend = JsonFileBackend<SdpState, SdpSettings>;
+
 pub type SdpService<RuntimeServiceId> = lb_sdp_service::SdpService<
     SdpMempoolAdapter<RuntimeServiceId>,
     SdpWalletAdapter<RuntimeServiceId>,
     CryptarchiaService<RuntimeServiceId>,
+    SdpRecoveryBackend,
     RuntimeServiceId,
 >;
