@@ -148,6 +148,10 @@ pub(crate) fn take_next_command(path: &Path) -> Result<Option<ManualCommand>, St
     Ok(selected)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Match statement to cover all arms."
+)]
 fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
     let parts: Vec<String> = raw
         .split(',')
@@ -164,10 +168,6 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
 
     let binding = action.to_ascii_uppercase();
     let command = binding.as_str();
-
-    if let Some(parsed) = parse_extended_manual_command(command, &parts)? {
-        return Ok(parsed);
-    }
 
     match command {
         "CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES" => {
@@ -237,6 +237,24 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
                 cycles: parse_usize_field(&parts, "cycles")?,
             })
         }
+        "COIN_SPLIT_ALL_USER_WALLETS" => Ok(ManualCommand::CoinSplitAllUserWallets {
+            splits_per_wallet: parse_usize_field(&parts, "splits_per_wallet")?,
+            outputs: parse_usize_field(&parts, "outputs")?,
+            value: parse_u64_field(&parts, "value")?,
+        }),
+        "VERIFY_MIN_AVAILABLE_OUTPUTS_ALL_USER_WALLETS" => {
+            Ok(ManualCommand::VerifyMinAvailableOutputsAllUserWallets {
+                min_outputs: parse_usize_field(&parts, "min_outputs")?,
+                timeout_seconds: parse_u64_field(&parts, "timeout_seconds")?,
+            })
+        }
+        "CONTINUOUS_NEXT_WALLET_USER_WALLETS" => {
+            Ok(ManualCommand::ContinuousNextWalletUserWallets {
+                cycles: parse_usize_field(&parts, "cycles")?,
+                transactions_per_wallet: parse_usize_field(&parts, "transactions_per_wallet")?,
+                value: parse_u64_field(&parts, "value")?,
+            })
+        }
         "FAUCET_ALL_USER_WALLETS" => Ok(ManualCommand::FaucetFundsAllUserWallets {
             rounds: parse_usize_field(&parts, "rounds")?,
         }),
@@ -253,35 +271,6 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
             message: format!("Unknown manual command: '{action}' in '{raw}'"),
         }),
     }
-}
-
-fn parse_extended_manual_command(
-    command: &str,
-    parts: &[String],
-) -> Result<Option<ManualCommand>, StepError> {
-    let parsed = match command {
-        "COIN_SPLIT_ALL_USER_WALLETS" => Some(ManualCommand::CoinSplitAllUserWallets {
-            splits_per_wallet: parse_usize_field(parts, "splits_per_wallet")?,
-            outputs: parse_usize_field(parts, "outputs")?,
-            value: parse_u64_field(parts, "value")?,
-        }),
-        "VERIFY_MIN_AVAILABLE_OUTPUTS_ALL_USER_WALLETS" => {
-            Some(ManualCommand::VerifyMinAvailableOutputsAllUserWallets {
-                min_outputs: parse_usize_field(parts, "min_outputs")?,
-                timeout_seconds: parse_u64_field(parts, "timeout_seconds")?,
-            })
-        }
-        "CONTINUOUS_NEXT_WALLET_USER_WALLETS" => {
-            Some(ManualCommand::ContinuousNextWalletUserWallets {
-                cycles: parse_usize_field(parts, "cycles")?,
-                transactions_per_wallet: parse_usize_field(parts, "transactions_per_wallet")?,
-                value: parse_u64_field(parts, "value")?,
-            })
-        }
-        _ => None,
-    };
-
-    Ok(parsed)
 }
 
 fn parse_quoted_field(parts: &[String], key: &str) -> Result<String, StepError> {
