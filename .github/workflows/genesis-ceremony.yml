@@ -7,10 +7,13 @@ on:
         description: "Target deployment environment (e.g., devnet, testnet)"
         required: true
         default: "devnet"
+        type: choice
+        options:
+          - devnet
+          - testnet
       version:
         description: "Protocol version string"
         required: true
-        default: "X.Y.Z-rc.0"
 
 jobs:
   genesis-ceremony:
