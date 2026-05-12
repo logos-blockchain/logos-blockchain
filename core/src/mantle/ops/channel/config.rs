@@ -49,18 +49,14 @@ pub struct ChannelConfigExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation for ChannelConfigOp {
-    type ValidationContext<'a>
-        = ChannelConfigValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
     type ExecutionContext<'a>
         = ChannelConfigExecutionContext
     where
         Self: 'a;
     type Error = Error;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &ChannelConfigValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the indexes are unique and there is the same number of proof and
         // index. This is enforced by the proof structure that enforces it.
 

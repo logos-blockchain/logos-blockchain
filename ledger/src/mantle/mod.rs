@@ -89,7 +89,6 @@ impl LedgerState {
             &config.sdp_config,
             utxo_tree,
             epoch_state,
-            tx.hash(),
             tx.sdp_declarations(),
         )?;
 

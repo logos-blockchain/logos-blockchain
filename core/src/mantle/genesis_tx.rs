@@ -293,7 +293,7 @@ mod tests {
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::channel::Ed25519PublicKey,
         },
-        sdp::{ProviderId, ServiceType},
+        sdp::{Locator, ProviderId, ServiceType},
     };
 
     fn inscription_op(
@@ -328,7 +328,7 @@ mod tests {
             locked_note_id: utxo_to_use.id(),
             zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             provider_id: ProviderId(verifying_key),
-            locators: [].into(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         }
     }
 

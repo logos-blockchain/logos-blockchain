@@ -7,26 +7,24 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
+use futures::{Stream, StreamExt as _, stream};
 use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 use rocksdb::WriteBatch;
 
 use crate::{
-    StorageServiceError,
     api::{
-        backend::rocksdb::{Error, utils::key_bytes},
+        backend::{
+            HeaderIdStream,
+            rocksdb::{Error, utils::key_bytes},
+        },
         chain::StorageChainApi,
     },
-    backends::{StorageBackend, rocksdb::RocksBackend},
+    backends::{StorageBackend as _, rocksdb::RocksBackend},
 };
 
 const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
 const BLOCK_PARENT_PREFIX: &str = "block_parent/";
-/// A stream of `HeaderId`s, used for scanning immutable header IDs. We return a
-/// stream here to allow for efficient pagination of large ranges of immutable
-/// blocks.
-pub type HeaderIdStream = Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send>>;
 
 #[async_trait]
 impl StorageChainApi for RocksBackend {
@@ -238,38 +236,6 @@ impl StorageChainApi for RocksBackend {
     }
 }
 
-/// Helper to collect a stream of immutable `HeaderId`s into a `Vec`.
-pub async fn streamed_immutable_block_ids_vec<Backend: StorageBackend>(
-    backend: &mut Backend,
-    slot_range: RangeInclusive<Slot>,
-    limit: NonZeroUsize,
-) -> Result<Vec<HeaderId>, StorageServiceError> {
-    let stream = backend
-        .scan_immutable_block_ids(slot_range, limit)
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-    stream
-        .try_collect::<Vec<HeaderId>>()
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))
-}
-
-/// Helper to collect a stream of immutable `HeaderId`s into a reversed `Vec`.
-pub async fn streamed_immutable_block_ids_reverse_vec<Backend: StorageBackend>(
-    backend: &mut Backend,
-    slot_range: RangeInclusive<Slot>,
-    limit: NonZeroUsize,
-) -> Result<Vec<HeaderId>, StorageServiceError> {
-    let stream = backend
-        .scan_immutable_block_ids_reverse(slot_range, limit)
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-    stream
-        .try_collect::<Vec<HeaderId>>()
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::iter;
@@ -277,7 +243,12 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::backends::rocksdb::RocksBackendSettings;
+    use crate::{
+        api::backend::{
+            streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec,
+        },
+        backends::rocksdb::RocksBackendSettings,
+    };
 
     #[tokio::test]
     async fn immutable_block_ids() {

@@ -16,15 +16,12 @@ use crate::{
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
 
-pub trait Operation {
-    type ValidationContext<'a>
-    where
-        Self: 'a;
+pub trait Operation<ValidationContext> {
     type ExecutionContext<'a>
     where
         Self: 'a;
     type Error;
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error>;
+    fn validate(&self, ctx: &ValidationContext) -> Result<(), Self::Error>;
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,

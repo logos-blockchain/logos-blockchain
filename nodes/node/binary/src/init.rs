@@ -367,9 +367,7 @@ fn build_network_config(args: &InitArgs, node_key: lb_libp2p::ed25519::SecretKey
 fn build_cryptarchia_config(args: &InitArgs, funding_pk: ZkPublicKey) -> CryptarchiaConfig {
     let mut base_config =
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues { funding_pk });
-    base_config.network.bootstrap.ibd.peers = if args.no_ibd {
-        HashSet::new()
-    } else {
+    base_config.network.bootstrap.ibd.peers = if args.ibd {
         args.initial_peers
             .iter()
             .filter_map(|addr| match addr.iter().last() {
@@ -377,6 +375,8 @@ fn build_cryptarchia_config(args: &InitArgs, funding_pk: ZkPublicKey) -> Cryptar
                 _ => None,
             })
             .collect()
+    } else {
+        HashSet::new()
     };
     base_config
 }
@@ -392,10 +392,10 @@ mod tests {
     };
 
     fn build_config_from_peers(initial_peers: Vec<Multiaddr>) -> UserConfig {
-        build_config(initial_peers, false)
+        build_config(initial_peers, true)
     }
 
-    fn build_config(initial_peers: Vec<Multiaddr>, no_ibd: bool) -> UserConfig {
+    fn build_config(initial_peers: Vec<Multiaddr>, ibd: bool) -> UserConfig {
         let args = InitArgs {
             initial_peers,
             output: "test_output.yaml".into(),
@@ -404,7 +404,7 @@ mod tests {
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
             state_path: None,
-            no_ibd,
+            ibd,
             log_filter: None,
             kms_file: None,
         };
@@ -454,7 +454,7 @@ mod tests {
             .parse()
             .unwrap();
 
-        let config = build_config(vec![addr_with_p2p], true);
+        let config = build_config(vec![addr_with_p2p], false);
 
         assert!(config.cryptarchia.network.bootstrap.ibd.peers.is_empty());
     }
@@ -469,7 +469,7 @@ mod tests {
             http_addr: SocketAddr::from(([0, 0, 0, 0], 8080)),
             external_address: None,
             state_path: None,
-            no_ibd: false,
+            ibd: false,
             log_filter: Some(
                 "warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error".to_owned(),
             ),

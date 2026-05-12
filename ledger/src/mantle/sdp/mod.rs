@@ -7,16 +7,18 @@ use lb_core::{
     block::BlockNumber,
     mantle::{
         NoteId, OpProof, TxHash, Utxo, Value,
-        ledger::Operation as _,
+        ledger::Operation,
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPActiveValidationContext,
             SDPDeclareExecutionContext, SDPDeclareOp, SDPDeclareValidationContext,
             SDPWithdrawExecutionContext, SDPWithdrawOp, SDPWithdrawValidationContext,
+            declare::SDPDeclareGenesisValidationContext,
         },
     },
     sdp::{
         ActivityMetadata, Declaration, DeclarationId, MinStake, Nonce, ProviderId, ProviderInfo,
-        ServiceParameters, ServiceType, SessionNumber, locked_notes, locked_notes::LockedNotes,
+        ServiceParameters, ServiceType, SessionNumber,
+        locked_notes::{self, LockedNotes},
     },
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -297,22 +299,13 @@ impl SdpLedger {
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
-        tx_hash: TxHash,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
     ) -> Result<Self, Error> {
         let mut sdp =
             Self::new().with_blend_service(&config.service_rewards_params.blend, epoch_state);
 
-        for (op, proof) in ops {
-            let OpProof::ZkAndEd25519Sigs {
-                zk_sig,
-                ed25519_sig,
-            } = proof
-            else {
-                return Err(Error::InvalidProof);
-            };
-            sdp =
-                sdp.try_apply_sdp_declaration(utxo_tree, op, zk_sig, ed25519_sig, tx_hash, config)?;
+        for (op, _) in ops {
+            sdp = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
         }
 
         let blend = sdp
@@ -395,6 +388,41 @@ impl SdpLedger {
         ))
     }
 
+    pub fn try_apply_genesis_sdp_declaration(
+        mut self,
+        utxo_tree: &UtxoTree,
+        op: &SDPDeclareOp,
+        config: &Config,
+    ) -> Result<Self, Error> {
+        let Some(service_state) = self.services.get_mut(&op.service_type) else {
+            return Err(Error::ServiceNotFound(op.service_type));
+        };
+
+        // Validate SDP Declare
+        op.validate(&SDPDeclareGenesisValidationContext {
+            utxo_tree,
+            locked_notes: &self.locked_notes,
+            declarations: service_state.declarations(),
+            min_stake: &config.min_stake,
+        })?;
+
+        // Execute SDP Declare
+        let result = <SDPDeclareOp as Operation<SDPDeclareGenesisValidationContext>>::execute(
+            op,
+            SDPDeclareExecutionContext {
+                utxo_tree: utxo_tree.clone(),
+                block_number: self.block_number,
+                declarations: service_state.declarations_clone(),
+                locked_notes: self.locked_notes.clone(),
+                min_stake: config.min_stake,
+            },
+        )?;
+
+        self.locked_notes = result.locked_notes;
+        service_state.update_declarations(result.declarations);
+        Ok(self)
+    }
+
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
@@ -420,13 +448,16 @@ impl SdpLedger {
         })?;
 
         // Execute SDP Declare
-        let result = op.execute(SDPDeclareExecutionContext {
-            utxo_tree: utxo_tree.clone(),
-            block_number: self.block_number,
-            declarations: service_state.declarations_clone(),
-            locked_notes: self.locked_notes.clone(),
-            min_stake: config.min_stake,
-        })?;
+        let result = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
+            op,
+            SDPDeclareExecutionContext {
+                utxo_tree: utxo_tree.clone(),
+                block_number: self.block_number,
+                declarations: service_state.declarations_clone(),
+                locked_notes: self.locked_notes.clone(),
+                min_stake: config.min_stake,
+            },
+        )?;
 
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
@@ -620,7 +651,7 @@ impl SdpLedger {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos};
+    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
@@ -731,7 +762,7 @@ mod tests {
             locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = op.id();
 
@@ -776,7 +807,7 @@ mod tests {
             locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
 
@@ -829,7 +860,7 @@ mod tests {
             locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = op.id();
 
@@ -942,7 +973,7 @@ mod tests {
             locked_note_id: utxo.id(),
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
 
@@ -1011,7 +1042,7 @@ mod tests {
             locked_note_id: utxo_1.id(),
             zk_id: zk_key_1.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id_1 = declare_op_1.id();
 
@@ -1039,7 +1070,7 @@ mod tests {
             locked_note_id: utxo_2.id(),
             zk_id: zk_key_2.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id_2 = declare_op_2.id();
 
@@ -1107,7 +1138,7 @@ mod tests {
             locked_note_id: utxo.id(),
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
 
@@ -1171,7 +1202,7 @@ mod tests {
             locked_note_id: utxo_1.id(),
             zk_id: zk_key_1.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id_1 = declare_op_1.id();
 
@@ -1202,7 +1233,7 @@ mod tests {
             locked_note_id: utxo_2.id(),
             zk_id: zk_key_2.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id_2 = declare_op_2.id();
 

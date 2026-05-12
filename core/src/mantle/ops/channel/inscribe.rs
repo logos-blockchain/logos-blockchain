@@ -54,19 +54,15 @@ pub struct InscriptionExecutionContext {
     pub block_slot: Slot,
 }
 
-impl Operation for InscriptionOp {
-    type ValidationContext<'a>
-        = InscriptionValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     type ExecutionContext<'a>
         = InscriptionExecutionContext
     where
         Self: 'a;
     type Error = Error;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check if the channel exist otherwise the inscription is valid if and
+    fn validate(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::Error> {
+        // Check if the channel exist otherwise the inscription is valid only if and
         // only if parent == ZERO
         if let Some(channel) = ctx.channels.channels.get(&self.channel_id).cloned() {
             // Check the parent corresponds to the payload
