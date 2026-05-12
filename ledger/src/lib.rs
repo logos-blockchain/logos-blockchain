@@ -560,14 +560,20 @@ impl LedgerState {
                 // as you only need the signer's public key and tx hash
                 // Callers are expected to validate the proof before calling this function.
                 (Op::ChannelInscribe(op), OpProof::Ed25519Sig(sig)) => {
-                    self.mantle_ledger = self
-                        .mantle_ledger
-                        .try_apply_channel_inscription(op, sig, tx_hash)?;
+                    self.mantle_ledger = self.mantle_ledger.try_apply_channel_inscription(
+                        op,
+                        sig,
+                        tx_hash,
+                        self.cryptarchia_ledger.slot,
+                    )?;
                 }
-                (Op::ChannelSetKeys(op), OpProof::Ed25519Sig(sig)) => {
-                    self.mantle_ledger = self
-                        .mantle_ledger
-                        .try_apply_channel_set_keys(op, sig, &tx_hash)?;
+                (Op::ChannelConfig(op), OpProof::ChannelMultiSigProof(sig)) => {
+                    self.mantle_ledger = self.mantle_ledger.try_apply_channel_set_keys(
+                        op,
+                        sig,
+                        &tx_hash,
+                        self.cryptarchia_ledger.slot,
+                    )?;
                 }
                 (Op::ChannelDeposit(op), OpProof::ZkSig(sig)) => {
                     let channels = self.mantle_ledger.channels();
@@ -595,7 +601,7 @@ impl LedgerState {
                     self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
                     self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
                 }
-                (Op::ChannelWithdraw(op), OpProof::ChannelWithdrawProof(sigs)) => {
+                (Op::ChannelWithdraw(op), OpProof::ChannelMultiSigProof(sigs)) => {
                     let channels = self.mantle_ledger.channels();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
@@ -706,13 +712,13 @@ mod tests {
             ledger::{Inputs, Outputs},
             ops::{
                 channel::{
-                    ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
-                    set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
+                    ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
+                    inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
                 },
                 transfer::TransferOp,
             },
         },
-        proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature},
+        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
     };
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
@@ -766,7 +772,7 @@ mod tests {
         Ed25519(Ed25519Key),
         Zk(ZkKey),
         EmptyZk,
-        Withdraw(ChannelWithdrawProof),
+        MultiSequencer(ChannelMultiSigProof),
     }
 
     fn create_signed_tx(op: Op, signing_key: &Key) -> SignedMantleTx {
@@ -788,7 +794,7 @@ mod tests {
                     ZkKey::multi_sign(std::slice::from_ref(key), &tx_hash.to_fr()).unwrap(),
                 ),
                 Key::EmptyZk => OpProof::ZkSig(ZkKey::multi_sign(&[], &tx_hash.to_fr()).unwrap()),
-                Key::Withdraw(proof) => OpProof::ChannelWithdrawProof(proof.clone()),
+                Key::MultiSequencer(proof) => OpProof::ChannelMultiSigProof(proof.clone()),
             })
             .collect();
 
@@ -908,18 +914,33 @@ mod tests {
     }
 
     #[test]
-    fn test_channel_set_keys_operation() {
+    fn test_channel_config_operation() {
         let test_config = config();
         let state = LedgerState::from_utxos([utxo()], &test_config);
         let (signing_key, verifying_key) = create_test_keys();
         let channel_id = ChannelId::from([3; 32]);
 
-        let set_keys_op = SetKeysOp {
+        let config_op = ChannelConfigOp {
             channel: channel_id,
             keys: vec![verifying_key],
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            withdraw_threshold: 1,
         };
 
-        let tx = create_signed_tx(Op::ChannelSetKeys(set_keys_op), &Key::Ed25519(signing_key));
+        let config_tx = MantleTx(vec![Op::ChannelConfig(config_op.clone())]);
+        let config_tx_hash = config_tx.hash();
+        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
+            0,
+            signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+
+        let tx = create_signed_tx(
+            Op::ChannelConfig(config_op),
+            &Key::MultiSequencer(config_proof),
+        );
         let result = state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx);
         assert!(result.is_ok());
 
@@ -938,7 +959,7 @@ mod tests {
                 .channels
                 .get(&channel_id)
                 .unwrap()
-                .keys,
+                .accredited_keys,
             vec![verifying_key].into()
         );
     }
@@ -1048,13 +1069,14 @@ mod tests {
         };
         let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
         let withdraw_tx_hash = withdraw_tx.hash();
-        let withdraw_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+        let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
             signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
         )])
         .unwrap();
 
-        let signed_tx = create_multi_signed_tx(withdraw_tx.0, vec![&Key::Withdraw(withdraw_proof)]);
+        let signed_tx =
+            create_multi_signed_tx(withdraw_tx.0, vec![&Key::MultiSequencer(withdraw_proof)]);
 
         let result =
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
@@ -1132,7 +1154,7 @@ mod tests {
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
         let withdraw_tx_hash = withdraw_tx.hash();
-        let invalid_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+        let invalid_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
             wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
         )])
@@ -1140,7 +1162,7 @@ mod tests {
 
         let signed_tx = create_multi_signed_tx(
             withdraw_tx.0,
-            vec![&Key::Withdraw(invalid_proof), &Key::EmptyZk],
+            vec![&Key::MultiSequencer(invalid_proof), &Key::EmptyZk],
         );
 
         let result = ledger_state
@@ -1149,7 +1171,7 @@ mod tests {
         assert_eq!(
             result,
             Err(LedgerError::VerificationError(
-                VerificationError::ChannelWithdrawProofInvalidSignature {
+                VerificationError::ChannelMultiSigProofInvalidSignature {
                     op_index: 0,
                     signature_index: 0,
                 }
@@ -1301,17 +1323,32 @@ mod tests {
         let (signing_key, _) = create_test_keys();
         let channel_id = ChannelId::from([7; 32]);
 
-        let set_keys_op = SetKeysOp {
+        let config_op = ChannelConfigOp {
             channel: channel_id,
             keys: vec![],
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            withdraw_threshold: 1,
         };
 
-        let tx = create_signed_tx(Op::ChannelSetKeys(set_keys_op), &Key::Ed25519(signing_key));
+        let config_tx = MantleTx(vec![Op::ChannelConfig(config_op.clone())]);
+        let config_tx_hash = config_tx.hash();
+        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
+            0,
+            signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+
+        let tx = create_signed_tx(
+            Op::ChannelConfig(config_op),
+            &Key::MultiSequencer(config_proof),
+        );
         let result = state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx);
         assert_eq!(
             result,
             Err(LedgerError::Mantle(mantle::Error::Channel(
-                mantle::channel::Error::EmptyKeys { channel_id }
+                mantle::channel::Error::InvalidChannelConfig
             )))
         );
     }
@@ -1326,8 +1363,8 @@ mod tests {
         let state = LedgerState::from_utxos([utxo()], &test_config);
         let (sk1, vk1) = create_test_keys_with_seed(1);
         let (sk2, vk2) = create_test_keys_with_seed(2);
-        let (_, vk3) = create_test_keys_with_seed(3);
-        let (sk4, vk4) = create_test_keys_with_seed(4);
+        let (sk3, vk3) = create_test_keys_with_seed(3);
+        let (_, vk4) = create_test_keys_with_seed(4);
 
         let channel1 = ChannelId::from([10; 32]);
         let channel2 = ChannelId::from([20; 32]);
@@ -1346,31 +1383,43 @@ mod tests {
             signer: vk2,
         };
 
-        let set_keys_op = SetKeysOp {
+        let config_op = ChannelConfigOp {
             channel: channel1,
             keys: vec![vk3, vk4],
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 1,
+            withdraw_threshold: 1,
         };
 
         let inscribe_op3 = InscriptionOp {
             channel_id: channel1,
             inscription: vec![7, 8, 9],
-            parent: inscribe_op1.id(),
-            signer: vk4,
+            parent: config_op.id(),
+            signer: vk3,
         };
 
         let ops = vec![
             Op::ChannelInscribe(inscribe_op1),
             Op::ChannelInscribe(inscribe_op2),
-            Op::ChannelSetKeys(set_keys_op),
+            Op::ChannelConfig(config_op),
             Op::ChannelInscribe(inscribe_op3.clone()),
         ];
+        let config_tx = MantleTx(ops.clone());
+        let config_tx_hash = config_tx.hash();
+        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
+            0,
+            sk1.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
+        )])
+        .unwrap();
+
         let tx = create_multi_signed_tx(
             ops,
             vec![
-                &Key::Ed25519(sk1.clone()),
-                &Key::Ed25519(sk2),
                 &Key::Ed25519(sk1),
-                &Key::Ed25519(sk4),
+                &Key::Ed25519(sk2),
+                &Key::MultiSequencer(config_proof),
+                &Key::Ed25519(sk3),
             ],
         );
 
@@ -1400,7 +1449,7 @@ mod tests {
                 .channels
                 .get(&channel1)
                 .unwrap()
-                .tip,
+                .tip_message,
             inscribe_op3.id()
         );
     }

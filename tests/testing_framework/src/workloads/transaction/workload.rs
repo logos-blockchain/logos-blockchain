@@ -192,7 +192,8 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
     }
 
     async fn execute(mut self) -> Result<(), DynError> {
-        let gas_context = MantleTxGasContext::new(HashMap::new(), GasPrices::new(0, 0));
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         while let Some(input) = self.plan.pop_front() {
             submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {

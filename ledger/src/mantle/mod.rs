@@ -12,19 +12,25 @@ use lb_core::{
         ledger::Operation as _,
         ops::{
             channel::{
-                inscribe::{InscriptionOp, InscriptionValidationContext},
-                set_keys::{SetKeysOp, SetKeysValidationContext},
+                config::{
+                    ChannelConfigExecutionContext, ChannelConfigOp, ChannelConfigValidationContext,
+                },
+                inscribe::{
+                    InscriptionExecutionContext, InscriptionOp, InscriptionValidationContext,
+                },
             },
             leader_claim::{LeaderClaimError, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
     },
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::{
         Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber,
         locked_notes::LockedNotes,
     },
 };
+use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
@@ -165,39 +171,54 @@ impl LedgerState {
         inscription_op: &InscriptionOp,
         inscription_sig: &Ed25519Signature,
         tx_hash: TxHash,
+        block_slot: Slot,
     ) -> Result<Self, Error> {
         //validate the inscription
         inscription_op.validate(&InscriptionValidationContext {
             channels: &self.channels,
             tx_hash: &tx_hash,
             inscribe_sig: inscription_sig,
+            block_slot,
         })?;
 
         // Execute the inscription
-        self.channels = inscription_op.execute(self.channels).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
-        )?;
+        self.channels = inscription_op
+            .execute(InscriptionExecutionContext {
+                channels: self.channels,
+                block_slot,
+            })
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
+            )?
+            .channels;
 
         Ok(self)
     }
 
     pub fn try_apply_channel_set_keys(
         mut self,
-        set_keys_op: &SetKeysOp,
-        set_keys_sig: &Ed25519Signature,
+        config_op: &ChannelConfigOp,
+        config_sigs: &ChannelMultiSigProof,
         tx_hash: &TxHash,
+        block_slot: Slot,
     ) -> Result<Self, Error> {
         // Validate the SetKeys
-        set_keys_op.validate(&SetKeysValidationContext {
+        config_op.validate(&ChannelConfigValidationContext {
             channels: &self.channels,
             tx_hash,
-            setkeys_sig: set_keys_sig,
+            config_sigs,
         })?;
 
         // Execute the SetKeys
-        self.channels = set_keys_op.execute(self.channels).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
-        )?;
+        self.channels = config_op
+            .execute(ChannelConfigExecutionContext {
+                channels: self.channels,
+                block_slot,
+            })
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
+            )?
+            .channels;
 
         Ok(self)
     }

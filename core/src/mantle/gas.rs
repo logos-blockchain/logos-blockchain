@@ -157,7 +157,7 @@ pub trait GasConstants {
     const CHANNEL_INSCRIBE: Gas;
 
     /// Verify the administrator signature.
-    const CHANNEL_SET_KEYS: Gas;
+    const CHANNEL_CONFIG: Gas;
 
     /// Verify the deposit signature.
     const CHANNEL_DEPOSIT: Gas;
@@ -183,7 +183,7 @@ pub struct MainnetGasConstants;
 impl GasConstants for MainnetGasConstants {
     const TRANSFER: Gas = Gas(590);
     const CHANNEL_INSCRIBE: Gas = Gas(56);
-    const CHANNEL_SET_KEYS: Gas = Gas(56);
+    const CHANNEL_CONFIG: Gas = Gas(56);
     const CHANNEL_DEPOSIT: Gas = Gas(590);
     const CHANNEL_WITHDRAW: Gas = Gas(56);
     const SDP_DECLARE: Gas = Gas(646);

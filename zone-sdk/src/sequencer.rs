@@ -6,14 +6,17 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
+        channel::{SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId, config::ChannelConfigOp,
+                inscribe::InscriptionOp,
             },
         },
         tx::TxHash,
     },
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc};
@@ -147,8 +150,12 @@ enum ActorRequest {
         msg_id: MsgId,
         reply: tokio::sync::oneshot::Sender<Result<PublishResult, Error>>,
     },
-    SetKeys {
+    ChannelConfig {
         keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
 }
@@ -293,30 +300,36 @@ where
         Ok(result)
     }
 
-    /// Update the channel's accredited keys.
+    /// Update the channel's config.
     ///
     /// The sequencer's signing key must be the channel administrator
     /// (`keys[0]`). This overwrites the entire key list — include the admin
     /// key if it should remain authorized.
     ///
-    /// Returns the publish result (with checkpoint) and a future that
-    /// resolves when the transaction is finalized:
+    /// `posting_timeframe` and `posting_timeout` control round-robin
+    /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a
+    /// single fixed sequencer at index 0.
     ///
-    /// ```ignore
-    /// let (result, finalized) = handle.set_keys(vec![admin_pk]).await?;
-    /// save_checkpoint(&result.checkpoint);
-    /// finalized.await?; // wait for finalization
-    /// ```
-    pub async fn set_keys(
+    /// Returns the publish result (with checkpoint) and a future that
+    /// resolves when the transaction is finalized.
+    pub async fn channel_config(
         &self,
         keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
     ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
         // Subscribe BEFORE submitting to avoid missing finalization events.
         let mut event_rx = self.event_tx.subscribe();
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::SetKeys {
+        let request = ActorRequest::ChannelConfig {
             keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            withdraw_threshold,
             reply: reply_tx,
         };
 
@@ -924,10 +937,25 @@ where
                 drop(reply.send(Ok(result)));
                 None
             }
-            ActorRequest::SetKeys { keys, reply } => {
+            ActorRequest::ChannelConfig {
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                withdraw_threshold,
+                reply,
+            } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
-                let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
+                let signed_tx = create_channel_config_tx(
+                    self.channel_id,
+                    &[&self.signing_key],
+                    keys,
+                    posting_timeframe,
+                    posting_timeout,
+                    configuration_threshold,
+                    withdraw_threshold,
+                );
                 s.submit_other(signed_tx.clone());
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
                 let result = PublishResult {
@@ -987,7 +1015,7 @@ fn reject_not_ready(request: ActorRequest) {
         ActorRequest::PublishMessage { .. } => {
             warn!("Publish dropped: sequencer not yet ready");
         }
-        ActorRequest::SetKeys { reply, .. } => drop(reply.send(Err(err()))),
+        ActorRequest::ChannelConfig { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::PrepareTx { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::SignTx { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::SubmitSignedTx { reply, .. } => drop(reply.send(Err(err()))),
@@ -1357,25 +1385,45 @@ fn enqueue_resubmit<Node>(
 /// form a single linear chain — that would be a protocol-level invariant
 /// violation.
 fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
-    let items: Vec<InscriptionInfo> = txs
+    // Also tracks ChannelConfig as a synthetic tip-update entry so the SDK's
+    // channel_tip stays in sync with the chain. Per spec, ChannelConfig sets
+    // `chan.tip_hash = hash(encode(config))`, replacing whatever was there.
+    // Synthetic entries have empty payload so app-layer consumers (which key
+    // off payload bytes) ignore them naturally.
+    let mut items: Vec<InscriptionInfo> = Vec::new();
+    let mut last_in_block: Option<MsgId> = None;
+    let hash_and_ops = txs
         .iter()
-        .flat_map(|tx| {
-            tx.mantle_tx.ops().iter().filter_map(|op| {
-                if let Op::ChannelInscribe(inscribe) = op
-                    && inscribe.channel_id == channel_id
-                {
-                    Some(InscriptionInfo {
-                        tx_hash: tx.mantle_tx.hash(),
-                        parent_msg: inscribe.parent,
-                        this_msg: inscribe.id(),
-                        payload: inscribe.inscription.clone(),
-                    })
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
+        .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops()));
+
+    for (tx_hash, op) in hash_and_ops {
+        match op {
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                let info = InscriptionInfo {
+                    tx_hash,
+                    parent_msg: inscribe.parent,
+                    this_msg: inscribe.id(),
+                    payload: inscribe.inscription.clone(),
+                };
+                last_in_block = Some(info.this_msg);
+                items.push(info);
+            }
+            Op::ChannelConfig(config) if config.channel == channel_id => {
+                // Chain off the previous in-block tip (or root) so the
+                // topological sort below can stitch it into a single chain.
+                let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
+                let info = InscriptionInfo {
+                    tx_hash,
+                    parent_msg,
+                    this_msg: config.id(),
+                    payload: Vec::new(),
+                };
+                last_in_block = Some(info.this_msg);
+                items.push(info);
+            }
+            _ => {}
+        }
+    }
 
     if items.len() <= 1 {
         return items;
@@ -1405,7 +1453,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
     tx.mantle_tx.ops().iter().any(|op| match op {
         Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        Op::ChannelSetKeys(set_keys) => set_keys.channel == channel_id,
+        Op::ChannelConfig(set_keys) => set_keys.channel == channel_id,
         _ => false,
     })
 }
@@ -1440,25 +1488,43 @@ fn create_inscribe_tx(
     (signed_tx, msg_id)
 }
 
-fn create_set_keys_tx(
+fn create_channel_config_tx(
     channel_id: ChannelId,
-    signing_key: &Ed25519Key,
+    signing_keys: &[&Ed25519Key],
     keys: Vec<Ed25519PublicKey>,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
+    configuration_threshold: u16,
+    withdraw_threshold: u16,
 ) -> SignedMantleTx {
-    let set_keys_op = SetKeysOp {
+    let config_op = ChannelConfigOp {
         channel: channel_id,
         keys,
+        posting_timeframe,
+        posting_timeout,
+        configuration_threshold,
+        withdraw_threshold,
     };
 
     // TODO: fund tx
-    let set_keys_tx = MantleTx(vec![Op::ChannelSetKeys(set_keys_op)]);
+    let config_tx = MantleTx(vec![Op::ChannelConfig(config_op)]);
 
-    let tx_hash = set_keys_tx.hash();
-    let signature = sign_tx(tx_hash, signing_key);
+    let tx_hash = config_tx.hash();
+    let signatures = signing_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            IndexedSignature::new(
+                index as ChannelKeyIndex,
+                key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            )
+        })
+        .collect();
+    let proof = ChannelMultiSigProof::new(signatures).unwrap();
 
     SignedMantleTx {
-        ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        mantle_tx: set_keys_tx,
+        ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],
+        mantle_tx: config_tx,
     }
 }
 

@@ -466,6 +466,7 @@ async fn fund_sdp_transaction(
 
     let empty_context = MantleTxGasContext::new(
         HashMap::new(),
+        HashMap::new(),
         GasPrices {
             execution_base_gas_price: 0.into(),
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
