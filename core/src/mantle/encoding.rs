@@ -41,7 +41,7 @@ use crate::{
 // limits maximum transaction size to 1MiB, for memory safety limits we can
 // allow 4MiB.
 
-/// Maximum memory allocation size allowed for channel inscription data .
+/// Maximum memory allocation size allowed for channel inscription data.
 /// Protects against unbounded allocation in `decode_channel_inscribe`
 pub const MAX_ENCODE_DECODE_INSCRIPTION_SIZE: u32 = (MAX_BLOCK_SIZE * 7 / 8) as u32;
 // Maximum memory allocation size allowed for SDP activity metadata.

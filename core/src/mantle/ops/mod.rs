@@ -64,16 +64,17 @@ pub trait OpId {
 /// [`OpWireVisitor`], which correctly handles `opcode` to select the
 /// appropriate variant.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum Op {
-    ChannelInscribe(InscriptionOp),
-    ChannelConfig(ChannelConfigOp),
-    ChannelDeposit(DepositOp),
-    ChannelWithdraw(ChannelWithdrawOp),
-    SDPDeclare(SDPDeclareOp),
-    SDPWithdraw(SDPWithdrawOp),
-    SDPActive(SDPActiveOp),
-    LeaderClaim(LeaderClaimOp),
-    Transfer(TransferOp),
+    ChannelInscribe(InscriptionOp) = INSCRIBE,
+    ChannelConfig(ChannelConfigOp) = CHANNEL_CONFIG,
+    ChannelDeposit(DepositOp) = CHANNEL_DEPOSIT,
+    ChannelWithdraw(ChannelWithdrawOp) = CHANNEL_WITHDRAW,
+    SDPDeclare(SDPDeclareOp) = SDP_DECLARE,
+    SDPWithdraw(SDPWithdrawOp) = SDP_WITHDRAW,
+    SDPActive(SDPActiveOp) = SDP_ACTIVE,
+    LeaderClaim(LeaderClaimOp) = LEADER_CLAIM,
+    Transfer(TransferOp) = TRANSFER,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -143,20 +144,6 @@ impl Op {
             Self::SDPActive(_) => "SDPActive",
             Self::LeaderClaim(_) => "LeaderClaim",
             Self::Transfer(_) => "Transfer",
-        }
-    }
-    #[must_use]
-    pub const fn opcode(&self) -> u8 {
-        match self {
-            Self::ChannelInscribe(_) => INSCRIBE,
-            Self::ChannelConfig(_) => CHANNEL_CONFIG,
-            Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
-            Self::ChannelWithdraw(_) => CHANNEL_WITHDRAW,
-            Self::SDPDeclare(_) => SDP_DECLARE,
-            Self::SDPWithdraw(_) => SDP_WITHDRAW,
-            Self::SDPActive(_) => SDP_ACTIVE,
-            Self::LeaderClaim(_) => LEADER_CLAIM,
-            Self::Transfer(_) => TRANSFER,
         }
     }
 
