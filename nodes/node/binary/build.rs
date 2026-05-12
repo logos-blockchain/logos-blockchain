@@ -61,30 +61,30 @@ fn find_repo_git_dir() -> Option<PathBuf> {
 }
 
 fn emit_rerun_if_changed(path: &Path) {
-    println!("cargo:rerun-if-changed={}", path.display());
+    println!("cargo:rerun-if-changed={}", path.to_string_lossy());
 }
 
 fn emit_git_watchers(git_dir: &Path) {
+    // Watch the HEAD file, this changes when the current branch changes or when a
+    // new commit is made on a detached HEAD.
     let head_path = git_dir.join("HEAD");
     emit_rerun_if_changed(&head_path);
 
     // Covers packed branch refs and packed tags.
     emit_rerun_if_changed(&git_dir.join("packed-refs"));
 
-    // If HEAD points to a branch ref (e.g. refs/heads/master), watch only that ref.
+    // If HEAD points to a branch ref (e.g. refs/heads/master), watch only that
+    // ref., this changes when the branch advances.
     if let Ok(head_contents) = fs::read_to_string(&head_path)
         && let Some(reference) = head_contents.strip_prefix("ref: ")
     {
         emit_rerun_if_changed(&git_dir.join(reference.trim()));
     }
 
-    // Watch existing tags on HEAD (without watching all refs/tags).
-    // New tags added later on HEAD won't trigger rebuild automatically.
-    if let Some(tag_names) = run_command("git", ["tag", "--points-at", "HEAD"]) {
-        for tag in tag_names.lines().map(str::trim).filter(|s| !s.is_empty()) {
-            emit_rerun_if_changed(&git_dir.join("refs").join("tags").join(tag));
-        }
-    }
+    // Watch loose tags because HEAD_TAG_NAME depends on exact tags at HEAD.
+    // This is broader than watching only current tags, but tag changes are rare
+    // and it preserves correctness if a tag is created after a previous build.
+    emit_rerun_if_changed(&git_dir.join("refs").join("tags"));
 }
 
 fn main() {
