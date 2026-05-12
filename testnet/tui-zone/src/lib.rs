@@ -18,7 +18,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     message::AppMessage,
-    state::{InMemoryZoneState, ZoneState},
+    state::{InMemoryZoneState, ZoneState as _},
 };
 
 #[derive(Parser, Debug)]
@@ -92,7 +92,7 @@ pub async fn run(args: InscribeArgs) {
 
 async fn handle_event(
     event: Event,
-    state: &mut dyn ZoneState,
+    state: &mut InMemoryZoneState,
     handle: &SequencerHandle<NodeHttpClient>,
     ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) {
@@ -120,7 +120,7 @@ async fn handle_event(
 }
 
 async fn handle_channel_update(
-    state: &mut dyn ZoneState,
+    state: &mut InMemoryZoneState,
     handle: &SequencerHandle<NodeHttpClient>,
     adopted: &[lb_zone_sdk::state::InscriptionInfo],
     orphaned: &[lb_zone_sdk::state::InscriptionInfo],
@@ -137,7 +137,10 @@ async fn handle_channel_update(
     ui::prompt();
 }
 
-fn handle_ready(state: &dyn ZoneState, ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>) {
+fn handle_ready(
+    state: &InMemoryZoneState,
+    ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
+) {
     info!("Sequencer ready");
     if let Some(tx) = ready_tx.take() {
         let _ = tx.send(());
