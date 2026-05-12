@@ -98,9 +98,9 @@ async fn handle_event(
 ) {
     match event {
         Event::Ready => handle_ready(state, ready_tx),
-        Event::ChannelUpdate {
-            orphaned, adopted, ..
-        } => handle_channel_update(state, handle, &adopted, &orphaned).await,
+        Event::ChannelUpdate { orphaned, adopted } => {
+            handle_channel_update(state, handle, &adopted, &orphaned).await;
+        }
         Event::TxsFinalized { inscriptions, .. } => {
             state.on_finalized(&inscriptions);
             ui::render_state(state);
@@ -126,10 +126,10 @@ async fn handle_channel_update(
     orphaned: &[lb_zone_sdk::state::InscriptionInfo],
 ) {
     state.on_adopted(adopted);
-    for inv in orphaned {
-        state.on_orphaned(&inv.this_msg);
-        debug!(msg_id = %hex::encode(inv.this_msg.as_ref()), "Auto-republishing orphan");
-        if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+    for info in orphaned {
+        state.on_orphaned(&info.this_msg);
+        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
+        if let Err(e) = handle.publish_message(info.payload.clone()).await {
             error!("failed to auto-republish: {e}");
         }
     }

@@ -52,10 +52,10 @@ impl ZoneState for InMemoryZoneState {
     }
 
     fn on_adopted(&mut self, adopted: &[InscriptionInfo]) {
-        for inv in adopted {
-            if !self.adopted.iter().any(|m| m.msg_id == inv.this_msg) {
+        for info in adopted {
+            if !self.adopted.iter().any(|m| m.msg_id == info.this_msg) {
                 self.adopted
-                    .push(Msg::from_payload(inv.this_msg, &inv.payload));
+                    .push(Msg::from_payload(info.this_msg, &info.payload));
             }
         }
     }
@@ -67,15 +67,19 @@ impl ZoneState for InMemoryZoneState {
     }
 
     fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]) {
-        for inv in inscriptions {
-            if let Some(i) = self.published.iter().position(|m| m.msg_id == inv.this_msg) {
+        for info in inscriptions {
+            if let Some(i) = self
+                .published
+                .iter()
+                .position(|m| m.msg_id == info.this_msg)
+            {
                 self.published.remove(i);
-            } else if let Some(i) = self.adopted.iter().position(|m| m.msg_id == inv.this_msg) {
+            } else if let Some(i) = self.adopted.iter().position(|m| m.msg_id == info.this_msg) {
                 self.adopted.remove(i);
             }
-            if !self.finalized.iter().any(|m| m.msg_id == inv.this_msg) {
+            if !self.finalized.iter().any(|m| m.msg_id == info.this_msg) {
                 self.finalized
-                    .push(Msg::from_payload(inv.this_msg, &inv.payload));
+                    .push(Msg::from_payload(info.this_msg, &info.payload));
             }
         }
     }

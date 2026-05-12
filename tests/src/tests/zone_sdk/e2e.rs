@@ -330,10 +330,13 @@ fn spawn_drive_republish(
                     }
                 }
                 Some(Event::ChannelUpdate { orphaned, .. }) => {
-                    for inv in &orphaned {
-                        if local_pending.remove(&inv.this_msg) {
-                            debug!("Re-publishing: {:?}", String::from_utf8_lossy(&inv.payload));
-                            if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                    for info in &orphaned {
+                        if local_pending.remove(&info.this_msg) {
+                            debug!(
+                                "Re-publishing: {:?}",
+                                String::from_utf8_lossy(&info.payload)
+                            );
+                            if let Err(e) = handle.publish_message(info.payload.clone()).await {
                                 debug!("Failed to re-publish: {e}");
                             }
                         }
@@ -874,33 +877,33 @@ fn spawn_sequencer_sorted_policy(
                 }
             }
 
-            for inv in &orphaned {
-                if discarded.lock().await.contains(&inv.payload) {
+            for info in &orphaned {
+                if discarded.lock().await.contains(&info.payload) {
                     continue;
                 }
                 let larger_or_equal = max_seen_on_chain
                     .as_ref()
-                    .is_some_and(|m| inv.payload >= *m);
+                    .is_some_and(|m| info.payload >= *m);
                 if larger_or_equal {
                     debug!(
                         "Sorted policy: re-publishing {:?} (>= max {:?})",
-                        String::from_utf8_lossy(&inv.payload),
+                        String::from_utf8_lossy(&info.payload),
                         max_seen_on_chain
                             .as_ref()
                             .map(|m| String::from_utf8_lossy(m).to_string()),
                     );
-                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                    if let Err(e) = handle.publish_message(info.payload.clone()).await {
                         debug!("Failed to re-publish: {e}");
                     }
                 } else {
                     debug!(
                         "Sorted policy: dropping {:?} (< max {:?})",
-                        String::from_utf8_lossy(&inv.payload),
+                        String::from_utf8_lossy(&info.payload),
                         max_seen_on_chain
                             .as_ref()
                             .map(|m| String::from_utf8_lossy(m).to_string()),
                     );
-                    discarded.lock().await.insert(inv.payload.clone());
+                    discarded.lock().await.insert(info.payload.clone());
                 }
             }
         }
@@ -1144,8 +1147,8 @@ fn spawn_balance_aware(
                 }
             }
 
-            for inv in &orphaned {
-                let Some((uuid, account, delta)) = parse_balance_tx(&inv.payload) else {
+            for info in &orphaned {
+                let Some((uuid, account, delta)) = parse_balance_tx(&info.payload) else {
                     continue;
                 };
                 let account_map = applied.entry(account.clone()).or_default();
@@ -1157,7 +1160,7 @@ fn spawn_balance_aware(
                 let balance = initial + current_applied;
                 if balance + delta >= 0 {
                     debug!("Balance OK ({account} = {balance} + {delta}), re-publishing {uuid}",);
-                    if let Err(e) = handle.publish_message(inv.payload.clone()).await {
+                    if let Err(e) = handle.publish_message(info.payload.clone()).await {
                         debug!("Failed to re-publish: {e}");
                     }
                 } else {

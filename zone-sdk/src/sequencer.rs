@@ -863,20 +863,20 @@ where
             update.adopted.len(),
             hex::encode(update.new_channel_tip.as_ref()),
         );
-        for inv in &update.orphaned {
+        for info in &update.orphaned {
             debug!(
                 "  orphaned: payload={:?}, tx={}, msg_id={}",
-                String::from_utf8_lossy(&inv.payload),
-                hex::encode(inv.tx_hash.0),
-                hex::encode(inv.this_msg.as_ref()),
+                String::from_utf8_lossy(&info.payload),
+                hex::encode(info.tx_hash.0),
+                hex::encode(info.this_msg.as_ref()),
             );
         }
-        for inv in &update.adopted {
+        for info in &update.adopted {
             debug!(
                 "  adopted: payload={:?}, tx={}, msg_id={}",
-                String::from_utf8_lossy(&inv.payload),
-                hex::encode(inv.tx_hash.0),
-                hex::encode(inv.this_msg.as_ref()),
+                String::from_utf8_lossy(&info.payload),
+                hex::encode(info.tx_hash.0),
+                hex::encode(info.this_msg.as_ref()),
             );
         }
     }
@@ -906,12 +906,12 @@ where
             None => u.adopted,
         };
 
-        for inv in &orphaned {
+        for info in &orphaned {
             debug!(
                 "  orphaned: payload={:?}, tx={}, msg_id={}",
-                String::from_utf8_lossy(&inv.payload),
-                hex::encode(inv.tx_hash.0),
-                hex::encode(inv.this_msg.as_ref()),
+                String::from_utf8_lossy(&info.payload),
+                hex::encode(info.tx_hash.0),
+                hex::encode(info.this_msg.as_ref()),
             );
         }
 
