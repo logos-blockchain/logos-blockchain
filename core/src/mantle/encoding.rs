@@ -152,8 +152,8 @@ fn decode_channel_config(input: &[u8]) -> IResult<&[u8], ChannelConfigOp> {
         ChannelConfigOp {
             channel,
             keys,
-            posting_timeframe,
-            posting_timeout,
+            posting_timeframe: SlotTimeframe::from(posting_timeframe),
+            posting_timeout: SlotTimeout::from(posting_timeout),
             configuration_threshold,
             withdraw_threshold,
         },
@@ -551,6 +551,7 @@ use super::ops::opcode;
 use crate::{
     block::MAX_BLOCK_SIZE,
     mantle::{
+        channel::{SlotTimeframe, SlotTimeout},
         ledger::{Inputs, Outputs},
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
@@ -663,8 +664,8 @@ pub fn encode_channel_config(op: &ChannelConfigOp) -> Vec<u8> {
         bytes.extend(encode_ed25519_public_key(key));
     }
 
-    bytes.extend(encode_uint32(op.posting_timeframe));
-    bytes.extend(encode_uint32(op.posting_timeout));
+    bytes.extend(encode_uint32(u32::from(op.posting_timeframe.clone())));
+    bytes.extend(encode_uint32(u32::from(op.posting_timeout.clone())));
     bytes.extend(encode_uint16(op.configuration_threshold));
     bytes.extend(encode_uint16(op.withdraw_threshold));
 
@@ -1138,8 +1139,8 @@ mod tests {
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
                 keys: vec![signing_key.public_key()],
-                posting_timeframe: 1,
-                posting_timeout: 2,
+                posting_timeframe: 1.into(),
+                posting_timeout: 2.into(),
                 configuration_threshold: 3,
                 withdraw_threshold: 4,
             }),
@@ -1347,8 +1348,8 @@ mod tests {
                 signing_key2.public_key(),
                 signing_key3.public_key(),
             ],
-            posting_timeframe: 0,
-            posting_timeout: 0,
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
         };
@@ -1514,8 +1515,8 @@ mod tests {
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xCC; 32]),
             keys: vec![signing_key.public_key()],
-            posting_timeframe: 0,
-            posting_timeout: 0,
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
         };
@@ -1619,8 +1620,8 @@ mod tests {
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0x33; 32]),
             keys: vec![signing_key1.public_key(), signing_key2.public_key()],
-            posting_timeframe: 0,
-            posting_timeout: 0,
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
         };
@@ -1875,8 +1876,8 @@ mod tests {
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
                 keys: vec![Ed25519Key::from_bytes(&[1; 32]).public_key()],
-                posting_timeframe: 0,
-                posting_timeout: 0,
+                posting_timeframe: 0.into(),
+                posting_timeout: 0.into(),
                 configuration_threshold: 0,
                 withdraw_threshold: 0,
             });
@@ -1971,8 +1972,8 @@ mod tests {
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0x22; 32]),
             keys: vec![Ed25519Key::from_bytes(&[1; 32]).public_key(); u8::MAX as usize + 1],
-            posting_timeframe: 0,
-            posting_timeout: 0,
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
         };

@@ -34,6 +34,7 @@ use lb_zone_sdk::{
 };
 
 type Node = NodeHttpClient;
+use lb_core::mantle::channel::{SlotTimeframe, SlotTimeout};
 use logos_blockchain_tests::{
     common::{sync::wait_for_validators_mode_and_height, time::max_block_propagation_time},
     nodes::{Validator, create_validator_config},
@@ -159,7 +160,7 @@ async fn test_sequencer_publish_and_indexer_read() {
     // Test channel_config: update channel's accredited keys
     let second_pk = keygen().public_key();
     let (_result, finalized) = handle
-        .channel_config(vec![admin_pk, second_pk], 0, 0, 1, 1)
+        .channel_config(vec![admin_pk, second_pk], 0.into(), 0.into(), 1, 1)
         .await
         .expect("channel_config should succeed");
     timeout(Duration::from_mins(6), finalized)
@@ -495,8 +496,8 @@ async fn authorize_keys(
     channel_id: ChannelId,
     admin_key: Ed25519Key,
     keys: Vec<lb_core::mantle::ops::channel::Ed25519PublicKey>,
-    posting_timeframe: u32,
-    posting_timeout: u32,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
     node_url: reqwest::Url,
     sequencer_config: SequencerConfig,
 ) {
@@ -628,7 +629,7 @@ async fn test_sequential_multi_sequencer() {
     // then back to A. Phase 2 waits for B's window; Phase 3 waits for A's
     // next window.
     let (_result, finalized) = handle_a
-        .channel_config(vec![admin_pk, seq_b_pk], 60, 0, 1, 1)
+        .channel_config(vec![admin_pk, seq_b_pk], 60.into(), 0.into(), 1, 1)
         .await
         .expect("channel_config should succeed");
     timeout(Duration::from_mins(6), finalized)
@@ -716,8 +717,8 @@ async fn test_concurrent_multi_sequencer() {
         channel_id,
         signing_key_a.clone(),
         vec![admin_pk, seq_b_pk, seq_c_pk],
-        60,
-        0,
+        60.into(),
+        0.into(),
         node_url.clone(),
         sequencer_config.clone(),
     )
@@ -1003,8 +1004,8 @@ async fn test_sorted_conflict_resolution() {
         channel_id,
         signing_key_a.clone(),
         vec![admin_pk, seq_b_pk],
-        10,
-        0,
+        10.into(),
+        0.into(),
         node_url.clone(),
         sequencer_config.clone(),
     )

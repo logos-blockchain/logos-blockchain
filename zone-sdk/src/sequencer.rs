@@ -6,6 +6,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
+        channel::{SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
             channel::{
@@ -151,8 +152,8 @@ enum ActorRequest {
     },
     ChannelConfig {
         keys: Vec<Ed25519PublicKey>,
-        posting_timeframe: u32,
-        posting_timeout: u32,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         withdraw_threshold: u16,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
@@ -314,8 +315,8 @@ where
     pub async fn channel_config(
         &self,
         keys: Vec<Ed25519PublicKey>,
-        posting_timeframe: u32,
-        posting_timeout: u32,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         withdraw_threshold: u16,
     ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
@@ -1391,35 +1392,36 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
     // off payload bytes) ignore them naturally.
     let mut items: Vec<InscriptionInfo> = Vec::new();
     let mut last_in_block: Option<MsgId> = None;
-    for tx in txs {
-        let tx_hash = tx.mantle_tx.hash();
-        for op in tx.mantle_tx.ops() {
-            match op {
-                Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
-                    let info = InscriptionInfo {
-                        tx_hash,
-                        parent_msg: inscribe.parent,
-                        this_msg: inscribe.id(),
-                        payload: inscribe.inscription.clone(),
-                    };
-                    last_in_block = Some(info.this_msg);
-                    items.push(info);
-                }
-                Op::ChannelConfig(config) if config.channel == channel_id => {
-                    // Chain off the previous in-block tip (or root) so the
-                    // topological sort below can stitch it into a single chain.
-                    let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
-                    let info = InscriptionInfo {
-                        tx_hash,
-                        parent_msg,
-                        this_msg: config.id(),
-                        payload: Vec::new(),
-                    };
-                    last_in_block = Some(info.this_msg);
-                    items.push(info);
-                }
-                _ => {}
+    let hash_and_ops = txs
+        .iter()
+        .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops()));
+
+    for (tx_hash, op) in hash_and_ops {
+        match op {
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                let info = InscriptionInfo {
+                    tx_hash,
+                    parent_msg: inscribe.parent,
+                    this_msg: inscribe.id(),
+                    payload: inscribe.inscription.clone(),
+                };
+                last_in_block = Some(info.this_msg);
+                items.push(info);
             }
+            Op::ChannelConfig(config) if config.channel == channel_id => {
+                // Chain off the previous in-block tip (or root) so the
+                // topological sort below can stitch it into a single chain.
+                let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
+                let info = InscriptionInfo {
+                    tx_hash,
+                    parent_msg,
+                    this_msg: config.id(),
+                    payload: Vec::new(),
+                };
+                last_in_block = Some(info.this_msg);
+                items.push(info);
+            }
+            _ => {}
         }
     }
 
@@ -1490,8 +1492,8 @@ fn create_channel_config_tx(
     channel_id: ChannelId,
     signing_keys: &[&Ed25519Key],
     keys: Vec<Ed25519PublicKey>,
-    posting_timeframe: u32,
-    posting_timeout: u32,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
     configuration_threshold: u16,
     withdraw_threshold: u16,
 ) -> SignedMantleTx {

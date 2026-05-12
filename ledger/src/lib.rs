@@ -923,8 +923,8 @@ mod tests {
         let config_op = ChannelConfigOp {
             channel: channel_id,
             keys: vec![verifying_key],
-            posting_timeframe: 0,
-            posting_timeout: 0,
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
             configuration_threshold: 1,
             withdraw_threshold: 1,
         };
@@ -1326,8 +1326,8 @@ mod tests {
         let config_op = ChannelConfigOp {
             channel: channel_id,
             keys: vec![],
-            posting_timeframe: 0,
-            posting_timeout: 0,
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
             configuration_threshold: 1,
             withdraw_threshold: 1,
         };
@@ -1386,8 +1386,8 @@ mod tests {
         let config_op = ChannelConfigOp {
             channel: channel1,
             keys: vec![vk3, vk4],
-            posting_timeframe: 0,
-            posting_timeout: 0,
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
             configuration_threshold: 1,
             withdraw_threshold: 1,
         };

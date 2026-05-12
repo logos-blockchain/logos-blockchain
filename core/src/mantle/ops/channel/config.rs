@@ -7,7 +7,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         TxHash,
-        channel::{ChannelState, Channels, Error},
+        channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         encoding::encode_channel_config,
         ledger::Operation,
     },
@@ -18,8 +18,8 @@ use crate::{
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Vec<Ed25519PublicKey>,
-    pub posting_timeframe: u32,
-    pub posting_timeout: u32,
+    pub posting_timeframe: SlotTimeframe,
+    pub posting_timeout: SlotTimeout,
     pub configuration_threshold: u16,
     pub withdraw_threshold: u16,
 }
@@ -49,7 +49,6 @@ pub struct ChannelConfigExecutionContext {
     pub block_slot: Slot,
 }
 
-// TODO: Replace with CHANNEL_CONFIG op: https://github.com/logos-blockchain/logos-blockchain/issues/2461
 impl Operation for ChannelConfigOp {
     type ValidationContext<'a>
         = ChannelConfigValidationContext<'a>
@@ -106,8 +105,8 @@ impl Operation for ChannelConfigOp {
             channel.configuration_threshold = self.configuration_threshold;
             channel.tip_sequencer = 0;
             channel.tip_sequencer_starting_slot = ctx.block_slot;
-            channel.posting_timeframe = self.posting_timeframe;
-            channel.posting_timeout = self.posting_timeout;
+            channel.posting_timeframe = self.posting_timeframe.clone();
+            channel.posting_timeout = self.posting_timeout.clone();
             channel.withdraw_threshold = self.withdraw_threshold;
             channel.tip_slot = ctx.block_slot;
             channel.tip_message = self.id();
@@ -121,11 +120,11 @@ impl Operation for ChannelConfigOp {
                     tip_slot: ctx.block_slot,
                     tip_sequencer: 0,
                     tip_sequencer_starting_slot: ctx.block_slot,
-                    posting_timeframe: self.posting_timeframe,
+                    posting_timeframe: self.posting_timeframe.clone(),
                     balance: 0,
                     withdraw_threshold: self.withdraw_threshold,
                     withdrawal_nonce: 0,
-                    posting_timeout: self.posting_timeout,
+                    posting_timeout: self.posting_timeout.clone(),
                 },
             );
         }

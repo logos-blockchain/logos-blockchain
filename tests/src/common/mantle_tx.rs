@@ -1,6 +1,7 @@
 use lb_core::{
     mantle::{
         MantleTx, NoteId, SignedMantleTx, Transaction as _,
+        channel::{SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
             channel::{
@@ -59,8 +60,8 @@ pub fn create_channel_config_tx(
     signing_keys: &[&Ed25519Key],
     channel_id: ChannelId,
     keys: Vec<Ed25519PublicKey>,
-    posting_timeframe: u32,
-    posting_timeout: u32,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
     configuration_threshold: u16,
     withdraw_threshold: u16,
 ) -> SignedMantleTx {

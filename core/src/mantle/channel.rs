@@ -12,6 +12,33 @@ use crate::mantle::{
     },
 };
 
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct SlotTimeframe(u32);
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct SlotTimeout(u32);
+
+impl From<u32> for SlotTimeframe {
+    fn from(slot: u32) -> Self {
+        Self(slot)
+    }
+}
+impl From<u32> for SlotTimeout {
+    fn from(slot: u32) -> Self {
+        Self(slot)
+    }
+}
+
+impl From<SlotTimeframe> for u32 {
+    fn from(slot: SlotTimeframe) -> Self {
+        slot.0
+    }
+}
+impl From<SlotTimeout> for u32 {
+    fn from(slot: SlotTimeout) -> Self {
+        slot.0
+    }
+}
+
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
     #[error("Invalid parent {parent:?} for channel {channel_id:?}, expected {actual:?}")]
@@ -74,8 +101,8 @@ pub struct ChannelState {
     pub tip_sequencer: u16, /* indicating the actual sequencer position in the list of
                              * accredited keys */
     pub tip_sequencer_starting_slot: Slot,
-    pub posting_timeframe: u32, // number of slots (0 = infinity)
-    pub posting_timeout: u32,   // number of slots (0 = no timeout)
+    pub posting_timeframe: SlotTimeframe, // number of slots (0 = infinity)
+    pub posting_timeout: SlotTimeout,     // number of slots (0 = no timeout)
 
     // Bridging
     pub balance: Value,
@@ -119,37 +146,38 @@ impl ChannelState {
     // Returns the new sequencer index and its starting slot
     #[must_use]
     pub fn round_robin(&self, block_slot: Slot) -> (u16, Slot) {
-        let elapsed_slots = block_slot - self.tip_slot;
-        let index: u16 = if u64::from(elapsed_slots) >= u64::from(self.posting_timeframe)
-            && self.posting_timeout != 0
-            && self.posting_timeframe != 0
-        {
-            ((u64::from(self.tip_sequencer)
-                + (u64::from(elapsed_slots) / u64::from(self.posting_timeout)))
-                % self.accredited_keys.len() as u64) as u16
-        } else if self.posting_timeframe != 0 {
-            ((u64::from(self.tip_sequencer)
-                + (u64::from(block_slot - self.tip_sequencer_starting_slot)
-                    / u64::from(self.posting_timeframe)))
-                % self.accredited_keys.len() as u64) as u16
-        } else {
-            self.tip_sequencer
-        };
+        let elapsed_slot_since_last_tip = (block_slot - self.tip_slot).into_inner();
+        let tip_sequencer_duration = (block_slot - self.tip_sequencer_starting_slot).into_inner();
+        let posting_timeframe = u64::from(self.posting_timeframe.0);
+        let posting_timeout = u64::from(self.posting_timeout.0);
+        let num_sequencers = self.accredited_keys.len() as u64; // bounded by ChannelKeyIndex::MAX
+        let tip_sequencer = u64::from(self.tip_sequencer);
 
-        let starting_slot: Slot = if u64::from(elapsed_slots) >= u64::from(self.posting_timeframe)
-            && self.posting_timeout != 0
-        {
-            self.tip_slot
-                + (u64::from(elapsed_slots) / u64::from(self.posting_timeout))
-                    * u64::from(self.posting_timeout)
-        } else if self.posting_timeframe != 0 {
-            self.tip_sequencer_starting_slot
-                + (u64::from(block_slot - self.tip_sequencer_starting_slot)
-                    / u64::from(self.posting_timeframe))
-                    * u64::from(self.posting_timeframe)
-        } else {
-            self.tip_sequencer_starting_slot
-        };
+        let is_timed_out = elapsed_slot_since_last_tip >= posting_timeframe;
+        let sequencers_timed_out = elapsed_slot_since_last_tip.checked_div(posting_timeout); // None if posting_timeout == 0
+        let timeframe_elapsed = tip_sequencer_duration.checked_div(posting_timeframe); // None if timeframe == 0
+
+        // Timeout-based rotation takes priority when timed out and both divisors are
+        // valid. Falls back to timeframe-based rotation, then to the current
+        // sequencer.
+        let index = sequencers_timed_out
+            .filter(|_| is_timed_out && posting_timeframe != 0)
+            .or(timeframe_elapsed)
+            .map_or(self.tip_sequencer, |slot| {
+                ((tip_sequencer + slot) % num_sequencers) as u16
+            });
+
+        // Starting slot mirrors the same priority, but timeout-based only needs
+        // timed_out
+        let starting_slot = sequencers_timed_out
+            .filter(|_| is_timed_out)
+            .map(|sequencers_timed_out| self.tip_slot + sequencers_timed_out * posting_timeout)
+            .or_else(|| {
+                timeframe_elapsed.map(|timeframe_elapsed| {
+                    self.tip_sequencer_starting_slot + timeframe_elapsed * posting_timeframe
+                })
+            })
+            .unwrap_or(self.tip_sequencer_starting_slot);
 
         (index, starting_slot)
     }
@@ -214,11 +242,11 @@ mod tests {
                         tip_slot: Slot::default(),
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
-                        posting_timeframe: 0,
+                        posting_timeframe: 0u32.into(),
                         balance,
                         withdraw_threshold: 1,
                         withdrawal_nonce: 0,
-                        posting_timeout: 0,
+                        posting_timeout: 0u32.into(),
                     },
                 ),
             }
@@ -242,11 +270,11 @@ mod tests {
                         tip_slot: Slot::default(),
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
-                        posting_timeframe: 0,
+                        posting_timeframe: 0u32.into(),
                         balance: 5,
                         withdraw_threshold: 1,
                         withdrawal_nonce: 0,
-                        posting_timeout: 0,
+                        posting_timeout: 0u32.into(),
                     },
                 )
                 .insert(
@@ -258,11 +286,11 @@ mod tests {
                         tip_slot: Slot::default(),
                         tip_sequencer: 0,
                         tip_sequencer_starting_slot: Slot::default(),
-                        posting_timeframe: 0,
+                        posting_timeframe: 0.into(),
                         balance: 9,
                         withdraw_threshold: 2,
                         withdrawal_nonce: 0,
-                        posting_timeout: 0,
+                        posting_timeout: 0.into(),
                     },
                 ),
         };

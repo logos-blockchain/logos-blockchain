@@ -125,11 +125,11 @@ impl Operation for InscriptionOp {
                 tip_slot: ctx.block_slot,
                 tip_sequencer: 0,
                 tip_sequencer_starting_slot: ctx.block_slot,
-                posting_timeframe: 0,
+                posting_timeframe: 0.into(),
                 balance: 0,
                 withdraw_threshold: crate::mantle::channel::DEFAULT_WITHDRAW_THRESHOLD,
                 withdrawal_nonce: 0,
-                posting_timeout: 0,
+                posting_timeout: 0.into(),
             });
 
         // Update the channel sequencer, its starting slot, the tip message and the tip
