@@ -30,6 +30,13 @@ where
 {
     let packed_message = message.to_bytes()?;
 
+    if packed_message.len() > MAX_MSG_LEN {
+        return Err(PackingError::MessageTooLarge {
+            max: MAX_MSG_LEN,
+            actual: packed_message.len(),
+        });
+    }
+
     let length_prefix: LenType =
         packed_message
             .len()
@@ -62,7 +69,36 @@ where
     R: AsyncReadExt + Unpin,
 {
     let data_length = read_data_length(reader).await?;
+    if data_length > MAX_MSG_LEN {
+        return Err(PackingError::MessageTooLarge {
+            max: MAX_MSG_LEN,
+            actual: data_length,
+        });
+    }
     let mut data = vec![0u8; data_length];
     reader.read_exact(&mut data).await?;
     Ok(Message::from_bytes(&data)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use futures::io::Cursor;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn reject_oversized_message_on_read() {
+        let oversized_len = (MAX_MSG_LEN as u32) + 1;
+        let header = oversized_len.to_le_bytes();
+        let mut reader = Cursor::new(header.to_vec());
+
+        let result = unpack_from_reader::<Vec<u8>, _>(&mut reader).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(
+            err,
+            PackingError::MessageTooLarge { max, actual }
+                if max == MAX_MSG_LEN && actual == oversized_len as usize
+        ));
+    }
 }
