@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::serde::serde_bytes_vec;
 use serde::{Deserialize, Serialize};
@@ -45,11 +46,17 @@ pub struct InscriptionValidationContext<'a> {
     pub channels: &'a Channels,
     pub tx_hash: &'a TxHash,
     pub inscribe_sig: &'a Ed25519Signature,
+    pub block_slot: Slot,
+}
+
+pub struct InscriptionExecutionContext {
+    pub channels: Channels,
+    pub block_slot: Slot,
 }
 
 impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     type ExecutionContext<'a>
-        = Channels
+        = InscriptionExecutionContext
     where
         Self: 'a;
     type Error = Error;
@@ -59,29 +66,22 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         // only if parent == ZERO
         if let Some(channel) = ctx.channels.channels.get(&self.channel_id).cloned() {
             // Check the parent corresponds to the payload
-            if self.parent != channel.tip {
+            if self.parent != channel.tip_message {
                 return Err(Error::InvalidParent {
                     channel_id: self.channel_id,
                     parent: self.parent.into(),
-                    actual: channel.tip.into(),
+                    actual: channel.tip_message.into(),
                 });
             }
 
-            // Check that the signer is in the list
-            if !channel.keys.contains(&self.signer) {
+            // Check that the signer is the authorized one
+            if self.signer
+                != channel.accredited_keys[channel.round_robin(ctx.block_slot).0 as usize]
+            {
                 return Err(Error::UnauthorizedSigner {
                     channel_id: self.channel_id,
                     signer: format!("{signer:?}", signer = self.signer),
                 });
-            }
-
-            // Check the signature
-            if self
-                .signer
-                .verify(ctx.tx_hash.as_signing_bytes().as_ref(), ctx.inscribe_sig)
-                .is_err()
-            {
-                return Err(Error::InvalidSignature);
             }
         } else if self.parent != MsgId::root() {
             // Checked that the parent is ZERO because channel doesn't exist
@@ -92,38 +92,57 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             });
         }
 
+        // Check the signature
+        if self
+            .signer
+            .verify(ctx.tx_hash.as_signing_bytes().as_ref(), ctx.inscribe_sig)
+            .is_err()
+        {
+            return Err(Error::InvalidSignature);
+        }
+
         Ok(())
     }
 
     fn execute(
         &self,
-        mut channels: Self::ExecutionContext<'_>,
+        mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
         // if the channel doesn't exist, create it
-        let channel = channels
+        let channel = ctx
+            .channels
             .channels
             .get(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
-                tip: MsgId::root(),
-                keys: vec![self.signer].into(),
+                accredited_keys: vec![self.signer].into(),
+                configuration_threshold: 1,
+                tip_message: MsgId::root(),
+                tip_slot: ctx.block_slot,
+                tip_sequencer: 0,
+                tip_sequencer_starting_slot: ctx.block_slot,
+                posting_timeframe: 0.into(),
                 balance: 0,
                 withdraw_threshold: crate::mantle::channel::DEFAULT_WITHDRAW_THRESHOLD,
                 withdrawal_nonce: 0,
+                posting_timeout: 0.into(),
             });
 
-        // Update the channel tip
-        channels.channels = channels.channels.insert(
+        // Update the channel sequencer, its starting slot, the tip message and the tip
+        // slot
+        let (new_sequencer, new_starting_slot) = channel.round_robin(ctx.block_slot);
+        ctx.channels.channels = ctx.channels.channels.insert(
             self.channel_id,
             ChannelState {
-                tip: self.id(),
-                keys: Arc::clone(&channel.keys),
-                balance: channel.balance,
-                withdraw_threshold: channel.withdraw_threshold,
-                withdrawal_nonce: channel.withdrawal_nonce,
+                tip_message: self.id(),
+                accredited_keys: Arc::clone(&channel.accredited_keys),
+                tip_sequencer: new_sequencer,
+                tip_sequencer_starting_slot: new_starting_slot,
+                tip_slot: ctx.block_slot,
+                ..channel
             },
         );
-        Ok(channels)
+        Ok(ctx)
     }
 }
 

@@ -6,14 +6,17 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
+        channel::{SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId, config::ChannelConfigOp,
+                inscribe::InscriptionOp,
             },
         },
         tx::TxHash,
     },
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc};
@@ -173,8 +176,12 @@ enum ActorRequest {
         msg_id: MsgId,
         reply: tokio::sync::oneshot::Sender<Result<PublishResult, Error>>,
     },
-    SetKeys {
+    ChannelConfig {
         keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
     },
 }
@@ -192,10 +199,7 @@ enum InFlight {
 pub struct SequencerHandle<Node> {
     request_tx: mpsc::Sender<ActorRequest>,
     node: Node,
-    /// Internal broadcast of every channel-related `tx_hash` observed in any
-    /// block (canonical or side branch) — used by `set_keys` to await
-    /// "seen on chain" without waiting for finalization. Not exposed.
-    tx_seen_tx: broadcast::Sender<TxHash>,
+    event_tx: broadcast::Sender<Event>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
 }
 
@@ -322,33 +326,36 @@ where
         Ok(result)
     }
 
-    /// Update the channel's accredited keys.
+    /// Update the channel's config.
     ///
     /// The sequencer's signing key must be the channel administrator
     /// (`keys[0]`). This overwrites the entire key list — include the admin
     /// key if it should remain authorized.
     ///
-    /// Returns the publish result (with checkpoint) and a future that
-    /// resolves when the transaction is first observed in any block (the
-    /// ledger validates inscriptions against current canonical channel keys,
-    /// so seen-on-chain is sufficient to start using the new keys; full
-    /// finalization is not required and would be much slower):
+    /// `posting_timeframe` and `posting_timeout` control round-robin
+    /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a
+    /// single fixed sequencer at index 0.
     ///
-    /// ```ignore
-    /// let (result, on_chain) = handle.set_keys(vec![admin_pk]).await?;
-    /// save_checkpoint(&result.checkpoint);
-    /// on_chain.await?; // wait until set_keys lands in some block
-    /// ```
-    pub async fn set_keys(
+    /// Returns the publish result (with checkpoint) and a future that
+    /// resolves when the transaction is finalized.
+    pub async fn channel_config(
         &self,
         keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
     ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
-        // Subscribe BEFORE submitting to avoid missing the seen-on-chain event.
-        let mut tx_seen_rx = self.tx_seen_tx.subscribe();
+        // Subscribe BEFORE submitting to avoid missing finalization events.
+        let mut event_rx = self.event_tx.subscribe();
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::SetKeys {
+        let request = ActorRequest::ChannelConfig {
             keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            withdraw_threshold,
             reply: reply_tx,
         };
 
@@ -365,17 +372,21 @@ where
 
         let tx_hash = signed_tx.mantle_tx.hash();
 
-        info!("Submitted set_keys transaction {:?}", tx_hash);
+        info!("Submitted channel_config transaction {:?}", tx_hash);
 
         // Post to network (best effort, will be resubmitted if needed)
         if let Err(e) = self.node.post_transaction(signed_tx).await {
-            warn!("Failed to post set_keys transaction: {e}");
+            warn!("Failed to post channel_config transaction: {e}");
         }
 
-        let on_chain = async move {
+        let finalized = async move {
             loop {
-                match tx_seen_rx.recv().await {
-                    Ok(seen) if seen == tx_hash => return Ok(()),
+                match event_rx.recv().await {
+                    Ok(Event::TxsFinalized { ref tx_hashes, .. })
+                        if tx_hashes.contains(&tx_hash) =>
+                    {
+                        return Ok(());
+                    }
                     Ok(_) => {}
                     Err(_) => {
                         return Err(Error::Unavailable {
@@ -386,7 +397,7 @@ where
             }
         };
 
-        Ok((publish_result, on_chain))
+        Ok((publish_result, finalized))
     }
 }
 
@@ -429,10 +440,6 @@ pub struct ZoneSequencer<Node> {
 
     // Broadcast channel for events — handles subscribe to receive events
     event_tx: broadcast::Sender<Event>,
-
-    // Internal broadcast of tx_hashes seen on any block — drives the
-    // `set_keys` "seen on chain" wait. Mirrors `SequencerHandle::tx_seen_tx`.
-    tx_seen_tx: broadcast::Sender<TxHash>,
 
     // Readiness signal — set to true when connected and backfill is complete
     ready_tx: tokio::sync::watch::Sender<bool>,
@@ -501,7 +508,6 @@ where
                             inscribe.parent,
                             inscribe.id(),
                             inscribe.inscription.clone(),
-                            inscribe.signer,
                         );
                         is_inscription = true;
                         break;
@@ -519,13 +525,12 @@ where
 
         let resubmit_interval = tokio::time::interval(config.resubmit_interval);
         let (event_tx, _) = broadcast::channel(256);
-        let (tx_seen_tx, _) = broadcast::channel(256);
         let (ready_tx, ready_rx) = tokio::sync::watch::channel(false);
 
         let handle = SequencerHandle {
             request_tx,
             node: node.clone(),
-            tx_seen_tx: tx_seen_tx.clone(),
+            event_tx: event_tx.clone(),
             ready_rx,
         };
 
@@ -547,7 +552,6 @@ where
             backfill_from: None,
             backfill_to: None,
             event_tx,
-            tx_seen_tx,
             ready_tx,
         };
 
@@ -818,10 +822,6 @@ where
     /// Process a `BlockEventResult`: apply channel updates to local state
     /// and emit events. Returns at most one event; a second is buffered.
     fn apply_block_result(&mut self, result: BlockEventResult) -> Option<Event> {
-        for tx_hash in &result.seen_tx_hashes {
-            drop(self.tx_seen_tx.send(*tx_hash));
-        }
-
         if let Some(update) = result.channel_update.as_ref() {
             Self::log_channel_update(update);
             let has_pending = self
@@ -950,10 +950,25 @@ where
                 drop(reply.send(Ok(result)));
                 None
             }
-            ActorRequest::SetKeys { keys, reply } => {
+            ActorRequest::ChannelConfig {
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                withdraw_threshold,
+                reply,
+            } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
-                let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
+                let signed_tx = create_channel_config_tx(
+                    self.channel_id,
+                    &[&self.signing_key],
+                    keys,
+                    posting_timeframe,
+                    posting_timeout,
+                    configuration_threshold,
+                    withdraw_threshold,
+                );
                 s.submit_other(signed_tx.clone());
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
                 let result = PublishResult {
@@ -989,13 +1004,7 @@ where
             hex::encode(id.0),
         );
 
-        s.submit_inscription(
-            signed_tx.clone(),
-            parent,
-            new_msg_id,
-            data.clone(),
-            self.signing_key.public_key(),
-        );
+        s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data.clone());
         self.last_msg_id = new_msg_id;
 
         // Post to network (best effort, resubmit timer retries if needed)
@@ -1009,7 +1018,6 @@ where
             parent_msg: parent,
             this_msg: new_msg_id,
             payload: data,
-            signer: self.signing_key.public_key(),
         });
         let event = Event::Published { info, checkpoint };
         drop(self.event_tx.send(event.clone()));
@@ -1025,7 +1033,7 @@ fn reject_not_ready(request: ActorRequest) {
         ActorRequest::PublishMessage { .. } => {
             warn!("Publish dropped: sequencer not yet ready");
         }
-        ActorRequest::SetKeys { reply, .. } => drop(reply.send(Err(err()))),
+        ActorRequest::ChannelConfig { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::PrepareTx { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::SignTx { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::SubmitSignedTx { reply, .. } => drop(reply.send(Err(err()))),
@@ -1064,10 +1072,6 @@ struct BlockEventResult {
     finalized_tx_hashes: Vec<TxHash>,
     finalized_inscriptions: Vec<InscriptionInfo>,
     channel_update: Option<crate::state::ChannelUpdateInfo>,
-    /// Tx hashes belonging to our channel observed in this block event
-    /// (incl. backfilled blocks). Used for the internal "tx seen" signal —
-    /// no canonical filtering, just "we saw it on some block".
-    seen_tx_hashes: Vec<TxHash>,
 }
 
 /// Process a block event. Returns finalized tx hashes and optional channel
@@ -1098,7 +1102,6 @@ where
             finalized_tx_hashes: Vec::new(),
             finalized_inscriptions: Vec::new(),
             channel_update: None,
-            seen_tx_hashes: Vec::new(),
         };
     };
 
@@ -1133,9 +1136,6 @@ where
         .filter(|tx| matches_channel(tx, channel_id))
         .map(|tx| tx.mantle_tx.hash())
         .collect();
-
-    let mut seen_tx_hashes = our_txs.clone();
-    seen_tx_hashes.extend(lib_finalized.iter().copied());
 
     let inscriptions = extract_inscriptions(&event.block.transactions, channel_id);
 
@@ -1191,7 +1191,6 @@ where
         finalized_tx_hashes,
         finalized_inscriptions,
         channel_update,
-        seen_tx_hashes,
     }
 }
 
@@ -1407,26 +1406,45 @@ fn enqueue_resubmit<Node>(
 /// form a single linear chain — that would be a protocol-level invariant
 /// violation.
 fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
-    let items: Vec<InscriptionInfo> = txs
+    // Also tracks ChannelConfig as a synthetic tip-update entry so the SDK's
+    // channel_tip stays in sync with the chain. Per spec, ChannelConfig sets
+    // `chan.tip_hash = hash(encode(config))`, replacing whatever was there.
+    // Synthetic entries have empty payload so app-layer consumers (which key
+    // off payload bytes) ignore them naturally.
+    let mut items: Vec<InscriptionInfo> = Vec::new();
+    let mut last_in_block: Option<MsgId> = None;
+    let hash_and_ops = txs
         .iter()
-        .flat_map(|tx| {
-            tx.mantle_tx.ops().iter().filter_map(|op| {
-                if let Op::ChannelInscribe(inscribe) = op
-                    && inscribe.channel_id == channel_id
-                {
-                    Some(InscriptionInfo {
-                        tx_hash: tx.mantle_tx.hash(),
-                        parent_msg: inscribe.parent,
-                        this_msg: inscribe.id(),
-                        payload: inscribe.inscription.clone(),
-                        signer: inscribe.signer,
-                    })
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
+        .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops()));
+
+    for (tx_hash, op) in hash_and_ops {
+        match op {
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                let info = InscriptionInfo {
+                    tx_hash,
+                    parent_msg: inscribe.parent,
+                    this_msg: inscribe.id(),
+                    payload: inscribe.inscription.clone(),
+                };
+                last_in_block = Some(info.this_msg);
+                items.push(info);
+            }
+            Op::ChannelConfig(config) if config.channel == channel_id => {
+                // Chain off the previous in-block tip (or root) so the
+                // topological sort below can stitch it into a single chain.
+                let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
+                let info = InscriptionInfo {
+                    tx_hash,
+                    parent_msg,
+                    this_msg: config.id(),
+                    payload: Vec::new(),
+                };
+                last_in_block = Some(info.this_msg);
+                items.push(info);
+            }
+            _ => {}
+        }
+    }
 
     if items.len() <= 1 {
         return items;
@@ -1456,7 +1474,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
     tx.mantle_tx.ops().iter().any(|op| match op {
         Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        Op::ChannelSetKeys(set_keys) => set_keys.channel == channel_id,
+        Op::ChannelConfig(set_keys) => set_keys.channel == channel_id,
         _ => false,
     })
 }
@@ -1491,25 +1509,43 @@ fn create_inscribe_tx(
     (signed_tx, msg_id)
 }
 
-fn create_set_keys_tx(
+fn create_channel_config_tx(
     channel_id: ChannelId,
-    signing_key: &Ed25519Key,
+    signing_keys: &[&Ed25519Key],
     keys: Vec<Ed25519PublicKey>,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
+    configuration_threshold: u16,
+    withdraw_threshold: u16,
 ) -> SignedMantleTx {
-    let set_keys_op = SetKeysOp {
+    let config_op = ChannelConfigOp {
         channel: channel_id,
         keys,
+        posting_timeframe,
+        posting_timeout,
+        configuration_threshold,
+        withdraw_threshold,
     };
 
     // TODO: fund tx
-    let set_keys_tx = MantleTx(vec![Op::ChannelSetKeys(set_keys_op)]);
+    let config_tx = MantleTx(vec![Op::ChannelConfig(config_op)]);
 
-    let tx_hash = set_keys_tx.hash();
-    let signature = sign_tx(tx_hash, signing_key);
+    let tx_hash = config_tx.hash();
+    let signatures = signing_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            IndexedSignature::new(
+                index as ChannelKeyIndex,
+                key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            )
+        })
+        .collect();
+    let proof = ChannelMultiSigProof::new(signatures).unwrap();
 
     SignedMantleTx {
-        ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        mantle_tx: set_keys_tx,
+        ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],
+        mantle_tx: config_tx,
     }
 }
 

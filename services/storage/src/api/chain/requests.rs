@@ -15,9 +15,7 @@ use crate::{
     StorageMsg, StorageServiceError,
     api::{
         StorageApiRequest, StorageBackendApi, StorageOperation,
-        backend::rocksdb::chain::{
-            streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec,
-        },
+        backend::{streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec},
         chain::StorageChainApi,
     },
     backends::StorageBackend,

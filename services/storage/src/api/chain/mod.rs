@@ -14,7 +14,7 @@ use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 
-use crate::api::backend::rocksdb::chain::HeaderIdStream;
+use crate::api::backend::HeaderIdStream;
 
 #[async_trait]
 pub trait StorageChainApi {

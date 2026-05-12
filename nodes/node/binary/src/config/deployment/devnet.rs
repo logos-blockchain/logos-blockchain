@@ -78,7 +78,7 @@ cryptarchia:
           - opcode: 32
             payload:
               service_type: BN
-              locators: []
+              locators: [ /ip4/127.0.0.1/tcp/8000 ]
               provider_id: '86c8519f00178e9eb1fe5f4247e4bed77d4c9f6da2fb10e8a1fdd7ba6bc79fa0'
               zk_id: '64249c75c2cb813578b75d05b215fc95f67cea5862fff047228183f22e63460e'
               locked_note_id: '0000000000000000000000000000000000000000000000000000000000000000'

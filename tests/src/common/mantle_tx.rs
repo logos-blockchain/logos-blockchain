@@ -1,14 +1,17 @@
 use lb_core::{
     mantle::{
         MantleTx, NoteId, SignedMantleTx, Transaction as _,
+        channel::{SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId, config::ChannelConfigOp,
+                inscribe::InscriptionOp,
             },
         },
         tx::TxHash,
     },
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
     sdp::{ActiveMessage, DeclarationMessage, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{
@@ -53,26 +56,40 @@ pub fn create_channel_inscribe_tx(
 }
 
 #[must_use]
-pub fn create_channel_set_keys_tx(
-    signing_key: &Ed25519Key,
+pub fn create_channel_config_tx(
+    signing_keys: &[&Ed25519Key],
     channel_id: ChannelId,
     keys: Vec<Ed25519PublicKey>,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
+    configuration_threshold: u16,
+    withdraw_threshold: u16,
 ) -> SignedMantleTx {
-    let set_keys_op = SetKeysOp {
+    let set_keys_op = ChannelConfigOp {
         channel: channel_id,
         keys,
+        posting_timeframe,
+        posting_timeout,
+        configuration_threshold,
+        withdraw_threshold,
     };
 
-    let set_keys_tx = MantleTx(vec![Op::ChannelSetKeys(set_keys_op)]);
+    let set_keys_tx = MantleTx(vec![Op::ChannelConfig(set_keys_op)]);
 
     let tx_hash = set_keys_tx.hash();
-    let signature_bytes = signing_key
-        .sign_payload(tx_hash.as_signing_bytes().as_ref())
-        .to_bytes();
-    let signature = Ed25519Signature::from_bytes(&signature_bytes);
-
+    let signatures = signing_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            IndexedSignature::new(
+                index as ChannelKeyIndex,
+                key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            )
+        })
+        .collect();
+    let proof = ChannelMultiSigProof::new(signatures).unwrap();
     SignedMantleTx {
-        ops_proofs: vec![OpProof::Ed25519Sig(signature)],
+        ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],
         mantle_tx: set_keys_tx,
     }
 }

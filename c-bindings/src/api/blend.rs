@@ -2,7 +2,7 @@ use std::ffi::c_char;
 
 use lb_core::{
     mantle::NoteId,
-    sdp::{self, DeclarationMessage, Locator, ProviderId, ServiceType},
+    sdp::{self, DeclarationMessage, Locator, Locators, ProviderId, ServiceType},
 };
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -53,7 +53,7 @@ unsafe fn parse_locked_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus
     })
 }
 
-unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult<Vec<Locator>> {
+unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult<Locators> {
     let locator_ptrs = unsafe { std::slice::from_raw_parts(ptrs, len) };
     let mut parsed = Vec::with_capacity(len);
     for (i, &ptr) in locator_ptrs.iter().enumerate() {
@@ -72,7 +72,11 @@ unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult
         };
         parsed.push(addr);
     }
-    Ok(parsed)
+    let Ok(locators) = parsed.try_into() else {
+        log::error!("[blend_join_as_core_node] Cannot use empty list of locators.");
+        return Err(OperationStatus::ValidationError);
+    };
+    Ok(locators)
 }
 
 /// Joins the Blend network as a core node by posting a service declaration.

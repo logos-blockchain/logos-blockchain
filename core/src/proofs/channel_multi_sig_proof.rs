@@ -7,14 +7,14 @@ use thiserror::Error;
 use crate::mantle::ops::channel::ChannelKeyIndex;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WithdrawSignature {
+pub struct IndexedSignature {
     pub channel_key_index: ChannelKeyIndex, /* Using ChannelKeyIndex ensures indices are
                                              * bounded, and MAX provides an upper limit for the
                                              * number of unique signatures (one per index) */
     pub signature: Ed25519Signature,
 }
 
-impl WithdrawSignature {
+impl IndexedSignature {
     #[must_use]
     pub const fn new(channel_key_index: ChannelKeyIndex, signature: Ed25519Signature) -> Self {
         Self {
@@ -24,19 +24,19 @@ impl WithdrawSignature {
     }
 }
 
-impl From<(ChannelKeyIndex, Ed25519Signature)> for WithdrawSignature {
+impl From<(ChannelKeyIndex, Ed25519Signature)> for IndexedSignature {
     fn from((index, signature): (ChannelKeyIndex, Ed25519Signature)) -> Self {
         Self::new(index, signature)
     }
 }
 
-impl PartialOrd<Self> for WithdrawSignature {
+impl PartialOrd<Self> for IndexedSignature {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for WithdrawSignature {
+impl Ord for IndexedSignature {
     fn cmp(&self, other: &Self) -> Ordering {
         self.channel_key_index
             .cmp(&other.channel_key_index)
@@ -53,13 +53,13 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChannelWithdrawProof {
+pub struct ChannelMultiSigProof {
     // Invariant: signatures are sorted by index (then signature) with no duplicates
-    signatures: Vec<WithdrawSignature>,
+    signatures: Vec<IndexedSignature>,
 }
 
-impl ChannelWithdrawProof {
-    pub fn new(signatures: Vec<WithdrawSignature>) -> Result<Self, Error> {
+impl ChannelMultiSigProof {
+    pub fn new(signatures: Vec<IndexedSignature>) -> Result<Self, Error> {
         let signatures = Self::normalize_signatures(signatures);
         Self::validate_well_formedness(&signatures)?;
         Ok(Self { signatures })
@@ -69,7 +69,7 @@ impl ChannelWithdrawProof {
     ///
     /// This is required for the Proof to be well-formed, but it's not
     /// sufficient for the Proof to be valid.
-    fn normalize_signatures(mut signatures: Vec<WithdrawSignature>) -> Vec<WithdrawSignature> {
+    fn normalize_signatures(mut signatures: Vec<IndexedSignature>) -> Vec<IndexedSignature> {
         signatures.sort_unstable();
         signatures.dedup();
         signatures
@@ -89,7 +89,7 @@ impl ChannelWithdrawProof {
     /// This validates structural correctness only. Cryptographic validity
     /// (e.g.: signature verification, threshold requirements, index-to-key
     /// correspondence) must be checked separately.
-    fn validate_well_formedness(signatures: &[WithdrawSignature]) -> Result<(), Error> {
+    fn validate_well_formedness(signatures: &[IndexedSignature]) -> Result<(), Error> {
         let unique_indices = signatures
             .iter()
             .map(|signature| signature.channel_key_index)
@@ -108,15 +108,15 @@ impl ChannelWithdrawProof {
     }
 
     #[must_use]
-    pub const fn signatures(&self) -> &Vec<WithdrawSignature> {
+    pub const fn signatures(&self) -> &Vec<IndexedSignature> {
         &self.signatures
     }
 }
 
-impl TryFrom<Vec<WithdrawSignature>> for ChannelWithdrawProof {
+impl TryFrom<Vec<IndexedSignature>> for ChannelMultiSigProof {
     type Error = Error;
 
-    fn try_from(value: Vec<WithdrawSignature>) -> Result<Self, Self::Error> {
+    fn try_from(value: Vec<IndexedSignature>) -> Result<Self, Self::Error> {
         Self::new(value)
     }
 }

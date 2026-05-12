@@ -13,7 +13,7 @@ use lb_core::{
             transfer::TransferOp,
         },
     },
-    proofs::channel_withdraw_proof::{ChannelWithdrawProof, WithdrawSignature},
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
     sdp::{Locator, ServiceType},
 };
 use lb_http_api_common::bodies::{
@@ -35,6 +35,7 @@ use lb_zone_sdk::{
 };
 
 type Node = NodeHttpClient;
+use lb_core::mantle::channel::{SlotTimeframe, SlotTimeout};
 use logos_blockchain_tests::{
     common::{sync::wait_for_validators_mode_and_height, time::max_block_propagation_time},
     nodes::{Validator, create_validator_config},
@@ -157,16 +158,16 @@ async fn test_sequencer_publish_and_indexer_read() {
 
     wait_for_indexer_ordered(&indexer, &test_data, Duration::from_mins(6)).await;
 
-    // Test set_keys: update channel's accredited keys
+    // Test channel_config: update channel's accredited keys
     let second_pk = keygen().public_key();
     let (_result, finalized) = handle
-        .set_keys(vec![admin_pk, second_pk])
+        .channel_config(vec![admin_pk, second_pk], 0.into(), 0.into(), 1, 1)
         .await
-        .expect("set_keys should succeed");
+        .expect("channel_config should succeed");
     timeout(Duration::from_mins(6), finalized)
         .await
-        .expect("Timeout waiting for set_keys to finalize")
-        .expect("set_keys finalization failed");
+        .expect("Timeout waiting for channel_config to finalize")
+        .expect("channel_config finalization failed");
 
     drive_task.abort();
 }
@@ -530,12 +531,15 @@ async fn spawn_competing_validators(n: usize) -> (Vec<Validator>, reqwest::Url) 
     (validators, node_url)
 }
 
-/// Bootstrap the channel by submitting `set_keys` from a transient sequencer
-/// using `admin_key`. Waits for finalization, then drops the sequencer.
+/// Bootstrap the channel by submitting `channel_config` from a transient
+/// sequencer using `admin_key`. Waits for finalization, then drops the
+/// sequencer.
 async fn authorize_keys(
     channel_id: ChannelId,
     admin_key: Ed25519Key,
     keys: Vec<lb_core::mantle::ops::channel::Ed25519PublicKey>,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
     node_url: reqwest::Url,
     sequencer_config: SequencerConfig,
 ) {
@@ -549,13 +553,13 @@ async fn authorize_keys(
     let (poll, _rx) = spawn_drive(sequencer);
     handle.wait_ready().await;
     let (_result, finalized) = handle
-        .set_keys(keys)
+        .channel_config(keys, posting_timeframe, posting_timeout, 1, 1)
         .await
-        .expect("set_keys should succeed");
+        .expect("channel_config should succeed");
     timeout(Duration::from_mins(6), finalized)
         .await
-        .expect("Timeout waiting for set_keys to finalize")
-        .expect("set_keys finalization failed");
+        .expect("Timeout waiting for channel_config to finalize")
+        .expect("channel_config finalization failed");
     poll.abort();
 }
 
@@ -1016,11 +1020,15 @@ async fn test_sorted_conflict_resolution() {
     let signing_key_b = keygen();
     let seq_b_pk = signing_key_b.public_key();
 
-    // Phase 1: SeqA creates channel and authorizes SeqB
+    // Phase 1: SeqA creates channel and authorizes SeqB.
+    // posting_timeframe=10 → each sequencer has ~10s windows in turn so both
+    // can land their messages within the test.
     authorize_keys(
         channel_id,
         signing_key_a.clone(),
         vec![admin_pk, seq_b_pk],
+        10.into(),
+        0.into(),
         node_url.clone(),
         sequencer_config.clone(),
     )
@@ -1210,6 +1218,8 @@ async fn test_balance_conditioned_republish() {
         channel_id,
         signing_key_a.clone(),
         vec![admin_pk, seq_b_pk, seq_c_pk],
+        60.into(),
+        0.into(),
         node_url.clone(),
         sequencer_config.clone(),
     )
@@ -1354,6 +1364,8 @@ async fn test_concurrent_identical_payloads() {
         channel_id,
         signing_key_a.clone(),
         vec![admin_pk, seq_b_pk, seq_c_pk],
+        60.into(),
+        0.into(),
         node_url.clone(),
         sequencer_config.clone(),
     )
@@ -1977,7 +1989,7 @@ async fn test_subscribe_to_finalized_withdraw() {
     // because withdraw_threshold is 1.
     // We can actually reuse `inscription_proof`, but here we use
     // `SequencerHandle::sign_tx` to show how to sign tx built by other sequencers.
-    let withdraw_proof = ChannelWithdrawProof::new(vec![WithdrawSignature::new(
+    let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
         0,
         handle.sign_tx(&tx).await.unwrap(),
     )])
@@ -1987,7 +1999,7 @@ async fn test_subscribe_to_finalized_withdraw() {
     let signed_tx = SignedMantleTx::new(
         tx,
         vec![
-            OpProof::ChannelWithdrawProof(withdraw_proof),
+            OpProof::ChannelMultiSigProof(withdraw_proof),
             OpProof::Ed25519Sig(inscription_proof),
         ],
     )

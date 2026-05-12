@@ -800,6 +800,7 @@ fn base_user_wallet_transaction(receivers: &[(ZkPublicKey, u64)]) -> MantleTxBui
     let empty_context = MantleTxContext {
         gas_context: MantleTxGasContext::new(
             HashMap::new(),
+            HashMap::new(),
             GasPrices::new(0, DEFAULT_STORAGE_GAS_PRICE),
         ),
         ..MantleTxContext::default()

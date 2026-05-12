@@ -1127,7 +1127,7 @@ mod tests {
             CryptarchiaParameter, GenesisTx as _, NoteId,
             ops::channel::{ChannelId, MsgId},
         },
-        sdp::{ProviderId, ServiceType},
+        sdp::{Locator, ProviderId, ServiceType},
     };
 
     // ── helpers ───────────────────────────────────────────────────────────────
@@ -1172,7 +1172,7 @@ mod tests {
             locked_note_id: NoteId(Fr::from(u64::from(id))),
             zk_id: ZkPublicKey::from(BigUint::from(u64::from(id) + 1)),
             provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[0; 32]).unwrap()),
-            locators: [].into(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         }
     }
 
