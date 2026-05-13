@@ -1,8 +1,8 @@
-use lbc_types::native::Bytes;
+use lbc_types::native::Witness;
 
 use crate::PoQWitnessInputs;
 
-pub fn generate_witness(inputs: PoQWitnessInputs) -> Result<Bytes, lbp_error::Error> {
+pub fn generate_witness(inputs: PoQWitnessInputs) -> Result<Witness, lbp_error::Error> {
     let witness_input: lbc_poq_sys::PoqWitnessInput = inputs.try_into()?;
-    lbc_poq_sys::generate_witness(witness_input).map_err(Into::into)
+    lbc_poq_sys::generate_witness(&witness_input).map_err(Into::into)
 }
