@@ -59,6 +59,7 @@ pub struct BlocksStreamQuery {
     pub server_batch_size: Option<usize>,
     /// When true, include only immutable blocks.
     /// If `slot_to` is omitted, the default anchor is LIB slot.
+    /// Defaults to `false`.
     #[serde(default)]
     pub immutable_only: Option<bool>,
 }

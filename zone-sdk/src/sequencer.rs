@@ -1579,11 +1579,11 @@ fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZero;
 
     use async_trait::async_trait;
     use lb_common_http_client::{
-        ApiBlock, ApiHeader, BlockInfo, ChainServiceMode, CryptarchiaInfo, State,
+        ApiBlock, ApiHeader, BlockInfo, BlocksRangeStreamParams, ChainServiceMode, CryptarchiaInfo,
+        State,
     };
     use lb_core::{
         header::ContentId,
@@ -1737,12 +1737,7 @@ mod tests {
 
         async fn blocks_range_stream(
             &self,
-            _blocks_limit: Option<NonZero<usize>>,
-            _slot_from: Option<u64>,
-            _slot_to: Option<u64>,
-            _descending: Option<bool>,
-            _server_batch_size: Option<NonZero<usize>>,
-            _immutable_only: Option<bool>,
+            _params: BlocksRangeStreamParams,
         ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
             unimplemented!()
         }

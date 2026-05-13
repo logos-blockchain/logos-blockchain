@@ -123,6 +123,57 @@ impl BlocksStreamQueryParams {
     }
 }
 
+/// Query parameters for the `get_blocks_range_stream` method, which streams
+/// processed blocks in a slot-bounded window.
+#[derive(Debug, Copy, Clone)]
+pub struct BlocksRangeStreamParams {
+    /// If omitted, the server chooses a default lower bound.
+    /// For descending streams this is `slot 0` (bounded by `blocks_limit`).
+    /// For ascending streams, `slot_from` is estimated from the average
+    /// slots-per-block and `blocks_limit`, biased so the stream ends near
+    /// `slot_to`. This may return fewer than `blocks_limit` blocks; callers
+    /// can refine by specifying `slot_from` explicitly.
+    /// Upper bound slot (inclusive). Defaults to tip slot, or LIB slot when
+    /// `immutable_only=true`.
+    pub slot_from: Option<u64>,
+    /// Upper bound slot (inclusive). Defaults to tip slot, or LIB slot when
+    /// `immutable_only=true`.
+    pub slot_to: Option<u64>,
+    /// Sort direction. Defaults to `Descending`.
+    pub order: Option<BlockSortOrder>,
+    /// The maximum number of actual blocks to return. If omitted:
+    /// - explicit bounded slot range (`slot_from` and `slot_to`) defaults to
+    ///   the server maximum (`630_720_000`);
+    /// - otherwise defaults to `100`.
+    pub blocks_limit: Option<NonZero<usize>>,
+    /// Server chunk size hint for streamed delivery. Defaults to `100` ,
+    /// maximum `1000`.
+    pub server_batch_size: Option<NonZero<usize>>,
+    /// When `ImmutableOnly`, include only immutable blocks.
+    /// If `slot_to` is omitted, the default anchor is LIB slot.
+    /// Defaults to `MutableAndImmutable`, which includes all blocks up to the
+    /// tip (bounded by `blocks_limit` or `slot_from`).
+    pub block_filter: Option<BlockFilter>,
+}
+
+/// Sort order for blocks in the `get_blocks_range_stream` method.
+#[derive(Debug, Copy, Clone)]
+pub enum BlockSortOrder {
+    /// Ascending order (oldest to newest).
+    Ascending,
+    /// Descending order (newest to oldest).
+    Descending,
+}
+
+/// Filter for block types in the `get_blocks_range_stream` method.
+#[derive(Debug, Copy, Clone)]
+pub enum BlockFilter {
+    /// Includes only immutable blocks.
+    ImmutableOnly,
+    /// Includes mutable and immutable blocks.
+    MutableAndImmutable,
+}
+
 #[derive(Clone)]
 pub struct CommonHttpClient {
     client: Arc<Client>,
@@ -408,26 +459,31 @@ impl CommonHttpClient {
     ///
     /// `server_batch_size` lets callers request smaller chunks; the server
     /// still enforces its own upper bound.
-    #[expect(clippy::too_many_arguments, reason = "Need all args")]
     pub async fn get_blocks_range_stream(
         &self,
         base_url: Url,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksRangeStreamParams,
     ) -> Result<impl Stream<Item = ProcessedBlockEvent> + use<>, Error> {
-        Self::verify_inputs(blocks_limit, slot_from, slot_to, server_batch_size)?;
+        Self::verify_inputs(
+            params.blocks_limit,
+            params.slot_from,
+            params.slot_to,
+            params.server_batch_size,
+        )?;
 
         let params = BlocksStreamQueryParams {
-            blocks_limit,
-            slot_from,
-            slot_to,
-            descending,
-            server_batch_size,
-            immutable_only,
+            blocks_limit: params.blocks_limit,
+            slot_from: params.slot_from,
+            slot_to: params.slot_to,
+            descending: params.order.map(|order| match order {
+                BlockSortOrder::Ascending => false,
+                BlockSortOrder::Descending => true,
+            }),
+            server_batch_size: params.server_batch_size,
+            immutable_only: params.block_filter.map(|filter| match filter {
+                BlockFilter::ImmutableOnly => true,
+                BlockFilter::MutableAndImmutable => false,
+            }),
         };
 
         let request_url = Self::build_blocks_range_stream_request_url(&base_url, &params)?;

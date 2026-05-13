@@ -58,6 +58,7 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use tokio_stream::StreamExt as _;
+use tracing::debug;
 
 use crate::api::{
     errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
@@ -69,6 +70,8 @@ use crate::api::{
         transactions::ApiSignedTransactionRef,
     },
 };
+
+const TARGET: &str = "node::binary::api";
 
 #[derive(Debug)]
 struct ResolvedBlocksStreamWindow {
@@ -104,18 +107,24 @@ fn resolve_blocks_stream_window(
     } else {
         chain_info.slot
     };
-    let slot_to = request.slot_to.map_or(max_slot_to, Slot::new);
+    let mut slot_to = request.slot_to.map_or(max_slot_to, Slot::new);
     if slot_to > max_slot_to {
+        slot_to = max_slot_to;
         let anchor = if request.immutable_only {
             "lib_slot"
         } else {
             "tip_slot"
         };
-        return Err(BlocksStreamWindowError::SlotToAboveAnchor {
-            anchor,
-            slot_to: slot_to.into_inner(),
-            max_slot_to: max_slot_to.into_inner(),
-        });
+        debug!(
+            target: TARGET,
+            "{}: clamping to {}",
+            BlocksStreamWindowError::SlotToAboveAnchor {
+                anchor,
+                slot_to: slot_to.into_inner(),
+                max_slot_to: max_slot_to.into_inner(),
+            }.to_string(),
+            max_slot_to.into_inner()
+        );
     }
 
     let slot_from = request.slot_from.map_or_else(
@@ -1554,31 +1563,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_slot_to_above_tip() {
-        let err = resolve_blocks_stream_window(
+    fn clamps_slot_to_above_tip() {
+        let window = resolve_blocks_stream_window(
             &request(None, Some(TIP_SLOT + 1), true, DEFAULT_LIMIT, false),
             &chain_info(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(
-            err,
-            BlocksStreamWindowError::SlotToAboveAnchor { .. }
-        ));
+        assert_eq!(window.slot_to, Slot::new(TIP_SLOT));
     }
 
     #[test]
-    fn rejects_slot_to_above_lib_when_immutable_only() {
-        let err = resolve_blocks_stream_window(
+    fn clamps_slot_to_above_lib_when_immutable_only() {
+        let window = resolve_blocks_stream_window(
             &request(None, Some(LIB_SLOT + 1), true, DEFAULT_LIMIT, true),
             &chain_info(),
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(matches!(
-            err,
-            BlocksStreamWindowError::SlotToAboveAnchor { .. }
-        ));
+        assert_eq!(window.slot_to, Slot::new(LIB_SLOT));
     }
 
     #[test]

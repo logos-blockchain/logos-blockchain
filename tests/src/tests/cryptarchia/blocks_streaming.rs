@@ -5,7 +5,9 @@ use std::{
 };
 
 use futures::stream::{self, StreamExt as _};
-use lb_common_http_client::ProcessedBlockEvent;
+use lb_common_http_client::{
+    BlockFilter, BlockSortOrder, BlocksRangeStreamParams, ProcessedBlockEvent,
+};
 use lb_core::header::HeaderId;
 use lb_http_api_common::{DEFAULT_NUMBER_OF_BLOCKS_TO_STREAM, paths::BLOCKS_RANGE_STREAM};
 use logos_blockchain_tests::{
@@ -207,29 +209,23 @@ fn slot_for_height(chain: &CanonicalChain, height: usize) -> u64 {
 
 async fn request_stream_events(
     node: &Validator,
-    blocks_limit: Option<NonZero<usize>>,
-    slot_from: Option<u64>,
-    slot_to: Option<u64>,
-    descending: Option<bool>,
-    chunk_size: Option<NonZero<usize>>,
-    immutable_only: Option<bool>,
+    params: BlocksRangeStreamParams,
 ) -> Vec<ProcessedBlockEvent> {
     let start = Instant::now();
     print!(
-        "  request_stream_events: blocks_limit={blocks_limit:?}, slot_from={slot_from:?}, \
-        slot_to={slot_to:?}, descending={descending:?}, chunk_size={chunk_size:?}, \
-        immutable_only={immutable_only:?}"
+        "  request_stream_events: blocks_limit={:?}, slot_from={:?}, \
+        slot_to={:?}, descending={:?}, chunk_size={:?}, \
+        immutable_only={:?}",
+        params.blocks_limit,
+        params.slot_from,
+        params.slot_to,
+        params.order,
+        params.server_batch_size,
+        params.block_filter
     );
 
     let stream = node
-        .get_blocks_stream_in_range_with_chunk_size(
-            blocks_limit,
-            slot_from,
-            slot_to,
-            descending,
-            chunk_size,
-            immutable_only,
-        )
+        .get_blocks_stream_in_range_with_chunk_size(params)
         .await
         .expect("blocks stream request should succeed");
 
@@ -363,12 +359,18 @@ async fn test_blocks_streaming() {
             chain = refresh_chain(&nodes[0], &chain).await;
             let events = request_stream_events(
                 &nodes[0],
-                blocks_limit,
-                None,
-                None,
-                Some(descending),
-                chunk_size,
-                Some(true),
+                BlocksRangeStreamParams {
+                    slot_from: None,
+                    slot_to: None,
+                    order: Some(if descending {
+                        BlockSortOrder::Descending
+                    } else {
+                        BlockSortOrder::Ascending
+                    }),
+                    blocks_limit,
+                    server_batch_size: chunk_size,
+                    block_filter: Some(BlockFilter::ImmutableOnly),
+                },
             )
             .await;
 
@@ -392,12 +394,14 @@ async fn test_blocks_streaming() {
     let (slot_from, slot_to) = blocks_request(&chain, target_height, target_height);
     let events = request_stream_events(
         &nodes[0],
-        None,
-        Some(slot_from),
-        Some(slot_to),
-        None,
-        None,
-        Some(false),
+        BlocksRangeStreamParams {
+            slot_from: Some(slot_from),
+            slot_to: Some(slot_to),
+            order: None,
+            blocks_limit: None,
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::MutableAndImmutable),
+        },
     )
     .await;
 
@@ -422,12 +426,14 @@ async fn test_blocks_streaming() {
     let (slot_from, slot_to) = (chain.lib_slot, chain.lib_slot);
     let events = request_stream_events(
         &nodes[0],
-        None,
-        Some(slot_from),
-        Some(slot_to),
-        None,
-        None,
-        Some(false),
+        BlocksRangeStreamParams {
+            slot_from: Some(slot_from),
+            slot_to: Some(slot_to),
+            order: None,
+            blocks_limit: None,
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::MutableAndImmutable),
+        },
     )
     .await;
 
@@ -451,12 +457,14 @@ async fn test_blocks_streaming() {
     let (slot_from, slot_to) = blocks_request(&chain, target_height, target_height);
     let events = request_stream_events(
         &nodes[0],
-        None,
-        Some(slot_from),
-        Some(slot_to),
-        None,
-        None,
-        Some(false),
+        BlocksRangeStreamParams {
+            slot_from: Some(slot_from),
+            slot_to: Some(slot_to),
+            order: None,
+            blocks_limit: None,
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::MutableAndImmutable),
+        },
     )
     .await;
 
@@ -489,12 +497,18 @@ async fn test_blocks_streaming() {
             let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
             let events = request_stream_events(
                 &nodes[0],
-                blocks_limit,
-                Some(slot_from),
-                Some(slot_to),
-                Some(descending),
-                chunk_size,
-                Some(false),
+                BlocksRangeStreamParams {
+                    slot_from: Some(slot_from),
+                    slot_to: Some(slot_to),
+                    order: Some(if descending {
+                        BlockSortOrder::Descending
+                    } else {
+                        BlockSortOrder::Ascending
+                    }),
+                    blocks_limit,
+                    server_batch_size: chunk_size,
+                    block_filter: Some(BlockFilter::MutableAndImmutable),
+                },
             )
             .await;
 
@@ -523,12 +537,18 @@ async fn test_blocks_streaming() {
             let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
             let events = request_stream_events(
                 &nodes[0],
-                blocks_limit,
-                Some(slot_from),
-                Some(slot_to),
-                Some(descending),
-                chunk_size,
-                Some(false),
+                BlocksRangeStreamParams {
+                    slot_from: Some(slot_from),
+                    slot_to: Some(slot_to),
+                    order: Some(if descending {
+                        BlockSortOrder::Descending
+                    } else {
+                        BlockSortOrder::Ascending
+                    }),
+                    blocks_limit,
+                    server_batch_size: chunk_size,
+                    block_filter: Some(BlockFilter::MutableAndImmutable),
+                },
             )
             .await;
 
@@ -555,12 +575,18 @@ async fn test_blocks_streaming() {
             let (slot_from, slot_to) = (0, chain.tip_slot);
             let events = request_stream_events(
                 &nodes[0],
-                blocks_limit,
-                Some(slot_from),
-                Some(slot_to),
-                Some(descending),
-                chunk_size,
-                Some(false),
+                BlocksRangeStreamParams {
+                    slot_from: Some(slot_from),
+                    slot_to: Some(slot_to),
+                    order: Some(if descending {
+                        BlockSortOrder::Descending
+                    } else {
+                        BlockSortOrder::Ascending
+                    }),
+                    blocks_limit,
+                    server_batch_size: chunk_size,
+                    block_filter: Some(BlockFilter::MutableAndImmutable),
+                },
             )
             .await;
 
@@ -587,12 +613,18 @@ async fn test_blocks_streaming() {
             let (slot_from, slot_to) = (0, chain.tip_slot);
             let events = request_stream_events(
                 &nodes[0],
-                blocks_limit,
-                Some(slot_from),
-                Some(slot_to),
-                Some(descending),
-                chunk_size,
-                Some(false),
+                BlocksRangeStreamParams {
+                    slot_from: Some(slot_from),
+                    slot_to: Some(slot_to),
+                    order: Some(if descending {
+                        BlockSortOrder::Descending
+                    } else {
+                        BlockSortOrder::Ascending
+                    }),
+                    blocks_limit,
+                    server_batch_size: chunk_size,
+                    block_filter: Some(BlockFilter::MutableAndImmutable),
+                },
             )
             .await;
 
@@ -611,12 +643,14 @@ async fn test_blocks_streaming() {
     let blocks_limit = 7;
     let events = request_stream_events(
         &nodes[0],
-        Some(nz(blocks_limit)),
-        None,
-        Some(tip_slot),
-        Some(false),
-        None,
-        Some(false),
+        BlocksRangeStreamParams {
+            slot_from: None,
+            slot_to: Some(tip_slot),
+            order: Some(BlockSortOrder::Ascending),
+            blocks_limit: Some(nz(blocks_limit)),
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::MutableAndImmutable),
+        },
     )
     .await;
 
@@ -637,79 +671,78 @@ async fn test_blocks_streaming() {
 
     // ============== Failure modes =============
 
-    // case: single block above LIB (immutable only, should fail)
-    println!("case: single block above LIB (immutable only, should fail)");
+    // case: single block above LIB (immutable only, explicit slot_from stays above
+    // clamped LIB)
+    println!(
+        "case: single block above LIB (immutable only, explicit slot_from stays above clamped LIB)"
+    );
 
     chain = refresh_chain(&nodes[0], &chain).await;
     let target_height = nz(chain.lib_height + 3);
     let (slot_from, slot_to) = blocks_request(&chain, target_height, target_height);
     let Err(err) = nodes[0]
-        .get_blocks_stream_in_range_with_chunk_size(
-            None,
-            Some(slot_from),
-            Some(slot_to),
-            None,
-            None,
-            Some(true),
-        )
+        .get_blocks_stream_in_range_with_chunk_size(BlocksRangeStreamParams {
+            slot_from: Some(slot_from),
+            slot_to: Some(slot_to),
+            order: None,
+            blocks_limit: None,
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::ImmutableOnly),
+        })
         .await
     else {
-        panic!("immutable-only request above LIB should fail");
+        panic!("explicit slot_from above clamped LIB should fail");
     };
     assert!(
-        matches!(err, lb_common_http_client::Error::Server(ref message) if message.contains("lib_slot")),
-        "immutable-only request above LIB should mention lib_slot, got: {err}"
+        matches!(err, lb_common_http_client::Error::Server(ref message) if message.contains("slot_from")),
+        "invalid clamped range should mention slot_from, got: {err}"
     );
 
-    // case: three blocks from LIB and up (immutable only, should fail)
-    println!("case: three blocks from LIB and up (immutable only, should fail)");
+    // case: three blocks from LIB and up (immutable only, slot_to clamps to LIB)
+    println!("case: three blocks from LIB and up (immutable only, slot_to clamps to LIB)");
 
     chain = refresh_chain(&nodes[0], &chain).await;
     let blocks_from = nz(chain.lib_height);
     let blocks_to = nz(chain.lib_height + 2);
     let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
-    let Err(err) = nodes[0]
-        .get_blocks_stream_in_range_with_chunk_size(
-            None,
-            Some(slot_from),
-            Some(slot_to),
-            None,
-            None,
-            Some(true),
-        )
-        .await
-    else {
-        panic!("immutable-only request above LIB should fail");
-    };
-    assert!(
-        matches!(err, lb_common_http_client::Error::Server(ref message) if message.contains("lib_slot")),
-        "immutable-only request above LIB should mention lib_slot, got: {err}"
-    );
+    let events = request_stream_events(
+        &nodes[0],
+        BlocksRangeStreamParams {
+            slot_from: Some(slot_from),
+            slot_to: Some(slot_to),
+            order: None,
+            blocks_limit: None,
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::ImmutableOnly),
+        },
+    )
+    .await;
+    let expected_ids = ids_in_slot_range(&chain, slot_from, chain.lib_slot, true, None);
+    assert_event_order_matches_expected(&events, &expected_ids);
+    assert_stream_integrity(&chain, &events);
 
-    // case: all blocks, small chunked (immutable only, should fail above LIB)
-    println!("case: all blocks, small chunked (immutable only, should fail above LIB)");
+    // case: all blocks, small chunked (immutable only, slot_to clamps to LIB)
+    println!("case: all blocks, small chunked (immutable only, slot_to clamps to LIB)");
 
     chain = refresh_chain(&nodes[0], &chain).await;
     let blocks_from = nz(1);
     let blocks_to = nz(chain.tip_height);
     let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
-    let Err(err) = nodes[0]
-        .get_blocks_stream_in_range_with_chunk_size(
-            None,
-            Some(slot_from),
-            Some(slot_to),
-            None,
-            Some(nz(4)),
-            Some(true),
-        )
-        .await
-    else {
-        panic!("immutable-only request above LIB should fail");
-    };
-    assert!(
-        matches!(err, lb_common_http_client::Error::Server(ref message) if message.contains("lib_slot")),
-        "immutable-only request above LIB should mention lib_slot, got: {err}"
-    );
+    let events = request_stream_events(
+        &nodes[0],
+        BlocksRangeStreamParams {
+            slot_from: Some(slot_from),
+            slot_to: Some(slot_to),
+            order: None,
+            blocks_limit: None,
+            server_batch_size: Some(nz(4)),
+            block_filter: Some(BlockFilter::ImmutableOnly),
+        },
+    )
+    .await;
+    let expected_ids = ids_in_slot_range(&chain, slot_from, chain.lib_slot, true, None);
+    assert_event_order_matches_expected(&events, &expected_ids);
+    assert_stream_integrity(&chain, &events);
 
     // case: blocks_limit=0 should fail (400) via raw HTTP query
     println!("case: blocks_limit=0 should fail (400) via raw HTTP query");
@@ -744,9 +777,10 @@ async fn test_blocks_streaming() {
         "400 body should mention blocks_limit, got: {body}"
     );
 
-    // case: slot_to above tip should fail (400)
-    println!("case: slot_to above tip should fail (400) via raw HTTP query");
+    // case: slot_to above tip should clamp to tip and succeed
+    println!("case: slot_to above tip should clamp to tip and succeed via raw HTTP query");
 
+    chain = refresh_chain(&nodes[0], &chain).await;
     let mut url = nodes[0]
         .base_url()
         .expect("validator base URL should be available");
@@ -761,24 +795,32 @@ async fn test_blocks_streaming() {
 
     assert_eq!(
         resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "slot_to above tip must return 400"
+        reqwest::StatusCode::OK,
+        "slot_to above tip must clamp and return 200"
     );
 
     let body = resp
         .text()
         .await
-        .expect("error response body should be readable");
-    assert!(
-        body.contains("tip_slot"),
-        "400 body should mention tip_slot, got: {body}"
-    );
+        .expect("stream response body should be readable");
+    let events = body
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<ProcessedBlockEvent>(line)
+                .expect("ndjson line should decode into ProcessedBlockEvent")
+        })
+        .collect::<Vec<_>>();
+    let expected_ids = ids_in_slot_range(&chain, 0, chain.tip_slot, true, None);
+    assert_event_order_matches_expected(&events, &expected_ids);
+    assert_stream_integrity(&chain, &events);
 
-    // case: immutable_only=true with slot_to above LIB should fail (400)
+    // case: immutable_only=true with slot_to above LIB should clamp to LIB and
+    // succeed
     println!(
-        "case: immutable_only=true with slot_to above LIB should fail (400) via raw HTTP query"
+        "case: immutable_only=true with slot_to above LIB should clamp to LIB and succeed via raw HTTP query"
     );
 
+    chain = refresh_chain(&nodes[0], &chain).await;
     let lib_slot = u64::from(
         nodes[0]
             .consensus_info(false)
@@ -803,18 +845,24 @@ async fn test_blocks_streaming() {
 
     assert_eq!(
         resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "immutable_only=true with slot_to above LIB must return 400"
+        reqwest::StatusCode::OK,
+        "immutable_only=true with slot_to above LIB must clamp and return 200"
     );
 
     let body = resp
         .text()
         .await
-        .expect("error response body should be readable");
-    assert!(
-        body.contains("lib_slot"),
-        "400 body should mention lib_slot, got: {body}"
-    );
+        .expect("stream response body should be readable");
+    let events = body
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<ProcessedBlockEvent>(line)
+                .expect("ndjson line should decode into ProcessedBlockEvent")
+        })
+        .collect::<Vec<_>>();
+    let expected_ids = ids_in_slot_range(&chain, 0, chain.lib_slot, true, None);
+    assert_event_order_matches_expected(&events, &expected_ids);
+    assert_stream_integrity(&chain, &events);
 }
 
 const fn nz(value: usize) -> NonZero<usize> {

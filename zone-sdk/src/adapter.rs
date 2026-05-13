@@ -1,9 +1,10 @@
-use std::{num::NonZero, pin::Pin};
+use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::{Stream, stream};
 use lb_common_http_client::{
-    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, ProcessedBlockEvent, Slot,
+    ApiBlock, BlockInfo, BlocksRangeStreamParams, ChainServiceInfo, CommonHttpClient, Error,
+    ProcessedBlockEvent, Slot,
 };
 use lb_core::{
     header::HeaderId,
@@ -24,12 +25,7 @@ pub trait Node {
 
     async fn blocks_range_stream(
         &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksRangeStreamParams,
     ) -> Result<BoxStream<ProcessedBlockEvent>, Error>;
 
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error>;
@@ -84,24 +80,11 @@ impl Node for NodeHttpClient {
 
     async fn blocks_range_stream(
         &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksRangeStreamParams,
     ) -> Result<BoxStream<ProcessedBlockEvent>, Error> {
         let stream = self
             .client
-            .get_blocks_range_stream(
-                self.base_url.clone(),
-                blocks_limit,
-                slot_from,
-                slot_to,
-                descending,
-                server_batch_size,
-                immutable_only,
-            )
+            .get_blocks_range_stream(self.base_url.clone(), params)
             .await?;
         Ok(Box::pin(stream))
     }

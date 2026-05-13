@@ -1,7 +1,6 @@
 use std::{
     ffi::OsStr,
     net::SocketAddr,
-    num::NonZero,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     str::FromStr as _,
@@ -11,7 +10,9 @@ use std::{
 use futures::Stream;
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::ChainServiceInfo;
-use lb_common_http_client::{ApiBlock, CommonHttpClient, ProcessedBlockEvent};
+use lb_common_http_client::{
+    ApiBlock, BlocksRangeStreamParams, CommonHttpClient, ProcessedBlockEvent,
+};
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     mantle::{Transaction as _, TxHash},
@@ -36,7 +37,8 @@ use lb_node::{
     },
 };
 use lb_testing_framework::{
-    record_system_monitor_event, register_system_monitor_output_file, release_reserved_port_block,
+    is_truthy_env, record_system_monitor_event, register_system_monitor_output_file,
+    release_reserved_port_block,
 };
 use lb_tx_service::MempoolMetrics;
 use reqwest::Url;
@@ -47,8 +49,8 @@ use super::{
     CLIENT, create_tempdir, current_test_system_stats_file, get_exe_path, persist_tempdir,
 };
 use crate::{
-    IS_DEBUG_TRACING, get_reserved_available_tcp_port, nodes::LOGS_PREFIX,
-    topology::configs::GeneralConfig,
+    IS_DEBUG_TRACING, cucumber::defaults::E2E_KEEP_LOGS, get_reserved_available_tcp_port,
+    nodes::LOGS_PREFIX, topology::configs::GeneralConfig,
 };
 
 pub enum Pool {
@@ -66,7 +68,7 @@ pub struct Validator {
 
 impl Drop for Validator {
     fn drop(&mut self) {
-        if std::thread::panicking()
+        if (is_truthy_env(E2E_KEEP_LOGS) || std::thread::panicking())
             && let Err(e) = persist_tempdir(&mut self.tempdir, "logos-blockchain-node")
         {
             println!("failed to persist tempdir: {e}");
@@ -444,65 +446,12 @@ impl Validator {
         self.http_client.get_lib_stream(self.base_url()?).await
     }
 
-    pub async fn get_blocks_stream(
-        &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
-    ) -> Result<impl Stream<Item = ProcessedBlockEvent>, lb_common_http_client::Error> {
-        self.http_client
-            .get_blocks_range_stream(
-                self.base_url()?,
-                blocks_limit,
-                slot_from,
-                slot_to,
-                descending,
-                server_batch_size,
-                immutable_only,
-            )
-            .await
-    }
-
-    pub async fn get_blocks_stream_in_range(
-        &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-    ) -> Result<impl Stream<Item = ProcessedBlockEvent>, lb_common_http_client::Error> {
-        self.get_blocks_stream_in_range_with_chunk_size(
-            blocks_limit,
-            slot_from,
-            slot_to,
-            descending,
-            None,
-            None,
-        )
-        .await
-    }
-
     pub async fn get_blocks_stream_in_range_with_chunk_size(
         &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        chunk_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksRangeStreamParams,
     ) -> Result<impl Stream<Item = ProcessedBlockEvent>, lb_common_http_client::Error> {
         self.http_client
-            .get_blocks_range_stream(
-                self.base_url()?,
-                blocks_limit,
-                slot_from,
-                slot_to,
-                descending,
-                chunk_size,
-                immutable_only,
-            )
+            .get_blocks_range_stream(self.base_url()?, params)
             .await
     }
 

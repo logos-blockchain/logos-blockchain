@@ -1,7 +1,8 @@
-use std::{net::SocketAddr, num::NonZero, pin::Pin};
+use std::{net::SocketAddr, pin::Pin};
 
 use common_http_client::{
-    ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
+    ApiBlock, BasicAuthCredentials, BlocksRangeStreamParams, CommonHttpClient, Error,
+    ProcessedBlockEvent,
 };
 use futures::Stream;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
@@ -113,24 +114,11 @@ impl NodeHttpClient {
     /// range.
     pub async fn blocks_range_stream(
         &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksRangeStreamParams,
     ) -> Result<Pin<Box<dyn Stream<Item = ProcessedBlockEvent> + Send + '_>>, Error> {
         let stream = self
             .http_client
-            .get_blocks_range_stream(
-                self.base_url.clone(),
-                blocks_limit,
-                slot_from,
-                slot_to,
-                descending,
-                server_batch_size,
-                immutable_only,
-            )
+            .get_blocks_range_stream(self.base_url.clone(), params)
             .await?;
         Ok(Box::pin(stream))
     }
