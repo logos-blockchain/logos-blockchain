@@ -15,17 +15,61 @@ impl Events {
     pub const fn new() -> Self {
         Self(Vec::new())
     }
+
+    pub fn extend(&mut self, events: Self) {
+        self.0.extend(events.0);
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Event> {
+        self.0.iter()
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl FromIterator<Event> for Events {
+    fn from_iter<T: IntoIterator<Item = Event>>(iter: T) -> Self {
+        Self(iter.into_iter().collect())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Event {
     pub tx_hash: Option<TxHash>,
     pub op_id: Option<Hash>,
-    pub payload: Payload,
+    pub payload: EventPayload,
+}
+
+impl Event {
+    #[must_use]
+    pub const fn new(tx_hash: TxHash, op_id: Hash, payload: EventPayload) -> Self {
+        Self {
+            tx_hash: Some(tx_hash),
+            op_id: Some(op_id),
+            payload,
+        }
+    }
+
+    #[must_use]
+    pub const fn new_without_tx(payload: EventPayload) -> Self {
+        Self {
+            tx_hash: None,
+            op_id: None,
+            payload,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Payload {
+pub enum EventPayload {
     Deposit {
         channel_id: ChannelId,
         amount: Value,

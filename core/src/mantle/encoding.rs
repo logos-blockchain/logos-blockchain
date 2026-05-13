@@ -673,7 +673,8 @@ pub fn encode_channel_config(op: &ChannelConfigOp) -> Vec<u8> {
     bytes
 }
 
-fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
+#[must_use]
+pub fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel_id.as_ref()));
     bytes.extend(encode_inputs(op.inputs.as_ref()));

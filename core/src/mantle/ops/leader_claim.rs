@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::{
     crypto::ZkHasher,
+    events::Events,
     mantle::{
         Note, TxHash, Utxo, Value,
         encoding::encode_leader_claim,
@@ -201,7 +202,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier);
 
@@ -212,7 +213,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
         // Remove the distributed rewards from the pool
         ctx.claimable_rewards -= ctx.reward_amount;
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }
 

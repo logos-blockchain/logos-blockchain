@@ -367,7 +367,7 @@ impl Cryptarchia {
         }
 
         // A block number of this block if it's applied to the chain.
-        let (_, state) = self
+        let (_, state, events) = self
             .ledger
             .prepare_update::<_, MainnetGasConstants>(
                 id,
@@ -402,11 +402,7 @@ impl Cryptarchia {
 
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
-        Ok((
-            pruned_blocks,
-            reorged_blocks,
-            todo!("generate events for the block"),
-        ))
+        Ok((pruned_blocks, reorged_blocks, events))
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {

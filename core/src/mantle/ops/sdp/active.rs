@@ -4,6 +4,7 @@ use tracing::info;
 use super::{SDPActiveOp, SdpError};
 use crate::{
     block::BlockNumber,
+    events::Events,
     mantle::{
         TxHash,
         ledger::{Declarations, Operation},
@@ -54,7 +55,7 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         let declaration = ctx
             .declarations
             .get_mut(&self.declaration_id)
@@ -69,6 +70,6 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
             "updated declaration with active message"
         );
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }

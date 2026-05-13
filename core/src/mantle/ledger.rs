@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::{
     crypto::{Hash, ZkHasher},
+    events::Events,
     mantle::ops::OpId,
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
@@ -25,7 +26,7 @@ pub trait Operation<ValidationContext> {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error>;
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error>;
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
