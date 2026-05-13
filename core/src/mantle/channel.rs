@@ -192,7 +192,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        events::EventPayload,
+        events::{Event, EventPayload},
         mantle::{
             Note, Utxo,
             ledger::{Inputs, Outputs, Utxos},
@@ -361,14 +361,21 @@ mod tests {
         );
 
         assert_eq!(events.len(), 1);
-        let event = events.iter().next().cloned().unwrap();
-        assert_eq!(event.tx_hash, Some([0; 32].into()));
-        assert_eq!(event.op_id, Some(deposit_op.op_id()));
+        let Event::Tx {
+            tx_hash,
+            op_id,
+            payload,
+        } = events.iter().next().cloned().unwrap()
+        else {
+            panic!("expected Tx event")
+        };
+        assert_eq!(tx_hash, [0; 32].into());
+        assert_eq!(op_id, deposit_op.op_id());
         let EventPayload::Deposit {
             channel_id,
             amount,
             metadata,
-        } = event.payload;
+        } = payload;
         assert_eq!(channel_id, deposit_op.channel_id);
         assert_eq!(amount, utxo.note.value);
         assert_eq!(metadata, deposit_op.metadata);

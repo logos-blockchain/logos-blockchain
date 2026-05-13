@@ -731,7 +731,7 @@ impl LedgerState {
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::{
-        events::EventPayload,
+        events::{Event, EventPayload},
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _,
             gas::MainnetGasConstants,
@@ -1026,8 +1026,8 @@ mod tests {
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
-        let tx_hash = tx.hash();
-        let result = ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx);
+        let result =
+            ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx.clone());
         let (new_state, balance, events) = result.unwrap();
         assert_eq!(
             new_state
@@ -1042,17 +1042,24 @@ mod tests {
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);
-        let event = events.iter().next().unwrap();
-        assert_eq!(event.tx_hash, Some(tx_hash));
-        assert_eq!(event.op_id, Some(deposit.op_id()));
+        let Event::Tx {
+            tx_hash,
+            op_id,
+            payload,
+        } = events.iter().next().unwrap().clone()
+        else {
+            panic!("expected a Tx event")
+        };
+        assert_eq!(tx_hash, tx.hash());
+        assert_eq!(op_id, deposit.op_id());
         let EventPayload::Deposit {
             channel_id,
             amount,
             metadata,
-        } = &event.payload;
-        assert_eq!(channel_id, &deposit.channel_id);
-        assert_eq!(amount, &utxo.note.value);
-        assert_eq!(metadata, &deposit.metadata);
+        } = payload;
+        assert_eq!(channel_id, deposit.channel_id);
+        assert_eq!(amount, utxo.note.value);
+        assert_eq!(metadata, deposit.metadata);
     }
 
     #[test]

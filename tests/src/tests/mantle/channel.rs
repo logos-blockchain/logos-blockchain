@@ -2,7 +2,7 @@ use std::{num::NonZero, time::Duration};
 
 use futures::StreamExt as _;
 use lb_core::{
-    events::{EventPayload, Events},
+    events::{Event, EventPayload, Events},
     header::HeaderId,
     mantle::{
         GenesisTx as _, NoteId, Transaction as _,
@@ -121,7 +121,7 @@ async fn channel_deposit() {
         response.text().await.unwrap_or_default(),
     );
 
-    let tx_hash = response
+    let deposit_tx_hash = response
         .json::<ChannelDepositResponseBody>()
         .await
         .expect("deposit response should be valid JSON")
@@ -133,7 +133,7 @@ async fn channel_deposit() {
                 .block
                 .transactions
                 .iter()
-                .any(|tx| tx.hash() == tx_hash)
+                .any(|tx| tx.hash() == deposit_tx_hash)
             {
                 return event.block.header.id;
             }
@@ -144,16 +144,20 @@ async fn channel_deposit() {
     .expect("timed out waiting for the deposit tx to be included in a block");
 
     let events = fetch_block_events(&validator.client, deposit_block_id).await;
-    let event = events
+    let payload = events
         .iter()
-        .find(|event| event.tx_hash == Some(tx_hash))
-        .expect("block events should include the deposit tx")
-        .clone();
+        .find_map(|event| match event {
+            Event::Tx {
+                tx_hash, payload, ..
+            } => (tx_hash == &deposit_tx_hash).then(|| payload.clone()),
+            Event::Ledger(_) => None,
+        })
+        .expect("block events should include the deposit tx");
     let EventPayload::Deposit {
         channel_id,
         amount,
         metadata,
-    } = event.payload;
+    } = payload;
     assert_eq!(channel_id, deposit_op.channel_id);
     assert_eq!(amount, deposit_amount);
     assert_eq!(metadata, deposit_op.metadata);
