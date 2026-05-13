@@ -33,5 +33,10 @@ tracing                         = { workspace = true }
 x25519-dalek                    = { features = ["serde", "static_secrets", "zeroize"], workspace = true }
 zeroize                         = { workspace = true }
 
+[dev-dependencies]
+rand       = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
 [features]
 unsafe = []
