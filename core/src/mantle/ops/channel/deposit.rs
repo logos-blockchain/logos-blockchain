@@ -91,7 +91,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
             })
         }?;
 
-        let events = Events::from_iter([Event::new(
+        let events = Events::from_iter(std::iter::once(Event::new(
             ctx.tx_hash,
             self.op_id(),
             EventPayload::Deposit {
@@ -99,7 +99,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
                 amount: amount_deposited,
                 metadata: self.metadata.clone(),
             },
-        )]);
+        )));
 
         Ok((ctx, events))
     }
