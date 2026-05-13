@@ -18,10 +18,7 @@ use crate::{
         nom::NomEncode as _,
         ops::{
             Op, OpProof,
-            channel::{
-                ChannelId, Ed25519PublicKey, config::ChannelConfigOp, deposit::DepositOp,
-                inscribe::InscriptionOp,
-            },
+            channel::{ChannelId, Ed25519PublicKey, config::ChannelConfigOp, deposit::DepositOp},
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
@@ -76,35 +73,14 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
 // ==============================================================================
 
 pub fn decode_ops(input: &[u8]) -> IResult<&[u8], Vec<Op>> {
-    // Ops = OpCount *Op
-    let (input, op_count) = decode_byte(input)?;
-
-    count(decode_op, op_count as usize).parse(input)
-}
-
-pub fn decode_op(input: &[u8]) -> IResult<&[u8], Op> {
-    // Op = Opcode OpPayload
-    let (input, opcode) = decode_byte(input)?;
-
-    match opcode {
-        opcode::INSCRIBE => map(InscriptionOp::decode, Op::ChannelInscribe).parse(input),
-        opcode::CHANNEL_CONFIG => map(decode_channel_config, Op::ChannelConfig).parse(input),
-        opcode::CHANNEL_DEPOSIT => map(decode_channel_deposit, Op::ChannelDeposit).parse(input),
-        opcode::CHANNEL_WITHDRAW => map(decode_channel_withdraw, Op::ChannelWithdraw).parse(input),
-        opcode::SDP_DECLARE => map(decode_sdp_declare, Op::SDPDeclare).parse(input),
-        opcode::SDP_WITHDRAW => map(decode_sdp_withdraw, Op::SDPWithdraw).parse(input),
-        opcode::SDP_ACTIVE => map(decode_sdp_active, Op::SDPActive).parse(input),
-        opcode::LEADER_CLAIM => map(decode_leader_claim, Op::LeaderClaim).parse(input),
-        opcode::TRANSFER => map(decode_transfer, Op::Transfer).parse(input),
-        _ => Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
-    }
+    Vec::<Op>::decode(input)
 }
 
 // ==============================================================================
 // Channel Operation Decoders
 // ==============================================================================
 
-fn decode_channel_config(input: &[u8]) -> IResult<&[u8], ChannelConfigOp> {
+pub(crate) fn decode_channel_config(input: &[u8]) -> IResult<&[u8], ChannelConfigOp> {
     // ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
     // PostingTimeout ConfigThreshold WithdrawThreshold
     let (input, channel) = map(decode_hash32, ChannelId::from).parse(input)?;
@@ -130,7 +106,7 @@ fn decode_channel_config(input: &[u8]) -> IResult<&[u8], ChannelConfigOp> {
     ))
 }
 
-fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
+pub(crate) fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
     // ChannelDeposit = ChannelId Amount Metadata
     let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, inputs) = decode_inputs(input)?;
@@ -148,7 +124,7 @@ fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
     ))
 }
 
-fn decode_channel_withdraw(input: &[u8]) -> IResult<&[u8], ChannelWithdrawOp> {
+pub(crate) fn decode_channel_withdraw(input: &[u8]) -> IResult<&[u8], ChannelWithdrawOp> {
     // ChannelWithdraw = ChannelId Amount
     let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
     let (input, outputs) = decode_outputs(input)?;
@@ -167,7 +143,7 @@ fn decode_channel_withdraw(input: &[u8]) -> IResult<&[u8], ChannelWithdrawOp> {
 // SDP Operation Decoders
 // ==============================================================================
 
-fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
+pub(crate) fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
     // SDPDeclare = ServiceType LocatorCount *Locator ProviderId ZkId LockedNoteId
     let (input, service_type_byte) = decode_byte(input)?;
     let service_type = match service_type_byte {
@@ -214,7 +190,7 @@ fn decode_locator(input: &[u8]) -> IResult<&[u8], Multiaddr> {
     .parse(input)
 }
 
-fn decode_sdp_withdraw(input: &[u8]) -> IResult<&[u8], SDPWithdrawOp> {
+pub(crate) fn decode_sdp_withdraw(input: &[u8]) -> IResult<&[u8], SDPWithdrawOp> {
     // SDPWithdraw = DeclarationId Nonce LockedNoteId
     let (input, declaration_id_bytes) = decode_hash32(input)?;
     let declaration_id = DeclarationId(declaration_id_bytes);
@@ -231,7 +207,7 @@ fn decode_sdp_withdraw(input: &[u8]) -> IResult<&[u8], SDPWithdrawOp> {
     ))
 }
 
-fn decode_sdp_active(input: &[u8]) -> IResult<&[u8], SDPActiveOp> {
+pub(crate) fn decode_sdp_active(input: &[u8]) -> IResult<&[u8], SDPActiveOp> {
     // SDPActive = DeclarationId Nonce Metadata
     // Metadata = UINT32 *BYTE
     let (input, declaration_id_bytes) = decode_hash32(input)?;
@@ -265,7 +241,7 @@ fn decode_sdp_active(input: &[u8]) -> IResult<&[u8], SDPActiveOp> {
 // Leader Operation Decoders
 // ==============================================================================
 
-fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp> {
+pub(crate) fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp> {
     // LeaderClaim = RewardsRoot VoucherNullifier
     let (input, rewards_root_fr) = decode_field_element(input)?;
     let (input, voucher_nullifier_fr) = decode_field_element(input)?;
@@ -310,7 +286,7 @@ fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
     Ok((input, Outputs::new(notes)))
 }
 
-fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
+pub(crate) fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
     // Transfer = Inputs Outputs
     let (input, inputs) = decode_inputs(input)?;
     let (input, outputs) = decode_outputs(input)?;
@@ -601,7 +577,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
     bytes
 }
 
-/// Encode channel operations
 #[must_use]
 pub fn encode_channel_config(op: &ChannelConfigOp) -> Vec<u8> {
     assert!(
@@ -626,7 +601,7 @@ pub fn encode_channel_config(op: &ChannelConfigOp) -> Vec<u8> {
 }
 
 #[must_use]
-pub fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
+pub(crate) fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(op.channel_id.as_ref()));
     bytes.extend(encode_inputs(op.inputs.as_ref()));
@@ -659,7 +634,7 @@ fn encode_locator(locator: &Multiaddr) -> Vec<u8> {
     bytes
 }
 
-fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
+pub(crate) fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
     assert!(
         u8::try_from(op.locators.len()).is_ok(),
         "Fatal error in 'encode_sdp_declare' - {} locators clipped to {}",
@@ -686,7 +661,7 @@ fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
     bytes
 }
 
-fn encode_sdp_withdraw(op: &SDPWithdrawOp) -> Vec<u8> {
+pub(crate) fn encode_sdp_withdraw(op: &SDPWithdrawOp) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_hash32(&op.declaration_id.0));
     bytes.extend(encode_uint64(op.nonce));

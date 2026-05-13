@@ -4,6 +4,8 @@ use nom::{
     bytes::take,
     combinator::{map, map_res},
     error::{Error, ErrorKind},
+    multi::count,
+    number::complete::u8,
 };
 
 use crate::mantle::{
@@ -11,12 +13,24 @@ use crate::mantle::{
     ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
 };
 
-pub trait NomEncode: Sized {
+pub trait NomEncode {
     // TODO: This could be turned into a `BoundedVec<u8, MAX_BYTES>` if we are
     // always able to set an upper limit on everything that goes through NOM
     // decoding.
     fn encode(&self) -> Vec<u8>;
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self>;
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self>
+    where
+        Self: Sized;
+}
+
+impl NomEncode for u8 {
+    fn encode(&self) -> Vec<u8> {
+        vec![*self]
+    }
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        u8(bytes)
+    }
 }
 
 impl NomEncode for u32 {
@@ -29,23 +43,52 @@ impl NomEncode for u32 {
     }
 }
 
-impl<const N: usize> NomEncode for BoundedVec<u8, N> {
+impl<T> NomEncode for [T]
+where
+    T: NomEncode,
+{
     fn encode(&self) -> Vec<u8> {
-        let mut bytes = (self.len() as u32).encode();
-        bytes.extend(self.as_slice());
+        let mut bytes = (self.len() as u8).encode();
+        for item in self {
+            bytes.extend(item.encode());
+        }
         bytes
+    }
+}
+
+impl<T, const N: usize> NomEncode for BoundedVec<T, N>
+where
+    T: NomEncode,
+{
+    fn encode(&self) -> Vec<u8> {
+        self.as_slice().encode()
     }
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (input, len) = decode_uint32(bytes)?;
+        let (input, op_count) = u8::decode(bytes)?;
 
-        if len > N as u32 {
+        if op_count as usize > N {
             return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
         }
 
-        let (input, bytes) = map(take(len as usize), <[u8]>::to_vec).parse(input)?;
+        let (input, items) = count(T::decode, op_count as usize).parse(input)?;
 
-        Ok((input, Self::new_unchecked(bytes)))
+        Ok((input, Self::new_unchecked(items)))
+    }
+}
+
+impl<T> NomEncode for Vec<T>
+where
+    T: NomEncode,
+{
+    fn encode(&self) -> Vec<u8> {
+        self.as_slice().encode()
+    }
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (input, op_count) = u8::decode(bytes)?;
+
+        count(T::decode, op_count as usize).parse(input)
     }
 }
 

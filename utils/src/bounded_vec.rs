@@ -27,20 +27,15 @@ pub struct BoundedVec<T, const MAX: usize>(Vec<T>);
 impl<T, const MAX: usize> BoundedVec<T, MAX> {
     pub const MAX: usize = MAX;
 
-    pub fn new(items: Vec<T>) -> Result<Self, BoundedError> {
-        if items.len() > MAX {
-            return Err(BoundedError::TooLong {
-                actual: items.len(),
-                max: MAX,
-            });
-        }
-        Ok(Self(items))
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(Vec::new())
     }
 
     /// Construct without checking the cap.
     ///
     /// Reserved for callers that have already validated the length. Prefer
-    /// [`Self::new`] at trust boundaries.
+    /// [`Self::try_from<Vec<T>>`] at trust boundaries.
     #[must_use]
     pub const fn new_unchecked(items: Vec<T>) -> Self {
         Self(items)
@@ -75,7 +70,20 @@ impl<T, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MAX> {
     type Error = BoundedError;
 
     fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
-        Self::new(value)
+        if value.len() > MAX {
+            return Err(BoundedError::TooLong {
+                actual: value.len(),
+                max: MAX,
+            });
+        }
+        Ok(Self(value))
+    }
+}
+
+impl<T, const INPUT_SIZE: usize, const MAX: usize> From<[T; INPUT_SIZE]> for BoundedVec<T, MAX> {
+    fn from(value: [T; INPUT_SIZE]) -> Self {
+        const { assert!(INPUT_SIZE <= MAX, "Array length exceeds BoundedVec MAX") }
+        Self(value.into())
     }
 }
 

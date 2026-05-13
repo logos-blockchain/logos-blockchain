@@ -14,7 +14,7 @@ use crate::{
     events::Events,
     mantle::{
         TxHash,
-        channel::{ChannelState, Channels, Error as ChannelError},
+        channel::{ChannelState, Channels, Error},
         ledger::Operation,
         nom::NomEncode,
     },
@@ -37,19 +37,14 @@ impl InscriptionOp {
     #[must_use]
     pub fn id(&self) -> MsgId {
         let mut hasher = Hasher::new();
-        hasher.update(self.payload_bytes());
+        hasher.update(self.encode().as_slice());
         MsgId(hasher.finalize().into())
-    }
-
-    #[must_use]
-    fn payload_bytes(&self) -> Bytes {
-        self.encode().into()
     }
 }
 
+// ChannelInscribe = ChannelId Inscription Parent Signer
 impl NomEncode for InscriptionOp {
     fn encode(&self) -> Vec<u8> {
-        // ChannelInscribe = ChannelId Inscription Parent Signer
         let mut bytes = self.channel_id.encode();
         bytes.extend(self.inscription.encode());
         bytes.extend(self.parent.encode());
@@ -58,7 +53,6 @@ impl NomEncode for InscriptionOp {
     }
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        // ChannelInscribe = ChannelId Inscription Parent Signer
         let (input, channel_id) = ChannelId::decode(bytes)?;
         let (input, inscription) = Inscription::decode(input)?;
         let (input, parent) = MsgId::decode(input)?;
@@ -92,7 +86,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         = InscriptionExecutionContext
     where
         Self: 'a;
-    type Error = ChannelError;
+    type Error = Error;
 
     fn validate(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
@@ -100,7 +94,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         if let Some(channel) = ctx.channels.channels.get(&self.channel_id).cloned() {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
-                return Err(ChannelError::InvalidParent {
+                return Err(Error::InvalidParent {
                     channel_id: self.channel_id,
                     parent: self.parent.into(),
                     actual: channel.tip_message.into(),
@@ -111,14 +105,14 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             if self.signer
                 != channel.accredited_keys[channel.round_robin(ctx.block_slot).0 as usize]
             {
-                return Err(ChannelError::UnauthorizedSigner {
+                return Err(Error::UnauthorizedSigner {
                     channel_id: self.channel_id,
                     signer: format!("{signer:?}", signer = self.signer),
                 });
             }
         } else if self.parent != MsgId::root() {
             // Checked that the parent is ZERO because channel doesn't exist
-            return Err(ChannelError::InvalidParent {
+            return Err(Error::InvalidParent {
                 channel_id: self.channel_id,
                 parent: self.parent.into(),
                 actual: MsgId::root().into(),
@@ -131,7 +125,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             .verify(ctx.tx_hash.as_signing_bytes().as_ref(), ctx.inscribe_sig)
             .is_err()
         {
-            return Err(ChannelError::InvalidSignature);
+            return Err(Error::InvalidSignature);
         }
 
         Ok(())
@@ -188,7 +182,7 @@ mod tests {
     fn sample() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId([0u8; 32]),
-            inscription: Inscription::new(b"genesis".to_vec()).unwrap(),
+            inscription: Inscription::try_from(*b"genesis").unwrap(),
             parent: MsgId([0u8; 32]),
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         }
@@ -197,7 +191,7 @@ mod tests {
     #[test]
     fn oversized_inscription_rejected_at_construction() {
         let oversized = vec![0u8; MAX_BYTES + 1];
-        let err = Inscription::new(oversized).unwrap_err();
+        let err = Inscription::try_from(oversized).unwrap_err();
         assert!(
             matches!(err, BoundedError::TooLong { actual, max } if actual == MAX_BYTES + 1 && max == MAX_BYTES)
         );
@@ -209,6 +203,14 @@ mod tests {
         let bytes = bincode::serialize(&oversized).unwrap();
         let err = bincode::deserialize::<Inscription>(&bytes).unwrap_err();
         assert!(format!("{err}").contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn encode_decode_round_trip() {
+        let op = sample();
+        let encoded = op.encode();
+        let decoded = InscriptionOp::decode(&encoded).unwrap().1;
+        assert_eq!(op, decoded);
     }
 
     #[test]

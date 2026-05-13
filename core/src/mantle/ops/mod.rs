@@ -1,10 +1,11 @@
 pub mod channel;
-pub(crate) mod internal;
 pub mod leader_claim;
-pub mod opcode;
 pub mod sdp;
-mod serde_;
 pub mod transfer;
+
+pub(crate) mod internal;
+
+mod serde_;
 
 use std::sync::LazyLock;
 
@@ -13,6 +14,11 @@ use channel::{
     withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+use nom::{
+    IResult, Parser,
+    combinator::map,
+    error::{Error, ErrorKind},
+};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
@@ -28,10 +34,16 @@ use super::{
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        encoding::{decode_op, encode_op},
+        encoding::{
+            decode_channel_config, decode_channel_deposit, decode_channel_withdraw,
+            decode_leader_claim, decode_sdp_active, decode_sdp_declare, decode_sdp_withdraw,
+            decode_transfer, encode_channel_config, encode_channel_deposit,
+            encode_channel_withdraw, encode_leader_claim, encode_op, encode_sdp_active,
+            encode_sdp_declare, encode_sdp_withdraw, encode_transfer_op,
+        },
+        nom::NomEncode,
         ops::{
             internal::{OpDe, OpSer},
-            opcode::{CHANNEL_DEPOSIT, CHANNEL_WITHDRAW},
             transfer::TransferOp,
         },
     },
@@ -52,6 +64,16 @@ pub trait OpId {
     fn op_bytes(&self) -> Vec<u8>;
 }
 
+const TRANSFER: u8 = 0x00;
+const CHANNEL_CONFIG: u8 = 0x10;
+const INSCRIBE: u8 = 0x11;
+const CHANNEL_DEPOSIT: u8 = 0x12;
+const CHANNEL_WITHDRAW: u8 = 0x13;
+const SDP_DECLARE: u8 = 0x20;
+const SDP_WITHDRAW: u8 = 0x21;
+const SDP_ACTIVE: u8 = 0x22;
+const LEADER_CLAIM: u8 = 0x30;
+
 /// Core set of supported Mantle operations.
 ///
 /// This type serves as the public-facing representation of [`OpSer`] and
@@ -62,17 +84,16 @@ pub trait OpId {
 /// Due to limitations in [`bincode`] and [`serde`]'s `#[serde(untagged)]`
 /// enums, binary deserialization is routed through [`decode_op`] instead.
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[repr(u8)]
 pub enum Op {
-    ChannelInscribe(InscriptionOp) = INSCRIBE,
-    ChannelConfig(ChannelConfigOp) = CHANNEL_CONFIG,
-    ChannelDeposit(DepositOp) = CHANNEL_DEPOSIT,
-    ChannelWithdraw(ChannelWithdrawOp) = CHANNEL_WITHDRAW,
-    SDPDeclare(SDPDeclareOp) = SDP_DECLARE,
-    SDPWithdraw(SDPWithdrawOp) = SDP_WITHDRAW,
-    SDPActive(SDPActiveOp) = SDP_ACTIVE,
-    LeaderClaim(LeaderClaimOp) = LEADER_CLAIM,
-    Transfer(TransferOp) = TRANSFER,
+    ChannelInscribe(InscriptionOp),
+    ChannelConfig(ChannelConfigOp),
+    ChannelDeposit(DepositOp),
+    ChannelWithdraw(ChannelWithdrawOp),
+    SDPDeclare(SDPDeclareOp),
+    SDPWithdraw(SDPWithdrawOp),
+    SDPActive(SDPActiveOp),
+    LeaderClaim(LeaderClaimOp),
+    Transfer(TransferOp),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.
@@ -112,6 +133,63 @@ impl<'de> Deserialize<'de> for Op {
     }
 }
 
+// Op = Opcode OpPayload
+impl NomEncode for Op {
+    fn encode(&self) -> Vec<u8> {
+        let op_code = self.code();
+        let mut bytes = op_code.encode();
+        match self {
+            Self::ChannelInscribe(op) => {
+                bytes.extend(op.encode());
+            }
+            // TODO: Use `.encode()` once implemented for all other ops
+            Self::ChannelConfig(op) => {
+                bytes.extend(encode_channel_config(op));
+            }
+            Self::ChannelDeposit(op) => {
+                bytes.extend(encode_channel_deposit(op));
+            }
+            Self::ChannelWithdraw(op) => {
+                bytes.extend(encode_channel_withdraw(op));
+            }
+            Self::SDPDeclare(op) => {
+                bytes.extend(encode_sdp_declare(op));
+            }
+            Self::SDPWithdraw(op) => {
+                bytes.extend(encode_sdp_withdraw(op));
+            }
+            Self::SDPActive(op) => {
+                bytes.extend(encode_sdp_active(op));
+            }
+            Self::LeaderClaim(op) => {
+                bytes.extend(encode_leader_claim(op));
+            }
+            Self::Transfer(op) => {
+                bytes.extend(encode_transfer_op(op));
+            }
+        }
+        bytes
+    }
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (input, opcode) = u8::decode(bytes)?;
+
+        match opcode {
+            INSCRIBE => map(InscriptionOp::decode, Self::ChannelInscribe).parse(input),
+            // TODO: Use `.decode()` once implemented for all other ops
+            CHANNEL_CONFIG => map(decode_channel_config, Self::ChannelConfig).parse(input),
+            CHANNEL_DEPOSIT => map(decode_channel_deposit, Self::ChannelDeposit).parse(input),
+            CHANNEL_WITHDRAW => map(decode_channel_withdraw, Self::ChannelWithdraw).parse(input),
+            SDP_DECLARE => map(decode_sdp_declare, Self::SDPDeclare).parse(input),
+            SDP_WITHDRAW => map(decode_sdp_withdraw, Self::SDPWithdraw).parse(input),
+            SDP_ACTIVE => map(decode_sdp_active, Self::SDPActive).parse(input),
+            LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(input),
+            TRANSFER => map(decode_transfer, Self::Transfer).parse(input),
+            _ => Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
+        }
+    }
+}
+
 impl Op {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
@@ -140,6 +218,20 @@ impl Op {
             Self::SDPActive(_) => Constants::SDP_ACTIVE,
             Self::LeaderClaim(_) => Constants::LEADER_CLAIM,
             Self::Transfer(_) => Constants::TRANSFER,
+        }
+    }
+
+    const fn code(&self) -> u8 {
+        match self {
+            Self::ChannelInscribe(_) => INSCRIBE,
+            Self::ChannelConfig(_) => CHANNEL_CONFIG,
+            Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
+            Self::ChannelWithdraw(_) => CHANNEL_WITHDRAW,
+            Self::SDPDeclare(_) => SDP_DECLARE,
+            Self::SDPWithdraw(_) => SDP_WITHDRAW,
+            Self::SDPActive(_) => SDP_ACTIVE,
+            Self::LeaderClaim(_) => LEADER_CLAIM,
+            Self::Transfer(_) => TRANSFER,
         }
     }
 }
