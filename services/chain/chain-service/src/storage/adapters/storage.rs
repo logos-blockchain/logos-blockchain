@@ -9,6 +9,7 @@ use futures::{Stream, StreamExt as _};
 use lb_core::{
     block::Block,
     codec::{DeserializeOp as _, SerializeOp as _},
+    events::Events,
     header::HeaderId,
     mantle::{Transaction, TxHash},
 };
@@ -50,6 +51,7 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     Tx: Clone
         + Eq
         + Serialize
@@ -62,6 +64,7 @@ where
     type Backend = Storage;
     type Block = Block<Tx>;
     type Tx = Tx;
+    type Events = Events;
 
     async fn new(
         storage_relay: OutboundRelay<
@@ -96,13 +99,19 @@ where
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
+        events: Self::Events,
     ) -> Result<(), overwatch::DynError> {
         let block = block
             .try_into()
             .map_err(|_| "Failed to convert block to storage format")?;
+        let events = events
+            .try_into()
+            .map_err(|_| "Failed to convert events to storage format")?;
 
         self.storage_relay
-            .send(StorageMsg::store_block_request(header_id, parent_id, block))
+            .send(StorageMsg::store_block_request(
+                header_id, parent_id, block, events,
+            ))
             .await
             .map_err(|_| "Failed to send store block request to storage relay")?;
 

@@ -25,12 +25,15 @@ use crate::{
 
 const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
 const BLOCK_PARENT_PREFIX: &str = "block_parent/";
+const BLOCK_EVENTS_PREFIX: &str = "block_events/";
 
 #[async_trait]
 impl StorageChainApi for RocksBackend {
     type Error = Error;
     type Block = Bytes;
     type Tx = Bytes;
+    type Events = Bytes;
+
     async fn get_block(&mut self, header_id: HeaderId) -> Result<Option<Self::Block>, Self::Error> {
         let header_id: [u8; 32] = header_id.into();
         let key = Bytes::copy_from_slice(&header_id);
@@ -42,17 +45,20 @@ impl StorageChainApi for RocksBackend {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
+        events: Self::Events,
     ) -> Result<(), Self::Error> {
         let header_bytes: [u8; 32] = header_id.into();
         let block_key = Bytes::copy_from_slice(&header_bytes);
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, header_bytes);
         let parent_bytes: [u8; 32] = parent_id.into();
         let parent_value = Bytes::copy_from_slice(&parent_bytes);
+        let events_key = key_bytes(BLOCK_EVENTS_PREFIX, header_bytes);
 
         let db_transaction = self.txn(move |db| {
             let mut batch = WriteBatch::default();
             batch.put(block_key, block);
             batch.put(parent_key, parent_value);
+            batch.put(events_key, events);
             db.write(batch)?;
             Ok(None)
         });
@@ -67,6 +73,7 @@ impl StorageChainApi for RocksBackend {
         let encoded_header_id: [u8; 32] = header_id.into();
         let block_key = Bytes::copy_from_slice(&encoded_header_id);
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, encoded_header_id);
+        let events_key = key_bytes(BLOCK_EVENTS_PREFIX, encoded_header_id);
 
         // Load the block first so we can return it.
         let val = self.load(&block_key).await?;
@@ -75,6 +82,7 @@ impl StorageChainApi for RocksBackend {
             let mut batch = WriteBatch::default();
             batch.delete(block_key);
             batch.delete(parent_key);
+            batch.delete(events_key);
             db.write(batch)?;
             Ok(None)
         });
@@ -92,6 +100,15 @@ impl StorageChainApi for RocksBackend {
             .await?
             .map(|bytes| bytes.as_ref().try_into().map_err(Into::into))
             .transpose()
+    }
+
+    async fn get_block_events(
+        &mut self,
+        header_id: HeaderId,
+    ) -> Result<Option<Self::Events>, Self::Error> {
+        let header_bytes: [u8; 32] = header_id.into();
+        let key = key_bytes(BLOCK_EVENTS_PREFIX, header_bytes);
+        self.load(&key).await.map_err(Into::into)
     }
 
     async fn store_immutable_block_ids(

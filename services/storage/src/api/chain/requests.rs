@@ -30,6 +30,7 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: <Backend as StorageChainApi>::Block,
+        events: <Backend as StorageChainApi>::Events,
     },
     RemoveBlock {
         header_id: HeaderId,
@@ -82,7 +83,8 @@ where
                 header_id,
                 parent_id,
                 block,
-            } => handle_store_block(backend, header_id, parent_id, block).await,
+                events,
+            } => handle_store_block(backend, header_id, parent_id, block, events).await,
             Self::RemoveBlock {
                 header_id,
                 response_tx,
@@ -150,9 +152,10 @@ async fn handle_store_block<Backend: StorageBackend>(
     header_id: HeaderId,
     parent_id: HeaderId,
     block: Backend::Block,
+    events: Backend::Events,
 ) -> Result<(), StorageServiceError> {
     backend
-        .store_block(header_id, parent_id, block)
+        .store_block(header_id, parent_id, block, events)
         .await
         .map_err(|e| StorageServiceError::BackendError(e.into()))
 }
@@ -281,12 +284,14 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: <Api as StorageChainApi>::Block,
+        events: <Api as StorageChainApi>::Events,
     ) -> Self {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::StoreBlock {
                 header_id,
                 parent_id,
                 block,
+                events,
             }),
         }
     }
