@@ -89,7 +89,7 @@ fn test_config(mut config: RunConfig, genesis_time: OffsetDateTime) -> RunConfig
     cryptarchia_parameter.genesis_time = genesis_time;
 
     let inscription = InscriptionOp {
-        inscription: cryptarchia_parameter.encode(),
+        inscription: cryptarchia_parameter.encode().try_into().unwrap(),
         ..genesis_tx.genesis_inscription().clone()
     };
 
