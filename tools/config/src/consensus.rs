@@ -282,7 +282,7 @@ pub fn create_genesis_block_with_declarations(
         };
         let declaration = DeclarationMessage {
             service_type: provider.service_type,
-            locators: vec![provider.locator.clone()],
+            locators: provider.locator.clone().into(),
             provider_id: provider.provider_id(),
             zk_id: provider.zk_id(),
             locked_note_id: utxo.id(),

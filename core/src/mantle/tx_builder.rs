@@ -11,7 +11,7 @@ use crate::{
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         tx::{GasPrices, MantleTxContext},
     },
-    proofs::channel_withdraw_proof::ChannelWithdrawProof,
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
 #[derive(Debug, Clone)]
@@ -20,7 +20,7 @@ pub struct MantleTxBuilder {
     ledger_inputs: Vec<Utxo>,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
-    channel_withdraw_proofs: HashMap<usize, ChannelWithdrawProof>,
+    channel_multi_sig_proofs: HashMap<usize, ChannelMultiSigProof>,
     context: MantleTxContext,
 }
 
@@ -32,7 +32,7 @@ impl MantleTxBuilder {
             mantle_tx: vec![].into(),
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
-            channel_withdraw_proofs: HashMap::new(),
+            channel_multi_sig_proofs: HashMap::new(),
             context,
         }
     }
@@ -54,10 +54,10 @@ impl MantleTxBuilder {
     }
 
     #[must_use]
-    pub fn push_channel_withdraw(self, op: ChannelWithdrawOp, proof: ChannelWithdrawProof) -> Self {
+    pub fn push_channel_withdraw(self, op: ChannelWithdrawOp, proof: ChannelMultiSigProof) -> Self {
         let mut builder = self.push_op(Op::ChannelWithdraw(op));
         let index = builder.mantle_tx.ops().len() - 1;
-        builder.channel_withdraw_proofs.insert(index, proof);
+        builder.channel_multi_sig_proofs.insert(index, proof);
         builder
     }
 
@@ -187,8 +187,8 @@ impl MantleTxBuilder {
     }
 
     #[must_use]
-    pub const fn channel_withdraw_proofs(&self) -> &HashMap<usize, ChannelWithdrawProof> {
-        &self.channel_withdraw_proofs
+    pub const fn channel_multi_sig_proofs(&self) -> &HashMap<usize, ChannelMultiSigProof> {
+        &self.channel_multi_sig_proofs
     }
 
     #[must_use]
@@ -214,7 +214,7 @@ mod tests {
             },
             tx::MantleTxGasContext,
         },
-        sdp::{DeclarationId, ProviderId, ServiceType},
+        sdp::{DeclarationId, Locator, ProviderId, ServiceType},
     };
 
     #[test]
@@ -275,7 +275,11 @@ mod tests {
 
         // Init a tx builder
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new([(op.channel_id, 1)].into(), GasPrices::new(0, 0)),
+            gas_context: MantleTxGasContext::new(
+                [(op.channel_id, 1)].into(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new(context).push_op(Op::ChannelWithdraw(op));
@@ -343,7 +347,11 @@ mod tests {
         // Init a tx builder for sending 30 to the recipient
         let channel_id = ChannelId::from([0; 32]);
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::new([(channel_id, 1)].into(), GasPrices::new(0, 0)),
+            gas_context: MantleTxGasContext::new(
+                [(channel_id, 1)].into(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let withdraw_note = Note {
@@ -413,7 +421,7 @@ mod tests {
             }))
             .push_op(Op::SDPDeclare(SDPDeclareOp {
                 service_type: ServiceType::BlendNetwork,
-                locators: vec![],
+                locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
                 provider_id: ProviderId(Ed25519Key::from_bytes(&[0; 32]).public_key()),
                 zk_id: ZkPublicKey::zero(),
                 locked_note_id: declare_locked,

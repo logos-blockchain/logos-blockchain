@@ -9,7 +9,8 @@ pub mod transfer;
 use std::sync::LazyLock;
 
 use channel::{
-    deposit::DepositOp, inscribe::InscriptionOp, set_keys::SetKeysOp, withdraw::ChannelWithdrawOp,
+    config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+    withdraw::ChannelWithdrawOp,
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -19,8 +20,7 @@ use super::{
     ops::{
         leader_claim::LeaderClaimOp,
         opcode::{
-            INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, SET_CHANNEL_KEYS,
-            TRANSFER,
+            CHANNEL_CONFIG, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
         },
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     },
@@ -36,7 +36,7 @@ use crate::{
         },
     },
     proofs::{
-        channel_withdraw_proof::ChannelWithdrawProof, leader_claim_proof::Groth16LeaderClaimProof,
+        channel_multi_sig_proof::ChannelMultiSigProof, leader_claim_proof::Groth16LeaderClaimProof,
     },
 };
 
@@ -66,7 +66,7 @@ pub trait OpId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Op {
     ChannelInscribe(InscriptionOp),
-    ChannelSetKeys(SetKeysOp),
+    ChannelConfig(ChannelConfigOp),
     ChannelDeposit(DepositOp),
     ChannelWithdraw(ChannelWithdrawOp),
     SDPDeclare(SDPDeclareOp),
@@ -85,7 +85,7 @@ pub enum OpProof {
         ed25519_sig: Ed25519Signature,
     },
     PoC(Groth16LeaderClaimProof),
-    ChannelWithdrawProof(ChannelWithdrawProof),
+    ChannelMultiSigProof(ChannelMultiSigProof),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.
@@ -135,7 +135,7 @@ impl Op {
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::ChannelInscribe(_) => "ChannelInscribe",
-            Self::ChannelSetKeys(_) => "ChannelSetKeys",
+            Self::ChannelConfig(_) => "ChannelConfig",
             Self::ChannelDeposit(_) => "ChannelDeposit",
             Self::ChannelWithdraw(_) => "ChannelWithdraw",
             Self::SDPDeclare(_) => "SDPDeclare",
@@ -149,7 +149,7 @@ impl Op {
     pub const fn opcode(&self) -> u8 {
         match self {
             Self::ChannelInscribe(_) => INSCRIBE,
-            Self::ChannelSetKeys(_) => SET_CHANNEL_KEYS,
+            Self::ChannelConfig(_) => CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => CHANNEL_DEPOSIT,
             Self::ChannelWithdraw(_) => CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => SDP_DECLARE,
@@ -164,7 +164,7 @@ impl Op {
     pub const fn execution_gas<Constants: GasConstants>(&self) -> Gas {
         match self {
             Self::ChannelInscribe(_) => Constants::CHANNEL_INSCRIBE,
-            Self::ChannelSetKeys(_) => Constants::CHANNEL_SET_KEYS,
+            Self::ChannelConfig(_) => Constants::CHANNEL_CONFIG,
             Self::ChannelDeposit(_) => Constants::CHANNEL_DEPOSIT,
             Self::ChannelWithdraw(_) => Constants::CHANNEL_WITHDRAW,
             Self::SDPDeclare(_) => Constants::SDP_DECLARE,

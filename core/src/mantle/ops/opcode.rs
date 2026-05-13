@@ -1,5 +1,5 @@
 pub const TRANSFER: u8 = 0x00;
-pub const SET_CHANNEL_KEYS: u8 = 0x10;
+pub const CHANNEL_CONFIG: u8 = 0x10;
 pub const INSCRIBE: u8 = 0x11;
 pub const CHANNEL_DEPOSIT: u8 = 0x12;
 pub const CHANNEL_WITHDRAW: u8 = 0x13;

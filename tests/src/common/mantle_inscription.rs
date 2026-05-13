@@ -22,6 +22,7 @@ pub fn build_inscription_tx_builder(
     let tx_context = MantleTxContext {
         gas_context: MantleTxGasContext::new(
             HashMap::new(),
+            HashMap::new(),
             GasPrices {
                 execution_base_gas_price: GasPrice::new(0),
                 storage_gas_price: GENESIS_STORAGE_GAS_PRICE,

@@ -10,7 +10,7 @@ use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{Event, ZoneSequencer},
+    sequencer::{Event, SequencerHandle, ZoneSequencer},
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
@@ -18,7 +18,7 @@ use tracing::{debug, error, info};
 
 use crate::{
     message::AppMessage,
-    state::{InMemoryZoneState, ZoneState as _, resolve_conflicts},
+    state::{InMemoryZoneState, ZoneState as _},
 };
 
 #[derive(Parser, Debug)]
@@ -93,41 +93,48 @@ pub async fn run(args: InscribeArgs) {
 async fn handle_event(
     event: Event,
     state: &mut InMemoryZoneState,
-    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
+    handle: &SequencerHandle<NodeHttpClient>,
     ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     match event {
         Event::Ready => handle_ready(state, ready_tx),
-        Event::ChannelUpdate {
-            orphaned,
-            adopted,
-            pending,
-            invalidated,
-            ..
-        } => {
-            handle_channel_update(state, handle, &orphaned, &adopted, &pending, &invalidated).await;
+        Event::ChannelUpdate { orphaned, adopted } => {
+            handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
         Event::TxsFinalized { inscriptions, .. } => {
-            finalize_inscriptions(state, &inscriptions, true);
+            state.on_finalized(&inscriptions);
+            ui::render_state(state);
+            ui::prompt();
         }
-        Event::Published {
-            payload,
-            checkpoint,
-            ..
-        } => {
-            debug!("Inscription published, checkpoint saved");
-            if let Some(msg) = AppMessage::from_bytes(&payload) {
-                state.mark_ours(msg.tx_uuid);
-                state.apply(msg);
-                ui::render_state(state);
-                ui::prompt();
-            }
+        Event::Published { info, checkpoint } => {
+            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
+            state.on_published(&info);
             state.save_checkpoint(checkpoint);
+            ui::render_state(state);
+            ui::prompt();
         }
         Event::FinalizedInscriptions { inscriptions } => {
-            finalize_inscriptions(state, &inscriptions, false);
+            state.on_finalized(&inscriptions);
         }
     }
+}
+
+async fn handle_channel_update(
+    state: &mut InMemoryZoneState,
+    handle: &SequencerHandle<NodeHttpClient>,
+    adopted: &[lb_zone_sdk::state::InscriptionInfo],
+    orphaned: &[lb_zone_sdk::state::InscriptionInfo],
+) {
+    state.on_adopted(adopted);
+    for info in orphaned {
+        state.on_orphaned(&info.this_msg);
+        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
+        if let Err(e) = handle.publish_message(info.payload.clone()).await {
+            error!("failed to auto-republish: {e}");
+        }
+    }
+    ui::render_state(state);
+    ui::prompt();
 }
 
 fn handle_ready(
@@ -145,63 +152,6 @@ fn handle_ready(
     println!();
     ui::render_state(state);
     ui::prompt();
-}
-
-async fn handle_channel_update(
-    state: &mut InMemoryZoneState,
-    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
-    orphaned: &[lb_zone_sdk::state::InscriptionInfo],
-    adopted: &[lb_zone_sdk::state::InscriptionInfo],
-    pending: &[lb_zone_sdk::state::InscriptionInfo],
-    invalidated: &[lb_zone_sdk::state::InscriptionInfo],
-) {
-    if orphaned.is_empty() && adopted.is_empty() && invalidated.is_empty() {
-        return;
-    }
-
-    debug!(
-        orphaned = orphaned.len(),
-        adopted = adopted.len(),
-        pending = pending.len(),
-        invalidated = invalidated.len(),
-        "Channel update"
-    );
-
-    let to_republish = resolve_conflicts(state, orphaned, adopted, pending, invalidated);
-    republish(handle, to_republish).await;
-
-    ui::render_state(state);
-    ui::prompt();
-}
-
-async fn republish(
-    handle: &lb_zone_sdk::sequencer::SequencerHandle<NodeHttpClient>,
-    messages: Vec<AppMessage>,
-) {
-    if messages.is_empty() {
-        return;
-    }
-    info!(count = messages.len(), "Re-publishing after conflict");
-    for msg in messages {
-        if let Err(e) = handle.publish_message(msg.to_bytes()).await {
-            error!("failed to re-publish: {e}");
-            break;
-        }
-    }
-}
-
-fn finalize_inscriptions(
-    state: &mut InMemoryZoneState,
-    inscriptions: &[lb_zone_sdk::state::InscriptionInfo],
-    render: bool,
-) {
-    debug!(count = inscriptions.len(), "Inscriptions finalized");
-    let payloads: Vec<Vec<u8>> = inscriptions.iter().map(|i| i.payload.clone()).collect();
-    state.finalize(&payloads);
-    if render {
-        ui::render_state(state);
-        ui::prompt();
-    }
 }
 
 fn load_or_create_signing_key(path: &Path) -> Ed25519Key {

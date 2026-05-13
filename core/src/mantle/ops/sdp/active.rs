@@ -21,18 +21,14 @@ pub struct SDPActiveExecutionContext {
     pub declarations: Declarations,
 }
 
-impl Operation for SDPActiveOp {
-    type ValidationContext<'a>
-        = SDPActiveValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
     type ExecutionContext<'a>
         = SDPActiveExecutionContext
     where
         Self: 'a;
     type Error = SdpError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &SDPActiveValidationContext<'_>) -> Result<(), Self::Error> {
         // Check the declaration exist
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));

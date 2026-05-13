@@ -1,14 +1,43 @@
 use std::sync::Arc;
 
+use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 
 use crate::mantle::{
     Value, ledger,
     ledger::Operation as _,
     ops::channel::{
-        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId, inscribe::InscriptionOp,
+        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId,
+        inscribe::{InscriptionExecutionContext, InscriptionOp},
     },
 };
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct SlotTimeframe(u32);
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct SlotTimeout(u32);
+
+impl From<u32> for SlotTimeframe {
+    fn from(slot: u32) -> Self {
+        Self(slot)
+    }
+}
+impl From<u32> for SlotTimeout {
+    fn from(slot: u32) -> Self {
+        Self(slot)
+    }
+}
+
+impl From<SlotTimeframe> for u32 {
+    fn from(slot: SlotTimeframe) -> Self {
+        slot.0
+    }
+}
+impl From<SlotTimeout> for u32 {
+    fn from(slot: SlotTimeout) -> Self {
+        slot.0
+    }
+}
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
@@ -25,8 +54,6 @@ pub enum Error {
     },
     #[error("Invalid signature")]
     InvalidSignature,
-    #[error("Invalid keys for channel {channel_id:?}")]
-    EmptyKeys { channel_id: ChannelId },
     #[error("Channel {channel_id:?} not found")]
     ChannelNotFound { channel_id: ChannelId },
     #[error("Insufficient funds")]
@@ -35,6 +62,8 @@ pub enum Error {
     BalanceOverflow,
     #[error("The withdraw nonce doesn't correspond to the channel state")]
     InvalidWithdrawNonce,
+    #[error("The Channel Config isn't well formed")]
+    InvalidChannelConfig,
     #[error("Withdraw Nonce overflow")]
     WithdrawNonceOverflow,
     #[error("Inputs error: {0}")]
@@ -44,7 +73,7 @@ pub enum Error {
     #[error(
         "Invalid number of signatures (treshold:?) for channel {channel_id:?}, expected {actual:?}"
     )]
-    WithdrawThresholdUnmet {
+    ThresholdUnmet {
         channel_id: ChannelId,
         threshold: u16,
         actual: usize,
@@ -58,15 +87,29 @@ pub struct Channels {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelState {
-    pub tip: MsgId,
-    // avoid cloning the keys every new message
-    #[serde(with = "arc_slice")]
-    pub keys: Arc<[PublicKey]>, // keys.len() <= ChannelKeyIndex::MAX
+    // Channel Configuration
+    pub accredited_keys: Arc<[PublicKey]>, // keys.len() <= ChannelKeyIndex::MAX
+    pub configuration_threshold: u16,      /* indicating how many keys are required to update
+                                            * the
+                                            * configuration */
+
+    // Message Ordering
+    pub tip_message: MsgId,
+
+    // Decentralized Sequencing
+    pub tip_slot: Slot,
+    pub tip_sequencer: u16, /* indicating the actual sequencer position in the list of
+                             * accredited keys */
+    pub tip_sequencer_starting_slot: Slot,
+    pub posting_timeframe: SlotTimeframe, // number of slots (0 = infinity)
+    pub posting_timeout: SlotTimeout,     // number of slots (0 = no timeout)
+
+    // Bridging
     pub balance: Value,
-    // Indicating how many accredited keys are required to withdraw
-    // funds from the channel.
-    pub withdraw_threshold: ChannelKeyIndex,
     pub withdrawal_nonce: u32,
+    pub withdraw_threshold: ChannelKeyIndex, /* indicating how many keys are required to
+                                              * withdraw
+                                              * funds from the channel */
 }
 
 pub(crate) const DEFAULT_WITHDRAW_THRESHOLD: ChannelKeyIndex = 1;
@@ -79,8 +122,11 @@ impl Default for Channels {
 
 impl Channels {
     pub fn from_genesis(op: &InscriptionOp) -> Result<Self, Error> {
-        let channels = op.execute(Self::default())?;
-        Ok(channels)
+        let ctx = op.execute(InscriptionExecutionContext {
+            channels: Self::default(),
+            block_slot: Slot::default(),
+        })?;
+        Ok(ctx.channels)
     }
 
     #[must_use]
@@ -96,19 +142,40 @@ impl Channels {
     }
 }
 
-mod arc_slice {
-    use std::sync::Arc;
+impl ChannelState {
+    // Returns the new sequencer index and its starting slot
+    #[must_use]
+    pub fn round_robin(&self, block_slot: Slot) -> (u16, Slot) {
+        let elapsed_slot_since_last_tip = (block_slot - self.tip_slot).into_inner();
+        let tip_sequencer_duration = (block_slot - self.tip_sequencer_starting_slot).into_inner();
+        let posting_timeframe = u64::from(self.posting_timeframe.0);
+        let posting_timeout = u64::from(self.posting_timeout.0);
+        let num_sequencers = self.accredited_keys.len() as u64; // bounded by ChannelKeyIndex::MAX
+        let tip_sequencer = u64::from(self.tip_sequencer);
+        let is_timed_out = elapsed_slot_since_last_tip >= posting_timeout && posting_timeout != 0;
+        let sequencers_timed_out = elapsed_slot_since_last_tip.checked_div(posting_timeout); // None if posting_timeout == 0
+        let timeframe_elapsed = tip_sequencer_duration.checked_div(posting_timeframe); // None if timeframe == 0
 
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+        // Timeout-based rotation takes priority when timed out.
+        // Falls back to timeframe-based rotation, then to the current sequencer.
+        let index = sequencers_timed_out
+            .filter(|_| is_timed_out)
+            .or(timeframe_elapsed)
+            .map_or(self.tip_sequencer, |slot| {
+                ((tip_sequencer + slot) % num_sequencers) as u16
+            });
 
-    pub fn serialize<T: Serialize, S: Serializer>(v: &Arc<[T]>, s: S) -> Result<S::Ok, S::Error> {
-        v.as_ref().serialize(s)
-    }
-
-    pub fn deserialize<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
-        d: D,
-    ) -> Result<Arc<[T]>, D::Error> {
-        Vec::<T>::deserialize(d).map(Into::into)
+        // Starting slot mirrors the same priority.
+        let starting_slot = sequencers_timed_out
+            .filter(|_| is_timed_out)
+            .map(|sequencers_timed_out| self.tip_slot + sequencers_timed_out * posting_timeout)
+            .or_else(|| {
+                timeframe_elapsed.map(|timeframe_elapsed| {
+                    self.tip_sequencer_starting_slot + timeframe_elapsed * posting_timeframe
+                })
+            })
+            .unwrap_or(self.tip_sequencer_starting_slot);
+        (index, starting_slot)
     }
 }
 
@@ -138,6 +205,32 @@ mod tests {
         Ed25519Key::from_bytes(&[seed; 32]).public_key()
     }
 
+    fn make_channel(
+        tip_slot: u64,
+        tip_sequencer: u16,
+        tip_sequencer_starting_slot: u64,
+        posting_timeframe: u32,
+        posting_timeout: u32,
+        num_keys: usize,
+    ) -> ChannelState {
+        ChannelState {
+            tip_slot: Slot::new(tip_slot),
+            tip_sequencer,
+            tip_sequencer_starting_slot: Slot::new(tip_sequencer_starting_slot),
+            posting_timeframe: SlotTimeframe(posting_timeframe),
+            posting_timeout: SlotTimeout(posting_timeout),
+            balance: 0,
+            withdrawal_nonce: 0,
+            accredited_keys: (0..num_keys as u8)
+                .map(test_public_key)
+                .collect::<Vec<_>>()
+                .into(),
+            configuration_threshold: 0,
+            tip_message: MsgId::root(),
+            withdraw_threshold: 0,
+        }
+    }
+
     fn utxo(value: Value) -> (ZkKey, Utxo) {
         let mut op_id = [0u8; 32];
         thread_rng().fill_bytes(&mut op_id);
@@ -165,11 +258,17 @@ mod tests {
                 channels: rpds::HashTrieMapSync::new_sync().insert(
                     channel_id,
                     ChannelState {
-                        tip: MsgId::root(),
-                        keys: vec![test_public_key(7)].into(),
+                        accredited_keys: vec![test_public_key(7)].into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0u32.into(),
                         balance,
                         withdraw_threshold: 1,
                         withdrawal_nonce: 0,
+                        posting_timeout: 0u32.into(),
                     },
                 ),
             }
@@ -187,21 +286,33 @@ mod tests {
                 .insert(
                     first_id,
                     ChannelState {
-                        tip: MsgId::root(),
-                        keys: vec![test_public_key(11)].into(),
+                        accredited_keys: vec![test_public_key(11)].into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0u32.into(),
                         balance: 5,
                         withdraw_threshold: 1,
                         withdrawal_nonce: 0,
+                        posting_timeout: 0u32.into(),
                     },
                 )
                 .insert(
                     second_id,
                     ChannelState {
-                        tip: MsgId::root(),
-                        keys: vec![test_public_key(22), test_public_key(23)].into(),
+                        accredited_keys: vec![test_public_key(22), test_public_key(23)].into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0.into(),
                         balance: 9,
                         withdraw_threshold: 2,
                         withdrawal_nonce: 0,
+                        posting_timeout: 0.into(),
                     },
                 ),
         };
@@ -322,5 +433,171 @@ mod tests {
         });
 
         assert!(matches!(result, Err(Error::ChannelNotFound { .. })));
+    }
+
+    // 1. Infinite timeframe (timeframe=0): sequencer holds indefinitely unless
+    //    timed out
+    #[test]
+    fn infinite_timeframe_no_timeout_stays_forever() {
+        let channel = make_channel(100, 2, 80, 0, 0, 5);
+        assert_eq!(channel.round_robin(100.into()), (2, 80.into()));
+        assert_eq!(channel.round_robin(999_999.into()), (2, 80.into()));
+    }
+
+    #[test]
+    fn infinite_timeframe_not_yet_timed_out() {
+        let channel = make_channel(100, 1, 90, 0, 50, 4);
+        assert_eq!(channel.round_robin(130.into()), (1, 90.into()));
+    }
+
+    #[test]
+    fn infinite_timeframe_timed_out() {
+        let channel = make_channel(100, 1, 90, 0, 50, 4);
+        assert_eq!(channel.round_robin(150.into()), (2, 150.into()));
+    }
+
+    #[test]
+    fn infinite_timeframe_multiple_timeouts() {
+        let channel = make_channel(100, 1, 90, 0, 50, 4);
+        assert_eq!(channel.round_robin(220.into()), (3, 200.into()));
+    }
+
+    // 2. Normal timeframe rotation (no timeout triggered)
+    #[test]
+    fn timeframe_rotation_same_slot_no_advance() {
+        let channel = make_channel(100, 0, 100, 10, 0, 3);
+        assert_eq!(channel.round_robin(100.into()), (0, 100.into()));
+    }
+
+    #[test]
+    fn timeframe_rotation_within_first_frame() {
+        let channel = make_channel(100, 0, 100, 10, 0, 3);
+        assert_eq!(channel.round_robin(105.into()), (0, 100.into()));
+    }
+
+    #[test]
+    fn timeframe_rotation_exact_boundary() {
+        let channel = make_channel(100, 0, 100, 10, 0, 3);
+        assert_eq!(channel.round_robin(110.into()), (1, 110.into()));
+    }
+
+    #[test]
+    fn timeframe_rotation_multiple_frames() {
+        let channel = make_channel(100, 0, 100, 10, 0, 4);
+        assert_eq!(channel.round_robin(125.into()), (2, 120.into()));
+    }
+
+    #[test]
+    fn timeframe_rotation_wraps_around() {
+        let channel = make_channel(100, 2, 100, 10, 0, 3);
+        assert_eq!(channel.round_robin(110.into()), (0, 110.into()));
+    }
+
+    #[test]
+    fn timeframe_rotation_full_cycle() {
+        // 3 keys, 3 rotations => back to the same sequencer
+        let channel = make_channel(100, 1, 100, 10, 0, 3);
+        assert_eq!(channel.round_robin(130.into()), (1, 130.into()));
+    }
+
+    #[test]
+    fn timeframe_rotation_starting_slot_offset() {
+        let channel = make_channel(100, 0, 95, 10, 0, 3);
+        assert_eq!(channel.round_robin(105.into()), (1, 105.into()));
+    }
+
+    // 3. Timed out sequencers
+    #[test]
+    fn timeout_exact_boundary() {
+        let channel = make_channel(100, 0, 100, 10, 20, 4);
+        assert_eq!(channel.round_robin(120.into()), (1, 120.into()));
+    }
+
+    #[test]
+    fn timeout_skips_multiple_unresponsive_sequencers() {
+        let channel = make_channel(100, 0, 100, 5, 10, 4);
+        assert_eq!(channel.round_robin(135.into()), (3, 130.into()));
+    }
+
+    #[test]
+    fn timeout_wraps_past_end_of_key_list() {
+        let channel = make_channel(100, 2, 100, 5, 10, 3);
+        assert_eq!(channel.round_robin(120.into()), (1, 120.into()));
+    }
+
+    #[test]
+    fn timeout_wraps_full_cycle() {
+        let channel = make_channel(100, 0, 100, 5, 10, 3);
+        assert_eq!(channel.round_robin(130.into()), (0, 130.into()));
+    }
+
+    // 4. No timeout (timeout=0)
+    #[test]
+    fn no_timeout_rotates_by_timeframe_even_after_long_absence() {
+        let channel = make_channel(100, 0, 100, 10, 0, 3);
+        assert_eq!(channel.round_robin(1100.into()), (1, 1100.into()));
+    }
+
+    // 5. Just below the timeout threshold
+    #[test]
+    fn just_below_timeout_uses_timeframe_branch() {
+        let channel = make_channel(100, 0, 100, 10, 20, 4);
+        assert_eq!(channel.round_robin(119.into()), (1, 110.into()));
+    }
+
+    // 6. Single sequencer
+    #[test]
+    fn single_key_always_index_zero() {
+        let channel = make_channel(100, 0, 100, 10, 20, 1);
+        assert_eq!(channel.round_robin(100.into()).0, 0);
+        assert_eq!(channel.round_robin(115.into()).0, 0);
+        assert_eq!(channel.round_robin(130.into()).0, 0);
+    }
+
+    // 7. Two sequencers
+    #[test]
+    fn two_sequencers_alternate() {
+        let channel = make_channel(100, 0, 100, 5, 0, 2);
+        assert_eq!(channel.round_robin(100.into()).0, 0);
+        assert_eq!(channel.round_robin(104.into()).0, 0);
+        assert_eq!(channel.round_robin(105.into()).0, 1);
+        assert_eq!(channel.round_robin(109.into()).0, 1);
+        assert_eq!(channel.round_robin(110.into()).0, 0);
+    }
+
+    // 8. 50 sequencers
+    #[test]
+    fn fifty_sequencers_rotate_and_wrap() {
+        let channel = make_channel(0, 0, 0, 5, 0, 50);
+
+        // After 5 slots => sequencer 1
+        assert_eq!(channel.round_robin(5.into()).0, 1);
+        // After 5*49 = 245 slots => sequencer 49 (last)
+        assert_eq!(channel.round_robin(245.into()).0, 49);
+        // After 5*50 = 250 slots => wrap back to 0
+        assert_eq!(channel.round_robin(250.into()).0, 0);
+        // After 5*73 = 365 slots => (0+73)%50 = 23
+        assert_eq!(channel.round_robin(365.into()).0, 23);
+    }
+
+    #[test]
+    fn fifty_sequencers_cascading_timeouts() {
+        let channel = make_channel(1000, 10, 1000, 5, 3, 50);
+        assert_eq!(channel.round_robin(1090.into()), (40, 1090.into()));
+    }
+
+    // 9. State transition: after timeout, new sequencer gets a fresh baseline
+    #[test]
+    fn after_timeout_new_sequencer_gets_fresh_starting_slot() {
+        let channel = make_channel(110, 1, 110, 15, 10, 3);
+        assert_eq!(channel.round_robin(125.into()), (2, 120.into()));
+        assert_eq!(channel.round_robin(135.into()), (0, 130.into()));
+    }
+
+    // 10. Zero elapsed (block_slot == tip_slot)
+    #[test]
+    fn zero_elapsed_no_change() {
+        let channel = make_channel(100, 3, 95, 10, 20, 5);
+        assert_eq!(channel.round_robin(100.into()), (3, 95.into()));
     }
 }

@@ -16,6 +16,7 @@ workspace = true
 [dependencies]
 async-trait                      = { workspace = true }
 futures                          = { workspace = true }
+hex                              = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-groth16                       = { workspace = true }

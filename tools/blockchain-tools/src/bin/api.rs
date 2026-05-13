@@ -159,7 +159,7 @@ async fn post_blend_declaration(
     .with_context(|| "Failed to extract necessary values from user config")?;
 
     let declaration = DeclarationMessage {
-        locators: vec![locator],
+        locators: locator.into(),
         locked_note_id,
         provider_id,
         service_type: ServiceType::BlendNetwork,
