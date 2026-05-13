@@ -56,8 +56,17 @@ macro_rules! declare_serde_generic_array {
                 deserializer: D,
             ) -> Result<GenericArray<u8, $size>, D::Error> {
                 if deserializer.is_human_readable() {
-                    let s = String::deserialize(deserializer)?;
-                    let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
+                    #[derive(serde::Deserialize)]
+                    #[serde(untagged)]
+                    enum StringOrSeq {
+                        Hex(String),
+                        Seq(Vec<u8>),
+                    }
+
+                    let bytes = match StringOrSeq::deserialize(deserializer)? {
+                        StringOrSeq::Hex(s) => hex::decode(&s).map_err(serde::de::Error::custom)?,
+                        StringOrSeq::Seq(b) => b,
+                    };
 
                     if bytes.len() != $size::USIZE {
                         return Err(serde::de::Error::custom(format!(

@@ -229,6 +229,7 @@ fn env_config_deserialization_rejects_unknown_blend_target() {
 fn repo_file(path_from_crate_root: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(path_from_crate_root)
 }
+
 #[test]
 fn standalone_node_config_deserializes() {
     let yaml_path = repo_file("../standalone-node-config.yaml");
