@@ -122,7 +122,7 @@ fn valid_cryptarchia_inscription(
         ))));
     }
 
-    CryptarchiaParameter::decode(&inscription.inscription)
+    CryptarchiaParameter::decode(inscription.inscription.as_ref())
 }
 
 impl Transaction for GenesisTx {
@@ -304,7 +304,7 @@ mod tests {
     ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
-            inscription: cryptarchia_param.encode(),
+            inscription: cryptarchia_param.encode().try_into().unwrap(),
             parent,
             signer,
         }

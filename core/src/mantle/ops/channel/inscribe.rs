@@ -3,27 +3,31 @@ use std::sync::Arc;
 use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::serde::serde_bytes_vec;
+use lb_utils::bounded_vec::BoundedVec;
+use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
+    block::MAX_BLOCK_SIZE,
     crypto::{Digest as _, Hasher},
     events::Events,
     mantle::{
         TxHash,
-        channel::{ChannelState, Channels, Error},
-        encoding::encode_channel_inscribe,
+        channel::{ChannelState, Channels, Error as ChannelError},
         ledger::Operation,
+        nom::NomEncode,
     },
 };
+
+pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
+pub type Inscription = BoundedVec<u8, MAX_BYTES>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
-    #[serde(with = "serde_bytes_vec")]
-    pub inscription: Vec<u8>,
+    pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
     pub signer: Ed25519PublicKey,
@@ -39,7 +43,35 @@ impl InscriptionOp {
 
     #[must_use]
     fn payload_bytes(&self) -> Bytes {
-        encode_channel_inscribe(self).into()
+        self.encode().into()
+    }
+}
+
+impl NomEncode for InscriptionOp {
+    fn encode(&self) -> Vec<u8> {
+        // ChannelInscribe = ChannelId Inscription Parent Signer
+        let mut bytes = self.channel_id.encode();
+        bytes.extend(self.inscription.encode());
+        bytes.extend(self.parent.encode());
+        bytes.extend(self.signer.encode());
+        bytes
+    }
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        // ChannelInscribe = ChannelId Inscription Parent Signer
+        let (input, channel_id) = ChannelId::decode(bytes)?;
+        let (input, inscription) = Inscription::decode(input)?;
+        let (input, parent) = MsgId::decode(input)?;
+        let (input, signer) = Ed25519PublicKey::decode(input)?;
+        Ok((
+            input,
+            Self {
+                channel_id,
+                inscription,
+                parent,
+                signer,
+            },
+        ))
     }
 }
 
@@ -60,7 +92,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         = InscriptionExecutionContext
     where
         Self: 'a;
-    type Error = Error;
+    type Error = ChannelError;
 
     fn validate(&self, ctx: &InscriptionValidationContext<'_>) -> Result<(), Self::Error> {
         // Check if the channel exist otherwise the inscription is valid only if and
@@ -68,7 +100,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
         if let Some(channel) = ctx.channels.channels.get(&self.channel_id).cloned() {
             // Check the parent corresponds to the payload
             if self.parent != channel.tip_message {
-                return Err(Error::InvalidParent {
+                return Err(ChannelError::InvalidParent {
                     channel_id: self.channel_id,
                     parent: self.parent.into(),
                     actual: channel.tip_message.into(),
@@ -79,14 +111,14 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             if self.signer
                 != channel.accredited_keys[channel.round_robin(ctx.block_slot).0 as usize]
             {
-                return Err(Error::UnauthorizedSigner {
+                return Err(ChannelError::UnauthorizedSigner {
                     channel_id: self.channel_id,
                     signer: format!("{signer:?}", signer = self.signer),
                 });
             }
         } else if self.parent != MsgId::root() {
             // Checked that the parent is ZERO because channel doesn't exist
-            return Err(Error::InvalidParent {
+            return Err(ChannelError::InvalidParent {
                 channel_id: self.channel_id,
                 parent: self.parent.into(),
                 actual: MsgId::root().into(),
@@ -99,7 +131,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             .verify(ctx.tx_hash.as_signing_bytes().as_ref(), ctx.inscribe_sig)
             .is_err()
         {
-            return Err(Error::InvalidSignature);
+            return Err(ChannelError::InvalidSignature);
         }
 
         Ok(())
@@ -149,15 +181,34 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
 #[cfg(test)]
 mod tests {
+    use lb_utils::bounded_vec::BoundedError;
+
     use super::*;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId([0u8; 32]),
-            inscription: b"genesis".to_vec(),
+            inscription: Inscription::new(b"genesis".to_vec()).unwrap(),
             parent: MsgId([0u8; 32]),
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         }
+    }
+
+    #[test]
+    fn oversized_inscription_rejected_at_construction() {
+        let oversized = vec![0u8; MAX_BYTES + 1];
+        let err = Inscription::new(oversized).unwrap_err();
+        assert!(
+            matches!(err, BoundedError::TooLong { actual, max } if actual == MAX_BYTES + 1 && max == MAX_BYTES)
+        );
+    }
+
+    #[test]
+    fn oversized_inscription_rejected_on_deserialize() {
+        let oversized = vec![0u8; MAX_BYTES + 1];
+        let bytes = bincode::serialize(&oversized).unwrap();
+        let err = bincode::deserialize::<Inscription>(&bytes).unwrap_err();
+        assert!(format!("{err}").contains("exceeds maximum"));
     }
 
     #[test]

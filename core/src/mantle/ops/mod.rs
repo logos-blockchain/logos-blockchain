@@ -57,12 +57,10 @@ pub trait OpId {
 /// This type serves as the public-facing representation of [`OpSer`] and
 /// [`OpDe`], delegating default serialization and deserialization to them.
 ///
-/// Serialization and deserialization are performed using [`serde_::WireOpSer`]
-/// and [`serde_::WireOpDe`], which introduce a custom `opcode` tag to identify
-/// the correct variant. Due to limitations in [`bincode`] and [`serde`]'s
-/// `#[serde(untagged)]` enums, binary deserialization is routed through
-/// [`OpWireVisitor`], which correctly handles `opcode` to select the
-/// appropriate variant.
+/// Serialization and deserialization share a single [`serde_::OpWire`] wire
+/// shape, which carries an `opcode` tag used to identify the correct variant.
+/// Due to limitations in [`bincode`] and [`serde`]'s `#[serde(untagged)]`
+/// enums, binary deserialization is routed through [`decode_op`] instead.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum Op {
@@ -75,18 +73,6 @@ pub enum Op {
     SDPActive(SDPActiveOp) = SDP_ACTIVE,
     LeaderClaim(LeaderClaimOp) = LEADER_CLAIM,
     Transfer(TransferOp) = TRANSFER,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum OpProof {
-    Ed25519Sig(Ed25519Signature),
-    ZkSig(ZkSignature),
-    ZkAndEd25519Sigs {
-        zk_sig: ZkSignature,
-        ed25519_sig: Ed25519Signature,
-    },
-    PoC(Groth16LeaderClaimProof),
-    ChannelMultiSigProof(ChannelMultiSigProof),
 }
 
 /// Delegates serialization through the [`OpInternal`] representation.
@@ -105,16 +91,11 @@ impl Serialize for Op {
     }
 }
 
-/// Delegates deserialization through the [`OpInternal`] representation.
+/// Delegates deserialization through the [`OpDe`] representation.
 ///
 /// If the deserializer is non-human-readable it falls back into custom
-/// decoding. Otherwise, it falls back to deserializing via [`OpInternal`]'s
+/// decoding via [`decode_op`]. Otherwise, it deserializes via [`OpDe`]'s
 /// default behaviour.
-///
-/// # Notes
-/// - When using the `wire` format, the tuple must contain the exact number of
-///   fields expected by [`WireOpDes`](serde_::WireOpDes), or unexpected
-///   behaviour may occur.
 impl<'de> Deserialize<'de> for Op {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -161,4 +142,16 @@ impl Op {
             Self::Transfer(_) => Constants::TRANSFER,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OpProof {
+    Ed25519Sig(Ed25519Signature),
+    ZkSig(ZkSignature),
+    ZkAndEd25519Sigs {
+        zk_sig: ZkSignature,
+        ed25519_sig: Ed25519Signature,
+    },
+    PoC(Groth16LeaderClaimProof),
+    ChannelMultiSigProof(ChannelMultiSigProof),
 }

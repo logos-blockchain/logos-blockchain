@@ -683,7 +683,7 @@ mod tests {
     fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: vec![1, 2, 3],
+            inscription: vec![1, 2, 3].try_into().unwrap(),
             parent: [0; 32].into(),
             signer: signing_key.public_key(),
         }

@@ -1140,7 +1140,9 @@ mod tests {
                 genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
                 epoch_nonce: Fr::ZERO,
             }
-            .encode(),
+            .encode()
+            .try_into()
+            .unwrap(),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         }
@@ -1154,7 +1156,9 @@ mod tests {
                 genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
                 epoch_nonce: Fr::ZERO,
             }
-            .encode(),
+            .encode()
+            .try_into()
+            .unwrap(),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         }

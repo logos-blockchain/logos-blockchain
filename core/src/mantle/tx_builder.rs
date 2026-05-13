@@ -222,7 +222,7 @@ mod tests {
         // Build an operation
         let op = InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: b"hello".into(),
+            inscription: b"hello".to_vec().try_into().unwrap(),
             parent: [1; 32].into(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
@@ -361,7 +361,7 @@ mod tests {
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id,
-                inscription: b"hello".into(),
+                inscription: b"hello".to_vec().try_into().unwrap(),
                 parent: [1; 32].into(),
                 signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
             }))

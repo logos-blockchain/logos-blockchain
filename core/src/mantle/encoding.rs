@@ -15,10 +15,11 @@ use time::OffsetDateTime;
 use crate::{
     mantle::{
         MantleTx, Note, NoteId, SignedMantleTx,
+        nom::NomEncode as _,
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, config::ChannelConfigOp, deposit::DepositOp,
+                ChannelId, Ed25519PublicKey, config::ChannelConfigOp, deposit::DepositOp,
                 inscribe::InscriptionOp,
             },
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
@@ -41,9 +42,6 @@ use crate::{
 // limits maximum transaction size to 1MiB, for memory safety limits we can
 // allow 4MiB.
 
-/// Maximum memory allocation size allowed for channel inscription data.
-/// Protects against unbounded allocation in `decode_channel_inscribe`
-pub const MAX_ENCODE_DECODE_INSCRIPTION_SIZE: u32 = (MAX_BLOCK_SIZE * 7 / 8) as u32;
 // Maximum memory allocation size allowed for SDP activity metadata.
 // Protects against unbounded allocation in `decode_sdp_active`
 const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed size of 234 bytes
@@ -89,7 +87,7 @@ pub fn decode_op(input: &[u8]) -> IResult<&[u8], Op> {
     let (input, opcode) = decode_byte(input)?;
 
     match opcode {
-        opcode::INSCRIBE => map(decode_channel_inscribe, Op::ChannelInscribe).parse(input),
+        opcode::INSCRIBE => map(InscriptionOp::decode, Op::ChannelInscribe).parse(input),
         opcode::CHANNEL_CONFIG => map(decode_channel_config, Op::ChannelConfig).parse(input),
         opcode::CHANNEL_DEPOSIT => map(decode_channel_deposit, Op::ChannelDeposit).parse(input),
         opcode::CHANNEL_WITHDRAW => map(decode_channel_withdraw, Op::ChannelWithdraw).parse(input),
@@ -105,34 +103,6 @@ pub fn decode_op(input: &[u8]) -> IResult<&[u8], Op> {
 // ==============================================================================
 // Channel Operation Decoders
 // ==============================================================================
-
-fn decode_channel_inscribe(input: &[u8]) -> IResult<&[u8], InscriptionOp> {
-    // ChannelInscribe = ChannelId Inscription Parent Signer
-    // Inscription = UINT32 *BYTE
-    // Signer = Ed25519PublicKey
-    let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
-    let (input, inscription_len) = decode_uint32(input)?;
-
-    // Validate inscription length to prevent unbounded memory allocation
-    if inscription_len > MAX_ENCODE_DECODE_INSCRIPTION_SIZE {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
-    }
-
-    let (input, inscription) =
-        map(take(inscription_len as usize), |b: &[u8]| b.to_vec()).parse(input)?;
-    let (input, parent) = map(decode_hash32, MsgId::from).parse(input)?;
-    let (input, signer) = decode_ed25519_public_key(input)?;
-
-    Ok((
-        input,
-        InscriptionOp {
-            channel_id,
-            inscription,
-            parent,
-            signer,
-        },
-    ))
-}
 
 fn decode_channel_config(input: &[u8]) -> IResult<&[u8], ChannelConfigOp> {
     // ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
@@ -431,7 +401,7 @@ fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
 }
 
 const ED25519_PK_BYTES: usize = 32;
-fn decode_ed25519_public_key(input: &[u8]) -> IResult<&[u8], Ed25519PublicKey> {
+pub(crate) fn decode_ed25519_public_key(input: &[u8]) -> IResult<&[u8], Ed25519PublicKey> {
     // Ed25519PublicKey = 32BYTE
     map_res(
         decode_array::<ED25519_PK_BYTES>,
@@ -484,7 +454,7 @@ pub(crate) fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
     .parse(input)
 }
 
-fn decode_hash32(input: &[u8]) -> IResult<&[u8], [u8; 32]> {
+pub(crate) fn decode_hash32(input: &[u8]) -> IResult<&[u8], [u8; 32]> {
     // Hash32 = 32BYTE
     decode_array::<32>(input)
 }
@@ -515,7 +485,7 @@ fn decode_uint16(input: &[u8]) -> IResult<&[u8], u16> {
     le_u16(input)
 }
 
-fn decode_uint32(input: &[u8]) -> IResult<&[u8], u32> {
+pub(crate) fn decode_uint32(input: &[u8]) -> IResult<&[u8], u32> {
     // UINT32 = 4BYTE
     le_u32(input)
 }
@@ -550,7 +520,6 @@ use lb_groth16::fr_to_bytes;
 
 use super::ops::opcode;
 use crate::{
-    block::MAX_BLOCK_SIZE,
     mantle::{
         channel::{SlotTimeframe, SlotTimeout},
         ledger::{Inputs, Outputs},
@@ -566,7 +535,7 @@ fn encode_uint16(value: u16) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
 
-fn encode_uint32(value: u32) -> Vec<u8> {
+pub(crate) fn encode_uint32(value: u32) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
 
@@ -590,7 +559,7 @@ pub(crate) fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
     )
 }
 
-fn encode_hash32(hash: &[u8; 32]) -> Vec<u8> {
+pub(crate) fn encode_hash32(hash: &[u8; 32]) -> Vec<u8> {
     hash.to_vec()
 }
 
@@ -603,7 +572,7 @@ fn encode_ed25519_signature(sig: &Ed25519Signature) -> Vec<u8> {
     sig.to_bytes().to_vec()
 }
 
-fn encode_ed25519_public_key(key: &Ed25519PublicKey) -> Vec<u8> {
+pub(crate) fn encode_ed25519_public_key(key: &Ed25519PublicKey) -> Vec<u8> {
     key.to_bytes().to_vec()
 }
 
@@ -633,23 +602,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
 }
 
 /// Encode channel operations
-#[must_use]
-pub fn encode_channel_inscribe(op: &InscriptionOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(op.channel_id.as_ref()));
-    assert!(
-        op.inscription.len() <= MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize,
-        "Fatal error in 'encode_channel_inscribe' - {} inscription data clipped to {}",
-        op.inscription.len(),
-        MAX_ENCODE_DECODE_INSCRIPTION_SIZE
-    );
-    bytes.extend(encode_uint32(op.inscription.len() as u32));
-    bytes.extend(&op.inscription);
-    bytes.extend(encode_hash32(op.parent.as_ref()));
-    bytes.extend(encode_ed25519_public_key(&op.signer));
-    bytes
-}
-
 #[must_use]
 pub fn encode_channel_config(op: &ChannelConfigOp) -> Vec<u8> {
     assert!(
@@ -825,7 +777,7 @@ pub fn encode_op(op: &Op) -> Vec<u8> {
     match op {
         Op::ChannelInscribe(op) => {
             bytes.extend(encode_byte(opcode::INSCRIBE));
-            bytes.extend(encode_channel_inscribe(op));
+            bytes.extend(op.encode());
         }
         Op::ChannelConfig(op) => {
             bytes.extend(encode_byte(opcode::CHANNEL_CONFIG));
@@ -985,7 +937,14 @@ mod tests {
 
     use super::*;
     use crate::{
-        mantle::{Transaction as _, tx::GasPrices},
+        mantle::{
+            Transaction as _,
+            ops::channel::{
+                MsgId,
+                inscribe::{self, Inscription},
+            },
+            tx::GasPrices,
+        },
         sdp::blend::ActivityProof,
     };
 
@@ -1090,7 +1049,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
         let mantle_tx = MantleTx(vec![Op::ChannelInscribe(InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"hello".to_vec(),
+            inscription: Inscription::new(b"hello".to_vec()).unwrap(),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         })]);
@@ -1134,7 +1093,7 @@ mod tests {
         let mantle_tx = MantleTx(vec![
             Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0x11; 32]),
-                inscription: b"first".to_vec(),
+                inscription: Inscription::new(b"first".to_vec()).unwrap(),
                 parent: MsgId::from([0x00; 32]),
                 signer: signing_key.public_key(),
             }),
@@ -1175,7 +1134,7 @@ mod tests {
     #[tokio::test]
     async fn test_large_payload_encoding_decoding() {
         // Test payload sizes from 512kB up to 2MiB in 512kB increments
-        const MAX_SIZE: usize = MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize;
+        const MAX_SIZE: usize = inscribe::MAX_BYTES;
         const CHUNK_SIZE: usize = MAX_SIZE / 10;
 
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
@@ -1186,7 +1145,7 @@ mod tests {
             let signing_key = signing_key.clone();
 
             let task = tokio::task::spawn(async move {
-                let large_inscription = vec![0xAB; payload_size];
+                let large_inscription = Inscription::new(vec![0xAB; payload_size]).unwrap();
 
                 let inscribe_op = InscriptionOp {
                     channel_id: ChannelId::from([0xAA; 32]),
@@ -1315,7 +1274,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"hello world".to_vec(),
+            inscription: Inscription::new(b"hello world".to_vec()).unwrap(),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         };
@@ -1511,7 +1470,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"test".to_vec(),
+            inscription: Inscription::new(b"test".to_vec()).unwrap(),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         };
@@ -1616,7 +1575,8 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0x11; 32]),
-            inscription: b"complex test inscription with more data".to_vec(),
+            inscription: Inscription::new(b"complex test inscription with more data".to_vec())
+                .unwrap(),
             parent: MsgId::from([0x22; 32]),
             signer: signing_key1.public_key(),
         };
@@ -1798,25 +1758,8 @@ mod tests {
     // Security Tests - Memory Over-Allocation Protection
     // ==============================================================================
 
-    #[test]
-    fn test_encode_reject_oversized_inscription() {
-        let oversized_inscription = vec![0xAB; MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize + 1];
-
-        let inscribe_op = InscriptionOp {
-            channel_id: ChannelId::from([0xAA; 32]),
-            inscription: oversized_inscription,
-            parent: MsgId::from([0xBB; 32]),
-            signer: Ed25519Key::from_bytes(&[1; 32]).public_key(),
-        };
-
-        let result = panic::catch_unwind(|| {
-            let _unused = encode_channel_inscribe(&inscribe_op);
-        });
-        assert!(
-            result.is_err(),
-            "Should reject encoding of oversized inscription"
-        );
-    }
+    // Encode-side enforcement is now a type invariant on `Inscription`;
+    // see `inscribe::tests::oversized_inscription_rejected_at_construction`.
 
     #[test]
     fn test_decode_reject_oversized_inscription() {
@@ -1827,14 +1770,14 @@ mod tests {
         malicious_input.extend_from_slice(&[0x42; 32]);
 
         // Inscription length (u32) - exceeds MAX_INSCRIPTION_SIZE
-        let oversized_len = MAX_ENCODE_DECODE_INSCRIPTION_SIZE + 1;
+        let oversized_len = inscribe::MAX_BYTES + 1;
         malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
 
         // We don't need to include the actual inscription data because
         // the decoder should reject it before trying to read that much
 
         // Try to decode - should fail with TooLarge error
-        let result = decode_channel_inscribe(&malicious_input);
+        let result = InscriptionOp::decode(&malicious_input);
         assert!(result.is_err(), "Should reject oversized inscription");
 
         // Verify it fails with the right error kind
@@ -1917,10 +1860,10 @@ mod tests {
         valid_input.extend_from_slice(&[0x42; 32]);
 
         // Inscription length (u32) - exactly MAX_INSCRIPTION_SIZE
-        valid_input.extend_from_slice(&MAX_ENCODE_DECODE_INSCRIPTION_SIZE.to_le_bytes());
+        valid_input.extend_from_slice(&inscribe::MAX_BYTES.to_le_bytes());
 
         // Inscription data (MAX_INSCRIPTION_SIZE bytes)
-        valid_input.extend_from_slice(&vec![0x01; MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize]);
+        valid_input.extend_from_slice(&vec![0x01; inscribe::MAX_BYTES]);
 
         // Parent MsgId (32 bytes)
         valid_input.extend_from_slice(&[0x43; 32]);
@@ -1931,17 +1874,14 @@ mod tests {
         valid_input.extend_from_slice(&pk.to_bytes());
 
         // Should succeed (though signature validation might fail later)
-        let result = decode_channel_inscribe(&valid_input);
+        let result = InscriptionOp::decode(&valid_input);
         assert!(
             result.is_ok(),
             "Should accept inscription at MAX_INSCRIPTION_SIZE: {result:?}",
         );
 
         let (_, inscription_op) = result.unwrap();
-        assert_eq!(
-            inscription_op.inscription.len(),
-            MAX_ENCODE_DECODE_INSCRIPTION_SIZE as usize
-        );
+        assert_eq!(inscription_op.inscription.len(), inscribe::MAX_BYTES);
     }
 
     #[test]
@@ -1958,7 +1898,7 @@ mod tests {
         malicious_input.extend_from_slice(&huge_len.to_le_bytes());
 
         // This should fail immediately without trying to allocate 4GB
-        let result = decode_channel_inscribe(&malicious_input);
+        let result = InscriptionOp::decode(&malicious_input);
         assert!(result.is_err(), "Should reject huge inscription length");
 
         // Similar test for metadata

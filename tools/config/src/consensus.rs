@@ -104,7 +104,9 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
             genesis_time: get_or_init_genesis_time(),
             epoch_nonce: Fr::ZERO,
         }
-        .encode(),
+        .encode()
+        .try_into()
+        .unwrap(),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
     }

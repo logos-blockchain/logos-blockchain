@@ -842,7 +842,7 @@ mod tests {
                 create_signed_tx(
                     Op::ChannelInscribe(InscriptionOp {
                         channel_id: id,
-                        inscription: vec![1, 2, 3, 4],
+                        inscription: vec![1, 2, 3, 4].try_into().unwrap(),
                         parent: MsgId::root(),
                         signer: verifying_key,
                     }),
@@ -922,7 +922,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id,
-            inscription: vec![1, 2, 3, 4],
+            inscription: vec![1, 2, 3, 4].try_into().unwrap(),
             parent: MsgId::root(),
             signer: verifying_key,
         };
@@ -1260,7 +1260,7 @@ mod tests {
         // First, create a channel with one message
         let first_inscribe = InscriptionOp {
             channel_id,
-            inscription: vec![1, 2, 3],
+            inscription: vec![1, 2, 3].try_into().unwrap(),
             parent: MsgId::root(),
             signer: verifying_key,
         };
@@ -1278,7 +1278,7 @@ mod tests {
         let wrong_parent = MsgId::from([99; 32]);
         let second_inscribe = InscriptionOp {
             channel_id,
-            inscription: vec![4, 5, 6],
+            inscription: vec![4, 5, 6].try_into().unwrap(),
             parent: wrong_parent,
             signer: verifying_key,
         };
@@ -1301,7 +1301,7 @@ mod tests {
         let empty_channel_id = ChannelId::from([8; 32]);
         let empty_inscribe = InscriptionOp {
             channel_id: empty_channel_id,
-            inscription: vec![7, 8, 9],
+            inscription: vec![7, 8, 9].try_into().unwrap(),
             parent: MsgId::from([1; 32]), // non-root parent
             signer: verifying_key,
         };
@@ -1331,7 +1331,7 @@ mod tests {
         // First, create a channel with authorized signer
         let first_inscribe = InscriptionOp {
             channel_id,
-            inscription: vec![1, 2, 3],
+            inscription: vec![1, 2, 3].try_into().unwrap(),
             parent: MsgId::root(),
             signer: verifying_key,
         };
@@ -1349,7 +1349,7 @@ mod tests {
         // Now try to add a message with unauthorized signer
         let second_inscribe = InscriptionOp {
             channel_id,
-            inscription: vec![4, 5, 6],
+            inscription: vec![4, 5, 6].try_into().unwrap(),
             parent: correct_parent,
             signer: unauthorized_verifying_key,
         };
@@ -1424,14 +1424,14 @@ mod tests {
 
         let inscribe_op1 = InscriptionOp {
             channel_id: channel1,
-            inscription: vec![1, 2, 3],
+            inscription: vec![1, 2, 3].try_into().unwrap(),
             parent: MsgId::root(),
             signer: vk1,
         };
 
         let inscribe_op2 = InscriptionOp {
             channel_id: channel2,
-            inscription: vec![4, 5, 6],
+            inscription: vec![4, 5, 6].try_into().unwrap(),
             parent: MsgId::root(),
             signer: vk2,
         };
@@ -1447,7 +1447,7 @@ mod tests {
 
         let inscribe_op3 = InscriptionOp {
             channel_id: channel1,
-            inscription: vec![7, 8, 9],
+            inscription: vec![7, 8, 9].try_into().unwrap(),
             parent: config_op.id(),
             signer: vk3,
         };

@@ -10,8 +10,9 @@ use lb_core::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId, config::ChannelConfigOp,
-                inscribe::InscriptionOp,
+                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId,
+                config::ChannelConfigOp,
+                inscribe::{Inscription, InscriptionOp},
             },
         },
         tx::TxHash,
@@ -151,7 +152,7 @@ pub enum Event {
 
 enum ActorRequest {
     /// Create/sign/submit a transaction with an inscription
-    PublishMessage { data: Vec<u8> },
+    PublishMessage { data: Inscription },
     /// Build an unsigned tx for the given ops and an inscription
     ///
     /// Calling this multiple times without submitting the prepared txs via
@@ -160,7 +161,7 @@ enum ActorRequest {
     /// unavoidable, handle potential conflicts carefully.
     PrepareTx {
         ops: Vec<Op>,
-        msg: Vec<u8>,
+        msg: Inscription,
         reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
     },
     /// Sign a tx using the sequencer's key
@@ -222,7 +223,7 @@ where
     /// sequencer's event loop. The result (inscription ID + checkpoint) is
     /// delivered via [`Event::Published`] once the tx is created and posted
     /// to the network.
-    pub async fn publish_message(&self, data: Vec<u8>) -> Result<(), Error> {
+    pub async fn publish_message(&self, data: Inscription) -> Result<(), Error> {
         if !*self.ready_rx.borrow() {
             return Err(Error::Unavailable {
                 reason: "sequencer not yet ready",
@@ -244,7 +245,7 @@ where
     pub async fn prepare_tx(
         &self,
         ops: Vec<Op>,
-        data: Vec<u8>,
+        data: Inscription,
     ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::PrepareTx {
@@ -981,7 +982,7 @@ where
         }
     }
 
-    async fn handle_publish(&mut self, data: Vec<u8>) -> Event {
+    async fn handle_publish(&mut self, data: Inscription) -> Event {
         // Safe to unwrap — handle_request checks is_ready() first
         let s = self.state.as_mut().unwrap();
 
@@ -1437,7 +1438,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
                     tx_hash,
                     parent_msg,
                     this_msg: config.id(),
-                    payload: Vec::new(),
+                    payload: Inscription::default(),
                 };
                 last_in_block = Some(info.this_msg);
                 items.push(info);
@@ -1482,7 +1483,7 @@ fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 fn create_inscribe_tx(
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
-    inscription: Vec<u8>,
+    inscription: Inscription,
     parent: MsgId,
 ) -> (SignedMantleTx, MsgId) {
     let signer = signing_key.public_key();
@@ -1553,7 +1554,7 @@ fn prepare_tx(
     mut ops: Vec<Op>,
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
-    inscription: Vec<u8>,
+    inscription: Inscription,
     parent: MsgId,
 ) -> (MantleTx, MsgId, Ed25519Signature) {
     let inscription_op = InscriptionOp {
@@ -1637,7 +1638,7 @@ mod tests {
         // Prepare a `MantleTx` — drive sequencer concurrently to process the request
         let prepare_fut = handle.prepare_tx(
             vec![Op::ChannelDeposit(deposit_op.clone())],
-            "Mint 10 to Alice".into(),
+            b"Mint 10 to Alice".to_vec().try_into().unwrap(),
         );
         tokio::pin!(prepare_fut);
         let (tx, msg_id, inscription_sig) = loop {
