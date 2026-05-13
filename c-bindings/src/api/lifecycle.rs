@@ -164,7 +164,7 @@ pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationS
 
 #[cfg(test)]
 mod test {
-    use std::{path::PathBuf, sync::LazyLock};
+    use std::{ffi::CString, path::PathBuf, sync::LazyLock};
 
     use crate::api::lifecycle::{start_lb_node, stop_node};
 
@@ -231,19 +231,11 @@ mod test {
     #[test]
     fn test_basic_lifecycle() {
         let _guard = NodeStateGuard::from_current_crate();
+        let config_path = CString::new(STANDALONE_NODE_CONFIG_PATH.to_str().unwrap()).unwrap();
+        let deployment_path =
+            CString::new(STANDALONE_DEPLOYMENT_CONFIG_PATH.to_str().unwrap()).unwrap();
 
-        let start_status = start_lb_node(
-            STANDALONE_NODE_CONFIG_PATH
-                .to_str()
-                .unwrap()
-                .as_ptr()
-                .cast::<i8>(),
-            STANDALONE_DEPLOYMENT_CONFIG_PATH
-                .to_str()
-                .unwrap()
-                .as_ptr()
-                .cast::<i8>(),
-        );
+        let start_status = start_lb_node(config_path.as_ptr(), deployment_path.as_ptr());
 
         assert!(
             start_status.is_ok(),
