@@ -225,3 +225,49 @@ fn env_config_deserialization_rejects_unknown_blend_target() {
             .contains("unknown log filter target `blend::service::missing`")
     );
 }
+
+fn repo_file(path_from_crate_root: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(path_from_crate_root)
+}
+#[test]
+fn standalone_node_config_deserializes() {
+    let yaml_path = repo_file("../standalone-node-config.yaml");
+    assert!(yaml_path.exists(), "standalone node config should exist at {:?}", yaml_path);
+    let bytes = std::fs::read(&yaml_path).expect("standalone node config should exist");
+
+    let parsed: Result<UserConfig, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
+    assert!(parsed.is_ok(), "standalone node config should deserialize");
+
+    let parsed = super::deserialize_config_at_path::<UserConfig>(
+        &yaml_path,
+        super::OnUnknownKeys::Fail,
+    );
+    assert!(
+        parsed.is_ok(),
+        "standalone node config should deserialize via loader, got: {:?}",
+        parsed.err()
+    );
+}
+
+#[test]
+fn standalone_deployment_config_deserializes() {
+    let yaml_path = repo_file("../standalone-deployment-config.yaml");
+    assert!(yaml_path.exists(), "standalone deployment config should exist at {:?}", yaml_path);
+    let bytes = std::fs::read(&yaml_path).expect("standalone deployment config should exist");
+
+    let parsed: Result<DeploymentSettings, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
+    assert!(
+        parsed.is_ok(),
+        "standalone deployment config should deserialize"
+    );
+
+    let parsed = super::deserialize_config_at_path::<DeploymentSettings>(
+        &yaml_path,
+        super::OnUnknownKeys::Fail,
+    );
+    assert!(
+        parsed.is_ok(),
+        "standalone deployment config should deserialize via loader, got: {:?}",
+        parsed.err()
+    );
+}
