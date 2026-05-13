@@ -5273,6 +5273,7 @@ version = "0.1.2"
 dependencies = [
  "async-trait",
  "futures",
+ "hex",
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",

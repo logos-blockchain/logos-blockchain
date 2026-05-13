@@ -260,11 +260,11 @@ impl TxState {
         let inscriptions = self
             .collect_pending_suffix(channel_tip)
             .into_iter()
-            .filter(|inv| !safe.contains(&inv.tx_hash))
-            .filter_map(|inv| {
+            .filter(|info| !safe.contains(&info.tx_hash))
+            .filter_map(|info| {
                 self.pending
-                    .get(&inv.tx_hash)
-                    .map(|p| (inv.tx_hash, p.signed_tx.clone()))
+                    .get(&info.tx_hash)
+                    .map(|p| (info.tx_hash, p.signed_tx.clone()))
             });
         let others = self
             .pending_other
@@ -284,6 +284,15 @@ impl TxState {
     #[must_use]
     pub fn has_pending_inscriptions(&self) -> bool {
         !self.pending.is_empty()
+    }
+
+    /// Whether `msg_id` matches the `this_msg` of any inscription currently
+    /// in our outbox. Used to identify chain-observed inscriptions that
+    /// originated from this sequencer instance — robust to shared signing
+    /// keys (each instance's outbox is independent).
+    #[must_use]
+    pub fn outbox_contains(&self, msg_id: MsgId) -> bool {
+        self.pending.values().any(|p| p.this_msg == msg_id)
     }
 
     /// Pending inscriptions valid to be added at the current channel tip:
@@ -355,15 +364,15 @@ impl TxState {
         let mut ordered = Vec::with_capacity(eligible.len());
         let mut seen = std::collections::HashSet::new();
         for root in root_parents {
-            for inv in self.collect_pending_suffix(root) {
-                if eligible.contains(&inv.tx_hash) && seen.insert(inv.tx_hash) {
-                    ordered.push(inv);
+            for info in self.collect_pending_suffix(root) {
+                if eligible.contains(&info.tx_hash) && seen.insert(info.tx_hash) {
+                    ordered.push(info);
                 }
             }
         }
 
-        for inv in &ordered {
-            self.remove_pending(&inv.tx_hash);
+        for info in &ordered {
+            self.remove_pending(&info.tx_hash);
         }
         ordered
     }
