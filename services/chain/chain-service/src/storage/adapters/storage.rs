@@ -132,6 +132,27 @@ where
         })
     }
 
+    async fn get_block_events(&self, header_id: &HeaderId) -> Option<Self::Events> {
+        let (sender, receiver) = oneshot::channel();
+
+        self.storage_relay
+            .send(StorageMsg::get_block_events_request(*header_id, sender))
+            .await
+            .unwrap();
+
+        let Ok(maybe_events) = receiver.await else {
+            tracing::error!("Failed to receive block events from storage relay");
+            return None;
+        };
+
+        let events = maybe_events?;
+        let Ok(events) = events.try_into() else {
+            tracing::error!("Failed to convert block events loaded from storage");
+            return None;
+        };
+        Some(events)
+    }
+
     async fn remove_block(
         &self,
         header_id: HeaderId,

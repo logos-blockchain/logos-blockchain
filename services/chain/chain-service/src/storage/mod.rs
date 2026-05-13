@@ -42,6 +42,8 @@ pub trait StorageAdapter<RuntimeServiceId> {
 
     async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId>;
 
+    async fn get_block_events(&self, header_id: &HeaderId) -> Option<Self::Events>;
+
     /// Remove a block from the storage layer.
     ///
     /// * If the block exists, this function returns `Ok(Self::Block).`

@@ -19,7 +19,7 @@ use lb_api_service::http::{
 };
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
-use lb_chain_service::{ConsensusMsg, Slot};
+use lb_chain_service::{ConsensusMsg, Slot, api::CryptarchiaServiceApi};
 use lb_core::{
     block::Block,
     events::Events,
@@ -1003,6 +1003,37 @@ where
             (StatusCode::OK, Json(api_block)).into_response()
         }
         Ok(None) => (StatusCode::NOT_FOUND,).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = paths::BLOCK_EVENTS,
+    responses(
+        (status = 200, description = "Block events", body = Events),
+        (status = 404, description = "Block not found"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn block_events<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<HeaderId>,
+) -> Response
+where
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+
+    match chain_api.get_block_events(id).await {
+        Ok(Some(events)) => (StatusCode::OK, Json(events)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "Block not found").into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
     }
 }

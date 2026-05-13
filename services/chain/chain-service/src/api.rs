@@ -1,7 +1,7 @@
 use std::pin::Pin;
 
 use futures::{Stream, TryStreamExt as _};
-use lb_core::{block::Block, header::HeaderId};
+use lb_core::{block::Block, events::Events, header::HeaderId};
 use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
@@ -221,6 +221,21 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetEpochConfig"))
+        })
+    }
+
+    pub async fn get_block_events(&self, id: HeaderId) -> Result<Option<Events>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(ConsensusMsg::GetBlockEvents { id, reply_channel })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetBlockEvents"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetBlockEvents"))
         })
     }
 

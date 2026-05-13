@@ -147,6 +147,10 @@ pub enum ConsensusMsg<Tx> {
             lb_cryptarchia_engine::Config,
         )>,
     },
+    GetBlockEvents {
+        id: HeaderId,
+        reply_channel: oneshot::Sender<Option<Events>>,
+    },
     /// Apply a block to the chain,
     /// and return the tip and reorged txs if successful.
     ApplyBlock {
@@ -780,7 +784,7 @@ where
                                 });
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter());
+                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
                             }
                         }
                     }
@@ -872,7 +876,7 @@ where
         Ok((current_slot, slot_timer))
     }
 
-    fn process_message(
+    async fn process_message(
         cryptarchia: &Cryptarchia,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
@@ -950,6 +954,12 @@ where
                     .unwrap_or_else(|_| {
                         error!("Could not send epoch config through channel");
                     });
+            }
+            ConsensusMsg::GetBlockEvents { id, reply_channel } => {
+                let events = storage_adapter.get_block_events(&id).await;
+                reply_channel.send(events).unwrap_or_else(|_| {
+                    error!("Could not send block events through channel");
+                });
             }
             ConsensusMsg::Info { .. } => {
                 // Info is handled separately in the run loop where we have async
