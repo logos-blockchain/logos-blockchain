@@ -578,27 +578,7 @@ where
             );
             let mut tx_state = TxState::new(cp.lib, cp.last_msg_id);
             for (_hash, tx) in cp.pending_txs {
-                // Try to extract inscription metadata for lineage tracking.
-                // Filter by `channel_id` — a checkpoint can in principle carry
-                // txs for other channels if the caller reused it.
-                let mut is_inscription = false;
-                for op in tx.mantle_tx.ops() {
-                    if let Op::ChannelInscribe(inscribe) = op
-                        && inscribe.channel_id == channel_id
-                    {
-                        tx_state.submit_inscription(
-                            tx.clone(),
-                            inscribe.parent,
-                            inscribe.id(),
-                            inscribe.inscription.clone(),
-                        );
-                        is_inscription = true;
-                        break;
-                    }
-                }
-                if !is_inscription {
-                    tx_state.submit_other(tx);
-                }
+                restore_pending_tx(&mut tx_state, tx, channel_id);
             }
             (Some(tx_state), cp.lib_slot, cp.last_msg_id)
         } else {
@@ -1323,6 +1303,40 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
     }
 }
 
+/// Restore a single pending tx into `TxState` on checkpoint resume.
+///
+/// Inspects the tx ops:
+/// - Any `Op::ChannelWithdraw` targeting our channel → bundle. Restored via
+///   `submit_atomic_withdraw` so `PendingInscription.withdraws` is repopulated
+///   and orphan/finalize emit the correct [`PublishedTx::AtomicWithdraw`] /
+///   [`OrphanedTx::AtomicWithdraw`] variant.
+/// - Only `Op::ChannelInscribe` for our channel → plain inscription.
+/// - Neither → treated as opaque (`submit_other`).
+///
+/// Txs for other channels (checkpoint reused across channels) hit the
+/// `submit_other` fallback.
+fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: ChannelId) {
+    let mut inscribe_meta: Option<(MsgId, MsgId, Vec<u8>)> = None;
+    let mut withdraws: Vec<WithdrawInfo> = Vec::new();
+    for op in tx.mantle_tx.ops() {
+        match op {
+            Op::ChannelInscribe(i) if i.channel_id == channel_id => {
+                inscribe_meta = Some((i.parent, i.id(), i.inscription.clone()));
+            }
+            Op::ChannelWithdraw(w) if w.channel_id == channel_id => {
+                withdraws.push(WithdrawInfo { op: w.clone() });
+            }
+            _ => {}
+        }
+    }
+    match inscribe_meta {
+        Some((parent, this_msg, payload)) => {
+            state.submit_atomic_withdraw(tx, parent, this_msg, payload, withdraws);
+        }
+        None => state.submit_other(tx),
+    }
+}
+
 /// Result of processing a block event.
 struct BlockEventResult {
     finalized_tx_hashes: Vec<TxHash>,
@@ -1948,6 +1962,114 @@ mod tests {
                 rx,
             )
         }
+    }
+
+    #[test]
+    fn restore_pending_tx_classifies_atomic_bundle_with_withdraws() {
+        // Bundle: [ChannelWithdraw(channel_id), ChannelInscribe(channel_id)]
+        // Restore should put it in pending (not pending_other) with the
+        // withdraws field populated, so on orphan we emit
+        // OrphanedTx::AtomicWithdraw (not Inscription).
+        let channel_id = ChannelId::from([1u8; 32]);
+        let outputs = Outputs::new(vec![Note::new(
+            5,
+            ZkKey::from(BigUint::from(0u64)).to_public_key(),
+        )]);
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id,
+            outputs,
+            withdraw_nonce: 0,
+        };
+        let inscribe_op = InscriptionOp {
+            channel_id,
+            inscription: b"hello".to_vec(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        };
+        let mantle_tx = MantleTx(vec![
+            Op::ChannelWithdraw(withdraw_op.clone()),
+            Op::ChannelInscribe(inscribe_op),
+        ]);
+        let tx_hash = mantle_tx.hash();
+        let signed_tx = SignedMantleTx {
+            mantle_tx,
+            ops_proofs: Vec::new(),
+        };
+
+        let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
+        restore_pending_tx(&mut state, signed_tx, channel_id);
+
+        let pending = state
+            .pending_inscription(&tx_hash)
+            .expect("bundle should be in pending inscriptions");
+        assert_eq!(
+            pending.withdraws.len(),
+            1,
+            "bundle should carry one WithdrawInfo"
+        );
+        assert_eq!(pending.withdraws[0].op, withdraw_op);
+        assert!(
+            !state.pending_other_contains(&tx_hash),
+            "bundle should not be in pending_other"
+        );
+    }
+
+    #[test]
+    fn restore_pending_tx_classifies_plain_inscription_with_empty_withdraws() {
+        // Plain inscription: pending with empty `withdraws`.
+        let channel_id = ChannelId::from([2u8; 32]);
+        let inscribe_op = InscriptionOp {
+            channel_id,
+            inscription: b"hello".to_vec(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        };
+        let mantle_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+        let tx_hash = mantle_tx.hash();
+        let signed_tx = SignedMantleTx {
+            mantle_tx,
+            ops_proofs: Vec::new(),
+        };
+
+        let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
+        restore_pending_tx(&mut state, signed_tx, channel_id);
+
+        let pending = state
+            .pending_inscription(&tx_hash)
+            .expect("plain inscription should be in pending inscriptions");
+        assert!(pending.withdraws.is_empty());
+    }
+
+    #[test]
+    fn restore_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
+        // Inscribe for a different channel: should fall back to pending_other
+        // (treated as opaque).
+        let our_channel = ChannelId::from([3u8; 32]);
+        let other_channel = ChannelId::from([4u8; 32]);
+        let inscribe_op = InscriptionOp {
+            channel_id: other_channel,
+            inscription: b"hello".to_vec(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        };
+        let mantle_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+        let tx_hash = mantle_tx.hash();
+        let signed_tx = SignedMantleTx {
+            mantle_tx,
+            ops_proofs: Vec::new(),
+        };
+
+        let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
+        restore_pending_tx(&mut state, signed_tx, our_channel);
+
+        assert!(
+            state.pending_inscription(&tx_hash).is_none(),
+            "wrong-channel tx should not be in pending inscriptions"
+        );
+        assert!(
+            state.pending_other_contains(&tx_hash),
+            "wrong-channel tx should be in pending_other"
+        );
     }
 
     #[async_trait]

@@ -482,6 +482,22 @@ impl TxState {
         self.current_lib
     }
 
+    /// Look up a pending inscription (or atomic-withdraw bundle) by tx hash.
+    /// Test-only accessor for inspecting internal pending state.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
+        self.pending.get(tx_hash)
+    }
+
+    /// Whether a non-inscription pending tx is tracked under this hash.
+    /// Test-only accessor for inspecting internal pending state.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn pending_other_contains(&self, tx_hash: &TxHash) -> bool {
+        self.pending_other.contains_key(tx_hash)
+    }
+
     /// All pending transactions (for checkpoint serialization).
     #[must_use]
     pub fn all_pending_txs(&self) -> Vec<(TxHash, SignedMantleTx)> {
