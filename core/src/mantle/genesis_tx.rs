@@ -346,7 +346,7 @@ mod tests {
         );
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
-        let mantle_tx = MantleTx(new_ops);
+        let mantle_tx = MantleTx(crate::mantle::encoding::Ops::new_unchecked(new_ops));
         let mut new_op_proofs = vec![OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
         )];

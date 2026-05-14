@@ -41,7 +41,9 @@ pub fn create_channel_inscribe_tx(
         signer: verifying_key,
     };
 
-    let inscribe_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+    let inscribe_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+        Op::ChannelInscribe(inscribe_op),
+    ]));
 
     let tx_hash = inscribe_tx.hash();
     let signature_bytes = signing_key
@@ -74,7 +76,9 @@ pub fn create_channel_config_tx(
         withdraw_threshold,
     };
 
-    let set_keys_tx = MantleTx(vec![Op::ChannelConfig(set_keys_op)]);
+    let set_keys_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+        Op::ChannelConfig(set_keys_op),
+    ]));
 
     let tx_hash = set_keys_tx.hash();
     let signatures = signing_keys
@@ -116,7 +120,9 @@ pub fn create_sdp_declare_tx(
         locked_note_id,
     };
 
-    let mantle_tx = MantleTx(vec![Op::SDPDeclare(declaration.clone())]);
+    let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+        Op::SDPDeclare(declaration.clone()),
+    ]));
 
     let tx_hash = mantle_tx.hash();
 
@@ -144,7 +150,9 @@ pub fn create_sdp_active_tx(
     zk_sk: &ZkKey,
     note_sk: &ZkKey,
 ) -> SignedMantleTx {
-    let mantle_tx = MantleTx(vec![Op::SDPActive(active.clone())]);
+    let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+        Op::SDPActive(active.clone()),
+    ]));
 
     let tx_hash = mantle_tx.hash();
     let zk_sig = prove_zk_signature(&tx_hash, &[note_sk.clone(), zk_sk.clone()]);
@@ -161,7 +169,9 @@ pub fn create_sdp_withdraw_tx(
     zk_sk: &ZkKey,
     note_sk: &ZkKey,
 ) -> SignedMantleTx {
-    let mantle_tx = MantleTx(vec![Op::SDPWithdraw(withdraw)]);
+    let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+        Op::SDPWithdraw(withdraw),
+    ]));
 
     let tx_hash = mantle_tx.hash();
     let zk_sig = prove_zk_signature(&tx_hash, &[note_sk.clone(), zk_sk.clone()]);
@@ -190,7 +200,9 @@ pub fn create_inscription_transaction_with_id(
         signer,
     };
 
-    let mantle_tx = MantleTx(vec![Op::ChannelInscribe(inscription_op)]);
+    let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+        Op::ChannelInscribe(inscription_op),
+    ]));
 
     let tx_hash = mantle_tx.hash();
     let signature = signing_key.sign_payload(&tx_hash.as_signing_bytes());

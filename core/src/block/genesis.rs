@@ -1094,7 +1094,7 @@ impl GenesisBlockBuilder<WithAll> {
         .collect();
         let n = ops.len();
         let signed_tx = SignedMantleTx::new_unverified(
-            ops.into(),
+            crate::mantle::MantleTx(crate::mantle::encoding::Ops::new_unchecked(ops)),
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
         );
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
@@ -1201,7 +1201,7 @@ mod tests {
         ops.extend(extra_ops);
         let n = ops.len();
         SignedMantleTx::new_unverified(
-            ops.into(),
+            crate::mantle::MantleTx(crate::mantle::encoding::Ops::new_unchecked(ops)),
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); n],
         )
     }

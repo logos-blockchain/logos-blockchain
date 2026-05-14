@@ -183,7 +183,9 @@ fn create_invalid_transaction() -> SignedMantleTx {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![output_note]));
 
-    let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
+    let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+        Op::Transfer(transfer_op),
+    ]));
 
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");

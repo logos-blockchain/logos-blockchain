@@ -15,7 +15,7 @@ use channel::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use nom::{
-    IResult, Parser,
+    IResult, Parser as _,
     combinator::map,
     error::{Error, ErrorKind},
 };
@@ -123,7 +123,7 @@ impl<'de> Deserialize<'de> for Op {
             OpDe::deserialize(deserializer).map(Self::from)
         } else {
             let bytes = <Vec<u8>>::deserialize(deserializer)?;
-            Op::decode(&bytes)
+            Self::decode(&bytes)
                 .map(|(_, op)| op)
                 .map_err(serde::de::Error::custom)
         }

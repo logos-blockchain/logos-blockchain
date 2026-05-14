@@ -1,13 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Op,
+    CHANNEL_CONFIG, CHANNEL_DEPOSIT, CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM, Op, SDP_ACTIVE,
+    SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
     channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
     leader_claim::LeaderClaimOp,
-    opcode::{
-        CHANNEL_CONFIG, CHANNEL_DEPOSIT, CHANNEL_WITHDRAW, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE,
-        SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
-    },
     sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     serde_::OpWire,
     transfer::TransferOp,

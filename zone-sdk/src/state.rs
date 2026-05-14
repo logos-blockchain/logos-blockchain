@@ -610,12 +610,14 @@ mod tests {
     }
 
     fn make_dummy_tx(data: u8) -> SignedMantleTx {
-        let mantle_tx = MantleTx(vec![ChannelInscribe(InscriptionOp {
-            channel_id: [0u8; 32].into(),
-            inscription: [data].into(),
-            parent: [0u8; 32].into(),
-            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-        })]);
+        let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+            ChannelInscribe(InscriptionOp {
+                channel_id: [0u8; 32].into(),
+                inscription: [data].into(),
+                parent: [0u8; 32].into(),
+                signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            }),
+        ]));
         SignedMantleTx {
             ops_proofs: vec![],
             mantle_tx,

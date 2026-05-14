@@ -7,7 +7,6 @@ use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_utils::bounded_vec::BoundedError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{

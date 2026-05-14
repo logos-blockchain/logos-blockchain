@@ -147,7 +147,8 @@ fn with_transfer_input_chunks(
 /// Reads the builder-authored pending transfer outputs so caller-side chunking
 /// can preserve them on the final transfer chunk.
 fn pending_transfer_output_sum(tx_builder: &MantleTxBuilder) -> u128 {
-    match tx_builder.clone().build().0.pop() {
+    let mut ops = tx_builder.clone().build().0.into_inner();
+    match ops.pop() {
         Some(Op::Transfer(transfer)) => transfer
             .outputs
             .iter()

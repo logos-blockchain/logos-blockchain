@@ -761,7 +761,9 @@ mod tests {
 
     fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
         let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
-        let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
+        let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+            Op::Transfer(transfer_op),
+        ]));
         SignedMantleTx {
             ops_proofs: vec![OpProof::ZkSig(
                 ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
@@ -807,7 +809,7 @@ mod tests {
     }
 
     fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&Key>) -> SignedMantleTx {
-        let mantle_tx = MantleTx(ops.clone());
+        let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(ops.clone()));
 
         let tx_hash = mantle_tx.hash();
         let ops_proofs = signing_keys
@@ -958,7 +960,9 @@ mod tests {
             withdraw_threshold: 1,
         };
 
-        let config_tx = MantleTx(vec![Op::ChannelConfig(config_op.clone())]);
+        let config_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+            Op::ChannelConfig(config_op.clone()),
+        ]));
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1116,7 +1120,9 @@ mod tests {
             outputs: Outputs::new(vec![withdraw_note]),
             withdraw_nonce: 0,
         };
-        let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
+        let withdraw_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+            Op::ChannelWithdraw(withdraw.clone()),
+        ]));
         let withdraw_tx_hash = withdraw_tx.hash();
         let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1124,8 +1130,10 @@ mod tests {
         )])
         .unwrap();
 
-        let signed_tx =
-            create_multi_signed_tx(withdraw_tx.0, vec![&Key::MultiSequencer(withdraw_proof)]);
+        let signed_tx = create_multi_signed_tx(
+            withdraw_tx.0.into_inner(),
+            vec![&Key::MultiSequencer(withdraw_proof)],
+        );
 
         let result =
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
@@ -1202,7 +1210,9 @@ mod tests {
             withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
-        let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
+        let withdraw_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+            Op::ChannelWithdraw(withdraw.clone()),
+        ]));
         let withdraw_tx_hash = withdraw_tx.hash();
         let invalid_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1211,7 +1221,7 @@ mod tests {
         .unwrap();
 
         let signed_tx = create_multi_signed_tx(
-            withdraw_tx.0,
+            withdraw_tx.0.into_inner(),
             vec![&Key::MultiSequencer(invalid_proof), &Key::EmptyZk],
         );
 
@@ -1383,7 +1393,9 @@ mod tests {
             withdraw_threshold: 1,
         };
 
-        let config_tx = MantleTx(vec![Op::ChannelConfig(config_op.clone())]);
+        let config_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
+            Op::ChannelConfig(config_op.clone()),
+        ]));
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1458,7 +1470,7 @@ mod tests {
             Op::ChannelConfig(config_op),
             Op::ChannelInscribe(inscribe_op3.clone()),
         ];
-        let config_tx = MantleTx(ops.clone());
+        let config_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(ops.clone()));
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,

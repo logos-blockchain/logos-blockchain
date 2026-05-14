@@ -323,7 +323,9 @@ mod tests {
     }
 
     fn create_tx(count: usize) -> Vec<MantleTx> {
-        iter::repeat_with(|| MantleTx(vec![])).take(count).collect()
+        iter::repeat_with(|| MantleTx(crate::mantle::encoding::Ops::new_unchecked(vec![])))
+            .take(count)
+            .collect()
     }
 
     #[test]

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded_vec::BoundedVec;
@@ -182,7 +181,7 @@ mod tests {
     fn sample() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId([0u8; 32]),
-            inscription: Inscription::try_from(*b"genesis").unwrap(),
+            inscription: b"genesis".into(),
             parent: MsgId([0u8; 32]),
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         }

@@ -66,9 +66,9 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
 
 pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     // MantleTx = Ops ExecutionGasPrice StorageGasPrice
-    let (input, ops) = Ops::decode(&input)?;
+    let (input, ops) = Ops::decode(input)?;
 
-    Ok((input, ops.into()))
+    Ok((input, MantleTx(ops)))
 }
 
 // ==============================================================================
@@ -926,7 +926,7 @@ mod tests {
 
     #[test]
     fn test_decode_signed_mantle_tx_empty() {
-        let mantle_tx = MantleTx(vec![]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![]));
 
         let signed_tx = SignedMantleTx {
             mantle_tx,
@@ -956,12 +956,14 @@ mod tests {
     #[test]
     fn test_decode_signed_mantle_tx_with_inscribe() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let mantle_tx = MantleTx(vec![Op::ChannelInscribe(InscriptionOp {
-            channel_id: ChannelId::from([0xAA; 32]),
-            inscription: b"hello".into(),
-            parent: MsgId::from([0xBB; 32]),
-            signer: signing_key.public_key(),
-        })]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(
+            InscriptionOp {
+                channel_id: ChannelId::from([0xAA; 32]),
+                inscription: b"hello".into(),
+                parent: MsgId::from([0xBB; 32]),
+                signer: signing_key.public_key(),
+            },
+        )]));
 
         let txhash = mantle_tx.hash();
         let inscribe_sig =
@@ -999,7 +1001,7 @@ mod tests {
     #[test]
     fn test_decode_signed_mantle_tx_with_multiple_ops() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let mantle_tx = MantleTx(vec![
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![
             Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0x11; 32]),
                 inscription: b"first".into(),
@@ -1014,7 +1016,7 @@ mod tests {
                 configuration_threshold: 3,
                 withdraw_threshold: 4,
             }),
-        ]);
+        ]));
 
         let txhash = mantle_tx.hash();
         let sig = signing_key.sign_payload(&txhash.as_signing_bytes());
@@ -1063,7 +1065,8 @@ mod tests {
                     signer: signing_key.public_key(),
                 };
 
-                let mantle_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+                let mantle_tx =
+                    MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]));
 
                 let txhash = mantle_tx.hash();
                 let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
@@ -1107,7 +1110,7 @@ mod tests {
     #[test]
     fn test_encode_decode_roundtrip_empty_tx() {
         // Create an empty MantleTx
-        let original_tx = MantleTx(vec![]);
+        let original_tx = MantleTx(Ops::new_unchecked(vec![]));
 
         // Encode
         let encoded = encode_mantle_tx(&original_tx);
@@ -1130,7 +1133,7 @@ mod tests {
         let note_id = NoteId(BigUint::from(123u64).into());
         let transfer_op = TransferOp::new(Inputs::new(vec![note_id]), Outputs::new(vec![note]));
 
-        let original_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
+        let original_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
 
         // Encode
         let encoded = encode_mantle_tx(&original_tx);
@@ -1146,7 +1149,7 @@ mod tests {
     #[test]
     fn test_encode_decode_roundtrip_signed_tx() {
         // Create a simple SignedMantleTx
-        let mantle_tx = MantleTx(vec![]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![]));
         let original_tx = SignedMantleTx::new(mantle_tx, vec![]).unwrap();
 
         // Encode
@@ -1163,7 +1166,7 @@ mod tests {
     #[test]
     fn test_predict_signed_mantle_tx_size_empty_tx() {
         // Create an empty MantleTx
-        let mantle_tx = MantleTx(vec![]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![]));
 
         // Predict size
         let gas_context =
@@ -1188,7 +1191,7 @@ mod tests {
             signer: signing_key.public_key(),
         };
 
-        let mantle_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]));
 
         // Predict size
         let gas_context =
@@ -1224,7 +1227,7 @@ mod tests {
             withdraw_threshold: 0,
         };
 
-        let mantle_tx = MantleTx(vec![Op::ChannelConfig(config_op)]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]));
 
         // Predict size
         let gas_context =
@@ -1274,7 +1277,7 @@ mod tests {
             locked_note_id: locked_note.id(),
         };
 
-        let mantle_tx = MantleTx(vec![Op::SDPDeclare(sdp_declare_op)]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::SDPDeclare(sdp_declare_op)]));
 
         // Predict size
         let gas_context =
@@ -1307,7 +1310,7 @@ mod tests {
             locked_note_id,
         };
 
-        let mantle_tx = MantleTx(vec![Op::SDPWithdraw(sdp_withdraw_op)]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::SDPWithdraw(sdp_withdraw_op)]));
 
         let txhash = mantle_tx.hash();
 
@@ -1350,7 +1353,7 @@ mod tests {
             metadata,
         };
 
-        let mantle_tx = MantleTx(vec![Op::SDPActive(sdp_active_op)]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::SDPActive(sdp_active_op)]));
 
         let gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -1406,11 +1409,11 @@ mod tests {
             metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
         };
 
-        let mantle_tx = MantleTx(vec![
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![
             Op::ChannelInscribe(inscribe_op),
             Op::ChannelConfig(config_op),
             Op::SDPActive(sdp_active_op),
-        ]);
+        ]));
 
         // Predict size
         let gas_context =
@@ -1456,7 +1459,7 @@ mod tests {
             Outputs::new(vec![note1, note2]),
         );
 
-        let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
 
         // Predict size
         let gas_context =
@@ -1518,12 +1521,12 @@ mod tests {
                 .id(),
         };
 
-        let mantle_tx = MantleTx(vec![
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![
             Op::ChannelInscribe(inscribe_op),
             Op::ChannelConfig(config_op),
             Op::SDPDeclare(sdp_declare_op),
             Op::Transfer(transfer_op),
-        ]);
+        ]));
 
         // Predict size
         let gas_context =
@@ -1564,7 +1567,9 @@ mod tests {
             pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
 
-        let mantle_tx = MantleTx(vec![Op::LeaderClaim(leader_claim_op.clone())]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::LeaderClaim(
+            leader_claim_op.clone(),
+        )]));
 
         let empty_gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
@@ -1641,11 +1646,13 @@ mod tests {
         let note2 = Note::new(2000, pk2);
 
         let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
-        let mantle_tx = MantleTx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
-            channel_id: ChannelId::from([0xAB; 32]),
-            outputs: Outputs::new(vec![note1, note2]),
-            withdraw_nonce: 0,
-        })]);
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelWithdraw(
+            ChannelWithdrawOp {
+                channel_id: ChannelId::from([0xAB; 32]),
+                outputs: Outputs::new(vec![note1, note2]),
+                withdraw_nonce: 0,
+            },
+        )]));
         let tx_hash = mantle_tx.hash();
         let proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,

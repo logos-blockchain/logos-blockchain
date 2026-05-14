@@ -29,7 +29,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new(context: MantleTxContext) -> Self {
         Self {
-            mantle_tx: vec![].into(),
+            mantle_tx: MantleTx(crate::mantle::encoding::Ops::new_unchecked(vec![])),
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
             channel_multi_sig_proofs: HashMap::new(),
@@ -49,7 +49,9 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Self {
-        self.mantle_tx.0.extend(ops);
+        let mut current_ops = self.mantle_tx.0.into_inner();
+        current_ops.extend(ops);
+        self.mantle_tx.0 = crate::mantle::encoding::Ops::new_unchecked(current_ops);
         self
     }
 
@@ -193,7 +195,9 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn build(mut self) -> MantleTx {
-        self.mantle_tx.0.push(Op::Transfer(self.pending_transfer));
+        let mut current_ops = self.mantle_tx.0.into_inner();
+        current_ops.push(Op::Transfer(self.pending_transfer));
+        self.mantle_tx.0 = crate::mantle::encoding::Ops::new_unchecked(current_ops);
         self.mantle_tx
     }
 }
