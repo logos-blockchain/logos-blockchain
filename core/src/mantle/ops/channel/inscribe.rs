@@ -201,7 +201,15 @@ mod tests {
         let oversized = vec![0u8; MAX_BYTES + 1];
         let bytes = bincode::serialize(&oversized).unwrap();
         let err = bincode::deserialize::<Inscription>(&bytes).unwrap_err();
-        assert!(format!("{err}").contains("exceeds maximum"));
+        assert!(
+            format!("{err}").contains(
+                format!(
+                    "Length {} exceeds static maximum of {MAX_BYTES}",
+                    MAX_BYTES + 1,
+                )
+                .as_str()
+            )
+        );
     }
 
     #[test]

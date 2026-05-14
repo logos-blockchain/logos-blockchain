@@ -3,6 +3,7 @@ use core::ops::{Deref, DerefMut};
 use lb_utils::bounded_vec::BoundedVec;
 use nom::{
     IResult, Parser as _,
+    bytes::take,
     combinator::{map, map_res},
     error::{Error, ErrorKind},
     multi::count,
@@ -183,9 +184,17 @@ where
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let () = Self::_N_BYTES_VALUE_CHECK;
 
-        let (bytes, slice) = <[T; N_BYTES]>::decode(bytes)?;
+        let (bytes, len_bytes): (&[u8], &[u8]) = take(N_BYTES).parse(bytes)?;
+        let mut buf = [0u8; 8];
+        buf[..N_BYTES].copy_from_slice(len_bytes);
+        let len = u64::from_le_bytes(buf) as usize;
 
-        Ok((bytes, BoundedVec::from(slice).into()))
+        if len > N {
+            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::TooLarge)));
+        }
+
+        let (bytes, items) = count(T::decode, len).parse(bytes)?;
+        Ok((bytes, Self(BoundedVec::new_unchecked(items))))
     }
 }
 
