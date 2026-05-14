@@ -25,9 +25,6 @@ use super::{
     gas::{Gas, GasConstants},
     ops::{
         leader_claim::LeaderClaimOp,
-        opcode::{
-            CHANNEL_CONFIG, INSCRIBE, LEADER_CLAIM, SDP_ACTIVE, SDP_DECLARE, SDP_WITHDRAW, TRANSFER,
-        },
         sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
     },
 };
@@ -38,8 +35,8 @@ use crate::{
             decode_channel_config, decode_channel_deposit, decode_channel_withdraw,
             decode_leader_claim, decode_sdp_active, decode_sdp_declare, decode_sdp_withdraw,
             decode_transfer, encode_channel_config, encode_channel_deposit,
-            encode_channel_withdraw, encode_leader_claim, encode_op, encode_sdp_active,
-            encode_sdp_declare, encode_sdp_withdraw, encode_transfer_op,
+            encode_channel_withdraw, encode_leader_claim, encode_sdp_active, encode_sdp_declare,
+            encode_sdp_withdraw, encode_transfer_op,
         },
         nom::NomEncode,
         ops::{
@@ -106,7 +103,7 @@ impl Serialize for Op {
             let op_ser = OpSer::from(self);
             op_ser.serialize(serializer)
         } else {
-            let bytes = encode_op(self);
+            let bytes = self.encode();
             serializer.serialize_bytes(&bytes)
         }
     }
@@ -126,7 +123,7 @@ impl<'de> Deserialize<'de> for Op {
             OpDe::deserialize(deserializer).map(Self::from)
         } else {
             let bytes = <Vec<u8>>::deserialize(deserializer)?;
-            decode_op(&bytes)
+            Op::decode(&bytes)
                 .map(|(_, op)| op)
                 .map_err(serde::de::Error::custom)
         }

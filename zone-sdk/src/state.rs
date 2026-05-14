@@ -612,7 +612,7 @@ mod tests {
     fn make_dummy_tx(data: u8) -> SignedMantleTx {
         let mantle_tx = MantleTx(vec![ChannelInscribe(InscriptionOp {
             channel_id: [0u8; 32].into(),
-            inscription: vec![data].try_into().unwrap(),
+            inscription: [data].into(),
             parent: [0u8; 32].into(),
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         })]);
@@ -813,7 +813,7 @@ mod tests {
     ) -> TxHash {
         let tx = make_dummy_tx(data);
         let hash = tx.mantle_tx.hash();
-        state.submit_inscription(tx, parent_msg, this_msg, vec![data].try_into().unwrap());
+        state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
     }
 
@@ -846,7 +846,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99].try_into().unwrap(),
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
@@ -883,7 +883,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99].try_into().unwrap(),
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
@@ -953,7 +953,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99].try_into().unwrap(),
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 

@@ -419,7 +419,7 @@ fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Inscription {
         payload.truncate(payload_bytes);
     }
 
-    payload.try_into().unwrap()
+    Inscription::new_unchecked(payload)
 }
 
 async fn submit_transaction_via_cluster(

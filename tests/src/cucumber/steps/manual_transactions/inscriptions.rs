@@ -38,7 +38,7 @@ async fn step_submit_inscription_transaction(
         world,
         step,
         transaction_alias,
-        vec![0xAB; payload_size].try_into().unwrap(),
+        Inscription::new_unchecked(vec![0xAB; payload_size]),
         wallet_name,
     )
     .await
@@ -58,7 +58,7 @@ async fn step_submit_inscription_transaction_with_payload(
         world,
         step,
         transaction_alias,
-        payload.into_bytes().try_into().unwrap(),
+        Inscription::new_unchecked(payload.into_bytes()),
         wallet_name,
     )
     .await

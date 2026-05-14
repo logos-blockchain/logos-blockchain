@@ -1,5 +1,6 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use lb_utils::bounded_vec::BoundedVec;
 use multiaddr::Multiaddr;
 use nom::{
     IResult, Parser as _,
@@ -46,6 +47,8 @@ const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed
 // Maximum byte size allowed for a locator in SDPDeclare operations.
 const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 
+pub type Ops = BoundedVec<Op, { u8::MAX as usize }>;
+
 // ==============================================================================
 // Top-Level Transaction Decoders
 // ==============================================================================
@@ -63,17 +66,9 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
 
 pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     // MantleTx = Ops ExecutionGasPrice StorageGasPrice
-    let (input, ops) = decode_ops(input)?;
+    let (input, ops) = Ops::decode(&input)?;
 
     Ok((input, ops.into()))
-}
-
-// ==============================================================================
-// Operation List Decoders
-// ==============================================================================
-
-pub fn decode_ops(input: &[u8]) -> IResult<&[u8], Vec<Op>> {
-    Vec::<Op>::decode(input)
 }
 
 // ==============================================================================
@@ -494,7 +489,6 @@ pub(crate) fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTi
 
 use lb_groth16::fr_to_bytes;
 
-use super::ops::opcode;
 use crate::{
     mantle::{
         channel::{SlotTimeframe, SlotTimeout},
@@ -504,7 +498,6 @@ use crate::{
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
-// Encode primitives
 
 /// Encode primitives
 fn encode_uint16(value: u16) -> Vec<u8> {
@@ -745,66 +738,6 @@ pub fn encode_transfer_op(op: &TransferOp) -> Vec<u8> {
     bytes
 }
 
-/// Encode operations
-#[must_use]
-pub fn encode_op(op: &Op) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    match op {
-        Op::ChannelInscribe(op) => {
-            bytes.extend(encode_byte(opcode::INSCRIBE));
-            bytes.extend(op.encode());
-        }
-        Op::ChannelConfig(op) => {
-            bytes.extend(encode_byte(opcode::CHANNEL_CONFIG));
-            bytes.extend(encode_channel_config(op));
-        }
-        Op::ChannelDeposit(op) => {
-            bytes.extend(encode_byte(opcode::CHANNEL_DEPOSIT));
-            bytes.extend(encode_channel_deposit(op));
-        }
-        Op::ChannelWithdraw(op) => {
-            bytes.extend(encode_byte(opcode::CHANNEL_WITHDRAW));
-            bytes.extend(encode_channel_withdraw(op));
-        }
-        Op::SDPDeclare(op) => {
-            bytes.extend(encode_byte(opcode::SDP_DECLARE));
-            bytes.extend(encode_sdp_declare(op));
-        }
-        Op::SDPWithdraw(op) => {
-            bytes.extend(encode_byte(opcode::SDP_WITHDRAW));
-            bytes.extend(encode_sdp_withdraw(op));
-        }
-        Op::SDPActive(op) => {
-            bytes.extend(encode_byte(opcode::SDP_ACTIVE));
-            bytes.extend(encode_sdp_active(op));
-        }
-        Op::LeaderClaim(op) => {
-            bytes.extend(encode_byte(opcode::LEADER_CLAIM));
-            bytes.extend(encode_leader_claim(op));
-        }
-        Op::Transfer(op) => {
-            bytes.extend(encode_byte(opcode::TRANSFER));
-            bytes.extend(encode_transfer_op(op));
-        }
-    }
-    bytes
-}
-
-fn encode_ops(ops: &[Op]) -> Vec<u8> {
-    assert!(
-        u8::try_from(ops.len()).is_ok(),
-        "Fatal error in 'encode_ops' - {} ops clipped to {}",
-        ops.len(),
-        u8::MAX
-    );
-    let mut bytes = Vec::new();
-    bytes.extend(encode_byte(ops.len() as u8));
-    for op in ops {
-        bytes.extend(encode_op(op));
-    }
-    bytes
-}
-
 /// Encode proofs
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     match (proof, op) {
@@ -845,7 +778,7 @@ fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
 /// Encode top-level transactions
 #[must_use]
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
-    encode_ops(tx.ops())
+    tx.ops().encode()
 }
 
 #[must_use]
@@ -908,6 +841,7 @@ mod tests {
     use ark_ff::Field as _;
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_utils::bounded_vec::BoundedError;
     use num_bigint::BigUint;
 
     use super::*;
@@ -916,7 +850,7 @@ mod tests {
             Transaction as _,
             ops::channel::{
                 MsgId,
-                inscribe::{self, Inscription},
+                inscribe::{self, Inscription, InscriptionOp},
             },
             tx::GasPrices,
         },
@@ -1024,7 +958,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
         let mantle_tx = MantleTx(vec![Op::ChannelInscribe(InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: Inscription::new(b"hello".to_vec()).unwrap(),
+            inscription: b"hello".into(),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         })]);
@@ -1068,7 +1002,7 @@ mod tests {
         let mantle_tx = MantleTx(vec![
             Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0x11; 32]),
-                inscription: Inscription::new(b"first".to_vec()).unwrap(),
+                inscription: b"first".into(),
                 parent: MsgId::from([0x00; 32]),
                 signer: signing_key.public_key(),
             }),
@@ -1120,7 +1054,7 @@ mod tests {
             let signing_key = signing_key.clone();
 
             let task = tokio::task::spawn(async move {
-                let large_inscription = Inscription::new(vec![0xAB; payload_size]).unwrap();
+                let large_inscription = Inscription::new_unchecked(vec![0xAB; payload_size]);
 
                 let inscribe_op = InscriptionOp {
                     channel_id: ChannelId::from([0xAA; 32]),
@@ -1249,7 +1183,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: Inscription::new(b"hello world".to_vec()).unwrap(),
+            inscription: b"hello world".into(),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         };
@@ -1445,7 +1379,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: Inscription::new(b"test".to_vec()).unwrap(),
+            inscription: b"test".into(),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         };
@@ -1550,8 +1484,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id: ChannelId::from([0x11; 32]),
-            inscription: Inscription::new(b"complex test inscription with more data".to_vec())
-                .unwrap(),
+            inscription: b"complex test inscription with more data".into(),
             parent: MsgId::from([0x22; 32]),
             signer: signing_key1.public_key(),
         };
@@ -1693,8 +1626,8 @@ mod tests {
         };
         let op = Op::LeaderClaim(leader_claim_op);
 
-        let encoded = encode_op(&op);
-        let (remaining, decoded_op) = decode_op(&encoded).unwrap();
+        let encoded = op.encode();
+        let (remaining, decoded_op) = Op::decode(&encoded).unwrap();
         assert!(remaining.is_empty());
         assert_eq!(decoded_op, op);
     }
@@ -1733,8 +1666,19 @@ mod tests {
     // Security Tests - Memory Over-Allocation Protection
     // ==============================================================================
 
-    // Encode-side enforcement is now a type invariant on `Inscription`;
-    // see `inscribe::tests::oversized_inscription_rejected_at_construction`.
+    #[test]
+    fn test_encode_reject_oversized_inscription() {
+        let oversized_inscription = vec![0xAB; inscribe::MAX_BYTES + 1];
+
+        let result = Inscription::try_from(oversized_inscription);
+        assert_eq!(
+            result,
+            Err(BoundedError::TooLong {
+                actual: inscribe::MAX_BYTES + 1,
+                max: inscribe::MAX_BYTES
+            })
+        );
+    }
 
     #[test]
     fn test_decode_reject_oversized_inscription() {
@@ -1806,10 +1750,14 @@ mod tests {
             u8::MAX as usize + 1
         ];
 
-        let result = panic::catch_unwind(|| {
-            encode_ops(&ops);
-        });
-        assert!(result.is_err(), "Should reject excessive output count");
+        let result = Ops::try_from(ops);
+        assert_eq!(
+            result,
+            Err(BoundedError::TooLong {
+                actual: u8::MAX as usize + 1,
+                max: u8::MAX as usize
+            })
+        );
     }
 
     #[test]
@@ -1820,7 +1768,7 @@ mod tests {
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
-        let result = decode_ops(&valid_input);
+        let result = Vec::<Op>::decode(&valid_input);
         if let Err(nom::Err::Error(e)) = result {
             assert_ne!(e.code, ErrorKind::TooLarge, "Should not reject at u8::MAX]");
         }

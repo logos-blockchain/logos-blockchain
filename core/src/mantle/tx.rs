@@ -7,6 +7,7 @@ use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_utils::bounded_vec::BoundedError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         channel::Channels,
-        encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
+        encoding::{Ops, decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ops::{
@@ -81,7 +82,7 @@ impl TxHash {
 
 #[derive(Serialize, Deserialize)]
 struct MantleTxDeSerImpl {
-    pub ops: Vec<Op>,
+    pub ops: Ops,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -168,7 +169,7 @@ impl MantleTxGasContext {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MantleTx(pub Vec<Op>);
+pub struct MantleTx(pub Ops);
 
 impl From<MantleTxDeSerImpl> for MantleTx {
     fn from(MantleTxDeSerImpl { ops }: MantleTxDeSerImpl) -> Self {
@@ -179,12 +180,6 @@ impl From<MantleTxDeSerImpl> for MantleTx {
 impl From<MantleTx> for MantleTxDeSerImpl {
     fn from(MantleTx(ops): MantleTx) -> Self {
         Self { ops }
-    }
-}
-
-impl<T: IntoIterator<Item = Op>> From<T> for MantleTx {
-    fn from(ops: T) -> Self {
-        Self(ops.into_iter().collect())
     }
 }
 
@@ -274,7 +269,7 @@ impl MantleTx {
     }
 
     #[must_use]
-    pub const fn ops(&self) -> &Vec<Op> {
+    pub const fn ops(&self) -> &Ops {
         &self.0
     }
 }
@@ -677,7 +672,7 @@ mod tests {
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
-        ops.into()
+        MantleTx(ops.try_into().unwrap())
     }
 
     fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {

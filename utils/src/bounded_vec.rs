@@ -87,6 +87,15 @@ impl<T, const INPUT_SIZE: usize, const MAX: usize> From<[T; INPUT_SIZE]> for Bou
     }
 }
 
+impl<T, const INPUT_SIZE: usize, const MAX: usize> From<&[T; INPUT_SIZE]> for BoundedVec<T, MAX>
+where
+    T: Clone,
+{
+    fn from(value: &[T; INPUT_SIZE]) -> Self {
+        value.clone().into()
+    }
+}
+
 impl<T, const MAX: usize> From<BoundedVec<T, MAX>> for Vec<T> {
     fn from(value: BoundedVec<T, MAX>) -> Self {
         value.0

@@ -7,6 +7,7 @@ use lb_core::{
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         channel::{SlotTimeframe, SlotTimeout},
+        encoding::Ops,
         ops::{
             Op, OpProof,
             channel::{
@@ -160,7 +161,7 @@ enum ActorRequest {
     /// prepared txs are submitted promptly. If additional prepares are
     /// unavoidable, handle potential conflicts carefully.
     PrepareTx {
-        ops: Vec<Op>,
+        ops: Ops,
         msg: Inscription,
         reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
     },
@@ -244,7 +245,7 @@ where
     /// via [`Self::submit_signed_tx`].
     pub async fn prepare_tx(
         &self,
-        ops: Vec<Op>,
+        ops: Ops,
         data: Inscription,
     ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
@@ -1551,7 +1552,7 @@ fn create_channel_config_tx(
 }
 
 fn prepare_tx(
-    mut ops: Vec<Op>,
+    mut ops: Ops,
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
     inscription: Inscription,
@@ -1638,7 +1639,7 @@ mod tests {
         // Prepare a `MantleTx` — drive sequencer concurrently to process the request
         let prepare_fut = handle.prepare_tx(
             vec![Op::ChannelDeposit(deposit_op.clone())],
-            b"Mint 10 to Alice".to_vec().try_into().unwrap(),
+            b"Mint 10 to Alice".into(),
         );
         tokio::pin!(prepare_fut);
         let (tx, msg_id, inscription_sig) = loop {
