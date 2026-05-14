@@ -16,7 +16,7 @@ use time::OffsetDateTime;
 use crate::{
     mantle::{
         MantleTx, Note, NoteId, SignedMantleTx,
-        nom::NomEncode as _,
+        nom::{NomBoundedVec, NomEncode as _},
         ops::{
             Op, OpProof,
             channel::{ChannelId, Ed25519PublicKey, config::ChannelConfigOp, deposit::DepositOp},
@@ -47,7 +47,7 @@ const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed
 // Maximum byte size allowed for a locator in SDPDeclare operations.
 const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 
-pub type Ops = BoundedVec<Op, { u8::MAX as usize }>;
+pub type Ops = NomBoundedVec<Op, { u8::MAX as usize }, 1>;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -1775,7 +1775,7 @@ mod tests {
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
-        let result = Vec::<Op>::decode(&valid_input);
+        let result = Ops::decode(&valid_input);
         if let Err(nom::Err::Error(e)) = result {
             assert_ne!(e.code, ErrorKind::TooLarge, "Should not reject at u8::MAX]");
         }
@@ -1790,7 +1790,7 @@ mod tests {
         valid_input.extend_from_slice(&[0x42; 32]);
 
         // Inscription length (u32) - exactly MAX_INSCRIPTION_SIZE
-        valid_input.extend_from_slice(&inscribe::MAX_BYTES.to_le_bytes());
+        valid_input.extend_from_slice(&(inscribe::MAX_BYTES as u32).to_le_bytes());
 
         // Inscription data (MAX_INSCRIPTION_SIZE bytes)
         valid_input.extend_from_slice(&vec![0x01; inscribe::MAX_BYTES]);

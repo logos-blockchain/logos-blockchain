@@ -6,6 +6,7 @@ use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
+        encoding::Ops,
         gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
@@ -29,7 +30,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new(context: MantleTxContext) -> Self {
         Self {
-            mantle_tx: MantleTx(crate::mantle::encoding::Ops::new_unchecked(vec![])),
+            mantle_tx: MantleTx(Ops::new_unchecked(vec![])),
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
             channel_multi_sig_proofs: HashMap::new(),
@@ -49,9 +50,9 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Self {
-        let mut current_ops = self.mantle_tx.0.into_inner();
-        current_ops.extend(ops);
-        self.mantle_tx.0 = crate::mantle::encoding::Ops::new_unchecked(current_ops);
+        for op in ops.into_iter() {
+            self.mantle_tx.0.try_push(op).expect("Too many ops.");
+        }
         self
     }
 
@@ -195,9 +196,10 @@ impl MantleTxBuilder {
 
     #[must_use]
     pub fn build(mut self) -> MantleTx {
-        let mut current_ops = self.mantle_tx.0.into_inner();
-        current_ops.push(Op::Transfer(self.pending_transfer));
-        self.mantle_tx.0 = crate::mantle::encoding::Ops::new_unchecked(current_ops);
+        self.mantle_tx
+            .0
+            .try_push(Op::Transfer(self.pending_transfer))
+            .expect("Failed to push transfer op. Too many ops defined.");
         self.mantle_tx
     }
 }

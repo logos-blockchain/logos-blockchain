@@ -64,6 +64,17 @@ impl<T, const MAX: usize> BoundedVec<T, MAX> {
     pub fn as_slice(&self) -> &[T] {
         &self.0
     }
+
+    pub fn try_push(&mut self, item: T) -> Result<(), BoundedError> {
+        if self.0.len() >= MAX {
+            return Err(BoundedError::TooLong {
+                actual: self.0.len() + 1,
+                max: MAX,
+            });
+        }
+        self.0.push(item);
+        Ok(())
+    }
 }
 
 impl<T, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MAX> {

@@ -259,9 +259,9 @@ impl MantleTx {
     #[must_use]
     pub fn transfers(&self) -> Vec<TransferOp> {
         let mut transfers: Vec<TransferOp> = vec![];
-        for op in self.ops().clone() {
+        for op in self.ops().iter() {
             if let Op::Transfer(transfer_op) = op {
-                transfers.push(transfer_op);
+                transfers.push(transfer_op.clone());
             }
         }
         transfers

@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded_vec::BoundedVec;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 
@@ -15,12 +14,12 @@ use crate::{
         TxHash,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
-        nom::NomEncode,
+        nom::{NomBoundedVec, NomEncode},
     },
 };
 
 pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
-pub type Inscription = BoundedVec<u8, MAX_BYTES>;
+pub type Inscription = NomBoundedVec<u8, MAX_BYTES, 4>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InscriptionOp {
