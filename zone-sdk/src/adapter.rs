@@ -185,9 +185,9 @@ impl Node for NodeHttpClient {
     }
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error> {
-        let path = format!("/channel/{}", hex::encode(channel_id.as_ref()));
-        let url = self.base_url.join(&path).map_err(Error::Url)?;
-        self.client.get::<(), ChannelState>(url, None).await
+        self.client
+            .get_channel_state(self.base_url.clone(), channel_id)
+            .await
     }
 }
 

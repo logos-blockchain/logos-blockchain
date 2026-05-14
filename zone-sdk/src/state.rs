@@ -104,9 +104,9 @@ impl ChannelUpdateInfo {
 
 /// Local pending inscription with lineage metadata.
 ///
-/// `withdraws` is empty for plain inscriptions; non-empty when the tx is an
-/// atomic inscription+withdraw bundle. The bundle nature lets us surface the
-/// right [`PublishedTx`] variant on finalize/adopt and re-prepare on orphan.
+/// `withdraws == None` is a plain inscription; `Some(_)` is an atomic
+/// inscription+withdraw bundle. The bundle nature lets us surface the right
+/// [`PublishedTx`] variant on finalize/adopt and re-prepare on orphan.
 #[derive(Debug, Clone)]
 pub struct PendingInscription {
     pub tx_hash: TxHash,
@@ -114,7 +114,7 @@ pub struct PendingInscription {
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
     pub payload: Vec<u8>,
-    pub withdraws: Vec<WithdrawInfo>,
+    pub withdraws: Option<Vec<WithdrawInfo>>,
 }
 
 /// Transaction state tracker.
@@ -174,7 +174,7 @@ impl TxState {
         this_msg: MsgId,
         payload: Vec<u8>,
     ) {
-        self.submit_atomic_withdraw(signed_tx, parent_msg, this_msg, payload, Vec::new());
+        self.insert_pending(signed_tx, parent_msg, this_msg, payload, None);
     }
 
     /// Submit an atomic inscription+withdraw bundle for tracking. `withdraws`
@@ -186,6 +186,17 @@ impl TxState {
         this_msg: MsgId,
         payload: Vec<u8>,
         withdraws: Vec<WithdrawInfo>,
+    ) {
+        self.insert_pending(signed_tx, parent_msg, this_msg, payload, Some(withdraws));
+    }
+
+    fn insert_pending(
+        &mut self,
+        signed_tx: SignedMantleTx,
+        parent_msg: MsgId,
+        this_msg: MsgId,
+        payload: Vec<u8>,
+        withdraws: Option<Vec<WithdrawInfo>>,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
         self.pending_by_parent
@@ -448,16 +459,17 @@ impl TxState {
             for info in self.collect_pending_suffix(root) {
                 if eligible.contains(&info.tx_hash) && seen.insert(info.tx_hash) {
                     let tx_hash = info.tx_hash;
-                    let entry = if let Some(pending) = self.pending.get(&tx_hash)
-                        && !pending.withdraws.is_empty()
+                    let entry = match self
+                        .pending
+                        .get(&tx_hash)
+                        .and_then(|p| p.withdraws.as_ref())
                     {
-                        PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                        Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
                             tx_hash,
                             inscription: info,
-                            withdraws: pending.withdraws.clone(),
-                        })
-                    } else {
-                        PublishedTx::Inscription(info)
+                            withdraws: withdraws.clone(),
+                        }),
+                        None => PublishedTx::Inscription(info),
                     };
                     ordered.push(entry);
                 }

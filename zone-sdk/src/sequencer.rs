@@ -1331,7 +1331,11 @@ fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: Chann
     }
     match inscribe_meta {
         Some((parent, this_msg, payload)) => {
-            state.submit_atomic_withdraw(tx, parent, this_msg, payload, withdraws);
+            if withdraws.is_empty() {
+                state.submit_inscription(tx, parent, this_msg, payload);
+            } else {
+                state.submit_atomic_withdraw(tx, parent, this_msg, payload, withdraws);
+            }
         }
         None => state.submit_other(tx),
     }
@@ -2002,12 +2006,12 @@ mod tests {
         let pending = state
             .pending_inscription(&tx_hash)
             .expect("bundle should be in pending inscriptions");
-        assert_eq!(
-            pending.withdraws.len(),
-            1,
-            "bundle should carry one WithdrawInfo"
-        );
-        assert_eq!(pending.withdraws[0].op, withdraw_op);
+        let withdraws = pending
+            .withdraws
+            .as_ref()
+            .expect("bundle should carry Some(withdraws)");
+        assert_eq!(withdraws.len(), 1, "bundle should carry one WithdrawInfo");
+        assert_eq!(withdraws[0].op, withdraw_op);
         assert!(
             !state.pending_other_contains(&tx_hash),
             "bundle should not be in pending_other"
@@ -2015,8 +2019,8 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_classifies_plain_inscription_with_empty_withdraws() {
-        // Plain inscription: pending with empty `withdraws`.
+    fn restore_pending_tx_classifies_plain_inscription_with_none_withdraws() {
+        // Plain inscription: pending with `withdraws == None`.
         let channel_id = ChannelId::from([2u8; 32]);
         let inscribe_op = InscriptionOp {
             channel_id,
@@ -2037,7 +2041,7 @@ mod tests {
         let pending = state
             .pending_inscription(&tx_hash)
             .expect("plain inscription should be in pending inscriptions");
-        assert!(pending.withdraws.is_empty());
+        assert!(pending.withdraws.is_none());
     }
 
     #[test]
