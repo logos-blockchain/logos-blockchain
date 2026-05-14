@@ -78,7 +78,7 @@ impl ServiceState for CryptarchiaConsensusState {
                     &settings.config,
                     genesis_tx.cryptarchia_parameter().epoch_nonce,
                 )?;
-                // TODO: store genesis block and events to DB
+                // TODO: store genesis block and events to DB: https://github.com/logos-blockchain/logos-blockchain/issues/2747
                 (lib_id, lib_id, ledger)
             }
             StartingState::Lib {
