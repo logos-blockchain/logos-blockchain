@@ -26,6 +26,7 @@ pub type Inscription = BoundedVec<u8, MAX_BYTES>;
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
+    #[serde(with = "lb_utils::serde::serde_bytes_slice")]
     pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
