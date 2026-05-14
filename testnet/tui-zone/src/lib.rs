@@ -149,8 +149,6 @@ async fn handle_orphan(
             }
         }
         OrphanedTx::AtomicWithdraw(_) => {
-            // TUI does not publish atomic-withdraw bundles. Surface a warning
-            // and let the consumer handle re-signing manually.
             error!("unexpected atomic-withdraw orphan - TUI does not publish bundles");
         }
     }
