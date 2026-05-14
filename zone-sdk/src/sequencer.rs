@@ -501,7 +501,7 @@ where
                 // Filter by `channel_id` — a checkpoint can in principle carry
                 // txs for other channels if the caller reused it.
                 let mut is_inscription = false;
-                for op in tx.mantle_tx.ops() {
+                for op in tx.mantle_tx.ops().iter() {
                     if let Op::ChannelInscribe(inscribe) = op
                         && inscribe.channel_id == channel_id
                     {
@@ -1417,7 +1417,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
     let mut last_in_block: Option<MsgId> = None;
     let hash_and_ops = txs
         .iter()
-        .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops()));
+        .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops().iter()));
 
     for (tx_hash, op) in hash_and_ops {
         match op {

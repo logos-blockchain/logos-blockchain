@@ -58,7 +58,7 @@ impl WalletBlock {
         let mut unlocked_notes = HashSet::new();
 
         for auth_tx in block.transactions() {
-            for op in auth_tx.mantle_tx().ops() {
+            for op in auth_tx.mantle_tx().ops().iter() {
                 match op {
                     Op::ChannelDeposit(deposit) => {
                         spent_notes.extend(deposit.inputs.iter().copied());

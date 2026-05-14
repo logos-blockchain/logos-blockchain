@@ -106,6 +106,12 @@ impl<T, const N: usize, const N_BYTES: usize> NomBoundedVec<T, N, N_BYTES> {
     }
 }
 
+impl<T, const N: usize, const N_BYTES: usize> From<NomBoundedVec<T, N, N_BYTES>> for Vec<T> {
+    fn from(value: NomBoundedVec<T, N, N_BYTES>) -> Self {
+        value.0.into()
+    }
+}
+
 impl<T, const N: usize, const N_BYTES: usize> From<BoundedVec<T, N>>
     for NomBoundedVec<T, N, N_BYTES>
 {

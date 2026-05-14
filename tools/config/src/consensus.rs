@@ -278,7 +278,7 @@ pub fn create_genesis_block_with_declarations(
     let inscription = inscription_for_current_test(test_context);
     let transfer_id = transfer_op.op_id();
 
-    let mut ops = [Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
+    let mut ops = vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
 
     for provider in &providers {
         let utxo = Utxo {
@@ -296,7 +296,7 @@ pub fn create_genesis_block_with_declarations(
         ops.push(Op::SDPDeclare(declaration));
     }
 
-    let mantle_tx = MantleTx(ops.into());
+    let mantle_tx = MantleTx(Ops::new_unchecked(ops));
 
     let mantle_tx_hash = mantle_tx.hash();
     let mut ops_proofs = vec![

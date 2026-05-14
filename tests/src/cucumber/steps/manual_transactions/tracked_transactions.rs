@@ -3,7 +3,6 @@ use std::{collections::HashSet, time::Duration};
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
     MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
-    encoding::Ops,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
 };

@@ -1,6 +1,5 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
-use lb_utils::bounded_vec::BoundedVec;
 use multiaddr::Multiaddr;
 use nom::{
     IResult, Parser as _,

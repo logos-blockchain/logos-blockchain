@@ -661,7 +661,6 @@ pub mod tests {
             AuthenticatedMantleTx, MantleTx, Note, Op,
             OpProof::ZkSig,
             SignedMantleTx, Transaction as _,
-            encoding::Ops,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::leader_claim::VoucherCm,

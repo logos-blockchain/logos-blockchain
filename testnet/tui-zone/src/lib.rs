@@ -33,6 +33,10 @@ pub struct InscribeArgs {
     key_path: String,
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: Address this at some point."
+)]
 pub async fn run(args: InscribeArgs) {
     let node_url: Url = args.node_url.parse().expect("invalid node URL");
     let signing_key = load_or_create_signing_key(Path::new(&args.key_path));
