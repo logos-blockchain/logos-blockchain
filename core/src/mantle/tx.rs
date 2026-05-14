@@ -671,13 +671,13 @@ mod tests {
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
-        MantleTx(ops.try_into().unwrap())
+        MantleTx(Ops::new_unchecked(ops))
     }
 
     fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: vec![1, 2, 3].try_into().unwrap(),
+            inscription: [1, 2, 3].into(),
             parent: [0; 32].into(),
             signer: signing_key.public_key(),
         }

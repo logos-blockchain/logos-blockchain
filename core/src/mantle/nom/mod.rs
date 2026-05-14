@@ -53,7 +53,7 @@ where
     T: NomEncode,
 {
     fn encode(&self) -> Vec<u8> {
-        self.iter().flat_map(|item| item.encode()).collect()
+        self.iter().flat_map(NomEncode::encode).collect()
     }
 }
 
@@ -109,16 +109,16 @@ impl<T, const N: usize, const N_BYTES: usize> NomBoundedVec<T, N, N_BYTES> {
 impl<T, const N: usize, const N_BYTES: usize> From<BoundedVec<T, N>>
     for NomBoundedVec<T, N, N_BYTES>
 {
-    fn from(v: BoundedVec<T, N>) -> Self {
-        Self(v)
+    fn from(value: BoundedVec<T, N>) -> Self {
+        Self(value)
     }
 }
 
 impl<T, const N: usize, const N_BYTES: usize> TryFrom<Vec<T>> for NomBoundedVec<T, N, N_BYTES> {
     type Error = <BoundedVec<T, N> as TryFrom<Vec<T>>>::Error;
 
-    fn try_from(v: Vec<T>) -> Result<Self, Self::Error> {
-        Ok(Self(BoundedVec::try_from(v)?))
+    fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
+        Ok(Self(BoundedVec::try_from(value)?))
     }
 }
 

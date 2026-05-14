@@ -391,9 +391,7 @@ fn build_inscription_transaction(
     };
     let msg_id = op.id();
 
-    let mantle_tx = MantleTx(lb_core::mantle::encoding::Ops::new_unchecked(vec![
-        Op::ChannelInscribe(op),
-    ]));
+    let mantle_tx = MantleTx([Op::ChannelInscribe(op)].into());
     let tx_hash = mantle_tx.hash();
 
     let ed25519_signature = channel

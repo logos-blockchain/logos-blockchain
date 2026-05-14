@@ -9,7 +9,10 @@ use lb_core::{
         genesis_tx::GenesisTx,
         ops::{
             Op, OpId as _,
-            channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, Ed25519PublicKey, MsgId,
+                inscribe::{Inscription, InscriptionOp},
+            },
             transfer::TransferOp,
         },
     },
@@ -100,14 +103,14 @@ fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
     println!("Genesis inscription: {owner}");
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
-        inscription: CryptarchiaParameter {
-            chain_id: owner,
-            genesis_time: get_or_init_genesis_time(),
-            epoch_nonce: Fr::ZERO,
-        }
-        .encode()
-        .try_into()
-        .unwrap(),
+        inscription: Inscription::new_unchecked(
+            CryptarchiaParameter {
+                chain_id: owner,
+                genesis_time: get_or_init_genesis_time(),
+                epoch_nonce: Fr::ZERO,
+            }
+            .encode(),
+        ),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY).unwrap(),
     }
@@ -275,7 +278,7 @@ pub fn create_genesis_block_with_declarations(
     let inscription = inscription_for_current_test(test_context);
     let transfer_id = transfer_op.op_id();
 
-    let mut ops = vec![Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
+    let mut ops = [Op::Transfer(transfer_op), Op::ChannelInscribe(inscription)];
 
     for provider in &providers {
         let utxo = Utxo {
@@ -293,7 +296,7 @@ pub fn create_genesis_block_with_declarations(
         ops.push(Op::SDPDeclare(declaration));
     }
 
-    let mantle_tx = MantleTx(Ops::new_unchecked(ops));
+    let mantle_tx = MantleTx(ops.into());
 
     let mantle_tx_hash = mantle_tx.hash();
     let mut ops_proofs = vec![

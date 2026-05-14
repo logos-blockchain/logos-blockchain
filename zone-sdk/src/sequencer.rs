@@ -1498,7 +1498,7 @@ fn create_inscribe_tx(
     let msg_id = inscribe_op.id();
 
     // TODO: set realistic gas prices and fund tx
-    let inscribe_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(inscribe_op)]));
+    let inscribe_tx = MantleTx([Op::ChannelInscribe(inscribe_op)].into());
 
     let tx_hash = inscribe_tx.hash();
     let signature = sign_tx(tx_hash, signing_key);
@@ -1530,7 +1530,7 @@ fn create_channel_config_tx(
     };
 
     // TODO: fund tx
-    let config_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]));
+    let config_tx = MantleTx([Op::ChannelConfig(config_op)].into());
 
     let tx_hash = config_tx.hash();
     let signatures = signing_keys
@@ -1552,7 +1552,7 @@ fn create_channel_config_tx(
 }
 
 fn prepare_tx(
-    ops: Ops,
+    mut ops: Ops,
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
     inscription: Inscription,
@@ -1565,11 +1565,11 @@ fn prepare_tx(
         signer: signing_key.public_key(),
     };
     let msg_id = inscription_op.id();
-    let mut op_list = ops.into_inner();
-    op_list.push(Op::ChannelInscribe(inscription_op));
+    // TODO: Return `Error` in case there's too many ops already.
+    ops.try_push(Op::ChannelInscribe(inscription_op)).unwrap();
 
     // TODO: fund tx
-    let tx = MantleTx(Ops::new_unchecked(op_list));
+    let tx = MantleTx(ops);
 
     let inscription_sig = sign_tx(tx.hash(), signing_key);
 
@@ -1639,7 +1639,7 @@ mod tests {
 
         // Prepare a `MantleTx` — drive sequencer concurrently to process the request
         let prepare_fut = handle.prepare_tx(
-            Ops::new_unchecked(vec![Op::ChannelDeposit(deposit_op.clone())]),
+            [Op::ChannelDeposit(deposit_op.clone())].into(),
             b"Mint 10 to Alice".into(),
         );
         tokio::pin!(prepare_fut);
