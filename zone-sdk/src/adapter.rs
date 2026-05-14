@@ -7,7 +7,7 @@ use lb_common_http_client::{
 };
 use lb_core::{
     header::HeaderId,
-    mantle::{Op, SignedMantleTx, ops::channel::ChannelId},
+    mantle::{Op, SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
 };
 use reqwest::Url;
 
@@ -56,6 +56,8 @@ pub trait Node {
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
 
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
+
+    async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error>;
 }
 
 #[derive(Clone)]
@@ -180,6 +182,12 @@ impl Node for NodeHttpClient {
         self.client
             .post_transaction(self.base_url.clone(), tx)
             .await
+    }
+
+    async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error> {
+        let path = format!("/channel/{}", hex::encode(channel_id.as_ref()));
+        let url = self.base_url.join(&path).map_err(Error::Url)?;
+        self.client.get::<(), ChannelState>(url, None).await
     }
 }
 

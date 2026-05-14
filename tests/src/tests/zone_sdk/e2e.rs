@@ -30,7 +30,7 @@ use lb_zone_sdk::{
     ZoneMessage,
     adapter::NodeHttpClient,
     indexer::ZoneIndexer,
-    sequencer::{Event, SequencerConfig, SequencerHandle, ZoneSequencer},
+    sequencer::{Event, SequencerConfig, SequencerHandle, WithdrawArg, ZoneSequencer},
     state::InscriptionInfo,
 };
 
@@ -313,8 +313,8 @@ fn spawn_drive_republish(
         let mut local_pending: HashSet<lb_core::mantle::ops::channel::MsgId> = HashSet::new();
         loop {
             match sequencer.next_event().await {
-                Some(Event::Published { info, .. }) => {
-                    local_pending.insert(info.this_msg);
+                Some(Event::Published { tx, .. }) => {
+                    local_pending.insert(tx.inscription().this_msg);
                 }
                 Some(
                     Event::TxsFinalized { inscriptions, .. }
@@ -330,7 +330,12 @@ fn spawn_drive_republish(
                     }
                 }
                 Some(Event::ChannelUpdate { orphaned, .. }) => {
-                    for info in &orphaned {
+                    for entry in &orphaned {
+                        let info = match entry {
+                            lb_zone_sdk::sequencer::OrphanedTx::Inscription(i) => i,
+                            // Drive-republish helper does not handle atomic-withdraw bundles.
+                            lb_zone_sdk::sequencer::OrphanedTx::AtomicWithdraw(_) => continue,
+                        };
                         if local_pending.remove(&info.this_msg) {
                             debug!(
                                 "Re-publishing: {:?}",
@@ -860,9 +865,10 @@ fn spawn_sequencer_sorted_policy(
 
         loop {
             let event = sequencer.next_event().await;
-            if let Some(Event::Published { info, .. }) = event {
-                if max_seen_on_chain.as_ref().is_none_or(|m| info.payload > *m) {
-                    max_seen_on_chain = Some(info.payload);
+            if let Some(Event::Published { tx, .. }) = event {
+                let payload = tx.inscription().payload.clone();
+                if max_seen_on_chain.as_ref().is_none_or(|m| payload > *m) {
+                    max_seen_on_chain = Some(payload);
                 }
                 continue;
             }
@@ -877,7 +883,11 @@ fn spawn_sequencer_sorted_policy(
                 }
             }
 
-            for info in &orphaned {
+            for entry in &orphaned {
+                let info = match entry {
+                    lb_zone_sdk::sequencer::OrphanedTx::Inscription(i) => i,
+                    lb_zone_sdk::sequencer::OrphanedTx::AtomicWithdraw(_) => continue,
+                };
                 if discarded.lock().await.contains(&info.payload) {
                     continue;
                 }
@@ -1123,9 +1133,10 @@ fn spawn_balance_aware(
 
         loop {
             let event = sequencer.next_event().await;
-            if let Some(Event::Published { info, .. }) = event {
+            if let Some(Event::Published { tx, .. }) = event {
                 // Optimistic apply: we just published this.
-                if let Some((uuid, account, delta)) = parse_balance_tx(&info.payload) {
+                let payload = &tx.inscription().payload;
+                if let Some((uuid, account, delta)) = parse_balance_tx(payload) {
                     applied.entry(account).or_default().insert(uuid, delta);
                 }
                 continue;
@@ -1134,7 +1145,11 @@ fn spawn_balance_aware(
                 continue;
             };
 
-            for o in &orphaned {
+            for entry in &orphaned {
+                let o = match entry {
+                    lb_zone_sdk::sequencer::OrphanedTx::Inscription(i) => i,
+                    lb_zone_sdk::sequencer::OrphanedTx::AtomicWithdraw(_) => continue,
+                };
                 if let Some((uuid, account, _)) = parse_balance_tx(&o.payload)
                     && let Some(account_map) = applied.get_mut(&account)
                 {
@@ -1147,7 +1162,11 @@ fn spawn_balance_aware(
                 }
             }
 
-            for info in &orphaned {
+            for entry in &orphaned {
+                let info = match entry {
+                    lb_zone_sdk::sequencer::OrphanedTx::Inscription(i) => i,
+                    lb_zone_sdk::sequencer::OrphanedTx::AtomicWithdraw(_) => continue,
+                };
                 let Some((uuid, account, delta)) = parse_balance_tx(&info.payload) else {
                     continue;
                 };
@@ -2016,6 +2035,241 @@ async fn test_subscribe_to_finalized_withdraw() {
     wait_for_zone_block(&indexer, inscription_data, Duration::from_mins(2)).await;
 
     drive_task.abort();
+}
+
+/// Drive a sequencer and auto-republish orphans for BOTH plain inscriptions
+/// and atomic-withdraw bundles. Used by multi-sequencer tests where
+/// `parent_msg` conflicts are expected and the SDK must recover transparently.
+fn spawn_drive_republish_all(
+    mut sequencer: ZoneSequencer<Node>,
+    handle: SequencerHandle<Node>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            if let Some(Event::ChannelUpdate { orphaned, .. }) = sequencer.next_event().await {
+                for entry in orphaned {
+                    republish_orphan(&handle, entry).await;
+                }
+            }
+        }
+    })
+}
+
+async fn republish_orphan(
+    handle: &SequencerHandle<Node>,
+    entry: lb_zone_sdk::sequencer::OrphanedTx,
+) {
+    match entry {
+        lb_zone_sdk::sequencer::OrphanedTx::Inscription(info) => {
+            republish_inscription(handle, info).await;
+        }
+        lb_zone_sdk::sequencer::OrphanedTx::AtomicWithdraw(info) => {
+            republish_atomic_withdraw(handle, info).await;
+        }
+    }
+}
+
+async fn republish_inscription(handle: &SequencerHandle<Node>, info: InscriptionInfo) {
+    debug!(
+        "Re-publishing orphaned inscription: {:?}",
+        String::from_utf8_lossy(&info.payload)
+    );
+    if let Err(e) = handle.publish_message(info.payload).await {
+        debug!("Failed to re-publish inscription: {e}");
+    }
+}
+
+async fn republish_atomic_withdraw(
+    handle: &SequencerHandle<Node>,
+    info: lb_zone_sdk::state::AtomicWithdrawInfo,
+) {
+    let inscribe = info.inscription.payload;
+    let withdraws = info
+        .withdraws
+        .into_iter()
+        .map(|w| WithdrawArg {
+            outputs: w.op.outputs,
+        })
+        .collect();
+    debug!(
+        "Re-publishing orphaned atomic-withdraw bundle: {:?}",
+        String::from_utf8_lossy(&inscribe)
+    );
+    if let Err(e) = handle.publish_atomic_withdraw(inscribe, withdraws).await {
+        debug!("Failed to re-publish atomic-withdraw: {e}");
+    }
+}
+
+/// Spawn validators with one extra funding note of `amount` and the standard
+/// fast-slot config used by atomic-withdraw e2e tests.
+async fn spawn_withdraw_test_validators(test_name: &str, amount: Value) -> Vec<Validator> {
+    spawn_validators_with_extra_funding_notes(
+        Some(test_name),
+        2,
+        [amount],
+        |mut config| {
+            config.deployment.time.slot_duration = Duration::from_secs(1);
+            config
+                .user
+                .cryptarchia
+                .service
+                .bootstrap
+                .prolonged_bootstrap_period = Duration::ZERO;
+            config.deployment.cryptarchia.security_param = NonZero::new(3).unwrap();
+            config.deployment.cryptarchia.slot_activation_coeff =
+                NonNegativeRatio::new(1, 2.try_into().unwrap());
+            config
+        },
+        3,
+    )
+    .await
+}
+
+/// Deposit `amount` from the validator's funding wallet into `channel_id` and
+/// wait for the deposit to be observed via the indexer. Returns the funding
+/// `ZkPublicKey` for downstream withdraw-output construction.
+async fn deposit_into_channel(
+    validator: &Validator,
+    indexer: &ZoneIndexer<Node>,
+    channel_id: ChannelId,
+    amount: Value,
+) -> ZkPublicKey {
+    let pk = validator.config().user.cryptarchia.leader.wallet.funding_pk;
+    let (deposit_note_id, _) = get_note_with_value(validator, pk, amount)
+        .await
+        .expect("should find a funding note");
+    let deposit = DepositOp {
+        channel_id,
+        inputs: Inputs::new(vec![deposit_note_id]),
+        metadata: format!("Mint {amount}").into_bytes(),
+    };
+    submit_deposit(validator, deposit.clone(), pk).await;
+    wait_for_deposit(indexer, &deposit, Duration::from_mins(2)).await;
+    pk
+}
+
+#[tokio::test]
+async fn test_atomic_withdraw_multi_sequencer() {
+    init_tracing();
+
+    // Two sequencer instances sharing a single signing key. SeqA publishes a
+    // batch of plain inscriptions while SeqB publishes a few inscriptions
+    // plus one atomic-withdraw bundle, all concurrently. Verifies that the
+    // atomic bundle lands correctly even when its parent_msg is being
+    // contested by other sequencers' inscriptions.
+    let deposit_amount: Value = 3;
+    let validators =
+        spawn_withdraw_test_validators("test_atomic_withdraw_multi_sequencer", deposit_amount)
+            .await;
+    let validator = &validators[0];
+    let node_url = validator.url();
+
+    let signing_key = keygen();
+    let channel_id = channel_id_from_key(&signing_key);
+    let sequencer_config = SequencerConfig {
+        resubmit_interval: Duration::from_secs(3),
+        ..SequencerConfig::default()
+    };
+
+    // SeqA bootstraps the channel + a deposit so it has balance to withdraw.
+    let (seq_a, mut handle_a) = init_sequencer(
+        channel_id,
+        signing_key.clone(),
+        node_url.clone(),
+        sequencer_config.clone(),
+    );
+    let drive_a = spawn_drive_republish_all(seq_a, handle_a.clone());
+    handle_a.wait_ready().await;
+    let init_msg = b"init".to_vec();
+    handle_a.publish_message(init_msg.clone()).await.unwrap();
+    let indexer = ZoneIndexer::new(
+        channel_id,
+        NodeHttpClient::new(CommonHttpClient::new(None), node_url.clone()),
+    );
+    wait_for_zone_block(&indexer, init_msg, Duration::from_mins(1)).await;
+    let pk = deposit_into_channel(validator, &indexer, channel_id, deposit_amount).await;
+
+    // SeqB joins now that the channel + balance are established.
+    let (seq_b, mut handle_b) =
+        init_sequencer(channel_id, signing_key, node_url.clone(), sequencer_config);
+    let drive_b = spawn_drive_republish_all(seq_b, handle_b.clone());
+    handle_b.wait_ready().await;
+
+    // Concurrent publishing — SeqA does plain inscriptions; SeqB interleaves
+    // plain inscriptions with one atomic-withdraw bundle.
+    let data_a: Vec<Vec<u8>> = vec![b"a1".to_vec(), b"a2".to_vec(), b"a3".to_vec()];
+    let data_b_pre = b"b1".to_vec();
+    let data_b_post = b"b2".to_vec();
+    let withdraw_outputs = Outputs::new(vec![Note::new(2, pk)]);
+    let withdraw_inscription = b"burn 2".to_vec();
+
+    let task_a = tokio::spawn(seq_a_workload(handle_a.clone(), data_a.clone()));
+    let task_b = tokio::spawn(seq_b_workload(
+        handle_b.clone(),
+        data_b_pre.clone(),
+        withdraw_inscription.clone(),
+        withdraw_outputs.clone(),
+        data_b_post.clone(),
+    ));
+    task_a.await.unwrap();
+    task_b.await.unwrap();
+
+    // Verify every payload landed on chain (order is not asserted — concurrent
+    // sequencers interleave non-deterministically).
+    let expected_payloads: Vec<Vec<u8>> = data_a
+        .into_iter()
+        .chain([data_b_pre, withdraw_inscription, data_b_post])
+        .collect();
+    for payload in expected_payloads {
+        wait_for_zone_block(&indexer, payload, Duration::from_mins(4)).await;
+    }
+    let expected_withdraw = ChannelWithdrawOp {
+        channel_id,
+        outputs: withdraw_outputs,
+        withdraw_nonce: 0,
+    };
+    wait_for_withdraw(&indexer, &expected_withdraw, Duration::from_mins(2)).await;
+
+    drive_a.abort();
+    drive_b.abort();
+}
+
+/// Publishes a series of plain inscriptions in order.
+async fn seq_a_workload(handle: SequencerHandle<Node>, payloads: Vec<Vec<u8>>) {
+    for d in payloads {
+        handle
+            .publish_message(d)
+            .await
+            .expect("seq_a publish failed");
+    }
+}
+
+/// Publishes a plain inscription, then an atomic-withdraw bundle, then a
+/// plain inscription — in order.
+async fn seq_b_workload(
+    handle: SequencerHandle<Node>,
+    pre: Vec<u8>,
+    withdraw_inscription: Vec<u8>,
+    withdraw_outputs: Outputs,
+    post: Vec<u8>,
+) {
+    handle
+        .publish_message(pre)
+        .await
+        .expect("seq_b pre-publish failed");
+    handle
+        .publish_atomic_withdraw(
+            withdraw_inscription,
+            vec![WithdrawArg {
+                outputs: withdraw_outputs,
+            }],
+        )
+        .await
+        .expect("seq_b publish_atomic_withdraw failed");
+    handle
+        .publish_message(post)
+        .await
+        .expect("seq_b post-publish failed");
 }
 
 async fn spawn_validators(
