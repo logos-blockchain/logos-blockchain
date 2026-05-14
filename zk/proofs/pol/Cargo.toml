@@ -15,7 +15,7 @@ lb-circuits-prover = { workspace = true }
 lb-circuits-utils  = { workspace = true }
 lb-groth16         = { workspace = true }
 lb-utils           = { workspace = true, features = ["serde"] }
-lbc-pol-sys        = { workspace = true }
+lbc-pol-sys        = { workspace = true, features = ["prebuilt"] }
 lbc-types          = { workspace = true }
 lbp-error          = { workspace = true }
 num-bigint         = { workspace = true }
