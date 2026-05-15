@@ -316,10 +316,19 @@ fn spawn_drive_republish(
                 Some(Event::Published { tx, .. }) => {
                     local_pending.insert(tx.inscription().this_msg);
                 }
-                Some(
-                    Event::TxsFinalized { inscriptions, .. }
-                    | Event::FinalizedInscriptions { inscriptions },
-                ) => {
+                Some(Event::TxsFinalized { txs, .. }) => {
+                    let inscriptions: Vec<InscriptionInfo> =
+                        txs.into_iter().map(|t| t.inscription().clone()).collect();
+                    for ins in &inscriptions {
+                        local_pending.remove(&ins.this_msg);
+                    }
+                    if let Some(tx) = finalized_tx.as_ref() {
+                        for ins in inscriptions {
+                            drop(tx.send(ins));
+                        }
+                    }
+                }
+                Some(Event::FinalizedInscriptions { inscriptions }) => {
                     for ins in &inscriptions {
                         local_pending.remove(&ins.this_msg);
                     }

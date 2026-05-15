@@ -102,7 +102,9 @@ async fn handle_event(
         Event::ChannelUpdate { orphaned, adopted } => {
             handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
-        Event::TxsFinalized { inscriptions, .. } => {
+        Event::TxsFinalized { txs, .. } => {
+            let inscriptions: Vec<InscriptionInfo> =
+                txs.iter().map(|t| t.inscription().clone()).collect();
             state.on_finalized(&inscriptions);
             ui::render_state(state);
             ui::prompt();

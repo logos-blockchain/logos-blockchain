@@ -116,9 +116,17 @@ pub enum Error {
 #[derive(Debug, Clone)]
 pub enum Event {
     /// Transactions finalized (at or below LIB).
+    ///
+    /// `tx_hashes` covers every finalized tx that was in our pending set
+    /// (inscription, atomic-withdraw bundle, or other op). `txs` carries the
+    /// typed payload for each finalized channel tx — for our own bundles the
+    /// [`PublishedTx::AtomicWithdraw`] variant is emitted with full bundle
+    /// info; observed-but-not-ours inscriptions surface as
+    /// [`PublishedTx::Inscription`] (we don't extract per-block withdraws for
+    /// other sequencers).
     TxsFinalized {
         tx_hashes: Vec<TxHash>,
-        inscriptions: Vec<InscriptionInfo>,
+        txs: Vec<PublishedTx>,
     },
     /// Channel state changed.
     ///
@@ -179,7 +187,7 @@ pub enum Event {
     /// from [`SequencerHandle::publish_message`] or
     /// [`SequencerHandle::publish_atomic_withdraw`]. `this_msg` on the
     /// inscription is the lineage key for correlating later
-    /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.inscriptions`
+    /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.txs`
     /// entries back to the originating publish call.
     Published {
         tx: Box<PublishedTx>,
@@ -905,10 +913,10 @@ where
         let channel_event = result.channel_update.map(|u| self.build_channel_event(u));
 
         let finalized_event = (!result.finalized_tx_hashes.is_empty()
-            || !result.finalized_inscriptions.is_empty())
+            || !result.finalized_txs.is_empty())
         .then_some(Event::TxsFinalized {
             tx_hashes: result.finalized_tx_hashes,
-            inscriptions: result.finalized_inscriptions,
+            txs: result.finalized_txs,
         });
 
         match (channel_event, finalized_event) {
@@ -1344,7 +1352,10 @@ fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: Chann
 /// Result of processing a block event.
 struct BlockEventResult {
     finalized_tx_hashes: Vec<TxHash>,
-    finalized_inscriptions: Vec<InscriptionInfo>,
+    /// Finalized channel txs in typed form. Our own bundles surface as
+    /// [`PublishedTx::AtomicWithdraw`]; observed inscriptions (ours or
+    /// others') surface as [`PublishedTx::Inscription`].
+    finalized_txs: Vec<PublishedTx>,
     channel_update: Option<crate::state::ChannelUpdateInfo>,
 }
 
@@ -1374,7 +1385,7 @@ where
     let Some(s) = state.as_mut() else {
         return BlockEventResult {
             finalized_tx_hashes: Vec::new(),
-            finalized_inscriptions: Vec::new(),
+            finalized_txs: Vec::new(),
             channel_update: None,
         };
     };
@@ -1417,8 +1428,18 @@ where
     s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
 
     // Remove our pending txs that were finalized in backfilled LIB blocks.
+    // Capture each finalized bundle's withdraw info BEFORE remove_pending
+    // strips it, so the finalized event can surface the right typed variant.
     let mut finalized_tx_hashes = Vec::new();
+    let mut bundle_withdraws: std::collections::HashMap<TxHash, Vec<WithdrawInfo>> =
+        std::collections::HashMap::new();
     for tx_hash in &lib_finalized {
+        if let Some(withdraws) = s
+            .pending_inscription(tx_hash)
+            .and_then(|p| p.withdraws.clone())
+        {
+            bundle_withdraws.insert(*tx_hash, withdraws);
+        }
         if s.remove_pending(tx_hash).is_some() {
             finalized_tx_hashes.push(*tx_hash);
         }
@@ -1427,14 +1448,24 @@ where
     // All channel inscriptions from backfilled LIB blocks — includes both
     // our own and other sequencers' inscriptions. Consumers need the full
     // picture to update their local state correctly.
-    let finalized_inscriptions = lib_inscriptions;
-    for info in &finalized_inscriptions {
-        tracing::trace!(
-            " Backfill-finalized: payload={:?}, tx={}",
-            String::from_utf8_lossy(&info.payload),
-            hex::encode(info.tx_hash.0),
-        );
-    }
+    let finalized_txs: Vec<PublishedTx> = lib_inscriptions
+        .into_iter()
+        .map(|info| {
+            tracing::trace!(
+                " Backfill-finalized: payload={:?}, tx={}",
+                String::from_utf8_lossy(&info.payload),
+                hex::encode(info.tx_hash.0),
+            );
+            match bundle_withdraws.remove(&info.tx_hash) {
+                Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                    tx_hash: info.tx_hash,
+                    inscription: info,
+                    withdraws,
+                }),
+                None => PublishedTx::Inscription(info),
+            }
+        })
+        .collect();
     *current_tip = Some(tip);
 
     // Detect channel changes.
@@ -1463,7 +1494,7 @@ where
 
     BlockEventResult {
         finalized_tx_hashes,
-        finalized_inscriptions,
+        finalized_txs,
         channel_update,
     }
 }

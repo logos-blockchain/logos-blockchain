@@ -495,15 +495,15 @@ impl TxState {
     }
 
     /// Look up a pending inscription (or atomic-withdraw bundle) by tx hash.
-    /// Test-only accessor for inspecting internal pending state.
-    #[cfg(test)]
+    /// Used during finalization to capture bundle info (`withdraws`) before
+    /// `remove_pending` strips the entry, so finalized events can surface the
+    /// correct [`PublishedTx`] variant.
     #[must_use]
-    pub(crate) fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
+    pub fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
         self.pending.get(tx_hash)
     }
 
     /// Whether a non-inscription pending tx is tracked under this hash.
-    /// Test-only accessor for inspecting internal pending state.
     #[cfg(test)]
     #[must_use]
     pub(crate) fn pending_other_contains(&self, tx_hash: &TxHash) -> bool {
