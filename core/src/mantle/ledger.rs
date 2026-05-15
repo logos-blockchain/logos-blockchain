@@ -159,6 +159,11 @@ impl Inputs {
         Self(note_ids)
     }
 
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(vec![])
+    }
+
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
         // Check that there is no duplicate
         let unique: HashSet<_> = self.0.iter().collect();

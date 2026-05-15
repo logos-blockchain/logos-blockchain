@@ -306,9 +306,10 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
 
-    let (notes, declarations) = distribution::distribute(stakeholders, providers)
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution")?;
+    let notes: Vec<Note> = transfer_op.notes().collect();
 
     let notes_value = struct_to_yaml_value(&notes)?;
     let declarations_value = struct_to_yaml_value(&declarations)?;

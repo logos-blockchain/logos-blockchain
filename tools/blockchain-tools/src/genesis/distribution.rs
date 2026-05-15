@@ -1,7 +1,11 @@
 use std::collections::HashSet;
 
 use lb_core::{
-    mantle::{Note, Utxo, Value as NoteValue, ops::sdp::SDPDeclareOp},
+    mantle::{
+        Note, Utxo, Value as NoteValue,
+        ledger::{Inputs, Outputs},
+        ops::{sdp::SDPDeclareOp, transfer::TransferOp},
+    },
     sdp::{Locators, ServiceType},
 };
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
@@ -26,6 +30,41 @@ pub struct ProviderInfo {
     pub service_type: ServiceType,
 }
 
+pub struct GenesisTransferOp {
+    transfer_op: TransferOp,
+    outputs: Outputs,
+}
+
+impl GenesisTransferOp {
+    pub fn new(stake_holders: impl Iterator<Item = StakeHolderInfo>) -> Self {
+        let outputs = Outputs::new(
+            stake_holders
+                .into_iter()
+                .map(|stake_holder| Note::new(stake_holder.stake, stake_holder.zk_id))
+                .collect(),
+        );
+
+        let transfer_op = TransferOp::new(Inputs::empty(), outputs.clone());
+        Self {
+            transfer_op,
+            outputs,
+        }
+    }
+
+    pub fn notes(&self) -> impl Iterator<Item = Note> {
+        self.outputs.utxos(&self.transfer_op).map(|u| u.note)
+    }
+
+    pub fn utxos(&self) -> impl Iterator<Item = Utxo> {
+        self.outputs.utxos(&self.transfer_op)
+    }
+
+    #[must_use]
+    pub fn utxo_by_index(&self, index: usize) -> Option<Utxo> {
+        self.outputs.utxo_by_index(index, &self.transfer_op)
+    }
+}
+
 #[derive(Error, Debug)]
 pub enum DistributionError {
     #[error("Provider with ZK ID {0:?} is not a registered stakeholder")]
@@ -41,7 +80,7 @@ pub enum DistributionError {
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
-) -> Result<(Vec<Note>, Vec<SDPDeclareOp>), DistributionError>
+) -> Result<(GenesisTransferOp, Vec<SDPDeclareOp>), DistributionError>
 where
     S: IntoIterator<Item = StakeHolderInfo> + Clone,
     P: IntoIterator<Item = ProviderInfo>,
@@ -49,16 +88,7 @@ where
     let stake_holder_keys: HashSet<ZkPublicKey> =
         stake_holders.clone().into_iter().map(|s| s.zk_id).collect();
 
-    let utxos: Vec<Utxo> = stake_holders
-        .into_iter()
-        .enumerate()
-        .map(|(output_index, stake_holder)| Utxo {
-            op_id: [0u8; 32],
-            output_index,
-            note: Note::new(stake_holder.stake, stake_holder.zk_id),
-        })
-        .collect();
-
+    let transfer_op = GenesisTransferOp::new(stake_holders.into_iter());
     let mut declarations = Vec::new();
     let mut locked_services = HashSet::new();
 
@@ -75,7 +105,7 @@ where
             ));
         }
 
-        if let Some(utxo) = utxos.iter().find(|u| u.note.pk == provider.zk_id) {
+        if let Some(utxo) = transfer_op.utxos().find(|u| u.note.pk == provider.zk_id) {
             declarations.push(SDPDeclareOp {
                 service_type: provider.service_type,
                 locators: provider.locators,
@@ -86,7 +116,7 @@ where
         }
     }
 
-    Ok((utxos.iter().map(|u| u.note).collect(), declarations))
+    Ok((transfer_op, declarations))
 }
 
 #[cfg(test)]
@@ -130,14 +160,19 @@ mod tests {
         let result = distribute(stake_holders, providers);
 
         assert!(result.is_ok());
-        let (utxos, declarations) = result.unwrap();
+        let (transfer_op, declarations) = result.unwrap();
+        let notes = transfer_op.notes().collect::<Vec<_>>();
 
-        assert_eq!(utxos.len(), 2);
-        assert_eq!(utxos[0].pk, zk_id_1);
-        assert_eq!(utxos[1].pk, zk_id_2);
+        assert_eq!(notes.len(), 2);
+        assert_eq!(notes[0].pk, zk_id_1);
+        assert_eq!(notes[1].pk, zk_id_2);
 
         assert_eq!(declarations.len(), 1);
         assert_eq!(declarations[0].zk_id, zk_id_1);
+        assert_eq!(
+            declarations[0].locked_note_id,
+            transfer_op.utxo_by_index(0).unwrap().id(),
+        );
     }
 
     #[test]

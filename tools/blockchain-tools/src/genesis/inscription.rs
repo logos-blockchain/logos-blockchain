@@ -13,6 +13,7 @@ use time::OffsetDateTime;
 #[derive(serde::Deserialize)]
 pub struct InscribeParams {
     pub chain_id: String,
+    #[serde(with = "time::serde::iso8601")]
     pub genesis_time: OffsetDateTime,
     pub entropy_sources: Vec<FrBytes>,
 }
