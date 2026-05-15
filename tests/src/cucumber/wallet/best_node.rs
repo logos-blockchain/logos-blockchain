@@ -9,9 +9,17 @@ use tokio::{
 };
 use tracing::{info, warn};
 
-use crate::cucumber::{
-    defaults::CUCUMBER_VERBOSE_CONSOLE, error::StepError, steps::TARGET, world::CucumberWorld,
+use crate::{
+    common::wallet::WalletSyncSourceId,
+    cucumber::{
+        defaults::CUCUMBER_VERBOSE_CONSOLE, error::StepError, wallet::TARGET, world::CucumberWorld,
+    },
 };
+
+const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_mins(3);
+const BEST_NODE_SELECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const BEST_NODE_SELECTION_LOG_INTERVAL: Duration = Duration::from_secs(5);
+const BEST_NODE_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Best-node selection result, keyed by group name.
 /// When no groups are configured the single key is the empty string "".
@@ -33,15 +41,6 @@ pub struct BestGroupNode {
 }
 
 impl BestNodeInfo {
-    /// Return the best node for the group that owns `node_name`,
-    /// or the single ungrouped best node when no groups are defined.
-    #[must_use]
-    pub fn for_node(&self, node_name: &str) -> Option<&BestGroupNode> {
-        self.best_nodes
-            .get(node_name)
-            .or_else(|| self.best_nodes.get(""))
-    }
-
     /// Return the best node for the group that owns `wallet_node`,
     /// given the reverse-lookup map.
     #[must_use]
@@ -55,17 +54,6 @@ impl BestNodeInfo {
             .and_then(|group| self.best_nodes.get(group.as_str()))
             .or_else(|| self.best_nodes.get(""))
     }
-}
-
-const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_mins(3);
-const BEST_NODE_SELECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
-const BEST_NODE_SELECTION_LOG_INTERVAL: Duration = Duration::from_secs(5);
-const BEST_NODE_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
-
-#[derive(Debug)]
-struct NodeConsensusSnapshot {
-    node_name: String,
-    consensus: CryptarchiaInfo,
 }
 
 /// Determine the best node to use for all block queries, with an optional hint
@@ -124,45 +112,67 @@ pub async fn sanitize_best_node_info<'a>(
     resolve_selected_best_node(world, &wallet_node_name, &refreshed).await
 }
 
-async fn resolve_selected_best_node<'a>(
+pub async fn sanitize_best_node_info_for_group<'a>(
     world: &'a CucumberWorld,
-    wallet_node_name: &str,
-    best_info: &BestNodeInfo,
+    source_id: &WalletSyncSourceId,
+    best_node_info: Option<&'a BestNodeInfo>,
 ) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
-    let selected = best_info
-        .for_wallet_node(wallet_node_name, &world.node_to_group)
-        .ok_or(StepError::LogicalError {
-            message: format!("No best-node entry found for wallet node '{wallet_node_name}'"),
-        })?;
+    let group_key = source_id.as_str();
+    let representative_node = representative_node_for_group(world, group_key)?;
 
-    let node_info = world
-        .nodes_info
-        .get(&selected.node_name)
-        .ok_or(StepError::LogicalError {
-            message: format!(
-                "Best node '{}' not found in world state",
-                selected.node_name
-            ),
-        })?;
+    if let Some(best_info) = best_node_info
+        && let Some(node) = best_info
+            .best_nodes
+            .get(group_key)
+            .or_else(|| best_info.best_nodes.get(""))
+    {
+        let Some(node_info) = world.nodes_info.get(&node.node_name) else {
+            return Err(StepError::LogicalError {
+                message: format!("Best node '{}' not found in world state", node.node_name),
+            });
+        };
 
-    let consensus = node_info
-        .started_node
-        .client
-        .consensus_info()
-        .await
-        .map_err(|_| StepError::LogicalError {
-            message: "No available nodes to query for UTXOs".to_owned(),
-        })?;
+        let consensus = node_info
+            .started_node
+            .client
+            .consensus_info()
+            .await
+            .map_err(|_| StepError::LogicalError {
+                message: "No available nodes to query for UTXOs".to_owned(),
+            })?;
 
-    Ok((
-        selected.node_name.clone(),
-        &node_info.started_node.client,
-        consensus.cryptarchia_info,
-    ))
+        let selected_tip = normalize_header_id_str(&node.tip);
+        let live_tip = consensus.cryptarchia_info.tip.encode_hex::<String>();
+        let tip_or_height_changed =
+            selected_tip != live_tip || consensus.cryptarchia_info.height != node.height;
+
+        if tip_or_height_changed
+            && !is_tip_still_on_canonical_chain(
+                &node_info.started_node.client,
+                &node.tip,
+                node.height,
+                &consensus.cryptarchia_info,
+            )
+            .await?
+        {
+            let refreshed = determine_best_node(world, &representative_node).await?;
+            return resolve_selected_best_node(world, &representative_node, &refreshed).await;
+        }
+
+        return Ok((
+            node.node_name.clone(),
+            &node_info.started_node.client,
+            consensus.cryptarchia_info,
+        ));
+    }
+
+    let refreshed = determine_best_node(world, &representative_node).await?;
+    resolve_selected_best_node(world, &representative_node, &refreshed).await
 }
 
 /// Determine the best node to query, scoped to the fork group that contains
 /// `wallet_node_name`.
+///
 /// Falls back to all nodes when no groups are configured.
 /// Nodes that do not respond within 2 seconds are excluded from the majority
 /// denominator.
@@ -268,6 +278,91 @@ pub async fn determine_best_node(
     }
 }
 
+/// Get best-node info for the wallet's fork group.
+pub async fn get_best_node_info(
+    world: &CucumberWorld,
+    wallet_name: &str,
+) -> Result<BestNodeInfo, StepError> {
+    let wallet = world.resolve_wallet(wallet_name)?;
+    determine_best_node(world, &wallet.node_name).await
+}
+
+#[derive(Debug)]
+struct NodeConsensusSnapshot {
+    node_name: String,
+    consensus: CryptarchiaInfo,
+}
+
+fn representative_node_for_group(
+    world: &CucumberWorld,
+    group_key: &str,
+) -> Result<String, StepError> {
+    if world.node_groups.is_empty() {
+        let mut candidates = world.all_node_names();
+        candidates.sort();
+        return candidates
+            .into_iter()
+            .next()
+            .ok_or_else(|| StepError::LogicalError {
+                message: "No available nodes to query for UTXOs".to_owned(),
+            });
+    }
+
+    let mut candidates = world
+        .node_groups
+        .get(group_key)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Node group '{group_key}' was not found in scenario state"),
+        })?
+        .iter()
+        .cloned()
+        .collect::<Vec<_>>();
+    candidates.sort();
+    candidates
+        .into_iter()
+        .next()
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Node group '{group_key}' has no nodes"),
+        })
+}
+
+async fn resolve_selected_best_node<'a>(
+    world: &'a CucumberWorld,
+    wallet_node_name: &str,
+    best_info: &BestNodeInfo,
+) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
+    let selected = best_info
+        .for_wallet_node(wallet_node_name, &world.node_to_group)
+        .ok_or(StepError::LogicalError {
+            message: format!("No best-node entry found for wallet node '{wallet_node_name}'"),
+        })?;
+
+    let node_info = world
+        .nodes_info
+        .get(&selected.node_name)
+        .ok_or(StepError::LogicalError {
+            message: format!(
+                "Best node '{}' not found in world state",
+                selected.node_name
+            ),
+        })?;
+
+    let consensus = node_info
+        .started_node
+        .client
+        .consensus_info()
+        .await
+        .map_err(|_| StepError::LogicalError {
+            message: "No available nodes to query for UTXOs".to_owned(),
+        })?;
+
+    Ok((
+        selected.node_name.clone(),
+        &node_info.started_node.client,
+        consensus.cryptarchia_info,
+    ))
+}
+
 const fn display_group_key(group_key: &str) -> &str {
     if group_key.is_empty() {
         "<ungrouped>"
@@ -358,7 +453,6 @@ fn tip_key(consensus: &CryptarchiaInfo) -> String {
 }
 
 fn summarize_tip_groups(snapshots: &[NodeConsensusSnapshot]) -> String {
-    // tip -> (node_count, max_height)
     let mut grouped: HashMap<String, (usize, u64)> = HashMap::new();
     for snapshot in snapshots {
         let entry = grouped
@@ -436,15 +530,6 @@ fn select_best_snapshot_index(
                 .cmp(&right.consensus.height)
                 .then_with(|| right.node_name.cmp(&left.node_name))
         })
-}
-
-/// Get best-node info for the wallet's fork group.
-pub async fn get_best_node_info(
-    world: &CucumberWorld,
-    wallet_name: &str,
-) -> Result<BestNodeInfo, StepError> {
-    let wallet = world.resolve_wallet(wallet_name)?;
-    determine_best_node(world, &wallet.node_name).await
 }
 
 fn normalize_header_id_str(header_id: &str) -> String {

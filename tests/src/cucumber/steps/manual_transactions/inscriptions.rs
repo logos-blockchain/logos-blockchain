@@ -11,14 +11,14 @@ use crate::{
         mantle_inscription::{
             build_inscription_tx_builder, channel_id_for_payload_size, inscription_signature_proof,
         },
+        wallet::WalletTransactionIntent,
     },
     cucumber::{
         error::{StepError, StepResult},
         steps::{
             TARGET,
             manual_transactions::utils::{
-                prepare_user_wallet_built_transaction_submission,
-                submit_prepared_user_wallet_transaction,
+                prepare_user_wallet_transaction_submission, submit_prepared_user_wallet_transaction,
             },
         },
         world::{CucumberWorld, WalletType},
@@ -95,19 +95,25 @@ async fn submit_inscription_transaction(
         channel_id_for_payload_size(payload_size),
         None,
     );
-    let prepared = prepare_user_wallet_built_transaction_submission(
+    let transaction_intent =
+        WalletTransactionIntent::from_builder(tx_builder).map_err(|error| {
+            StepError::LogicalError {
+                message: error.to_string(),
+            }
+        })?;
+
+    let prepared = prepare_user_wallet_transaction_submission(
         world,
         &step.value,
         &wallet_name,
-        tx_builder,
-        0,
+        transaction_intent,
         None,
     )
     .await;
     let prepared = prepared.inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
-    let tx_hash = prepared.tx_hash;
+    let tx_hash = prepared.tx_hash();
 
     let tx_hash = submit_prepared_user_wallet_transaction(
         world,
