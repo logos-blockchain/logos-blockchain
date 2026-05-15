@@ -512,7 +512,7 @@ impl SortedConflictState {
     fn preserves_order(&self, inscription: &InscriptionInfo) -> bool {
         self.max_seen_on_chain
             .as_deref()
-            .is_some_and(|seen| inscription.payload.as_slice() >= seen)
+            .is_none_or(|seen| inscription.payload.as_slice() >= seen)
     }
 
     async fn discard(&self, payload: Vec<u8>) {

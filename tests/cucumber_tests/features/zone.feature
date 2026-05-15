@@ -1,6 +1,7 @@
 Feature: Zone SDK
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_sequencer_publish_and_indexer_read
   Scenario: Publish messages and read them from the zone indexer
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -29,6 +30,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_sequencer_checkpoint_resume
   Scenario: Resume zone sequencer from checkpoint
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -57,6 +59,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_sequencer_stale_checkpoint_resume
   Scenario: Resume zone sequencer from stale checkpoint
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -93,6 +96,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_sequential_multi_sequencer
   Scenario: Sequential multi-sequencer publishing keeps channel order
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -149,6 +153,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_concurrent_multi_sequencer
   Scenario: Concurrent multi-sequencer publishing converges without duplicates
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -170,6 +175,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_sorted_conflict_resolution
   Scenario: Sorted conflict policy converges to a sorted chain
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -199,6 +205,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_balance_conditioned_republish
   Scenario: Balance-aware republish policy drops unaffordable zone updates
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -234,6 +241,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_concurrent_identical_payloads
   Scenario: Concurrent identical payloads converge to one inscription per publish
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -258,6 +266,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_subscribe_to_finalized_deposit
   Scenario: Finalized deposits are returned by the zone indexer
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -276,6 +285,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_atomic_deposit_inscription
   Scenario: Atomic deposit and inscription are finalized together
     Given I have a zone cluster
     And the following zone sequencers exist:
@@ -298,6 +308,7 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  # [tests/src/tests/zone_sdk/e2e.rs] test_subscribe_to_finalized_withdraw
   Scenario: Finalized withdraws are returned by the zone indexer
     Given I have a zone cluster
     And the following zone sequencers exist:
