@@ -1,30 +1,13 @@
 use std::collections::HashSet;
 
 use lb_core::{
-    mantle::{Note, Utxo, Value as NoteValue, ops::sdp::SDPDeclareOp},
-    sdp::{Locators, ServiceType},
+    mantle::{Note, Utxo, ops::sdp::SDPDeclareOp},
+    sdp::ServiceType,
 };
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
-use serde::Deserialize;
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use thiserror::Error;
 
-/// `StakeHolderInfo` is used to distribute Notes of `NoteValue`.
-#[derive(Clone, Deserialize)]
-pub struct StakeHolderInfo {
-    pub zk_id: ZkPublicKey,
-    pub stake: NoteValue,
-}
-
-/// `ProviderInfo` is used to register a service provider.
-/// A note matching the stake holder info by the `zk_pk` will be locked for this
-/// service.
-#[derive(Clone, Debug, Deserialize)]
-pub struct ProviderInfo {
-    pub provider_id: Ed25519PublicKey,
-    pub zk_id: ZkPublicKey,
-    pub locators: Locators,
-    pub service_type: ServiceType,
-}
+pub use lb_core::sdp::genesis::{ProviderInfo, StakeHolderInfo};
 
 #[derive(Error, Debug)]
 pub enum DistributionError {
@@ -92,6 +75,7 @@ where
 #[cfg(test)]
 mod tests {
     use lb_core::sdp::Locator;
+    use lb_key_management_system_keys::keys::Ed25519PublicKey;
     use num_bigint::BigUint;
 
     use super::*;

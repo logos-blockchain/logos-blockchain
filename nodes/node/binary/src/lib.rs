@@ -3,8 +3,10 @@ pub mod config;
 pub mod generic_services;
 pub mod panic;
 
-#[cfg(feature = "config-gen")]
 pub mod init;
+
+pub mod get_peer_id;
+pub mod participate;
 
 pub mod global_allocators;
 

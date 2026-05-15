@@ -16,7 +16,7 @@ use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
     logging::local::{AppenderType, CompressionType, RetentionType, RollingConfig, RotationType},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tracing::serde::filter::{EnvConfig, Layer};
 
 use crate::config::tracing::serde::logger::{FileConfig, GelfConfig};
@@ -115,13 +115,39 @@ pub struct CliArgs {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Initialize a new user config with generated keys
-    #[cfg(feature = "config-gen")]
     Init(InitArgs),
     /// Publish text inscriptions as zone blocks
     Inscribe(lb_tui_zone::InscribeArgs),
+    /// Generate stakeholder.yaml and provider.yaml from a user config
+    Participate(ParticipateArgs),
+    /// Print the libp2p PeerId derived from the node key in a user config
+    GetPeerId(GetPeerIdArgs),
 }
 
-#[cfg(feature = "config-gen")]
+#[derive(Parser, Debug)]
+pub struct ParticipateArgs {
+    /// Path to the user config YAML file
+    #[arg(long, default_value = "user_config.yaml")]
+    pub config: PathBuf,
+    /// Stake amount in base units
+    #[arg(long)]
+    pub stake: u64,
+    /// Output directory for stakeholder.yaml and provider.yaml
+    #[arg(long, default_value = ".")]
+    pub output: PathBuf,
+    /// Node's public IPv4 address, required when the blend listening address
+    /// is 0.0.0.0
+    #[arg(long)]
+    pub external_address: Option<std::net::Ipv4Addr>,
+}
+
+#[derive(Parser, Debug)]
+pub struct GetPeerIdArgs {
+    /// Path to the user config YAML file
+    #[arg(long, default_value = "user_config.yaml")]
+    pub config: PathBuf,
+}
+
 #[derive(Parser, Debug)]
 pub struct InitArgs {
     /// Trusted peers to bootstrap from (multiaddr format).
@@ -170,7 +196,6 @@ pub struct InitArgs {
     pub kms_file: Option<PathBuf>,
 }
 
-#[cfg(feature = "config-gen")]
 impl Default for InitArgs {
     fn default() -> Self {
         Self::parse_from::<Vec<String>, String>(vec![])
@@ -381,11 +406,7 @@ impl FromStr for DeploymentType {
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
-#[cfg_attr(
-    any(feature = "testing", feature = "config-gen"),
-    derive(serde::Serialize)
-)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct UserConfig {
     #[serde(default)]
     pub network: NetworkConfig,

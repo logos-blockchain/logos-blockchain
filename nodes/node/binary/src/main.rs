@@ -18,13 +18,18 @@ async fn main() -> Result<()> {
 
     if let Some(command) = cli_args.command {
         match command {
-            #[cfg(feature = "config-gen")]
             logos_blockchain_node::config::Command::Init(init_args) => {
                 return logos_blockchain_node::init::run(&init_args);
             }
             logos_blockchain_node::config::Command::Inscribe(inscribe_args) => {
                 lb_tui_zone::run(inscribe_args).await;
                 return Ok(());
+            }
+            logos_blockchain_node::config::Command::Participate(participate_args) => {
+                return logos_blockchain_node::participate::run(&participate_args);
+            }
+            logos_blockchain_node::config::Command::GetPeerId(get_peer_id_args) => {
+                return logos_blockchain_node::get_peer_id::run(&get_peer_id_args);
             }
         }
     }
