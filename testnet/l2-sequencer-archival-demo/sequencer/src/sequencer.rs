@@ -205,7 +205,7 @@ impl Sequencer {
         block_id: HeaderId,
     ) -> bool {
         for tx in &block.transactions {
-            for op in tx.mantle_tx.ops().iter() {
+            for op in tx.mantle_tx.ops() {
                 if let Op::ChannelInscribe(inscribe) = op {
                     tracing::debug!(
                         "Found inscription: channel={}, parent={}",

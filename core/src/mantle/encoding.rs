@@ -1,5 +1,6 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use lb_utils::bounded_vec::BoundedVec;
 use multiaddr::Multiaddr;
 use nom::{
     IResult, Parser as _,
@@ -15,7 +16,7 @@ use time::OffsetDateTime;
 use crate::{
     mantle::{
         MantleTx, Note, NoteId, SignedMantleTx,
-        nom::{NomBoundedVec, NomEncode as _},
+        nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
             channel::{ChannelId, Ed25519PublicKey, config::ChannelConfigOp, deposit::DepositOp},
@@ -46,7 +47,8 @@ const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed
 // Maximum byte size allowed for a locator in SDPDeclare operations.
 const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 
-pub type Ops = NomBoundedVec<Op, { u8::MAX as usize }, 1>;
+pub type Ops = BoundedVec<Op, { u8::MAX as usize }>;
+type NomOps<'a> = NomBoundedVec<'a, Op, { u8::MAX as usize }, 1>;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -65,7 +67,7 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
 
 pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     // MantleTx = Ops ExecutionGasPrice StorageGasPrice
-    let (input, ops) = Ops::decode(input)?;
+    let (input, ops) = NomOps::decode(input)?;
 
     Ok((input, MantleTx(ops)))
 }
@@ -1774,7 +1776,7 @@ mod tests {
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
-        let result = Ops::decode(&valid_input);
+        let result = NomOps::decode(&valid_input);
         if let Err(nom::Err::Error(e)) = result {
             assert_ne!(e.code, ErrorKind::TooLarge, "Should not reject at u8::MAX]");
         }

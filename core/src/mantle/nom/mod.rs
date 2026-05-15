@@ -1,5 +1,3 @@
-use core::ops::{Deref, DerefMut};
-
 use lb_utils::bounded_vec::BoundedVec;
 use nom::{
     IResult, Parser as _,
@@ -9,7 +7,6 @@ use nom::{
     multi::count,
     number::complete::u8,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::mantle::{
     encoding::{decode_uint32, encode_uint32},
@@ -22,17 +19,24 @@ pub trait NomEncode {
     // decoding. That would allow us to set an upper bound on ANY nom-encoded
     // struct, including a mantle tx itself.
     fn encode(&self) -> Vec<u8>;
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self>
-    where
-        Self: Sized;
+}
+
+pub trait NomDecode {
+    type Output;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output>;
 }
 
 impl NomEncode for u8 {
     fn encode(&self) -> Vec<u8> {
         vec![*self]
     }
+}
 
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+impl NomDecode for u8 {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         u8(bytes)
     }
 }
@@ -41,8 +45,12 @@ impl NomEncode for u32 {
     fn encode(&self) -> Vec<u8> {
         encode_uint32(*self)
     }
+}
 
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+impl NomDecode for u32 {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         decode_uint32(bytes)
     }
 }
@@ -58,17 +66,35 @@ where
     }
 }
 
-// Fixed-length slices are encoded without a length prefix, since the length is
-// implied by the type.
-impl<T, const N: usize> NomEncode for [T; N]
+pub struct NomArray<'a, T, const N: usize>(&'a [T::Output; N])
 where
-    T: NomEncode,
+    T: NomDecode;
+
+impl<'a, T, const N: usize> From<&'a [T::Output; N]> for NomArray<'a, T, N>
+where
+    T: NomDecode,
+{
+    fn from(array: &'a [T::Output; N]) -> Self {
+        Self(array)
+    }
+}
+
+impl<T, const N: usize> NomEncode for NomArray<'_, T, N>
+where
+    T: NomDecode<Output: NomEncode>,
 {
     fn encode(&self) -> Vec<u8> {
-        self.as_slice().encode()
+        self.0.as_slice().encode()
     }
+}
 
-    fn decode(input: &[u8]) -> IResult<&[u8], Self> {
+impl<T, const N: usize> NomDecode for NomArray<'_, T, N>
+where
+    T: NomDecode,
+{
+    type Output = [T::Output; N];
+
+    fn decode(input: &[u8]) -> IResult<&[u8], Self::Output> {
         let (input, items) = count(T::decode, N).parse(input)?;
 
         let Ok(items) = items.try_into() else {
@@ -78,11 +104,14 @@ where
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
-#[serde(bound(serialize = "T: Clone + Serialize"))]
-pub struct NomBoundedVec<T, const N: usize, const N_BYTES: usize>(BoundedVec<T, N>);
+pub struct NomBoundedVec<'a, T, const N: usize, const N_BYTES: usize>(&'a BoundedVec<T::Output, N>)
+where
+    T: NomDecode;
 
-impl<T, const N: usize, const N_BYTES: usize> NomBoundedVec<T, N, N_BYTES> {
+impl<T, const N: usize, const N_BYTES: usize> NomBoundedVec<'_, T, N, N_BYTES>
+where
+    T: NomDecode,
+{
     const _N_BYTES_VALUE_CHECK: () = {
         assert!(
             matches!(N_BYTES, 1 | 2 | 4 | 8),
@@ -95,93 +124,42 @@ impl<T, const N: usize, const N_BYTES: usize> NomBoundedVec<T, N, N_BYTES> {
         };
         assert!(N as u64 <= max_repr, "N exceeds what N_BYTES can encode");
     };
-
-    #[must_use]
-    pub const fn new() -> Self {
-        Self(BoundedVec::new())
-    }
-
-    #[must_use]
-    pub const fn new_unchecked(items: Vec<T>) -> Self {
-        Self(BoundedVec::new_unchecked(items))
-    }
 }
 
-impl<T, const N: usize, const N_BYTES: usize> From<NomBoundedVec<T, N, N_BYTES>> for Vec<T> {
-    fn from(value: NomBoundedVec<T, N, N_BYTES>) -> Self {
-        value.0.into()
-    }
-}
-
-impl<T, const N: usize, const N_BYTES: usize> From<BoundedVec<T, N>>
-    for NomBoundedVec<T, N, N_BYTES>
-{
-    fn from(value: BoundedVec<T, N>) -> Self {
-        Self(value)
-    }
-}
-
-impl<T, const N: usize, const N_BYTES: usize> TryFrom<Vec<T>> for NomBoundedVec<T, N, N_BYTES> {
-    type Error = <BoundedVec<T, N> as TryFrom<Vec<T>>>::Error;
-
-    fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
-        Ok(Self(BoundedVec::try_from(value)?))
-    }
-}
-
-impl<T, const INPUT_SIZE: usize, const MAX: usize, const N_BYTES: usize> From<[T; INPUT_SIZE]>
-    for NomBoundedVec<T, MAX, N_BYTES>
-{
-    fn from(value: [T; INPUT_SIZE]) -> Self {
-        Self(value.into())
-    }
-}
-
-impl<T, const INPUT_SIZE: usize, const MAX: usize, const N_BYTES: usize> From<&[T; INPUT_SIZE]>
-    for NomBoundedVec<T, MAX, N_BYTES>
+impl<'a, T, const N: usize, const N_BYTES: usize> From<&'a BoundedVec<T::Output, N>>
+    for NomBoundedVec<'a, T, N, N_BYTES>
 where
-    T: Clone,
+    T: NomDecode,
 {
-    fn from(value: &[T; INPUT_SIZE]) -> Self {
-        Self(value.clone().into())
+    fn from(vec: &'a BoundedVec<T::Output, N>) -> Self {
+        let () = Self::_N_BYTES_VALUE_CHECK;
+
+        Self(vec)
     }
 }
 
-impl<T, const N: usize, const N_BYTES: usize> Deref for NomBoundedVec<T, N, N_BYTES> {
-    type Target = BoundedVec<T, N>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T, const N: usize, const N_BYTES: usize> DerefMut for NomBoundedVec<T, N, N_BYTES> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<T, const N: usize, const N_BYTES: usize> AsRef<[T]> for NomBoundedVec<T, N, N_BYTES> {
-    fn as_ref(&self) -> &[T] {
-        self.0.as_ref()
-    }
-}
-
-impl<T, const N: usize, const N_BYTES: usize> NomEncode for NomBoundedVec<T, N, N_BYTES>
+impl<T, const N: usize, const N_BYTES: usize> NomEncode for NomBoundedVec<'_, T, N, N_BYTES>
 where
-    T: NomEncode,
+    T: NomDecode<Output: NomEncode>,
 {
     fn encode(&self) -> Vec<u8> {
         let () = Self::_N_BYTES_VALUE_CHECK;
 
         // Initialize `bytes` with the encoded length prefix.
-        let mut bytes = (self.len() as u64).to_le_bytes()[..N_BYTES].to_vec();
-        bytes.extend(self.as_slice().encode());
+        let mut bytes = (self.0.len() as u64).to_le_bytes()[..N_BYTES].to_vec();
+        bytes.extend(self.0.as_slice().encode());
 
         bytes
     }
+}
 
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+impl<T, const N: usize, const N_BYTES: usize> NomDecode for NomBoundedVec<'_, T, N, N_BYTES>
+where
+    T: NomDecode,
+{
+    type Output = BoundedVec<T::Output, N>;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let () = Self::_N_BYTES_VALUE_CHECK;
 
         let (bytes, len_bytes): (&[u8], &[u8]) = take(N_BYTES).parse(bytes)?;
@@ -194,7 +172,7 @@ where
         }
 
         let (bytes, items) = count(T::decode, len).parse(bytes)?;
-        Ok((bytes, Self(BoundedVec::new_unchecked(items))))
+        Ok((bytes, BoundedVec::new_unchecked(items)))
     }
 }
 
@@ -202,9 +180,13 @@ impl NomEncode for ChannelId {
     fn encode(&self) -> Vec<u8> {
         self.as_ref().encode()
     }
+}
+
+impl NomDecode for ChannelId {
+    type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map(<[u8; 32]>::decode, Self::from).parse(bytes)
+        map(NomArray::<u8, 32>::decode, Self::from).parse(bytes)
     }
 }
 
@@ -212,9 +194,13 @@ impl NomEncode for MsgId {
     fn encode(&self) -> Vec<u8> {
         self.as_ref().encode()
     }
+}
+
+impl NomDecode for MsgId {
+    type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map(<[u8; 32]>::decode, Self::from).parse(bytes)
+        map(NomArray::<u8, 32>::decode, Self::from).parse(bytes)
     }
 }
 
@@ -223,9 +209,13 @@ impl NomEncode for Ed25519PublicKey {
     fn encode(&self) -> Vec<u8> {
         self.to_bytes().encode()
     }
+}
+
+impl NomDecode for Ed25519PublicKey {
+    type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map_res(<[u8; 32]>::decode, |key_bytes: [u8; 32]| {
+        map_res(NomArray::<u8, 32>::decode, |key_bytes: [u8; 32]| {
             Self::from_bytes(&key_bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
         })
         .parse(bytes)

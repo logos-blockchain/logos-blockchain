@@ -38,7 +38,7 @@ use crate::{
             encode_channel_withdraw, encode_leader_claim, encode_sdp_active, encode_sdp_declare,
             encode_sdp_withdraw, encode_transfer_op,
         },
-        nom::NomEncode,
+        nom::{NomDecode, NomEncode},
         ops::{
             internal::{OpDe, OpSer},
             transfer::TransferOp,
@@ -167,8 +167,12 @@ impl NomEncode for Op {
         }
         bytes
     }
+}
 
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+impl NomDecode for Op {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let (input, opcode) = u8::decode(bytes)?;
 
         match opcode {

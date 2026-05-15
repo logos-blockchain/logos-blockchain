@@ -501,7 +501,7 @@ where
                 // Filter by `channel_id` — a checkpoint can in principle carry
                 // txs for other channels if the caller reused it.
                 let mut is_inscription = false;
-                for op in tx.mantle_tx.ops().iter() {
+                for op in tx.mantle_tx.ops() {
                     if let Op::ChannelInscribe(inscribe) = op
                         && inscribe.channel_id == channel_id
                     {
