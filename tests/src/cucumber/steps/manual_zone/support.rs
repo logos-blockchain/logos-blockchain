@@ -15,6 +15,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_common_http_client::{CommonHttpClient, Slot};
+use lb_config::consensus::{ProviderInfo, create_genesis_block_with_declarations};
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, Note, NoteId, Op, OpProof, Transaction as _, Value,
@@ -64,11 +65,8 @@ use tokio::{
 use tracing::warn;
 
 use crate::{
-    common::{
-        chain::wait_for_transactions_inclusion, manual_cluster::ensure_local_node_binary_env,
-    },
+    common::chain::wait_for_transactions_inclusion,
     cucumber::utils::{extract_child_dir_name, matching_child_dirs},
-    topology::configs::consensus::{ProviderInfo, create_genesis_block_with_declarations},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -195,8 +193,6 @@ impl PublishDeadline {
 pub fn prepare_zone_cluster(
     scenario_base_dir: PathBuf,
 ) -> Result<ZoneClusterTemplate, ZoneTestError> {
-    ensure_local_node_binary_env();
-
     let deployment = build_zone_deployment(scenario_base_dir)?;
     let funding_public_key = deployment.nodes()[0]
         .general

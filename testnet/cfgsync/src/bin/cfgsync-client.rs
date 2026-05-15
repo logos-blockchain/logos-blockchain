@@ -1,6 +1,6 @@
 use std::{env, fs, net::Ipv4Addr, process};
 
-use lb_node::UserConfig as ValidatorConfig;
+use lb_node::UserConfig as NodeConfig;
 use logos_blockchain_cfgsync::{RegistrationInfo, client::get_config};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -56,9 +56,7 @@ async fn main() {
         payload.identifier, payload.ip
     );
 
-    if let Err(err) =
-        pull_to_file::<ValidatorConfig, _>(&payload, &endpoint, &config_file_path).await
-    {
+    if let Err(err) = pull_to_file::<NodeConfig, _>(&payload, &endpoint, &config_file_path).await {
         eprintln!("Error: {err}");
         process::exit(1);
     }

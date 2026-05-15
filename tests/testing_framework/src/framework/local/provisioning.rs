@@ -287,7 +287,10 @@ const fn node_binary_config() -> BinaryConfig {
     BinaryConfig {
         env_var: "LOGOS_BLOCKCHAIN_NODE_BIN",
         binary_name: "logos-blockchain-node",
-        fallback_path: "target/debug/logos-blockchain-node",
+        fallback_path: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/release/logos-blockchain-node"
+        ),
     }
 }
 
