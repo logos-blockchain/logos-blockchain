@@ -1,12 +1,8 @@
 pub mod api;
+pub mod cli;
 pub mod config;
 pub mod generic_services;
 pub mod panic;
-
-pub mod init;
-
-pub mod get_peer_id;
-pub mod participate;
 
 pub mod global_allocators;
 
@@ -49,7 +45,8 @@ use overwatch::{
 };
 use tokio::runtime;
 
-pub use crate::config::{ApiArgs, Command, LogArgs, NetworkArgs, UserConfig};
+pub use crate::cli::Command;
+pub use crate::config::{ApiArgs, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{

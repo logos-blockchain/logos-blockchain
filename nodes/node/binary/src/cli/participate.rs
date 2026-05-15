@@ -9,8 +9,10 @@ use lb_libp2p::{Multiaddr, Protocol};
 
 use crate::{
     UserConfig,
-    config::{OnUnknownKeys, ParticipateArgs, deserialize_config_at_path, network::serde::nat},
+    config::{OnUnknownKeys, deserialize_config_at_path, network::serde::nat},
 };
+
+use super::ParticipateArgs;
 
 pub fn run(args: &ParticipateArgs) -> Result<()> {
     let user_config =

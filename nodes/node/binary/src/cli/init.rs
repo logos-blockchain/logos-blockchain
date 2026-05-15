@@ -17,8 +17,7 @@ use rand::rngs::OsRng;
 use crate::{
     UserConfig,
     config::{
-        ApiConfig, InitArgs, KmsConfig, SdpConfig, StateConfig, StorageConfig, TracingConfig,
-        WalletConfig,
+        ApiConfig, KmsConfig, SdpConfig, StateConfig, StorageConfig, TracingConfig, WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
@@ -26,10 +25,13 @@ use crate::{
         network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
-        update_tracing_filter_and_derive_level,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
+
+use crate::config::update_tracing_filter_and_derive_level;
+
+use super::InitArgs;
 
 fn key_id(key: &Key) -> KeyId {
     let key_id_bytes = match key {

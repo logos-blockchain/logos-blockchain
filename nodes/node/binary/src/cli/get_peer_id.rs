@@ -4,8 +4,10 @@ use libp2p::PeerId;
 
 use crate::{
     UserConfig,
-    config::{GetPeerIdArgs, OnUnknownKeys, deserialize_config_at_path},
+    config::{OnUnknownKeys, deserialize_config_at_path},
 };
+
+use super::GetPeerIdArgs;
 
 pub fn run(args: &GetPeerIdArgs) -> Result<()> {
     let user_config =
