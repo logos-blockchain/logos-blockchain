@@ -84,9 +84,9 @@ tikv-jemallocator = { optional = true, workspace = true }
 rand = { workspace = true }
 
 [features]
-default  = ["tracing"]
-dhat-heap  = ["dep:dhat"]
-jemalloc   = ["dep:tikv-jemallocator"]
-profiling  = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
-testing    = ["lb-key-management-system-service/unsafe"]
-tracing    = []
+default   = ["tracing"]
+dhat-heap = ["dep:dhat"]
+jemalloc  = ["dep:tikv-jemallocator"]
+profiling = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
+testing   = ["lb-key-management-system-service/unsafe"]
+tracing   = []
