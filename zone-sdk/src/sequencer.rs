@@ -1064,15 +1064,16 @@ where
             ActorRequest::PublishAtomicWithdraw {
                 inscribe,
                 withdraws,
-            } => {
-                if let Err(e) = self
-                    .handle_publish_atomic_withdraw(inscribe, withdraws)
-                    .await
-                {
+            } => match self
+                .handle_publish_atomic_withdraw(inscribe, withdraws)
+                .await
+            {
+                Ok(event) => Some(event),
+                Err(e) => {
                     warn!("publish_atomic_withdraw failed: {e}");
+                    None
                 }
-                None
-            }
+            },
         }
     }
 
@@ -1131,7 +1132,7 @@ where
         &mut self,
         inscribe: Vec<u8>,
         withdraws: Vec<WithdrawArg>,
-    ) -> Result<(), Error> {
+    ) -> Result<Event, Error> {
         if withdraws.is_empty() {
             return Err(Error::Network(
                 "publish_atomic_withdraw requires at least one withdraw".into(),
@@ -1247,9 +1248,9 @@ where
             })),
             checkpoint,
         };
-        drop(self.event_tx.send(event));
+        drop(self.event_tx.send(event.clone()));
 
-        Ok(())
+        Ok(event)
     }
 }
 

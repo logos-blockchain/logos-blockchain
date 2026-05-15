@@ -340,8 +340,7 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
     let inscription_data = format!("Burn {amount}").into_bytes();
 
     let submission = {
-        let sequencer =
-            log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
+        let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
         let sequencer_events =
             log_step_error(step, world.zone.sequencer_events_mut(sequencer_alias))?;
 
