@@ -38,6 +38,7 @@ jobs:
             --inscription-params testnet/ceremony/genesis/$LB_TARGET_ENV/inscribe.yaml \
             --stake-holders testnet/ceremony/genesis/$LB_TARGET_ENV/stakeholders.yaml \
             --providers testnet/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
+            --faucet testnet/ceremony/genesis/$LB_TARGET_ENV/faucet.yaml \
             --deployment testnet/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
             --output nodes/node/binary/src/config/deployment/devnet/deployment.yaml
 

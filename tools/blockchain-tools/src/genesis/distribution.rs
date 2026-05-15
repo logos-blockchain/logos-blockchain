@@ -43,7 +43,7 @@ pub struct GenesisTransferOp {
 }
 
 impl GenesisTransferOp {
-    pub fn new(stake_holders: impl Iterator<Item = StakeHolderInfo>, faucet: Faucet) -> Self {
+    pub fn new(stake_holders: impl Iterator<Item = StakeHolderInfo>, faucet: &Faucet) -> Self {
         let mut notes: Vec<Note> = stake_holders
             .map(|stake_holder| Note::new(stake_holder.stake, stake_holder.zk_id))
             .collect();
@@ -88,7 +88,7 @@ pub enum DistributionError {
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
-    faucet: Faucet,
+    faucet: &Faucet,
 ) -> Result<(GenesisTransferOp, Vec<SDPDeclareOp>), DistributionError>
 where
     S: IntoIterator<Item = StakeHolderInfo> + Clone,
@@ -171,7 +171,7 @@ mod tests {
             funds: 100_000,
         };
 
-        let result = distribute(stake_holders, providers, faucet);
+        let result = distribute(stake_holders, providers, &faucet);
 
         assert!(result.is_ok());
         let (transfer_op, declarations) = result.unwrap();
@@ -208,7 +208,7 @@ mod tests {
             funds: 100_000,
         };
 
-        let result = distribute(stake_holders, providers, faucet);
+        let result = distribute(stake_holders, providers, &faucet);
 
         assert!(matches!(
             result,
@@ -246,7 +246,7 @@ mod tests {
             funds: 100_000,
         };
 
-        let result = distribute(stake_holders, providers, faucet);
+        let result = distribute(stake_holders, providers, &faucet);
 
         assert!(matches!(
             result,

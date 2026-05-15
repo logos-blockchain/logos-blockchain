@@ -77,7 +77,7 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub providers: PathBuf,
 
-    /// Provider definitions for Faucet keys.
+    /// Faucet definition for stake distribution.
     #[arg(long, value_name = "FILE")]
     pub faucet: PathBuf,
 
@@ -233,7 +233,7 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
     let faucet: Faucet = load_yaml_file(&args.faucet)?;
-    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, faucet)
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution during ceremony")?;
     let notes: Vec<Note> = transfer_op.notes().collect();
@@ -390,7 +390,7 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
     let faucet: Faucet = load_yaml_file(&args.faucet)?;
 
-    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, faucet)
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution")?;
     let notes: Vec<Note> = transfer_op.notes().collect();
