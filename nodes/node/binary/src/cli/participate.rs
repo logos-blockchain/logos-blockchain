@@ -7,16 +7,14 @@ use lb_core::sdp::{
 };
 use lb_libp2p::{Multiaddr, Protocol};
 
+use super::ParticipateArgs;
 use crate::{
     UserConfig,
     config::{OnUnknownKeys, deserialize_config_at_path, network::serde::nat},
 };
 
-use super::ParticipateArgs;
-
 pub fn run(args: &ParticipateArgs) -> Result<()> {
-    let user_config =
-        deserialize_config_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
+    let user_config = deserialize_config_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
 
     let (_, zk_id) = user_config.blend_zk_key().map_err(|e| eyre!("{e}"))?;
     let provider_id = user_config

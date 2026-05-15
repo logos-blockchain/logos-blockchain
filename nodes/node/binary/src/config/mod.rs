@@ -18,9 +18,10 @@ use lb_tracing::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::tracing::serde::filter::{EnvConfig, Layer};
-use crate::config::tracing::serde::logger::{FileConfig, GelfConfig};
-
+use crate::config::tracing::serde::{
+    filter::{EnvConfig, Layer},
+    logger::{FileConfig, GelfConfig},
+};
 pub use crate::config::{
     api::serde::Config as ApiConfig,
     blend::serde::Config as BlendConfig,

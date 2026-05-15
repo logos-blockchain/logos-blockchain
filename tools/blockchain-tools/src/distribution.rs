@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
+pub use lb_core::sdp::genesis::{ProviderInfo, StakeHolderInfo};
 use lb_core::{
     mantle::{Note, Utxo, ops::sdp::SDPDeclareOp},
     sdp::ServiceType,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use thiserror::Error;
-
-pub use lb_core::sdp::genesis::{ProviderInfo, StakeHolderInfo};
 
 #[derive(Error, Debug)]
 pub enum DistributionError {

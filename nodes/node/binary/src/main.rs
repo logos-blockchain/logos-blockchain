@@ -3,7 +3,9 @@ use color_eyre::eyre::{Result, eyre};
 use logos_blockchain_node::{
     UserConfig,
     cli::{CliArgs, Command, build_run_config},
-    config::{DeploymentType, OnUnknownKeys, deployment::DeploymentSettings, deserialize_config_at_path},
+    config::{
+        DeploymentType, OnUnknownKeys, deployment::DeploymentSettings, deserialize_config_at_path,
+    },
     get_services_to_start, run_node_from_config,
 };
 

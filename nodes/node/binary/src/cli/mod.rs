@@ -13,9 +13,8 @@ use lb_libp2p::Multiaddr;
 
 use crate::config::{
     ApiArgs, BlendArgs, DeploymentArgs, DeploymentSettings, DeploymentType, LogArgs, NetworkArgs,
-    OnUnknownKeys, RunConfig, StateArgs, UserConfig,
-    deserialize_config_at_path, update_api, update_blend, update_network, update_state,
-    update_tracing,
+    OnUnknownKeys, RunConfig, StateArgs, UserConfig, deserialize_config_at_path, update_api,
+    update_blend, update_network, update_state, update_tracing,
 };
 
 fn long_version() -> String {
@@ -105,7 +104,7 @@ pub enum Command {
     Inscribe(lb_tui_zone::InscribeArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
     Participate(ParticipateArgs),
-    /// Print the libp2p PeerId derived from the node key in a user config
+    /// Print the libp2p `PeerId` derived from the node key in a user config
     GetPeerId(GetPeerIdArgs),
 }
 

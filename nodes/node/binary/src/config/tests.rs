@@ -1,13 +1,12 @@
 use std::path::Path;
 
-use clap::Parser as _;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use tracing::Level;
 
 use crate::{
     UserConfig,
     config::{
-        CliArgs, DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
+        ApiArgs, DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
         blend::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},

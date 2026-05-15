@@ -14,6 +14,7 @@ use libp2p::{Multiaddr, PeerId};
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 
+use super::InitArgs;
 use crate::{
     UserConfig,
     config::{
@@ -25,13 +26,10 @@ use crate::{
         network::serde::{Config as NetworkConfig, nat},
         sdp::serde::RequiredValues as SdpRequiredValues,
         time::serde::Config as TimeConfig,
+        update_tracing_filter_and_derive_level,
         wallet::serde::RequiredValues as WalletConfigRequiredValues,
     },
 };
-
-use crate::config::update_tracing_filter_and_derive_level;
-
-use super::InitArgs;
 
 fn key_id(key: &Key) -> KeyId {
     let key_id_bytes = match key {
