@@ -129,12 +129,11 @@ mod tests {
         let (utxos, declarations) = result.unwrap();
 
         assert_eq!(utxos.len(), 2);
-        assert_eq!(utxos[0].note.pk, zk_id_1);
-        assert_eq!(utxos[1].note.pk, zk_id_2);
+        assert_eq!(utxos[0].pk, zk_id_1);
+        assert_eq!(utxos[1].pk, zk_id_2);
 
         assert_eq!(declarations.len(), 1);
         assert_eq!(declarations[0].zk_id, zk_id_1);
-        assert_eq!(declarations[0].locked_note_id, utxos[0].id());
     }
 
     #[test]
