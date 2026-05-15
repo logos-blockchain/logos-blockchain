@@ -3,6 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use cucumber::gherkin::Step;
 use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
+use lb_core::mantle::ops::channel::inscribe::Inscription;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::LbcManualCluster;
 use lb_zone_sdk::{
@@ -417,7 +418,7 @@ pub(super) async fn publish_zone_messages_concurrently(
 
         async move {
             for payload in payloads {
-                handle.publish_message(payload).await.map_err(|error| {
+                handle.publish_message(Inscription::new_unchecked(payload)).await.map_err(|error| {
                     StepError::LogicalError {
                         message: format!(
                             "Zone concurrent publish failed for sequencer '{sequencer_alias}': {error}"
