@@ -15,9 +15,12 @@ pub const SDP_POST_WITHDRAWAL: &str = "/sdp/withdrawal";
 pub const SDP_POST_SET_DECLARATION_ID: &str = "/sdp/set-declaration-id";
 pub const LEADER_CLAIM: &str = "/leader/claim";
 
+// TODO: change prefix to `/chain` since `Block` is defined outside of
+// Cryptarchia
 pub const BLOCKS: &str = "/cryptarchia/blocks";
 pub const BLOCKS_RANGE_STREAM: &str = "/cryptarchia/blocks_range";
 pub const BLOCKS_DETAIL: &str = "/cryptarchia/blocks/:id";
+pub const BLOCK_EVENTS: &str = "/cryptarchia/blocks/:id/events";
 pub const BLOCKS_STREAM: &str = "/cryptarchia/events/blocks/stream";
 
 pub const TRANSACTION: &str = "/cryptarchia/transaction/:id";

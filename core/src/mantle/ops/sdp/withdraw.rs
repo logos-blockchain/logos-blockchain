@@ -4,6 +4,7 @@ use tracing::info;
 use super::{SDPWithdrawOp, SdpError};
 use crate::{
     block::BlockNumber,
+    events::Events,
     mantle::{
         TxHash,
         ledger::{Declarations, Operation},
@@ -92,7 +93,7 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         let declaration = ctx
             .declarations
             .get(&self.declaration_id)
@@ -111,6 +112,6 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
 
         ctx.declarations = ctx.declarations.remove(&self.declaration_id);
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }

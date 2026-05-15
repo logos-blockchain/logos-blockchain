@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    events::Events,
     mantle::{
         TxHash,
         channel::{Channels, Error},
@@ -99,7 +100,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // Get the amount withdraw
         let amount_withdraw = self.outputs.amount()?;
 
@@ -123,6 +124,6 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         // Add the ouputs to the ledger
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }

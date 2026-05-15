@@ -187,6 +187,16 @@ jobs:
           artifact_subdir: Transactions
           verbose_console: "true"
 
+      # Feature: Zone SDK (@zone_ci)
+      - name: Run cucumber suite - zone
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@zone_ci"
+          suite_name: zone
+          artifact_subdir: Zone
+
       # Feature: CLI utility binary (@cli_ci)
       - name: Run cucumber suite - CLI utilities
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}

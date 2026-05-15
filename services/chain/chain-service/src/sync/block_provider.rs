@@ -586,6 +586,7 @@ mod tests {
     use lb_core::{
         codec::DeserializeOp as _,
         crypto::ZkHasher,
+        events::Events,
         mantle::{Note, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm},
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
@@ -919,6 +920,7 @@ mod tests {
                     header_id,
                     parent_id,
                     store_result.unwrap(),
+                    Events::new().try_into().unwrap(),
                 ))
                 .await
                 .expect("Failed to store block");

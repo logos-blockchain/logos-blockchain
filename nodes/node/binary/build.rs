@@ -1,4 +1,10 @@
-use std::{env, ffi::OsStr, process::Command};
+use std::{
+    env,
+    ffi::OsStr,
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 fn run_command<Cmd, ArgIter, Arg>(command: Cmd, args: ArgIter) -> Option<String>
 where
@@ -28,9 +34,61 @@ fn get_rustc_version() -> String {
         .expect("Rustc binary should always be available when compiling a Rust project.")
 }
 
+fn find_repo_git_dir() -> Option<PathBuf> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").ok()?);
+
+    for dir in manifest_dir.ancestors() {
+        let dot_git = dir.join(".git");
+
+        if dot_git.is_dir() {
+            return Some(dot_git);
+        }
+
+        if dot_git.is_file() {
+            let contents = fs::read_to_string(&dot_git).ok()?;
+            let gitdir = contents.strip_prefix("gitdir:")?.trim();
+            let gitdir = PathBuf::from(gitdir);
+
+            return Some(if gitdir.is_absolute() {
+                gitdir
+            } else {
+                dir.join(gitdir)
+            });
+        }
+    }
+
+    None
+}
+
+fn emit_rerun_if_changed(path: &Path) {
+    println!("cargo:rerun-if-changed={}", path.to_string_lossy());
+}
+
+fn emit_git_watchers(git_dir: &Path) {
+    // Watch the HEAD file, this changes when the current branch changes or when a
+    // new commit is made on a detached HEAD.
+    let head_path = git_dir.join("HEAD");
+    emit_rerun_if_changed(&head_path);
+
+    // Covers packed branch refs and packed tags.
+    emit_rerun_if_changed(&git_dir.join("packed-refs"));
+
+    // If HEAD points to a branch ref (e.g. refs/heads/master), watch only that
+    // ref., this changes when the branch advances.
+    if let Ok(head_contents) = fs::read_to_string(&head_path)
+        && let Some(reference) = head_contents.strip_prefix("ref: ")
+    {
+        emit_rerun_if_changed(&git_dir.join(reference.trim()));
+    }
+
+    // Watch loose tags because HEAD_TAG_NAME depends on exact tags at HEAD.
+    // This is broader than watching only current tags, but tag changes are rare
+    // and it preserves correctness if a tag is created after a previous build.
+    emit_rerun_if_changed(&git_dir.join("refs").join("tags"));
+}
+
 fn main() {
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    println!("cargo:rerun-if-changed=.git/refs");
+    emit_git_watchers(&find_repo_git_dir().expect("No git dir"));
 
     let head_commit_hash = get_head_commit_hash().unwrap_or_default();
     println!("cargo:rustc-env=HEAD_COMMIT_HASH={head_commit_hash}");

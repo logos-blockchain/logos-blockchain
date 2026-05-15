@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
     crypto::{Digest as _, Hasher},
+    events::Events,
     mantle::{
         TxHash,
         channel::{ChannelState, Channels, Error},
@@ -107,7 +108,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels
@@ -142,7 +143,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 ..channel
             },
         );
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }
 

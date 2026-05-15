@@ -2,6 +2,7 @@ use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSigna
 
 use super::{MAX_DECLARATION_LOCATOR, SDPDeclareOp, SdpError};
 use crate::{
+    events::Events,
     mantle::{
         Note, TxHash,
         ledger::{Declarations, Operation, Utxos},
@@ -21,7 +22,7 @@ trait SDPDeclareValidationExt {
     fn execute(
         &self,
         ctx: SDPDeclareExecutionContext,
-    ) -> Result<SDPDeclareExecutionContext, SdpError>;
+    ) -> Result<(SDPDeclareExecutionContext, Events), SdpError>;
 }
 
 impl SDPDeclareValidationExt for SDPDeclareOp {
@@ -64,7 +65,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     fn execute(
         &self,
         mut ctx: SDPDeclareExecutionContext,
-    ) -> Result<SDPDeclareExecutionContext, SdpError> {
+    ) -> Result<(SDPDeclareExecutionContext, Events), SdpError> {
         let declaration_id = self.id();
         let declaration = Declaration::new(ctx.block_number, self);
         ctx.declarations = ctx.declarations.insert(declaration_id, declaration);
@@ -85,7 +86,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             )
             .map_err(|_| SdpError::UnexpectedError)?;
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }
 
@@ -158,7 +159,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }
@@ -189,7 +190,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }

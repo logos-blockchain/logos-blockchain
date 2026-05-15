@@ -45,3 +45,10 @@ pub struct Withdraw {
     /// Amount of the withdrawal
     pub outputs: Outputs,
 }
+
+impl Deposit {
+    #[must_use]
+    pub fn metadata(&self) -> &[u8] {
+        &self.metadata
+    }
+}

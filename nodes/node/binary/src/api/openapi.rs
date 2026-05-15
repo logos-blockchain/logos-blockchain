@@ -20,6 +20,7 @@ use utoipa::OpenApi;
         crate::api::handlers::leader_claim,
         crate::api::handlers::immutable_blocks,
         crate::api::handlers::block,
+        crate::api::handlers::block_events,
         crate::api::handlers::blocks_stream,
         crate::api::handlers::transaction,
         crate::api::handlers::wallet::get_balance,
