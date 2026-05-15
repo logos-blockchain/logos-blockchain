@@ -56,14 +56,10 @@ impl NomDecode for u32 {
 }
 
 // Simple utility to encode a slice of `NomEncode` items by encoding each item
-// and concatenating the results.
-impl<T> NomEncode for [T]
-where
-    T: NomEncode,
-{
-    fn encode(&self) -> Vec<u8> {
-        self.iter().flat_map(NomEncode::encode).collect()
-    }
+// and concatenating the results. Not implemented on the slice type directly
+// `[T]` since that could be misleading.
+fn encode_slice<T: NomEncode>(items: &[T]) -> Vec<u8> {
+    items.iter().flat_map(NomEncode::encode).collect()
 }
 
 pub struct NomArray<'a, T, const N: usize>(&'a [T::Output; N])
@@ -84,7 +80,7 @@ where
     T: NomDecode<Output: NomEncode>,
 {
     fn encode(&self) -> Vec<u8> {
-        self.0.as_slice().encode()
+        encode_slice(self.0.as_slice())
     }
 }
 
@@ -147,7 +143,7 @@ where
 
         // Initialize `bytes` with the encoded length prefix.
         let mut bytes = (self.0.len() as u64).to_le_bytes()[..N_BYTES].to_vec();
-        bytes.extend(self.0.as_slice().encode());
+        bytes.extend(encode_slice(self.0.as_slice()));
 
         bytes
     }
@@ -178,7 +174,7 @@ where
 
 impl NomEncode for ChannelId {
     fn encode(&self) -> Vec<u8> {
-        self.as_ref().encode()
+        encode_slice(self.as_ref())
     }
 }
 
@@ -192,7 +188,7 @@ impl NomDecode for ChannelId {
 
 impl NomEncode for MsgId {
     fn encode(&self) -> Vec<u8> {
-        self.as_ref().encode()
+        encode_slice(self.as_ref())
     }
 }
 
@@ -207,7 +203,7 @@ impl NomDecode for MsgId {
 // Ed25519PublicKey = 32BYTE
 impl NomEncode for Ed25519PublicKey {
     fn encode(&self) -> Vec<u8> {
-        self.to_bytes().encode()
+        encode_slice(&self.to_bytes())
     }
 }
 

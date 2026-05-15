@@ -779,7 +779,7 @@ fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
 /// Encode top-level transactions
 #[must_use]
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
-    tx.ops().encode()
+    NomOps::from(tx.ops()).encode()
 }
 
 #[must_use]
