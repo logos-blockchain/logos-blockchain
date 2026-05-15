@@ -88,7 +88,9 @@ fn emit_git_watchers(git_dir: &Path) {
 }
 
 fn main() {
-    emit_git_watchers(&find_repo_git_dir().expect("No git dir"));
+    if let Some(dir) = find_repo_git_dir() {
+        emit_git_watchers(&dir);
+    }
 
     let head_commit_hash = get_head_commit_hash().unwrap_or_default();
     println!("cargo:rustc-env=HEAD_COMMIT_HASH={head_commit_hash}");
