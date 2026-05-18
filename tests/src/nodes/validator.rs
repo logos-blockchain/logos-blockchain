@@ -10,16 +10,17 @@ use std::{
 use futures::Stream;
 use lb_chain_broadcast_service::BlockInfo;
 use lb_chain_service::ChainServiceInfo;
-use lb_common_http_client::{
-    ApiBlock, BlocksRangeStreamParams, CommonHttpClient, ProcessedBlockEvent,
-};
+use lb_common_http_client::{ApiBlock, CommonHttpClient, ProcessedBlockEvent};
 use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     mantle::{Transaction as _, TxHash},
     sdp::Declaration,
 };
-use lb_http_api_common::paths::{
-    BLOCKS_DETAIL, CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO,
+use lb_http_api_common::{
+    paths::{
+        BLOCKS_DETAIL, CRYPTARCHIA_HEADERS, CRYPTARCHIA_INFO, MANTLE_SDP_DECLARATIONS, NETWORK_INFO,
+    },
+    queries::BlocksStreamQuery,
 };
 use lb_key_management_system_service::keys::secured_key::SecuredKey as _;
 use lb_network_service::backends::libp2p::Libp2pInfo;
@@ -448,7 +449,7 @@ impl Validator {
 
     pub async fn get_blocks_stream_in_range_with_chunk_size(
         &self,
-        params: BlocksRangeStreamParams,
+        params: BlocksStreamQuery,
     ) -> Result<impl Stream<Item = ProcessedBlockEvent>, lb_common_http_client::Error> {
         self.http_client
             .get_blocks_range_stream(self.base_url()?, params)

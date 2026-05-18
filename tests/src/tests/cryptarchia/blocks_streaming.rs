@@ -5,13 +5,12 @@ use std::{
 };
 
 use futures::stream::{self, StreamExt as _};
-use lb_common_http_client::{
-    BlockFilter, BlockSortOrder, BlocksRangeStreamParams, ProcessedBlockEvent,
-};
+use lb_common_http_client::ProcessedBlockEvent;
 use lb_core::header::HeaderId;
 use lb_http_api_common::{
     DEFAULT_NUMBER_OF_BLOCKS_TO_STREAM, MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     paths::BLOCKS_RANGE_STREAM,
+    queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery},
 };
 use logos_blockchain_tests::{
     common::time::max_block_propagation_time,
@@ -212,7 +211,7 @@ fn slot_for_height(chain: &CanonicalChain, height: usize) -> u64 {
 
 async fn request_stream_events(
     node: &Validator,
-    params: BlocksRangeStreamParams,
+    params: BlocksStreamQuery,
 ) -> Vec<ProcessedBlockEvent> {
     let start = Instant::now();
     print!(
@@ -372,7 +371,7 @@ async fn test_blocks_streaming() {
             chain = refresh_chain(&nodes[0], &chain).await;
             let events = request_stream_events(
                 &nodes[0],
-                BlocksRangeStreamParams {
+                BlocksStreamQuery {
                     slot_from: None,
                     slot_to: None,
                     order: if descending {
@@ -412,7 +411,7 @@ async fn test_blocks_streaming() {
         let (slot_from, slot_to) = blocks_request(&chain, target_height, target_height);
         let events = request_stream_events(
             &nodes[0],
-            BlocksRangeStreamParams {
+            BlocksStreamQuery {
                 slot_from: Some(slot_from),
                 slot_to: Some(slot_to),
                 order: None,
@@ -467,7 +466,7 @@ async fn test_blocks_streaming() {
                 let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
                 let events = request_stream_events(
                     &nodes[0],
-                    BlocksRangeStreamParams {
+                    BlocksStreamQuery {
                         slot_from: Some(slot_from),
                         slot_to: Some(slot_to),
                         order: Some(if descending {
@@ -498,7 +497,7 @@ async fn test_blocks_streaming() {
     let blocks_limit = 7;
     let events = request_stream_events(
         &nodes[0],
-        BlocksRangeStreamParams {
+        BlocksStreamQuery {
             slot_from: None,
             slot_to: Some(tip_slot),
             order: Some(BlockSortOrder::Ascending),
@@ -535,7 +534,7 @@ async fn test_blocks_streaming() {
     let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
     let events = request_stream_events(
         &nodes[0],
-        BlocksRangeStreamParams {
+        BlocksStreamQuery {
             slot_from: Some(slot_from),
             slot_to: Some(slot_to),
             order: None,
@@ -558,7 +557,7 @@ async fn test_blocks_streaming() {
     let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
     let events = request_stream_events(
         &nodes[0],
-        BlocksRangeStreamParams {
+        BlocksStreamQuery {
             slot_from: Some(slot_from),
             slot_to: Some(slot_to),
             order: None,
@@ -672,7 +671,7 @@ async fn test_blocks_streaming() {
     let target_height = nz(chain.lib_height + 3);
     let (slot_from, slot_to) = blocks_request(&chain, target_height, target_height);
     let Err(err) = nodes[0]
-        .get_blocks_stream_in_range_with_chunk_size(BlocksRangeStreamParams {
+        .get_blocks_stream_in_range_with_chunk_size(BlocksStreamQuery {
             slot_from: Some(slot_from),
             slot_to: Some(slot_to),
             order: None,
@@ -686,47 +685,49 @@ async fn test_blocks_streaming() {
     };
     assert!(
         matches!(err, lb_common_http_client::Error::Server(ref message) if message.contains("slot_from")),
-        "invalid clamped range should mention slot_from, got: {err}"
+        "invalid clamped range should mention 'slot_from', got: {err}"
     );
 
-    // case: blocks_limit=0 should fail (400) via raw HTTP query
-    println!("case: blocks_limit=0 should fail (400) via raw HTTP query");
+    // case: blocks_limit=0 and server_batch_size=0 should fail (400) via raw HTTP
+    // query
+    println!("case: blocks_limit=0 and server_batch_size=0 should fail (400) via raw HTTP query");
 
     let tip_slot = u64::from(nodes[0].consensus_info(false).await.cryptarchia_info.slot);
+    for query_part in ["blocks_limit=0", "server_batch_size=0"] {
+        let mut url = nodes[0]
+            .base_url()
+            .expect("validator base URL should be available");
+        url.set_path(BLOCKS_RANGE_STREAM);
+        url.set_query(Some(&format!("{query_part}&slot_to={tip_slot}")));
 
-    let mut url = nodes[0]
-        .base_url()
-        .expect("validator base URL should be available");
-    url.set_path(BLOCKS_RANGE_STREAM);
-    url.set_query(Some(&format!("blocks_limit=0&slot_to={tip_slot}")));
+        let resp = client
+            .get(url)
+            .send()
+            .await
+            .expect("raw blocks/stream request should complete");
 
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .expect("raw blocks/stream request should complete");
+        assert_eq!(
+            resp.status(),
+            reqwest::StatusCode::BAD_REQUEST,
+            "'{query_part}' must return 400"
+        );
 
-    assert_eq!(
-        resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "blocks_limit=0 must return 400"
-    );
-
-    let body = resp
-        .text()
-        .await
-        .expect("error response body should be readable");
-    assert!(
-        body.contains("blocks_limit"),
-        "400 body should mention blocks_limit, got: {body}"
-    );
+        let body = resp
+            .text()
+            .await
+            .expect("error response body should be readable");
+        assert!(
+            body.contains("expected a nonzero usize"),
+            "400 body should mention 'expected a nonzero usize', got: {body}"
+        );
+    }
 
     // case: slot_from > slot_to should fail client-side validation
     println!("case: slot_from > slot_to should fail client-side validation");
 
     chain = refresh_chain(&nodes[0], &chain).await;
     let Err(err) = nodes[0]
-        .get_blocks_stream_in_range_with_chunk_size(BlocksRangeStreamParams {
+        .get_blocks_stream_in_range_with_chunk_size(BlocksStreamQuery {
             slot_from: Some(chain.lib_slot),
             slot_to: Some(chain.lib_slot / 2),
             order: None,

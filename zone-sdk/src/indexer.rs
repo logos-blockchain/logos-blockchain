@@ -146,14 +146,15 @@ mod tests {
 
     use async_trait::async_trait;
     use lb_common_http_client::{
-        ApiBlock, BlockInfo, BlocksRangeStreamParams, ChainServiceInfo, ChainServiceMode,
-        CryptarchiaInfo, ProcessedBlockEvent, State,
+        ApiBlock, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo,
+        ProcessedBlockEvent, State,
     };
     use lb_core::{
         header::HeaderId,
         mantle::{NoteId, SignedMantleTx, ledger::Inputs},
     };
     use lb_groth16::Fr;
+    use lb_http_api_common::queries::BlocksStreamQuery;
 
     use super::*;
     use crate::{Deposit, ZoneBlock, adapter::BoxStream};
@@ -389,7 +390,7 @@ mod tests {
 
         async fn blocks_range_stream(
             &self,
-            _params: BlocksRangeStreamParams,
+            _params: BlocksStreamQuery,
         ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
             Ok(Box::pin(futures::stream::empty()))
         }

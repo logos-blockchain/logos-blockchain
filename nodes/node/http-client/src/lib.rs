@@ -1,4 +1,4 @@
-use std::{num::NonZero, sync::Arc};
+use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
@@ -22,6 +22,7 @@ use lb_http_api_common::{
         CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
+    queries::BlocksStreamQuery,
     settings::default_max_body_size,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -86,111 +87,6 @@ impl BasicAuthCredentials {
     pub const fn new(username: String, password: Option<String>) -> Self {
         Self { username, password }
     }
-}
-
-#[derive(Default, Clone, Debug)]
-struct BlocksStreamQueryParams {
-    blocks_limit: Option<NonZero<usize>>,
-    slot_from: Option<u64>,
-    slot_to: Option<u64>,
-    descending: Option<bool>,
-    server_batch_size: Option<NonZero<usize>>,
-    immutable_only: Option<bool>,
-}
-
-impl BlocksStreamQueryParams {
-    fn append_to_url(&self, request_url: &mut Url) {
-        let mut query = request_url.query_pairs_mut();
-
-        if let Some(blocks_limit) = self.blocks_limit {
-            query.append_pair("blocks_limit", &blocks_limit.to_string());
-        }
-        if let Some(slot_from) = self.slot_from {
-            query.append_pair("slot_from", &slot_from.to_string());
-        }
-        if let Some(slot_to) = self.slot_to {
-            query.append_pair("slot_to", &slot_to.to_string());
-        }
-        if let Some(descending) = self.descending {
-            query.append_pair("descending", &descending.to_string());
-        }
-        if let Some(server_batch_size) = self.server_batch_size {
-            query.append_pair("server_batch_size", &server_batch_size.to_string());
-        }
-        if self.immutable_only == Some(true) {
-            query.append_pair("immutable_only", "true");
-        }
-    }
-}
-
-impl From<BlocksRangeStreamParams> for BlocksStreamQueryParams {
-    fn from(params: BlocksRangeStreamParams) -> Self {
-        Self {
-            blocks_limit: params.blocks_limit,
-            slot_from: params.slot_from,
-            slot_to: params.slot_to,
-            descending: params.order.map(|order| match order {
-                BlockSortOrder::Ascending => false,
-                BlockSortOrder::Descending => true,
-            }),
-            server_batch_size: params.server_batch_size,
-            immutable_only: params.block_filter.map(|filter| match filter {
-                BlockFilter::ImmutableOnly => true,
-                BlockFilter::MutableAndImmutable => false,
-            }),
-        }
-    }
-}
-
-/// Query parameters for the `get_blocks_range_stream` method, which streams
-/// processed blocks in a slot-bounded window.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct BlocksRangeStreamParams {
-    /// If omitted, the server chooses a default lower bound.
-    /// For descending streams this is `slot 0` (bounded by `blocks_limit`).
-    /// For ascending streams, `slot_from` is estimated from the average
-    /// slots-per-block and `blocks_limit`, biased so the stream ends near
-    /// `slot_to`. This may return fewer than `blocks_limit` blocks; callers
-    /// can refine by specifying `slot_from` explicitly.
-    /// Lower bound slot (inclusive). Defaults to tip slot, or LIB slot when
-    /// `immutable_only=true`.
-    pub slot_from: Option<u64>,
-    /// Upper bound slot (inclusive). Defaults to tip slot, or LIB slot when
-    /// `immutable_only=true`.
-    pub slot_to: Option<u64>,
-    /// Sort direction. Defaults to `Descending`.
-    pub order: Option<BlockSortOrder>,
-    /// The maximum number of actual blocks to return. If omitted:
-    /// - explicit bounded slot range (`slot_from` and `slot_to`) defaults to
-    ///   the server maximum (`630_720_000`);
-    /// - otherwise defaults to `100`.
-    pub blocks_limit: Option<NonZero<usize>>,
-    /// Server chunk size hint for streamed delivery. Defaults to `100` ,
-    /// maximum `1000`.
-    pub server_batch_size: Option<NonZero<usize>>,
-    /// When `ImmutableOnly`, include only immutable blocks.
-    /// If `slot_to` is omitted, the default anchor is LIB slot.
-    /// Defaults to `MutableAndImmutable`, which includes all blocks up to the
-    /// tip (bounded by `blocks_limit` or `slot_from`).
-    pub block_filter: Option<BlockFilter>,
-}
-
-/// Sort order for blocks in the `get_blocks_range_stream` method.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum BlockSortOrder {
-    /// Ascending order (oldest to newest).
-    Ascending,
-    /// Descending order (newest to oldest).
-    Descending,
-}
-
-/// Filter for block types in the `get_blocks_range_stream` method.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum BlockFilter {
-    /// Includes only immutable blocks.
-    ImmutableOnly,
-    /// Includes mutable and immutable blocks.
-    MutableAndImmutable,
 }
 
 #[derive(Clone)]
@@ -403,9 +299,11 @@ impl CommonHttpClient {
         }
     }
 
-    fn build_blocks_range_stream_request_url(
+    /// Build the request URL for the `get_blocks_range_stream` method with the
+    /// given parameters.
+    pub fn build_blocks_range_stream_request_url(
         base_url: &Url,
-        params: &BlocksStreamQueryParams,
+        params: &BlocksStreamQuery,
     ) -> Result<Url, Error> {
         let mut request_url = base_url
             .join(BLOCKS_RANGE_STREAM.trim_start_matches('/'))
@@ -444,10 +342,10 @@ impl CommonHttpClient {
 
     // Helper function to validate inputs for block streaming methods.
     fn verify_inputs(
-        blocks_limit: Option<NonZero<usize>>,
+        blocks_limit: Option<std::num::NonZero<usize>>,
         slot_from: Option<u64>,
         slot_to: Option<u64>,
-        server_batch_size: Option<NonZero<usize>>,
+        server_batch_size: Option<std::num::NonZero<usize>>,
     ) -> Result<(), Error> {
         if let Some(blocks) = blocks_limit
             && blocks.get() > MAX_BLOCKS_STREAM_BLOCKS
@@ -481,16 +379,15 @@ impl CommonHttpClient {
     pub async fn get_blocks_range_stream(
         &self,
         base_url: Url,
-        params: BlocksRangeStreamParams,
+        params: BlocksStreamQuery,
     ) -> Result<impl Stream<Item = ProcessedBlockEvent> + use<>, Error> {
+        let request_url = Self::build_blocks_range_stream_request_url(&base_url, &params)?;
         Self::verify_inputs(
             params.blocks_limit,
             params.slot_from,
             params.slot_to,
             params.server_batch_size,
         )?;
-
-        let request_url = Self::build_blocks_range_stream_request_url(&base_url, &params.into())?;
         let response = self.send_blocks_range_stream_request(request_url).await?;
         Ok(Self::parse_processed_blocks_range_event_stream(response))
     }

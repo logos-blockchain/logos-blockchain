@@ -38,6 +38,7 @@ use lb_http_api_common::{
         },
     },
     paths,
+    queries::BlocksStreamQuery,
 };
 use lb_libp2p::libp2p::bytes::Bytes;
 use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
@@ -63,7 +64,7 @@ use tracing::debug;
 use crate::api::{
     errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
     openapi::schema,
-    queries::{BlockRangeQuery, BlocksStreamQuery, BlocksStreamRequest},
+    queries::{BlockRangeQuery, BlocksStreamRequest},
     responses::{self, overwatch::get_relay_or_500},
     serializers::{
         blocks::{ApiBlock, ApiProcessedBlockEvent},

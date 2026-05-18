@@ -4580,6 +4580,7 @@ name = "logos-blockchain-http-api-common"
 version = "0.1.2"
 dependencies = [
  "axum",
+ "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-tracing",
@@ -4587,8 +4588,12 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "time",
  "tokio",
  "tracing",
+ "url",
+ "utoipa",
+ "validator",
 ]
 
 [[package]]
@@ -4792,6 +4797,7 @@ dependencies = [
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-network-service",
  "logos-blockchain-chain-service",
+ "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
@@ -4819,6 +4825,7 @@ dependencies = [
  "serde",
  "serde_ignored",
  "serde_json",
+ "serde_urlencoded",
  "serde_with",
  "serde_yaml",
  "thiserror 2.0.18",
@@ -5280,6 +5287,7 @@ dependencies = [
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
+ "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "num-bigint",
  "rand 0.8.5",

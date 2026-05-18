@@ -81,7 +81,9 @@ validator  = { features = ["derive"], workspace = true }
 tikv-jemallocator = { optional = true, workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
+lb-common-http-client = { workspace = true }
+rand                  = { workspace = true }
+serde_urlencoded      = "0.7.1"
 
 [features]
 config-gen = ["lb-key-management-system-service/unsafe"]

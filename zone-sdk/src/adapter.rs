@@ -3,13 +3,13 @@ use std::pin::Pin;
 use async_trait::async_trait;
 use futures::{Stream, stream};
 use lb_common_http_client::{
-    ApiBlock, BlockInfo, BlocksRangeStreamParams, ChainServiceInfo, CommonHttpClient, Error,
-    ProcessedBlockEvent, Slot,
+    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, ProcessedBlockEvent, Slot,
 };
 use lb_core::{
     header::HeaderId,
     mantle::{Op, SignedMantleTx, ops::channel::ChannelId},
 };
+use lb_http_api_common::queries::BlocksStreamQuery;
 use reqwest::Url;
 
 use crate::{Deposit, Withdraw, ZoneBlock, ZoneMessage};
@@ -25,7 +25,7 @@ pub trait Node {
 
     async fn blocks_range_stream(
         &self,
-        params: BlocksRangeStreamParams,
+        params: BlocksStreamQuery,
     ) -> Result<BoxStream<ProcessedBlockEvent>, Error>;
 
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error>;
@@ -80,7 +80,7 @@ impl Node for NodeHttpClient {
 
     async fn blocks_range_stream(
         &self,
-        params: BlocksRangeStreamParams,
+        params: BlocksStreamQuery,
     ) -> Result<BoxStream<ProcessedBlockEvent>, Error> {
         let stream = self
             .client

@@ -1582,14 +1582,14 @@ mod tests {
 
     use async_trait::async_trait;
     use lb_common_http_client::{
-        ApiBlock, ApiHeader, BlockInfo, BlocksRangeStreamParams, ChainServiceMode, CryptarchiaInfo,
-        State,
+        ApiBlock, ApiHeader, BlockInfo, ChainServiceMode, CryptarchiaInfo, State,
     };
     use lb_core::{
         header::ContentId,
         mantle::{Note, Utxo, ledger::Inputs, ops::channel::deposit::DepositOp},
         proofs::leader_proof::Groth16LeaderProof,
     };
+    use lb_http_api_common::queries::BlocksStreamQuery;
     use lb_key_management_system_service::keys::ZkKey;
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -1737,7 +1737,7 @@ mod tests {
 
         async fn blocks_range_stream(
             &self,
-            _params: BlocksRangeStreamParams,
+            _params: BlocksStreamQuery,
         ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
             unimplemented!()
         }

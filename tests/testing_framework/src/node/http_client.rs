@@ -1,8 +1,7 @@
 use std::{net::SocketAddr, pin::Pin};
 
 use common_http_client::{
-    ApiBlock, BasicAuthCredentials, BlocksRangeStreamParams, CommonHttpClient, Error,
-    ProcessedBlockEvent,
+    ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
 };
 use futures::Stream;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
@@ -13,6 +12,7 @@ use lb_http_api_common::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
     paths::{BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
+    queries::BlocksStreamQuery,
 };
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
@@ -114,7 +114,7 @@ impl NodeHttpClient {
     /// range.
     pub async fn blocks_range_stream(
         &self,
-        params: BlocksRangeStreamParams,
+        params: BlocksStreamQuery,
     ) -> Result<Pin<Box<dyn Stream<Item = ProcessedBlockEvent> + Send + '_>>, Error> {
         let stream = self
             .http_client
