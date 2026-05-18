@@ -1,0 +1,67 @@
+name: Logos Genesis Ceremony workflow
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment:
+        description: "Target deployment environment (e.g., devnet, testnet)"
+        required: true
+        default: "devnet"
+        type: choice
+        options:
+          - devnet
+          - testnet
+      version:
+        description: "Protocol version string"
+        required: true
+
+jobs:
+  genesis-ceremony:
+    name: Genesis Ceremony
+    runs-on: ubuntu-24.04
+    env:
+      LB_TARGET_ENV: ${{ github.event.inputs.deployment }}
+      LB_VERSION: ${{ github.event.inputs.version }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Setup Circuits
+        uses: ./.github/actions/setup-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Ceremony
+        run: |
+          cargo run --locked --bin logos-blockchain-tools-genesis -- ceremony \
+            --inscription-params testnet/ceremony/genesis/$LB_TARGET_ENV/inscribe.yaml \
+            --stake-holders testnet/ceremony/genesis/$LB_TARGET_ENV/stakeholders.yaml \
+            --providers testnet/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
+            --faucet testnet/ceremony/genesis/$LB_TARGET_ENV/faucet.yaml \
+            --deployment testnet/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
+            --output nodes/node/binary/src/config/deployment/devnet/deployment.yaml
+
+      - name: Commit and Push changes
+        run: |
+          # Configure git with a generic bot identity
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          git add nodes/node/binary/src/config/deployment/devnet/deployment.yaml
+
+          # Only commit and push if there are actual changes
+          if git diff --staged --quiet; then
+            echo "Error: No changes detected in deployment.yaml. Genesis ceremony likely produced identical output."
+            exit 1
+          else
+            git commit -m "chore: genesis ceremony for $LB_TARGET_ENV version $LB_VERSION"
+            git push
+
+            COMMIT_SHA=$(git rev-parse HEAD)
+            COMMIT_URL="${{ github.server_url }}/${{ github.repository }}/commit/$COMMIT_SHA"
+
+            echo "### Deployment Updated Successfully" >> $GITHUB_STEP_SUMMARY
+            echo "The changes have been pushed directly to the current branch." >> $GITHUB_STEP_SUMMARY
+            echo "[View Commit on GitHub]($COMMIT_URL)" >> $GITHUB_STEP_SUMMARY
+          fi
