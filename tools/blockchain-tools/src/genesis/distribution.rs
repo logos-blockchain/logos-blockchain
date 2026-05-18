@@ -30,21 +30,29 @@ pub struct ProviderInfo {
     pub service_type: ServiceType,
 }
 
+/// `Faucet` is used to register a faucet key with it's value.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Faucet {
+    pub zk_id: ZkPublicKey,
+    pub funds: NoteValue,
+}
+
 pub struct GenesisTransferOp {
     transfer_op: TransferOp,
     outputs: Outputs,
 }
 
 impl GenesisTransferOp {
-    pub fn new(stake_holders: impl Iterator<Item = StakeHolderInfo>) -> Self {
-        let outputs = Outputs::new(
-            stake_holders
-                .into_iter()
-                .map(|stake_holder| Note::new(stake_holder.stake, stake_holder.zk_id))
-                .collect(),
-        );
+    pub fn new(stake_holders: impl Iterator<Item = StakeHolderInfo>, faucet: &Faucet) -> Self {
+        let mut notes: Vec<Note> = stake_holders
+            .map(|stake_holder| Note::new(stake_holder.stake, stake_holder.zk_id))
+            .collect();
 
+        notes.push(Note::new(faucet.funds, faucet.zk_id));
+
+        let outputs = Outputs::new(notes);
         let transfer_op = TransferOp::new(Inputs::empty(), outputs.clone());
+
         Self {
             transfer_op,
             outputs,
@@ -80,6 +88,7 @@ pub enum DistributionError {
 pub fn distribute<S, P>(
     stake_holders: S,
     providers: P,
+    faucet: &Faucet,
 ) -> Result<(GenesisTransferOp, Vec<SDPDeclareOp>), DistributionError>
 where
     S: IntoIterator<Item = StakeHolderInfo> + Clone,
@@ -88,7 +97,7 @@ where
     let stake_holder_keys: HashSet<ZkPublicKey> =
         stake_holders.clone().into_iter().map(|s| s.zk_id).collect();
 
-    let transfer_op = GenesisTransferOp::new(stake_holders.into_iter());
+    let transfer_op = GenesisTransferOp::new(stake_holders.into_iter(), faucet);
     let mut declarations = Vec::new();
     let mut locked_services = HashSet::new();
 
@@ -157,13 +166,18 @@ mod tests {
             service_type: ServiceType::BlendNetwork,
         }];
 
-        let result = distribute(stake_holders, providers);
+        let faucet = Faucet {
+            zk_id: mock_zk_pk(3),
+            funds: 100_000,
+        };
+
+        let result = distribute(stake_holders, providers, &faucet);
 
         assert!(result.is_ok());
         let (transfer_op, declarations) = result.unwrap();
         let notes = transfer_op.notes().collect::<Vec<_>>();
 
-        assert_eq!(notes.len(), 2);
+        assert_eq!(notes.len(), 3);
         assert_eq!(notes[0].pk, zk_id_1);
         assert_eq!(notes[1].pk, zk_id_2);
 
@@ -189,7 +203,12 @@ mod tests {
             service_type: ServiceType::BlendNetwork,
         }];
 
-        let result = distribute(stake_holders, providers);
+        let faucet = Faucet {
+            zk_id: mock_zk_pk(3),
+            funds: 100_000,
+        };
+
+        let result = distribute(stake_holders, providers, &faucet);
 
         assert!(matches!(
             result,
@@ -222,7 +241,12 @@ mod tests {
             },
         ];
 
-        let result = distribute(stake_holders, providers);
+        let faucet = Faucet {
+            zk_id: mock_zk_pk(3),
+            funds: 100_000,
+        };
+
+        let result = distribute(stake_holders, providers, &faucet);
 
         assert!(matches!(
             result,

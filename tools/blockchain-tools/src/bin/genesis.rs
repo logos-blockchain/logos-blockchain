@@ -17,7 +17,7 @@ use lb_core::{
 use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
 use logos_blockchain_tools::{
     genesis::{
-        distribution::{self, ProviderInfo, StakeHolderInfo},
+        distribution::{self, Faucet, ProviderInfo, StakeHolderInfo},
         inscription::{self, InscribeParams},
     },
     overwrite_yaml, value_from_dotted_kv,
@@ -76,6 +76,10 @@ pub struct CeremonyArgs {
     /// Provider definitions for SDP declarations.
     #[arg(long, value_name = "FILE")]
     pub providers: PathBuf,
+
+    /// Faucet definition for stake distribution.
+    #[arg(long, value_name = "FILE")]
+    pub faucet: PathBuf,
 
     /// The base deployment config (e.g., 'devnet' or path/to/config.yaml).
     #[arg(long, value_name = "NAME_OR_PATH")]
@@ -171,6 +175,10 @@ struct DistributeArgs {
     #[arg(long, value_name = "FILE")]
     providers: PathBuf,
 
+    /// YAML file containing faucet info.
+    #[arg(long, value_name = "FILE")]
+    faucet: PathBuf,
+
     /// Write notes output to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
     notes_output: Option<PathBuf>,
@@ -224,7 +232,8 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
 
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
-    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers)
+    let faucet: Faucet = load_yaml_file(&args.faucet)?;
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution during ceremony")?;
     let notes: Vec<Note> = transfer_op.notes().collect();
@@ -379,8 +388,9 @@ fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
 fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let faucet: Faucet = load_yaml_file(&args.faucet)?;
 
-    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers)
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution")?;
     let notes: Vec<Note> = transfer_op.notes().collect();
