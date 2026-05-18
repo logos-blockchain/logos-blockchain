@@ -20,10 +20,10 @@ lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
 serde                         = { features = ["derive"], workspace = true }
-serde_json                    = { workspace = true }
+serde_with                    = { features = ["hex"], workspace = true }
 serde_yml                     = { workspace = true }
 thiserror                     = { workspace = true }
-time                          = { workspace = true }
+time                          = { features = ["serde"], workspace = true }
 tokio                         = { features = ["macros", "rt-multi-thread"], workspace = true }
 url                           = { workspace = true }
 

@@ -8,12 +8,16 @@ use lb_core::{
 };
 use lb_groth16::{FrBytes, fr_from_bytes};
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use serde_with::{hex::Hex, serde_as};
 use time::OffsetDateTime;
 
+#[serde_as]
 #[derive(serde::Deserialize)]
 pub struct InscribeParams {
     pub chain_id: String,
+    #[serde(with = "time::serde::iso8601")]
     pub genesis_time: OffsetDateTime,
+    #[serde_as(as = "Vec<Hex>")]
     pub entropy_sources: Vec<FrBytes>,
 }
 
@@ -24,6 +28,11 @@ pub fn inscribe<D: ZkDigest>(
 ) -> InscriptionOp {
     let mut hasher = D::new();
 
+    let mut entropy_sources = entropy_sources.into_iter().peekable();
+    assert!(
+        entropy_sources.peek().is_some(),
+        "Entropy sources must contain at least one item"
+    );
     for bytes in entropy_sources {
         let fr = fr_from_bytes(&bytes).expect("Invalid entropy source for Fr conversion");
         hasher.update(&fr);
@@ -39,7 +48,10 @@ pub fn inscribe<D: ZkDigest>(
 
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
-        inscription: params.encode(),
+        inscription: params
+            .encode()
+            .try_into()
+            .expect("CryptarchiaParameter encoding exceeded MAX_BYTES"),
         parent: MsgId::root(),
         signer: Ed25519PublicKey::from_bytes(&EMPTY_ED25519_PUBLIC_KEY)
             .expect("Constant EMPTY_ED25519_PUBLIC_KEY should be valid"),

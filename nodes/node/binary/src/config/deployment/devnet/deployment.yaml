@@ -1,6 +1,3 @@
-pub const NAME: &str = "devnet";
-
-pub const SERIALIZED_DEPLOYMENT: &str = "
 blend:
   common:
     num_blend_layers: 1
@@ -96,5 +93,3 @@ time:
   slot_duration: '1.000000000'
 mempool:
   pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0
-
-";
