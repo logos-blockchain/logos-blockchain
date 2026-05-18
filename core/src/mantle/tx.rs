@@ -27,13 +27,13 @@ use crate::{
         channel_multi_sig_proof::ChannelMultiSigProof,
         leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
     },
+    utils::serde_bytes_newtype,
 };
 
 /// The hash of a transaction
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub struct TxHash(pub Hash);
+serde_bytes_newtype!(TxHash, 32);
 
 impl From<Hash> for TxHash {
     fn from(hash: Hash) -> Self {
