@@ -328,16 +328,29 @@ pub(super) async fn submit_zone_withdraw_transaction(
 /// [`submit_zone_withdraw_transaction`] but uses the high-level fire-and-forget
 /// flow: SDK fills the withdraw nonce, locates its own accredited-key index,
 /// builds the bundled `MantleTx`, signs locally, and submits.
+///
+/// `withdraw_rows` carries one `(alias, outputs)` per `WithdrawArg`; each
+/// withdraw is remembered under its own alias so multi-withdraw bundles can
+/// be asserted per-withdraw via the indexer step. `bundle_alias` is remembered
+/// as the bundle's tx hash for `zone transaction "..." is finalized`.
 pub(super) async fn publish_atomic_zone_withdraw_transaction(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: &str,
-    transaction_alias: String,
+    bundle_alias: String,
     message_alias: String,
-    amount: u64,
+    withdraw_rows: Vec<(String, Vec<u64>)>,
 ) -> StepResult {
     let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
-    let inscription_data = format!("Burn {amount}").into_bytes();
+    let total: u64 = withdraw_rows
+        .iter()
+        .flat_map(|(_, outputs)| outputs.iter())
+        .sum();
+    let inscription_data = format!("Burn {total}").into_bytes();
+    let outputs_per_arg: Vec<Vec<u64>> = withdraw_rows
+        .iter()
+        .map(|(_, outputs)| outputs.clone())
+        .collect();
 
     let submission = {
         let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
@@ -348,7 +361,7 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
             &sequencer,
             sequencer_events,
             funding_public_key,
-            amount,
+            outputs_per_arg,
             inscription_data.clone(),
             PublishDeadline::from_now(Duration::from_mins(3)),
         )
@@ -356,9 +369,23 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
         .map_err(|error| zone_step_error(step, &error))?
     };
 
-    world
-        .zone
-        .remember_submitted_withdraw(transaction_alias.clone(), submission.withdraw);
+    if submission.withdraws.len() != withdraw_rows.len() {
+        return Err(zone_step_error(
+            step,
+            &super::support::ZoneTestError::SubmitWithdraw {
+                message: format!(
+                    "atomic withdraw bundle produced {} withdraw ops, expected {}",
+                    submission.withdraws.len(),
+                    withdraw_rows.len(),
+                ),
+            },
+        ));
+    }
+    for ((alias, _), withdraw_op) in withdraw_rows.iter().zip(submission.withdraws) {
+        world
+            .zone
+            .remember_submitted_withdraw(alias.clone(), withdraw_op);
+    }
     remember_published_zone_message(
         world,
         sequencer_alias,
@@ -366,7 +393,7 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
         inscription_data,
         &submission.publish,
     );
-    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id);
+    world.remember_submitted_transaction(bundle_alias, submission.publish.inscription_id);
 
     Ok(())
 }

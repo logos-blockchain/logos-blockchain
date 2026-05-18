@@ -349,7 +349,7 @@ Feature: Zone SDK
       | alias    | data                |
       | MSG_INIT | initial inscription |
     Then all zone messages are finalized in 120 seconds
-    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 3 with metadata "Mint 3 for atomic withdraw"
+    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 5 with metadata "Mint 5 for atomic withdraw"
     Then zone transaction "DEPOSIT_1" is finalized in 120 seconds
     And the zone indexer returns finalized deposit "DEPOSIT_1" in 120 seconds
     When I start zone sequencer "SEQ_B"
@@ -357,10 +357,14 @@ Feature: Zone SDK
       | alias  | data |
       | MSG_A1 | a1   |
       | MSG_A2 | a2   |
-    And sequencer "SEQ_B" publishes atomic withdraw "WITHDRAW_1" with inscription "MSG_BURN" of 2
-    Then zone transaction "WITHDRAW_1" is included in 240 seconds
-    And zone transaction "WITHDRAW_1" is finalized in 240 seconds
-    And the zone indexer returns finalized withdraw "WITHDRAW_1" in 120 seconds
+    And sequencer "SEQ_B" publishes atomic withdraw "BUNDLE_1" with inscription "MSG_BURN":
+      | withdraw    | outputs |
+      | WITHDRAW_1A | 1       |
+      | WITHDRAW_1B | 1,2     |
+    Then zone transaction "BUNDLE_1" is included in 240 seconds
+    And zone transaction "BUNDLE_1" is finalized in 240 seconds
+    And the zone indexer returns finalized withdraw "WITHDRAW_1A" in 120 seconds
+    And the zone indexer returns finalized withdraw "WITHDRAW_1B" in 120 seconds
     And the zone indexer returns messages in any order in 240 seconds:
       | alias    |
       | MSG_INIT |

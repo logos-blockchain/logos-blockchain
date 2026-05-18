@@ -31,7 +31,7 @@ use super::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
         generated_zone_message_batches, generated_zone_message_sequencers,
         group_zone_messages_by_sequencer, single_column_table, zone_account_balances,
-        zone_balance_rows, zone_message_rows,
+        zone_atomic_withdraw_rows, zone_balance_rows, zone_message_rows,
     },
 };
 use crate::{
@@ -356,24 +356,22 @@ async fn step_submit_zone_withdraw_transaction(
     .await
 }
 
-#[when(
-    expr = "sequencer {string} publishes atomic withdraw {string} with inscription {string} of {int}"
-)]
+#[when(expr = "sequencer {string} publishes atomic withdraw {string} with inscription {string}:")]
 async fn step_publish_atomic_zone_withdraw_transaction(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: String,
-    transaction_alias: String,
+    bundle_alias: String,
     message_alias: String,
-    amount: u64,
 ) -> StepResult {
+    let withdraw_rows = zone_atomic_withdraw_rows(step)?;
     publish_atomic_zone_withdraw_transaction(
         world,
         step,
         &sequencer_alias,
-        transaction_alias,
+        bundle_alias,
         message_alias,
-        amount,
+        withdraw_rows,
     )
     .await
 }

@@ -21,7 +21,7 @@ use lb_core::{
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     adapter,
@@ -1126,8 +1126,9 @@ where
     /// Build, sign, and submit an atomic inscription+withdraw bundle.
     ///
     /// Scoped to centralized single-sequencer channels — the sequencer's own
-    /// signature is the only signature used. For channels with
-    /// `withdraw_threshold > 1`, the submission will fail validation on chain.
+    /// signature is the only signature used. Errors early if the channel's
+    /// `withdraw_threshold > 1`, which would require multi-sig orchestration
+    /// not supported by this API.
     async fn handle_publish_atomic_withdraw(
         &mut self,
         inscribe: Vec<u8>,
@@ -1148,6 +1149,12 @@ where
             .channel_state(self.channel_id)
             .await
             .map_err(|e| Error::Network(format!("channel_state query failed: {e}")))?;
+        if channel_state.withdraw_threshold > 1 {
+            return Err(Error::Network(format!(
+                "publish_atomic_withdraw requires withdraw_threshold == 1, got {}",
+                channel_state.withdraw_threshold
+            )));
+        }
         let own_key_index = find_own_key_index(&channel_state, &self.signing_key)?;
         let mut next_nonce = channel_state.withdrawal_nonce;
 
@@ -1184,33 +1191,8 @@ where
         ops.push(Op::ChannelInscribe(inscription_op));
 
         let tx = MantleTx(ops);
-        let tx_hash = tx.hash();
-        let own_sig = sign_tx(tx_hash, &self.signing_key);
-
-        // Single-signer ChannelMultiSigProof; reused for every withdraw op
-        // (all sign the same tx_hash with the same key).
-        let withdraw_proof =
-            ChannelMultiSigProof::new(vec![IndexedSignature::new(own_key_index, own_sig)])
-                .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
-
-        // Build ops_proofs matching tx ops in order.
-        let mut ops_proofs = Vec::with_capacity(tx.ops().len());
-        for op in tx.ops() {
-            match op {
-                Op::ChannelWithdraw(_) => {
-                    ops_proofs.push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()));
-                }
-                Op::ChannelInscribe(_) => {
-                    ops_proofs.push(OpProof::Ed25519Sig(own_sig));
-                }
-                _ => {
-                    return Err(Error::Network(format!(
-                        "unexpected op in atomic withdraw bundle: {op:?}"
-                    )));
-                }
-            }
-        }
-
+        let own_sig = sign_tx(tx.hash(), &self.signing_key);
+        let ops_proofs = build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig)?;
         let signed_tx = SignedMantleTx::new(tx, ops_proofs)
             .map_err(|e| Error::Network(format!("signed tx assembly failed: {e:?}")))?;
 
@@ -1252,6 +1234,35 @@ where
 
         Ok(event)
     }
+}
+
+/// Build per-op proofs for an atomic withdraw bundle. The same single-signer
+/// `ChannelMultiSigProof` is reused for every `ChannelWithdraw` op (all sign
+/// the same tx hash with the same key) and the inscription op carries an
+/// `Ed25519Sig` proof.
+fn build_atomic_withdraw_ops_proofs(
+    tx: &MantleTx,
+    own_key_index: ChannelKeyIndex,
+    own_sig: Ed25519Signature,
+) -> Result<Vec<OpProof>, Error> {
+    let withdraw_proof =
+        ChannelMultiSigProof::new(vec![IndexedSignature::new(own_key_index, own_sig)])
+            .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
+    let mut ops_proofs = Vec::with_capacity(tx.ops().len());
+    for op in tx.ops() {
+        match op {
+            Op::ChannelWithdraw(_) => {
+                ops_proofs.push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()));
+            }
+            Op::ChannelInscribe(_) => ops_proofs.push(OpProof::Ed25519Sig(own_sig)),
+            _ => {
+                return Err(Error::Network(format!(
+                    "unexpected op in atomic withdraw bundle: {op:?}"
+                )));
+            }
+        }
+    }
+    Ok(ops_proofs)
 }
 
 /// Find the position of the SDK's public key in the channel's `accredited_keys`
@@ -1324,19 +1335,38 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
 ///
 /// Txs for other channels (checkpoint reused across channels) hit the
 /// `submit_other` fallback.
+///
+/// A tx with 2+ `ChannelInscribe` ops for our channel (constructable via
+/// `prepare_tx` + `submit_signed_tx`) isn't a bundle our API can represent.
+/// We log an error and fall back to `submit_other` — the tx is still tracked
+/// for finalize/orphan, just without per-tx inscription lineage.
 fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: ChannelId) {
     let mut inscribe_meta: Option<(MsgId, MsgId, Vec<u8>)> = None;
+    let mut multi_inscribe = false;
     let mut withdraws: Vec<WithdrawInfo> = Vec::new();
     for op in tx.mantle_tx.ops() {
         match op {
             Op::ChannelInscribe(i) if i.channel_id == channel_id => {
-                inscribe_meta = Some((i.parent, i.id(), i.inscription.clone()));
+                if inscribe_meta.is_some() {
+                    multi_inscribe = true;
+                } else {
+                    inscribe_meta = Some((i.parent, i.id(), i.inscription.clone()));
+                }
             }
             Op::ChannelWithdraw(w) if w.channel_id == channel_id => {
                 withdraws.push(WithdrawInfo { op: w.clone() });
             }
             _ => {}
         }
+    }
+    if multi_inscribe {
+        error!(
+            tx_hash = %hex::encode(tx.mantle_tx.hash().0),
+            "restore_pending_tx: tx has multiple ChannelInscribe ops for our channel; \
+             tracking as opaque (no bundle lineage)"
+        );
+        state.submit_other(tx);
+        return;
     }
     match inscribe_meta {
         Some((parent, this_msg, payload)) => {

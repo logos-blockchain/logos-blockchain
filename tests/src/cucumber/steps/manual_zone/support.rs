@@ -1173,23 +1173,49 @@ pub async fn submit_zone_withdraw(
     })
 }
 
+/// Result of publishing an atomic inscription+withdraw bundle. Carries every
+/// withdraw op produced by the SDK (one per `WithdrawArg`, in submission
+/// order) so a multi-withdraw scenario can match each by its outputs.
+pub struct ZoneAtomicWithdrawSubmission {
+    pub withdraws: Vec<ChannelWithdrawOp>,
+    pub publish: PublishResult,
+}
+
 /// Publishes an atomic inscription+withdraw bundle via the
 /// [`SequencerHandle::publish_atomic_withdraw`] API (fire-and-forget). Waits
 /// for the matching `Event::Published` carrying the
-/// [`PublishedTx::AtomicWithdraw`] variant and extracts the resulting
-/// [`ChannelWithdrawOp`] (with nonce filled by the SDK) and `PublishResult`
-/// so downstream cucumber assertions can match by tx hash.
+/// [`PublishedTx::AtomicWithdraw`] variant and returns every withdraw op (with
+/// the nonce filled by the SDK) so downstream cucumber assertions can match
+/// each withdraw by its outputs.
+///
+/// `outputs_per_arg` carries one entry per `WithdrawArg`; each inner `Vec`
+/// becomes that arg's `Outputs` (one `Note::new(amount, funding_pk)` per
+/// listed amount). Exercises the SDK API at full width: multiple args, with
+/// any arg able to carry multiple output notes.
 pub async fn publish_atomic_zone_withdraw(
     sequencer: &SequencerHandle<ZoneNodeHttpClient>,
     sequencer_events: &mut tokio::sync::mpsc::Receiver<Event>,
     funding_public_key: ZkPublicKey,
-    amount: Value,
+    outputs_per_arg: Vec<Vec<Value>>,
     inscription_data: Vec<u8>,
     deadline: PublishDeadline,
-) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
-    let withdraw_args = vec![WithdrawArg {
-        outputs: Outputs::new(vec![Note::new(amount, funding_public_key)]),
-    }];
+) -> Result<ZoneAtomicWithdrawSubmission, ZoneTestError> {
+    if outputs_per_arg.is_empty() {
+        return Err(ZoneTestError::SubmitWithdraw {
+            message: "publish_atomic_zone_withdraw requires at least one withdraw arg".to_owned(),
+        });
+    }
+    let withdraw_args: Vec<WithdrawArg> = outputs_per_arg
+        .iter()
+        .map(|amounts| WithdrawArg {
+            outputs: Outputs::new(
+                amounts
+                    .iter()
+                    .map(|amount| Note::new(*amount, funding_public_key))
+                    .collect(),
+            ),
+        })
+        .collect();
 
     sequencer
         .publish_atomic_withdraw(inscription_data.clone(), withdraw_args)
@@ -1207,21 +1233,20 @@ pub async fn publish_atomic_zone_withdraw(
                 continue;
             }
             let PublishedTx::AtomicWithdraw(info) = *tx else {
-                return Err(ZoneTestError::SubmitWithdraw {
-                    message:
-                        "publish_atomic_withdraw produced Inscription variant instead of AtomicWithdraw"
-                            .to_owned(),
-                });
+                // The sequencer may surface other Published events (e.g. a
+                // plain inscription with a coincidental payload from a
+                // concurrent flow). Skip and keep waiting for the bundle.
+                warn!("ignoring non-AtomicWithdraw Published event while awaiting bundle");
+                continue;
             };
-            let withdraw = info
-                .withdraws
-                .into_iter()
-                .next()
-                .ok_or_else(|| ZoneTestError::SubmitWithdraw {
+            if info.withdraws.is_empty() {
+                return Err(ZoneTestError::SubmitWithdraw {
                     message: "atomic withdraw bundle had no withdraw ops".to_owned(),
-                })?;
-            return Ok(ZoneWithdrawSubmission {
-                withdraw: withdraw.op,
+                });
+            }
+            let withdraws = info.withdraws.into_iter().map(|w| w.op).collect();
+            return Ok(ZoneAtomicWithdrawSubmission {
+                withdraws,
                 publish: PublishResult {
                     inscription_id: info.tx_hash,
                     checkpoint,
@@ -1344,7 +1369,10 @@ fn build_zone_deployment(scenario_base_dir: PathBuf) -> Result<DeploymentPlan, Z
             message: error.to_string(),
         })?;
 
-    Ok(add_exact_deposit_notes_to_funding_key(deployment, [1, 3]))
+    Ok(add_exact_deposit_notes_to_funding_key(
+        deployment,
+        [1, 3, 5],
+    ))
 }
 
 /// Adds small exact-value notes that make deposit assertions deterministic
