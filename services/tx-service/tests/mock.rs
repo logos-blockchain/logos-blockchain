@@ -31,7 +31,9 @@ use lb_tracing_service::{Tracing, TracingSettings};
 use lb_utils::noop_service::NoService;
 use logos_blockchain_tx_service::{
     MempoolMsg, TxMempoolSettings,
-    backend::{MemPool as _, Mempool, PoolRecoveryState, RecoverableMempool as _, Status},
+    backend::{
+        MemPool as _, Mempool, MempoolError, PoolRecoveryState, RecoverableMempool as _, Status,
+    },
     network::adapters::mock::{MOCK_TX_CONTENT_TOPIC, MockAdapter},
     storage::{MempoolStorageAdapter, adapters::rocksdb::RocksStorageAdapter},
     tx::{service::GenericTxMempoolService, state::TxMempoolState},
@@ -93,6 +95,9 @@ struct InMemoryStorageAdapter {
     items: Arc<Mutex<BTreeMap<MockTxId, MockTransaction<MockMessage>>>>,
 }
 
+#[derive(Clone, Default)]
+struct FailingStorageAdapter;
+
 #[async_trait]
 impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
     type Backend = RocksBackend;
@@ -144,6 +149,39 @@ impl MempoolStorageAdapter<RuntimeServiceId> for InMemoryStorageAdapter {
     }
 }
 
+#[async_trait]
+impl MempoolStorageAdapter<RuntimeServiceId> for FailingStorageAdapter {
+    type Backend = RocksBackend;
+    type Item = MockTransaction<MockMessage>;
+    type Key = MockTxId;
+    type Error = MempoolError;
+
+    fn new(
+        _storage_relay: OutboundRelay<
+            <StorageService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
+        >,
+    ) -> Self {
+        Self
+    }
+
+    async fn store_item(&mut self, _key: Self::Key, _item: Self::Item) -> Result<(), Self::Error> {
+        Err(MempoolError::StorageError(
+            "test storage failure".to_owned(),
+        ))
+    }
+
+    async fn get_items(
+        &self,
+        _keys: &BTreeSet<Self::Key>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Self::Item> + Send>>, Self::Error> {
+        Ok(Box::pin(stream::empty()))
+    }
+
+    async fn remove_items(&mut self, _keys: &[Self::Key]) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
 #[test]
 fn test_mock_pool_recovery_state() {
     let recovery_state = PoolRecoveryState::<MockTxId> {
@@ -163,6 +201,30 @@ fn test_mock_pool_recovery_state() {
         deserialized.last_item_timestamp,
         recovery_state.last_item_timestamp
     );
+}
+
+#[tokio::test]
+async fn storage_failure_does_not_mark_tx_pending() {
+    let mut pool = Mempool::<
+        HeaderId,
+        MockTransaction<MockMessage>,
+        MockTxId,
+        FailingStorageAdapter,
+        RuntimeServiceId,
+    >::new((), FailingStorageAdapter);
+
+    let tx = sample_removed_tx();
+    let tx_id = tx.id();
+
+    let error = pool
+        .add_item(tx_id, tx)
+        .await
+        .expect_err("storage failure should reject mempool add");
+
+    assert!(matches!(error, MempoolError::StorageError(_)));
+    assert_eq!(pool.pending_item_count(), 0);
+    assert_eq!(pool.status(&[tx_id]), vec![Status::Unknown]);
+    assert!(pool.save().pending_items.is_empty());
 }
 
 #[tokio::test]
