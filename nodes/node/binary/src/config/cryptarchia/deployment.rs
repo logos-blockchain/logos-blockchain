@@ -1,9 +1,10 @@
 use core::num::{NonZero, NonZeroU32};
 use std::collections::HashMap;
 
+use lb_chain_service::Epoch;
 use lb_core::{
-    block::{BlockNumber, genesis::GenesisBlock},
-    sdp::{MinStake, ServiceType},
+    block::genesis::GenesisBlock,
+    sdp::{MinStake, NumberOfEpochs, ServiceType},
 };
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length, time::epoch_length,
@@ -88,8 +89,8 @@ pub struct SdpConfig {
 // provided.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServiceParameters {
-    pub lock_period: u64,
-    pub inactivity_period: u64,
-    pub retention_period: u64,
-    pub timestamp: BlockNumber,
+    pub lock_period: NumberOfEpochs,
+    pub inactivity_period: NumberOfEpochs,
+    pub retention_period: NumberOfEpochs,
+    pub epoch: Epoch,
 }

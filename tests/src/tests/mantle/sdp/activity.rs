@@ -7,12 +7,14 @@ use std::{
     time::Duration,
 };
 
-use lb_core::sdp::ServiceType;
+use lb_chain_service::Epoch;
+use lb_core::sdp::{NumberOfEpochs, ServiceType};
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
+use lb_zone_sdk::Slot;
 use logos_blockchain_tests::common::manual_cluster::{
-    ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,
+    ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_tip_slot,
 };
 use testing_framework_core::scenario::DynError;
 use tokio::time::sleep;
@@ -29,7 +31,7 @@ const NODE_COUNT: usize = 2;
 ///    automatically submitted valid activity messages that the ledger accepted.
 #[tokio::test]
 async fn sdp_blend_activity() {
-    let blocks_per_session = Arc::new(AtomicU64::new(0));
+    let slots_per_epoch = Arc::new(AtomicU64::new(0));
     let (_base, nodes) = start_local_manual_cluster_with_layout(
         "sdp-blend-activity",
         "mantle-sdp",
@@ -40,12 +42,12 @@ async fn sdp_blend_activity() {
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
         {
-            let blocks_per_session = Arc::clone(&blocks_per_session);
-            move |config| Ok::<_, DynError>(test_config(config, &blocks_per_session))
+            let slots_per_epoch = Arc::clone(&slots_per_epoch);
+            move |config| Ok::<_, DynError>(test_config(config, &slots_per_epoch))
         },
     )
     .await;
-    let blocks_per_session = blocks_per_session.load(Ordering::Relaxed);
+    let slots_per_epoch = slots_per_epoch.load(Ordering::Relaxed);
 
     let node0 = &nodes[0];
     let node1 = &nodes[1];
@@ -61,24 +63,12 @@ async fn sdp_blend_activity() {
 
     // Wait past the point where declarations would be removed if no activity
     // proofs were submitted.
-    //
-    // session_duration = blocks_per_epoch = 6 blocks
-    //
-    // A declaration created at genesis with no activity would be removed
-    // after (inactivity_period + retention_period) * session_duration
-    // = (1 + 1) * 6 = 12 blocks.
-    //
-    // We wait for more sessions to give a solid margin and ensure that if
-    // activity proofs are being submitted, they keep the declarations alive.
-    let survival_sessions = INACTIVITY_PERIOD + RETENTION_PERIOD + 1; // +1 margin
-    let target_height = survival_sessions * blocks_per_session;
-    println!(
-        "Waiting for {target_height} blocks ({survival_sessions} sessions, {blocks_per_session} blocks/session)",
-    );
-
-    wait_for_nodes_height(
+    let survival_epochs = INACTIVITY_PERIOD + RETENTION_PERIOD + 1.into(); // +1 margin
+    let survival_slots =
+        Slot::new(u64::from(survival_epochs.into_inner().into_inner()) * slots_per_epoch);
+    wait_for_nodes_tip_slot(
         &[&node0.client, &node1.client],
-        target_height,
+        survival_slots,
         Duration::from_secs(500),
     )
     .await;
@@ -99,10 +89,10 @@ async fn sdp_blend_activity() {
     );
 }
 
-const INACTIVITY_PERIOD: u64 = 1;
-const RETENTION_PERIOD: u64 = 1;
+const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
+const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
 
-fn test_config(mut config: RunConfig, blocks_per_session: &AtomicU64) -> RunConfig {
+fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
     config.deployment.cryptarchia.epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
@@ -113,8 +103,8 @@ fn test_config(mut config: RunConfig, blocks_per_session: &AtomicU64) -> RunConf
     config.deployment.cryptarchia.slot_activation_coeff =
         NonNegativeRatio::new(1, 10.try_into().unwrap());
 
-    blocks_per_session.store(
-        config.deployment.cryptarchia.blocks_per_epoch(),
+    slots_per_epoch.store(
+        config.deployment.cryptarchia.slots_per_epoch(),
         Ordering::Relaxed,
     );
 

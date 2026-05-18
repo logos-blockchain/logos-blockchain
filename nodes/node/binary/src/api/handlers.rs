@@ -27,6 +27,7 @@ use lb_core::{
         Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
         tx_builder::MantleTxBuilder,
     },
+    sdp::Declarations,
 };
 use lb_http_api_common::{
     bodies::{
@@ -173,6 +174,8 @@ where
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: Debug
         + Send
@@ -230,6 +233,8 @@ where
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: Debug
         + Send
@@ -955,6 +960,8 @@ where
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: Debug
         + Sync
@@ -1019,6 +1026,8 @@ where
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     ConsensusService: ServiceData<Message = ConsensusMsg<SignedMantleTx>> + 'static,
     RuntimeServiceId: Debug
@@ -1058,6 +1067,8 @@ where
     StorageBackend::Block: Serialize,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<SignedMantleTx>> + TryInto<Block<SignedMantleTx>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: Debug
         + Send

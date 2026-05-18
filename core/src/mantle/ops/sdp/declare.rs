@@ -1,3 +1,4 @@
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 
 use super::{MAX_DECLARATION_LOCATOR, SDPDeclareOp, SdpError};
@@ -21,7 +22,7 @@ pub struct SDPDeclareValidationContext<'a> {
 
 pub struct SDPDeclareExecutionContext {
     pub utxo_tree: Utxos,
-    pub block_number: u64,
+    pub epoch: Epoch,
     pub declarations: Declarations,
     pub locked_notes: LockedNotes,
     pub min_stake: MinStake,
@@ -100,7 +101,7 @@ impl Operation for SDPDeclareOp {
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
         let declaration_id = self.id();
-        let declaration = Declaration::new(ctx.block_number, self);
+        let declaration = Declaration::new(ctx.epoch, self);
         ctx.declarations = ctx.declarations.insert(declaration_id, declaration);
         let utxo = ctx
             .utxo_tree

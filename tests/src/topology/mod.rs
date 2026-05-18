@@ -11,7 +11,7 @@ use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     block::genesis::GenesisBlock,
     mantle::{GenesisTx as _, Note, NoteId},
-    sdp::{Locator, ServiceType},
+    sdp::{Locator, NumberOfEpochs, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkKey;
 use lb_network_service::backends::libp2p::Libp2pInfo;
@@ -38,7 +38,7 @@ pub struct TopologyConfig {
     pub extra_genesis_notes: Vec<GenesisNoteSpec>,
     /// Override the SDP `lock_period` for this test topology.
     /// If None, uses the default from deployment settings (10).
-    pub lock_period_override: Option<u64>,
+    pub lock_period_override: Option<NumberOfEpochs>,
 }
 
 impl TopologyConfig {
@@ -82,7 +82,7 @@ impl TopologyConfig {
     }
 
     #[must_use]
-    pub const fn with_lock_period(mut self, lock_period: u64) -> Self {
+    pub const fn with_lock_period(mut self, lock_period: NumberOfEpochs) -> Self {
         self.lock_period_override = Some(lock_period);
         self
     }
@@ -221,7 +221,7 @@ impl Topology {
     async fn spawn_validators(
         config: Vec<GeneralConfig>,
         genesis_block: GenesisBlock,
-        lock_period_override: Option<u64>,
+        lock_period_override: Option<NumberOfEpochs>,
     ) -> Vec<Validator> {
         let mut validators = Vec::new();
         for general_config in config {

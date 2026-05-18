@@ -919,6 +919,7 @@ mod tests {
                     header_id,
                     parent_id,
                     store_result.unwrap(),
+                    Bytes::new(),
                 ))
                 .await
                 .expect("Failed to store block");

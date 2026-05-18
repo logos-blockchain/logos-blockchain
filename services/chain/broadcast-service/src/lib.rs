@@ -6,8 +6,9 @@ use derivative::Derivative;
 use futures::{Stream, StreamExt as _, future::ready, stream::iter};
 use lb_core::{
     header::HeaderId,
-    sdp::{ProviderId, ProviderInfo, SessionNumber},
+    sdp::{ProviderId, ProviderInfo},
 };
+use lb_cryptarchia_engine::Epoch;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{
@@ -22,11 +23,11 @@ use tracing::{debug, error, info};
 
 const BROADCAST_CHANNEL_SIZE: usize = 128;
 
-pub type SessionSubscription = Pin<Box<dyn Stream<Item = SessionUpdate> + Send + Sync>>;
+pub type ActiveProvidersSubscription = Pin<Box<dyn Stream<Item = ActiveProviders> + Send + Sync>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionUpdate {
-    pub session_number: SessionNumber,
+pub struct ActiveProviders {
+    pub epoch: Epoch,
     pub providers: HashMap<ProviderId, ProviderInfo>,
 }
 
@@ -40,22 +41,22 @@ pub struct BlockInfo {
 #[derivative(Debug)]
 pub enum BlockBroadcastMsg {
     BroadcastFinalizedBlock(BlockInfo),
-    BroadcastBlendSession(SessionUpdate),
+    BroadcastBlendProviders(ActiveProviders),
     SubscribeToFinalizedBlocks {
         result_sender: oneshot::Sender<broadcast::Receiver<BlockInfo>>,
     },
-    SubscribeBlendSession {
+    SubscribeBlendProviders {
         #[derivative(Debug = "ignore")]
-        result_sender: oneshot::Sender<SessionSubscription>,
+        result_sender: oneshot::Sender<ActiveProvidersSubscription>,
     },
 }
 
 pub struct BlockBroadcastService<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     finalized_blocks: broadcast::Sender<BlockInfo>,
-    blend_session: broadcast::Sender<SessionUpdate>,
-    // For sending latest session on subscription.
-    last_blend_session: Option<SessionUpdate>,
+    blend_providers: broadcast::Sender<ActiveProviders>,
+    // For sending latest blend active providers on subscription.
+    last_blend_providers: Option<ActiveProviders>,
 }
 
 impl<RuntimeServiceId> ServiceData for BlockBroadcastService<RuntimeServiceId> {
@@ -75,13 +76,13 @@ where
         _initial_state: Self::State,
     ) -> Result<Self, overwatch::DynError> {
         let (finalized_blocks, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
-        let (blend_session, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
+        let (blend_providers, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
 
         Ok(Self {
             service_resources_handle,
             finalized_blocks,
-            blend_session,
-            last_blend_session: None,
+            blend_providers,
+            last_blend_providers: None,
         })
     }
 
@@ -99,10 +100,10 @@ where
                         debug!("No listener for finalized blocks. Not broadcasting. ");
                     }
                 }
-                BlockBroadcastMsg::BroadcastBlendSession(session) => {
-                    self.last_blend_session = Some(session.clone());
-                    if self.blend_session.send(session).is_err() {
-                        debug!("No listener for blend sessions. Not broadcasting. ");
+                BlockBroadcastMsg::BroadcastBlendProviders(providers) => {
+                    self.last_blend_providers = Some(providers.clone());
+                    if self.blend_providers.send(providers).is_err() {
+                        debug!("No listener for blend active providers. Not broadcasting. ");
                     }
                 }
                 BlockBroadcastMsg::SubscribeToFinalizedBlocks { result_sender } => {
@@ -113,15 +114,15 @@ where
                         error!("Could not subscribe to new blocks channel: {err:?}");
                     }
                 }
-                BlockBroadcastMsg::SubscribeBlendSession { result_sender } => {
+                BlockBroadcastMsg::SubscribeBlendProviders { result_sender } => {
                     if result_sender
-                        .send(create_session_stream(
-                            self.last_blend_session.clone(),
-                            &self.blend_session,
+                        .send(create_active_providers_stream(
+                            self.last_blend_providers.clone(),
+                            &self.blend_providers,
                         ))
                         .is_err()
                     {
-                        error!("Could not subscribe to blend session channel.");
+                        error!("Could not subscribe to blend active providers channel.");
                     }
                 }
             }
@@ -137,10 +138,10 @@ where
 /// The stream immediately yields the current value if `Some`, else it will wait
 /// for the first `Ok` value as returned by the broadcast channel wrapper
 /// stream.
-fn create_session_stream(
-    current_value: Option<SessionUpdate>,
-    sender: &broadcast::Sender<SessionUpdate>,
-) -> SessionSubscription {
+fn create_active_providers_stream(
+    current_value: Option<ActiveProviders>,
+    sender: &broadcast::Sender<ActiveProviders>,
+) -> ActiveProvidersSubscription {
     Box::pin(
         iter(current_value)
             .chain(BroadcastStream::new(sender.subscribe()).filter_map(|item| ready(item.ok()))),

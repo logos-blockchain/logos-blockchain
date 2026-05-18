@@ -27,7 +27,7 @@ use lb_core::{
         tx::{GasPrices, MantleTxContext, MantleTxGasContext},
     },
     proofs::leader_proof,
-    sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber},
+    sdp::Declarations,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
@@ -485,21 +485,8 @@ impl LedgerState {
     }
 
     #[must_use]
-    pub fn sdp_declarations(&self) -> Vec<(DeclarationId, Declaration)> {
+    pub fn sdp_declarations(&self) -> Declarations {
         self.mantle_ledger.sdp_declarations()
-    }
-
-    #[must_use]
-    pub fn active_session_providers(
-        &self,
-        service_type: ServiceType,
-    ) -> Option<HashMap<ProviderId, ProviderInfo>> {
-        self.mantle_ledger.active_session_providers(service_type)
-    }
-
-    #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, SessionNumber> {
-        self.mantle_ledger.active_sessions()
     }
 
     #[must_use]

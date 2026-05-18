@@ -1,6 +1,6 @@
 use std::{collections::HashSet, time::SystemTime};
 
-use lb_core::{header::HeaderId, mantle::GenesisTx as _};
+use lb_core::{header::HeaderId, mantle::GenesisTx as _, sdp::Declarations};
 use lb_ledger::LedgerState;
 use overwatch::{DynError, services::state::ServiceState};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ pub struct CryptarchiaConsensusState {
     pub(crate) lib_block_length: u64,
     pub(crate) lib_block_slot: lb_cryptarchia_engine::Slot,
     pub(crate) genesis_id: HeaderId,
+    pub(crate) genesis_declarations: Declarations,
     /// Set of blocks that have been pruned from the engine but have not yet
     /// been deleted from the persistence layer because of some unexpected
     /// error.
@@ -47,6 +48,7 @@ impl CryptarchiaConsensusState {
             tip: cryptarchia.consensus.tip_branch().id(),
             lib: lib.id(),
             genesis_id: cryptarchia.genesis_id,
+            genesis_declarations: cryptarchia.genesis_declarations.clone(),
             lib_ledger_state,
             lib_block_length,
             lib_block_slot,
@@ -66,26 +68,33 @@ impl ServiceState for CryptarchiaConsensusState {
     fn from_settings(
         settings: &<Self as ServiceState>::Settings,
     ) -> Result<Self, <Self as ServiceState>::Error> {
-        let (lib_id, genesis_id, lib_ledger_state) = match &settings.starting_state {
-            StartingState::Genesis { genesis_block } => {
-                let lib_id = genesis_block.header().id();
-                let genesis_tx = genesis_block
-                    .transactions()
-                    .next()
-                    .expect("Genesis block should be valid");
-                let ledger = LedgerState::from_genesis_tx(
-                    genesis_tx,
-                    &settings.config,
-                    genesis_tx.cryptarchia_parameter().epoch_nonce,
-                )?;
-                (lib_id, lib_id, ledger)
-            }
-            StartingState::Lib {
-                lib_id,
-                genesis_id,
-                lib_ledger_state,
-            } => (*lib_id, *genesis_id, lib_ledger_state.as_ref().clone()),
-        };
+        let (lib_id, genesis_id, genesis_declarations, lib_ledger_state) =
+            match &settings.starting_state {
+                StartingState::Genesis { genesis_block } => {
+                    let lib_id = genesis_block.header().id();
+                    let genesis_tx = genesis_block
+                        .transactions()
+                        .next()
+                        .expect("Genesis block should be valid");
+                    let ledger = LedgerState::from_genesis_tx(
+                        genesis_tx,
+                        &settings.config,
+                        genesis_tx.cryptarchia_parameter().epoch_nonce,
+                    )?;
+                    (lib_id, lib_id, ledger.sdp_declarations(), ledger)
+                }
+                StartingState::Lib {
+                    lib_id,
+                    genesis_id,
+                    genesis_declarations,
+                    lib_ledger_state,
+                } => (
+                    *lib_id,
+                    *genesis_id,
+                    genesis_declarations.clone(),
+                    lib_ledger_state.as_ref().clone(),
+                ),
+            };
 
         Ok(Self {
             tip: lib_id,
@@ -94,6 +103,7 @@ impl ServiceState for CryptarchiaConsensusState {
             lib_block_length: 0,
             lib_block_slot: lb_cryptarchia_engine::Slot::default(),
             genesis_id,
+            genesis_declarations,
             storage_blocks_to_remove: HashSet::new(),
             last_engine_state: None,
         })
@@ -109,12 +119,18 @@ pub struct LastEngineState {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::HashMap,
         num::{NonZero, NonZeroU64},
         sync::Arc,
     };
 
-    use lb_core::sdp::{MinStake, ServiceParameters, ServiceType};
+    use lb_core::{
+        mantle::NoteId,
+        sdp::{Declaration, DeclarationMessage, MinStake, ServiceParameters, ServiceType},
+    };
     use lb_cryptarchia_engine::State::Bootstrapping;
+    use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
@@ -131,30 +147,33 @@ mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
         );
+        let epoch_config = lb_cryptarchia_engine::EpochConfig {
+            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+            epoch_period_nonce_buffer: 1.try_into().unwrap(),
+            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+        };
+        let epoch_length =
+            epoch_config.epoch_length(cryptarchia_engine_config.base_period_length());
+
         let ledger_config = lb_ledger::Config {
-            epoch_config: lb_cryptarchia_engine::EpochConfig {
-                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-                epoch_period_nonce_buffer: 1.try_into().unwrap(),
-                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-            },
+            epoch_config,
             consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            lock_period: 10,
-                            inactivity_period: 20,
-                            retention_period: 100,
-                            timestamp: 0,
-                            session_duration: 10,
+                            lock_period: 10.into(),
+                            inactivity_period: 20.into(),
+                            retention_period: 100.into(),
+                            epoch: 0.into(),
                         },
                     )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
-                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        rounds_per_session: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -238,6 +257,7 @@ mod tests {
                 ledger: ledger_state,
                 consensus: cryptarchia_engine.clone(),
                 genesis_id: genesis_header_id,
+                genesis_declarations: Declarations::default(),
             },
             pruned_stale_blocks.clone(),
         )
@@ -255,36 +275,47 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "Test function")]
     fn restore_preserves_info() {
         let genesis_header_id: HeaderId = [0; 32].into();
+        let genesis_decl = DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            locators: vec![],
+            provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
+            zk_id: ZkKey::zero().to_public_key(),
+            locked_note_id: NoteId::from(Fr::ZERO),
+        };
+
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
         );
+        let epoch_config = lb_cryptarchia_engine::EpochConfig {
+            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+            epoch_period_nonce_buffer: 1.try_into().unwrap(),
+            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+        };
+        let epoch_length =
+            epoch_config.epoch_length(cryptarchia_engine_config.base_period_length());
+
         let ledger_config = lb_ledger::Config {
-            epoch_config: lb_cryptarchia_engine::EpochConfig {
-                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-                epoch_period_nonce_buffer: 1.try_into().unwrap(),
-                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-            },
+            epoch_config,
             consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            lock_period: 10,
-                            inactivity_period: 20,
-                            retention_period: 100,
-                            timestamp: 0,
-                            session_duration: 10,
+                            lock_period: 10.into(),
+                            inactivity_period: 20.into(),
+                            retention_period: 100.into(),
+                            epoch: 0.into(),
                         },
                     )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
-                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        rounds_per_session: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -336,6 +367,13 @@ mod tests {
                 ledger_config.clone(),
             ),
             genesis_id: genesis_header_id,
+            genesis_declarations: Declarations::from_iter([(
+                ServiceType::BlendNetwork,
+                HashMap::from_iter([(
+                    genesis_decl.id(),
+                    Declaration::new(0.into(), &genesis_decl),
+                )]),
+            )]),
         };
         let info_before = original.info();
 
@@ -345,6 +383,10 @@ mod tests {
             HashSet::new(),
         )
         .unwrap();
+        assert_eq!(
+            saved_state.genesis_declarations,
+            original.genesis_declarations
+        );
 
         // Restore (simulates initialize_cryptarchia on restart):
         // Create a new Cryptarchia from the saved LIB with its slot and length.
@@ -352,6 +394,7 @@ mod tests {
             saved_state.lib,
             saved_state.lib_ledger_state.clone(),
             saved_state.genesis_id,
+            saved_state.genesis_declarations.clone(),
             ledger_config,
             *engine.state(),
             saved_state.lib_block_slot,

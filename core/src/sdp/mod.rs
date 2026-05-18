@@ -2,9 +2,15 @@ pub mod blend;
 pub mod locked_notes;
 
 use core::str::FromStr;
-use std::hash::Hash;
+use std::{
+    collections::HashMap,
+    hash::Hash,
+    ops::{Add, Sub},
+};
 
 use blake2::{Blake2b, Digest as _};
+use bytes::Bytes;
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use multiaddr::{Multiaddr, Protocol};
 use nom::{IResult, Parser as _, bytes::complete::take};
@@ -13,6 +19,7 @@ use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
+    codec::{self, DeserializeOp as _, SerializeOp as _},
     mantle::{NoteId, ops::channel::Ed25519PublicKey},
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
@@ -30,17 +37,59 @@ pub struct MinStake {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
-    pub lock_period: u64,
-    pub inactivity_period: u64,
-    pub retention_period: u64,
-    pub timestamp: BlockNumber,
-    pub session_duration: BlockNumber,
+    /// Minimum epochs during which a declaration cannot be withdrawn
+    pub lock_period: NumberOfEpochs,
+    /// Maximum epochs during which an activity message must be sent
+    pub inactivity_period: NumberOfEpochs,
+    /// Epochs after which a declaration can be safely deleted by Garbage
+    /// Collection
+    pub retention_period: NumberOfEpochs,
+    // Epoch number at which this parameter was set
+    pub epoch: Epoch,
 }
 
-impl ServiceParameters {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NumberOfEpochs(Epoch);
+
+impl NumberOfEpochs {
     #[must_use]
-    pub const fn session_for_block(&self, block_number: BlockNumber) -> SessionNumber {
-        block_number / self.session_duration
+    pub const fn new(epoch: Epoch) -> Self {
+        Self(epoch)
+    }
+
+    #[must_use]
+    pub const fn into_inner(self) -> Epoch {
+        self.0
+    }
+}
+
+impl From<u32> for NumberOfEpochs {
+    fn from(value: u32) -> Self {
+        Self(value.into())
+    }
+}
+
+impl Add for NumberOfEpochs {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Add<NumberOfEpochs> for Epoch {
+    type Output = Self;
+
+    fn add(self, rhs: NumberOfEpochs) -> Self::Output {
+        self + rhs.0
+    }
+}
+
+impl Sub<NumberOfEpochs> for Epoch {
+    type Output = Self;
+
+    fn sub(self, rhs: NumberOfEpochs) -> Self::Output {
+        self - rhs.0
     }
 }
 
@@ -177,9 +226,9 @@ pub struct Declaration {
     pub locked_note_id: NoteId,
     pub locators: Vec<Locator>,
     pub zk_id: ZkPublicKey,
-    pub created: BlockNumber,
-    pub active: BlockNumber,
-    pub withdrawn: Option<BlockNumber>,
+    pub created: Epoch,
+    pub active: Epoch,
+    pub withdrawn: Option<Epoch>,
     pub nonce: Nonce,
 }
 
@@ -191,18 +240,59 @@ pub struct ProviderInfo {
 
 impl Declaration {
     #[must_use]
-    pub fn new(block_number: BlockNumber, declaration_msg: &DeclarationMessage) -> Self {
+    pub fn new(epoch: Epoch, declaration_msg: &DeclarationMessage) -> Self {
         Self {
             service_type: declaration_msg.service_type,
             provider_id: declaration_msg.provider_id,
             locked_note_id: declaration_msg.locked_note_id,
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
-            created: block_number,
-            active: block_number,
+            created: epoch,
+            active: epoch,
             withdrawn: None,
             nonce: 0,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Declarations(HashMap<ServiceType, HashMap<DeclarationId, Declaration>>);
+
+impl Declarations {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&ServiceType, &HashMap<DeclarationId, Declaration>)> {
+        self.0.iter()
+    }
+}
+
+impl From<HashMap<ServiceType, HashMap<DeclarationId, Declaration>>> for Declarations {
+    fn from(value: HashMap<ServiceType, HashMap<DeclarationId, Declaration>>) -> Self {
+        Self(value)
+    }
+}
+
+impl FromIterator<(ServiceType, HashMap<DeclarationId, Declaration>)> for Declarations {
+    fn from_iter<I: IntoIterator<Item = (ServiceType, HashMap<DeclarationId, Declaration>)>>(
+        iter: I,
+    ) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl TryFrom<Bytes> for Declarations {
+    type Error = codec::Error;
+
+    fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
+        Self::from_bytes(&bytes)
+    }
+}
+
+impl TryFrom<Declarations> for Bytes {
+    type Error = codec::Error;
+
+    fn try_from(this: Declarations) -> Result<Self, Self::Error> {
+        this.to_bytes()
     }
 }
 

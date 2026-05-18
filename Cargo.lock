@@ -4251,6 +4251,7 @@ dependencies = [
  "derivative",
  "futures",
  "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
  "overwatch",
  "serde",
  "tokio",
@@ -4337,6 +4338,7 @@ dependencies = [
  "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
+ "logos-blockchain-tracing-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "overwatch",
@@ -4411,6 +4413,7 @@ version = "0.1.2"
 dependencies = [
  "hex",
  "logos-blockchain-core",
+ "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-libp2p",

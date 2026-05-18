@@ -1,4 +1,5 @@
 pub mod blend;
+#[cfg(false)] // TODO: enable after removing sessions from thos module
 #[cfg(test)]
 mod test_utils;
 

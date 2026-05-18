@@ -23,6 +23,7 @@ use crate::{
 
 const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
 const BLOCK_PARENT_PREFIX: &str = "block_parent/";
+const BLOCK_SDP_DECLARATIONS_PREFIX: &str = "block_sdp/";
 /// A stream of `HeaderId`s, used for scanning immutable header IDs. We return a
 /// stream here to allow for efficient pagination of large ranges of immutable
 /// blocks.
@@ -32,7 +33,9 @@ pub type HeaderIdStream = Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + S
 impl StorageChainApi for RocksBackend {
     type Error = Error;
     type Block = Bytes;
+    type SdpDeclarations = Bytes;
     type Tx = Bytes;
+
     async fn get_block(&mut self, header_id: HeaderId) -> Result<Option<Self::Block>, Self::Error> {
         let header_id: [u8; 32] = header_id.into();
         let key = Bytes::copy_from_slice(&header_id);
@@ -44,17 +47,22 @@ impl StorageChainApi for RocksBackend {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
+        sdp_declarations: Self::SdpDeclarations,
     ) -> Result<(), Self::Error> {
         let header_bytes: [u8; 32] = header_id.into();
         let block_key = Bytes::copy_from_slice(&header_bytes);
+
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, header_bytes);
         let parent_bytes: [u8; 32] = parent_id.into();
         let parent_value = Bytes::copy_from_slice(&parent_bytes);
+
+        let sdp_key = key_bytes(BLOCK_SDP_DECLARATIONS_PREFIX, header_bytes);
 
         let db_transaction = self.txn(move |db| {
             let mut batch = WriteBatch::default();
             batch.put(block_key, block);
             batch.put(parent_key, parent_value);
+            batch.put(sdp_key, sdp_declarations);
             db.write(batch)?;
             Ok(None)
         });
@@ -69,6 +77,7 @@ impl StorageChainApi for RocksBackend {
         let encoded_header_id: [u8; 32] = header_id.into();
         let block_key = Bytes::copy_from_slice(&encoded_header_id);
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, encoded_header_id);
+        let sdp_key = key_bytes(BLOCK_SDP_DECLARATIONS_PREFIX, encoded_header_id);
 
         // Load the block first so we can return it.
         let val = self.load(&block_key).await?;
@@ -77,6 +86,7 @@ impl StorageChainApi for RocksBackend {
             let mut batch = WriteBatch::default();
             batch.delete(block_key);
             batch.delete(parent_key);
+            batch.delete(sdp_key);
             db.write(batch)?;
             Ok(None)
         });
@@ -94,6 +104,15 @@ impl StorageChainApi for RocksBackend {
             .await?
             .map(|bytes| bytes.as_ref().try_into().map_err(Into::into))
             .transpose()
+    }
+
+    async fn get_sdp_declarations(
+        &mut self,
+        header_id: HeaderId,
+    ) -> Result<Option<Self::SdpDeclarations>, Self::Error> {
+        let header_bytes: [u8; 32] = header_id.into();
+        let key = key_bytes(BLOCK_SDP_DECLARATIONS_PREFIX, header_bytes);
+        self.load(&key).await.map_err(Into::into)
     }
 
     async fn store_immutable_block_ids(

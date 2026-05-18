@@ -5,7 +5,7 @@ use lb_blend::{
     crypto::merkle::sort_nodes_and_build_merkle_tree,
     scheduling::membership::{Membership, Node},
 };
-use lb_chain_broadcast_service::{BlockBroadcastMsg, SessionSubscription, SessionUpdate};
+use lb_chain_broadcast_service::{ActiveProviders, ActiveProvidersSubscription, BlockBroadcastMsg};
 use lb_core::sdp::{ProviderId, ProviderInfo};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use overwatch::{
@@ -71,26 +71,21 @@ where
 
         Ok(Box::pin(
             session_stream
-                .map(
-                    |SessionUpdate {
-                         providers,
-                         session_number,
-                     }| {
-                        (
-                            providers
-                                .iter()
-                                .filter_map(|(provider_id, provider_info)| {
-                                    node_from_provider::<NodeId>(provider_id, provider_info)
-                                })
-                                .collect::<Vec<_>>(),
-                            session_number,
-                        )
-                    },
-                )
+                .map(|ActiveProviders { providers, epoch }| {
+                    (
+                        providers
+                            .iter()
+                            .filter_map(|(provider_id, provider_info)| {
+                                node_from_provider::<NodeId>(provider_id, provider_info)
+                            })
+                            .collect::<Vec<_>>(),
+                        epoch,
+                    )
+                })
                 // Sort nodes (if any) by their ZK public key to build a Merkle tree, since the
                 // returned `HashMap` from the chain broadcast service is
                 // non-deterministic across different machines.
-                .map(move |(mut nodes, session_number)| {
+                .map(move |(mut nodes, epoch)| {
                     let zk_info = if nodes.is_empty() {
                         None
                     } else {
@@ -119,7 +114,8 @@ where
                     MembershipInfo {
                         membership,
                         zk: zk_info,
-                        session_number,
+                        // TODO: change `session_number` to `epoch`
+                        session_number: epoch.into_inner().into(),
                     }
                 }),
         ))
@@ -132,11 +128,11 @@ where
     NodeId: Sync,
 {
     /// Subscribe to membership updates for the given service type.
-    async fn subscribe_stream(&self) -> Result<SessionSubscription, Error> {
+    async fn subscribe_stream(&self) -> Result<ActiveProvidersSubscription, Error> {
         let (sender, receiver) = oneshot::channel();
 
         self.relay
-            .send(BlockBroadcastMsg::SubscribeBlendSession {
+            .send(BlockBroadcastMsg::SubscribeBlendProviders {
                 result_sender: sender,
             })
             .await

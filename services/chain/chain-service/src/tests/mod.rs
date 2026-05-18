@@ -1,3 +1,6 @@
+mod node;
+mod sdp;
+
 use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Display},
@@ -13,7 +16,7 @@ use lb_core::{
         ops::leader_claim::{VoucherCm, VoucherSecret},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
-    sdp::ServiceParameters,
+    sdp::{Declarations, ServiceParameters},
 };
 use lb_cryptarchia_engine::{EpochConfig, Slot};
 use lb_cryptarchia_sync::HeaderId;
@@ -53,6 +56,7 @@ fn cryptarchia_switch_to_online() {
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
+        Declarations::default(),
         config,
         lb_cryptarchia_engine::State::Bootstrapping,
         Slot::new(0),
@@ -135,6 +139,7 @@ async fn get_block_ids() {
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
+        Declarations::default(),
         config,
         lb_cryptarchia_engine::State::Online,
         Slot::genesis(),
@@ -240,35 +245,37 @@ async fn get_block_ids() {
 }
 
 #[must_use]
-fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
+pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
     let mut service_params = HashMap::new();
     service_params.insert(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
-            lock_period: 10,
-            inactivity_period: 1,
-            retention_period: 1,
-            timestamp: 0,
-            session_duration: 10,
+            lock_period: 10.into(),
+            inactivity_period: 1.into(),
+            retention_period: 1.into(),
+            epoch: 0.into(),
         },
     );
+    let epoch_config = EpochConfig {
+        epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
+        epoch_period_nonce_buffer: 3.try_into().unwrap(),
+        epoch_period_nonce_stabilization: 4.try_into().unwrap(),
+    };
+    let consensus_config = lb_cryptarchia_engine::Config::new(
+        security_param,
+        NonNegativeRatio::new(1, 10.try_into().unwrap()),
+        1.0.try_into().unwrap(),
+    );
+    let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
 
     lb_ledger::Config {
-        epoch_config: EpochConfig {
-            epoch_stake_distribution_stabilization: 3.try_into().unwrap(),
-            epoch_period_nonce_buffer: 3.try_into().unwrap(),
-            epoch_period_nonce_stabilization: 4.try_into().unwrap(),
-        },
-        consensus_config: lb_cryptarchia_engine::Config::new(
-            security_param,
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
-            1.0.try_into().unwrap(),
-        ),
+        epoch_config,
+        consensus_config,
         sdp_config: lb_ledger::mantle::sdp::Config {
             service_params: Arc::new(service_params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
-                    rounds_per_session: 10.try_into().unwrap(),
+                    rounds_per_session: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: 1.0.try_into().unwrap(),
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),
@@ -286,7 +293,7 @@ fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
 }
 
 /// Builds a block by grinding through slots
-fn try_build_block(
+pub fn try_build_block(
     cryptarchia: &Cryptarchia,
     parent: HeaderId,
     utxo: Utxo,
@@ -340,7 +347,7 @@ fn try_build_block(
     None
 }
 
-fn utxo() -> (ZkKey, Utxo) {
+pub fn utxo() -> (ZkKey, Utxo) {
     let mut op_id = [0u8; 32];
     thread_rng().fill_bytes(&mut op_id);
     let zk_sk = ZkKey::from(Fr::ZERO);
@@ -352,7 +359,7 @@ fn utxo() -> (ZkKey, Utxo) {
     (zk_sk, utxo)
 }
 
-fn spawn_storage_service(
+pub fn spawn_storage_service(
     mut rx: mpsc::Receiver<StorageMsg<RocksBackend>>,
 ) -> (JoinHandle<()>, TempDir) {
     let db_dir = TempDir::new().unwrap();
@@ -376,7 +383,7 @@ fn spawn_storage_service(
     (handle, db_dir)
 }
 
-struct TestRuntimeServiceId;
+pub struct TestRuntimeServiceId;
 
 impl AsServiceId<CryptarchiaConsensus<SignedMantleTx, RocksBackend, SystemTimeBackend, Self>>
     for TestRuntimeServiceId

@@ -20,6 +20,7 @@ use crate::api::backend::rocksdb::chain::HeaderIdStream;
 pub trait StorageChainApi {
     type Error: Error + Send + Sync + Debug + 'static;
     type Block: Send + Sync;
+    type SdpDeclarations: Send + Sync;
     type Tx: Send + Sync;
 
     async fn get_block(&mut self, header_id: HeaderId) -> Result<Option<Self::Block>, Self::Error>;
@@ -29,6 +30,7 @@ pub trait StorageChainApi {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
+        sdp_declarations: Self::SdpDeclarations,
     ) -> Result<(), Self::Error>;
 
     async fn remove_block(
@@ -40,6 +42,11 @@ pub trait StorageChainApi {
         &mut self,
         header_id: HeaderId,
     ) -> Result<Option<HeaderId>, Self::Error>;
+
+    async fn get_sdp_declarations(
+        &mut self,
+        header_id: HeaderId,
+    ) -> Result<Option<Self::SdpDeclarations>, Self::Error>;
 
     async fn store_immutable_block_ids(
         &mut self,

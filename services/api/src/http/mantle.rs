@@ -12,7 +12,7 @@ use lb_core::{
     block::Block,
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
-    sdp::Declaration,
+    sdp::{Declaration, Declarations},
 };
 use lb_storage_service::{
     StorageMsg, StorageService,
@@ -223,13 +223,16 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     ConsensusService: ServiceData<Message = ConsensusMsg<Transaction>>,
     RuntimeServiceId: Debug
         + Sync
         + Display
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
-        + AsServiceId<ConsensusService>,
+        + AsServiceId<ConsensusService>
+        + 'static,
 {
     let processed_blocks_stream =
         get_processed_blocks_event_stream::<Transaction, ConsensusService, RuntimeServiceId>(
@@ -319,6 +322,8 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: Debug
         + Send
@@ -395,6 +400,8 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: Debug
         + Send
@@ -487,6 +494,8 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: Debug
         + Send
@@ -530,6 +539,8 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     RuntimeServiceId: Debug
         + Send
@@ -709,9 +720,14 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let header_ids = get_immutable_blocks_header_ids(handle, from_slot, to_slot).await?;
 
@@ -760,9 +776,14 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay().await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
@@ -800,9 +821,14 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay().await?;
     let storage_adapter = StorageAdapter::<_, _, RuntimeServiceId>::new(relay).await;
@@ -838,9 +864,14 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
+    <StorageBackend as StorageChainApi>::SdpDeclarations:
+        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
-    RuntimeServiceId:
-        Debug + Sync + Display + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Sync
+        + Display
+        + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
+        + 'static,
 {
     let mut stream = get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(
         handle,
@@ -856,8 +887,13 @@ pub async fn get_sdp_declarations<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
 ) -> Result<Vec<Declaration>, super::DynError>
 where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
 {
     let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
     let (sender, receiver) = oneshot::channel();

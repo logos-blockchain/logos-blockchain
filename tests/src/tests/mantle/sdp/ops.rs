@@ -2,9 +2,14 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
+use lb_chain_service::Epoch;
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
@@ -13,7 +18,7 @@ use lb_core::{
         tx::{GasPrices, MantleTxGasContext},
         tx_builder::MantleTxBuilder,
     },
-    sdp::{Declaration, DeclarationMessage, ServiceType, WithdrawMessage},
+    sdp::{Declaration, DeclarationMessage, NumberOfEpochs, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::RunConfig;
@@ -25,7 +30,7 @@ use logos_blockchain_tests::common::{
     chain::wait_for_transactions_inclusion,
     manual_cluster::{
         build_local_manual_cluster, read_manual_node_logs,
-        wait_for_height as wait_for_manual_cluster_height,
+        wait_for_height as wait_for_manual_cluster_height, wait_for_tip_slot,
     },
     wallet::{
         current_utxos_for_public_key, fund_transfer_builder_from_utxos, utxos_for_public_key,
@@ -35,7 +40,7 @@ use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
 
-const LOCK_PERIOD: u64 = 3;
+const LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(3));
 
 /// High-level SDP flow covered by this E2E:
 /// - submit a `Declare` transaction backed by an unused genesis note and wait
@@ -67,6 +72,7 @@ async fn sdp_ops_e2e() {
         spare_note_secret_key,
         spare_note_id,
         lock_period,
+        slots_per_epoch,
     ) = start_sdp_manual_cluster("sdp-ops").await;
 
     let inclusion_timeout = Duration::from_mins(1);
@@ -152,12 +158,14 @@ async fn sdp_ops_e2e() {
     .await
     .expect("declaration should appear after submission");
 
-    let created_height = declaration_state.created;
+    let created_epoch = declaration_state.created;
     let current_nonce = declaration_state.nonce;
 
-    wait_for_manual_cluster_height(
+    // Wait until we're past the lock period
+    let target_epoch = created_epoch + lock_period.into_inner() + Epoch::new(1);
+    wait_for_tip_slot(
         &node0,
-        created_height + lock_period + 1,
+        (slots_per_epoch * u64::from(target_epoch.into_inner())).into(),
         Duration::from_mins(2),
     )
     .await
@@ -355,8 +363,10 @@ async fn start_sdp_manual_cluster(
     ZkKey,
     ZkKey,
     NoteId,
+    NumberOfEpochs,
     u64,
 ) {
+    let slots_per_epoch = Arc::new(AtomicU64::new(0));
     let funding_wallet =
         WalletAccount::deterministic(0, 2_000_000, false).expect("funding wallet should build");
 
@@ -382,7 +392,17 @@ async fn start_sdp_manual_cluster(
             "0",
             StartNodeOptions::default()
                 .with_persist_dir(node0_persist_dir)
-                .create_patch(|config| Ok::<_, DynError>(patch_sdp_manual_cluster_config(config))),
+                .create_patch({
+                    let slots_per_epoch = Arc::clone(&slots_per_epoch);
+                    move |config| {
+                        let config = patch_sdp_manual_cluster_config(config);
+                        slots_per_epoch.store(
+                            config.deployment.cryptarchia.slots_per_epoch(),
+                            Ordering::Relaxed,
+                        );
+                        Ok::<_, DynError>(config)
+                    }
+                }),
         )
         .await
         .expect("starting node-0 should succeed");
@@ -432,6 +452,7 @@ async fn start_sdp_manual_cluster(
         spare_wallet.secret_key,
         spare_note_id,
         LOCK_PERIOD,
+        slots_per_epoch.load(Ordering::Relaxed),
     )
 }
 

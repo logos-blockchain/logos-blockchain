@@ -45,6 +45,7 @@ lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-network-service            = { workspace = true }
 lb-storage-service            = { features = ["rocksdb-backend"], workspace = true }
+lb-tracing-service            = { workspace = true }
 lb-utxotree                   = { workspace = true }
 rand                          = { workspace = true }
 tempfile                      = { workspace = true }
