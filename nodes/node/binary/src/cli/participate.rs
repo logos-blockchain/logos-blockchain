@@ -15,6 +15,12 @@ use crate::{
 #[derive(Serialize)]
 struct ParticipationData {
     stakeholder_identity: ZkPublicKey,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blend: Option<BlendParticipationData>,
+}
+
+#[derive(Serialize)]
+struct BlendParticipationData {
     provider_id: Ed25519PublicKey,
     locators: Locators,
     service_type: ServiceType,
@@ -23,22 +29,10 @@ struct ParticipationData {
 pub fn run(args: &ParticipateArgs) -> Result<()> {
     let user_config = deserialize_config_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
 
-    let (_, zk_id) = user_config.blend_zk_key().map_err(|e| eyre!("{e}"))?;
-    let provider_id = user_config
-        .blend_provider_id()
-        .map_err(|e| eyre!("{e}"))
-        .map(|p| p.0)?;
-
-    let listen_addr = &user_config.blend.core.backend.listening_address;
-    let nat_config = &user_config.network.backend.swarm.nat;
-    let locator_addr = resolve_locator_addr(listen_addr, nat_config, args.external_address)?;
-    let locator = Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?;
-
+    let (_, stakeholder_identity) = user_config.blend_zk_key().map_err(|e| eyre!("{e}"))?;
     let data = ParticipationData {
-        stakeholder_identity: zk_id,
-        provider_id,
-        locators: Locators::from(locator),
-        service_type: ServiceType::BlendNetwork,
+        stakeholder_identity,
+        blend: build_blend_data(&user_config, args.external_address)?,
     };
 
     std::fs::create_dir_all(&args.output)?;
@@ -47,6 +41,30 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
     println!("Written: {}", output_path.display());
 
     Ok(())
+}
+
+/// Returns `Ok(Some(...))` when the blend signing key is present and the
+/// locator can be resolved, `Ok(None)` when the signing key is absent, or
+/// `Err` when the key is present but address resolution fails.
+fn build_blend_data(
+    user_config: &UserConfig,
+    external_address: Option<Ipv4Addr>,
+) -> Result<Option<BlendParticipationData>> {
+    let provider_id = match user_config.blend_provider_id() {
+        Ok(id) => id.0,
+        Err(_) => return Ok(None),
+    };
+
+    let listen_addr = &user_config.blend.core.backend.listening_address;
+    let nat_config = &user_config.network.backend.swarm.nat;
+    let locator_addr = resolve_locator_addr(listen_addr, nat_config, external_address)?;
+    let locator = Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?;
+
+    Ok(Some(BlendParticipationData {
+        provider_id,
+        locators: Locators::from(locator),
+        service_type: ServiceType::BlendNetwork,
+    }))
 }
 
 /// Resolves the blend locator address, replacing an unspecified host with a
