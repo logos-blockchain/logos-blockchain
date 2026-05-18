@@ -1,8 +1,10 @@
-use tracing::debug;
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::TryMapAddress,
 };
+
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::TRY_MAP_ADDRESS;
 
 /// The `TryMapAddress` state is responsible for attempting to map the address
 /// to a public-facing address on the NAT-box. If the mapping is successful, it
@@ -18,7 +20,8 @@ impl OnEvent for State<TryMapAddress> {
                 local_address,
                 external_address,
             } => {
-                debug!(
+                tracing::debug!(
+                    target: LOG_TARGET,
                     "State<TryMapAddress>: Mapping succeeded for {local_address} (was tracking {}), transitioning to TestIfMappedPublic with {external_address}.",
                     self.state.addr_to_map(),
                 );
@@ -30,7 +33,8 @@ impl OnEvent for State<TryMapAddress> {
                 })
             }
             Event::AddressMappingFailed(addr) => {
-                debug!(
+                tracing::debug!(
+                    target: LOG_TARGET,
                     "State<TryMapAddress>: Mapping failed for {addr} (was tracking {}), transitioning to Private.",
                     self.state.addr_to_map(),
                 );

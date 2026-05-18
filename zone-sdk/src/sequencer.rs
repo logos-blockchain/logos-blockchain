@@ -7,12 +7,15 @@ use lb_core::{
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         channel::{SlotTimeframe, SlotTimeout},
+        encoding::Ops,
         ledger::Outputs,
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId, config::ChannelConfigOp,
-                inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId,
+                config::ChannelConfigOp,
+                inscribe::{Inscription, InscriptionOp},
+                withdraw::ChannelWithdrawOp,
             },
         },
         tx::TxHash,
@@ -197,7 +200,7 @@ pub enum Event {
 
 enum ActorRequest {
     /// Create/sign/submit a transaction with an inscription
-    PublishMessage { data: Vec<u8> },
+    PublishMessage { data: Inscription },
     /// Build an unsigned tx for the given ops and an inscription
     ///
     /// Calling this multiple times without submitting the prepared txs via
@@ -205,8 +208,8 @@ enum ActorRequest {
     /// prepared txs are submitted promptly. If additional prepares are
     /// unavoidable, handle potential conflicts carefully.
     PrepareTx {
-        ops: Vec<Op>,
-        msg: Vec<u8>,
+        ops: Ops,
+        msg: Inscription,
         reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
     },
     /// Sign a tx using the sequencer's key
@@ -238,7 +241,7 @@ enum ActorRequest {
     /// own signature is the only one used. Fire-and-forget; the result is
     /// delivered via `Event::Published`.
     PublishAtomicWithdraw {
-        inscribe: Vec<u8>,
+        inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
     },
 }
@@ -279,7 +282,7 @@ where
     /// sequencer's event loop. The result (inscription ID + checkpoint) is
     /// delivered via [`Event::Published`] once the tx is created and posted
     /// to the network.
-    pub async fn publish_message(&self, data: Vec<u8>) -> Result<(), Error> {
+    pub async fn publish_message(&self, data: Inscription) -> Result<(), Error> {
         if !*self.ready_rx.borrow() {
             return Err(Error::Unavailable {
                 reason: "sequencer not yet ready",
@@ -300,8 +303,8 @@ where
     /// via [`Self::submit_signed_tx`].
     pub async fn prepare_tx(
         &self,
-        ops: Vec<Op>,
-        data: Vec<u8>,
+        ops: Ops,
+        data: Inscription,
     ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::PrepareTx {
@@ -472,7 +475,7 @@ where
     /// because it does not await an actor reply.
     pub async fn publish_atomic_withdraw(
         &self,
-        inscribe: Vec<u8>,
+        inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
     ) -> Result<(), Error> {
         if !*self.ready_rx.borrow() {
@@ -1077,7 +1080,7 @@ where
         }
     }
 
-    async fn handle_publish(&mut self, data: Vec<u8>) -> Event {
+    async fn handle_publish(&mut self, data: Inscription) -> Event {
         // Safe to unwrap — handle_request checks is_ready() first
         let s = self.state.as_mut().unwrap();
 
@@ -1131,7 +1134,7 @@ where
     /// not supported by this API.
     async fn handle_publish_atomic_withdraw(
         &mut self,
-        inscribe: Vec<u8>,
+        inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
     ) -> Result<Event, Error> {
         if withdraws.is_empty() {
@@ -1166,7 +1169,7 @@ where
             self.last_msg_id
         };
 
-        let mut ops = Vec::with_capacity(withdraws.len() + 1);
+        let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
         let mut withdraw_infos = Vec::with_capacity(withdraws.len());
         for arg in withdraws {
             let op = ChannelWithdrawOp {
@@ -1190,7 +1193,9 @@ where
         let msg_id = inscription_op.id();
         ops.push(Op::ChannelInscribe(inscription_op));
 
-        let tx = MantleTx(ops);
+        let tx = MantleTx(Ops::try_from(ops).map_err(|e| {
+            Error::Network(format!("atomic withdraw bundle exceeds op limit: {e:?}"))
+        })?);
         let own_sig = sign_tx(tx.hash(), &self.signing_key);
         let ops_proofs = build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig)?;
         let signed_tx = SignedMantleTx::new(tx, ops_proofs)
@@ -1341,7 +1346,7 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
 /// We log an error and fall back to `submit_other` — the tx is still tracked
 /// for finalize/orphan, just without per-tx inscription lineage.
 fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: ChannelId) {
-    let mut inscribe_meta: Option<(MsgId, MsgId, Vec<u8>)> = None;
+    let mut inscribe_meta: Option<(MsgId, MsgId, Inscription)> = None;
     let mut multi_inscribe = false;
     let mut withdraws: Vec<WithdrawInfo> = Vec::new();
     for op in tx.mantle_tx.ops() {
@@ -1751,7 +1756,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
     let mut last_in_block: Option<MsgId> = None;
     let hash_and_ops = txs
         .iter()
-        .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops()));
+        .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops().iter()));
 
     for (tx_hash, op) in hash_and_ops {
         match op {
@@ -1773,7 +1778,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
                     tx_hash,
                     parent_msg,
                     this_msg: config.id(),
-                    payload: Vec::new(),
+                    payload: Inscription::default(),
                 };
                 last_in_block = Some(info.this_msg);
                 items.push(info);
@@ -1818,7 +1823,7 @@ fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 fn create_inscribe_tx(
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
-    inscription: Vec<u8>,
+    inscription: Inscription,
     parent: MsgId,
 ) -> (SignedMantleTx, MsgId) {
     let signer = signing_key.public_key();
@@ -1832,7 +1837,7 @@ fn create_inscribe_tx(
     let msg_id = inscribe_op.id();
 
     // TODO: set realistic gas prices and fund tx
-    let inscribe_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+    let inscribe_tx = MantleTx([Op::ChannelInscribe(inscribe_op)].into());
 
     let tx_hash = inscribe_tx.hash();
     let signature = sign_tx(tx_hash, signing_key);
@@ -1864,7 +1869,7 @@ fn create_channel_config_tx(
     };
 
     // TODO: fund tx
-    let config_tx = MantleTx(vec![Op::ChannelConfig(config_op)]);
+    let config_tx = MantleTx([Op::ChannelConfig(config_op)].into());
 
     let tx_hash = config_tx.hash();
     let signatures = signing_keys
@@ -1886,10 +1891,10 @@ fn create_channel_config_tx(
 }
 
 fn prepare_tx(
-    mut ops: Vec<Op>,
+    mut ops: Ops,
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
-    inscription: Vec<u8>,
+    inscription: Inscription,
     parent: MsgId,
 ) -> (MantleTx, MsgId, Ed25519Signature) {
     let inscription_op = InscriptionOp {
@@ -1899,7 +1904,8 @@ fn prepare_tx(
         signer: signing_key.public_key(),
     };
     let msg_id = inscription_op.id();
-    ops.push(Op::ChannelInscribe(inscription_op));
+    // TODO: Return `Error` in case there's too many ops already.
+    ops.try_push(Op::ChannelInscribe(inscription_op)).unwrap();
 
     // TODO: fund tx
     let tx = MantleTx(ops);
@@ -1972,8 +1978,8 @@ mod tests {
 
         // Prepare a `MantleTx` — drive sequencer concurrently to process the request
         let prepare_fut = handle.prepare_tx(
-            vec![Op::ChannelDeposit(deposit_op.clone())],
-            "Mint 10 to Alice".into(),
+            [Op::ChannelDeposit(deposit_op.clone())].into(),
+            b"Mint 10 to Alice".into(),
         );
         tokio::pin!(prepare_fut);
         let (tx, msg_id, inscription_sig) = loop {
@@ -2048,14 +2054,17 @@ mod tests {
         };
         let inscribe_op = InscriptionOp {
             channel_id,
-            inscription: b"hello".to_vec(),
+            inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(vec![
-            Op::ChannelWithdraw(withdraw_op.clone()),
-            Op::ChannelInscribe(inscribe_op),
-        ]);
+        let mantle_tx = MantleTx(
+            Ops::try_from(vec![
+                Op::ChannelWithdraw(withdraw_op.clone()),
+                Op::ChannelInscribe(inscribe_op),
+            ])
+            .unwrap(),
+        );
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,
@@ -2086,11 +2095,11 @@ mod tests {
         let channel_id = ChannelId::from([2u8; 32]);
         let inscribe_op = InscriptionOp {
             channel_id,
-            inscription: b"hello".to_vec(),
+            inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,
@@ -2114,11 +2123,11 @@ mod tests {
         let other_channel = ChannelId::from([4u8; 32]);
         let inscribe_op = InscriptionOp {
             channel_id: other_channel,
-            inscription: b"hello".to_vec(),
+            inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
             parent: MsgId::root(),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
-        let mantle_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
         let tx_hash = mantle_tx.hash();
         let signed_tx = SignedMantleTx {
             mantle_tx,

@@ -4,13 +4,15 @@ use igd_next::{
     PortMappingProtocol, SearchOptions,
     aio::{Gateway, tokio::Tokio},
 };
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use libp2p::Multiaddr;
 use multiaddr::Protocol;
-use tracing::info;
 
 use crate::{
     behaviour::nat::address_mapper::errors::AddressMapperError, config::NatMappingSettings,
 };
+
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::address_mapper::protocols::UPNP;
 
 type AddressWithProtocol = (SocketAddr, PortMappingProtocol);
 
@@ -21,7 +23,7 @@ impl UpnpProtocol {
         let gateway = igd_next::aio::tokio::search_gateway(SearchOptions::default()).await?;
         let gateway_external_ip = gateway.get_external_ip().await?;
 
-        info!("UPnP gateway found: {gateway_external_ip}");
+        tracing::info!(target: LOG_TARGET, "UPnP gateway found: {gateway_external_ip}");
 
         Ok((gateway, gateway_external_ip))
     }
@@ -50,7 +52,10 @@ impl UpnpProtocol {
 
         let external_addr = external_address(gateway_external_ip, address_to_map);
 
-        info!("Successfully added UPnP mapping: {external_addr}");
+        tracing::info!(
+            target: LOG_TARGET,
+            "Successfully added UPnP mapping: {external_addr}"
+        );
 
         Ok(external_addr)
     }

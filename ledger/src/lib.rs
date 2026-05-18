@@ -734,6 +734,7 @@ mod tests {
         events::{Event, EventPayload},
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _,
+            encoding::Ops,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{
@@ -761,7 +762,7 @@ mod tests {
 
     fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
         let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
-        let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op)]);
+        let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
         SignedMantleTx {
             ops_proofs: vec![OpProof::ZkSig(
                 ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
@@ -807,7 +808,7 @@ mod tests {
     }
 
     fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&Key>) -> SignedMantleTx {
-        let mantle_tx = MantleTx(ops.clone());
+        let mantle_tx = MantleTx(Ops::new_unchecked(ops.clone()));
 
         let tx_hash = mantle_tx.hash();
         let ops_proofs = signing_keys
@@ -842,7 +843,7 @@ mod tests {
                 create_signed_tx(
                     Op::ChannelInscribe(InscriptionOp {
                         channel_id: id,
-                        inscription: vec![1, 2, 3, 4],
+                        inscription: [1, 2, 3, 4].into(),
                         parent: MsgId::root(),
                         signer: verifying_key,
                     }),
@@ -922,7 +923,7 @@ mod tests {
 
         let inscribe_op = InscriptionOp {
             channel_id,
-            inscription: vec![1, 2, 3, 4],
+            inscription: [1, 2, 3, 4].into(),
             parent: MsgId::root(),
             signer: verifying_key,
         };
@@ -958,7 +959,7 @@ mod tests {
             withdraw_threshold: 1,
         };
 
-        let config_tx = MantleTx(vec![Op::ChannelConfig(config_op.clone())]);
+        let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1116,7 +1117,7 @@ mod tests {
             outputs: Outputs::new(vec![withdraw_note]),
             withdraw_nonce: 0,
         };
-        let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
+        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1124,8 +1125,10 @@ mod tests {
         )])
         .unwrap();
 
-        let signed_tx =
-            create_multi_signed_tx(withdraw_tx.0, vec![&Key::MultiSequencer(withdraw_proof)]);
+        let signed_tx = create_multi_signed_tx(
+            withdraw_tx.0.to_vec(),
+            vec![&Key::MultiSequencer(withdraw_proof)],
+        );
 
         let result =
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, signed_tx);
@@ -1202,7 +1205,7 @@ mod tests {
             withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
-        let withdraw_tx = MantleTx(vec![Op::ChannelWithdraw(withdraw.clone())]);
+        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let invalid_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1211,7 +1214,7 @@ mod tests {
         .unwrap();
 
         let signed_tx = create_multi_signed_tx(
-            withdraw_tx.0,
+            withdraw_tx.0.to_vec(),
             vec![&Key::MultiSequencer(invalid_proof), &Key::EmptyZk],
         );
 
@@ -1260,7 +1263,7 @@ mod tests {
         // First, create a channel with one message
         let first_inscribe = InscriptionOp {
             channel_id,
-            inscription: vec![1, 2, 3],
+            inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: verifying_key,
         };
@@ -1278,7 +1281,7 @@ mod tests {
         let wrong_parent = MsgId::from([99; 32]);
         let second_inscribe = InscriptionOp {
             channel_id,
-            inscription: vec![4, 5, 6],
+            inscription: [4, 5, 6].into(),
             parent: wrong_parent,
             signer: verifying_key,
         };
@@ -1301,7 +1304,7 @@ mod tests {
         let empty_channel_id = ChannelId::from([8; 32]);
         let empty_inscribe = InscriptionOp {
             channel_id: empty_channel_id,
-            inscription: vec![7, 8, 9],
+            inscription: [7, 8, 9].into(),
             parent: MsgId::from([1; 32]), // non-root parent
             signer: verifying_key,
         };
@@ -1331,7 +1334,7 @@ mod tests {
         // First, create a channel with authorized signer
         let first_inscribe = InscriptionOp {
             channel_id,
-            inscription: vec![1, 2, 3],
+            inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: verifying_key,
         };
@@ -1349,7 +1352,7 @@ mod tests {
         // Now try to add a message with unauthorized signer
         let second_inscribe = InscriptionOp {
             channel_id,
-            inscription: vec![4, 5, 6],
+            inscription: [4, 5, 6].into(),
             parent: correct_parent,
             signer: unauthorized_verifying_key,
         };
@@ -1383,7 +1386,7 @@ mod tests {
             withdraw_threshold: 1,
         };
 
-        let config_tx = MantleTx(vec![Op::ChannelConfig(config_op.clone())]);
+        let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,
@@ -1424,14 +1427,14 @@ mod tests {
 
         let inscribe_op1 = InscriptionOp {
             channel_id: channel1,
-            inscription: vec![1, 2, 3],
+            inscription: [1, 2, 3].into(),
             parent: MsgId::root(),
             signer: vk1,
         };
 
         let inscribe_op2 = InscriptionOp {
             channel_id: channel2,
-            inscription: vec![4, 5, 6],
+            inscription: [4, 5, 6].into(),
             parent: MsgId::root(),
             signer: vk2,
         };
@@ -1447,7 +1450,7 @@ mod tests {
 
         let inscribe_op3 = InscriptionOp {
             channel_id: channel1,
-            inscription: vec![7, 8, 9],
+            inscription: [7, 8, 9].into(),
             parent: config_op.id(),
             signer: vk3,
         };
@@ -1458,7 +1461,7 @@ mod tests {
             Op::ChannelConfig(config_op),
             Op::ChannelInscribe(inscribe_op3.clone()),
         ];
-        let config_tx = MantleTx(ops.clone());
+        let config_tx = MantleTx(Ops::new_unchecked(ops.clone()));
         let config_tx_hash = config_tx.hash();
         let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
             0,

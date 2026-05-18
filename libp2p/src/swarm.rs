@@ -12,6 +12,7 @@ use std::{
     time::Duration,
 };
 
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use libp2p::{
     Multiaddr, PeerId, TransportError,
     identity::ed25519,
@@ -29,6 +30,8 @@ pub use crate::{
 /// How long to keep a connection alive once it is idling.
 const IDLE_CONN_TIMEOUT: Duration = Duration::from_mins(5);
 
+const LOG_TARGET: &str = lb_log_targets_libp2p::ROOT;
+
 /// Wraps [`libp2p::Swarm`], and config it for use within Logos blockchain.
 pub struct Swarm<R: Clone + Send + RngCore + 'static> {
     // A core libp2p swarm
@@ -42,7 +45,7 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
         let keypair =
             libp2p::identity::Keypair::from(ed25519::Keypair::from(config.node_key.clone()));
         let peer_id = PeerId::from(keypair.public());
-        tracing::info!("libp2p peer_id:{}", peer_id);
+        tracing::info!(target: LOG_TARGET, "libp2p peer_id:{}", peer_id);
 
         let SwarmConfig {
             gossipsub_config,
@@ -100,7 +103,10 @@ impl<R: Clone + Send + RngCore + 'static> Swarm<R> {
         let opt = DialOpts::from(peer_addr.clone());
         let connection_id = opt.connection_id();
 
-        tracing::debug!("attempting to dial {peer_addr}. connection_id:{connection_id:?}",);
+        tracing::debug!(
+            target: LOG_TARGET,
+            "attempting to dial {peer_addr}. connection_id:{connection_id:?}",
+        );
         self.swarm.dial(opt)?;
         Ok(connection_id)
     }

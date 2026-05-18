@@ -6,7 +6,10 @@ use lb_core::mantle::{
     genesis_tx::GENESIS_STORAGE_GAS_PRICE,
     ops::{
         Op,
-        channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+        channel::{
+            ChannelId, MsgId,
+            inscribe::{Inscription, InscriptionOp},
+        },
     },
     tx::{GasPrices, MantleTxContext, MantleTxGasContext},
     tx_builder::MantleTxBuilder,
@@ -14,7 +17,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
 pub fn build_inscription_tx_builder(
-    inscription: Vec<u8>,
+    inscription: Inscription,
     signing_key: &Ed25519Key,
     channel_id: ChannelId,
     parent: Option<MsgId>,

@@ -4,7 +4,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx, Transaction as _,
-        ops::channel::{MsgId, withdraw::ChannelWithdrawOp},
+        ops::channel::{MsgId, inscribe::Inscription, withdraw::ChannelWithdrawOp},
         tx::TxHash,
     },
 };
@@ -20,7 +20,7 @@ pub struct InscriptionInfo {
     /// The message ID of this inscription.
     pub this_msg: MsgId,
     /// The opaque inscription payload.
-    pub payload: Vec<u8>,
+    pub payload: Inscription,
 }
 
 /// A channel withdraw observed on chain or bundled in a pending atomic tx.
@@ -113,7 +113,7 @@ pub struct PendingInscription {
     pub signed_tx: SignedMantleTx,
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
-    pub payload: Vec<u8>,
+    pub payload: Inscription,
     pub withdraws: Option<Vec<WithdrawInfo>>,
 }
 
@@ -172,7 +172,7 @@ impl TxState {
         signed_tx: SignedMantleTx,
         parent_msg: MsgId,
         this_msg: MsgId,
-        payload: Vec<u8>,
+        payload: Inscription,
     ) {
         self.insert_pending(signed_tx, parent_msg, this_msg, payload, None);
     }
@@ -184,7 +184,7 @@ impl TxState {
         signed_tx: SignedMantleTx,
         parent_msg: MsgId,
         this_msg: MsgId,
-        payload: Vec<u8>,
+        payload: Inscription,
         withdraws: Vec<WithdrawInfo>,
     ) {
         self.insert_pending(signed_tx, parent_msg, this_msg, payload, Some(withdraws));
@@ -195,7 +195,7 @@ impl TxState {
         signed_tx: SignedMantleTx,
         parent_msg: MsgId,
         this_msg: MsgId,
-        payload: Vec<u8>,
+        payload: Inscription,
         withdraws: Option<Vec<WithdrawInfo>>,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
@@ -727,12 +727,15 @@ mod tests {
     }
 
     fn make_dummy_tx(data: u8) -> SignedMantleTx {
-        let mantle_tx = MantleTx(vec![ChannelInscribe(InscriptionOp {
-            channel_id: [0u8; 32].into(),
-            inscription: vec![data],
-            parent: [0u8; 32].into(),
-            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-        })]);
+        let mantle_tx = MantleTx(
+            [ChannelInscribe(InscriptionOp {
+                channel_id: [0u8; 32].into(),
+                inscription: [data].into(),
+                parent: [0u8; 32].into(),
+                signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            })]
+            .into(),
+        );
         SignedMantleTx {
             ops_proofs: vec![],
             mantle_tx,
@@ -930,7 +933,7 @@ mod tests {
     ) -> TxHash {
         let tx = make_dummy_tx(data);
         let hash = tx.mantle_tx.hash();
-        state.submit_inscription(tx, parent_msg, this_msg, vec![data]);
+        state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
     }
 
@@ -963,7 +966,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99],
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
@@ -1000,7 +1003,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99],
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
@@ -1070,7 +1073,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99],
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
