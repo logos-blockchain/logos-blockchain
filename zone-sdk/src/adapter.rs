@@ -143,7 +143,7 @@ impl Node for NodeHttpClient {
         Ok(Box::pin(stream::iter(
             transactions
                 .into_iter()
-                .flat_map(|tx| tx.mantle_tx.0)
+                .flat_map(|tx| Vec::from(tx.mantle_tx.0))
                 .filter_map(move |op| op_to_zone_message(&op, channel_id)),
         )))
     }
@@ -169,7 +169,7 @@ impl Node for NodeHttpClient {
                 block
                     .transactions
                     .into_iter()
-                    .flat_map(|tx| tx.mantle_tx.0)
+                    .flat_map(|tx| Vec::from(tx.mantle_tx.0))
                     .filter_map(move |op| op_to_zone_message(&op, channel_id))
                     .map(move |msg| (msg, slot))
             },
@@ -191,7 +191,7 @@ fn op_to_zone_message(op: &Op, channel_id: ChannelId) -> Option<ZoneMessage> {
         Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
             Some(ZoneMessage::Block(ZoneBlock {
                 id: inscribe.id(),
-                data: inscribe.inscription.clone(),
+                data: inscribe.inscription.clone().into(),
             }))
         }
         Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {

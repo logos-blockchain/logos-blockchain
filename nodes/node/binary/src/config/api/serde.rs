@@ -10,6 +10,7 @@ use serde_with::serde_as;
 #[serde(default)]
 pub struct Config {
     pub backend: AxumBackendSettings,
+    pub admin: AxumBackendSettings,
     #[cfg(feature = "testing")]
     pub testing: AxumBackendSettings,
 }
@@ -18,6 +19,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             backend: AxumBackendSettings::default(),
+            admin: AxumBackendSettings {
+                listen_address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8082).into(),
+                ..AxumBackendSettings::default()
+            },
             #[cfg(feature = "testing")]
             testing: AxumBackendSettings {
                 listen_address: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8081).into(),
@@ -29,6 +34,7 @@ impl Default for Config {
 
 #[serde_as]
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AxumBackendSettings {
     /// Listening address.
     pub listen_address: SocketAddr,

@@ -251,6 +251,7 @@ mod tests {
         crypto::ZkHasher,
         mantle::{
             MantleTx, TransactionHasher,
+            encoding::Ops,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
         },
@@ -323,7 +324,9 @@ mod tests {
     }
 
     fn create_tx(count: usize) -> Vec<MantleTx> {
-        iter::repeat_with(|| MantleTx(vec![])).take(count).collect()
+        iter::repeat_with(|| MantleTx(Ops::new_unchecked(vec![])))
+            .take(count)
+            .collect()
     }
 
     #[test]

@@ -6,7 +6,8 @@ use crate::{
     block::Block,
     header::Header,
     mantle::{
-        Note, Op, OpProof, SignedMantleTx,
+        MantleTx, Note, Op, OpProof, SignedMantleTx,
+        encoding::Ops,
         genesis_tx::{self, GenesisTx},
         ledger::{Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
@@ -1093,8 +1094,16 @@ impl GenesisBlockBuilder<WithAll> {
         .chain(sdp_declarations.into_iter().map(Op::SDPDeclare))
         .collect();
         let n = ops.len();
+        let Ok(capped_ops) = Ops::try_from(ops) else {
+            // This should never happen because the builder doesn't allow more
+            // ops than can fit in a genesis tx, but we have to handle the error
+            // just in case.
+            return Err(Error::InvalidGenesisTx(genesis_tx::Error::TooManyOps {
+                count: n,
+            }));
+        };
         let signed_tx = SignedMantleTx::new_unverified(
-            ops.into(),
+            MantleTx(capped_ops),
             vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
         );
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
@@ -1125,7 +1134,7 @@ mod tests {
         header::HeaderId,
         mantle::{
             CryptarchiaParameter, GenesisTx as _, NoteId,
-            ops::channel::{ChannelId, MsgId},
+            ops::channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -1135,12 +1144,14 @@ mod tests {
     fn valid_inscription() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId::from([0; 32]),
-            inscription: CryptarchiaParameter {
-                chain_id: "test-chain".into(),
-                genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
-                epoch_nonce: Fr::ZERO,
-            }
-            .encode(),
+            inscription: Inscription::new_unchecked(
+                CryptarchiaParameter {
+                    chain_id: "test-chain".into(),
+                    genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+                    epoch_nonce: Fr::ZERO,
+                }
+                .encode(),
+            ),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         }
@@ -1149,12 +1160,14 @@ mod tests {
     fn invalid_inscription() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId::from([1; 32]), // non-zero — invalid
-            inscription: CryptarchiaParameter {
-                chain_id: "test-chain".into(),
-                genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
-                epoch_nonce: Fr::ZERO,
-            }
-            .encode(),
+            inscription: Inscription::new_unchecked(
+                CryptarchiaParameter {
+                    chain_id: "test-chain".into(),
+                    genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+                    epoch_nonce: Fr::ZERO,
+                }
+                .encode(),
+            ),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         }
@@ -1197,7 +1210,7 @@ mod tests {
         ops.extend(extra_ops);
         let n = ops.len();
         SignedMantleTx::new_unverified(
-            ops.into(),
+            MantleTx(Ops::new_unchecked(ops)),
             vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); n],
         )
     }

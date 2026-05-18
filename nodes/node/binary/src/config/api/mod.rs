@@ -10,13 +10,12 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    #[cfg(not(feature = "testing"))]
     #[must_use]
-    pub fn into_backend_settings(self) -> ApiServiceSettings<AxumBackendSettings> {
+    pub fn backend_settings(&self) -> ApiServiceSettings<AxumBackendSettings> {
         ApiServiceSettings {
             backend_settings: AxumBackendSettings {
                 address: self.user.backend.listen_address,
-                cors_origins: self.user.backend.cors_origins,
+                cors_origins: self.user.backend.cors_origins.clone(),
                 timeout: self.user.backend.timeout,
                 max_body_size: self.user.backend.max_body_size as usize,
                 max_concurrent_requests: self.user.backend.max_concurrent_requests as usize,
@@ -26,33 +25,28 @@ impl ServiceConfig {
 
     #[cfg(feature = "testing")]
     #[must_use]
-    pub fn into_backend_and_testing_settings(
-        self,
-    ) -> (
-        ApiServiceSettings<AxumBackendSettings>,
-        ApiServiceSettings<AxumBackendSettings>,
-    ) {
-        let backend_settings = AxumBackendSettings {
-            address: self.user.backend.listen_address,
-            cors_origins: self.user.backend.cors_origins,
-            timeout: self.user.backend.timeout,
-            max_body_size: self.user.backend.max_body_size as usize,
-            max_concurrent_requests: self.user.backend.max_concurrent_requests as usize,
-        };
-
-        let testing_settings = AxumBackendSettings {
-            address: self.user.testing.listen_address,
-            cors_origins: self.user.testing.cors_origins,
-            timeout: self.user.testing.timeout,
-            max_body_size: self.user.testing.max_body_size as usize,
-            max_concurrent_requests: self.user.testing.max_concurrent_requests as usize,
-        };
-
-        (
-            ApiServiceSettings { backend_settings },
-            ApiServiceSettings {
-                backend_settings: testing_settings,
+    pub fn testing_settings(&self) -> ApiServiceSettings<AxumBackendSettings> {
+        ApiServiceSettings {
+            backend_settings: AxumBackendSettings {
+                address: self.user.testing.listen_address,
+                cors_origins: self.user.testing.cors_origins.clone(),
+                timeout: self.user.testing.timeout,
+                max_body_size: self.user.testing.max_body_size as usize,
+                max_concurrent_requests: self.user.testing.max_concurrent_requests as usize,
             },
-        )
+        }
+    }
+
+    #[must_use]
+    pub fn admin_settings(&self) -> ApiServiceSettings<AxumBackendSettings> {
+        ApiServiceSettings {
+            backend_settings: AxumBackendSettings {
+                address: self.user.admin.listen_address,
+                cors_origins: self.user.admin.cors_origins.clone(),
+                timeout: self.user.admin.timeout,
+                max_body_size: self.user.admin.max_body_size as usize,
+                max_concurrent_requests: self.user.admin.max_concurrent_requests as usize,
+            },
+        }
     }
 }

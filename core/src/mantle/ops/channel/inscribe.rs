@@ -1,29 +1,34 @@
 use std::sync::Arc;
 
-use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::serde::serde_bytes_vec;
+use lb_utils::bounded_vec::BoundedVec;
+use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
+    block::MAX_BLOCK_SIZE,
     crypto::{Digest as _, Hasher},
     events::Events,
     mantle::{
         TxHash,
         channel::{ChannelState, Channels, Error},
-        encoding::encode_channel_inscribe,
         ledger::Operation,
+        nom::{NomBoundedVec, NomDecode, NomEncode},
     },
 };
+
+pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
+pub type Inscription = BoundedVec<u8, MAX_BYTES>;
+type NomInscription<'a> = NomBoundedVec<'a, u8, MAX_BYTES, 4>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
-    #[serde(with = "serde_bytes_vec")]
-    pub inscription: Vec<u8>,
+    #[serde(with = "lb_utils::serde::serde_bytes_slice")]
+    pub inscription: Inscription,
     /// Enforce that this inscription comes after this tx
     pub parent: MsgId,
     pub signer: Ed25519PublicKey,
@@ -33,13 +38,39 @@ impl InscriptionOp {
     #[must_use]
     pub fn id(&self) -> MsgId {
         let mut hasher = Hasher::new();
-        hasher.update(self.payload_bytes());
+        hasher.update(self.encode().as_slice());
         MsgId(hasher.finalize().into())
     }
+}
 
-    #[must_use]
-    fn payload_bytes(&self) -> Bytes {
-        encode_channel_inscribe(self).into()
+// ChannelInscribe = ChannelId Inscription Parent Signer
+impl NomEncode for InscriptionOp {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = self.channel_id.encode();
+        bytes.extend(NomInscription::from(&self.inscription).encode());
+        bytes.extend(self.parent.encode());
+        bytes.extend(self.signer.encode());
+        bytes
+    }
+}
+
+impl NomDecode for InscriptionOp {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        let (input, channel_id) = ChannelId::decode(bytes)?;
+        let (input, inscription) = NomInscription::decode(input)?;
+        let (input, parent) = MsgId::decode(input)?;
+        let (input, signer) = Ed25519PublicKey::decode(input)?;
+        Ok((
+            input,
+            Self {
+                channel_id,
+                inscription,
+                parent,
+                signer,
+            },
+        ))
     }
 }
 
@@ -149,15 +180,50 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
 #[cfg(test)]
 mod tests {
+    use lb_utils::bounded_vec::BoundedError;
+
     use super::*;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {
             channel_id: ChannelId([0u8; 32]),
-            inscription: b"genesis".to_vec(),
+            inscription: b"genesis".into(),
             parent: MsgId([0u8; 32]),
             signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
         }
+    }
+
+    #[test]
+    fn oversized_inscription_rejected_at_construction() {
+        let oversized = vec![0u8; MAX_BYTES + 1];
+        let err = Inscription::try_from(oversized).unwrap_err();
+        assert!(
+            matches!(err, BoundedError::TooLong { actual, max } if actual == MAX_BYTES + 1 && max == MAX_BYTES)
+        );
+    }
+
+    #[test]
+    fn oversized_inscription_rejected_on_deserialize() {
+        let oversized = vec![0u8; MAX_BYTES + 1];
+        let bytes = bincode::serialize(&oversized).unwrap();
+        let err = bincode::deserialize::<Inscription>(&bytes).unwrap_err();
+        assert!(
+            format!("{err}").contains(
+                format!(
+                    "Length {} exceeds static maximum of {MAX_BYTES}",
+                    MAX_BYTES + 1,
+                )
+                .as_str()
+            )
+        );
+    }
+
+    #[test]
+    fn encode_decode_round_trip() {
+        let op = sample();
+        let encoded = op.encode();
+        let decoded = InscriptionOp::decode(&encoded).unwrap().1;
+        assert_eq!(op, decoded);
     }
 
     #[test]

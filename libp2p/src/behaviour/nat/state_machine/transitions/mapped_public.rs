@@ -1,8 +1,10 @@
-use tracing::warn;
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 
 use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::MappedPublic,
 };
+
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::MAPPED_PUBLIC;
 
 /// The `MappedPublic` state represents a state where the node's address is
 /// known and confirmed to be mapped to a publicly reachable address on the
@@ -38,7 +40,8 @@ impl OnEvent for State<MappedPublic> {
                 }
             }
             Event::ExternalAddressConfirmed(addr) => {
-                warn!(
+                tracing::warn!(
+                    target: LOG_TARGET,
                     "State<MappedPublic>: ignoring external address confirmation for {} (expected {}).",
                     addr,
                     self.state.external_address(),
@@ -46,7 +49,8 @@ impl OnEvent for State<MappedPublic> {
                 self
             }
             Event::AutonatClientTestOk(addr) => {
-                warn!(
+                tracing::warn!(
+                    target: LOG_TARGET,
                     "State<MappedPublic>: ignoring autonat success for {} (expected {}).",
                     addr,
                     self.state.external_address(),
@@ -54,7 +58,8 @@ impl OnEvent for State<MappedPublic> {
                 self
             }
             Event::AutonatClientTestFailed(addr) => {
-                warn!(
+                tracing::warn!(
+                    target: LOG_TARGET,
                     "State<MappedPublic>: Ignoring failed autonat test for mismatched address {} (expected {}).",
                     addr,
                     self.state.external_address(),

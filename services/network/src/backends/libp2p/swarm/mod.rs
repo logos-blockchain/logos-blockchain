@@ -8,7 +8,11 @@
 macro_rules! log_error {
     ($e:expr) => {
         if let Err(e) = $e {
-            tracing::error!("error while processing {}: {e:?}", stringify!($e));
+            tracing::error!(
+                target: LOG_TARGET,
+                "error while processing {}: {e:?}",
+                stringify!($e)
+            );
         }
     };
 }
@@ -20,10 +24,10 @@ use lb_libp2p::{
     behaviour::BehaviourEvent,
     libp2p::{kad::QueryId, swarm::ConnectionId},
 };
+use lb_log_targets::network_service;
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tokio_stream::StreamExt as _;
-use tracing::debug;
 
 use super::{
     Libp2pConfig, Message,
@@ -41,6 +45,8 @@ pub use gossipsub::PubSubCommand;
 pub use kademlia::DiscoveryCommand;
 
 use crate::message::ChainSyncEvent;
+
+const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 
 pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub swarm: Swarm<R>,
@@ -146,7 +152,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 endpoint,
                 ..
             } => {
-                tracing::trace!("connected to peer:{peer_id}, connection_id:{connection_id:?}");
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    "connected to peer:{peer_id}, connection_id:{connection_id:?}"
+                );
                 if endpoint.is_dialer() {
                     self.complete_connect(connection_id, peer_id);
                 }
@@ -161,6 +170,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 ..
             } => {
                 tracing::trace!(
+                    target: LOG_TARGET,
                     "connection closed from peer: {peer_id} {connection_id:?} due to {cause:?}"
                 );
 
@@ -174,6 +184,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 ..
             } => {
                 tracing::error!(
+                    target: LOG_TARGET,
                     "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
                 );
                 crate::metrics::network_dial_failures();
@@ -189,7 +200,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     fn handle_external_addr_confirmed(&mut self, address: &Multiaddr) {
         let local_peer_id = *self.swarm.swarm().local_peer_id();
         self.swarm.kademlia_add_address(local_peer_id, address);
-        debug!(%address, "added confirmed external address to Kademlia");
+        tracing::debug!(target: LOG_TARGET, %address, "added confirmed external address to Kademlia");
     }
 
     fn remove_kademlia_address_for_dial(&mut self, peer_id: Option<PeerId>, dial_addr: &Multiaddr) {
@@ -201,6 +212,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         let resolved_peer_id = peer_id.or(address_peer_id);
         let Some(peer_id) = resolved_peer_id else {
             tracing::trace!(
+                target: LOG_TARGET,
                 "Skipping Kademlia removal for failed dial; peer id unavailable: {}",
                 dial_addr
             );
@@ -249,11 +261,11 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         commands_tx
             .send(Command::Network(NetworkCommand::Connect(dial)))
             .await
-            .unwrap_or_else(|_| tracing::error!("could not schedule connect"));
+            .unwrap_or_else(|_| tracing::error!(target: LOG_TARGET, "could not schedule connect"));
     }
 
     fn connect(&mut self, dial: Dial) {
-        tracing::debug!("Connecting to {}", dial.addr);
+        tracing::debug!(target: LOG_TARGET, "Connecting to {}", dial.addr);
 
         match self.swarm.connect(&dial.addr) {
             Ok(connection_id) => {
@@ -262,7 +274,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             }
             Err(e) => {
                 if let Err(err) = dial.result_sender.send(Err(e)) {
-                    tracing::warn!("failed to send the Err result of dialing: {err:?}");
+                    tracing::warn!(
+                        target: LOG_TARGET,
+                        "failed to send the Err result of dialing: {err:?}"
+                    );
                 }
             }
         }
@@ -272,7 +287,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         if let Some(dial) = self.pending_dials.remove(&connection_id)
             && let Err(e) = dial.result_sender.send(Ok(peer_id))
         {
-            tracing::warn!("failed to send the Ok result of dialing: {e:?}");
+            tracing::warn!(
+                target: LOG_TARGET,
+                "failed to send the Ok result of dialing: {e:?}"
+            );
         }
     }
 
@@ -282,18 +300,21 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             return;
         };
         let Some(new_retry_count) = dial.retry_count.checked_add(1) else {
-            tracing::debug!("Retry count overflow.");
+            tracing::debug!(target: LOG_TARGET, "Retry count overflow.");
             return;
         };
         if new_retry_count > MAX_RETRY {
-            tracing::debug!("Max retry({MAX_RETRY}) has been reached: {dial:?}");
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Max retry({MAX_RETRY}) has been reached: {dial:?}"
+            );
             self.remove_kademlia_address_for_dial(peer_id, &dial.addr);
             return;
         }
         dial.retry_count = new_retry_count;
 
         let wait = exp_backoff(dial.retry_count);
-        tracing::debug!("Retry dialing in {wait:?}: {dial:?}");
+        tracing::debug!(target: LOG_TARGET, "Retry dialing in {wait:?}: {dial:?}");
 
         let commands_tx = self.commands_tx.clone();
         tokio::spawn(async move {
@@ -314,7 +335,6 @@ mod tests {
     use lb_libp2p::{libp2p::swarm::DialError, protocol_name::StreamProtocol};
     use lb_utils::net::get_available_udp_port;
     use rand::rngs::OsRng;
-    use tracing::info;
     use tracing_subscriber::EnvFilter;
 
     use super::*;
@@ -418,7 +438,8 @@ mod tests {
             "Bootstrap node has no listening addresses"
         );
 
-        info!(
+        tracing::info!(
+            target: LOG_TARGET,
             "Bootstrap node listening on: {:?}",
             bootstrap_info.listen_addresses
         );
@@ -428,7 +449,7 @@ mod tests {
             .clone()
             .with(Protocol::P2p(bootstrap_node_peer_id));
 
-        info!("Using bootstrap address: {}", bootstrap_addr);
+        tracing::info!(target: LOG_TARGET, "Using bootstrap address: {}", bootstrap_addr);
 
         let bootstrap_addr = bootstrap_addr.clone();
 
@@ -455,7 +476,7 @@ mod tests {
             );
 
             let peer_id = *handler.swarm.swarm().local_peer_id();
-            info!("Starting node {} with peer ID: {}", i, peer_id);
+            tracing::info!(target: LOG_TARGET, "Starting node {} with peer ID: {}", i, peer_id);
 
             let bootstrap_addr = bootstrap_addr.clone();
             let task = tokio::spawn(async move {
@@ -494,7 +515,8 @@ mod tests {
                 if routing_table.len() >= NODE_COUNT - 1 {
                     // This node's routing table is fully populated, mark for removal
                     indices_to_remove.push(idx);
-                    info!(
+                    tracing::info!(
+                        target: LOG_TARGET,
                         "Node has complete routing table with {} entries",
                         routing_table.len()
                     );

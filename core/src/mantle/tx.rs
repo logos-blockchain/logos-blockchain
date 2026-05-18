@@ -14,7 +14,7 @@ use crate::{
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         channel::Channels,
-        encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
+        encoding::{Ops, decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ops::{
@@ -27,13 +27,13 @@ use crate::{
         channel_multi_sig_proof::ChannelMultiSigProof,
         leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
     },
+    utils::serde_bytes_newtype,
 };
 
 /// The hash of a transaction
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub struct TxHash(pub Hash);
+serde_bytes_newtype!(TxHash, 32);
 
 impl From<Hash> for TxHash {
     fn from(hash: Hash) -> Self {
@@ -81,7 +81,7 @@ impl TxHash {
 
 #[derive(Serialize, Deserialize)]
 struct MantleTxDeSerImpl {
-    pub ops: Vec<Op>,
+    pub ops: Ops,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -168,7 +168,7 @@ impl MantleTxGasContext {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MantleTx(pub Vec<Op>);
+pub struct MantleTx(pub Ops);
 
 impl From<MantleTxDeSerImpl> for MantleTx {
     fn from(MantleTxDeSerImpl { ops }: MantleTxDeSerImpl) -> Self {
@@ -179,12 +179,6 @@ impl From<MantleTxDeSerImpl> for MantleTx {
 impl From<MantleTx> for MantleTxDeSerImpl {
     fn from(MantleTx(ops): MantleTx) -> Self {
         Self { ops }
-    }
-}
-
-impl<T: IntoIterator<Item = Op>> From<T> for MantleTx {
-    fn from(ops: T) -> Self {
-        Self(ops.into_iter().collect())
     }
 }
 
@@ -265,16 +259,16 @@ impl MantleTx {
     #[must_use]
     pub fn transfers(&self) -> Vec<TransferOp> {
         let mut transfers: Vec<TransferOp> = vec![];
-        for op in self.ops().clone() {
+        for op in self.ops() {
             if let Op::Transfer(transfer_op) = op {
-                transfers.push(transfer_op);
+                transfers.push(transfer_op.clone());
             }
         }
         transfers
     }
 
     #[must_use]
-    pub const fn ops(&self) -> &Vec<Op> {
+    pub const fn ops(&self) -> &Ops {
         &self.0
     }
 }
@@ -677,13 +671,13 @@ mod tests {
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
-        ops.into()
+        MantleTx(Ops::new_unchecked(ops))
     }
 
     fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: vec![1, 2, 3],
+            inscription: [1, 2, 3].into(),
             parent: [0; 32].into(),
             signer: signing_key.public_key(),
         }

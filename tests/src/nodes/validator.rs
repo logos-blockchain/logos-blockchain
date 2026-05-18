@@ -595,6 +595,11 @@ pub fn create_validator_user_config(config: GeneralConfig) -> UserConfig {
             max_concurrent_requests: 1000,
             ..Default::default()
         },
+        admin: AxumBackendSettings {
+            listen_address: config.api_config.admin_http_address,
+            max_concurrent_requests: 1000,
+            ..Default::default()
+        },
     };
 
     let storage_config = StorageConfig::default();

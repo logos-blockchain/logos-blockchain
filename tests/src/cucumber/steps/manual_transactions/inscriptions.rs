@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use cucumber::{gherkin::Step, when};
+use lb_core::mantle::ops::channel::inscribe::Inscription;
 use lb_key_management_system_service::keys::Ed25519Key;
 use tracing::{info, warn};
 
@@ -37,7 +38,7 @@ async fn step_submit_inscription_transaction(
         world,
         step,
         transaction_alias,
-        vec![0xAB; payload_size],
+        Inscription::new_unchecked(vec![0xAB; payload_size]),
         wallet_name,
     )
     .await
@@ -57,7 +58,7 @@ async fn step_submit_inscription_transaction_with_payload(
         world,
         step,
         transaction_alias,
-        payload.into_bytes(),
+        Inscription::new_unchecked(payload.into_bytes()),
         wallet_name,
     )
     .await
@@ -67,7 +68,7 @@ async fn submit_inscription_transaction(
     world: &mut CucumberWorld,
     step: &Step,
     transaction_alias: String,
-    payload: Vec<u8>,
+    payload: Inscription,
     wallet_name: String,
 ) -> StepResult {
     let wallet = world.resolve_wallet(&wallet_name).inspect_err(|e| {

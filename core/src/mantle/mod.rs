@@ -14,6 +14,8 @@ pub mod select;
 pub mod tx;
 pub mod tx_builder;
 
+mod nom;
+
 pub use gas::{GasCalculator, GasConstants};
 pub use genesis_tx::CryptarchiaParameter;
 pub use ledger::{Note, NoteId, Utxo, Value};
