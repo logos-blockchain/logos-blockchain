@@ -46,7 +46,7 @@ pub use kademlia::DiscoveryCommand;
 
 use crate::message::ChainSyncEvent;
 
-const LOG_TARGET: &str = network_service::backends::libp2p::swarm::ROOT;
+const LOG_TARGET: &str = network_service::backends::libp2p::ROOT;
 
 pub struct SwarmHandler<R: Clone + Send + RngCore + 'static> {
     pub swarm: Swarm<R>,

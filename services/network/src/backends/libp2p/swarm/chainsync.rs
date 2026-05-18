@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use crate::{backends::libp2p::swarm::SwarmHandler, message::ChainSyncEvent};
 
-const LOG_TARGET: &str = network_service::backends::libp2p::swarm::CHAINSYNC;
+const LOG_TARGET: &str = network_service::backends::libp2p::CHAINSYNC;
 
 type SerialisedBlockStream = BoxedStream<Result<SerialisedBlock, ChainSyncError>>;
 

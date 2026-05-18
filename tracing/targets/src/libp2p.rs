@@ -4,7 +4,7 @@ log_targets! {
     root = libp2p;
 
     behaviour::{
-        kademlia::BEHAVIOUR,
+        KADEMLIA,
         nat::{
             GATEWAY_MONITOR,
             INNER,
@@ -19,7 +19,7 @@ log_targets! {
                     },
                 },
             },
-            state_machine::transitions::{
+            state_machine::{
                 MAPPED_PUBLIC,
                 PUBLIC,
                 TEST_IF_MAPPED_PUBLIC,

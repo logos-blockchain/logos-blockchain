@@ -10,7 +10,7 @@ use tokio::sync::oneshot;
 
 use crate::backends::libp2p::swarm::SwarmHandler;
 
-const LOG_TARGET: &str = network_service::backends::libp2p::swarm::KADEMLIA;
+const LOG_TARGET: &str = network_service::backends::libp2p::KADEMLIA;
 
 #[derive(Debug)]
 #[non_exhaustive]

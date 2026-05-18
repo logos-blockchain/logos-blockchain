@@ -6,7 +6,7 @@ use rand::RngCore;
 
 use crate::backends::libp2p::swarm::SwarmHandler;
 
-const LOG_TARGET: &str = network_service::backends::libp2p::swarm::IDENTIFY;
+const LOG_TARGET: &str = network_service::backends::libp2p::IDENTIFY;
 
 impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     #[expect(

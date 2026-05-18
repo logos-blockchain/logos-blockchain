@@ -9,7 +9,7 @@ use rand::RngCore;
 
 use crate::behaviour::Behaviour;
 
-const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::kademlia::BEHAVIOUR;
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::KADEMLIA;
 
 impl<R: Clone + Send + RngCore + 'static> Behaviour<R> {
     pub(crate) fn kademlia_add_address(&mut self, peer_id: PeerId, addr: &Multiaddr) {

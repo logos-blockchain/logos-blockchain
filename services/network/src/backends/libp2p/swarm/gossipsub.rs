@@ -9,7 +9,7 @@ use crate::backends::libp2p::{
 
 pub type Topic = String;
 
-const LOG_TARGET: &str = network_service::backends::libp2p::swarm::GOSSIPSUB;
+const LOG_TARGET: &str = network_service::backends::libp2p::GOSSIPSUB;
 
 #[derive(Debug)]
 #[non_exhaustive]

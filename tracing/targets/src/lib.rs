@@ -70,8 +70,7 @@ mod tests {
     #[test]
     fn network_service_targets_are_registered() {
         assert!(
-            network_service::all_targets()
-                .contains(&network_service::backends::libp2p::swarm::GOSSIPSUB)
+            network_service::all_targets().contains(&network_service::backends::libp2p::GOSSIPSUB)
         );
     }
 

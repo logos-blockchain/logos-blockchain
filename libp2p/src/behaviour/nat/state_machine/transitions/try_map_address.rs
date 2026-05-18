@@ -4,8 +4,7 @@ use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::TryMapAddress,
 };
 
-const LOG_TARGET: &str =
-    lb_log_targets_libp2p::behaviour::nat::state_machine::transitions::TRY_MAP_ADDRESS;
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::TRY_MAP_ADDRESS;
 
 /// The `TryMapAddress` state is responsible for attempting to map the address
 /// to a public-facing address on the NAT-box. If the mapping is successful, it

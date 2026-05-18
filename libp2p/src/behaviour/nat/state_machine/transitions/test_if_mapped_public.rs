@@ -5,7 +5,7 @@ use crate::behaviour::nat::state_machine::{
 };
 
 const LOG_TARGET: &str =
-    lb_log_targets_libp2p::behaviour::nat::state_machine::transitions::TEST_IF_MAPPED_PUBLIC;
+    lb_log_targets_libp2p::behaviour::nat::state_machine::TEST_IF_MAPPED_PUBLIC;
 
 /// The `TestIfMappedPublic` state is responsible for testing if the mapped
 /// address on the NAT-box is public. If the address is confirmed as public, it

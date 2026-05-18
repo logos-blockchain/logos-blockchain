@@ -5,7 +5,7 @@ log_targets! {
 
     backends::{
         MOCK,
-        libp2p::swarm::{
+        libp2p::{
             CHAINSYNC,
             GOSSIPSUB,
             IDENTIFY,

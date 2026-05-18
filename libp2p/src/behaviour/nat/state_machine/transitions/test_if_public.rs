@@ -4,8 +4,7 @@ use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::TestIfPublic,
 };
 
-const LOG_TARGET: &str =
-    lb_log_targets_libp2p::behaviour::nat::state_machine::transitions::TEST_IF_PUBLIC;
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::TEST_IF_PUBLIC;
 
 /// The `TestIfPublic` state is responsible for testing if the provided address
 /// is public. If the address is confirmed as public, it transitions to the

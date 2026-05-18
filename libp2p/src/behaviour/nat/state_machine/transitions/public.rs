@@ -4,7 +4,7 @@ use crate::behaviour::nat::state_machine::{
     Command, CommandTx, OnEvent, State, event::Event, states::Public,
 };
 
-const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::transitions::PUBLIC;
+const LOG_TARGET: &str = lb_log_targets_libp2p::behaviour::nat::state_machine::PUBLIC;
 
 /// The `Public` state represents a state where the node's address is known and
 /// confirmed to be publicly reachable. In this state, the address is
