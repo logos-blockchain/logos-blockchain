@@ -88,7 +88,6 @@ where
 #[cfg(test)]
 mod tests {
     use lb_core::sdp::Locator;
-    use lb_key_management_system_keys::keys::Ed25519PublicKey;
     use num_bigint::BigUint;
 
     use super::*;

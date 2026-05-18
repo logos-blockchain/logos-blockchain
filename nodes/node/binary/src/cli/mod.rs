@@ -167,7 +167,7 @@ pub struct ParticipateArgs {
     /// Path to the user config YAML file
     #[arg(long, default_value = "user_config.yaml")]
     pub config: PathBuf,
-    /// Output directory for participation_data.yaml
+    /// Output directory for `participation_data.yaml`
     #[arg(long, default_value = ".")]
     pub output: PathBuf,
     /// Node's public IPv4 address, required when the blend listening address
