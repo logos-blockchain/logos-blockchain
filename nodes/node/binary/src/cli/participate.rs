@@ -1,17 +1,24 @@
 use std::net::Ipv4Addr;
 
 use color_eyre::eyre::{Result, bail, eyre};
-use lb_core::sdp::{
-    Locator, Locators, ServiceType,
-    genesis::{ProviderInfo, StakeHolderInfo},
-};
+use lb_core::sdp::{Locator, Locators, ServiceType};
+use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, Protocol};
+use serde::Serialize;
 
 use super::ParticipateArgs;
 use crate::{
     UserConfig,
     config::{OnUnknownKeys, deserialize_config_at_path, network::serde::nat},
 };
+
+#[derive(Serialize)]
+struct ParticipationData {
+    stakeholder_identity: ZkPublicKey,
+    provider_id: Ed25519PublicKey,
+    locators: Locators,
+    service_type: ServiceType,
+}
 
 pub fn run(args: &ParticipateArgs) -> Result<()> {
     let user_config = deserialize_config_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
@@ -27,26 +34,17 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
     let locator_addr = resolve_locator_addr(listen_addr, nat_config, args.external_address)?;
     let locator = Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?;
 
-    let stakeholder = StakeHolderInfo {
-        zk_id,
-        stake: args.stake,
-    };
-    let provider = ProviderInfo {
+    let data = ParticipationData {
+        stakeholder_identity: zk_id,
         provider_id,
-        zk_id,
         locators: Locators::from(locator),
         service_type: ServiceType::BlendNetwork,
     };
 
     std::fs::create_dir_all(&args.output)?;
-    let stakeholder_path = args.output.join("stakeholder.yaml");
-    let provider_path = args.output.join("provider.yaml");
-
-    std::fs::write(&stakeholder_path, serde_yaml::to_string(&stakeholder)?)?;
-    std::fs::write(&provider_path, serde_yaml::to_string(&provider)?)?;
-
-    println!("Written: {}", stakeholder_path.display());
-    println!("Written: {}", provider_path.display());
+    let output_path = args.output.join("participation_data.yaml");
+    std::fs::write(&output_path, serde_yaml::to_string(&data)?)?;
+    println!("Written: {}", output_path.display());
 
     Ok(())
 }

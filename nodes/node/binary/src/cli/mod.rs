@@ -167,10 +167,7 @@ pub struct ParticipateArgs {
     /// Path to the user config YAML file
     #[arg(long, default_value = "user_config.yaml")]
     pub config: PathBuf,
-    /// Stake amount in base units
-    #[arg(long)]
-    pub stake: u64,
-    /// Output directory for stakeholder.yaml and provider.yaml
+    /// Output directory for participation_data.yaml
     #[arg(long, default_value = ".")]
     pub output: PathBuf,
     /// Node's public IPv4 address, required when the blend listening address

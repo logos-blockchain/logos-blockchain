@@ -1,12 +1,26 @@
 use std::collections::HashSet;
 
-pub use lb_core::sdp::genesis::{ProviderInfo, StakeHolderInfo};
 use lb_core::{
-    mantle::{Note, Utxo, ops::sdp::SDPDeclareOp},
-    sdp::ServiceType,
+    mantle::{Note, Utxo, Value as NoteValue, ops::sdp::SDPDeclareOp},
+    sdp::{Locators, ServiceType},
 };
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct StakeHolderInfo {
+    pub zk_id: ZkPublicKey,
+    pub stake: NoteValue,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProviderInfo {
+    pub provider_id: Ed25519PublicKey,
+    pub zk_id: ZkPublicKey,
+    pub locators: Locators,
+    pub service_type: ServiceType,
+}
 
 #[derive(Error, Debug)]
 pub enum DistributionError {
