@@ -144,6 +144,16 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Purge old circuits
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            rm -rf ~/.cache/logos/blockchain/
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            rm -rf ~/Library/Caches/logos/blockchain/
+          else
+            echo "Unsupported OS: $RUNNER_OS"
+          fi
+
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
         uses: ./.github/actions/prune-disk-space
