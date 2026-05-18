@@ -54,8 +54,8 @@ services:
       - CFG_NETWORK_PORT=${NODE0_NET_PORT}
       - CFG_BLEND_PORT=${NODE0_BLEND_PORT}
       - CFG_API_PORT=${NODE0_API_PORT}
-      - LOG_LEVEL="DEBUG"
-      - LOG_APPENDER="rolling-max-files"
+      - LOG_LEVEL=DEBUG
+      - LOG_APPENDER=rolling-max-files
       - LOG_APPENDER_MAX_FILES=48
     ports:
       - "3000:3000/udp"
@@ -77,8 +77,8 @@ services:
       - CFG_NETWORK_PORT=${NODE1_NET_PORT}
       - CFG_BLEND_PORT=${NODE1_BLEND_PORT}
       - CFG_API_PORT=${NODE1_API_PORT}
-      - LOG_LEVEL="DEBUG"
-      - LOG_APPENDER="rolling-max-files"
+      - LOG_LEVEL=DEBUG
+      - LOG_APPENDER=rolling-max-files
       - LOG_APPENDER_MAX_FILES=48
     ports:
       - "3001:3001/udp"
@@ -100,8 +100,8 @@ services:
       - CFG_NETWORK_PORT=${NODE2_NET_PORT}
       - CFG_BLEND_PORT=${NODE2_BLEND_PORT}
       - CFG_API_PORT=${NODE2_API_PORT}
-      - LOG_LEVEL="TRACE"
-      - LOG_APPENDER="rolling-max-files"
+      - LOG_LEVEL=DEBUG
+      - LOG_APPENDER=rolling-max-files
       - LOG_APPENDER_MAX_FILES=48
     ports:
       - "3002:3002/udp"
@@ -123,8 +123,8 @@ services:
       - CFG_NETWORK_PORT=${NODE3_NET_PORT}
       - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
       - CFG_API_PORT=${NODE3_API_PORT}
-      - LOG_LEVEL="TRACE"
-      - LOG_APPENDER="rolling-max-files"
+      - LOG_LEVEL=TRACE
+      - LOG_APPENDER=rolling-max-files
       - LOG_APPENDER_MAX_FILES=48
     ports:
       - "3003:3003/udp"
