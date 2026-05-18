@@ -123,9 +123,28 @@ impl BlocksStreamQueryParams {
     }
 }
 
+impl From<BlocksRangeStreamParams> for BlocksStreamQueryParams {
+    fn from(params: BlocksRangeStreamParams) -> Self {
+        Self {
+            blocks_limit: params.blocks_limit,
+            slot_from: params.slot_from,
+            slot_to: params.slot_to,
+            descending: params.order.map(|order| match order {
+                BlockSortOrder::Ascending => false,
+                BlockSortOrder::Descending => true,
+            }),
+            server_batch_size: params.server_batch_size,
+            immutable_only: params.block_filter.map(|filter| match filter {
+                BlockFilter::ImmutableOnly => true,
+                BlockFilter::MutableAndImmutable => false,
+            }),
+        }
+    }
+}
+
 /// Query parameters for the `get_blocks_range_stream` method, which streams
 /// processed blocks in a slot-bounded window.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct BlocksRangeStreamParams {
     /// If omitted, the server chooses a default lower bound.
     /// For descending streams this is `slot 0` (bounded by `blocks_limit`).
@@ -133,7 +152,7 @@ pub struct BlocksRangeStreamParams {
     /// slots-per-block and `blocks_limit`, biased so the stream ends near
     /// `slot_to`. This may return fewer than `blocks_limit` blocks; callers
     /// can refine by specifying `slot_from` explicitly.
-    /// Upper bound slot (inclusive). Defaults to tip slot, or LIB slot when
+    /// Lower bound slot (inclusive). Defaults to tip slot, or LIB slot when
     /// `immutable_only=true`.
     pub slot_from: Option<u64>,
     /// Upper bound slot (inclusive). Defaults to tip slot, or LIB slot when
@@ -157,7 +176,7 @@ pub struct BlocksRangeStreamParams {
 }
 
 /// Sort order for blocks in the `get_blocks_range_stream` method.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BlockSortOrder {
     /// Ascending order (oldest to newest).
     Ascending,
@@ -166,7 +185,7 @@ pub enum BlockSortOrder {
 }
 
 /// Filter for block types in the `get_blocks_range_stream` method.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BlockFilter {
     /// Includes only immutable blocks.
     ImmutableOnly,
@@ -471,22 +490,7 @@ impl CommonHttpClient {
             params.server_batch_size,
         )?;
 
-        let params = BlocksStreamQueryParams {
-            blocks_limit: params.blocks_limit,
-            slot_from: params.slot_from,
-            slot_to: params.slot_to,
-            descending: params.order.map(|order| match order {
-                BlockSortOrder::Ascending => false,
-                BlockSortOrder::Descending => true,
-            }),
-            server_batch_size: params.server_batch_size,
-            immutable_only: params.block_filter.map(|filter| match filter {
-                BlockFilter::ImmutableOnly => true,
-                BlockFilter::MutableAndImmutable => false,
-            }),
-        };
-
-        let request_url = Self::build_blocks_range_stream_request_url(&base_url, &params)?;
+        let request_url = Self::build_blocks_range_stream_request_url(&base_url, &params.into())?;
         let response = self.send_blocks_range_stream_request(request_url).await?;
         Ok(Self::parse_processed_blocks_range_event_stream(response))
     }
