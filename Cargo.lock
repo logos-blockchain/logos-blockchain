@@ -4580,7 +4580,6 @@ name = "logos-blockchain-http-api-common"
 version = "0.1.2"
 dependencies = [
  "axum",
- "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-tracing",
@@ -4798,7 +4797,6 @@ dependencies = [
  "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-network-service",
  "logos-blockchain-chain-service",
- "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",

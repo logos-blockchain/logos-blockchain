@@ -27,9 +27,6 @@ url                           = { workspace = true }
 utoipa                        = { workspace = true }
 validator                     = { features = ["derive"], workspace = true }
 
-[dev-dependencies]
-lb-common-http-client = { workspace = true }
-
 [target.'cfg(not(windows))'.dependencies]
 pprof = { features = ["criterion", "flamegraph", "protobuf-codec"], optional = true, workspace = true }
 
