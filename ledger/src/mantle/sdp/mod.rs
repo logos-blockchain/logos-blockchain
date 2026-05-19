@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
     block::BlockNumber,
+    events::Events,
     mantle::{
         NoteId, OpProof, TxHash, Utxo, Value,
         ledger::Operation,
@@ -300,12 +301,15 @@ impl SdpLedger {
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         let mut sdp =
             Self::new().with_blend_service(&config.service_rewards_params.blend, epoch_state);
 
+        let mut all_events = Events::new();
         for (op, _) in ops {
-            sdp = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
+            let (result, events) = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
+            sdp = result;
+            all_events.extend(events);
         }
 
         let blend = sdp
@@ -317,7 +321,7 @@ impl SdpLedger {
         state.active.declarations = state.declarations.clone();
         state.next.declarations = state.declarations.clone();
 
-        Ok(sdp)
+        Ok((sdp, all_events))
     }
 
     #[must_use]
@@ -393,7 +397,7 @@ impl SdpLedger {
         utxo_tree: &UtxoTree,
         op: &SDPDeclareOp,
         config: &Config,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
@@ -407,20 +411,21 @@ impl SdpLedger {
         })?;
 
         // Execute SDP Declare
-        let result = <SDPDeclareOp as Operation<SDPDeclareGenesisValidationContext>>::execute(
-            op,
-            SDPDeclareExecutionContext {
-                utxo_tree: utxo_tree.clone(),
-                block_number: self.block_number,
-                declarations: service_state.declarations_clone(),
-                locked_notes: self.locked_notes.clone(),
-                min_stake: config.min_stake,
-            },
-        )?;
+        let (result, events) =
+            <SDPDeclareOp as Operation<SDPDeclareGenesisValidationContext>>::execute(
+                op,
+                SDPDeclareExecutionContext {
+                    utxo_tree: utxo_tree.clone(),
+                    block_number: self.block_number,
+                    declarations: service_state.declarations_clone(),
+                    locked_notes: self.locked_notes.clone(),
+                    min_stake: config.min_stake,
+                },
+            )?;
 
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn try_apply_sdp_declaration(
@@ -431,7 +436,7 @@ impl SdpLedger {
         ed25519_sig: &Ed25519Signature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
@@ -448,7 +453,7 @@ impl SdpLedger {
         })?;
 
         // Execute SDP Declare
-        let result = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
+        let (result, events) = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
             op,
             SDPDeclareExecutionContext {
                 utxo_tree: utxo_tree.clone(),
@@ -461,7 +466,7 @@ impl SdpLedger {
 
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn apply_active_msg(
@@ -470,7 +475,7 @@ impl SdpLedger {
         zksig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
         let Some(service_state) = self.services.get_mut(&service) else {
             return Err(Error::ServiceNotFound(service));
@@ -484,7 +489,7 @@ impl SdpLedger {
         })?;
 
         // Execute SDP Active
-        let result = op.execute(SDPActiveExecutionContext {
+        let (result, events) = op.execute(SDPActiveExecutionContext {
             block_number: self.block_number,
             declarations: service_state.declarations_clone(),
         })?;
@@ -503,7 +508,7 @@ impl SdpLedger {
             &config.service_rewards_params,
         )?;
 
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn apply_withdrawn_msg(
@@ -512,7 +517,7 @@ impl SdpLedger {
         zksig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         let (service, config) = self.get_service(&op.declaration_id, config)?;
         let Some(service_state) = self.services.get_mut(&service) else {
             return Err(Error::ServiceNotFound(service));
@@ -529,7 +534,7 @@ impl SdpLedger {
         })?;
 
         // Execute SDP Withdraw
-        let result = op.execute(SDPWithdrawExecutionContext {
+        let (result, events) = op.execute(SDPWithdrawExecutionContext {
             block_number: self.block_number,
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
@@ -538,7 +543,7 @@ impl SdpLedger {
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
 
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn add_blend_income(&mut self, income: Value) {
@@ -721,7 +726,9 @@ mod tests {
         let signing_key = create_signing_key();
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-        sdp_ledger.try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
+        sdp_ledger
+            .try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
     fn apply_withdraw_with_dummies(
@@ -734,7 +741,9 @@ mod tests {
         let tx_hash = TxHash([1u8; 32]);
         let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.to_fr()).unwrap();
 
-        sdp_ledger.apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
+        sdp_ledger
+            .apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
     fn dummy_epoch_state() -> EpochState {

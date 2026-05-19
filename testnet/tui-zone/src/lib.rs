@@ -5,12 +5,13 @@ mod ui;
 use std::{fs, path::Path};
 
 use clap::Parser;
-use lb_core::mantle::ops::channel::ChannelId;
+use lb_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{Event, SequencerHandle, ZoneSequencer},
+    sequencer::{Event, OrphanedTx, SequencerHandle, ZoneSequencer},
+    state::InscriptionInfo,
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
@@ -33,6 +34,10 @@ pub struct InscribeArgs {
     key_path: String,
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: Address this at some point."
+)]
 pub async fn run(args: InscribeArgs) {
     let node_url: Url = args.node_url.parse().expect("invalid node URL");
     let signing_key = load_or_create_signing_key(Path::new(&args.key_path));
@@ -72,7 +77,11 @@ pub async fn run(args: InscribeArgs) {
 
                 let msg = AppMessage::new(text);
                 debug!(tx_uuid = %msg.tx_uuid, text = %msg.text, "Publishing message");
-                if let Err(e) = handle.publish_message(msg.to_bytes()).await {
+                let Ok(inscription) = Inscription::try_from(msg.to_bytes()) else {
+                    error!("Message is too large to fit in an inscription");
+                    continue;
+                };
+                if let Err(e) = handle.publish_message(inscription).await {
                     error!("failed to publish: {e}");
                     break;
                 }
@@ -101,14 +110,17 @@ async fn handle_event(
         Event::ChannelUpdate { orphaned, adopted } => {
             handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
-        Event::TxsFinalized { inscriptions, .. } => {
+        Event::TxsFinalized { txs, .. } => {
+            let inscriptions: Vec<InscriptionInfo> =
+                txs.iter().map(|t| t.inscription().clone()).collect();
             state.on_finalized(&inscriptions);
             ui::render_state(state);
             ui::prompt();
         }
-        Event::Published { info, checkpoint } => {
+        Event::Published { tx, checkpoint } => {
+            let info = tx.inscription();
             debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
-            state.on_published(&info);
+            state.on_published(info);
             state.save_checkpoint(checkpoint);
             ui::render_state(state);
             ui::prompt();
@@ -122,19 +134,34 @@ async fn handle_event(
 async fn handle_channel_update(
     state: &mut InMemoryZoneState,
     handle: &SequencerHandle<NodeHttpClient>,
-    adopted: &[lb_zone_sdk::state::InscriptionInfo],
-    orphaned: &[lb_zone_sdk::state::InscriptionInfo],
+    adopted: &[InscriptionInfo],
+    orphaned: &[OrphanedTx],
 ) {
     state.on_adopted(adopted);
-    for info in orphaned {
-        state.on_orphaned(&info.this_msg);
-        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
-        if let Err(e) = handle.publish_message(info.payload.clone()).await {
-            error!("failed to auto-republish: {e}");
-        }
+    for entry in orphaned {
+        handle_orphan(state, handle, entry).await;
     }
     ui::render_state(state);
     ui::prompt();
+}
+
+async fn handle_orphan(
+    state: &mut InMemoryZoneState,
+    handle: &SequencerHandle<NodeHttpClient>,
+    entry: &OrphanedTx,
+) {
+    match entry {
+        OrphanedTx::Inscription(info) => {
+            state.on_orphaned(&info.this_msg);
+            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
+            if let Err(e) = handle.publish_message(info.payload.clone()).await {
+                error!("failed to auto-republish: {e}");
+            }
+        }
+        OrphanedTx::AtomicWithdraw(_) => {
+            error!("unexpected atomic-withdraw orphan - TUI does not publish bundles");
+        }
+    }
 }
 
 fn handle_ready(

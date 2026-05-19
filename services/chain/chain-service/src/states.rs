@@ -73,11 +73,12 @@ impl ServiceState for CryptarchiaConsensusState {
                     .transactions()
                     .next()
                     .expect("Genesis block should be valid");
-                let ledger = LedgerState::from_genesis_tx(
+                let (ledger, _events) = LedgerState::from_genesis_tx(
                     genesis_tx,
                     &settings.config,
                     genesis_tx.cryptarchia_parameter().epoch_nonce,
                 )?;
+                // TODO: store genesis block and events to DB: https://github.com/logos-blockchain/logos-blockchain/issues/2747
                 (lib_id, lib_id, ledger)
             }
             StartingState::Lib {

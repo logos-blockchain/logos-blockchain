@@ -287,7 +287,10 @@ const fn node_binary_config() -> BinaryConfig {
     BinaryConfig {
         env_var: "LOGOS_BLOCKCHAIN_NODE_BIN",
         binary_name: "logos-blockchain-node",
-        fallback_path: "target/debug/logos-blockchain-node",
+        fallback_path: concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../target/release/logos-blockchain-node"
+        ),
     }
 }
 
@@ -520,6 +523,11 @@ fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
             },
             testing: api::serde::AxumBackendSettings {
                 listen_address: config.api_config.testing_http_address,
+                max_concurrent_requests: 1000,
+                ..Default::default()
+            },
+            admin: api::serde::AxumBackendSettings {
+                listen_address: config.api_config.admin_http_address,
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },

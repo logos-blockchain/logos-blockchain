@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use cucumber::{gherkin::Step, when};
+use lb_core::mantle::ops::channel::inscribe::Inscription;
 use lb_key_management_system_service::keys::Ed25519Key;
 use tracing::{info, warn};
 
@@ -10,14 +11,14 @@ use crate::{
         mantle_inscription::{
             build_inscription_tx_builder, channel_id_for_payload_size, inscription_signature_proof,
         },
+        wallet::WalletTransactionIntent,
     },
     cucumber::{
         error::{StepError, StepResult},
         steps::{
             TARGET,
             manual_transactions::utils::{
-                prepare_user_wallet_built_transaction_submission,
-                submit_prepared_user_wallet_transaction,
+                prepare_user_wallet_transaction_submission, submit_prepared_user_wallet_transaction,
             },
         },
         world::{CucumberWorld, WalletType},
@@ -37,7 +38,7 @@ async fn step_submit_inscription_transaction(
         world,
         step,
         transaction_alias,
-        vec![0xAB; payload_size],
+        Inscription::new_unchecked(vec![0xAB; payload_size]),
         wallet_name,
     )
     .await
@@ -57,7 +58,7 @@ async fn step_submit_inscription_transaction_with_payload(
         world,
         step,
         transaction_alias,
-        payload.into_bytes(),
+        Inscription::new_unchecked(payload.into_bytes()),
         wallet_name,
     )
     .await
@@ -67,7 +68,7 @@ async fn submit_inscription_transaction(
     world: &mut CucumberWorld,
     step: &Step,
     transaction_alias: String,
-    payload: Vec<u8>,
+    payload: Inscription,
     wallet_name: String,
 ) -> StepResult {
     let wallet = world.resolve_wallet(&wallet_name).inspect_err(|e| {
@@ -94,19 +95,25 @@ async fn submit_inscription_transaction(
         channel_id_for_payload_size(payload_size),
         None,
     );
-    let prepared = prepare_user_wallet_built_transaction_submission(
+    let transaction_intent =
+        WalletTransactionIntent::from_builder(tx_builder).map_err(|error| {
+            StepError::LogicalError {
+                message: error.to_string(),
+            }
+        })?;
+
+    let prepared = prepare_user_wallet_transaction_submission(
         world,
         &step.value,
         &wallet_name,
-        tx_builder,
-        0,
+        transaction_intent,
         None,
     )
     .await;
     let prepared = prepared.inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
-    let tx_hash = prepared.tx_hash;
+    let tx_hash = prepared.tx_hash();
 
     let tx_hash = submit_prepared_user_wallet_transaction(
         world,

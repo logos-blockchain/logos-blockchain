@@ -7,7 +7,7 @@ use lb_common_http_client::{
 };
 use lb_core::{
     header::HeaderId,
-    mantle::{Op, SignedMantleTx, ops::channel::ChannelId},
+    mantle::{Op, SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
 };
 use reqwest::Url;
 
@@ -56,6 +56,8 @@ pub trait Node {
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
 
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
+
+    async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error>;
 }
 
 #[derive(Clone)]
@@ -143,7 +145,7 @@ impl Node for NodeHttpClient {
         Ok(Box::pin(stream::iter(
             transactions
                 .into_iter()
-                .flat_map(|tx| tx.mantle_tx.0)
+                .flat_map(|tx| Vec::from(tx.mantle_tx.0))
                 .filter_map(move |op| op_to_zone_message(&op, channel_id)),
         )))
     }
@@ -169,7 +171,7 @@ impl Node for NodeHttpClient {
                 block
                     .transactions
                     .into_iter()
-                    .flat_map(|tx| tx.mantle_tx.0)
+                    .flat_map(|tx| Vec::from(tx.mantle_tx.0))
                     .filter_map(move |op| op_to_zone_message(&op, channel_id))
                     .map(move |msg| (msg, slot))
             },
@@ -179,6 +181,12 @@ impl Node for NodeHttpClient {
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error> {
         self.client
             .post_transaction(self.base_url.clone(), tx)
+            .await
+    }
+
+    async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error> {
+        self.client
+            .get_channel_state(self.base_url.clone(), channel_id)
             .await
     }
 }
@@ -191,7 +199,7 @@ fn op_to_zone_message(op: &Op, channel_id: ChannelId) -> Option<ZoneMessage> {
         Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
             Some(ZoneMessage::Block(ZoneBlock {
                 id: inscribe.id(),
-                data: inscribe.inscription.clone(),
+                data: inscribe.inscription.clone().into(),
             }))
         }
         Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {

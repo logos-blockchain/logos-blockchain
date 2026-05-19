@@ -2,11 +2,13 @@ use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    events::{Event, EventPayload, Events},
     mantle::{
         TxHash,
         channel::{Channels, Error},
+        encoding::encode_channel_deposit,
         ledger::{Inputs, Operation, Utxos},
-        ops::channel::ChannelId,
+        ops::{OpId, channel::ChannelId},
     },
     sdp::locked_notes::LockedNotes,
 };
@@ -16,6 +18,12 @@ pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
     pub metadata: Vec<u8>,
+}
+
+impl OpId for DepositOp {
+    fn op_bytes(&self) -> Vec<u8> {
+        encode_channel_deposit(self)
+    }
 }
 
 pub struct DepositValidationContext<'a> {
@@ -30,6 +38,7 @@ pub struct DepositExecutionContext {
     pub channels: Channels,
     pub locked_notes: LockedNotes,
     pub utxos: Utxos,
+    pub tx_hash: TxHash,
 }
 
 impl Operation<DepositValidationContext<'_>> for DepositOp {
@@ -62,7 +71,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // Get the amount deposited
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
 
@@ -82,6 +91,17 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
             })
         }?;
 
-        Ok(ctx)
+        let events = std::iter::once(Event::from_tx(
+            ctx.tx_hash,
+            self.op_id(),
+            EventPayload::Deposit {
+                channel_id: self.channel_id,
+                amount: amount_deposited,
+                metadata: self.metadata.clone(),
+            },
+        ))
+        .collect();
+
+        Ok((ctx, events))
     }
 }

@@ -3,12 +3,15 @@ use std::sync::Arc;
 use lb_cryptarchia_engine::Slot;
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::{
-    Value, ledger,
-    ledger::Operation as _,
-    ops::channel::{
-        ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId,
-        inscribe::{InscriptionExecutionContext, InscriptionOp},
+use crate::{
+    events::Events,
+    mantle::{
+        Value,
+        ledger::{self, Operation as _},
+        ops::channel::{
+            ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId,
+            inscribe::{InscriptionExecutionContext, InscriptionOp},
+        },
     },
 };
 
@@ -121,12 +124,12 @@ impl Default for Channels {
 }
 
 impl Channels {
-    pub fn from_genesis(op: &InscriptionOp) -> Result<Self, Error> {
-        let ctx = op.execute(InscriptionExecutionContext {
+    pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Events), Error> {
+        let (ctx, events) = op.execute(InscriptionExecutionContext {
             channels: Self::default(),
             block_slot: Slot::default(),
         })?;
-        Ok(ctx.channels)
+        Ok((ctx.channels, events))
     }
 
     #[must_use]
@@ -189,12 +192,16 @@ mod tests {
 
     use super::*;
     use crate::{
+        events::{Event, EventPayload},
         mantle::{
             Note, Utxo,
             ledger::{Inputs, Outputs, Utxos},
-            ops::channel::{
-                deposit::{DepositExecutionContext, DepositOp},
-                withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
+            ops::{
+                OpId as _,
+                channel::{
+                    deposit::{DepositExecutionContext, DepositOp},
+                    withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
+                },
             },
             tx::{GasPrices, MantleTxGasContext},
         },
@@ -339,11 +346,12 @@ mod tests {
 
         let utxo_tree = utxo_tree(vec![utxo]);
 
-        let updated = deposit_op
+        let (updated, events) = deposit_op
             .execute(DepositExecutionContext {
                 channels,
                 locked_notes: LockedNotes::new(),
                 utxos: utxo_tree,
+                tx_hash: [0; 32].into(),
             })
             .expect("execution should succeed");
 
@@ -351,6 +359,26 @@ mod tests {
             updated.channels.channel_state(&channel_id).unwrap().balance,
             16
         );
+
+        assert_eq!(events.len(), 1);
+        let Event::Tx {
+            tx_hash,
+            op_id,
+            payload,
+        } = events.iter().next().cloned().unwrap()
+        else {
+            panic!("expected Tx event")
+        };
+        assert_eq!(tx_hash, [0; 32].into());
+        assert_eq!(op_id, deposit_op.op_id());
+        let EventPayload::Deposit {
+            channel_id,
+            amount,
+            metadata,
+        } = payload;
+        assert_eq!(channel_id, deposit_op.channel_id);
+        assert_eq!(amount, utxo.note.value);
+        assert_eq!(metadata, deposit_op.metadata);
     }
 
     #[test]
@@ -371,7 +399,7 @@ mod tests {
 
         let utxo_tree = utxo_tree(vec![utxo]);
 
-        let updated = withdraw_op
+        let (updated, events) = withdraw_op
             .execute(WithdrawExecutionContext {
                 channels,
                 utxos: utxo_tree,
@@ -382,6 +410,7 @@ mod tests {
             updated.channels.channel_state(&channel_id).unwrap().balance,
             4
         );
+        assert!(events.is_empty());
     }
 
     #[test]

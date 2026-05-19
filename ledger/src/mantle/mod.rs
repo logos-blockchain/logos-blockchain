@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use lb_core::{
     crypto::ZkHasher,
+    events::Events,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         ledger::Operation as _,
@@ -83,20 +84,28 @@ impl LedgerState {
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
-    ) -> Result<Self, Error> {
-        let channels = channel::Channels::from_genesis(tx.genesis_inscription())?;
-        let sdp = sdp::SdpLedger::from_genesis(
+    ) -> Result<(Self, Events), Error> {
+        let mut tx_events = Events::new();
+
+        let (channels, events) = channel::Channels::from_genesis(tx.genesis_inscription())?;
+        tx_events.extend(events);
+
+        let (sdp, events) = sdp::SdpLedger::from_genesis(
             &config.sdp_config,
             utxo_tree,
             epoch_state,
             tx.sdp_declarations(),
         )?;
+        tx_events.extend(events);
 
-        Ok(Self {
-            channels,
-            sdp,
-            leaders: leader::LeaderState::new(),
-        })
+        Ok((
+            Self {
+                channels,
+                sdp,
+                leaders: leader::LeaderState::new(),
+            },
+            tx_events,
+        ))
     }
 
     #[must_use]
@@ -172,7 +181,7 @@ impl LedgerState {
         inscription_sig: &Ed25519Signature,
         tx_hash: TxHash,
         block_slot: Slot,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         //validate the inscription
         inscription_op.validate(&InscriptionValidationContext {
             channels: &self.channels,
@@ -182,17 +191,17 @@ impl LedgerState {
         })?;
 
         // Execute the inscription
-        self.channels = inscription_op
+        let (result, events) = inscription_op
             .execute(InscriptionExecutionContext {
                 channels: self.channels,
                 block_slot,
             })
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
-            )?
-            .channels;
+            )?;
+        self.channels = result.channels;
 
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn try_apply_channel_set_keys(
@@ -201,7 +210,7 @@ impl LedgerState {
         config_sigs: &ChannelMultiSigProof,
         tx_hash: &TxHash,
         block_slot: Slot,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         // Validate the SetKeys
         config_op.validate(&ChannelConfigValidationContext {
             channels: &self.channels,
@@ -210,17 +219,17 @@ impl LedgerState {
         })?;
 
         // Execute the SetKeys
-        self.channels = config_op
+        let (result, events) = config_op
             .execute(ChannelConfigExecutionContext {
                 channels: self.channels,
                 block_slot,
             })
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
-            )?
-            .channels;
+            )?;
+        self.channels = result.channels;
 
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn try_apply_sdp_declaration(
@@ -231,8 +240,8 @@ impl LedgerState {
         utxo_tree: &UtxoTree,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
-        self.sdp = self
+    ) -> Result<(Self, Events), Error> {
+        let (result, events) = self
             .sdp
             .try_apply_sdp_declaration(
                 utxo_tree,
@@ -245,7 +254,8 @@ impl LedgerState {
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"),
             )?;
-        Ok(self)
+        self.sdp = result;
+        Ok((self, events))
     }
 
     pub fn try_apply_sdp_active(
@@ -254,8 +264,8 @@ impl LedgerState {
         sdp_active_zk_sig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
-        self.sdp = self
+    ) -> Result<(Self, Events), Error> {
+        let (result, events) = self
             .sdp
             .apply_active_msg(
                 sdp_active_op,
@@ -266,7 +276,8 @@ impl LedgerState {
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP active message"),
             )?;
-        Ok(self)
+        self.sdp = result;
+        Ok((self, events))
     }
 
     pub fn try_apply_sdp_withdraw(
@@ -275,8 +286,8 @@ impl LedgerState {
         sdp_withdraw_zk_sig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
-        self.sdp = self
+    ) -> Result<(Self, Events), Error> {
+        let (result, events) = self
             .sdp
             .apply_withdrawn_msg(
                 sdp_withdraw_op,
@@ -287,6 +298,7 @@ impl LedgerState {
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"),
             )?;
-        Ok(self)
+        self.sdp = result;
+        Ok((self, events))
     }
 }
