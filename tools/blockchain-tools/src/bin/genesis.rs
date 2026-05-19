@@ -8,6 +8,7 @@ use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
+    crypto::ZkHasher,
     mantle::{
         Note,
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp},
@@ -15,7 +16,10 @@ use lb_core::{
 };
 use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
 use logos_blockchain_tools::{
-    distribution::{self, ProviderInfo, StakeHolderInfo},
+    genesis::{
+        distribution::{self, Faucet, ProviderInfo, StakeHolderInfo},
+        inscription::{self, InscribeParams},
+    },
     overwrite_yaml, value_from_dotted_kv,
 };
 use serde_yml::Value;
@@ -36,6 +40,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Orchestrate the full genesis ceremony: inscribe, distribute, and build
+    /// the final deployment configuration.
+    Ceremony(CeremonyArgs),
+
     /// Generate a deployment config YAML from a well-known deployment or file,
     /// with optional field overrides.
     Config(ConfigArgs),
@@ -47,6 +55,43 @@ enum Commands {
     /// Calculate the distribution of notes and SDP declarations from
     /// stakeholder and provider definitions.
     Distribute(DistributeArgs),
+
+    /// Generate a genesis `InscriptionOp` using entropy sources.
+    Inscribe(InscribeArgs),
+}
+
+// ── ceremony subcommand
+// ──────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+pub struct CeremonyArgs {
+    /// Genesis parameters for the `InscriptionOp`.
+    #[arg(long, value_name = "FILE")]
+    pub inscription_params: PathBuf,
+
+    /// Stakeholder definitions for note distribution.
+    #[arg(long, value_name = "FILE")]
+    pub stake_holders: PathBuf,
+
+    /// Provider definitions for SDP declarations.
+    #[arg(long, value_name = "FILE")]
+    pub providers: PathBuf,
+
+    /// Faucet definition for stake distribution.
+    #[arg(long, value_name = "FILE")]
+    pub faucet: PathBuf,
+
+    /// The base deployment config (e.g., 'devnet' or path/to/config.yaml).
+    #[arg(long, value_name = "NAME_OR_PATH")]
+    pub deployment: String,
+
+    /// Optional overrides for the deployment config.
+    #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
+    pub overrides: Vec<String>,
+
+    /// Write the final deployment config to FILE instead of stdout.
+    #[arg(long, short, value_name = "FILE")]
+    pub output: Option<PathBuf>,
 }
 
 // ── config subcommand
@@ -130,6 +175,10 @@ struct DistributeArgs {
     #[arg(long, value_name = "FILE")]
     providers: PathBuf,
 
+    /// YAML file containing faucet info.
+    #[arg(long, value_name = "FILE")]
+    faucet: PathBuf,
+
     /// Write notes output to FILE instead of stdout.
     #[arg(long, short, value_name = "FILE")]
     notes_output: Option<PathBuf>,
@@ -139,16 +188,75 @@ struct DistributeArgs {
     declarations_output: Option<PathBuf>,
 }
 
+// ── inscribe subcommand
+// ──────────────────────────────────────────────────────────
+
+#[derive(Parser, Debug)]
+struct InscribeArgs {
+    /// YAML file containing genesis parameters (`chain_id`, `genesis_time`, and
+    /// `entropy_sources`). `entropy_sources` should be a list of hex-encoded
+    /// 32-byte strings.
+
+    #[arg(long, value_name = "FILE")]
+    params: PathBuf,
+
+    /// Write the serialized `InscriptionOp` to FILE instead of stdout.
+    #[arg(long, short, value_name = "FILE")]
+    output: Option<PathBuf>,
+}
+
 // ── entry point
 // ───────────────────────────────────────────────────────────────
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Commands::Ceremony(args) => run_ceremony(&args),
         Commands::Config(args) => run_config(&args),
         Commands::Block(args) => run_block(&args),
         Commands::Distribute(args) => run_distribute(&args),
+        Commands::Inscribe(args) => run_inscribe(&args),
     }
+}
+
+// ── ceremony implementation
+// ─────────────────────────────────────────────────────
+
+fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
+    let inscribe_params: InscribeParams = load_yaml_file(&args.inscription_params)?;
+    let inscription_op = inscription::inscribe::<ZkHasher>(
+        inscribe_params.chain_id,
+        inscribe_params.genesis_time,
+        inscribe_params.entropy_sources,
+    );
+
+    let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
+    let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let faucet: Faucet = load_yaml_file(&args.faucet)?;
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to calculate distribution during ceremony")?;
+    let notes: Vec<Note> = transfer_op.notes().collect();
+
+    let mut config_value = load_base_config(&args.deployment)?;
+    for raw in &args.overrides {
+        let patch = resolve_override(raw)?;
+        config_value = overwrite_yaml(config_value, patch);
+    }
+
+    if notes.is_empty() {
+        bail!("Ceremony failed: distribution resulted in zero notes");
+    }
+    if declarations.is_empty() {
+        bail!("Ceremony failed: distribution resulted in zero declarations");
+    }
+    let genesis_block = build_genesis_block(notes, inscription_op, declarations)?;
+
+    let block_value = struct_to_yaml_value(&genesis_block)?;
+    let patch = wrap_as_cryptarchia_genesis_block(block_value);
+    let final_config = overwrite_yaml(config_value, patch);
+
+    write_yaml(&final_config, args.output.as_deref())
 }
 
 // ── config implementation
@@ -280,18 +388,36 @@ fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
 fn run_distribute(args: &DistributeArgs) -> Result<()> {
     let stakeholders: Vec<StakeHolderInfo> = load_yaml_file(&args.stake_holders)?;
     let providers: Vec<ProviderInfo> = load_yaml_file(&args.providers)?;
+    let faucet: Faucet = load_yaml_file(&args.faucet)?;
 
-    let (utxos, declarations) = distribution::distribute(stakeholders, providers)
+    let (transfer_op, declarations) = distribution::distribute(stakeholders, providers, &faucet)
         .map_err(|e| anyhow::anyhow!(e))
         .context("Failed to calculate distribution")?;
+    let notes: Vec<Note> = transfer_op.notes().collect();
 
-    let utxos_value = struct_to_yaml_value(&utxos)?;
+    let notes_value = struct_to_yaml_value(&notes)?;
     let declarations_value = struct_to_yaml_value(&declarations)?;
 
-    write_yaml(&utxos_value, args.notes_output.as_deref())?;
+    write_yaml(&notes_value, args.notes_output.as_deref())?;
     write_yaml(&declarations_value, args.declarations_output.as_deref())?;
 
     Ok(())
+}
+
+// ── inscribe implementation
+// ─────────────────────────────────────────────────────
+
+fn run_inscribe(args: &InscribeArgs) -> Result<()> {
+    let params: InscribeParams = load_yaml_file(&args.params)?;
+
+    let op = inscription::inscribe::<ZkHasher>(
+        params.chain_id,
+        params.genesis_time,
+        params.entropy_sources,
+    );
+
+    let op_value = struct_to_yaml_value(&op)?;
+    write_yaml(&op_value, args.output.as_deref())
 }
 
 // ── shared helpers
@@ -307,15 +433,15 @@ fn run_distribute(args: &DistributeArgs) -> Result<()> {
 /// 2. Some types (e.g. `PoLProof`) call `serializer.serialize_bytes`
 ///    unconditionally; `serde_yml::to_string` rejects those with an error.
 ///
-/// Using `serde_json` as an intermediate format avoids both problems: JSON is
-/// a human-readable format (fixing pitfall 1), and its `serialize_bytes`
-/// implementation emits a JSON array of integers (fixing pitfall 2). JSON is
-/// a strict subset of YAML, so `serde_yml::from_str` can parse the resulting
-/// JSON string transparently, and YAML's human-readable deserializer correctly
-/// interprets all field formats.
+/// Using `serde_yaml::to_string` as an intermediate format avoids both
+/// problems: YAML is a human-readable format (fixing pitfall 1).
+/// Regarding (fixing pitfall 2): The error doesn't appear when using template
+/// from `testnet/ceremony` directory, but if it happens, settings override code
+/// should be refactored to use concrete genesis related types instead of
+/// operating at YAML level.
 fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
-    let json = serde_json::to_string(value)?;
-    serde_yml::from_str(&json).map_err(Into::into)
+    let yaml_string = serde_yml::to_string(value)?;
+    serde_yml::from_str(&yaml_string).map_err(Into::into)
 }
 
 fn load_yaml_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {

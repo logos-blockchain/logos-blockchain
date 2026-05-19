@@ -30,8 +30,8 @@ use crate::unique::unique_test_context;
 
 pub const SHORT_PROLONGED_BOOTSTRAP_PERIOD: Duration = Duration::from_secs(1);
 
-const EMPTY_CHANNEL_ID: [u8; 32] = [0; 32];
-const EMPTY_ED25519_PUBLIC_KEY: [u8; 32] = [0; 32];
+pub const EMPTY_CHANNEL_ID: [u8; 32] = [0; 32];
+pub const EMPTY_ED25519_PUBLIC_KEY: [u8; 32] = [0; 32];
 const EMPTY_GROTH16_PROOF_BYTES: [u8; 128] = [0u8; 128];
 
 const LEADER_KEY_PREFIX: &[u8] = b"ld";
