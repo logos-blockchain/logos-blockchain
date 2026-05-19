@@ -82,7 +82,7 @@ tikv-jemallocator = { optional = true, workspace = true }
 [dev-dependencies]
 lb-common-http-client = { workspace = true }
 rand                  = { workspace = true }
-serde_urlencoded      = "0.7.1"
+serde_urlencoded      = { workspace = true }
 
 [features]
 config-gen = ["lb-key-management-system-service/unsafe"]
