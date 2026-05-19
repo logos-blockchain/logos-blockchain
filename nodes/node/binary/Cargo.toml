@@ -14,7 +14,6 @@ workspace = true
 
 [dependencies]
 async-trait                      = { workspace = true }
-cfg-if                           = { workspace = true }
 clap                             = { features = ["derive", "env", "help", "std", "string"], workspace = true }
 color-eyre                       = { workspace = true }
 dhat                             = { optional = true, workspace = true }
@@ -87,9 +86,8 @@ serde_urlencoded      = "0.7.1"
 
 [features]
 config-gen = ["lb-key-management-system-service/unsafe"]
-default    = ["config-gen", "tracing"]
+default    = ["config-gen"]
 dhat-heap  = ["dep:dhat"]
 jemalloc   = ["dep:tikv-jemallocator"]
 profiling  = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
 testing    = ["lb-key-management-system-service/unsafe"]
-tracing    = []

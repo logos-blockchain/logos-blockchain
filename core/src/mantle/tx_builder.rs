@@ -6,6 +6,7 @@ use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
+        encoding::Ops,
         gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
@@ -29,7 +30,7 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new(context: MantleTxContext) -> Self {
         Self {
-            mantle_tx: vec![].into(),
+            mantle_tx: MantleTx(Ops::new()),
             ledger_inputs: vec![],
             pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
             channel_multi_sig_proofs: HashMap::new(),
@@ -47,9 +48,13 @@ impl MantleTxBuilder {
         self.extend_ops([op])
     }
 
+    // TODO: Change this to a `Result` if trying to push too many ops in the genesis
+    // block.
     #[must_use]
     pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Self {
-        self.mantle_tx.0.extend(ops);
+        for op in ops {
+            self.mantle_tx.0.try_push(op).expect("Too many ops.");
+        }
         self
     }
 
@@ -191,9 +196,14 @@ impl MantleTxBuilder {
         &self.channel_multi_sig_proofs
     }
 
+    // TODO: Change this to a `Result` if genesis tx already contains max number of
+    // ops.
     #[must_use]
     pub fn build(mut self) -> MantleTx {
-        self.mantle_tx.0.push(Op::Transfer(self.pending_transfer));
+        self.mantle_tx
+            .0
+            .try_push(Op::Transfer(self.pending_transfer))
+            .expect("Failed to push transfer op. Too many ops defined.");
         self.mantle_tx
     }
 }

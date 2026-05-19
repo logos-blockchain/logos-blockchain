@@ -20,7 +20,9 @@ use lb_core::{
         GenesisTx as _, MantleTx, Note, NoteId, Op, OpProof, Transaction as _, Value,
         ledger::{Inputs, Outputs},
         ops::{
-            channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
+            channel::{
+                ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+            },
             transfer::TransferOp,
         },
     },
@@ -362,7 +364,7 @@ pub fn start_sorted_conflict_policy(
         loop {
             match sequencer.next_event().await {
                 Some(Event::Published { info, .. }) => {
-                    sorted_state.record_seen_payload(info.payload);
+                    sorted_state.record_seen_payload(info.payload.into_inner());
                 }
                 Some(Event::ChannelUpdate { orphaned, adopted }) => {
                     sorted_state.record_adoptions(&adopted).await;
@@ -377,7 +379,7 @@ pub fn start_sorted_conflict_policy(
                                 warn!(%error, "Failed to re-publish sorted zone payload");
                             }
                         } else {
-                            sorted_state.discard(inscription.payload).await;
+                            sorted_state.discard(inscription.payload.into_inner()).await;
                         }
                     }
                 }
@@ -490,8 +492,11 @@ impl SortedConflictState {
 
     async fn record_adoptions(&mut self, adopted: &[InscriptionInfo]) {
         for payload in adopted {
-            self.discarded.lock().await.remove(&payload.payload);
-            self.record_seen_payload(payload.payload.clone());
+            self.discarded
+                .lock()
+                .await
+                .remove(payload.payload.as_slice());
+            self.record_seen_payload(payload.payload.clone().into_inner());
         }
     }
 
@@ -574,7 +579,10 @@ pub async fn publish_message_with_retry(
             return Err(ZoneTestError::PublishTimeout);
         }
 
-        match sequencer.publish_message(data.to_vec()).await {
+        match sequencer
+            .publish_message(Inscription::new_unchecked(data.to_vec()))
+            .await
+        {
             Ok(()) => return wait_for_published_event(sequencer_events, data, deadline).await,
             Err(error) => {
                 warn!(error = %error, "Zone sequencer publish failed, retrying");
@@ -593,7 +601,7 @@ async fn wait_for_published_event(
     timeout(deadline.remaining()?, async {
         while let Some(event) = sequencer_events.recv().await {
             if let Event::Published { info, checkpoint } = event
-                && info.payload == data
+                && info.payload.as_slice() == data
             {
                 return Ok(PublishResult {
                     inscription_id: info.tx_hash,
@@ -1003,8 +1011,8 @@ pub async fn submit_atomic_zone_deposit(
 
     let (tx, msg_id, sequencer_sig) = sequencer
         .prepare_tx(
-            vec![Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())],
-            inscription_data,
+            [Op::Transfer(transfer), Op::ChannelDeposit(deposit.clone())].into(),
+            Inscription::new_unchecked(inscription_data),
         )
         .await
         .map_err(|error| ZoneTestError::BuildAtomicDeposit {
@@ -1100,8 +1108,8 @@ pub async fn submit_zone_withdraw(
 
     let (tx, msg_id, inscription_sig) = sequencer
         .prepare_tx(
-            vec![Op::ChannelWithdraw(withdraw.clone())],
-            inscription_data,
+            [Op::ChannelWithdraw(withdraw.clone())].into(),
+            Inscription::new_unchecked(inscription_data),
         )
         .await
         .map_err(|error| ZoneTestError::SubmitWithdraw {

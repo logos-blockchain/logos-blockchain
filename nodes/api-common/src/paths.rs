@@ -32,6 +32,10 @@ pub mod wallet {
     pub const SIGN_TX_ZK: &str = "/wallet/sign/zk";
 }
 
+pub mod admin {
+    pub const TRACING_FILTER: &str = "/admin/tracing/filter";
+}
+
 // testing paths
 pub const UPDATE_MEMBERSHIP: &str = "/test/membership/update";
 pub const DIAL_PEER: &str = "/test/network/dial_peer";

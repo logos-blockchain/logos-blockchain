@@ -2,7 +2,11 @@ use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction as _, ops::channel::MsgId, tx::TxHash},
+    mantle::{
+        SignedMantleTx, Transaction as _,
+        ops::channel::{MsgId, inscribe::Inscription},
+        tx::TxHash,
+    },
 };
 use rpds::HashTrieSetSync;
 
@@ -16,7 +20,7 @@ pub struct InscriptionInfo {
     /// The message ID of this inscription.
     pub this_msg: MsgId,
     /// The opaque inscription payload.
-    pub payload: Vec<u8>,
+    pub payload: Inscription,
 }
 
 /// Result of channel update detection — the linear block-level delta
@@ -53,7 +57,7 @@ pub struct PendingInscription {
     pub signed_tx: SignedMantleTx,
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
-    pub payload: Vec<u8>,
+    pub payload: Inscription,
 }
 
 /// Transaction state tracker.
@@ -110,7 +114,7 @@ impl TxState {
         signed_tx: SignedMantleTx,
         parent_msg: MsgId,
         this_msg: MsgId,
-        payload: Vec<u8>,
+        payload: Inscription,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
         self.pending_by_parent
@@ -606,12 +610,15 @@ mod tests {
     }
 
     fn make_dummy_tx(data: u8) -> SignedMantleTx {
-        let mantle_tx = MantleTx(vec![ChannelInscribe(InscriptionOp {
-            channel_id: [0u8; 32].into(),
-            inscription: vec![data],
-            parent: [0u8; 32].into(),
-            signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-        })]);
+        let mantle_tx = MantleTx(
+            [ChannelInscribe(InscriptionOp {
+                channel_id: [0u8; 32].into(),
+                inscription: [data].into(),
+                parent: [0u8; 32].into(),
+                signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            })]
+            .into(),
+        );
         SignedMantleTx {
             ops_proofs: vec![],
             mantle_tx,
@@ -809,7 +816,7 @@ mod tests {
     ) -> TxHash {
         let tx = make_dummy_tx(data);
         let hash = tx.mantle_tx.hash();
-        state.submit_inscription(tx, parent_msg, this_msg, vec![data]);
+        state.submit_inscription(tx, parent_msg, this_msg, [data].into());
         hash
     }
 
@@ -842,7 +849,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99],
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
@@ -879,7 +886,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99],
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
@@ -949,7 +956,7 @@ mod tests {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
-            payload: vec![99],
+            payload: [99].into(),
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 

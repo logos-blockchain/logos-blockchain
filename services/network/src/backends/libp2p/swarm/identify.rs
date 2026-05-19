@@ -1,9 +1,12 @@
 use std::collections::HashSet;
 
 use lb_libp2p::{Multiaddr, Protocol, libp2p::identify};
+use lb_log_targets::network_service;
 use rand::RngCore;
 
 use crate::backends::libp2p::swarm::SwarmHandler;
+
+const LOG_TARGET: &str = network_service::backends::libp2p::IDENTIFY;
 
 impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     #[expect(
@@ -14,6 +17,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         match event {
             identify::Event::Received { peer_id, info, .. } => {
                 tracing::trace!(
+                    target: LOG_TARGET,
                     "Identified peer {} with addresses {:?}",
                     peer_id,
                     info.listen_addrs
@@ -28,6 +32,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     .any(|p| kad_protocol_names.contains(&p))
                 {
                     tracing::trace!(
+                        target: LOG_TARGET,
                         "Adding discovered node to Kademlia, seen addresses: {:?}",
                         info.listen_addrs
                     );
@@ -36,6 +41,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     for addr in &info.listen_addrs {
                         if !is_kademlia_candidate_address(addr) {
                             tracing::trace!(
+                                target: LOG_TARGET,
                                 "Skipping non-routable identify address for Kademlia: {}",
                                 addr
                             );
@@ -46,7 +52,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 }
             }
             event => {
-                tracing::trace!("Identify event: {:?}", event);
+                tracing::trace!(target: LOG_TARGET, "Identify event: {:?}", event);
             }
         }
     }

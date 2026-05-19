@@ -21,6 +21,7 @@ futures = { workspace = true }
 hex = { workspace = true }
 igd-next = { features = ["aio_tokio", "tokio"], workspace = true }
 lb-cryptarchia-sync = { workspace = true }
+lb-log-targets = { workspace = true }
 lb-utils = { features = ["time"], workspace = true }
 libp2p = { features = [
   "autonat",
