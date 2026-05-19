@@ -119,6 +119,7 @@ pub enum ZoneTestError {
 pub struct ZoneClusterTemplate {
     pub cluster: LbcManualCluster,
     pub funding_public_key: ZkPublicKey,
+    pub genesis_block_utxos: Vec<Utxo>,
 }
 
 /// A started single-node zone chain plus the resolved runtime directory used
@@ -203,12 +204,23 @@ pub fn prepare_zone_cluster(
         .consensus_config
         .funding_sk
         .as_public_key();
+    let genesis_block_utxos = deployment
+        .config
+        .genesis_block
+        .as_ref()
+        .map(|genesis_block| {
+            crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(
+                &genesis_block.genesis_tx(),
+            )
+        })
+        .unwrap_or_default();
 
     let cluster = LbcLocalDeployer::new().manual_cluster_from_descriptors(deployment);
 
     Ok(ZoneClusterTemplate {
         cluster,
         funding_public_key,
+        genesis_block_utxos,
     })
 }
 

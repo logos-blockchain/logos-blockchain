@@ -24,8 +24,7 @@ use super::{
         publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
         start_balance_aware_policy, start_republish_policy, start_sequencer_event_loop,
         start_sorted_conflict_policy, start_zone_node, submit_atomic_zone_deposit,
-        submit_zone_deposit, submit_zone_withdraw,
-        wait_for_zone_network_ready,
+        submit_zone_deposit, submit_zone_withdraw, wait_for_zone_network_ready,
     },
     tables::{ConcurrentZoneMessageRow, ZoneBalanceRow, group_zone_messages_by_sequencer},
 };
@@ -91,6 +90,7 @@ pub(super) async fn start_zone_cluster(world: &mut CucumberWorld, step: &Step) -
         .map_err(|error| zone_step_error(step, &error))?;
 
     let funding_public_key = zone_cluster.funding_public_key;
+    let genesis_block_utxos = zone_cluster.genesis_block_utxos;
     let cluster = zone_cluster.cluster;
 
     let started_zone_node = start_zone_node(&cluster, &world.scenario_base_dir)
@@ -103,7 +103,13 @@ pub(super) async fn start_zone_cluster(world: &mut CucumberWorld, step: &Step) -
 
     let client = started_zone_node.started_node.client.clone();
 
-    remember_zone_cluster(world, cluster, started_zone_node, funding_public_key);
+    remember_zone_cluster(
+        world,
+        cluster,
+        started_zone_node,
+        funding_public_key,
+        genesis_block_utxos,
+    );
 
     info!(target: TARGET, node_url = %client.base_url(), "Started zone cluster");
 
@@ -115,9 +121,11 @@ fn remember_zone_cluster(
     cluster: LbcManualCluster,
     started_zone_node: StartedZoneNode,
     funding_public_key: ZkPublicKey,
+    genesis_block_utxos: Vec<Utxo>,
 ) {
     let node_name = "NODE_1".to_owned();
 
+    world.genesis_block_utxos = genesis_block_utxos;
     world.local_cluster = Some(cluster);
     world.nodes_info.insert(
         node_name.clone(),
