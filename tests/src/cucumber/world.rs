@@ -38,6 +38,7 @@ use tracing::warn;
 
 use crate::{
     BIN_PATH_DEBUG, BIN_PATH_RELEASE,
+    common::wallet::{TrackedWallets, WalletDiagnostics},
     cucumber::{
         TARGET,
         defaults::{
@@ -125,13 +126,6 @@ impl ManualNodeConfigOverrides {
     pub const fn set_prolonged_bootstrap_period(&mut self, period: Duration) {
         self.prolonged_bootstrap_period = Some(period);
     }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct WalletRuntimeState {
-    pub encumbered_tokens: Vec<Utxo>,
-    pub submitted_tx_hashes: Vec<TxHash>,
-    pub tracked_spent_fees: u64,
 }
 
 pub struct ZonePublishedMessage {
@@ -635,15 +629,11 @@ pub struct CucumberWorld {
     pub wallet_accounts: HashMap<usize, WalletAccount>,
     /// Manual: Scenario-level fee sponsor configuration and accounting.
     pub fee_state: ScenarioFeeState,
-    /// Manual: Mapping of logical wallet names to a mapping of chain height to
-    /// the
-    pub wallet_tokens_per_block: HashMap<String, WalletTokenMap>,
-    /// Manual: Mutable runtime state scoped to each logical wallet.
-    pub wallet_runtime_state: HashMap<String, WalletRuntimeState>,
+    /// Manual: Scenario-local tracked wallet state reconstructed from chain
+    /// sync and pending submissions.
+    pub wallets: TrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
-    /// Manual:  Per node: `header_id` -> height
-    pub node_header_heights: HashMap<String, HashMap<String, u64>>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -719,17 +709,6 @@ impl Drop for CucumberWorld {
     }
 }
 
-/// Mapping of block header to the UTXOs and STXOs associated with a wallet in
-/// that block.
-#[derive(Debug)]
-pub struct WalletTokenMap {
-    /// The block hash.
-    pub header_id: String,
-    /// The UTXOs associated with the wallet for the block hash - this takes
-    /// into account outputs that have been spent up to that block.
-    pub utxos_per_wallet: HashMap<String, Vec<Utxo>>,
-}
-
 /// Information about a node snapshot, which can be used to initialize
 /// dynamically
 #[derive(Debug, Default, Clone)]
@@ -747,6 +726,8 @@ impl Debug for CucumberWorld {
         reason = "Debug output intentionally enumerates world state fields for test diagnostics"
     )]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let wallet_diagnostics = self.wallets.diagnostics();
+
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
             .field("test_context", &format!("{:?}", self.test_context))
@@ -799,15 +780,21 @@ impl Debug for CucumberWorld {
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field(
-                "wallet_tokens_per_block",
-                &self.wallet_tokens_per_block.len(),
+                "wallet_utxos_by_block",
+                &wallet_diagnostics.utxo_snapshot_count,
             )
-            .field("wallet_runtime_state", &self.wallet_runtime_state.len())
+            .field(
+                "wallet_pending_states",
+                &wallet_diagnostics.pending_wallet_count,
+            )
             .field(
                 "scenario_fee_encumbered_tokens",
-                &self.fee_state.encumbered_tokens_per_wallet.len(),
+                &self.fee_state.reserved_wallet_count(),
             )
-            .field("node_header_heights", &self.node_header_heights.len())
+            .field(
+                "node_header_heights",
+                &wallet_diagnostics.header_height_node_count,
+            )
             .field("node_peer_ids", &self.node_peer_ids.len())
             .field("node_groups", &self.node_groups.len())
             .field("node_to_group", &self.node_to_group.len())
@@ -1455,38 +1442,9 @@ impl CucumberWorld {
         format!("{:?}", FullDebugInfo(self))
     }
 
-    /// Record a submitted transaction hash for a wallet
-    pub fn record_submitted_tx_hash(&mut self, wallet_name: &str, tx_hash: TxHash) {
-        self.wallet_runtime_state
-            .entry(wallet_name.to_owned())
-            .or_default()
-            .submitted_tx_hashes
-            .push(tx_hash);
-    }
-
-    pub fn record_tracked_spent_fee(&mut self, wallet_name: &str, spent_fee: u64) {
-        self.wallet_runtime_state
-            .entry(wallet_name.to_owned())
-            .or_default()
-            .tracked_spent_fees += spent_fee;
-    }
-
-    #[must_use]
-    pub fn total_tracked_spent_fees(&self) -> u64 {
-        self.wallet_runtime_state
-            .values()
-            .map(|state| state.tracked_spent_fees)
-            .sum()
-    }
-
-    /// Get submitted transaction hashes for a wallet
-    pub fn submitted_tx_hashes_for_wallet(&self, wallet_name: &str) -> &[TxHash] {
-        self.wallet_runtime_state
-            .get(wallet_name)
-            .map_or(&[], |state| state.submitted_tx_hashes.as_slice())
-    }
-
     pub fn full_debug_info(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let wallet_diagnostics = self.wallets.diagnostics();
+
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
             .field("scenario_base_dir", &self.scenario_base_dir)
@@ -1542,16 +1500,16 @@ impl CucumberWorld {
             )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field(
-                "wallet_tokens_per_block",
-                &wallet_tokens_per_block_display(&self.wallet_tokens_per_block),
+                "wallet_utxos_by_block",
+                &wallet_utxos_by_block_display(&wallet_diagnostics),
             )
             .field(
-                "wallet_runtime_state",
-                &wallet_runtime_state_display(&self.wallet_runtime_state),
+                "wallet_pending_states",
+                &wallet_pending_states_display(&wallet_diagnostics),
             )
             .field(
                 "node_header_heights",
-                &node_header_heights_display(&self.node_header_heights),
+                &node_header_heights_display(&wallet_diagnostics),
             )
             .field("node_peer_ids", &node_peer_ids_display(&self.node_peer_ids))
             .field("node_groups", &self.node_groups)
@@ -1662,48 +1620,45 @@ fn wallet_accounts_display(wallet_accounts: &HashMap<usize, WalletAccount>) -> S
     format!("HashMap<usize, WalletAccount>({})", accounts.join(", "))
 }
 
-fn wallet_tokens_per_block_display(
-    wallet_tokens_per_block: &HashMap<String, WalletTokenMap>,
-) -> String {
-    let blocks: Vec<_> = wallet_tokens_per_block
+fn wallet_utxos_by_block_display(wallet_diagnostics: &WalletDiagnostics) -> String {
+    let blocks: Vec<_> = wallet_diagnostics
+        .utxo_snapshots
         .iter()
-        .filter_map(|(block_hash, wallet_token_map)| {
-            let non_empty_wallets: Vec<_> = wallet_token_map
-                .utxos_per_wallet
-                .iter()
-                .filter(|(_, utxos)| !utxos.is_empty())
-                .map(|(wallet, utxos)| format!("{wallet}: [{}]", utxos.len()))
-                .collect();
-            if non_empty_wallets.is_empty() {
+        .filter_map(|snapshot| {
+            if snapshot.non_empty_wallets.is_empty() {
                 None
             } else {
+                let non_empty_wallets: Vec<_> = snapshot
+                    .non_empty_wallets
+                    .iter()
+                    .map(|(wallet, utxo_count)| format!("{wallet}: [{utxo_count}]"))
+                    .collect();
                 Some(format!(
                     "{}: {} {}",
-                    block_hash,
-                    wallet_token_map.header_id,
+                    snapshot.block_hash,
+                    snapshot.header_id,
                     non_empty_wallets.join(" -")
                 ))
             }
         })
         .collect();
-    format!("HashMap<String, WalletTokenMap>({})", blocks.join(", "))
+
+    format!("HashMap<String, WalletUtxoSnapshot>({})", blocks.join(", "))
 }
 
-fn wallet_runtime_state_display(
-    wallet_runtime_state: &HashMap<String, WalletRuntimeState>,
-) -> String {
-    let states: Vec<_> = wallet_runtime_state
+fn wallet_pending_states_display(wallet_diagnostics: &WalletDiagnostics) -> String {
+    let states: Vec<_> = wallet_diagnostics
+        .pending_states
         .iter()
-        .map(|(k, state)| {
+        .map(|state| {
             format!(
-                "'{k}: encumbered={}, submitted={}, tracked_fees={}'",
-                state.encumbered_tokens.len(),
-                state.submitted_tx_hashes.len(),
-                state.tracked_spent_fees
+                "'{}: encumbered={}, tracked_fees={}'",
+                state.wallet_id, state.reserved_utxos, state.tracked_spent_fees
             )
         })
         .collect();
-    format!("HashMap<String, WalletRuntimeState>({})", states.join(", "))
+
+    format!("WalletPendingStates({})", states.join(", "))
 }
 
 fn fee_state_summary(fee_state: &ScenarioFeeState) -> String {
@@ -1721,20 +1676,17 @@ fn fee_state_summary(fee_state: &ScenarioFeeState) -> String {
     format!(
         "sponsor={sponsor}, wallet_account={}, encumbered_by_wallet={}",
         fee_state.wallet_account.is_some(),
-        fee_state.encumbered_tokens_per_wallet.len(),
+        fee_state.reserved_wallet_count(),
     )
 }
 
-fn node_header_heights_display(
-    node_header_heights: &HashMap<String, HashMap<String, u64>>,
-) -> String {
-    let nodes: Vec<_> = node_header_heights
+fn node_header_heights_display(wallet_diagnostics: &WalletDiagnostics) -> String {
+    let nodes: Vec<_> = wallet_diagnostics
+        .header_heights
         .iter()
-        .map(|(k, v)| {
-            let mut heights: Vec<u64> = v.values().copied().collect();
-            heights.sort_unstable();
+        .map(|(node_name, heights)| {
             format!(
-                "{k}: [{}]",
+                "{node_name}: [{}]",
                 heights
                     .iter()
                     .map(ToString::to_string)

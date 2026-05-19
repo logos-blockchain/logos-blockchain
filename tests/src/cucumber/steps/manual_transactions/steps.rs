@@ -1,4 +1,4 @@
-use std::{str::FromStr as _, time::Duration};
+use std::time::Duration;
 
 use cucumber::{gherkin::Step, given, then, when};
 use tracing::{info, warn};
@@ -9,7 +9,6 @@ use crate::{
         steps::{
             TARGET,
             manual_transactions::{
-                best_node::get_best_node_info,
                 command_file_parsing::ManualCommand,
                 command_file_utils::{
                     execute_coin_splits_all_user_wallets,
@@ -23,13 +22,15 @@ use crate::{
                 },
                 utils,
                 utils::{
-                    WalletStateType, assert_tracked_wallet_fees_equal_sponsored_fee_account_spend,
-                    create_and_submit_transaction, wait_for_transactions_inclusion,
-                    wait_for_wallet_or_encumbered_state,
+                    WalletOutputState,
+                    assert_tracked_wallet_fees_equal_sponsored_fee_account_spend,
+                    create_and_submit_transaction, parse_wallet_output_state,
+                    wait_for_wallet_output_state, wait_for_wallet_submitted_transactions_inclusion,
                 },
             },
         },
         utils::resolve_literal_or_env,
+        wallet::best_node::get_best_node_info,
         world::{CucumberWorld, WalletInfo},
     },
     non_zero,
@@ -77,7 +78,7 @@ async fn step_wallet_has_at_least_coins(
     min_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -86,7 +87,7 @@ async fn step_wallet_has_at_least_coins(
         None,
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -100,7 +101,7 @@ async fn step_wallet_has_at_most_coins(
     max_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -109,7 +110,7 @@ async fn step_wallet_has_at_most_coins(
         None,
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -123,7 +124,7 @@ async fn step_wallet_has_exact_coins(
     coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -132,7 +133,7 @@ async fn step_wallet_has_exact_coins(
         None,
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -146,7 +147,7 @@ async fn step_wallet_has_at_most_encumbered_coins(
     max_coin_count: usize,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -155,7 +156,7 @@ async fn step_wallet_has_at_most_encumbered_coins(
         None,
         None,
         time_out_seconds,
-        WalletStateType::Encumbered,
+        WalletOutputState::Reserved,
     )
     .await
 }
@@ -169,7 +170,7 @@ async fn step_wallet_has_at_least_value(
     min_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -178,7 +179,7 @@ async fn step_wallet_has_at_least_value(
         Some(&min_token_value),
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -192,7 +193,7 @@ async fn step_wallet_has_exact_value(
     token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -201,7 +202,7 @@ async fn step_wallet_has_exact_value(
         Some(&token_value),
         Some(&token_value),
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -215,7 +216,7 @@ async fn step_wallet_has_at_most_value(
     max_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -224,7 +225,7 @@ async fn step_wallet_has_at_most_value(
         None,
         Some(&max_token_value),
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -239,7 +240,7 @@ async fn step_wallet_has_at_least_coins_and_value(
     min_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -248,7 +249,7 @@ async fn step_wallet_has_at_least_coins_and_value(
         Some(&min_token_value),
         None,
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -263,7 +264,7 @@ async fn step_wallet_has_at_most_coins_and_value(
     max_token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -272,7 +273,7 @@ async fn step_wallet_has_at_most_coins_and_value(
         None,
         Some(&max_token_value),
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -287,7 +288,7 @@ async fn step_wallet_has_exact_coins_and_value(
     token_value: u64,
     time_out_seconds: u64,
 ) -> StepResult {
-    wait_for_wallet_or_encumbered_state(
+    wait_for_wallet_output_state(
         world,
         &step.value,
         wallet_name,
@@ -296,7 +297,7 @@ async fn step_wallet_has_exact_coins_and_value(
         Some(&token_value),
         Some(&token_value),
         time_out_seconds,
-        WalletStateType::OnChain,
+        WalletOutputState::OnChain,
     )
     .await
 }
@@ -315,18 +316,9 @@ async fn step_wallet_has_all_submitted_transactions_settled(
     wallet_name: String,
     time_out_seconds: u64,
 ) -> StepResult {
-    let tx_hashes = world.submitted_tx_hashes_for_wallet(&wallet_name).to_vec();
-
-    wait_for_transactions_inclusion(
-        &world
-            .nodes_info
-            .get(&world.resolve_wallet(&wallet_name)?.node_name)
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!("Node for wallet '{wallet_name}' not found"),
-            })?
-            .started_node
-            .client,
-        &tx_hashes,
+    wait_for_wallet_submitted_transactions_inclusion(
+        world,
+        &wallet_name,
         Duration::from_secs(time_out_seconds),
     )
     .await
@@ -562,9 +554,13 @@ async fn step_verify_each_wallet_minimum_outputs(
         &step.value,
         min_outputs,
         timeout_seconds,
-        WalletStateType::from_str(&wallet_state_type).inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-        })?,
+        parse_wallet_output_state(&wallet_state_type)
+            .inspect_err(|e| {
+                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+            })
+            .map_err(|e| StepError::InvalidArgument {
+                message: e.to_string(),
+            })?,
     )
     .await
     .inspect_err(|e| {
@@ -604,7 +600,7 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
 #[given(expr = "I update all user wallets balances")]
 #[when(expr = "I update all user wallets balances")]
 async fn step_update_all_wallets_balances(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    utils::update_wallet_balance_all_user_wallets(world, &step.value, None).await?;
+    utils::sync_available_utxos_for_user_wallets(world, &step.value, None).await?;
     Ok(())
 }
 

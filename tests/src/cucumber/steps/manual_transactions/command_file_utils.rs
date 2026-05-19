@@ -41,7 +41,7 @@ use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::cucumber::{
-    error::StepError,
+    error::{StepError, StepResult},
     steps::{
         TARGET, manual_nodes,
         manual_nodes::{
@@ -51,12 +51,12 @@ use crate::cucumber::{
             },
         },
         manual_transactions::{
-            best_node::get_best_node_info,
             command_file_parsing::{ManualCommand, take_next_command},
             utils,
-            utils::{BestNodeInfo, WalletStateType},
+            utils::{BestNodeInfo, WalletOutputState},
         },
     },
+    wallet::best_node::get_best_node_info,
     world::{CucumberWorld, WalletInfo},
 };
 
@@ -138,7 +138,7 @@ pub(crate) async fn verify_min_outputs_all_user_wallets(
     step: &str,
     min_outputs: usize,
     timeout_seconds: u64,
-    wallet_state_type: WalletStateType,
+    wallet_state_type: WalletOutputState,
 ) -> Result<(), StepError> {
     let mut wallet_names: Vec<_> = world
         .all_user_wallets()
@@ -148,7 +148,7 @@ pub(crate) async fn verify_min_outputs_all_user_wallets(
     wallet_names.sort();
 
     for wallet_name in &wallet_names {
-        utils::wait_for_wallet_or_encumbered_state(
+        utils::wait_for_wallet_output_state(
             world,
             step,
             wallet_name.clone(),
@@ -212,7 +212,7 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
             "CONTINUOUS NEXT WALLET cycle {} C: Refresh user wallet balances",
             cycle + 1
         );
-        utils::update_wallet_balance_all_user_wallets(world, step, None).await?;
+        utils::sync_available_utxos_for_user_wallets(world, step, None).await?;
     }
 
     Ok(())
@@ -257,13 +257,14 @@ async fn execute_ring_send_round(
                     );
                     wait_wallet_send_ready(world, from, 180).await?;
                     loop {
-                        let (_, available) = utils::get_wallet_balances(
+                        let balance = utils::sync_wallet_balance(
                             world,
                             "execute_ring_send_round",
                             from,
-                            WalletStateType::Available,
+                            WalletOutputState::Available,
                         )
                         .await?;
+                        let available = balance.value;
                         if available > value * 2 {
                             execute_coin_split(
                                 world,
@@ -296,13 +297,14 @@ async fn wait_wallet_send_ready(
     let mut last_encumbered = 0usize;
 
     while start.elapsed() < Duration::from_secs(timeout_seconds) {
-        let (encumbered_count, _) = utils::get_wallet_balances(
+        let balance = utils::sync_wallet_balance(
             world,
             "wait_wallet_send_ready",
             wallet_name,
-            WalletStateType::Encumbered,
+            WalletOutputState::Reserved,
         )
         .await?;
+        let encumbered_count = balance.output_count;
 
         last_encumbered = encumbered_count;
 
@@ -355,27 +357,25 @@ async fn execute_non_stop_manual_command(
         } => execute_coin_split(world, step, wallet, *outputs, *value, None).await,
         ManualCommand::Verify { .. } => handle_verify_command(world, step, command).await,
         ManualCommand::WalletBalance { wallet_name } => {
-            utils::update_wallet_balance(world, step, wallet_name).await?;
+            utils::sync_available_utxos_for_wallet(world, step, wallet_name).await?;
             Ok(())
         }
         ManualCommand::WalletBalanceAllUserWallets => {
-            utils::update_wallet_balance_all_user_wallets(world, step, None).await?;
+            utils::sync_available_utxos_for_user_wallets(world, step, None).await?;
             Ok(())
         }
         ManualCommand::WalletBalanceAllFundingWallets => {
-            utils::update_wallet_balance_all_funding_wallets(world, step, None).await?;
+            utils::sync_available_utxos_for_funding_wallets(world, step, None).await?;
             Ok(())
         }
         ManualCommand::WalletBalanceAllWallets => {
-            utils::update_wallet_balance_all_wallets(world, step, None).await?;
+            utils::sync_available_utxos_for_all_wallets(world, step, None).await?;
             Ok(())
         }
         ManualCommand::ClearEncumbrances { wallet_name } => {
-            utils::clear_wallet_encumbrances(world, step, wallet_name)
+            clear_wallet_encumbrances(world, step, wallet_name)
         }
-        ManualCommand::ClearEncumbrancesAllWallets => {
-            utils::clear_all_wallet_encumbrances(world, step)
-        }
+        ManualCommand::ClearEncumbrancesAllWallets => clear_all_wallet_encumbrances(world, step),
         ManualCommand::Send {
             transactions,
             value,
@@ -416,7 +416,7 @@ async fn execute_non_stop_manual_command(
                 step,
                 *min_outputs,
                 *timeout_seconds,
-                WalletStateType::Available,
+                WalletOutputState::Available,
             )
             .await
         }
@@ -425,6 +425,34 @@ async fn execute_non_stop_manual_command(
         }
         ManualCommand::Stop => Ok(()),
     }
+}
+
+fn clear_wallet_encumbrances(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+) -> StepResult {
+    if world.resolve_wallet(wallet_name).is_err() {
+        warn!(target: TARGET, "Step `{}` error: wallet '{wallet_name}' not found in world state", step);
+        return Err(StepError::LogicalError {
+            message: format!("wallet '{wallet_name}' not found in world state"),
+        });
+    }
+
+    world.wallets.clear_encumbrances(wallet_name);
+    world.fee_state.clear_wallet_reservations(wallet_name);
+    info!(target: TARGET, "Cleared encumbrances for wallet '{wallet_name}'");
+    Ok(())
+}
+
+fn clear_all_wallet_encumbrances(world: &mut CucumberWorld, step: &str) -> StepResult {
+    let wallet_names: Vec<String> = world.wallet_info.keys().cloned().collect();
+
+    for wallet_name in wallet_names {
+        clear_wallet_encumbrances(world, step, &wallet_name)?;
+    }
+    info!(target: TARGET, "Cleared encumbrances for all wallets");
+    Ok(())
 }
 
 fn execute_create_blockchain_snapshot_all_nodes(
@@ -484,7 +512,7 @@ async fn handle_verify_command(
     };
 
     let verify_min = !*verify_max;
-    utils::wait_for_wallet_or_encumbered_state(
+    utils::wait_for_wallet_output_state(
         world,
         step,
         wallet.clone(),
@@ -663,7 +691,7 @@ async fn execute_continuous_round_robin(
             cycle + 1
         );
         for sender in &wallet_names {
-            if let Err(e) = utils::wait_for_wallet_or_encumbered_state(
+            if let Err(e) = utils::wait_for_wallet_output_state(
                 world,
                 step,
                 sender.clone(),
@@ -672,7 +700,7 @@ async fn execute_continuous_round_robin(
                 None,
                 None,
                 300,
-                WalletStateType::Encumbered,
+                WalletOutputState::Reserved,
             )
             .await
             {
@@ -707,7 +735,7 @@ async fn execute_continuous_round_robin(
             cycle + 1
         );
         for sender in &wallet_names {
-            if let Err(e) = utils::wait_for_wallet_or_encumbered_state(
+            if let Err(e) = utils::wait_for_wallet_output_state(
                 world,
                 step,
                 sender.clone(),
@@ -716,7 +744,7 @@ async fn execute_continuous_round_robin(
                 None,
                 None,
                 300,
-                WalletStateType::Encumbered,
+                WalletOutputState::Reserved,
             )
             .await
             {
@@ -777,10 +805,10 @@ async fn wait_for_available_value(
 ) -> Result<(), StepError> {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(timeout_seconds) {
-        let (_, value) =
-            utils::get_wallet_balances(world, step, wallet_name, WalletStateType::Available)
+        let balance =
+            utils::sync_wallet_balance(world, step, wallet_name, WalletOutputState::Available)
                 .await?;
-        if value >= required_value {
+        if balance.value >= required_value {
             return Ok(());
         }
         sleep(Duration::from_millis(200)).await;

@@ -21,7 +21,6 @@ lb-mmr      = { workspace = true }
 lb-utxotree = { workspace = true }
 
 [dependencies]
-async-trait                      = { workspace = true }
 cucumber                         = { features = ["macros", "output-junit"], workspace = true }
 derivative                       = { workspace = true }
 ed25519                          = { workspace = true }
@@ -29,7 +28,6 @@ futures                          = { workspace = true }
 futures-util                     = { workspace = true }
 hex                              = { workspace = true }
 lb-api-service                   = { workspace = true }
-lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-config                        = { workspace = true }
@@ -39,10 +37,8 @@ lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
 lb-mmr                           = { workspace = true }
-lb-network-service               = { workspace = true }
 lb-node                          = { features = ["testing"], workspace = true }
 lb-testing-framework             = { workspace = true }
-lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
 lb-zksign                        = { workspace = true }
@@ -58,7 +54,6 @@ serde_yaml                       = { workspace = true }
 serial_test                      = { workspace = true }
 strum                            = { features = ["derive", "std"], workspace = true }
 strum_macros                     = { workspace = true }
-tempfile                         = { workspace = true }
 testing-framework-core           = { workspace = true }
 testing-framework-runner-local   = { workspace = true }
 thiserror                        = { workspace = true }

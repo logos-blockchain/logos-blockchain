@@ -1,10 +1,8 @@
 pub mod api;
+pub mod cli;
 pub mod config;
 pub mod generic_services;
 pub mod panic;
-
-#[cfg(feature = "config-gen")]
-pub mod init;
 
 pub mod global_allocators;
 
@@ -45,7 +43,6 @@ use overwatch::{
 };
 use tokio::runtime;
 
-pub use crate::config::{ApiArgs, Command, LogArgs, NetworkArgs, UserConfig};
 use crate::{
     api::backend::AxumBackend,
     config::{
@@ -57,6 +54,10 @@ use crate::{
     },
     generic_services::{SdpMempoolAdapter, SdpRecoveryBackend, SdpService, SdpWalletAdapter},
     panic::log_and_exit_hook,
+};
+pub use crate::{
+    cli::Command,
+    config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
 };
 
 pub const MB16: usize = 1024 * 1024 * 16;

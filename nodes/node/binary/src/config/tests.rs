@@ -1,13 +1,13 @@
 use std::path::Path;
 
-use clap::Parser as _;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use tracing::Level;
 
 use crate::{
     UserConfig,
+    cli::CliArgs,
     config::{
-        CliArgs, DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
+        DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
         blend::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
@@ -33,6 +33,7 @@ use crate::{
 
 #[test]
 fn parse_config_path() {
+    use clap::Parser as _;
     let parsed_args = CliArgs::parse_from(["", "test_cfg.yaml"]);
     assert_eq!(parsed_args.config_path().to_str().unwrap(), "test_cfg.yaml");
 }

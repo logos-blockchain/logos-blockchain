@@ -16,8 +16,6 @@ use reqwest::Url;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
 use tokio::time::error::Elapsed;
 
-use crate::nodes::get_exe_path;
-
 pub struct LocalManualClusterHarnessBase {
     pub scenario_base_dir: PathBuf,
     pub deployment: DeploymentPlan,
@@ -35,8 +33,6 @@ pub fn build_local_manual_cluster(
     prefix: &str,
     builder: DeploymentBuilder,
 ) -> LocalManualClusterHarnessBase {
-    ensure_local_node_binary_env();
-
     let scenario_base_dir = unique_scenario_base_dir(&format!("{prefix}-{test_name}"));
     register_system_monitor_output_file(&scenario_base_dir.join("system_stats.ndjson"));
     record_system_monitor_event(
@@ -88,19 +84,6 @@ where
     (base, nodes)
 }
 
-pub fn ensure_local_node_binary_env() {
-    // Respect an existing binary override (for example, a testing-featured build).
-    if std::env::var_os("LOGOS_BLOCKCHAIN_NODE_BIN").is_some() {
-        return;
-    }
-
-    // SAFETY: Tests set this process-local env var before spawning node processes.
-    // We do not read-modify-write shared data through references here.
-    unsafe {
-        std::env::set_var("LOGOS_BLOCKCHAIN_NODE_BIN", get_exe_path());
-    }
-}
-
 pub async fn start_manual_nodes_with_layout<F>(
     cluster: &LbcManualCluster,
     scenario_base_dir: &Path,
@@ -128,7 +111,7 @@ where
                 ),
             )
             .await
-            .unwrap_or_else(|_| panic!("starting node-{node_index} should succeed")),
+            .unwrap_or_else(|error| panic!("starting node-{node_index} should succeed: {error}")),
         );
     }
 

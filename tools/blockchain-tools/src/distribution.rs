@@ -5,20 +5,16 @@ use lb_core::{
     sdp::{Locators, ServiceType},
 };
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// `StakeHolderInfo` is used to distribute Notes of `NoteValue`.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StakeHolderInfo {
     pub zk_id: ZkPublicKey,
     pub stake: NoteValue,
 }
 
-/// `ProviderInfo` is used to register a service provider.
-/// A note matching the stake holder info by the `zk_pk` will be locked for this
-/// service.
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProviderInfo {
     pub provider_id: Ed25519PublicKey,
     pub zk_id: ZkPublicKey,

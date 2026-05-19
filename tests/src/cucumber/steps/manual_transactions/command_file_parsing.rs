@@ -1,6 +1,9 @@
 use std::{fs, path::Path};
 
-use crate::cucumber::{error::StepError, steps::manual_transactions::utils::WalletStateType};
+use crate::cucumber::{
+    error::StepError,
+    steps::manual_transactions::utils::{WalletOutputState, parse_wallet_output_state},
+};
 
 #[cfg_attr(test, derive(strum_macros::EnumCount))]
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -22,7 +25,7 @@ pub enum ManualCommand {
         outputs: Option<usize>,
         value: Option<u64>,
         time_out: u64,
-        wallet_state_type: WalletStateType,
+        wallet_state_type: WalletOutputState,
         verify_max: bool,
     },
     WalletBalance {
@@ -195,10 +198,9 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
             let time_out = parse_u64_field(&parts, "time_out")?;
             let wallet_state_type =
                 parse_quoted_field(&parts, "wallet_state_type").and_then(|s| {
-                    s.parse::<WalletStateType>()
-                        .map_err(|e| StepError::InvalidArgument {
-                            message: format!("Invalid 'wallet_state_type' value: {e}"),
-                        })
+                    parse_wallet_output_state(&s).map_err(|e| StepError::InvalidArgument {
+                        message: format!("Invalid 'wallet_state_type' value: {e}"),
+                    })
                 })?;
             Ok(ManualCommand::Verify {
                 wallet,
@@ -345,7 +347,7 @@ fn parse_optional_number_field<'a>(parts: &'a [String], key: &str) -> Option<&'a
 mod tests {
     use strum::EnumCount as _;
 
-    use super::{ManualCommand, WalletStateType, parse_manual_command};
+    use super::{ManualCommand, WalletOutputState, parse_manual_command};
 
     fn parse_ok(raw: &str) -> ManualCommand {
         parse_manual_command(raw)
@@ -402,7 +404,7 @@ mod tests {
                 outputs,
                 value,
                 time_out,
-                wallet_state_type: WalletStateType::Encumbered,
+                wallet_state_type: WalletOutputState::Reserved,
                 verify_max,
             } if wallet == "WALLET_1A"
                 && outputs == Some(0)
@@ -424,7 +426,7 @@ mod tests {
                 outputs,
                 value,
                 time_out,
-                wallet_state_type: WalletStateType::OnChain,
+                wallet_state_type: WalletOutputState::OnChain,
                 verify_max,
             } if wallet == "WALLET_2A"
                 && outputs == Some(1)
@@ -622,7 +624,7 @@ mod tests {
                 outputs: None,
                 value: None,
                 time_out: 0,
-                wallet_state_type: WalletStateType::OnChain,
+                wallet_state_type: WalletOutputState::OnChain,
                 verify_max: false,
             },
             ManualCommand::WalletBalance {

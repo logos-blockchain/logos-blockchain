@@ -14,11 +14,11 @@ use libp2p::{Multiaddr, PeerId};
 use num_bigint::BigUint;
 use rand::rngs::OsRng;
 
+use super::InitArgs;
 use crate::{
     UserConfig,
     config::{
-        ApiConfig, InitArgs, KmsConfig, SdpConfig, StateConfig, StorageConfig, TracingConfig,
-        WalletConfig,
+        ApiConfig, KmsConfig, SdpConfig, StateConfig, StorageConfig, TracingConfig, WalletConfig,
         blend::serde::{Config as BlendConfig, RequiredValues as BlendConfigRequiredValues},
         cryptarchia::serde::{
             Config as CryptarchiaConfig, RequiredValues as CryptarchiaConfigRequiredValues,
