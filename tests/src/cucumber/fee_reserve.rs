@@ -44,8 +44,14 @@ impl ScenarioFeeState {
         });
     }
 
-    pub fn reserve_for_wallet(&mut self, wallet_name: impl Into<String>, utxos: Vec<Utxo>) {
-        self.reservations.reserve_for_wallet(wallet_name, utxos);
+    pub fn reserve_for_wallet(
+        &mut self,
+        wallet_name: impl Into<String>,
+        group_key: impl Into<String>,
+        utxos: Vec<Utxo>,
+    ) {
+        self.reservations
+            .reserve_for_wallet(wallet_name, group_key, utxos);
     }
 
     pub fn clear_wallet_reservations(&mut self, wallet_name: &str) {
@@ -71,11 +77,6 @@ impl ScenarioFeeState {
         self.reservations.wallet_count()
     }
 
-    #[must_use]
-    pub fn available_utxos(&self, on_chain_utxos: Vec<Utxo>) -> Vec<Utxo> {
-        self.reservations.available_utxos(on_chain_utxos)
-    }
-
     pub fn funding_source_for_group(
         &self,
         group_key: &str,
@@ -95,7 +96,7 @@ impl ScenarioFeeState {
 
         Ok(Some(WalletFundingSource::new(
             fee_wallet_account,
-            self.available_utxos(available_fee_utxos),
+            self.available_utxos_for_group(group_key, available_fee_utxos),
         )))
     }
 
@@ -105,24 +106,45 @@ impl ScenarioFeeState {
         wallet_id: impl Into<WalletId>,
         on_chain_utxos: Vec<Utxo>,
     ) -> WalletStateView {
-        let reserved_utxos = self.reservations.reserved_utxos();
+        let wallet_id = wallet_id.into();
+        let group_key = fee_wallet_group_key(wallet_id.as_str()).unwrap_or_default();
+        let reserved_utxos = self.reservations.reserved_utxos_for_group(group_key);
 
         WalletStateView::new(wallet_id, on_chain_utxos, reserved_utxos)
+    }
+
+    #[must_use]
+    fn available_utxos_for_group(&self, group_key: &str, on_chain_utxos: Vec<Utxo>) -> Vec<Utxo> {
+        self.reservations
+            .available_utxos_for_group(group_key, on_chain_utxos)
     }
 }
 
 /// Scenario fee UTXOs reserved while grouped transactions are being planned.
 #[derive(Debug, Default)]
 struct ScenarioFeeReservations {
-    reserved_by_wallet: HashMap<String, Vec<Utxo>>,
+    reserved_by_wallet: HashMap<String, ScenarioFeeReservation>,
+}
+
+#[derive(Debug, Default)]
+struct ScenarioFeeReservation {
+    group_key: String,
+    utxos: Vec<Utxo>,
 }
 
 impl ScenarioFeeReservations {
-    fn reserve_for_wallet(&mut self, wallet_name: impl Into<String>, utxos: Vec<Utxo>) {
-        self.reserved_by_wallet
+    fn reserve_for_wallet(
+        &mut self,
+        wallet_name: impl Into<String>,
+        group_key: impl Into<String>,
+        utxos: Vec<Utxo>,
+    ) {
+        let reservation = self
+            .reserved_by_wallet
             .entry(wallet_name.into())
-            .or_default()
-            .extend(utxos);
+            .or_default();
+        reservation.group_key = group_key.into();
+        reservation.utxos.extend(utxos);
     }
 
     fn clear_wallet(&mut self, wallet_name: &str) {
@@ -133,8 +155,8 @@ impl ScenarioFeeReservations {
         self.reserved_by_wallet.len()
     }
 
-    fn available_utxos(&self, on_chain_utxos: Vec<Utxo>) -> Vec<Utxo> {
-        let reserved_note_ids = self.reserved_note_ids();
+    fn available_utxos_for_group(&self, group_key: &str, on_chain_utxos: Vec<Utxo>) -> Vec<Utxo> {
+        let reserved_note_ids = self.reserved_note_ids_for_group(group_key);
 
         on_chain_utxos
             .into_iter()
@@ -142,18 +164,28 @@ impl ScenarioFeeReservations {
             .collect()
     }
 
-    fn reserved_utxos(&self) -> Vec<Utxo> {
+    fn reserved_utxos_for_group(&self, group_key: &str) -> Vec<Utxo> {
         self.reserved_by_wallet
             .values()
-            .flat_map(|utxos| utxos.iter().copied())
+            .filter(|reservation| reservation.group_key == group_key)
+            .flat_map(|reservation| reservation.utxos.iter().copied())
             .collect()
     }
 
-    fn reserved_note_ids(&self) -> HashSet<NoteId> {
+    fn reserved_note_ids_for_group(&self, group_key: &str) -> HashSet<NoteId> {
         self.reserved_by_wallet
             .values()
-            .flat_map(|utxos| utxos.iter().map(Utxo::id))
+            .filter(|reservation| reservation.group_key == group_key)
+            .flat_map(|reservation| reservation.utxos.iter().map(Utxo::id))
             .collect()
+    }
+}
+
+fn fee_wallet_group_key(wallet_name: &str) -> Option<&str> {
+    let suffix = wallet_name.strip_prefix(SCENARIO_FEE_ACCOUNT_NAME)?;
+    match suffix {
+        "" => Some(""),
+        suffix => suffix.strip_prefix('@'),
     }
 }
 

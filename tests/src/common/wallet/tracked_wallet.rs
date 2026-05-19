@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lb_core::mantle::{NoteId, Utxo};
 
@@ -87,7 +87,7 @@ impl WalletStateView {
 }
 
 fn available_utxos(on_chain_utxos: &[Utxo], reserved_utxos: &[Utxo]) -> Vec<Utxo> {
-    let reserved_note_ids = reserved_utxos.iter().map(Utxo::id).collect::<Vec<_>>();
+    let reserved_note_ids = reserved_utxos.iter().map(Utxo::id).collect::<HashSet<_>>();
 
     on_chain_utxos
         .iter()
@@ -193,7 +193,16 @@ struct PendingWalletState {
 
 impl PendingWalletState {
     fn reserve_utxos(&mut self, utxos: impl IntoIterator<Item = Utxo>) {
-        self.reserved_utxos.extend(utxos);
+        let mut reserved_note_ids = self
+            .reserved_utxos
+            .iter()
+            .map(Utxo::id)
+            .collect::<HashSet<_>>();
+        self.reserved_utxos.extend(
+            utxos
+                .into_iter()
+                .filter(|utxo| reserved_note_ids.insert(utxo.id())),
+        );
     }
 
     const fn record_spent_fee(&mut self, spent_fee: u64) {

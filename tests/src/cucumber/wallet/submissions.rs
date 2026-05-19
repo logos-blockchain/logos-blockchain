@@ -165,7 +165,6 @@ pub async fn submit_prepared_user_wallet_transaction(
     best_node_info: Option<&BestNodeInfo>,
 ) -> Result<TxHash, StepError> {
     let PreparedUserWalletSubmission { wallet, submission } = prepared;
-    let sender_wallet_name = wallet.wallet_name.as_str();
     let signed_submission = submission
         .sign_with_leading_proofs(extra_op_proofs)
         .map_err(wallet_transaction_error)
@@ -183,7 +182,7 @@ pub async fn submit_prepared_user_wallet_transaction(
             warn!(target: TARGET, "Step `{}` error: {e}", step);
         })?;
 
-    record_wallet_submission(world, sender_wallet_name, &signed_submission);
+    record_wallet_submission(world, &wallet, &signed_submission);
     Ok(tx_hash)
 }
 
@@ -288,9 +287,15 @@ fn wallet_transaction_error(error: WalletTransactionError) -> StepError {
 
 fn record_wallet_submission(
     world: &mut CucumberWorld,
-    wallet_name: &str,
+    wallet: &WalletInfo,
     signed_submission: &SignedWalletTransaction,
 ) {
+    let wallet_name = wallet.wallet_name.as_str();
+    let group_key = world
+        .node_to_group
+        .get(&wallet.node_name)
+        .cloned()
+        .unwrap_or_default();
     let reserved_inputs = signed_submission.reserved_inputs();
     let recorded = world.wallets.record_wallet_reservation(
         wallet_name.to_owned(),
@@ -301,6 +306,7 @@ fn record_wallet_submission(
 
     world.fee_state.reserve_for_wallet(
         wallet_name.to_owned(),
+        group_key,
         recorded.into_fee_sponsor_reserved_inputs(),
     );
 }
