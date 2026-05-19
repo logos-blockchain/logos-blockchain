@@ -57,6 +57,14 @@ pub enum Error {
     },
     #[error("Invalid signature")]
     InvalidSignature,
+    #[error(
+        "Invalid signature index {index:?} for channel {channel_id:?} which has {sequencers:?} sequencers"
+    )]
+    InvalidSignatureIndex {
+        channel_id: ChannelId,
+        sequencers: usize,
+        index: ChannelKeyIndex,
+    },
     #[error("Channel {channel_id:?} not found")]
     ChannelNotFound { channel_id: ChannelId },
     #[error("Insufficient funds")]

@@ -80,7 +80,14 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
 
             // Check the signatures
             for sig in signatures {
-                if channel.accredited_keys[sig.channel_key_index as usize]
+                if channel
+                    .accredited_keys
+                    .get(sig.channel_key_index as usize)
+                    .ok_or_else(|| Error::InvalidSignatureIndex {
+                        channel_id: self.channel,
+                        sequencers: channel.accredited_keys.len(),
+                        index: sig.channel_key_index,
+                    })?
                     .verify(ctx.tx_hash.as_signing_bytes().as_ref(), &sig.signature)
                     .is_err()
                 {
