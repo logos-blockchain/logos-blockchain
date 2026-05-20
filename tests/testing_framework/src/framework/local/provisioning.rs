@@ -3,6 +3,7 @@ use std::{
     env, fs, io,
     net::{Ipv4Addr, UdpSocket},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -27,8 +28,9 @@ use lb_node::{
 use rand::Rng as _;
 use testing_framework_core::scenario::{Application, DynError, PeerSelection, StartNodeOptions};
 use testing_framework_runner_local::{
-    BinaryConfig, BinaryResolver, BuiltNodeConfig, LaunchEnvVar, LaunchFile, LocalDeployerEnv,
-    NodeConfigEntry, NodeEndpointPort, NodeEndpoints, ProcessSpawnError, env::Node,
+    BinaryProviderRef, BuildBinaryProvider, BuildCommand, BuiltNodeConfig, EnvBinaryProvider,
+    FallbackBinaryProvider, LaunchEnvVar, LaunchFile, LocalDeployerEnv, NodeConfigEntry,
+    NodeEndpointPort, NodeEndpoints, PathBinaryProvider, ProcessSpawnError, env::Node,
     process::LaunchSpec,
 };
 use tracing::debug;
@@ -168,7 +170,7 @@ impl LocalDeployerEnv for LbcEnv {
         let deployment_yaml =
             serde_yaml::to_string(&config.deployment).map_err(io::Error::other)?;
 
-        Ok(build_node_launch_spec(dir, user_yaml, deployment_yaml))
+        build_node_launch_spec(dir, user_yaml, deployment_yaml)
     }
 
     fn node_endpoints(
@@ -252,14 +254,18 @@ fn allocate_udp_port(label: &'static str) -> Result<u16, DynError> {
         })
 }
 
-fn build_node_launch_spec(dir: &Path, user_yaml: String, deployment_yaml: String) -> LaunchSpec {
+fn build_node_launch_spec(
+    dir: &Path,
+    user_yaml: String,
+    deployment_yaml: String,
+) -> Result<LaunchSpec, DynError> {
     let config_path = dir.join(USER_CONFIG_FILE);
     let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
     let time_backend =
         env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").unwrap_or_else(|_| "monotonic".to_owned());
 
-    LaunchSpec {
-        binary: BinaryResolver::resolve_path(&node_binary_config()),
+    Ok(LaunchSpec {
+        binary: node_binary_provider().resolve()?,
         files: vec![
             launch_file(USER_CONFIG_FILE, user_yaml.into_bytes()),
             launch_file(DEPLOYMENT_CONFIG_FILE, deployment_yaml.into_bytes()),
@@ -273,7 +279,7 @@ fn build_node_launch_spec(dir: &Path, user_yaml: String, deployment_yaml: String
             "LOGOS_BLOCKCHAIN_TIME_BACKEND",
             time_backend,
         )],
-    }
+    })
 }
 
 fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
@@ -283,15 +289,47 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
     }
 }
 
-const fn node_binary_config() -> BinaryConfig {
-    BinaryConfig {
-        env_var: "LOGOS_BLOCKCHAIN_NODE_BIN",
-        binary_name: "logos-blockchain-node",
-        fallback_path: concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../target/release/logos-blockchain-node"
-        ),
+fn node_binary_provider() -> BinaryProviderRef {
+    Arc::new(FallbackBinaryProvider::new([
+        Arc::new(EnvBinaryProvider::new("LOGOS_BLOCKCHAIN_NODE_BIN")),
+        default_node_binary_provider(),
+    ]))
+}
+
+fn default_node_binary_provider() -> BinaryProviderRef {
+    if running_in_ci() {
+        Arc::new(PathBinaryProvider::new(release_node_binary_path()))
+    } else {
+        Arc::new(BuildBinaryProvider {
+            command: BuildCommand::new("cargo").with_args([
+                "build",
+                "--locked",
+                "--release",
+                "-p",
+                "logos-blockchain-node",
+                "--features",
+                "testing",
+            ]),
+            output_path: release_node_binary_path(),
+            working_dir: Some(workspace_root()),
+            lock_dir: Some(workspace_root().join("target").join(".tf-binaries")),
+        })
     }
+}
+
+fn release_node_binary_path() -> PathBuf {
+    workspace_root()
+        .join("target")
+        .join("release")
+        .join("logos-blockchain-node")
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn running_in_ci() -> bool {
+    env::var_os("CI").is_some() || env::var_os("GITHUB_ACTIONS").is_some()
 }
 
 fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {

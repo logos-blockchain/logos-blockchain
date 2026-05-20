@@ -37,7 +37,7 @@ use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::{
-    BIN_PATH_DEBUG, BIN_PATH_RELEASE,
+    BIN_PATH_RELEASE,
     common::wallet::{TrackedWallets, WalletDiagnostics},
     cucumber::{
         TARGET,
@@ -1202,7 +1202,11 @@ impl CucumberWorld {
             return Ok(());
         }
 
-        let default_binary = default_node_binary_path().ok_or_else(missing_node_binary_error)?;
+        if !running_in_ci() {
+            return Ok(());
+        }
+
+        let default_binary = ci_node_binary_path().ok_or_else(missing_node_binary_error)?;
         warn_if_overriding_invalid_node_binary(&default_binary);
         let default_binary_display = default_binary.display().to_string();
 
@@ -1550,14 +1554,9 @@ fn host_node_binary_from_env_var_available() -> bool {
         || shared_host_bin_path("logos-blockchain-node").is_file()
 }
 
-fn default_node_binary_path() -> Option<PathBuf> {
+fn ci_node_binary_path() -> Option<PathBuf> {
     let current_dir = env::current_dir().ok()?;
-    let debug_binary = current_dir.join(BIN_PATH_DEBUG);
     let release_binary = current_dir.join(BIN_PATH_RELEASE);
-
-    if matches!(std::fs::exists(&debug_binary), Ok(true)) {
-        return Some(debug_binary);
-    }
 
     if matches!(std::fs::exists(&release_binary), Ok(true)) {
         return Some(release_binary);
@@ -1581,11 +1580,14 @@ fn warn_if_overriding_invalid_node_binary(path: &Path) {
 fn missing_node_binary_error() -> StepError {
     StepError::Preflight {
         message: format!(
-            "Missing Logos host binaries. Set {LOGOS_BLOCKCHAIN_NODE_BIN}, \
-            or run `scripts/run/run-examples.sh host` to restore them into \
-            `testing-framework/assets/stack/bin`."
+            "Missing Logos host binary in CI. Set {LOGOS_BLOCKCHAIN_NODE_BIN}, \
+            or build target/release/logos-blockchain-node before running Cucumber tests."
         ),
     }
+}
+
+fn running_in_ci() -> bool {
+    env::var_os("CI").is_some() || env::var_os("GITHUB_ACTIONS").is_some()
 }
 
 fn nodes_info_display(nodes_info: &HashMap<String, NodeInfo>) -> String {
