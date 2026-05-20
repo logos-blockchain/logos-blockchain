@@ -37,5 +37,5 @@ tokio-stream               = { workspace = true }
 tracing                    = { workspace = true }
 
 [dev-dependencies]
-serde             = { workspace = true }
-tracing           = { workspace = true }
+serde   = { workspace = true }
+tracing = { workspace = true }
