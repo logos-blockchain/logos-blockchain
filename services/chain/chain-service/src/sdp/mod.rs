@@ -11,7 +11,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_ledger::mantle::sdp::SNAPSHOT_FINALIZATION_DELAY;
 use overwatch::DynError;
-use tracing::{debug, error};
+use tracing::{debug, trace};
 
 use crate::{LOG_TARGET, relays::BroadcastRelay};
 
@@ -118,20 +118,17 @@ async fn broadcast_sdp_snapshot(epoch: Epoch, snapshot: &Declarations, relay: &B
                         .collect(),
                 };
 
-                if let Err(e) = broadcast_blend_providers(relay, providers).await {
-                    error!(target: LOG_TARGET, ?epoch, err = ?e, "Failed to broadcast a new blend SDP snapshot");
-                }
+                broadcast_blend_providers(relay, providers).await;
             }
         }
     }
 }
 
-async fn broadcast_blend_providers(
-    relay: &BroadcastRelay,
-    providers: ActiveProviders,
-) -> Result<(), DynError> {
-    relay
+async fn broadcast_blend_providers(relay: &BroadcastRelay, providers: ActiveProviders) {
+    if let Err((err, _)) = relay
         .send(BlockBroadcastMsg::BroadcastBlendProviders(providers))
         .await
-        .map_err(|(error, _)| Box::new(error) as DynError)
+    {
+        trace!(target: LOG_TARGET, ?err, "Failed to broadcast a new blend SDP snapshot");
+    }
 }
