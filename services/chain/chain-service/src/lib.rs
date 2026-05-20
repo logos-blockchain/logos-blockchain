@@ -1544,30 +1544,32 @@ where
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         chain_start_time_passed: bool,
     ) -> Option<Declarations> {
-        if chain_start_time_passed {
-            let config = cryptarchia.ledger.config();
-            let current_epoch = config.epoch(current_slot);
-            let new_epoch = config.epoch(new_slot);
-            if new_epoch > current_epoch {
-                info!(target: LOG_TARGET, ?current_epoch, ?new_epoch, ?current_slot, ?new_slot, "epoch advanced");
-                let snapshot = {
-                    let lib = cryptarchia.lib_branch();
-                    take_and_broadcast_sdp_snapshot(
-                        new_epoch,
-                        lib.id(),
-                        &cryptarchia.genesis_declarations,
-                        cryptarchia.ledger.config(),
-                        relays.storage_adapter(),
-                        relays.broadcast_relay(),
-                    )
-                    .await
-                    .expect("failed to take SDP snapshot")
-                };
-
-                return Some(snapshot);
-            }
+        if !chain_start_time_passed {
+            return None;
         }
-        None
+
+        let config = cryptarchia.ledger.config();
+        let current_epoch = config.epoch(current_slot);
+        let new_epoch = config.epoch(new_slot);
+        assert!(new_epoch >= current_epoch, "epoch shouldn't go backwards");
+        if new_epoch == current_epoch {
+            // if epoch hasn't advanced, do nothing.
+            return None;
+        }
+
+        info!(target: LOG_TARGET, ?current_epoch, ?new_epoch, ?current_slot, ?new_slot, "epoch advanced");
+        let lib = cryptarchia.lib_branch();
+        let snapshot = take_and_broadcast_sdp_snapshot(
+            new_epoch,
+            lib.id(),
+            &cryptarchia.genesis_declarations,
+            cryptarchia.ledger.config(),
+            relays.storage_adapter(),
+            relays.broadcast_relay(),
+        )
+        .await
+        .expect("failed to take SDP snapshot");
+        Some(snapshot)
     }
 }
 
