@@ -64,8 +64,7 @@ async fn sdp_blend_activity() {
     // Wait past the point where declarations would be removed if no activity
     // proofs were submitted.
     let survival_epochs = INACTIVITY_PERIOD + RETENTION_PERIOD + 1.into(); // +1 margin
-    let survival_slots =
-        Slot::new(u64::from(survival_epochs.into_inner().into_inner()) * slots_per_epoch);
+    let survival_slots = Slot::new(u64::from(u32::from(survival_epochs)) * slots_per_epoch);
     wait_for_nodes_tip_slot(
         &[&node0.client, &node1.client],
         survival_slots,

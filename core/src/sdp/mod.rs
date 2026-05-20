@@ -56,16 +56,17 @@ impl NumberOfEpochs {
     pub const fn new(epoch: Epoch) -> Self {
         Self(epoch)
     }
-
-    #[must_use]
-    pub const fn into_inner(self) -> Epoch {
-        self.0
-    }
 }
 
 impl From<u32> for NumberOfEpochs {
     fn from(value: u32) -> Self {
         Self(value.into())
+    }
+}
+
+impl From<NumberOfEpochs> for u32 {
+    fn from(this: NumberOfEpochs) -> Self {
+        this.0.into_inner()
     }
 }
 

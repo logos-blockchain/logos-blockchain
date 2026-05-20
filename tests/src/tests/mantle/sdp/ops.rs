@@ -162,7 +162,7 @@ async fn sdp_ops_e2e() {
     let current_nonce = declaration_state.nonce;
 
     // Wait until we're past the lock period
-    let target_epoch = created_epoch + lock_period.into_inner() + Epoch::new(1);
+    let target_epoch = created_epoch + lock_period + Epoch::new(1);
     wait_for_tip_slot(
         &node0,
         (slots_per_epoch * u64::from(target_epoch.into_inner())).into(),
