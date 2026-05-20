@@ -11,7 +11,7 @@ use lb_core::{
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_ledger::mantle::sdp::SNAPSHOT_FINALIZATION_DELAY;
 use overwatch::DynError;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::{LOG_TARGET, relays::BroadcastRelay};
 
@@ -30,7 +30,7 @@ where
     let (snapshot, snapshot_slot) =
         take_sdp_snapshot(epoch, lib_id, genesis_declarations, config, storage).await?;
     broadcast_sdp_snapshot(epoch, &snapshot, broadcast_relay).await;
-    info!(target: LOG_TARGET, ?epoch, ?snapshot_slot, "took/broadcasted SDP snapshot");
+    debug!(target: LOG_TARGET, ?epoch, ?snapshot_slot, "took/broadcasted SDP snapshot");
     Ok(snapshot)
 }
 
