@@ -10,7 +10,11 @@ use ::tracing::warn;
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_core::sdp::ProviderId;
-use lb_key_management_system_service::keys::{Key, ZkPublicKey};
+use lb_groth16::fr_from_bytes;
+use lb_key_management_system_service::{
+    backend::preload::KeyId,
+    keys::{Key, ZkPublicKey},
+};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
@@ -236,6 +240,22 @@ pub struct NetworkArgs {
 pub struct BlendArgs {
     #[clap(long = "blend-addr", env = "BLEND_ADDR")]
     blend_addr: Option<Multiaddr>,
+
+    #[clap(long = "blend-signing-key-id", env = "BLEND_SIGNING_KEY_ID")]
+    blend_signing_key_id: Option<KeyId>,
+
+    #[clap(long = "blend-secret-key-id", env = "BLEND_SECRET_KEY_ID")]
+    blend_secret_key_id: Option<KeyId>,
+}
+
+#[derive(Parser, Debug, Clone, Copy)]
+pub struct CryptarchiaArgs {
+    #[clap(
+        long = "cryptarchia-funding-pk",
+        env = "CRYPTARCHIA_FUNDING_PK",
+        value_parser = parse_hex_public_key
+    )]
+    funding_pk: Option<ZkPublicKey>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -473,10 +493,33 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
 }
 
 pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
-    let BlendArgs { blend_addr } = blend_args;
+    let BlendArgs {
+        blend_addr,
+        blend_signing_key_id,
+        blend_secret_key_id,
+    } = blend_args;
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);
+    }
+
+    if let Some(key_id) = blend_signing_key_id {
+        blend.set_signing_key_id(key_id);
+    }
+
+    if let Some(key_id) = blend_secret_key_id {
+        blend.set_secret_key_id(key_id);
+    }
+}
+
+pub const fn update_cryptarchia(
+    cryptarchia: &mut CryptarchiaConfig,
+    cryptarchia_args: CryptarchiaArgs,
+) {
+    let CryptarchiaArgs { funding_pk } = cryptarchia_args;
+
+    if let Some(pk) = funding_pk {
+        cryptarchia.set_funding_pk(pk);
     }
 }
 
@@ -615,4 +658,13 @@ impl From<RunConfig> for UserConfig {
     fn from(value: RunConfig) -> Self {
         value.user
     }
+}
+
+fn parse_hex_public_key(key: &str) -> Result<ZkPublicKey, String> {
+    let bytes = hex::decode(key).map_err(|e| format!("Failed to parse hex string: {e}"))?;
+
+    let fr =
+        fr_from_bytes(&bytes).map_err(|e| format!("Failed to deserialize Fr from bytes: {e}"))?;
+
+    Ok(ZkPublicKey::new(fr))
 }

@@ -12,9 +12,10 @@ use color_eyre::eyre::Result;
 use lb_libp2p::Multiaddr;
 
 use crate::config::{
-    ApiArgs, BlendArgs, DeploymentArgs, DeploymentSettings, DeploymentType, LogArgs, NetworkArgs,
-    OnUnknownKeys, RunConfig, StateArgs, UserConfig, deserialize_config_at_path, update_api,
-    update_blend, update_network, update_state, update_tracing,
+    ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
+    LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, StateArgs, UserConfig,
+    deserialize_config_at_path, update_api, update_blend, update_cryptarchia, update_network,
+    update_state, update_tracing,
 };
 
 fn long_version() -> String {
@@ -68,6 +69,9 @@ pub struct CliArgs {
     /// Overrides blend config.
     #[clap(flatten)]
     blend: BlendArgs,
+    /// Overrides cryptarchia config.
+    #[clap(flatten)]
+    cryptarchia: CryptarchiaArgs,
     /// Overrides http config.
     #[clap(flatten)]
     api: ApiArgs,
@@ -191,6 +195,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
         api: api_args,
         network: network_args,
         blend: blend_args,
+        cryptarchia: cryptarchia_args,
         deployment: deployment_args,
         state: state_args,
         ..
@@ -198,6 +203,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_tracing(&mut user_config.tracing, log_args)?;
     update_network(&mut user_config.network, network_args)?;
     update_blend(&mut user_config.blend, blend_args);
+    update_cryptarchia(&mut user_config.cryptarchia, cryptarchia_args);
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
 
