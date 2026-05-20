@@ -95,13 +95,10 @@ where
 
         let timestamp = current_timestamp_millis();
 
-        if let Err(e) = self
-            .storage_adapter
+        self.storage_adapter
             .store_item(key.clone(), item.into())
             .await
-        {
-            tracing::warn!("Failed to store item in storage: {:?}", e);
-        }
+            .map_err(|e| MempoolError::StorageError(format!("{e:?}")))?;
 
         self.removed_items.remove(&key);
         self.pending_items.insert(key);

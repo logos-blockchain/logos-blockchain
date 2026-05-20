@@ -132,7 +132,7 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 300 seconds
-    When I perform continuous transactions on user wallets with 5 coin split outputs of 100 LGO, 3 transactions of 50 LGO each for 3 cycles
+    When I perform continuous transactions on user wallets with 5 coin split outputs of 100 LGO, 3 transactions of 50 LGO each for 3 cycles and timeout of 300 seconds
     Then I stop all nodes
 
   @local_transactions

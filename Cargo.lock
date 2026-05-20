@@ -4017,10 +4017,8 @@ name = "logos-blockchain-api-service"
 version = "0.1.2"
 dependencies = [
  "async-trait",
- "axum",
  "bytes",
  "futures",
- "hyper",
  "logos-blockchain-blend-service",
  "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-leader-service",
@@ -4034,15 +4032,12 @@ dependencies = [
  "logos-blockchain-time-service",
  "logos-blockchain-tx-service",
  "overwatch",
- "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tracing",
- "utoipa",
- "utoipa-swagger-ui",
 ]
 
 [[package]]
