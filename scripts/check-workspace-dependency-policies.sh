@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-# Enforces workspace dependency policy across Cargo manifests.
+# Enforces workspace dependency and lint policy across Cargo manifests.
 #
 # Checks:
 # - Workspace members must declare dependencies using `workspace = true` only
@@ -9,6 +9,8 @@ set -eu
 # - Workspace members must not override `default-features` on workspace deps.
 # - Root `[workspace.dependencies]` entries must set `default-features = false`.
 # - Root `[workspace.dependencies]` entries must not set `features`.
+# - Workspace members must inherit lints from the workspace via a `[lints]`
+#   section containing `workspace = true`.
 #
 # Exit codes:
 # - 0: all checks passed.
@@ -82,6 +84,11 @@ function normalize_dep_name(name) {
 function record_violation(rule, dep, line_no, details) {
   violations += 1
   printf("- [%s] %s:%d dependency=%s %s\n", rule, manifest_path, line_no, dep, details)
+}
+
+function record_manifest_violation(rule, details) {
+  violations += 1
+  printf("- [%s] %s %s\n", rule, manifest_path, details)
 }
 
 function braces_delta(s,    opens, closes, copy) {
@@ -188,6 +195,7 @@ function analyze_dependency_assignment(dep, value_text, line_no) {
 BEGIN {
   violations = 0
   current_section = ""
+  lints_workspace_true = 0
   reset_specific_state()
 }
 
@@ -255,6 +263,17 @@ BEGIN {
       }
     }
     next
+  }
+
+  if (!is_root_manifest && current_section == "lints") {
+    eq_pos = index(line, "=")
+    if (eq_pos > 0) {
+      key = trim(substr(line, 1, eq_pos - 1))
+      value = trim(substr(line, eq_pos + 1))
+      if (key == "workspace" && value ~ /^true([[:space:]]|$)/) {
+        lints_workspace_true = 1
+      }
+    }
   }
 
   if ((is_root_manifest && current_section == "workspace.dependencies") ||

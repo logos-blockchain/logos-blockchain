@@ -13,7 +13,7 @@ use lb_core::{
         tx::{GasPrices, MantleTxGasContext},
         tx_builder::MantleTxBuilder,
     },
-    sdp::{Declaration, DeclarationMessage, ServiceType, WithdrawMessage},
+    sdp::{Declaration, DeclarationMessage, Locator, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::RunConfig;
@@ -27,9 +27,7 @@ use logos_blockchain_tests::common::{
         build_local_manual_cluster, read_manual_node_logs,
         wait_for_height as wait_for_manual_cluster_height,
     },
-    wallet::{
-        current_utxos_for_public_key, fund_transfer_builder_from_utxos, utxos_for_public_key,
-    },
+    wallet::{current_wallet_funding_source, fund_builder_from_wallet_source},
 };
 use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
@@ -63,7 +61,7 @@ async fn sdp_ops_e2e() {
         _node0_name,
         node0,
         genesis_utxos,
-        funding_secret_key,
+        funding_wallet,
         spare_note_secret_key,
         spare_note_id,
         lock_period,
@@ -85,13 +83,13 @@ async fn sdp_ops_e2e() {
     let provider_signing_key = Ed25519Key::from_bytes(&[7u8; 32]);
     let provider_zk_key = ZkKey::from(BigUint::from(7u64));
     let zk_id = provider_zk_key.to_public_key();
-    let locator = "/ip4/127.0.0.1/tcp/9100"
+    let locator: Locator = "/ip4/127.0.0.1/tcp/9100"
         .parse()
         .expect("Valid locator multiaddr");
 
     let declaration = DeclarationMessage {
         service_type: ServiceType::BlendNetwork,
-        locators: vec![locator],
+        locators: locator.into(),
         provider_id: lb_core::sdp::ProviderId::try_from(
             provider_signing_key.public_key().to_bytes(),
         )
@@ -104,7 +102,7 @@ async fn sdp_ops_e2e() {
     let (declare_mantle_tx, declare_signing_keys) = fund_sdp_transaction(
         &node0,
         &genesis_utxos,
-        &funding_secret_key,
+        &funding_wallet,
         Op::SDPDeclare(declaration),
     )
     .await;
@@ -172,7 +170,7 @@ async fn sdp_ops_e2e() {
     let (withdraw_mantle_tx, withdraw_signing_keys) = fund_sdp_transaction(
         &node0,
         &genesis_utxos,
-        &funding_secret_key,
+        &funding_wallet,
         Op::SDPWithdraw(withdraw_message),
     )
     .await;
@@ -352,7 +350,7 @@ async fn start_sdp_manual_cluster(
     String,
     NodeHttpClient,
     Vec<Utxo>,
-    ZkKey,
+    WalletAccount,
     ZkKey,
     NoteId,
     u64,
@@ -415,12 +413,12 @@ async fn start_sdp_manual_cluster(
         )
         .collect();
 
-    let spare_note_id =
-        utxos_for_public_key(genesis_utxos.iter().copied(), spare_wallet.public_key())
-            .first()
-            .copied()
-            .expect("wallet-backed spare note should exist at genesis")
-            .id();
+    let spare_note_id = genesis_utxos
+        .iter()
+        .copied()
+        .find(|utxo| utxo.note.pk == spare_wallet.public_key())
+        .expect("wallet-backed spare note should exist at genesis")
+        .id();
 
     (
         base.scenario_base_dir,
@@ -428,7 +426,7 @@ async fn start_sdp_manual_cluster(
         node0.name,
         node0.client,
         genesis_utxos,
-        funding_wallet.secret_key,
+        funding_wallet,
         spare_wallet.secret_key,
         spare_note_id,
         LOCK_PERIOD,
@@ -458,13 +456,15 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
 async fn fund_sdp_transaction(
     node: &NodeHttpClient,
     genesis_utxos: &[Utxo],
-    funding_secret_key: &ZkKey,
+    funding_wallet: &WalletAccount,
     extra_op: Op,
 ) -> (MantleTx, Vec<ZkKey>) {
-    let funding_public_key = funding_secret_key.to_public_key();
-    let funding_utxos = current_utxos_for_public_key(node, genesis_utxos, funding_public_key).await;
+    let funding_source = current_wallet_funding_source(node, genesis_utxos, funding_wallet.clone())
+        .await
+        .expect("funding wallet source should sync from chain");
 
     let empty_context = MantleTxGasContext::new(
+        HashMap::new(),
         HashMap::new(),
         GasPrices {
             execution_base_gas_price: 0.into(),
@@ -477,14 +477,13 @@ async fn fund_sdp_transaction(
     };
     let tx_builder = MantleTxBuilder::new(tx_context).push_op(extra_op);
 
-    let funded_builder =
-        fund_transfer_builder_from_utxos(funding_utxos, &tx_builder, funding_public_key)
-            .expect("funding mixed-op transaction should succeed");
+    let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder)
+        .expect("funding mixed-op transaction should succeed");
 
     let signing_keys = funded_builder
         .ledger_inputs()
         .iter()
-        .map(|_| funding_secret_key.clone())
+        .map(|_| funding_wallet.secret_key.clone())
         .collect::<Vec<_>>();
 
     (funded_builder.build(), signing_keys)

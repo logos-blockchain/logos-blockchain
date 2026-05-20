@@ -616,16 +616,27 @@ fn invalid_path(path: &str, detail: &str) -> StepError {
 mod tests {
     use std::time::Duration;
 
+    use lb_config::{
+        create_general_configs, deployment::e2e_deployment_settings_with_genesis_block,
+        node::create_node_user_config,
+    };
     use lb_libp2p::Multiaddr;
 
     use super::*;
-    use crate::{
-        add_strings,
-        nodes::create_validator_config,
-        topology::configs::{
-            create_general_configs, deployment::e2e_deployment_settings_with_genesis_block,
-        },
-    };
+    use crate::add_strings;
+
+    fn test_run_config(test_context: &str) -> RunConfig {
+        let (configs, genesis_block) = create_general_configs(1, Some(test_context));
+        let deployment = e2e_deployment_settings_with_genesis_block(&genesis_block);
+        let user = create_node_user_config(
+            configs
+                .into_iter()
+                .next()
+                .expect("test config should include one node"),
+        );
+
+        RunConfig { deployment, user }
+    }
 
     #[test]
     fn normalize_path_rejects_empty_segments() {
@@ -690,9 +701,7 @@ mod tests {
 
     #[test]
     fn apply_overrides_updates_user_and_deployment_config() {
-        let (configs, genesis_block) = create_general_configs(1, Some("test_set_config_overrides"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
-        let mut config = create_validator_config(configs[0].clone(), deployment_settings);
+        let mut config = test_run_config("test_set_config_overrides");
 
         let retain_scores = config.user.network.backend.swarm.gossipsub.retain_scores;
         let override_1 = ConfigOverride {
@@ -746,9 +755,7 @@ mod tests {
 
     #[test]
     fn world_overrides_accept_explicit_functions() {
-        let (configs, genesis_block) = create_general_configs(1, Some("test_override_functions"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
-        let mut config = create_validator_config(configs[0].clone(), deployment_settings);
+        let mut config = test_run_config("test_override_functions");
         let mut world = CucumberWorld::default();
 
         set_user_config_override(
@@ -804,10 +811,7 @@ mod tests {
 
     #[test]
     fn world_overrides_round_trip_scalar_types() {
-        let (configs, genesis_block) =
-            create_general_configs(1, Some("test_override_scalar_types"));
-        let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
-        let mut config = create_validator_config(configs[0].clone(), deployment_settings);
+        let mut config = test_run_config("test_override_scalar_types");
         let mut world = CucumberWorld::default();
 
         set_user_config_override(

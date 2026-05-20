@@ -11,16 +11,25 @@ use cucumber::World;
 use derivative::Derivative;
 use lb_core::{
     codec::DeserializeOp as _,
-    mantle::{SignedMantleTx, TxHash, Utxo},
+    mantle::{
+        SignedMantleTx, TxHash, Utxo,
+        ops::channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
+    },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
-use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
 };
+use lb_zone_sdk::{
+    adapter::NodeHttpClient as ZoneNodeHttpClient,
+    indexer::ZoneIndexer,
+    sequencer::{Event, InscriptionId, SequencerCheckpoint, SequencerHandle},
+};
+use reqwest::Url;
 use testing_framework_core::scenario::{
     NodeControlCapability, PeerSelection, Scenario, StartedNode,
 };
@@ -29,6 +38,7 @@ use tracing::warn;
 
 use crate::{
     BIN_PATH_DEBUG, BIN_PATH_RELEASE,
+    common::wallet::{TrackedWallets, WalletDiagnostics},
     cucumber::{
         TARGET,
         defaults::{
@@ -118,11 +128,412 @@ impl ManualNodeConfigOverrides {
     }
 }
 
-#[derive(Debug, Default, Clone)]
-pub struct WalletRuntimeState {
-    pub encumbered_tokens: Vec<Utxo>,
-    pub submitted_tx_hashes: Vec<TxHash>,
-    pub tracked_spent_fees: u64,
+pub struct ZonePublishedMessage {
+    pub payload: Vec<u8>,
+    pub inscription_id: Option<InscriptionId>,
+}
+
+pub type ZoneDiscardedPayloads = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
+
+pub struct ZoneSequencerIdentity {
+    signing_key: Ed25519Key,
+    channel_id: ChannelId,
+}
+
+pub struct ZoneSequencerRuntime {
+    handle: SequencerHandle<ZoneNodeHttpClient>,
+    task: JoinHandle<()>,
+    events: Option<tokio::sync::mpsc::Receiver<Event>>,
+    discarded_payloads: Option<ZoneDiscardedPayloads>,
+}
+
+#[derive(Default)]
+pub struct ZoneState {
+    node_name: Option<String>,
+    funding_public_key: Option<ZkPublicKey>,
+    indexer: Option<ZoneIndexer<ZoneNodeHttpClient>>,
+    sequencers: HashMap<String, ZoneSequencerIdentity>,
+    runtimes: HashMap<String, ZoneSequencerRuntime>,
+    default_sequencer_alias: Option<String>,
+    published_messages: HashMap<String, ZonePublishedMessage>,
+    submitted_deposits: HashMap<String, DepositOp>,
+    submitted_withdraws: HashMap<String, ChannelWithdrawOp>,
+    account_balances: HashMap<String, i64>,
+    published_order: Vec<String>,
+    checkpoints: HashMap<String, SequencerCheckpoint>,
+    latest_checkpoints: HashMap<String, SequencerCheckpoint>,
+    sorted_total_payloads: Option<usize>,
+}
+
+impl ZoneState {
+    pub fn initialize_cluster(&mut self, node_name: String, funding_public_key: ZkPublicKey) {
+        self.reset_zone_state();
+
+        self.node_name = Some(node_name);
+        self.funding_public_key = Some(funding_public_key);
+    }
+
+    pub fn clear(&mut self) {
+        self.reset_zone_state();
+    }
+
+    pub fn node_name(&self) -> Result<&str, StepError> {
+        self.node_name.as_deref().ok_or(StepError::LogicalError {
+            message: "Zone cluster is not initialized".to_owned(),
+        })
+    }
+
+    pub fn register_sequencer(&mut self, alias: String, signing_key: Ed25519Key) -> ChannelId {
+        let channel_id = self.channel_for_new_sequencer(&signing_key);
+
+        self.sequencers.insert(
+            alias.clone(),
+            ZoneSequencerIdentity {
+                signing_key,
+                channel_id,
+            },
+        );
+
+        if self.default_sequencer_alias.is_none() {
+            self.default_sequencer_alias = Some(alias);
+        }
+
+        channel_id
+    }
+
+    fn channel_for_new_sequencer(&self, signing_key: &Ed25519Key) -> ChannelId {
+        self.default_sequencer_alias
+            .as_ref()
+            .and_then(|alias| self.sequencers.get(alias))
+            .map_or_else(
+                || ChannelId::from(signing_key.public_key().to_bytes()),
+                |sequencer| sequencer.channel_id,
+            )
+    }
+
+    pub fn default_sequencer_alias(&self) -> Result<&str, StepError> {
+        self.default_sequencer_alias
+            .as_deref()
+            .ok_or(StepError::LogicalError {
+                message: "No zone sequencer is registered".to_owned(),
+            })
+    }
+
+    pub fn sequencer_signing_key(&self, alias: &str) -> Result<&Ed25519Key, StepError> {
+        self.sequencers
+            .get(alias)
+            .map(|sequencer| &sequencer.signing_key)
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not registered"),
+            })
+    }
+
+    pub fn default_sequencer_signing_key(&self) -> Result<&Ed25519Key, StepError> {
+        let alias = self.default_sequencer_alias()?.to_owned();
+
+        self.sequencer_signing_key(&alias)
+    }
+
+    pub fn sequencer_channel_id(&self, alias: &str) -> Result<ChannelId, StepError> {
+        self.sequencers
+            .get(alias)
+            .map(|sequencer| sequencer.channel_id)
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not registered"),
+            })
+    }
+
+    pub fn default_channel_id(&self) -> Result<ChannelId, StepError> {
+        let alias = self.default_sequencer_alias()?.to_owned();
+
+        self.sequencer_channel_id(&alias)
+    }
+
+    pub fn funding_public_key(&self) -> Result<ZkPublicKey, StepError> {
+        self.funding_public_key.ok_or(StepError::LogicalError {
+            message: "Zone funding public key is not initialized".to_owned(),
+        })
+    }
+
+    pub fn remember_zone_message(
+        &mut self,
+        alias: String,
+        payload: Vec<u8>,
+        inscription_id: Option<InscriptionId>,
+        sequencer_alias: Option<&str>,
+        checkpoint: Option<SequencerCheckpoint>,
+    ) {
+        self.published_order.push(alias.clone());
+        self.published_messages.insert(
+            alias,
+            ZonePublishedMessage {
+                payload,
+                inscription_id,
+            },
+        );
+
+        if let (Some(sequencer_alias), Some(checkpoint)) = (sequencer_alias, checkpoint) {
+            self.latest_checkpoints
+                .insert(sequencer_alias.to_owned(), checkpoint);
+        }
+    }
+
+    pub fn remember_submitted_deposit(&mut self, alias: String, deposit: DepositOp) {
+        self.submitted_deposits.insert(alias, deposit);
+    }
+
+    pub fn resolve_submitted_deposit(
+        &self,
+        alias: impl AsRef<str>,
+    ) -> Result<&DepositOp, StepError> {
+        let alias = alias.as_ref();
+
+        self.submitted_deposits
+            .get(alias)
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone deposit alias '{alias}' not found"),
+            })
+    }
+
+    pub fn remember_submitted_withdraw(&mut self, alias: String, withdraw: ChannelWithdrawOp) {
+        self.submitted_withdraws.insert(alias, withdraw);
+    }
+
+    pub fn resolve_submitted_withdraw(
+        &self,
+        alias: impl AsRef<str>,
+    ) -> Result<&ChannelWithdrawOp, StepError> {
+        let alias = alias.as_ref();
+
+        self.submitted_withdraws
+            .get(alias)
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone withdraw alias '{alias}' not found"),
+            })
+    }
+
+    pub fn set_zone_account_balances(&mut self, balances: HashMap<String, i64>) {
+        self.account_balances = balances;
+    }
+
+    pub fn zone_account_balances(&self) -> Result<HashMap<String, i64>, StepError> {
+        if self.account_balances.is_empty() {
+            return Err(StepError::LogicalError {
+                message: "Zone account balances are not initialized".to_owned(),
+            });
+        }
+
+        Ok(self.account_balances.clone())
+    }
+
+    pub fn ordered_inscription_ids(&self) -> Result<Vec<InscriptionId>, StepError> {
+        self.published_order
+            .iter()
+            .map(|alias| {
+                self.published_messages
+                    .get(alias)
+                    .and_then(|message| message.inscription_id)
+                    .ok_or(StepError::LogicalError {
+                        message: format!(
+                            "Zone message alias '{alias}' does not have a tracked inscription id"
+                        ),
+                    })
+            })
+            .collect()
+    }
+
+    pub fn message_payloads_for_aliases(
+        &self,
+        aliases: &[String],
+    ) -> Result<Vec<Vec<u8>>, StepError> {
+        aliases
+            .iter()
+            .map(|alias| {
+                self.published_messages
+                    .get(alias)
+                    .map(|message| message.payload.clone())
+                    .ok_or(StepError::LogicalError {
+                        message: format!("Zone message alias '{alias}' not found"),
+                    })
+            })
+            .collect()
+    }
+
+    pub fn published_message_payloads(&self) -> Result<Vec<Vec<u8>>, StepError> {
+        self.message_payloads_for_aliases(&self.published_order)
+    }
+
+    #[must_use]
+    pub const fn has_published_messages(&self) -> bool {
+        !self.published_order.is_empty()
+    }
+
+    pub fn remember_checkpoint(&mut self, alias: String, checkpoint: SequencerCheckpoint) {
+        self.checkpoints.insert(alias, checkpoint);
+    }
+
+    pub fn set_latest_checkpoint_for(
+        &mut self,
+        sequencer_alias: &str,
+        checkpoint: SequencerCheckpoint,
+    ) {
+        self.latest_checkpoints
+            .insert(sequencer_alias.to_owned(), checkpoint);
+    }
+
+    pub fn current_checkpoint_for(
+        &self,
+        sequencer_alias: &str,
+    ) -> Result<SequencerCheckpoint, StepError> {
+        self.latest_checkpoints
+            .get(sequencer_alias)
+            .cloned()
+            .ok_or(StepError::LogicalError {
+                message: format!(
+                    "Zone sequencer '{sequencer_alias}' has not produced a checkpoint yet"
+                ),
+            })
+    }
+
+    pub fn resolve_checkpoint(
+        &self,
+        alias: impl AsRef<str>,
+    ) -> Result<SequencerCheckpoint, StepError> {
+        let alias = alias.as_ref();
+
+        self.checkpoints
+            .get(alias)
+            .cloned()
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone checkpoint alias '{alias}' not found"),
+            })
+    }
+
+    pub fn set_sequencer_runtime(
+        &mut self,
+        alias: String,
+        sequencer_handle: SequencerHandle<ZoneNodeHttpClient>,
+        sequencer_task: JoinHandle<()>,
+        sequencer_events: Option<tokio::sync::mpsc::Receiver<Event>>,
+        discarded_payloads: Option<ZoneDiscardedPayloads>,
+    ) {
+        if let Some(runtime) = self.runtimes.remove(&alias) {
+            runtime.task.abort();
+        }
+
+        self.runtimes.insert(
+            alias,
+            ZoneSequencerRuntime {
+                handle: sequencer_handle,
+                task: sequencer_task,
+                events: sequencer_events,
+                discarded_payloads,
+            },
+        );
+    }
+
+    pub fn stop_sequencer(&mut self, alias: &str) -> Result<(), StepError> {
+        let runtime = self.runtimes.remove(alias).ok_or(StepError::LogicalError {
+            message: format!("Zone sequencer '{alias}' is not running"),
+        })?;
+
+        runtime.task.abort();
+
+        Ok(())
+    }
+
+    pub fn sequencer_handle(
+        &self,
+        alias: &str,
+    ) -> Result<&SequencerHandle<ZoneNodeHttpClient>, StepError> {
+        self.runtimes
+            .get(alias)
+            .map(|runtime| &runtime.handle)
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not running"),
+            })
+    }
+
+    pub fn sequencer_events_mut(
+        &mut self,
+        alias: &str,
+    ) -> Result<&mut tokio::sync::mpsc::Receiver<Event>, StepError> {
+        self.runtimes
+            .get_mut(alias)
+            .and_then(|runtime| runtime.events.as_mut())
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' does not expose events"),
+            })
+    }
+
+    pub fn discarded_payloads(&self, alias: &str) -> Result<ZoneDiscardedPayloads, StepError> {
+        self.runtimes
+            .get(alias)
+            .and_then(|runtime| runtime.discarded_payloads.clone())
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' does not track discarded payloads"),
+            })
+    }
+
+    pub const fn set_sorted_total_payloads(&mut self, total: usize) {
+        self.sorted_total_payloads = Some(total);
+    }
+
+    pub fn sorted_total_payloads(&self) -> Result<usize, StepError> {
+        self.sorted_total_payloads.ok_or(StepError::LogicalError {
+            message: "Zone sorted conflict expectations are not initialized".to_owned(),
+        })
+    }
+
+    pub fn set_indexer(&mut self, indexer: ZoneIndexer<ZoneNodeHttpClient>) {
+        self.indexer = Some(indexer);
+    }
+
+    pub fn indexer(&self) -> Result<&ZoneIndexer<ZoneNodeHttpClient>, StepError> {
+        self.indexer.as_ref().ok_or(StepError::LogicalError {
+            message: "Zone indexer is not initialized".to_owned(),
+        })
+    }
+
+    #[must_use]
+    pub fn debug_summary(&self) -> String {
+        let node_name = self.node_name.as_deref().unwrap_or("<unset>");
+        let sequencers = self.sequencers.len();
+        let running = self.runtimes.len();
+        let published = self.published_messages.len();
+        let deposits = self.submitted_deposits.len();
+        let withdraws = self.submitted_withdraws.len();
+        let checkpoints = self.checkpoints.len();
+
+        format!(
+            "node={node_name}, sequencers={sequencers}, running={running}, published={published}, deposits={deposits}, withdraws={withdraws}, checkpoints={checkpoints}"
+        )
+    }
+
+    fn abort_all_runtimes(&mut self) {
+        for (_, runtime) in self.runtimes.drain() {
+            runtime.task.abort();
+        }
+    }
+
+    fn reset_zone_state(&mut self) {
+        self.abort_all_runtimes();
+
+        self.node_name = None;
+        self.funding_public_key = None;
+        self.indexer = None;
+        self.default_sequencer_alias = None;
+        self.sorted_total_payloads = None;
+
+        self.sequencers.clear();
+        self.published_messages.clear();
+        self.submitted_deposits.clear();
+        self.submitted_withdraws.clear();
+        self.account_balances.clear();
+        self.published_order.clear();
+        self.checkpoints.clear();
+        self.latest_checkpoints.clear();
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -179,8 +590,7 @@ pub struct ConsensusLivenessSpec {
 pub struct CucumberWorld {
     /// The deployer kind that this scenario is configured for.
     pub deployer: Option<DeployerKind>,
-    /// The unique test context, helfull to guarantee unique genesis transaction
-    /// inscription.
+    /// A unique per-scenario context string used to isolate runtime resources.
     pub test_context: Option<String>,
     /// Base directory for scenario artifacts like logs and generated configs.
     pub scenario_base_dir: PathBuf,
@@ -219,15 +629,11 @@ pub struct CucumberWorld {
     pub wallet_accounts: HashMap<usize, WalletAccount>,
     /// Manual: Scenario-level fee sponsor configuration and accounting.
     pub fee_state: ScenarioFeeState,
-    /// Manual: Mapping of logical wallet names to a mapping of chain height to
-    /// the
-    pub wallet_tokens_per_block: HashMap<String, WalletTokenMap>,
-    /// Manual: Mutable runtime state scoped to each logical wallet.
-    pub wallet_runtime_state: HashMap<String, WalletRuntimeState>,
+    /// Manual: Scenario-local tracked wallet state reconstructed from chain
+    /// sync and pending submissions.
+    pub wallets: TrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
-    /// Manual:  Per node: `header_id` -> height
-    pub node_header_heights: HashMap<String, HashMap<String, u64>>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -287,27 +693,20 @@ pub struct CucumberWorld {
     /// Manual: Task handles for dynamically spawned faucet funding tasks.
     #[derivative(Default(value = "None"))]
     pub faucet_task_handles: Option<Vec<JoinHandle<()>>>,
+    /// Manual: Zone-specific state for SDK/sequencer scenarios.
+    pub zone: ZoneState,
 }
 
 impl Drop for CucumberWorld {
     fn drop(&mut self) {
+        self.zone.clear();
+
         if let Some(handles) = self.faucet_task_handles.take() {
             for handle in handles {
                 handle.abort();
             }
         }
     }
-}
-
-/// Mapping of block header to the UTXOs and STXOs associated with a wallet in
-/// that block.
-#[derive(Debug)]
-pub struct WalletTokenMap {
-    /// The block hash.
-    pub header_id: String,
-    /// The UTXOs associated with the wallet for the block hash - this takes
-    /// into account outputs that have been spent up to that block.
-    pub utxos_per_wallet: HashMap<String, Vec<Utxo>>,
 }
 
 /// Information about a node snapshot, which can be used to initialize
@@ -327,6 +726,8 @@ impl Debug for CucumberWorld {
         reason = "Debug output intentionally enumerates world state fields for test diagnostics"
     )]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let wallet_diagnostics = self.wallets.diagnostics();
+
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
             .field("test_context", &format!("{:?}", self.test_context))
@@ -379,15 +780,21 @@ impl Debug for CucumberWorld {
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field(
-                "wallet_tokens_per_block",
-                &self.wallet_tokens_per_block.len(),
+                "wallet_utxos_by_block",
+                &wallet_diagnostics.utxo_snapshot_count,
             )
-            .field("wallet_runtime_state", &self.wallet_runtime_state.len())
+            .field(
+                "wallet_pending_states",
+                &wallet_diagnostics.pending_wallet_count,
+            )
             .field(
                 "scenario_fee_encumbered_tokens",
-                &self.fee_state.encumbered_tokens_per_wallet.len(),
+                &self.fee_state.reserved_wallet_count(),
             )
-            .field("node_header_heights", &self.node_header_heights.len())
+            .field(
+                "node_header_heights",
+                &wallet_diagnostics.header_height_node_count,
+            )
             .field("node_peer_ids", &self.node_peer_ids.len())
             .field("node_groups", &self.node_groups.len())
             .field("node_to_group", &self.node_to_group.len())
@@ -397,6 +804,7 @@ impl Debug for CucumberWorld {
                 "manual_node_config_overrides",
                 &self.manual_node_config_overrides,
             )
+            .field("zone", &self.zone.debug_summary())
             .field(
                 "initial_override_peers_display",
                 &initial_peers_override_display(self.initial_peers_override.as_ref()),
@@ -586,11 +994,6 @@ impl CucumberWorld {
         self.deployer = Some(deployer);
     }
 
-    /// Set the unique test context for this scenario.
-    pub fn set_test_context(&mut self, test_context: String) {
-        self.test_context = Some(test_context);
-    }
-
     /// Set the directory where scenario artifacts should be stored.
     pub fn set_scenario_base_dir(&mut self, log_dir: &Path, deployer: &DeployerKind) {
         let log_dir = PathBuf::from(log_dir);
@@ -600,6 +1003,10 @@ impl CucumberWorld {
         if let Some(topology) = self.spec.topology.as_mut() {
             topology.scenario_base_dir = log_dir;
         }
+    }
+
+    pub fn set_test_context(&mut self, test_context: String) {
+        self.test_context = Some(test_context);
     }
 
     /// Remove all scenario artifacts from the scenario base directory. This is
@@ -863,6 +1270,15 @@ impl CucumberWorld {
             .collect()
     }
 
+    pub fn zone_node_http_client(&self) -> Result<NodeHttpClient, StepError> {
+        let node_name = self.zone.node_name()?;
+        self.resolve_node_http_client(node_name)
+    }
+
+    pub fn zone_node_url(&self) -> Result<Url, StepError> {
+        Ok(self.zone_node_http_client()?.base_url().clone())
+    }
+
     /// Helper to resolve a node http client to the actual started node name.
     pub fn resolve_node_http_client(&self, node_name: &str) -> Result<NodeHttpClient, StepError> {
         Ok(self
@@ -1026,38 +1442,9 @@ impl CucumberWorld {
         format!("{:?}", FullDebugInfo(self))
     }
 
-    /// Record a submitted transaction hash for a wallet
-    pub fn record_submitted_tx_hash(&mut self, wallet_name: &str, tx_hash: TxHash) {
-        self.wallet_runtime_state
-            .entry(wallet_name.to_owned())
-            .or_default()
-            .submitted_tx_hashes
-            .push(tx_hash);
-    }
-
-    pub fn record_tracked_spent_fee(&mut self, wallet_name: &str, spent_fee: u64) {
-        self.wallet_runtime_state
-            .entry(wallet_name.to_owned())
-            .or_default()
-            .tracked_spent_fees += spent_fee;
-    }
-
-    #[must_use]
-    pub fn total_tracked_spent_fees(&self) -> u64 {
-        self.wallet_runtime_state
-            .values()
-            .map(|state| state.tracked_spent_fees)
-            .sum()
-    }
-
-    /// Get submitted transaction hashes for a wallet
-    pub fn submitted_tx_hashes_for_wallet(&self, wallet_name: &str) -> &[TxHash] {
-        self.wallet_runtime_state
-            .get(wallet_name)
-            .map_or(&[], |state| state.submitted_tx_hashes.as_slice())
-    }
-
     pub fn full_debug_info(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let wallet_diagnostics = self.wallets.diagnostics();
+
         f.debug_struct("CucumberWorld")
             .field("deployer", &format!("{:?}", self.deployer))
             .field("scenario_base_dir", &self.scenario_base_dir)
@@ -1069,6 +1456,7 @@ impl CucumberWorld {
                 "join_external_network",
                 &format!("{:?}", self.join_external_network),
             )
+            .field("zone", &self.zone.debug_summary())
             .field(
                 "populate_ibd_peers",
                 &format!("{:?}", self.populate_ibd_peers_from_initial_peers),
@@ -1105,22 +1493,23 @@ impl CucumberWorld {
                 "faucet_task_handles",
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
             )
+            .field("test_context", &format!("{:?}", self.test_context))
             .field(
                 "wallet_accounts",
                 &wallet_accounts_display(&self.wallet_accounts),
             )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field(
-                "wallet_tokens_per_block",
-                &wallet_tokens_per_block_display(&self.wallet_tokens_per_block),
+                "wallet_utxos_by_block",
+                &wallet_utxos_by_block_display(&wallet_diagnostics),
             )
             .field(
-                "wallet_runtime_state",
-                &wallet_runtime_state_display(&self.wallet_runtime_state),
+                "wallet_pending_states",
+                &wallet_pending_states_display(&wallet_diagnostics),
             )
             .field(
                 "node_header_heights",
-                &node_header_heights_display(&self.node_header_heights),
+                &node_header_heights_display(&wallet_diagnostics),
             )
             .field("node_peer_ids", &node_peer_ids_display(&self.node_peer_ids))
             .field("node_groups", &self.node_groups)
@@ -1231,48 +1620,45 @@ fn wallet_accounts_display(wallet_accounts: &HashMap<usize, WalletAccount>) -> S
     format!("HashMap<usize, WalletAccount>({})", accounts.join(", "))
 }
 
-fn wallet_tokens_per_block_display(
-    wallet_tokens_per_block: &HashMap<String, WalletTokenMap>,
-) -> String {
-    let blocks: Vec<_> = wallet_tokens_per_block
+fn wallet_utxos_by_block_display(wallet_diagnostics: &WalletDiagnostics) -> String {
+    let blocks: Vec<_> = wallet_diagnostics
+        .utxo_snapshots
         .iter()
-        .filter_map(|(block_hash, wallet_token_map)| {
-            let non_empty_wallets: Vec<_> = wallet_token_map
-                .utxos_per_wallet
-                .iter()
-                .filter(|(_, utxos)| !utxos.is_empty())
-                .map(|(wallet, utxos)| format!("{wallet}: [{}]", utxos.len()))
-                .collect();
-            if non_empty_wallets.is_empty() {
+        .filter_map(|snapshot| {
+            if snapshot.non_empty_wallets.is_empty() {
                 None
             } else {
+                let non_empty_wallets: Vec<_> = snapshot
+                    .non_empty_wallets
+                    .iter()
+                    .map(|(wallet, utxo_count)| format!("{wallet}: [{utxo_count}]"))
+                    .collect();
                 Some(format!(
                     "{}: {} {}",
-                    block_hash,
-                    wallet_token_map.header_id,
+                    snapshot.block_hash,
+                    snapshot.header_id,
                     non_empty_wallets.join(" -")
                 ))
             }
         })
         .collect();
-    format!("HashMap<String, WalletTokenMap>({})", blocks.join(", "))
+
+    format!("HashMap<String, WalletUtxoSnapshot>({})", blocks.join(", "))
 }
 
-fn wallet_runtime_state_display(
-    wallet_runtime_state: &HashMap<String, WalletRuntimeState>,
-) -> String {
-    let states: Vec<_> = wallet_runtime_state
+fn wallet_pending_states_display(wallet_diagnostics: &WalletDiagnostics) -> String {
+    let states: Vec<_> = wallet_diagnostics
+        .pending_states
         .iter()
-        .map(|(k, state)| {
+        .map(|state| {
             format!(
-                "'{k}: encumbered={}, submitted={}, tracked_fees={}'",
-                state.encumbered_tokens.len(),
-                state.submitted_tx_hashes.len(),
-                state.tracked_spent_fees
+                "'{}: encumbered={}, tracked_fees={}'",
+                state.wallet_id, state.reserved_utxos, state.tracked_spent_fees
             )
         })
         .collect();
-    format!("HashMap<String, WalletRuntimeState>({})", states.join(", "))
+
+    format!("WalletPendingStates({})", states.join(", "))
 }
 
 fn fee_state_summary(fee_state: &ScenarioFeeState) -> String {
@@ -1290,20 +1676,17 @@ fn fee_state_summary(fee_state: &ScenarioFeeState) -> String {
     format!(
         "sponsor={sponsor}, wallet_account={}, encumbered_by_wallet={}",
         fee_state.wallet_account.is_some(),
-        fee_state.encumbered_tokens_per_wallet.len(),
+        fee_state.reserved_wallet_count(),
     )
 }
 
-fn node_header_heights_display(
-    node_header_heights: &HashMap<String, HashMap<String, u64>>,
-) -> String {
-    let nodes: Vec<_> = node_header_heights
+fn node_header_heights_display(wallet_diagnostics: &WalletDiagnostics) -> String {
+    let nodes: Vec<_> = wallet_diagnostics
+        .header_heights
         .iter()
-        .map(|(k, v)| {
-            let mut heights: Vec<u64> = v.values().copied().collect();
-            heights.sort_unstable();
+        .map(|(node_name, heights)| {
             format!(
-                "{k}: [{}]",
+                "{node_name}: [{}]",
                 heights
                     .iter()
                     .map(ToString::to_string)

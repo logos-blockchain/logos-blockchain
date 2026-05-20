@@ -6,23 +6,30 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
+        channel::{SlotTimeframe, SlotTimeout},
+        encoding::Ops,
+        ledger::Outputs,
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp, set_keys::SetKeysOp,
+                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId,
+                config::ChannelConfigOp,
+                inscribe::{Inscription, InscriptionOp},
+                withdraw::ChannelWithdrawOp,
             },
         },
         tx::TxHash,
     },
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc};
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     adapter,
     adapter::BoxStream,
-    state::{InscriptionInfo, TxState},
+    state::{AtomicWithdrawInfo, InscriptionInfo, PublishedTx, TxState, WithdrawInfo},
 };
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
@@ -53,6 +60,32 @@ pub struct PublishResult {
     pub inscription_id: InscriptionId,
     /// Current checkpoint for persistence.
     pub checkpoint: SequencerCheckpoint,
+}
+
+/// One withdraw to bundle atomically with an inscription.
+///
+/// The SDK fills `channel_id` and `withdraw_nonce` from internal state.
+/// The caller only specifies the outputs (recipients + amounts).
+#[derive(Debug, Clone)]
+pub struct WithdrawArg {
+    pub outputs: Outputs,
+}
+
+/// A pending tx that has been orphaned by a chain update.
+///
+/// The consumer republishes by calling the same SDK method they used
+/// originally with the data carried inside the variant:
+/// - [`OrphanedTx::Inscription`] → [`SequencerHandle::publish_message`] with
+///   `info.payload`
+/// - [`OrphanedTx::AtomicWithdraw`] →
+///   [`SequencerHandle::publish_atomic_withdraw`] with
+///   `info.inscription.payload` and `WithdrawArg`s reconstructed from
+///   `info.withdraws[i].op.outputs`. The SDK fills fresh `parent_msg` and
+///   current `withdraw_nonce` internally on each publish.
+#[derive(Debug, Clone)]
+pub enum OrphanedTx {
+    Inscription(InscriptionInfo),
+    AtomicWithdraw(AtomicWithdrawInfo),
 }
 
 /// Configuration for the zone sequencer.
@@ -86,43 +119,88 @@ pub enum Error {
 #[derive(Debug, Clone)]
 pub enum Event {
     /// Transactions finalized (at or below LIB).
+    ///
+    /// `tx_hashes` covers every finalized tx that was in our pending set
+    /// (inscription, atomic-withdraw bundle, or other op). `txs` carries the
+    /// typed payload for each finalized channel tx — for our own bundles the
+    /// [`PublishedTx::AtomicWithdraw`] variant is emitted with full bundle
+    /// info; observed-but-not-ours inscriptions surface as
+    /// [`PublishedTx::Inscription`] (we don't extract per-block withdraws for
+    /// other sequencers).
     TxsFinalized {
         tx_hashes: Vec<TxHash>,
-        inscriptions: Vec<InscriptionInfo>,
+        txs: Vec<PublishedTx>,
     },
     /// Channel state changed.
     ///
+    /// Emitted when at least one of `orphaned` or `adopted` is non-empty.
+    /// `safe → pending` transitions whose original signed tx is still valid
+    /// (parent unchanged on the new branch) are not surfaced — the SDK
+    /// keeps retrying them internally.
+    ///
+    /// `orphaned` contains only items the SDK has given up on: our own
+    /// pending whose original signed tx is permanently invalid because a
+    /// competing inscription claimed the parent slot (or because the parent
+    /// is now off the canonical chain transitively). These need a user
+    /// decision — re-creation requires your signing key.
+    ///
+    /// `adopted` is the block-delta of inscriptions newly on the canonical
+    /// branch, filtered to **exclude items that originated from this
+    /// sequencer instance** (matched by `this_msg` against the internal
+    /// outbox). Consumers learn about their own publishes via
+    /// `Event::Published` (optimistic apply pattern) — those don't need to
+    /// be re-surfaced here. The outbox-based filter works correctly even
+    /// when multiple sequencer instances share a signing key: each
+    /// instance's outbox only contains what it itself submitted.
+    ///
     /// Consumer pattern:
-    /// 1. Apply `orphaned` and `adopted` to state (revert / add).
-    /// 2. For each entry in `invalidated`, decide whether to republish.
+    /// 1. On `Event::Published`: optimistically apply your own inscription to
+    ///    local state.
+    /// 2. On `ChannelUpdate`: apply `adopted` (others' new inscriptions) to
+    ///    local state, revert `orphaned` (yours that can no longer land).
+    /// 3. For each entry in `orphaned`, decide whether to republish (with a
+    ///    fresh parent — SDK handles parent selection).
     ChannelUpdate {
-        /// Removed from the canonical branch (revert from state).
-        orphaned: Vec<InscriptionInfo>,
-        /// Added to the canonical branch (apply to state).
+        /// Our pending whose original signed tx is permanently invalid
+        /// (parent slot claimed by something in `adopted`, or parent
+        /// transitively off canonical).
+        ///
+        /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
+        /// via [`SequencerHandle::publish_message`]. For
+        /// [`OrphanedTx::AtomicWithdraw`] entries, the consumer republishes
+        /// via [`SequencerHandle::publish_atomic_withdraw`] with the original
+        /// payload and reconstructed [`WithdrawArg`]s from the bundle's
+        /// `withdraws`. The SDK fills fresh `parent_msg` and current
+        /// `withdraw_nonce` internally on each publish.
+        orphaned: Vec<OrphanedTx>,
+        /// Others' inscriptions newly on the canonical branch (block-delta,
+        /// excluding entries this instance submitted — matched by `this_msg`
+        /// against the internal outbox. See `Event::Published` for our own).
         adopted: Vec<InscriptionInfo>,
-        /// Pending tx on this branch.
-        pending: Vec<InscriptionInfo>,
-        /// Submitted tx that is not valid on this branch anymore.
-        invalidated: Vec<InscriptionInfo>,
-        /// The new channel tip `MsgId`.
-        new_channel_tip: MsgId,
     },
     /// Batch of finalized inscriptions discovered during backfill catch-up.
     /// Emitted incrementally when the sequencer catches up from a checkpoint.
     FinalizedInscriptions { inscriptions: Vec<InscriptionInfo> },
     /// Sequencer is connected, backfill complete, ready to accept publishes.
     Ready,
-    /// An inscription was created and submitted to the network.
+    /// A tx (plain inscription or atomic-withdraw bundle) was created and
+    /// submitted to the network.
+    ///
+    /// The inner [`PublishedTx`] variant tells the consumer whether this came
+    /// from [`SequencerHandle::publish_message`] or
+    /// [`SequencerHandle::publish_atomic_withdraw`]. `this_msg` on the
+    /// inscription is the lineage key for correlating later
+    /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.txs`
+    /// entries back to the originating publish call.
     Published {
-        inscription_id: InscriptionId,
-        payload: Vec<u8>,
+        tx: Box<PublishedTx>,
         checkpoint: SequencerCheckpoint,
     },
 }
 
 enum ActorRequest {
     /// Create/sign/submit a transaction with an inscription
-    PublishMessage { data: Vec<u8> },
+    PublishMessage { data: Inscription },
     /// Build an unsigned tx for the given ops and an inscription
     ///
     /// Calling this multiple times without submitting the prepared txs via
@@ -130,8 +208,8 @@ enum ActorRequest {
     /// prepared txs are submitted promptly. If additional prepares are
     /// unavoidable, handle potential conflicts carefully.
     PrepareTx {
-        ops: Vec<Op>,
-        msg: Vec<u8>,
+        ops: Ops,
+        msg: Inscription,
         reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
     },
     /// Sign a tx using the sequencer's key
@@ -147,9 +225,24 @@ enum ActorRequest {
         msg_id: MsgId,
         reply: tokio::sync::oneshot::Sender<Result<PublishResult, Error>>,
     },
-    SetKeys {
+    ChannelConfig {
         keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
         reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
+    },
+    /// Publish an atomic inscription+withdraw bundle.
+    ///
+    /// SDK queries channel state to fill `withdraw_nonce`s and locate its own
+    /// accredited-key index, builds the `MantleTx`, signs locally, and submits.
+    /// Scoped to single-sequencer (centralized) channels — the sequencer's
+    /// own signature is the only one used. Fire-and-forget; the result is
+    /// delivered via `Event::Published`.
+    PublishAtomicWithdraw {
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
     },
 }
 
@@ -189,7 +282,7 @@ where
     /// sequencer's event loop. The result (inscription ID + checkpoint) is
     /// delivered via [`Event::Published`] once the tx is created and posted
     /// to the network.
-    pub async fn publish_message(&self, data: Vec<u8>) -> Result<(), Error> {
+    pub async fn publish_message(&self, data: Inscription) -> Result<(), Error> {
         if !*self.ready_rx.borrow() {
             return Err(Error::Unavailable {
                 reason: "sequencer not yet ready",
@@ -210,8 +303,8 @@ where
     /// via [`Self::submit_signed_tx`].
     pub async fn prepare_tx(
         &self,
-        ops: Vec<Op>,
-        data: Vec<u8>,
+        ops: Ops,
+        data: Inscription,
     ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         let request = ActorRequest::PrepareTx {
@@ -293,30 +386,36 @@ where
         Ok(result)
     }
 
-    /// Update the channel's accredited keys.
+    /// Update the channel's config.
     ///
     /// The sequencer's signing key must be the channel administrator
     /// (`keys[0]`). This overwrites the entire key list — include the admin
     /// key if it should remain authorized.
     ///
-    /// Returns the publish result (with checkpoint) and a future that
-    /// resolves when the transaction is finalized:
+    /// `posting_timeframe` and `posting_timeout` control round-robin
+    /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a
+    /// single fixed sequencer at index 0.
     ///
-    /// ```ignore
-    /// let (result, finalized) = handle.set_keys(vec![admin_pk]).await?;
-    /// save_checkpoint(&result.checkpoint);
-    /// finalized.await?; // wait for finalization
-    /// ```
-    pub async fn set_keys(
+    /// Returns the publish result (with checkpoint) and a future that
+    /// resolves when the transaction is finalized.
+    pub async fn channel_config(
         &self,
         keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
     ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
         // Subscribe BEFORE submitting to avoid missing finalization events.
         let mut event_rx = self.event_tx.subscribe();
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::SetKeys {
+        let request = ActorRequest::ChannelConfig {
             keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            withdraw_threshold,
             reply: reply_tx,
         };
 
@@ -333,11 +432,11 @@ where
 
         let tx_hash = signed_tx.mantle_tx.hash();
 
-        info!("Submitted set_keys transaction {:?}", tx_hash);
+        info!("Submitted channel_config transaction {:?}", tx_hash);
 
         // Post to network (best effort, will be resubmitted if needed)
         if let Err(e) = self.node.post_transaction(signed_tx).await {
-            warn!("Failed to post set_keys transaction: {e}");
+            warn!("Failed to post channel_config transaction: {e}");
         }
 
         let finalized = async move {
@@ -359,6 +458,40 @@ where
         };
 
         Ok((publish_result, finalized))
+    }
+
+    /// Publish an atomic inscription+withdraw bundle.
+    ///
+    /// The SDK queries channel state to fill withdraw nonces and locate its
+    /// own accredited-key index, selects the inscription's `parent_msg` from
+    /// the current canonical tip, builds the bundled `MantleTx`, signs locally
+    /// with the sequencer's key, and submits. Scoped to single-sequencer
+    /// (centralized) channels — only the sequencer's own signature is used.
+    ///
+    /// Fire-and-forget: the bundle is queued for processing by the sequencer's
+    /// event loop. The result is delivered via
+    /// [`Event::Published`] (`PublishedTx::AtomicWithdraw` variant). Safe to
+    /// call from the drive task itself (e.g. an orphan re-publish handler)
+    /// because it does not await an actor reply.
+    pub async fn publish_atomic_withdraw(
+        &self,
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+    ) -> Result<(), Error> {
+        if !*self.ready_rx.borrow() {
+            return Err(Error::Unavailable {
+                reason: "sequencer not yet ready",
+            });
+        }
+        self.request_tx
+            .send(ActorRequest::PublishAtomicWithdraw {
+                inscribe,
+                withdraws,
+            })
+            .await
+            .map_err(|_| Error::Unavailable {
+                reason: "sequencer channel closed",
+            })
     }
 }
 
@@ -456,27 +589,7 @@ where
             );
             let mut tx_state = TxState::new(cp.lib, cp.last_msg_id);
             for (_hash, tx) in cp.pending_txs {
-                // Try to extract inscription metadata for lineage tracking.
-                // Filter by `channel_id` — a checkpoint can in principle carry
-                // txs for other channels if the caller reused it.
-                let mut is_inscription = false;
-                for op in tx.mantle_tx.ops() {
-                    if let Op::ChannelInscribe(inscribe) = op
-                        && inscribe.channel_id == channel_id
-                    {
-                        tx_state.submit_inscription(
-                            tx.clone(),
-                            inscribe.parent,
-                            inscribe.id(),
-                            inscribe.inscription.clone(),
-                        );
-                        is_inscription = true;
-                        break;
-                    }
-                }
-                if !is_inscription {
-                    tx_state.submit_other(tx);
-                }
+                restore_pending_tx(&mut tx_state, tx, channel_id);
             }
             (Some(tx_state), cp.lib_slot, cp.last_msg_id)
         } else {
@@ -560,11 +673,14 @@ where
         let stream = self.blocks_stream.as_mut()?;
 
         tokio::select! {
+            // Biased: drain queued publish/sign requests before processing new
+            // block events. Prevents a race where a `ChannelUpdate`-triggered
+            // republish gets re-orphaned by a fresh block event arriving on
+            // the stream before the republish reaches the actor, which could
+            // cause duplicate work or duplicate inscriptions.
+            biased;
             Some(request) = self.request_rx.recv() => {
                 self.handle_request(request).await
-            }
-            maybe_event = stream.next() => {
-                self.handle_stream_item(maybe_event).await
             }
             Some(inflight_result) = self.in_flight.next(), if !self.in_flight.is_empty() => {
                 handle_inflight(inflight_result, &mut self.resubmit_active);
@@ -579,6 +695,9 @@ where
                     &mut self.resubmit_active,
                 );
                 None
+            }
+            maybe_event = stream.next() => {
+                self.handle_stream_item(maybe_event).await
             }
         }
     }
@@ -797,10 +916,10 @@ where
         let channel_event = result.channel_update.map(|u| self.build_channel_event(u));
 
         let finalized_event = (!result.finalized_tx_hashes.is_empty()
-            || !result.finalized_inscriptions.is_empty())
+            || !result.finalized_txs.is_empty())
         .then_some(Event::TxsFinalized {
             tx_hashes: result.finalized_tx_hashes,
-            inscriptions: result.finalized_inscriptions,
+            txs: result.finalized_txs,
         });
 
         match (channel_event, finalized_event) {
@@ -819,77 +938,70 @@ where
 
     fn log_channel_update(update: &crate::state::ChannelUpdateInfo) {
         debug!(
-            "ChannelUpdate: orphaned={}, adopted={}, new_tip={:?}",
+            "ChannelUpdate: orphaned={}, adopted={}, new_tip={}",
             update.orphaned.len(),
             update.adopted.len(),
-            update.new_channel_tip,
+            hex::encode(update.new_channel_tip.as_ref()),
         );
-        for inv in &update.orphaned {
+        for info in &update.orphaned {
             debug!(
-                "  orphaned: payload={:?}, tx={:?}, msg_id={:?}",
-                String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
+                "  orphaned: payload={:?}, tx={}, msg_id={}",
+                String::from_utf8_lossy(&info.payload),
+                hex::encode(info.tx_hash.0),
+                hex::encode(info.this_msg.as_ref()),
             );
         }
-        for inv in &update.adopted {
+        for info in &update.adopted {
             debug!(
-                "  adopted: payload={:?}, tx={:?}, msg_id={:?}",
-                String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
+                "  adopted: payload={:?}, tx={}, msg_id={}",
+                String::from_utf8_lossy(&info.payload),
+                hex::encode(info.tx_hash.0),
+                hex::encode(info.this_msg.as_ref()),
             );
         }
     }
 
-    /// Build the `ChannelUpdate` event. `invalidated` = orphaned blocks ∪
-    /// pending shed because lineage no longer reaches the new channel tip.
-    /// Shed runs here (only when there's a canonical change) — pre-event
-    /// state is preserved so shed can correctly identify what just went
-    /// off-branch.
+    /// Build the `ChannelUpdate` event. `orphaned` contains only our own
+    /// pending whose original signed tx is permanently invalid — items the
+    /// SDK has given up on (parent slot claimed by a competing inscription,
+    /// or parent transitively off canonical). Block-delta orphans whose
+    /// original tx is still valid (the SDK keeps retrying them) are not
+    /// surfaced. `adopted` is filtered against our internal outbox (by
+    /// `this_msg`) to exclude inscriptions this instance submitted —
+    /// consumers learn about those via `Event::Published`. This outbox match
+    /// works under shared-signing-key deployments: each sequencer instance
+    /// only tracks what it itself submitted.
     fn build_channel_event(&mut self, u: crate::state::ChannelUpdateInfo) -> Event {
-        let shed = match (self.state.as_mut(), self.current_tip) {
+        let shed: Vec<PublishedTx> = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
             _ => Vec::new(),
         };
-        let pending = match (self.state.as_ref(), self.current_tip) {
-            (Some(s), Some(tip)) => s.pending_on_branch(tip),
-            _ => Vec::new(),
+
+        let adopted: Vec<InscriptionInfo> = match self.state.as_ref() {
+            Some(s) => u
+                .adopted
+                .into_iter()
+                .filter(|i| !s.outbox_contains(i.this_msg))
+                .collect(),
+            None => u.adopted,
         };
 
-        let orphaned_hashes: std::collections::HashSet<TxHash> =
-            u.orphaned.iter().map(|i| i.tx_hash).collect();
-        let mut invalidated = u.orphaned.clone();
-        invalidated.extend(
-            shed.into_iter()
-                .filter(|i| !orphaned_hashes.contains(&i.tx_hash)),
-        );
-
-        for inv in &pending {
+        let mut orphaned = Vec::with_capacity(shed.len());
+        for entry in shed {
+            let info = entry.inscription();
             debug!(
-                "  pending: payload={:?}, tx={:?}, msg_id={:?}, parent={:?}",
-                String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
-                inv.parent_msg,
+                "  orphaned: payload={:?}, tx={}, msg_id={}",
+                String::from_utf8_lossy(&info.payload),
+                hex::encode(info.tx_hash.0),
+                hex::encode(info.this_msg.as_ref()),
             );
-        }
-        for inv in &invalidated {
-            debug!(
-                "  invalidated: payload={:?}, tx={:?}, msg_id={:?}",
-                String::from_utf8_lossy(&inv.payload),
-                inv.tx_hash,
-                inv.this_msg,
-            );
+            match entry {
+                PublishedTx::Inscription(i) => orphaned.push(OrphanedTx::Inscription(i)),
+                PublishedTx::AtomicWithdraw(a) => orphaned.push(OrphanedTx::AtomicWithdraw(a)),
+            }
         }
 
-        Event::ChannelUpdate {
-            orphaned: u.orphaned,
-            adopted: u.adopted,
-            pending,
-            invalidated,
-            new_channel_tip: u.new_channel_tip,
-        }
+        Event::ChannelUpdate { orphaned, adopted }
     }
 
     async fn handle_request(&mut self, request: ActorRequest) -> Option<Event> {
@@ -924,10 +1036,25 @@ where
                 drop(reply.send(Ok(result)));
                 None
             }
-            ActorRequest::SetKeys { keys, reply } => {
+            ActorRequest::ChannelConfig {
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                withdraw_threshold,
+                reply,
+            } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
-                let signed_tx = create_set_keys_tx(self.channel_id, &self.signing_key, keys);
+                let signed_tx = create_channel_config_tx(
+                    self.channel_id,
+                    &[&self.signing_key],
+                    keys,
+                    posting_timeframe,
+                    posting_timeout,
+                    configuration_threshold,
+                    withdraw_threshold,
+                );
                 s.submit_other(signed_tx.clone());
                 let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
                 let result = PublishResult {
@@ -937,10 +1064,23 @@ where
                 drop(reply.send(Ok((signed_tx, result))));
                 None
             }
+            ActorRequest::PublishAtomicWithdraw {
+                inscribe,
+                withdraws,
+            } => match self
+                .handle_publish_atomic_withdraw(inscribe, withdraws)
+                .await
+            {
+                Ok(event) => Some(event),
+                Err(e) => {
+                    warn!("publish_atomic_withdraw failed: {e}");
+                    None
+                }
+            },
         }
     }
 
-    async fn handle_publish(&mut self, data: Vec<u8>) -> Event {
+    async fn handle_publish(&mut self, data: Inscription) -> Event {
         // Safe to unwrap — handle_request checks is_ready() first
         let s = self.state.as_mut().unwrap();
 
@@ -956,8 +1096,11 @@ where
         let id = signed_tx.mantle_tx.hash();
 
         debug!(
-            "Publishing: payload={:?}, parent={parent:?}, msg_id={new_msg_id:?}, tx={id:?}",
+            "Publishing: payload={:?}, parent={}, msg_id={}, tx={}",
             String::from_utf8_lossy(&data),
+            hex::encode(parent.as_ref()),
+            hex::encode(new_msg_id.as_ref()),
+            hex::encode(id.0),
         );
 
         s.submit_inscription(signed_tx.clone(), parent, new_msg_id, data.clone());
@@ -969,14 +1112,178 @@ where
         }
 
         let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
-        let event = Event::Published {
-            inscription_id: id,
+        let info = InscriptionInfo {
+            tx_hash: id,
+            parent_msg: parent,
+            this_msg: new_msg_id,
             payload: data,
+        };
+        let event = Event::Published {
+            tx: Box::new(PublishedTx::Inscription(info)),
             checkpoint,
         };
         drop(self.event_tx.send(event.clone()));
         event
     }
+
+    /// Build, sign, and submit an atomic inscription+withdraw bundle.
+    ///
+    /// Scoped to centralized single-sequencer channels — the sequencer's own
+    /// signature is the only signature used. Errors early if the channel's
+    /// `withdraw_threshold > 1`, which would require multi-sig orchestration
+    /// not supported by this API.
+    async fn handle_publish_atomic_withdraw(
+        &mut self,
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+    ) -> Result<Event, Error> {
+        if withdraws.is_empty() {
+            return Err(Error::Network(
+                "publish_atomic_withdraw requires at least one withdraw".into(),
+            ));
+        }
+
+        // Query channel state for the current on-chain `withdraw_nonce` and
+        // this sequencer's accredited-key index. Done before borrowing
+        // `self.state` since `await` on a node method must not hold a `&Self`
+        // reference (forces `Self: Sync`).
+        let channel_state = self
+            .node
+            .channel_state(self.channel_id)
+            .await
+            .map_err(|e| Error::Network(format!("channel_state query failed: {e}")))?;
+        if channel_state.withdraw_threshold > 1 {
+            return Err(Error::Network(format!(
+                "publish_atomic_withdraw requires withdraw_threshold == 1, got {}",
+                channel_state.withdraw_threshold
+            )));
+        }
+        let own_key_index = find_own_key_index(&channel_state, &self.signing_key)?;
+        let mut next_nonce = channel_state.withdrawal_nonce;
+
+        // Safe to unwrap — is_ready() guarantees state is initialized
+        let s = self.state.as_ref().unwrap();
+        let parent = if let Some(tip) = self.current_tip {
+            s.publish_parent(tip)
+        } else {
+            self.last_msg_id
+        };
+
+        let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
+        let mut withdraw_infos = Vec::with_capacity(withdraws.len());
+        for arg in withdraws {
+            let op = ChannelWithdrawOp {
+                channel_id: self.channel_id,
+                outputs: arg.outputs,
+                withdraw_nonce: next_nonce,
+            };
+            withdraw_infos.push(WithdrawInfo { op: op.clone() });
+            ops.push(Op::ChannelWithdraw(op));
+            next_nonce = next_nonce
+                .checked_add(1)
+                .ok_or_else(|| Error::Network("withdraw nonce overflow".into()))?;
+        }
+
+        let inscription_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription: inscribe.clone(),
+            parent,
+            signer: self.signing_key.public_key(),
+        };
+        let msg_id = inscription_op.id();
+        ops.push(Op::ChannelInscribe(inscription_op));
+
+        let tx = MantleTx(Ops::try_from(ops).map_err(|e| {
+            Error::Network(format!("atomic withdraw bundle exceeds op limit: {e:?}"))
+        })?);
+        let own_sig = sign_tx(tx.hash(), &self.signing_key);
+        let ops_proofs = build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig)?;
+        let signed_tx = SignedMantleTx::new(tx, ops_proofs)
+            .map_err(|e| Error::Network(format!("signed tx assembly failed: {e:?}")))?;
+
+        // Safe to unwrap — is_ready() guarantees state is initialized
+        let s = self.state.as_mut().unwrap();
+        let id = signed_tx.mantle_tx.hash();
+
+        s.submit_atomic_withdraw(
+            signed_tx.clone(),
+            parent,
+            msg_id,
+            inscribe.clone(),
+            withdraw_infos.clone(),
+        );
+        self.last_msg_id = msg_id;
+
+        let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
+
+        // Best-effort post; resubmit timer retries on failure.
+        if let Err(e) = self.node.post_transaction(signed_tx).await {
+            warn!("Failed to post atomic withdraw transaction: {e}");
+        }
+
+        let inscription = InscriptionInfo {
+            tx_hash: id,
+            parent_msg: parent,
+            this_msg: msg_id,
+            payload: inscribe,
+        };
+        let event = Event::Published {
+            tx: Box::new(PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                tx_hash: id,
+                inscription,
+                withdraws: withdraw_infos,
+            })),
+            checkpoint,
+        };
+        drop(self.event_tx.send(event.clone()));
+
+        Ok(event)
+    }
+}
+
+/// Build per-op proofs for an atomic withdraw bundle. The same single-signer
+/// `ChannelMultiSigProof` is reused for every `ChannelWithdraw` op (all sign
+/// the same tx hash with the same key) and the inscription op carries an
+/// `Ed25519Sig` proof.
+fn build_atomic_withdraw_ops_proofs(
+    tx: &MantleTx,
+    own_key_index: ChannelKeyIndex,
+    own_sig: Ed25519Signature,
+) -> Result<Vec<OpProof>, Error> {
+    let withdraw_proof =
+        ChannelMultiSigProof::new(vec![IndexedSignature::new(own_key_index, own_sig)])
+            .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
+    let mut ops_proofs = Vec::with_capacity(tx.ops().len());
+    for op in tx.ops() {
+        match op {
+            Op::ChannelWithdraw(_) => {
+                ops_proofs.push(OpProof::ChannelMultiSigProof(withdraw_proof.clone()));
+            }
+            Op::ChannelInscribe(_) => ops_proofs.push(OpProof::Ed25519Sig(own_sig)),
+            _ => {
+                return Err(Error::Network(format!(
+                    "unexpected op in atomic withdraw bundle: {op:?}"
+                )));
+            }
+        }
+    }
+    Ok(ops_proofs)
+}
+
+/// Find the position of the SDK's public key in the channel's `accredited_keys`
+/// list. Returns an error if our key is not on the accredited list (we can't
+/// sign for this channel).
+fn find_own_key_index(
+    channel_state: &lb_core::mantle::channel::ChannelState,
+    signing_key: &Ed25519Key,
+) -> Result<ChannelKeyIndex, Error> {
+    let own_pk = signing_key.public_key();
+    channel_state
+        .accredited_keys
+        .iter()
+        .position(|k| *k == own_pk)
+        .map(|i| i as ChannelKeyIndex)
+        .ok_or_else(|| Error::Network("sequencer key not in channel accredited_keys".into()))
 }
 
 fn reject_not_ready(request: ActorRequest) {
@@ -984,10 +1291,10 @@ fn reject_not_ready(request: ActorRequest) {
         reason: "sequencer not yet ready",
     };
     match request {
-        ActorRequest::PublishMessage { .. } => {
+        ActorRequest::PublishMessage { .. } | ActorRequest::PublishAtomicWithdraw { .. } => {
             warn!("Publish dropped: sequencer not yet ready");
         }
-        ActorRequest::SetKeys { reply, .. } => drop(reply.send(Err(err()))),
+        ActorRequest::ChannelConfig { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::PrepareTx { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::SignTx { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::SubmitSignedTx { reply, .. } => drop(reply.send(Err(err()))),
@@ -1021,10 +1328,70 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
     }
 }
 
+/// Restore a single pending tx into `TxState` on checkpoint resume.
+///
+/// Inspects the tx ops:
+/// - Any `Op::ChannelWithdraw` targeting our channel → bundle. Restored via
+///   `submit_atomic_withdraw` so `PendingInscription.withdraws` is repopulated
+///   and orphan/finalize emit the correct [`PublishedTx::AtomicWithdraw`] /
+///   [`OrphanedTx::AtomicWithdraw`] variant.
+/// - Only `Op::ChannelInscribe` for our channel → plain inscription.
+/// - Neither → treated as opaque (`submit_other`).
+///
+/// Txs for other channels (checkpoint reused across channels) hit the
+/// `submit_other` fallback.
+///
+/// A tx with 2+ `ChannelInscribe` ops for our channel (constructable via
+/// `prepare_tx` + `submit_signed_tx`) isn't a bundle our API can represent.
+/// We log an error and fall back to `submit_other` — the tx is still tracked
+/// for finalize/orphan, just without per-tx inscription lineage.
+fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: ChannelId) {
+    let mut inscribe_meta: Option<(MsgId, MsgId, Inscription)> = None;
+    let mut multi_inscribe = false;
+    let mut withdraws: Vec<WithdrawInfo> = Vec::new();
+    for op in tx.mantle_tx.ops() {
+        match op {
+            Op::ChannelInscribe(i) if i.channel_id == channel_id => {
+                if inscribe_meta.is_some() {
+                    multi_inscribe = true;
+                } else {
+                    inscribe_meta = Some((i.parent, i.id(), i.inscription.clone()));
+                }
+            }
+            Op::ChannelWithdraw(w) if w.channel_id == channel_id => {
+                withdraws.push(WithdrawInfo { op: w.clone() });
+            }
+            _ => {}
+        }
+    }
+    if multi_inscribe {
+        error!(
+            tx_hash = %hex::encode(tx.mantle_tx.hash().0),
+            "restore_pending_tx: tx has multiple ChannelInscribe ops for our channel; \
+             tracking as opaque (no bundle lineage)"
+        );
+        state.submit_other(tx);
+        return;
+    }
+    match inscribe_meta {
+        Some((parent, this_msg, payload)) => {
+            if withdraws.is_empty() {
+                state.submit_inscription(tx, parent, this_msg, payload);
+            } else {
+                state.submit_atomic_withdraw(tx, parent, this_msg, payload, withdraws);
+            }
+        }
+        None => state.submit_other(tx),
+    }
+}
+
 /// Result of processing a block event.
 struct BlockEventResult {
     finalized_tx_hashes: Vec<TxHash>,
-    finalized_inscriptions: Vec<InscriptionInfo>,
+    /// Finalized channel txs in typed form. Our own bundles surface as
+    /// [`PublishedTx::AtomicWithdraw`]; observed inscriptions (ours or
+    /// others') surface as [`PublishedTx::Inscription`].
+    finalized_txs: Vec<PublishedTx>,
     channel_update: Option<crate::state::ChannelUpdateInfo>,
 }
 
@@ -1054,7 +1421,7 @@ where
     let Some(s) = state.as_mut() else {
         return BlockEventResult {
             finalized_tx_hashes: Vec::new(),
-            finalized_inscriptions: Vec::new(),
+            finalized_txs: Vec::new(),
             channel_update: None,
         };
     };
@@ -1097,8 +1464,18 @@ where
     s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
 
     // Remove our pending txs that were finalized in backfilled LIB blocks.
+    // Capture each finalized bundle's withdraw info BEFORE remove_pending
+    // strips it, so the finalized event can surface the right typed variant.
     let mut finalized_tx_hashes = Vec::new();
+    let mut bundle_withdraws: std::collections::HashMap<TxHash, Vec<WithdrawInfo>> =
+        std::collections::HashMap::new();
     for tx_hash in &lib_finalized {
+        if let Some(withdraws) = s
+            .pending_inscription(tx_hash)
+            .and_then(|p| p.withdraws.clone())
+        {
+            bundle_withdraws.insert(*tx_hash, withdraws);
+        }
         if s.remove_pending(tx_hash).is_some() {
             finalized_tx_hashes.push(*tx_hash);
         }
@@ -1107,14 +1484,24 @@ where
     // All channel inscriptions from backfilled LIB blocks — includes both
     // our own and other sequencers' inscriptions. Consumers need the full
     // picture to update their local state correctly.
-    let finalized_inscriptions = lib_inscriptions;
-    for info in &finalized_inscriptions {
-        tracing::trace!(
-            " Backfill-finalized: payload={:?}, tx={:?}",
-            String::from_utf8_lossy(&info.payload),
-            info.tx_hash
-        );
-    }
+    let finalized_txs: Vec<PublishedTx> = lib_inscriptions
+        .into_iter()
+        .map(|info| {
+            tracing::trace!(
+                " Backfill-finalized: payload={:?}, tx={}",
+                String::from_utf8_lossy(&info.payload),
+                hex::encode(info.tx_hash.0),
+            );
+            match bundle_withdraws.remove(&info.tx_hash) {
+                Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                    tx_hash: info.tx_hash,
+                    inscription: info,
+                    withdraws,
+                }),
+                None => PublishedTx::Inscription(info),
+            }
+        })
+        .collect();
     *current_tip = Some(tip);
 
     // Detect channel changes.
@@ -1143,7 +1530,7 @@ where
 
     BlockEventResult {
         finalized_tx_hashes,
-        finalized_inscriptions,
+        finalized_txs,
         channel_update,
     }
 }
@@ -1330,7 +1717,10 @@ fn enqueue_resubmit<Node>(
                 }
             })
             .collect();
-        debug!("  resubmit: tx={id:?}, payloads={payloads:?}");
+        debug!(
+            "  resubmit: tx={}, payloads={payloads:?}",
+            hex::encode(id.0)
+        );
     }
 
     debug!("Resubmitting {} pending inscription(s)", pending.len());
@@ -1357,25 +1747,45 @@ fn enqueue_resubmit<Node>(
 /// form a single linear chain — that would be a protocol-level invariant
 /// violation.
 fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
-    let items: Vec<InscriptionInfo> = txs
+    // Also tracks ChannelConfig as a synthetic tip-update entry so the SDK's
+    // channel_tip stays in sync with the chain. Per spec, ChannelConfig sets
+    // `chan.tip_hash = hash(encode(config))`, replacing whatever was there.
+    // Synthetic entries have empty payload so app-layer consumers (which key
+    // off payload bytes) ignore them naturally.
+    let mut items: Vec<InscriptionInfo> = Vec::new();
+    let mut last_in_block: Option<MsgId> = None;
+    let hash_and_ops = txs
         .iter()
-        .flat_map(|tx| {
-            tx.mantle_tx.ops().iter().filter_map(|op| {
-                if let Op::ChannelInscribe(inscribe) = op
-                    && inscribe.channel_id == channel_id
-                {
-                    Some(InscriptionInfo {
-                        tx_hash: tx.mantle_tx.hash(),
-                        parent_msg: inscribe.parent,
-                        this_msg: inscribe.id(),
-                        payload: inscribe.inscription.clone(),
-                    })
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
+        .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops().iter()));
+
+    for (tx_hash, op) in hash_and_ops {
+        match op {
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                let info = InscriptionInfo {
+                    tx_hash,
+                    parent_msg: inscribe.parent,
+                    this_msg: inscribe.id(),
+                    payload: inscribe.inscription.clone(),
+                };
+                last_in_block = Some(info.this_msg);
+                items.push(info);
+            }
+            Op::ChannelConfig(config) if config.channel == channel_id => {
+                // Chain off the previous in-block tip (or root) so the
+                // topological sort below can stitch it into a single chain.
+                let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
+                let info = InscriptionInfo {
+                    tx_hash,
+                    parent_msg,
+                    this_msg: config.id(),
+                    payload: Inscription::default(),
+                };
+                last_in_block = Some(info.this_msg);
+                items.push(info);
+            }
+            _ => {}
+        }
+    }
 
     if items.len() <= 1 {
         return items;
@@ -1405,7 +1815,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
 fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
     tx.mantle_tx.ops().iter().any(|op| match op {
         Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
-        Op::ChannelSetKeys(set_keys) => set_keys.channel == channel_id,
+        Op::ChannelConfig(set_keys) => set_keys.channel == channel_id,
         _ => false,
     })
 }
@@ -1413,7 +1823,7 @@ fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 fn create_inscribe_tx(
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
-    inscription: Vec<u8>,
+    inscription: Inscription,
     parent: MsgId,
 ) -> (SignedMantleTx, MsgId) {
     let signer = signing_key.public_key();
@@ -1427,7 +1837,7 @@ fn create_inscribe_tx(
     let msg_id = inscribe_op.id();
 
     // TODO: set realistic gas prices and fund tx
-    let inscribe_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+    let inscribe_tx = MantleTx([Op::ChannelInscribe(inscribe_op)].into());
 
     let tx_hash = inscribe_tx.hash();
     let signature = sign_tx(tx_hash, signing_key);
@@ -1440,33 +1850,51 @@ fn create_inscribe_tx(
     (signed_tx, msg_id)
 }
 
-fn create_set_keys_tx(
+fn create_channel_config_tx(
     channel_id: ChannelId,
-    signing_key: &Ed25519Key,
+    signing_keys: &[&Ed25519Key],
     keys: Vec<Ed25519PublicKey>,
+    posting_timeframe: SlotTimeframe,
+    posting_timeout: SlotTimeout,
+    configuration_threshold: u16,
+    withdraw_threshold: u16,
 ) -> SignedMantleTx {
-    let set_keys_op = SetKeysOp {
+    let config_op = ChannelConfigOp {
         channel: channel_id,
         keys,
+        posting_timeframe,
+        posting_timeout,
+        configuration_threshold,
+        withdraw_threshold,
     };
 
     // TODO: fund tx
-    let set_keys_tx = MantleTx(vec![Op::ChannelSetKeys(set_keys_op)]);
+    let config_tx = MantleTx([Op::ChannelConfig(config_op)].into());
 
-    let tx_hash = set_keys_tx.hash();
-    let signature = sign_tx(tx_hash, signing_key);
+    let tx_hash = config_tx.hash();
+    let signatures = signing_keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            IndexedSignature::new(
+                index as ChannelKeyIndex,
+                key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            )
+        })
+        .collect();
+    let proof = ChannelMultiSigProof::new(signatures).unwrap();
 
     SignedMantleTx {
-        ops_proofs: vec![OpProof::Ed25519Sig(signature)],
-        mantle_tx: set_keys_tx,
+        ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],
+        mantle_tx: config_tx,
     }
 }
 
 fn prepare_tx(
-    mut ops: Vec<Op>,
+    mut ops: Ops,
     channel_id: ChannelId,
     signing_key: &Ed25519Key,
-    inscription: Vec<u8>,
+    inscription: Inscription,
     parent: MsgId,
 ) -> (MantleTx, MsgId, Ed25519Signature) {
     let inscription_op = InscriptionOp {
@@ -1476,7 +1904,8 @@ fn prepare_tx(
         signer: signing_key.public_key(),
     };
     let msg_id = inscription_op.id();
-    ops.push(Op::ChannelInscribe(inscription_op));
+    // TODO: Return `Error` in case there's too many ops already.
+    ops.try_push(Op::ChannelInscribe(inscription_op)).unwrap();
 
     // TODO: fund tx
     let tx = MantleTx(ops);
@@ -1549,8 +1978,8 @@ mod tests {
 
         // Prepare a `MantleTx` — drive sequencer concurrently to process the request
         let prepare_fut = handle.prepare_tx(
-            vec![Op::ChannelDeposit(deposit_op.clone())],
-            "Mint 10 to Alice".into(),
+            [Op::ChannelDeposit(deposit_op.clone())].into(),
+            b"Mint 10 to Alice".into(),
         );
         tokio::pin!(prepare_fut);
         let (tx, msg_id, inscription_sig) = loop {
@@ -1605,6 +2034,117 @@ mod tests {
                 rx,
             )
         }
+    }
+
+    #[test]
+    fn restore_pending_tx_classifies_atomic_bundle_with_withdraws() {
+        // Bundle: [ChannelWithdraw(channel_id), ChannelInscribe(channel_id)]
+        // Restore should put it in pending (not pending_other) with the
+        // withdraws field populated, so on orphan we emit
+        // OrphanedTx::AtomicWithdraw (not Inscription).
+        let channel_id = ChannelId::from([1u8; 32]);
+        let outputs = Outputs::new(vec![Note::new(
+            5,
+            ZkKey::from(BigUint::from(0u64)).to_public_key(),
+        )]);
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id,
+            outputs,
+            withdraw_nonce: 0,
+        };
+        let inscribe_op = InscriptionOp {
+            channel_id,
+            inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        };
+        let mantle_tx = MantleTx(
+            Ops::try_from(vec![
+                Op::ChannelWithdraw(withdraw_op.clone()),
+                Op::ChannelInscribe(inscribe_op),
+            ])
+            .unwrap(),
+        );
+        let tx_hash = mantle_tx.hash();
+        let signed_tx = SignedMantleTx {
+            mantle_tx,
+            ops_proofs: Vec::new(),
+        };
+
+        let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
+        restore_pending_tx(&mut state, signed_tx, channel_id);
+
+        let pending = state
+            .pending_inscription(&tx_hash)
+            .expect("bundle should be in pending inscriptions");
+        let withdraws = pending
+            .withdraws
+            .as_ref()
+            .expect("bundle should carry Some(withdraws)");
+        assert_eq!(withdraws.len(), 1, "bundle should carry one WithdrawInfo");
+        assert_eq!(withdraws[0].op, withdraw_op);
+        assert!(
+            !state.pending_other_contains(&tx_hash),
+            "bundle should not be in pending_other"
+        );
+    }
+
+    #[test]
+    fn restore_pending_tx_classifies_plain_inscription_with_none_withdraws() {
+        // Plain inscription: pending with `withdraws == None`.
+        let channel_id = ChannelId::from([2u8; 32]);
+        let inscribe_op = InscriptionOp {
+            channel_id,
+            inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        };
+        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let tx_hash = mantle_tx.hash();
+        let signed_tx = SignedMantleTx {
+            mantle_tx,
+            ops_proofs: Vec::new(),
+        };
+
+        let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
+        restore_pending_tx(&mut state, signed_tx, channel_id);
+
+        let pending = state
+            .pending_inscription(&tx_hash)
+            .expect("plain inscription should be in pending inscriptions");
+        assert!(pending.withdraws.is_none());
+    }
+
+    #[test]
+    fn restore_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
+        // Inscribe for a different channel: should fall back to pending_other
+        // (treated as opaque).
+        let our_channel = ChannelId::from([3u8; 32]);
+        let other_channel = ChannelId::from([4u8; 32]);
+        let inscribe_op = InscriptionOp {
+            channel_id: other_channel,
+            inscription: Inscription::try_from(b"hello".to_vec()).unwrap(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        };
+        let mantle_tx = MantleTx(Ops::try_from(vec![Op::ChannelInscribe(inscribe_op)]).unwrap());
+        let tx_hash = mantle_tx.hash();
+        let signed_tx = SignedMantleTx {
+            mantle_tx,
+            ops_proofs: Vec::new(),
+        };
+
+        let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
+        restore_pending_tx(&mut state, signed_tx, our_channel);
+
+        assert!(
+            state.pending_inscription(&tx_hash).is_none(),
+            "wrong-channel tx should not be in pending inscriptions"
+        );
+        assert!(
+            state.pending_other_contains(&tx_hash),
+            "wrong-channel tx should be in pending_other"
+        );
     }
 
     #[async_trait]
@@ -1702,6 +2242,13 @@ mod tests {
         ) -> Result<(), lb_common_http_client::Error> {
             self.posted_transactions_sender.send(tx).await.unwrap();
             Ok(())
+        }
+
+        async fn channel_state(
+            &self,
+            _channel_id: ChannelId,
+        ) -> Result<lb_core::mantle::channel::ChannelState, lb_common_http_client::Error> {
+            unimplemented!()
         }
     }
 }

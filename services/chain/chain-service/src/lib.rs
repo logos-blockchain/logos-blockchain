@@ -28,6 +28,7 @@ use lb_chain_broadcast_service::{
 };
 use lb_core::{
     block::{Block, genesis::GenesisBlock},
+    events::Events,
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
@@ -145,6 +146,10 @@ pub enum ConsensusMsg<Tx> {
             lb_cryptarchia_engine::EpochConfig,
             lb_cryptarchia_engine::Config,
         )>,
+    },
+    GetBlockEvents {
+        id: HeaderId,
+        reply_channel: oneshot::Sender<Option<Events>>,
     },
     /// Apply a block to the chain,
     /// and return the tip and reorged txs if successful.
@@ -348,7 +353,7 @@ impl Cryptarchia {
         &mut self,
         block: &Block<Tx>,
         current_slot: Slot,
-    ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>), Error>
+    ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
         Tx: AuthenticatedMantleTx<Context = GasPrices>,
     {
@@ -366,7 +371,7 @@ impl Cryptarchia {
         }
 
         // A block number of this block if it's applied to the chain.
-        let (_, state) = self
+        let (_, state, events) = self
             .ledger
             .prepare_update::<_, MainnetGasConstants>(
                 id,
@@ -401,7 +406,7 @@ impl Cryptarchia {
 
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
-        Ok((pruned_blocks, reorged_blocks))
+        Ok((pruned_blocks, reorged_blocks, events))
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
@@ -578,6 +583,7 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
@@ -778,7 +784,7 @@ where
                                 });
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter());
+                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
                             }
                         }
                     }
@@ -829,6 +835,7 @@ where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
 {
@@ -869,7 +876,7 @@ where
         Ok((current_slot, slot_timer))
     }
 
-    fn process_message(
+    async fn process_message(
         cryptarchia: &Cryptarchia,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
@@ -947,6 +954,12 @@ where
                     .unwrap_or_else(|_| {
                         error!("Could not send epoch config through channel");
                     });
+            }
+            ConsensusMsg::GetBlockEvents { id, reply_channel } => {
+                let events = storage_adapter.get_block_events(&id).await;
+                reply_channel.send(events).unwrap_or_else(|_| {
+                    error!("Could not send block events through channel");
+                });
             }
             ConsensusMsg::Info { .. } => {
                 // Info is handled separately in the run loop where we have async
@@ -1066,7 +1079,8 @@ where
             }
         };
 
-        let (pruned_blocks, reorged_blocks) = cryptarchia.try_apply_block(&block, current_slot)?;
+        let (pruned_blocks, reorged_blocks, events) =
+            cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
 
         let tx_count = block.transactions().count();
@@ -1074,7 +1088,7 @@ where
 
         relays
             .storage_adapter()
-            .store_block(header.id(), header.parent(), block.clone())
+            .store_block(header.id(), header.parent(), block.clone(), events)
             .await
             .map_err(|e| Error::Storage(format!("Failed to store block: {e}")))?;
 

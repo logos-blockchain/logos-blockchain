@@ -12,23 +12,21 @@ use thiserror::Error;
 
 use crate::{
     crypto::{Hash, ZkHasher},
+    events::Events,
     mantle::ops::OpId,
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
 
-pub trait Operation {
-    type ValidationContext<'a>
-    where
-        Self: 'a;
+pub trait Operation<ValidationContext> {
     type ExecutionContext<'a>
     where
         Self: 'a;
     type Error;
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error>;
+    fn validate(&self, ctx: &ValidationContext) -> Result<(), Self::Error>;
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error>;
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error>;
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -159,6 +157,11 @@ impl Inputs {
     #[must_use]
     pub const fn new(note_ids: Vec<NoteId>) -> Self {
         Self(note_ids)
+    }
+
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self(vec![])
     }
 
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {

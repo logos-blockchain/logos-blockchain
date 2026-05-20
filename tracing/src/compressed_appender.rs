@@ -39,7 +39,9 @@ impl CompressedRollingAppender {
             inner: rolling_appender,
             directory,
             prefix: prefix_str,
-            last_compression: Instant::now() - compression_threshold,
+            last_compression: Instant::now()
+                .checked_sub(compression_threshold)
+                .expect("Specified compression threshold is too large."),
             compression_threshold,
             is_compressing: Arc::new(AtomicBool::new(false)),
         }

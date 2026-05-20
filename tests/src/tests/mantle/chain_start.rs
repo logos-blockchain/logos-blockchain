@@ -3,7 +3,10 @@ use std::{num::NonZero, time::Duration};
 use lb_chain_service::{ChainServiceMode, State};
 use lb_core::{
     block::genesis::GenesisBlockBuilder,
-    mantle::{GenesisTx as _, ops::channel::inscribe::InscriptionOp},
+    mantle::{
+        GenesisTx as _,
+        ops::channel::inscribe::{Inscription, InscriptionOp},
+    },
 };
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
@@ -89,7 +92,7 @@ fn test_config(mut config: RunConfig, genesis_time: OffsetDateTime) -> RunConfig
     cryptarchia_parameter.genesis_time = genesis_time;
 
     let inscription = InscriptionOp {
-        inscription: cryptarchia_parameter.encode(),
+        inscription: Inscription::new_unchecked(cryptarchia_parameter.encode()),
         ..genesis_tx.genesis_inscription().clone()
     };
 

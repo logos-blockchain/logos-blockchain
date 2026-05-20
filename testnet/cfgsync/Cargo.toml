@@ -16,13 +16,11 @@ workspace = true
 axum                             = { features = ["http1", "http2", "json", "tokio"], workspace = true }
 blake2                           = { workspace = true }
 clap                             = { features = ["derive", "env", "std"], workspace = true }
-lb-config                        = { workspace = true }
+lb-config                        = { features = ["testing"], workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 lb-libp2p                        = { workspace = true }
-lb-node                          = { workspace = true }
-lb-tests                         = { workspace = true }
-lb-utils                         = { workspace = true }
+lb-node                          = { features = ["testing"], workspace = true }
 num-bigint                       = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }
@@ -33,10 +31,6 @@ serde_yaml                       = { workspace = true }
 time                             = { workspace = true }
 tokio                            = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
 tracing                          = { workspace = true }
-
-[dev-dependencies]
-hex        = { features = ["alloc"], workspace = true }
-lb-groth16 = { workspace = true }
 
 [[bin]]
 name = "logos-blockchain-cfgsync-client"

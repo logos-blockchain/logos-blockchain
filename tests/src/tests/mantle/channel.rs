@@ -1,13 +1,19 @@
 use std::{num::NonZero, time::Duration};
 
-use lb_core::mantle::{
-    GenesisTx as _, NoteId,
-    gas::GasCost,
-    ledger::Inputs,
-    ops::channel::{ChannelId, deposit::DepositOp},
+use futures::StreamExt as _;
+use lb_core::{
+    events::{Event, EventPayload, Events},
+    header::HeaderId,
+    mantle::{
+        GenesisTx as _, NoteId, Transaction as _,
+        gas::GasCost,
+        ledger::Inputs,
+        ops::channel::{ChannelId, deposit::DepositOp},
+    },
 };
 use lb_http_api_common::bodies::{
-    channel::ChannelDepositRequestBody, wallet::balance::WalletBalanceResponseBody,
+    channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+    wallet::balance::WalletBalanceResponseBody,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
@@ -22,7 +28,7 @@ use logos_blockchain_tests::common::manual_cluster::{
 };
 use serial_test::serial;
 use testing_framework_core::scenario::DynError;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 
 /// End-to-end test for the channel deposit flow:
 ///
@@ -30,8 +36,10 @@ use tokio::time::sleep;
 /// 2. Call the POST `/channel/deposit` HTTP endpoint on one validator.
 /// 3. Verify the API call succeeds.
 /// 4. Wait for the deposit transaction to be included in a block.
-/// 5. Verify the funding key's wallet balance decreases.
-/// 6. Verify the channel balance increases.
+/// 5. Verify the block containing the deposit tx exposes a matching `Deposit`
+///    event via the `/cryptarchia/blocks/:id/events` endpoint.
+/// 6. Verify the funding key's wallet balance decreases.
+/// 7. Verify the channel balance increases.
 #[tokio::test]
 #[serial]
 async fn channel_deposit() {
@@ -80,15 +88,21 @@ async fn channel_deposit() {
     let channel_balance_before = get_channel_balance(&validator.client, channel_id).await;
     println!("Channel balance before deposit: {channel_balance_before}");
 
+    // Subscribe before submitting so we can locate the block that includes the
+    // deposit tx and then query its events via the HTTP API.
+    let mut block_stream = validator.client.blocks_stream().await.unwrap();
+
     let (note_id, selected_deposit_amount) =
         get_wallet_note(&validator.client, funding_pk, deposit_amount).await;
+    assert_eq!(selected_deposit_amount, deposit_amount);
+    let deposit_op = DepositOp {
+        channel_id,
+        inputs: Inputs::new(vec![note_id]),
+        metadata: format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
+    };
     let body = ChannelDepositRequestBody {
         tip: None,
-        deposit: DepositOp {
-            channel_id,
-            inputs: Inputs::new(vec![note_id]),
-            metadata: format!("Mint {selected_deposit_amount} to Alice in Zone").into_bytes(),
-        },
+        deposit: deposit_op.clone(),
         change_public_key: funding_pk,
         funding_public_keys: vec![funding_pk],
         max_tx_fee: GasCost::new(10),
@@ -107,16 +121,46 @@ async fn channel_deposit() {
         response.text().await.unwrap_or_default(),
     );
 
-    wait_for_nodes_height(
-        nodes
-            .iter()
-            .map(|node| &node.client)
-            .collect::<Vec<_>>()
-            .as_slice(),
-        8,
-        Duration::from_mins(5),
-    )
-    .await;
+    let deposit_tx_hash = response
+        .json::<ChannelDepositResponseBody>()
+        .await
+        .expect("deposit response should be valid JSON")
+        .hash;
+
+    let deposit_block_id = timeout(Duration::from_mins(5), async {
+        while let Some(event) = block_stream.next().await {
+            if event
+                .block
+                .transactions
+                .iter()
+                .any(|tx| tx.hash() == deposit_tx_hash)
+            {
+                return event.block.header.id;
+            }
+        }
+        panic!("blocks stream ended before deposit tx was observed");
+    })
+    .await
+    .expect("timed out waiting for the deposit tx to be included in a block");
+
+    let events = fetch_block_events(&validator.client, deposit_block_id).await;
+    let payload = events
+        .iter()
+        .find_map(|event| match event {
+            Event::Tx {
+                tx_hash, payload, ..
+            } => (tx_hash == &deposit_tx_hash).then(|| payload.clone()),
+            Event::Ledger(_) => None,
+        })
+        .expect("block events should include the deposit tx");
+    let EventPayload::Deposit {
+        channel_id,
+        amount,
+        metadata,
+    } = payload;
+    assert_eq!(channel_id, deposit_op.channel_id);
+    assert_eq!(amount, deposit_amount);
+    assert_eq!(metadata, deposit_op.metadata);
 
     let balance_after = get_wallet_balance(&validator.client, funding_pk).await;
     assert_eq!(
@@ -186,6 +230,27 @@ async fn get_wallet_note(node: &NodeHttpClient, pk: ZkPublicKey, min_value: u64)
         .filter(|(_, value)| *value >= min_value)
         .min_by_key(|(_, value)| *value)
         .expect("should find a note with sufficient balance for deposit")
+}
+
+async fn fetch_block_events(node: &NodeHttpClient, block_id: HeaderId) -> Events {
+    let url = api_url(node, &format!("cryptarchia/blocks/{block_id}/events"));
+    let response = reqwest::Client::new()
+        .get(url)
+        .send()
+        .await
+        .expect("block events request should not fail");
+
+    assert!(
+        response.status().is_success(),
+        "block events request should succeed, got status: {} body: {}",
+        response.status(),
+        response.text().await.unwrap_or_default(),
+    );
+
+    response
+        .json::<Events>()
+        .await
+        .expect("block events response should be valid JSON")
 }
 
 async fn get_channel_balance(node: &NodeHttpClient, channel_id: ChannelId) -> u64 {

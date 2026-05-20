@@ -1,4 +1,8 @@
-use std::{num::NonZero, ops::Add, time::Duration};
+use std::{
+    num::NonZero,
+    ops::{Add, Sub},
+    time::Duration,
+};
 
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use time::OffsetDateTime;
@@ -92,6 +96,22 @@ impl Slot {
     #[must_use]
     pub const fn saturating_sub(self, rhs: Self) -> Self {
         Self(self.0.saturating_sub(rhs.0))
+    }
+}
+
+impl Add for Slot {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub for Slot {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.saturating_sub(rhs)
     }
 }
 

@@ -1,5 +1,6 @@
 use std::net::Ipv4Addr;
 
+use lb_log_targets::libp2p as lb_log_targets_libp2p;
 use zerocopy::{
     FromBytes, FromZeros as _, Immutable, IntoBytes, KnownLayout, Unaligned,
     byteorder::network_endian::{U16 as U16NE, U32 as U32NE},
@@ -10,6 +11,8 @@ use crate::behaviour::nat::address_mapper::protocols::pcp_core::client::PcpError
 
 pub const OPCODE_MAP: u8 = 1;
 pub const PCP_MAP_SIZE: usize = 60;
+const LOG_TARGET: &str =
+    lb_log_targets_libp2p::behaviour::nat::address_mapper::protocols::pcp_core::wire::MAP;
 
 pub type PcpMapRequest = PcpRequest<MapPayload>;
 
@@ -112,7 +115,11 @@ impl TryFrom<&[u8]> for PcpMapResponse {
             .map_err(|e| PcpError::ParseError(format!("Failed to parse MAP response: {e}")))?;
 
         let Ok(result_code) = ResultCode::try_from(response.header.result_code) else {
-            tracing::warn!("Unknown PCP result code: {}", response.header.result_code);
+            tracing::warn!(
+                target: LOG_TARGET,
+                "Unknown PCP result code: {}",
+                response.header.result_code
+            );
 
             return Err(PcpError::InvalidResponse(format!(
                 "Unknown result code: {}",

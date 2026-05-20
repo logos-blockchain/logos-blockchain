@@ -1,8 +1,12 @@
 pub mod blend;
 pub mod locked_notes;
 
-use core::str::FromStr;
-use std::hash::Hash;
+use core::{
+    iter::{Chain, Once, once},
+    slice,
+    str::FromStr,
+};
+use std::{hash::Hash, vec};
 
 use blake2::{Blake2b, Digest as _};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -41,6 +45,66 @@ impl ServiceParameters {
     #[must_use]
     pub const fn session_for_block(&self, block_number: BlockNumber) -> SessionNumber {
         block_number / self.session_duration
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(into = "Vec<Locator>", try_from = "Vec<Locator>")]
+pub struct Locators(Locator, Vec<Locator>);
+
+impl Locators {
+    #[must_use]
+    pub const fn first(&self) -> &Locator {
+        &self.0
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        1 + self.1.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Locator> {
+        self.into_iter()
+    }
+}
+
+impl From<Locator> for Locators {
+    fn from(locator: Locator) -> Self {
+        Self(locator, vec![])
+    }
+}
+
+impl From<Locators> for Vec<Locator> {
+    fn from(locators: Locators) -> Self {
+        once(locators.0).chain(locators.1).collect()
+    }
+}
+
+impl TryFrom<Vec<Locator>> for Locators {
+    type Error = String;
+
+    fn try_from(mut value: Vec<Locator>) -> Result<Self, Self::Error> {
+        if value.is_empty() {
+            return Err("At least one locator is required".to_owned());
+        }
+
+        let rest = value.split_off(1);
+
+        Ok(Self(value.pop().unwrap(), rest))
+    }
+}
+
+impl<'a> IntoIterator for &'a Locators {
+    type Item = &'a Locator;
+    type IntoIter = Chain<Once<&'a Locator>, slice::Iter<'a, Locator>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        once(&self.0).chain(self.1.iter())
     }
 }
 
@@ -175,7 +239,7 @@ pub struct Declaration {
     pub service_type: ServiceType,
     pub provider_id: ProviderId,
     pub locked_note_id: NoteId,
-    pub locators: Vec<Locator>,
+    pub locators: Locators,
     pub zk_id: ZkPublicKey,
     pub created: BlockNumber,
     pub active: BlockNumber,
@@ -185,7 +249,7 @@ pub struct Declaration {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProviderInfo {
-    pub locators: Vec<Locator>,
+    pub locators: Locators,
     pub zk_id: ZkPublicKey,
 }
 
@@ -209,7 +273,7 @@ impl Declaration {
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
-    pub locators: Vec<Locator>,
+    pub locators: Locators,
     pub provider_id: ProviderId,
     pub zk_id: ZkPublicKey,
     pub locked_note_id: NoteId,
@@ -347,5 +411,34 @@ mod tests {
         let result = Locator::try_from(addr.clone()).unwrap();
 
         assert_eq!(result.into_inner(), addr);
+    }
+
+    #[test]
+    fn locators_array_serde_equivalence() {
+        let locator: Locator = "/ip4/127.0.0.1/udp/3001/quic-v1".parse().unwrap();
+
+        let locator_vector_serialized = serde_json::to_string(&vec![locator.clone()]).unwrap();
+        let locators_serialized = serde_json::to_string(&Locators::from(locator.clone())).unwrap();
+
+        assert_eq!(locator_vector_serialized, locators_serialized);
+
+        let locator_vectors_deserialized_as_locators =
+            serde_json::from_str::<Locators>(&locator_vector_serialized).unwrap();
+        assert_eq!(
+            locator_vectors_deserialized_as_locators,
+            Locators::from(locator)
+        );
+    }
+
+    #[test]
+    fn empty_locators_fail_to_deserialize() {
+        let empty_locators = Vec::<Locator>::new();
+        let serialized = serde_json::to_string(&empty_locators).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Locators>(&serialized)
+                .unwrap_err()
+                .to_string(),
+            "At least one locator is required"
+        );
     }
 }

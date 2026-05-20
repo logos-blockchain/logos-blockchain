@@ -1,6 +1,6 @@
+pub mod config;
 pub mod deposit;
 pub mod inscribe;
-pub mod set_keys;
 pub mod withdraw;
 
 use std::fmt::{Display, Formatter};

@@ -12,3 +12,6 @@ version     = { workspace = true }
 [dependencies]
 lb-core = { workspace = true }
 serde   = { features = ["derive"], workspace = true }
+
+[lints]
+workspace = true

@@ -44,9 +44,9 @@ use utoipa::OpenApi as _;
 use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
-    add_tx, blend_info, block, blocks_range_stream, blocks_stream, cryptarchia_headers,
-    cryptarchia_info, cryptarchia_lib_stream, immutable_blocks, libp2p_info, mantle_metrics,
-    mantle_status, transaction, wallet,
+    add_tx, blend_info, block, block_events, blocks_range_stream, blocks_stream,
+    cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, immutable_blocks, libp2p_info,
+    mantle_metrics, mantle_status, transaction, wallet,
 };
 use crate::{
     BlendBroadcastSettings, BlendService, WalletService,
@@ -336,6 +336,10 @@ where
             .route(
                 paths::BLOCKS_DETAIL,
                 routing::get(block::<StorageAdapter, RuntimeServiceId>),
+            )
+            .route(
+                paths::BLOCK_EVENTS,
+                routing::get(block_events::<RuntimeServiceId>),
             )
             .route(
                 paths::TRANSACTION,

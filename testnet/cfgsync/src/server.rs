@@ -8,8 +8,8 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use lb_config::node::create_node_user_config;
 use lb_node::config::TracingConfig;
-use lb_tests::nodes::create_validator_user_config;
 use reqwest::header::CONTENT_TYPE;
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -67,7 +67,7 @@ async fn init_node(
         |config_response| match config_response {
             RepoResponse::Config(response) => {
                 let (config, _) = *response;
-                let config = create_validator_user_config(config);
+                let config = create_node_user_config(config);
                 (StatusCode::OK, Json(config)).into_response()
             }
             RepoResponse::Timeout => (StatusCode::REQUEST_TIMEOUT).into_response(),

@@ -468,6 +468,20 @@ where
     let Some(zk_info) = &new_membership_info.zk else {
         return Err(Error::NetworkIsTooSmall(0));
     };
+
+    // Validate the edge node condition up front so the service shuts down on
+    // an invalid membership regardless of whether secret PoL info has arrived
+    // yet. Without this check, an invalid membership would silently update
+    // `current_membership_info` and surface later as a panic in
+    // `handle_new_secret_epoch_info`.
+    let membership_size = new_membership_info.membership.size();
+    if membership_size < settings.minimum_network_size.get() as usize {
+        return Err(Error::NetworkIsTooSmall(membership_size));
+    }
+    if new_membership_info.membership.contains_local() {
+        return Err(Error::LocalIsCoreNode);
+    }
+
     debug!(target: LOG_TARGET, "New session received, trying to create a new message handler");
 
     // Update session and core public inputs, preserving the current epoch's

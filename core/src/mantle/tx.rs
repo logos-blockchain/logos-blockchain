@@ -14,7 +14,7 @@ use crate::{
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         channel::Channels,
-        encoding::{decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
+        encoding::{Ops, decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ops::{
@@ -24,16 +24,16 @@ use crate::{
         },
     },
     proofs::{
-        channel_withdraw_proof::ChannelWithdrawProof,
+        channel_multi_sig_proof::ChannelMultiSigProof,
         leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
     },
+    utils::serde_bytes_newtype,
 };
 
 /// The hash of a transaction
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
 pub struct TxHash(pub Hash);
+serde_bytes_newtype!(TxHash, 32);
 
 impl From<Hash> for TxHash {
     fn from(hash: Hash) -> Self {
@@ -81,7 +81,7 @@ impl TxHash {
 
 #[derive(Serialize, Deserialize)]
 struct MantleTxDeSerImpl {
-    pub ops: Vec<Op>,
+    pub ops: Ops,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -93,6 +93,7 @@ pub struct MantleTxContext {
 #[derive(Debug, Clone, Default)]
 pub struct MantleTxGasContext {
     withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+    configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     gas_prices: GasPrices,
 }
 
@@ -125,10 +126,12 @@ impl MantleTxGasContext {
     #[must_use]
     pub const fn new(
         withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+        configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         gas_prices: GasPrices,
     ) -> Self {
         Self {
             withdraw_thresholds,
+            configuration_thresholds,
             gas_prices,
         }
     }
@@ -139,13 +142,23 @@ impl MantleTxGasContext {
     }
 
     #[must_use]
+    pub fn configuration_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
+        self.configuration_thresholds.get(channel_id).copied()
+    }
+
+    #[must_use]
     pub fn from_channels(value: &Channels, base_prices: GasPrices) -> Self {
         let withdraw_thresholds = value
             .channels
             .iter()
             .map(|(channel_id, channel)| (*channel_id, channel.withdraw_threshold))
             .collect();
-        Self::new(withdraw_thresholds, base_prices)
+        let configuration_thresholds = value
+            .channels
+            .iter()
+            .map(|(channel_id, channel)| (*channel_id, channel.configuration_threshold))
+            .collect();
+        Self::new(withdraw_thresholds, configuration_thresholds, base_prices)
     }
 
     #[must_use]
@@ -155,7 +168,7 @@ impl MantleTxGasContext {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MantleTx(pub Vec<Op>);
+pub struct MantleTx(pub Ops);
 
 impl From<MantleTxDeSerImpl> for MantleTx {
     fn from(MantleTxDeSerImpl { ops }: MantleTxDeSerImpl) -> Self {
@@ -166,12 +179,6 @@ impl From<MantleTxDeSerImpl> for MantleTx {
 impl From<MantleTx> for MantleTxDeSerImpl {
     fn from(MantleTx(ops): MantleTx) -> Self {
         Self { ops }
-    }
-}
-
-impl<T: IntoIterator<Item = Op>> From<T> for MantleTx {
-    fn from(ops: T) -> Self {
-        Self(ops.into_iter().collect())
     }
 }
 
@@ -252,16 +259,16 @@ impl MantleTx {
     #[must_use]
     pub fn transfers(&self) -> Vec<TransferOp> {
         let mut transfers: Vec<TransferOp> = vec![];
-        for op in self.ops().clone() {
+        for op in self.ops() {
             if let Op::Transfer(transfer_op) = op {
-                transfers.push(transfer_op);
+                transfers.push(transfer_op.clone());
             }
         }
         transfers
     }
 
     #[must_use]
-    pub const fn ops(&self) -> &Vec<Op> {
+    pub const fn ops(&self) -> &Ops {
         &self.0
     }
 }
@@ -332,19 +339,19 @@ pub enum VerificationError {
         key_index: ChannelKeyIndex,
     },
     #[error(
-        "Not enough signatures in ChannelWithdrawProof at index {op_index}: got {actual}, required {required}"
+        "Not enough signatures in ChannelMultiSigProof at index {op_index}: got {actual}, required {required}"
     )]
-    ChannelWithdrawProofNotEnoughSignatures {
+    ChannelMultiSigProofNotEnoughSignatures {
         op_index: usize,
         actual: usize,
         required: ChannelKeyIndex,
     },
-    #[error("Duplicate signature indices in ChannelWithdrawProof at index {op_index}")]
-    ChannelWithdrawProofDuplicateIndices { op_index: usize },
+    #[error("Duplicate signature indices in ChannelMultiSigProof at index {op_index}")]
+    ChannelMultiSigProofDuplicateIndices { op_index: usize },
     #[error(
-        "Invalid signature in ChannelWithdrawProof at index {op_index} for signature index {signature_index}"
+        "Invalid signature in ChannelMultiSigProof at index {op_index} for signature index {signature_index}"
     )]
-    ChannelWithdrawProofInvalidSignature {
+    ChannelMultiSigProofInvalidSignature {
         op_index: usize,
         signature_index: usize,
     },
@@ -466,7 +473,7 @@ impl SignedMantleTx {
             match (op, proof) {
                 (
                     Op::ChannelWithdraw(channel_withdraw_op),
-                    OpProof::ChannelWithdrawProof(proof),
+                    OpProof::ChannelMultiSigProof(proof),
                 ) => {
                     verify_channel_withdraw(
                         channel_withdraw_op,
@@ -494,7 +501,7 @@ impl SignedMantleTx {
 
 fn verify_channel_withdraw(
     operation: &ChannelWithdrawOp,
-    proof: &ChannelWithdrawProof,
+    proof: &ChannelMultiSigProof,
     tx_hash_bytes: &Bytes,
     helper: &impl OperationVerificationHelper,
     op_index: usize,
@@ -505,7 +512,7 @@ fn verify_channel_withdraw(
     let signatures = proof.signatures();
     let signatures_len = signatures.len();
     if signatures_len < withdraw_threshold as usize {
-        return Err(VerificationError::ChannelWithdrawProofNotEnoughSignatures {
+        return Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
             op_index,
             actual: signatures_len,
             required: withdraw_threshold,
@@ -518,14 +525,14 @@ fn verify_channel_withdraw(
         .collect::<HashSet<_>>();
     let indices_set_len = indices_set.len();
     if indices_set_len != signatures_len {
-        return Err(VerificationError::ChannelWithdrawProofDuplicateIndices { op_index });
+        return Err(VerificationError::ChannelMultiSigProofDuplicateIndices { op_index });
     }
 
     for (i, signature) in signatures.iter().enumerate() {
         let public_key =
             helper.get_key_from_channel_at_index(channel_id, &signature.channel_key_index)?;
         if let Err(_error) = public_key.verify(tx_hash_bytes.as_ref(), &signature.signature) {
-            return Err(VerificationError::ChannelWithdrawProofInvalidSignature {
+            return Err(VerificationError::ChannelMultiSigProofInvalidSignature {
                 op_index,
                 signature_index: i,
             });
@@ -660,17 +667,17 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{Note, ledger::Outputs, ops::channel::inscribe::InscriptionOp},
-        proofs::channel_withdraw_proof::WithdrawSignature,
+        proofs::channel_multi_sig_proof::IndexedSignature,
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
-        ops.into()
+        MantleTx(Ops::new_unchecked(ops))
     }
 
     fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
-            inscription: vec![1, 2, 3],
+            inscription: [1, 2, 3].into(),
             parent: [0; 32].into(),
             signer: signing_key.public_key(),
         }
@@ -735,14 +742,14 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, key)| {
-                WithdrawSignature::new(
+                IndexedSignature::new(
                     index as ChannelKeyIndex,
                     key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
                 )
             })
             .collect();
-        let proof = ChannelWithdrawProof::new(signatures).unwrap();
-        SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelWithdrawProof(proof)]).unwrap()
+        let proof = ChannelMultiSigProof::new(signatures).unwrap();
+        SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(proof)]).unwrap()
     }
 
     #[test]
@@ -1038,7 +1045,7 @@ mod tests {
         let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
         assert_eq!(
             verification_result,
-            Err(VerificationError::ChannelWithdrawProofNotEnoughSignatures {
+            Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
                 op_index: 0,
                 actual: 1,
                 required: 2
@@ -1061,7 +1068,7 @@ mod tests {
         let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
         assert_eq!(
             verification_result,
-            Err(VerificationError::ChannelWithdrawProofInvalidSignature {
+            Err(VerificationError::ChannelMultiSigProofInvalidSignature {
                 op_index: 0,
                 signature_index: 0
             })

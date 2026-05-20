@@ -21,7 +21,10 @@ use logos_blockchain_core::{
         encoding::{decode_signed_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         ops::{
             Op, OpProof,
-            channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, MsgId,
+                inscribe::{Inscription, InscriptionOp},
+            },
         },
     },
 };
@@ -46,13 +49,15 @@ const SIZES: &[usize] = &[
 // Helper fn to create an inscription `MantleTx`, no ledger inputs ot outputs.
 fn make_inscription_tx(payload_size: usize) -> MantleTx {
     let signing_key = Ed25519Key::from_bytes(&[1; 32]);
-    vec![Op::ChannelInscribe(InscriptionOp {
-        channel_id: ChannelId::from([0xAA; 32]),
-        inscription: vec![0xAB; payload_size],
-        parent: MsgId::from([0xBB; 32]),
-        signer: signing_key.public_key(),
-    })]
-    .into()
+    MantleTx(
+        [Op::ChannelInscribe(InscriptionOp {
+            channel_id: ChannelId::from([0xAA; 32]),
+            inscription: Inscription::new_unchecked(vec![0xAB; payload_size]),
+            parent: MsgId::from([0xBB; 32]),
+            signer: signing_key.public_key(),
+        })]
+        .into(),
+    )
 }
 
 // Helper fn to create a `SignedMantleTx`.

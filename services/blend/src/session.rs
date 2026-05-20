@@ -29,8 +29,10 @@ impl<NodeId, CorePoQGenerator> From<CoreSessionInfo<NodeId, CorePoQGenerator>>
 pub struct CoreSessionInfo<NodeId, CorePoQGenerator> {
     /// The session info available to all nodes.
     pub public: CoreSessionPublicInfo<NodeId>,
-    /// The core `PoQ` generator component.
-    pub core_poq_generator: CorePoQGenerator,
+    /// The core `PoQ` generator component. `None` when Blend is running
+    /// (network large enough), but local node is not part of the core
+    /// membership.
+    pub core_poq_generator: Option<CorePoQGenerator>,
 }
 
 #[derive(Clone, Debug)]

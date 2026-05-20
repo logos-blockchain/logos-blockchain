@@ -399,7 +399,6 @@ shadow_same                        = { level = "allow" }
 shadow_unrelated                   = { level = "allow" }
 tests_outside_test_module          = { level = "allow" }
 todo                               = { level = "allow" }
-unchecked_time_subtraction         = { level = "allow" }
 unimplemented                      = { level = "allow" }
 unreachable                        = { level = "allow" }
 unwrap_in_result                   = { level = "allow" }
@@ -416,8 +415,10 @@ unused_results            = { level = "allow" } # We have Clippy lints to warn o
 ambiguous_negative_literals   = { level = "warn" }
 closure_returning_async_block = { level = "warn" }
 deref_into_dyn_supertrait     = { level = "warn" }
+ffi_unwind_calls              = { level = "warn" }
 impl_trait_redundant_captures = { level = "warn" }
 let_underscore_drop           = { level = "warn" }
+linker_messages               = { level = "warn" }
 macro_use_extern_crate        = { level = "warn" }
 missing_unsafe_on_extern      = { level = "warn" }
 redundant_imports             = { level = "warn" }
@@ -435,12 +436,10 @@ unused_lifetimes              = { level = "warn" }
 unused_macro_rules            = { level = "warn" }
 unused_qualifications         = { level = "warn" }
 
-# TODO: Address these allow-by-default Rustc lints at some point. To allow them, move them to the list of explicitly allowed lints. To enforce them, move them to the list of explicitly warned ones.
+# TODO: Address these allow-by-default Rustc lints at some point. To allow them, simply remove them from this list. To enforce them, move them to the list of explicitly warned ones and mark them as "warn" level.
 absolute_paths_not_starting_with_crate = { level = "allow" }
 elided_lifetimes_in_paths              = { level = "allow" }
-ffi_unwind_calls                       = { level = "allow" }
 impl_trait_overcaptures                = { level = "allow" }
-linker_messages                        = { level = "allow" }
 missing_copy_implementations           = { level = "allow" }
 missing_debug_implementations          = { level = "allow" }
 missing_docs                           = { level = "allow" }

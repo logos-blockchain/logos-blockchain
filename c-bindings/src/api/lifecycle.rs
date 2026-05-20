@@ -161,3 +161,99 @@ pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationS
     let node = unsafe { Box::from_raw(node) };
     node.stop()
 }
+
+#[cfg(test)]
+mod test {
+    use std::{path::PathBuf, sync::LazyLock};
+
+    use crate::api::lifecycle::{start_lb_node, stop_node};
+
+    static REPOSITORY_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
+        let crate_dir = env!("CARGO_MANIFEST_DIR");
+        let crate_path = PathBuf::from(crate_dir);
+        crate_path
+            .parent()
+            .expect("Failed to get the parent directory of crate.")
+            .to_path_buf()
+    });
+    static CRATE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
+        let dir = REPOSITORY_ROOT.join("c-bindings");
+        assert!(dir.exists());
+        dir
+    });
+    static NODE_DIR: LazyLock<PathBuf> = LazyLock::new(|| REPOSITORY_ROOT.join("nodes/node"));
+    static STANDALONE_NODE_CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
+        let file = NODE_DIR.join("standalone-node-config.yaml");
+        assert!(file.exists());
+        file
+    });
+    static STANDALONE_DEPLOYMENT_CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
+        let file = NODE_DIR.join("standalone-deployment-config.yaml");
+        assert!(file.exists());
+        file
+    });
+
+    struct NodeStateGuard {
+        location: PathBuf,
+        existed_before: bool,
+    }
+
+    impl NodeStateGuard {
+        #[must_use]
+        pub fn new(location: PathBuf) -> Self {
+            let exists = location.exists();
+            Self {
+                location,
+                existed_before: exists,
+            }
+        }
+
+        #[must_use]
+        pub fn from_current_crate() -> Self {
+            let current_dir = CRATE_DIR.clone();
+            let state_dir = current_dir.join("state");
+            Self::new(state_dir)
+        }
+
+        fn cleanup(&self) {
+            if !self.existed_before {
+                drop(std::fs::remove_dir_all(&self.location));
+            }
+        }
+    }
+
+    impl Drop for NodeStateGuard {
+        fn drop(&mut self) {
+            self.cleanup();
+        }
+    }
+
+    #[test]
+    fn test_basic_lifecycle() {
+        let _guard = NodeStateGuard::from_current_crate();
+
+        let start_status = start_lb_node(
+            STANDALONE_NODE_CONFIG_PATH
+                .to_str()
+                .unwrap()
+                .as_ptr()
+                .cast::<i8>(),
+            STANDALONE_DEPLOYMENT_CONFIG_PATH
+                .to_str()
+                .unwrap()
+                .as_ptr()
+                .cast::<i8>(),
+        );
+
+        assert!(
+            start_status.is_ok(),
+            "Failed to start node: {:?}",
+            start_status.error
+        );
+        let node = start_status.value;
+
+        let stop_status = unsafe { stop_node(node) };
+
+        assert!(stop_status.is_ok(), "Failed to stop node: {stop_status:?}");
+    }
+}

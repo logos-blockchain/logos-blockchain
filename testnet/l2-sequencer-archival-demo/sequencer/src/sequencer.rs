@@ -7,7 +7,10 @@ use lb_core::{
         MantleTx, SignedMantleTx, Transaction as _,
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, Ed25519PublicKey, MsgId,
+                inscribe::{Inscription, InscriptionOp},
+            },
         },
     },
 };
@@ -153,7 +156,7 @@ impl Sequencer {
     }
 
     /// Create and sign a transaction for inscribing data
-    fn create_inscribe_tx(&self, data: Vec<u8>, parent: MsgId) -> SignedMantleTx {
+    fn create_inscribe_tx(&self, data: Inscription, parent: MsgId) -> SignedMantleTx {
         let verifying_key_bytes = self.signing_key.public_key().to_bytes();
         let verifying_key =
             Ed25519PublicKey::from_bytes(&verifying_key_bytes).expect("valid ed25519 public key");
@@ -165,7 +168,7 @@ impl Sequencer {
             signer: verifying_key,
         };
 
-        let inscribe_tx = MantleTx(vec![Op::ChannelInscribe(inscribe_op)]);
+        let inscribe_tx = MantleTx([Op::ChannelInscribe(inscribe_op)].into());
 
         let tx_hash = inscribe_tx.hash();
         let signature_bytes = self
@@ -498,8 +501,11 @@ impl Sequencer {
             transactions,
         };
 
-        let inscription_data = serde_json::to_vec(&block_data)
+        let raw_inscription_data = serde_json::to_vec(&block_data)
             .map_err(|e| SequencerError::Serialization(e.to_string()))?;
+        let inscription_data = Inscription::try_from(raw_inscription_data).map_err(|e| {
+            SequencerError::Serialization(format!("Failed to create inscription data: {e}"))
+        })?;
 
         info!(
             "BLOCK #{} (parent: #{}) posting to chain ({} tx)",
