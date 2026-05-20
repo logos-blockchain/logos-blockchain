@@ -149,9 +149,10 @@ async fn snapshot_at_last_block_of_epoch_minus_2() {
 }
 
 /// For epoch 2+, if LIB is older than the last block of `current_epoch-2`,
-/// the snapshot should be taken at LIB.
+/// the snapshot should be taken at the last block of an older epoch
+/// which is not newer than LIB.
 #[tokio::test]
-async fn snapshot_at_lib() {
+async fn snapshot_at_older_epoch_if_lib_is_old() {
     let config = config();
     let epoch_len = config.epoch_length();
     let (relay, mut rx) = broadcast_relay();
@@ -162,25 +163,25 @@ async fn snapshot_at_lib() {
     let mut storage = InMemoryStorage::default();
     storage.insert(id(1), 1.into(), genesis_id, decls(0, 0.into())); // epoch 0
     storage.insert(id(2), epoch_len.into(), id(1), decls(1, 1.into())); // epoch 1
-    storage.insert(id(3), (2 * epoch_len).into(), id(2), decls(2, 2.into())); // epoch 2
+    storage.insert(id(3), (2 * epoch_len).into(), id(2), decls(2, 2.into())); // epoch 2 <- LIB
     storage.insert(id(4), (2 * epoch_len + 1).into(), id(3), decls(3, 2.into())); // epoch 2 <- last
     storage.insert(id(5), (3 * epoch_len).into(), id(4), decls(4, 3.into())); // epoch 3
     storage.insert(id(6), (4 * epoch_len).into(), id(5), decls(5, 4.into())); // epoch 4
-    let lib = id(3); // LIB is at epoch 2 but is not the last block 4.
+    let lib = id(3); // LIB is in epoch 2 but older than the last block of epoch 2 (= cur_epoch-2)
 
     // Take a snapshot for epoch 4.
     let snapshot =
         take_and_broadcast_sdp_snapshot(4.into(), lib, &genesis_decls, &config, &storage, &relay)
             .await
             .unwrap();
-    // snapshot should be taken at LIB
-    let expected = storage.sdp_declarations_at(lib).await.unwrap().unwrap();
+    // snapshot should be taken at id(2) which is the last block of epoch 1
+    let expected = storage.sdp_declarations_at(id(2)).await.unwrap().unwrap();
     assert_eq!(snapshot, expected);
     assert_broadcast(&mut rx, 4.into(), &expected).await;
 }
 
 // For epoch 2+, if there is no block in `current_epoch - 2`,
-// the snapshot should be taken at the most recent one from older blocks.
+// the snapshot should be taken at the last block of the most recent older epoch.
 #[tokio::test]
 async fn snapshot_at_older_block_if_no_blocks_in_epoch_minus_2() {
     let config = config();
@@ -191,34 +192,47 @@ async fn snapshot_at_older_block_if_no_blocks_in_epoch_minus_2() {
     let genesis_decls = decls(0, 0.into());
 
     let mut storage = InMemoryStorage::default();
-    storage.insert(
-        id(2),
-        (3 * epoch_len).into(), // epoch 3
-        genesis_id,
-        decls(2, 3.into()),
-    );
-    let lib = id(2); // LIB is at epoch 3.
+    storage.insert(id(1), 1.into(), genesis_id, decls(0, 0.into())); // epoch 0
+    storage.insert(id(2), epoch_len.into(), id(1), decls(1, 1.into())); // epoch 1 <- LIB
+    let lib = id(2); // LIB is at epoch 1.
 
     // Take a snapshot for epoch 4.
     let snapshot =
         take_and_broadcast_sdp_snapshot(4.into(), lib, &genesis_decls, &config, &storage, &relay)
             .await
             .unwrap();
-    // snapshot should be taken at genesis because there's no block
-    // in epoch 2, 1, and 0.
+    // snapshot should be taken at id(1) which is the last block of epoch 0
+    // because there's no block in epoch 2 and there's no last block finalized in epoch 1.
     assert_eq!(snapshot, genesis_decls);
     assert_broadcast(&mut rx, 4.into(), &genesis_decls).await;
+}
 
-    // Take a snapshot for epoch 6.
+// For epoch 2+, if LIB is the last block of `current_epoch - 2`,
+// the snapshot should be taken at LIB.
+#[tokio::test]
+async fn snapshot_at_lib() {
+    let config = config();
+    let epoch_len = config.epoch_length();
+    let (relay, mut rx) = broadcast_relay();
+
+    let genesis_id = id(0);
+    let genesis_decls = decls(0, 0.into());
+
+    let mut storage = InMemoryStorage::default();
+    storage.insert(id(1), 1.into(), genesis_id, decls(0, 0.into())); // epoch 0
+    storage.insert(id(2), epoch_len.into(), id(1), decls(1, 1.into())); // epoch 1
+    storage.insert(id(3), config.last_slot(2.into()), id(2), decls(2, 2.into())); // epoch 2 <- LIB and last
+    let lib = id(3); // LIB is the last block of epoch 2 because it's on the last slot of the epoch
+
+    // Take a snapshot for epoch 4.
     let snapshot =
-        take_and_broadcast_sdp_snapshot(6.into(), lib, &genesis_decls, &config, &storage, &relay)
+        take_and_broadcast_sdp_snapshot(4.into(), lib, &genesis_decls, &config, &storage, &relay)
             .await
             .unwrap();
-    // snapshot should be taken at id(2) (epoch 3) because there's no block
-    // in epoch 4
-    let expected = storage.sdp_declarations_at(id(2)).await.unwrap().unwrap();
+    // snapshot should be taken at LIB id(3) which is the last block of epoch 2.
+    let expected = storage.sdp_declarations_at(id(3)).await.unwrap().unwrap();
     assert_eq!(snapshot, expected);
-    assert_broadcast(&mut rx, 6.into(), &expected).await;
+    assert_broadcast(&mut rx, 4.into(), &expected).await;
 }
 
 fn id(byte: u8) -> HeaderId {

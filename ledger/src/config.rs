@@ -84,6 +84,12 @@ impl Config {
         self.epoch_config
             .epoch(slot, self.consensus_config.base_period_length())
     }
+
+    #[must_use]
+    pub fn last_slot(&self, epoch: Epoch) -> Slot {
+        self.epoch_config
+            .last_slot(epoch, self.consensus_config.base_period_length())
+    }
 }
 
 #[cfg(test)]
