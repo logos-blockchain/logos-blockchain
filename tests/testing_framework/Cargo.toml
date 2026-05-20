@@ -23,7 +23,7 @@ lb-blend-service                 = { workspace = true }
 lb-chain-leader-service          = { workspace = true }
 lb-chain-network-service         = { workspace = true }
 lb-chain-service                 = { workspace = true }
-lb-config                        = { workspace = true }
+lb-config                        = { features = ["testing"], workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
 lb-cryptarchia-sync              = { workspace = true }

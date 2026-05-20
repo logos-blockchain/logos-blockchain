@@ -51,9 +51,10 @@ use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
     indexer::ZoneIndexer,
     sequencer::{
-        Event, InscriptionId, PublishResult, SequencerConfig, SequencerHandle, ZoneSequencer,
+        Event, InscriptionId, OrphanedTx, PublishResult, SequencerConfig, SequencerHandle,
+        WithdrawArg, ZoneSequencer,
     },
-    state::InscriptionInfo,
+    state::{InscriptionInfo, PublishedTx},
 };
 use rand::{Rng as _, thread_rng};
 use reqwest::Url;
@@ -293,19 +294,25 @@ pub fn start_republish_policy(
 
         loop {
             match sequencer.next_event().await {
-                Some(Event::Published { info, .. }) => {
-                    local_pending.insert(info.this_msg);
+                Some(Event::Published { tx, .. }) => {
+                    local_pending.insert(tx.inscription().this_msg);
                 }
-                Some(
-                    Event::TxsFinalized { inscriptions, .. }
-                    | Event::FinalizedInscriptions { inscriptions },
-                ) => {
+                Some(Event::TxsFinalized { txs, .. }) => {
+                    for tx in txs {
+                        local_pending.remove(&tx.inscription().this_msg);
+                    }
+                }
+                Some(Event::FinalizedInscriptions { inscriptions }) => {
                     for inscription in inscriptions {
                         local_pending.remove(&inscription.this_msg);
                     }
                 }
                 Some(Event::ChannelUpdate { orphaned, .. }) => {
-                    for inscription in orphaned {
+                    for entry in orphaned {
+                        let OrphanedTx::Inscription(inscription) = entry else {
+                            // Republish-by-payload helper doesn't handle bundles.
+                            continue;
+                        };
                         if !local_pending.remove(&inscription.this_msg) {
                             continue;
                         }
@@ -333,13 +340,25 @@ pub fn start_balance_aware_policy(
 
         loop {
             match sequencer.next_event().await {
-                Some(Event::Published { info, .. }) => {
-                    balances.record_applied_payload(&info.payload);
+                Some(Event::Published { tx, .. }) => {
+                    balances.record_applied_payload(&tx.inscription().payload);
                 }
                 Some(Event::ChannelUpdate { orphaned, adopted }) => {
-                    balances.remove_orphaned_payloads(&orphaned);
+                    let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
+                        .into_iter()
+                        .filter_map(|o| match o {
+                            OrphanedTx::Inscription(i) => Some(i),
+                            OrphanedTx::AtomicWithdraw(_) => None,
+                        })
+                        .collect();
+                    balances.remove_orphaned_payloads(&orphaned_inscriptions);
                     balances.record_adopted_payloads(&adopted);
-                    republish_affordable_balance_updates(&handle, &mut balances, orphaned).await;
+                    republish_affordable_balance_updates(
+                        &handle,
+                        &mut balances,
+                        orphaned_inscriptions,
+                    )
+                    .await;
                 }
                 _ => {}
             }
@@ -359,13 +378,17 @@ pub fn start_sorted_conflict_policy(
 
         loop {
             match sequencer.next_event().await {
-                Some(Event::Published { info, .. }) => {
-                    sorted_state.record_seen_payload(info.payload.into_inner());
+                Some(Event::Published { tx, .. }) => {
+                    sorted_state.record_seen_payload(tx.inscription().payload.clone().into_inner());
                 }
                 Some(Event::ChannelUpdate { orphaned, adopted }) => {
                     sorted_state.record_adoptions(&adopted).await;
 
-                    for inscription in orphaned {
+                    for entry in orphaned {
+                        let OrphanedTx::Inscription(inscription) = entry else {
+                            // Sorted-conflict policy doesn't handle bundles.
+                            continue;
+                        };
                         if sorted_state.already_discarded(&inscription.payload).await {
                             continue;
                         }
@@ -596,11 +619,11 @@ async fn wait_for_published_event(
 ) -> Result<PublishResult, ZoneTestError> {
     timeout(deadline.remaining()?, async {
         while let Some(event) = sequencer_events.recv().await {
-            if let Event::Published { info, checkpoint } = event
-                && info.payload.as_slice() == data
+            if let Event::Published { tx, checkpoint } = event
+                && tx.inscription().payload.as_slice() == data
             {
                 return Ok(PublishResult {
-                    inscription_id: info.tx_hash,
+                    inscription_id: tx.tx_hash(),
                     checkpoint,
                 });
             }
@@ -1154,6 +1177,99 @@ pub async fn submit_zone_withdraw(
     })
 }
 
+/// Result of publishing an atomic inscription+withdraw bundle. Carries every
+/// withdraw op produced by the SDK (one per `WithdrawArg`, in submission
+/// order) so a multi-withdraw scenario can match each by its outputs.
+pub struct ZoneAtomicWithdrawSubmission {
+    pub withdraws: Vec<ChannelWithdrawOp>,
+    pub publish: PublishResult,
+}
+
+/// Publishes an atomic inscription+withdraw bundle via the
+/// [`SequencerHandle::publish_atomic_withdraw`] API (fire-and-forget). Waits
+/// for the matching `Event::Published` carrying the
+/// [`PublishedTx::AtomicWithdraw`] variant and returns every withdraw op (with
+/// the nonce filled by the SDK) so downstream cucumber assertions can match
+/// each withdraw by its outputs.
+///
+/// `outputs_per_arg` carries one entry per `WithdrawArg`; each inner `Vec`
+/// becomes that arg's `Outputs` (one `Note::new(amount, funding_pk)` per
+/// listed amount). Exercises the SDK API at full width: multiple args, with
+/// any arg able to carry multiple output notes.
+pub async fn publish_atomic_zone_withdraw(
+    sequencer: &SequencerHandle<ZoneNodeHttpClient>,
+    sequencer_events: &mut tokio::sync::mpsc::Receiver<Event>,
+    funding_public_key: ZkPublicKey,
+    outputs_per_arg: Vec<Vec<Value>>,
+    inscription_data: Vec<u8>,
+    deadline: PublishDeadline,
+) -> Result<ZoneAtomicWithdrawSubmission, ZoneTestError> {
+    if outputs_per_arg.is_empty() {
+        return Err(ZoneTestError::SubmitWithdraw {
+            message: "publish_atomic_zone_withdraw requires at least one withdraw arg".to_owned(),
+        });
+    }
+    let withdraw_args: Vec<WithdrawArg> = outputs_per_arg
+        .iter()
+        .map(|amounts| WithdrawArg {
+            outputs: Outputs::new(
+                amounts
+                    .iter()
+                    .map(|amount| Note::new(*amount, funding_public_key))
+                    .collect(),
+            ),
+        })
+        .collect();
+
+    sequencer
+        .publish_atomic_withdraw(
+            Inscription::new_unchecked(inscription_data.clone()),
+            withdraw_args,
+        )
+        .await
+        .map_err(|error| ZoneTestError::SubmitWithdraw {
+            message: error.to_string(),
+        })?;
+
+    timeout(deadline.remaining()?, async {
+        while let Some(event) = sequencer_events.recv().await {
+            let Event::Published { tx, checkpoint } = event else {
+                continue;
+            };
+            if tx.inscription().payload.as_slice() != inscription_data {
+                continue;
+            }
+            let PublishedTx::AtomicWithdraw(info) = *tx else {
+                // The sequencer may surface other Published events (e.g. a
+                // plain inscription with a coincidental payload from a
+                // concurrent flow). Skip and keep waiting for the bundle.
+                warn!("ignoring non-AtomicWithdraw Published event while awaiting bundle");
+                continue;
+            };
+            if info.withdraws.is_empty() {
+                return Err(ZoneTestError::SubmitWithdraw {
+                    message: "atomic withdraw bundle had no withdraw ops".to_owned(),
+                });
+            }
+            let withdraws = info.withdraws.into_iter().map(|w| w.op).collect();
+            return Ok(ZoneAtomicWithdrawSubmission {
+                withdraws,
+                publish: PublishResult {
+                    inscription_id: info.tx_hash,
+                    checkpoint,
+                },
+            });
+        }
+        Err(ZoneTestError::SubmitWithdraw {
+            message: "sequencer event channel closed before AtomicWithdraw published".to_owned(),
+        })
+    })
+    .await
+    .map_err(|_| ZoneTestError::SubmitWithdraw {
+        message: "timed out waiting for atomic-withdraw Published event".to_owned(),
+    })?
+}
+
 /// Selects a wallet note large enough to fund a zone operation.
 async fn get_note_with_value(
     node_url: &Url,
@@ -1260,7 +1376,10 @@ fn build_zone_deployment(scenario_base_dir: PathBuf) -> Result<DeploymentPlan, Z
             message: error.to_string(),
         })?;
 
-    Ok(add_exact_deposit_notes_to_funding_key(deployment, [1, 3]))
+    Ok(add_exact_deposit_notes_to_funding_key(
+        deployment,
+        [1, 3, 5],
+    ))
 }
 
 /// Adds small exact-value notes that make deposit assertions deterministic
