@@ -333,3 +333,42 @@ Feature: Zone SDK
       | MSG_1 |
       | MSG_2 |
     And I stop all nodes
+
+  @zone_ci
+  Scenario: Atomic withdraw bundle finalizes alongside multi-sequencer publishing
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+    And the following zone sequencers share the signing key of "SEQ_A":
+      | alias |
+      | SEQ_B |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias    | data                |
+      | MSG_INIT | initial inscription |
+    Then all zone messages are finalized in 120 seconds
+    When I submit zone deposit transaction "DEPOSIT_1" into channel of "SEQ_A" of 5 with metadata "Mint 5 for atomic withdraw"
+    Then zone transaction "DEPOSIT_1" is finalized in 120 seconds
+    And the zone indexer returns finalized deposit "DEPOSIT_1" in 120 seconds
+    When I start zone sequencer "SEQ_B"
+    And sequencer "SEQ_A" publishes the following zone messages:
+      | alias  | data |
+      | MSG_A1 | a1   |
+      | MSG_A2 | a2   |
+    And sequencer "SEQ_B" publishes atomic withdraw "BUNDLE_1" with inscription "MSG_BURN":
+      | withdraw    | outputs |
+      | WITHDRAW_1A | 1       |
+      | WITHDRAW_1B | 1,2     |
+    Then zone transaction "BUNDLE_1" is included in 240 seconds
+    And zone transaction "BUNDLE_1" is finalized in 240 seconds
+    And the zone indexer returns finalized withdraw "WITHDRAW_1A" in 120 seconds
+    And the zone indexer returns finalized withdraw "WITHDRAW_1B" in 120 seconds
+    And the zone indexer returns messages in any order in 240 seconds:
+      | alias    |
+      | MSG_INIT |
+      | MSG_A1   |
+      | MSG_A2   |
+      | MSG_BURN |
+    And I stop all nodes

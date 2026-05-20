@@ -9,8 +9,8 @@ use cucumber::{gherkin::Step, given, when};
 use super::{
     actions::{
         DriveMode, ensure_zone_sequencer_exists, initialize_zone_indexer,
-        publish_balance_updates_concurrently, publish_zone_messages,
-        publish_zone_messages_concurrently, register_zone_sequencers,
+        publish_atomic_zone_withdraw_transaction, publish_balance_updates_concurrently,
+        publish_zone_messages, publish_zone_messages_concurrently, register_zone_sequencers,
         register_zone_sequencers_with_shared_key, save_zone_checkpoint, start_named_sequencer,
         start_zone_cluster, stop_zone_sequencer, submit_atomic_zone_deposit_transaction,
         submit_zone_channel_config, submit_zone_deposit_transaction,
@@ -31,7 +31,7 @@ use super::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
         generated_zone_message_batches, generated_zone_message_sequencers,
         group_zone_messages_by_sequencer, single_column_table, zone_account_balances,
-        zone_balance_rows, zone_message_rows,
+        zone_atomic_withdraw_rows, zone_balance_rows, zone_message_rows,
     },
 };
 use crate::{
@@ -352,6 +352,26 @@ async fn step_submit_zone_withdraw_transaction(
         transaction_alias,
         message_alias,
         amount,
+    )
+    .await
+}
+
+#[when(expr = "sequencer {string} publishes atomic withdraw {string} with inscription {string}:")]
+async fn step_publish_atomic_zone_withdraw_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    bundle_alias: String,
+    message_alias: String,
+) -> StepResult {
+    let withdraw_rows = zone_atomic_withdraw_rows(step)?;
+    publish_atomic_zone_withdraw_transaction(
+        world,
+        step,
+        &sequencer_alias,
+        bundle_alias,
+        message_alias,
+        withdraw_rows,
     )
     .await
 }

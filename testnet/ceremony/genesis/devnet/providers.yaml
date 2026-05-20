@@ -1,0 +1,5 @@
+- provider_id: d753718c843490d46d5dcc1b04fb0eae04116fdcd2ec345e2f40f86810785ca8
+  zk_id: 870a752d28856f77d1ce8f1c68a2279de213640aa97ca30e5bdba461d3ddd624
+  locators: 
+    - /ip4/65.109.51.37/udp/3000/quic-v1
+  service_type: BN

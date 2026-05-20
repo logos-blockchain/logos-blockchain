@@ -20,10 +20,11 @@ use super::{
     support::{
         DiscardedPayloads, PublishDeadline, StartedZoneNode, ZoneAccountBalances,
         balance_update_payload, build_zone_deposit, ensure_zone_transactions_included, keygen,
-        prepare_zone_cluster, publish_message_with_retry, sequencer_config,
-        start_balance_aware_policy, start_republish_policy, start_sequencer_event_loop,
-        start_sorted_conflict_policy, start_zone_node, submit_atomic_zone_deposit,
-        submit_zone_deposit, submit_zone_withdraw, wait_for_zone_network_ready,
+        prepare_zone_cluster, publish_atomic_zone_withdraw, publish_message_with_retry,
+        sequencer_config, start_balance_aware_policy, start_republish_policy,
+        start_sequencer_event_loop, start_sorted_conflict_policy, start_zone_node,
+        submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
+        wait_for_zone_network_ready,
     },
     tables::{ConcurrentZoneMessageRow, ZoneBalanceRow, group_zone_messages_by_sequencer},
 };
@@ -320,6 +321,80 @@ pub(super) async fn submit_zone_withdraw_transaction(
         &submission.publish,
     );
     world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id);
+
+    Ok(())
+}
+
+/// Action wrapper for the new `publish_atomic_withdraw` SDK API. Mirrors
+/// [`submit_zone_withdraw_transaction`] but uses the high-level fire-and-forget
+/// flow: SDK fills the withdraw nonce, locates its own accredited-key index,
+/// builds the bundled `MantleTx`, signs locally, and submits.
+///
+/// `withdraw_rows` carries one `(alias, outputs)` per `WithdrawArg`; each
+/// withdraw is remembered under its own alias so multi-withdraw bundles can
+/// be asserted per-withdraw via the indexer step. `bundle_alias` is remembered
+/// as the bundle's tx hash for `zone transaction "..." is finalized`.
+pub(super) async fn publish_atomic_zone_withdraw_transaction(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    bundle_alias: String,
+    message_alias: String,
+    withdraw_rows: Vec<(String, Vec<u64>)>,
+) -> StepResult {
+    let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
+    let total: u64 = withdraw_rows
+        .iter()
+        .flat_map(|(_, outputs)| outputs.iter())
+        .sum();
+    let inscription_data = format!("Burn {total}").into_bytes();
+    let outputs_per_arg: Vec<Vec<u64>> = withdraw_rows
+        .iter()
+        .map(|(_, outputs)| outputs.clone())
+        .collect();
+
+    let submission = {
+        let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
+        let sequencer_events =
+            log_step_error(step, world.zone.sequencer_events_mut(sequencer_alias))?;
+
+        publish_atomic_zone_withdraw(
+            &sequencer,
+            sequencer_events,
+            funding_public_key,
+            outputs_per_arg,
+            inscription_data.clone(),
+            PublishDeadline::from_now(Duration::from_mins(3)),
+        )
+        .await
+        .map_err(|error| zone_step_error(step, &error))?
+    };
+
+    if submission.withdraws.len() != withdraw_rows.len() {
+        return Err(zone_step_error(
+            step,
+            &super::support::ZoneTestError::SubmitWithdraw {
+                message: format!(
+                    "atomic withdraw bundle produced {} withdraw ops, expected {}",
+                    submission.withdraws.len(),
+                    withdraw_rows.len(),
+                ),
+            },
+        ));
+    }
+    for ((alias, _), withdraw_op) in withdraw_rows.iter().zip(submission.withdraws) {
+        world
+            .zone
+            .remember_submitted_withdraw(alias.clone(), withdraw_op);
+    }
+    remember_published_zone_message(
+        world,
+        sequencer_alias,
+        message_alias,
+        inscription_data,
+        &submission.publish,
+    );
+    world.remember_submitted_transaction(bundle_alias, submission.publish.inscription_id);
 
     Ok(())
 }

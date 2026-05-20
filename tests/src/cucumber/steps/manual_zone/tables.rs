@@ -152,6 +152,42 @@ pub(super) fn zone_balance_rows(step: &Step) -> Result<Vec<ZoneBalanceRow>, Step
     )
 }
 
+/// Parses an atomic-withdraw table row of `(alias, outputs)` where `outputs`
+/// is a comma-separated list of note values. Each row becomes one
+/// `WithdrawArg`; the comma list lets a single arg carry multiple output
+/// notes so the SDK's `publish_atomic_withdraw(inscribe, vec![WithdrawArg])`
+/// signature is exercised at full width (multi-arg + multi-output-per-arg).
+pub(super) fn zone_atomic_withdraw_rows(step: &Step) -> Result<Vec<(String, Vec<u64>)>, StepError> {
+    parse_zone_table_rows(
+        step,
+        &["withdraw", "outputs"],
+        "Atomic withdraw",
+        |row| match row {
+            [alias, outputs] => {
+                let amounts = outputs
+                    .split(',')
+                    .map(|s| {
+                        s.trim()
+                            .parse::<u64>()
+                            .map_err(|error| StepError::InvalidArgument {
+                                message: format!("Invalid withdraw output amount '{s}': {error}"),
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                if amounts.is_empty() {
+                    return Err(StepError::InvalidArgument {
+                        message: format!(
+                            "Atomic withdraw '{alias}' must list at least one output amount"
+                        ),
+                    });
+                }
+                Ok((alias.clone(), amounts))
+            }
+            _ => invalid_zone_table_row("Atomic withdraw", &["withdraw", "outputs"], row.len()),
+        },
+    )
+}
+
 pub(super) fn single_column_table(
     step: &Step,
     header_name: &str,

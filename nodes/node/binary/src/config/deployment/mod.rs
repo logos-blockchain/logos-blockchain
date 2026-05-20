@@ -56,11 +56,10 @@ pub struct DeploymentSettings {
 impl From<WellKnownDeployment> for DeploymentSettings {
     fn from(value: WellKnownDeployment) -> Self {
         match value {
-            WellKnownDeployment::Devnet => deserialize_config_from_reader(
-                devnet::SERIALIZED_DEPLOYMENT.as_bytes(),
-                OnUnknownKeys::Fail,
-            )
-            .expect("Devnet deployment config is valid."),
+            WellKnownDeployment::Devnet => {
+                deserialize_config_from_reader(devnet::SERIALIZED_DEPLOYMENT, OnUnknownKeys::Fail)
+                    .expect("Devnet deployment config is valid.")
+            }
         }
     }
 }

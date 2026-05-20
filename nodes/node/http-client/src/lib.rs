@@ -6,7 +6,7 @@ pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, 
 use lb_core::{
     block::MAX_BLOCK_SIZE,
     header::{ContentId, HeaderId},
-    mantle::SignedMantleTx,
+    mantle::{SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
     proofs::leader_proof::Groth16LeaderProof,
     sdp::{DeclarationId, DeclarationMessage},
 };
@@ -18,7 +18,7 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CRYPTARCHIA_INFO,
+        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO,
         CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
@@ -277,6 +277,20 @@ impl CommonHttpClient {
             .join(SDP_POST_DECLARATION.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.post(request_url, declaration).await
+    }
+
+    /// Get the on-chain state for a channel (`accredited_keys`,
+    /// `withdrawal_nonce`, balance, etc.). Returns the tip-of-chain view.
+    pub async fn get_channel_state(
+        &self,
+        base_url: Url,
+        channel_id: ChannelId,
+    ) -> Result<ChannelState, Error> {
+        let path = CHANNEL
+            .trim_start_matches('/')
+            .replace(":id", &channel_id.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+        self.get::<(), ChannelState>(request_url, None).await
     }
 
     /// Get consensus info (tip, height, etc.)

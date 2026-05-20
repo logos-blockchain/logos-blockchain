@@ -4,7 +4,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx, Transaction as _,
-        ops::channel::{MsgId, inscribe::Inscription},
+        ops::channel::{MsgId, inscribe::Inscription, withdraw::ChannelWithdrawOp},
         tx::TxHash,
     },
 };
@@ -21,6 +21,58 @@ pub struct InscriptionInfo {
     pub this_msg: MsgId,
     /// The opaque inscription payload.
     pub payload: Inscription,
+}
+
+/// A channel withdraw observed on chain or bundled in a pending atomic tx.
+#[derive(Debug, Clone)]
+pub struct WithdrawInfo {
+    /// The withdraw op (`channel_id`, outputs, `withdraw_nonce`).
+    pub op: ChannelWithdrawOp,
+}
+
+/// An inscription bundled atomically with one or more withdraws in a single
+/// `MantleTx`. All ops in this tx adopt/orphan/finalize as a unit.
+#[derive(Debug, Clone)]
+pub struct AtomicWithdrawInfo {
+    /// Transaction hash of the bundled `MantleTx`.
+    pub tx_hash: TxHash,
+    /// The inscription op carried by the bundle.
+    pub inscription: InscriptionInfo,
+    /// The withdraw ops carried by the bundle, in tx order.
+    pub withdraws: Vec<WithdrawInfo>,
+}
+
+/// A tx tracked by the SDK — either a plain inscription or an atomic
+/// inscription+withdraw bundle. Used in event payloads for
+/// adopted/published/finalized observations.
+#[derive(Debug, Clone)]
+pub enum PublishedTx {
+    /// A plain inscription published via `publish_message`.
+    Inscription(InscriptionInfo),
+    /// A bundled inscription+withdraw(s) published via
+    /// `publish_atomic_withdraw`.
+    AtomicWithdraw(AtomicWithdrawInfo),
+}
+
+impl PublishedTx {
+    /// The tx hash for this entry.
+    #[must_use]
+    pub const fn tx_hash(&self) -> TxHash {
+        match self {
+            Self::Inscription(i) => i.tx_hash,
+            Self::AtomicWithdraw(a) => a.tx_hash,
+        }
+    }
+
+    /// The inscription info for this entry. Atomic-withdraw bundles always
+    /// carry exactly one inscription.
+    #[must_use]
+    pub const fn inscription(&self) -> &InscriptionInfo {
+        match self {
+            Self::Inscription(i) => i,
+            Self::AtomicWithdraw(a) => &a.inscription,
+        }
+    }
 }
 
 /// Result of channel update detection — the linear block-level delta
@@ -51,6 +103,10 @@ impl ChannelUpdateInfo {
 }
 
 /// Local pending inscription with lineage metadata.
+///
+/// `withdraws == None` is a plain inscription; `Some(_)` is an atomic
+/// inscription+withdraw bundle. The bundle nature lets us surface the right
+/// [`PublishedTx`] variant on finalize/adopt and re-prepare on orphan.
 #[derive(Debug, Clone)]
 pub struct PendingInscription {
     pub tx_hash: TxHash,
@@ -58,6 +114,7 @@ pub struct PendingInscription {
     pub parent_msg: MsgId,
     pub this_msg: MsgId,
     pub payload: Inscription,
+    pub withdraws: Option<Vec<WithdrawInfo>>,
 }
 
 /// Transaction state tracker.
@@ -108,13 +165,38 @@ impl TxState {
         self.finalized_msg = msg;
     }
 
-    /// Submit an inscription tx for tracking with lineage metadata.
+    /// Submit an inscription tx for tracking with lineage metadata. Use
+    /// [`Self::submit_atomic_withdraw`] for inscription+withdraw bundles.
     pub fn submit_inscription(
         &mut self,
         signed_tx: SignedMantleTx,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
+    ) {
+        self.insert_pending(signed_tx, parent_msg, this_msg, payload, None);
+    }
+
+    /// Submit an atomic inscription+withdraw bundle for tracking. `withdraws`
+    /// must mirror the `Op::ChannelWithdraw` ops in the bundle, in tx order.
+    pub fn submit_atomic_withdraw(
+        &mut self,
+        signed_tx: SignedMantleTx,
+        parent_msg: MsgId,
+        this_msg: MsgId,
+        payload: Inscription,
+        withdraws: Vec<WithdrawInfo>,
+    ) {
+        self.insert_pending(signed_tx, parent_msg, this_msg, payload, Some(withdraws));
+    }
+
+    fn insert_pending(
+        &mut self,
+        signed_tx: SignedMantleTx,
+        parent_msg: MsgId,
+        this_msg: MsgId,
+        payload: Inscription,
+        withdraws: Option<Vec<WithdrawInfo>>,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
         self.pending_by_parent
@@ -129,6 +211,7 @@ impl TxState {
                 parent_msg,
                 this_msg,
                 payload,
+                withdraws,
             },
         );
     }
@@ -316,7 +399,12 @@ impl TxState {
     /// Returns the removed entries in **parent-before-child (BFS) order** so
     /// a consumer that iterates and republishes naturally rebuilds the chain
     /// in dependency order. Keeps `self.pending` linear.
-    pub fn shed_off_branch_pending(&mut self, tip: HeaderId) -> Vec<InscriptionInfo> {
+    ///
+    /// Bundle-aware: atomic inscription+withdraw bundles are returned as
+    /// [`PublishedTx::AtomicWithdraw`] so the caller can re-prepare them with
+    /// fresh `parent_msg` + `withdraw_nonce`; plain inscriptions are returned
+    /// as [`PublishedTx::Inscription`].
+    pub fn shed_off_branch_pending(&mut self, tip: HeaderId) -> Vec<PublishedTx> {
         if self.pending.is_empty() {
             return Vec::new();
         }
@@ -370,13 +458,26 @@ impl TxState {
         for root in root_parents {
             for info in self.collect_pending_suffix(root) {
                 if eligible.contains(&info.tx_hash) && seen.insert(info.tx_hash) {
-                    ordered.push(info);
+                    let tx_hash = info.tx_hash;
+                    let entry = match self
+                        .pending
+                        .get(&tx_hash)
+                        .and_then(|p| p.withdraws.as_ref())
+                    {
+                        Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                            tx_hash,
+                            inscription: info,
+                            withdraws: withdraws.clone(),
+                        }),
+                        None => PublishedTx::Inscription(info),
+                    };
+                    ordered.push(entry);
                 }
             }
         }
 
-        for info in &ordered {
-            self.remove_pending(&info.tx_hash);
+        for entry in &ordered {
+            self.remove_pending(&entry.tx_hash());
         }
         ordered
     }
@@ -391,6 +492,22 @@ impl TxState {
     #[must_use]
     pub const fn lib(&self) -> HeaderId {
         self.current_lib
+    }
+
+    /// Look up a pending inscription (or atomic-withdraw bundle) by tx hash.
+    /// Used during finalization to capture bundle info (`withdraws`) before
+    /// `remove_pending` strips the entry, so finalized events can surface the
+    /// correct [`PublishedTx`] variant.
+    #[must_use]
+    pub fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
+        self.pending.get(tx_hash)
+    }
+
+    /// Whether a non-inscription pending tx is tracked under this hash.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn pending_other_contains(&self, tx_hash: &TxHash) -> bool {
+        self.pending_other.contains_key(tx_hash)
     }
 
     /// All pending transactions (for checkpoint serialization).
