@@ -52,7 +52,7 @@ pub struct AxumBackendSettings {
 impl Default for AxumBackendSettings {
     fn default() -> Self {
         Self {
-            listen_address: SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8080).into(),
+            listen_address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080).into(),
             cors_origins: Vec::default(),
             timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,
