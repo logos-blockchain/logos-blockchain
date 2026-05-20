@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use cucumber::{gherkin::Step, given, then, when};
+use tokio::time::timeout;
 use tracing::{info, warn};
 
 use crate::{
@@ -520,6 +521,43 @@ async fn step_continuous_user_wallets(
     info!(target: TARGET, "Completed continuous user wallet transactions step");
 
     Ok(())
+}
+
+#[when(
+    expr = "I perform continuous transactions on user wallets with {int} coin split outputs of {int} LGO, {int} transactions of {int} LGO each for {int} cycles and timeout of {int} seconds"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Cucumber step captures map directly to step function arguments."
+)]
+async fn step_continuous_user_wallets_with_timeout(
+    world: &mut CucumberWorld,
+    step: &Step,
+    coin_split_outputs: usize,
+    coin_split_value: u64,
+    transactions: usize,
+    value: u64,
+    cycles: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    timeout(
+        Duration::from_secs(timeout_seconds),
+        step_continuous_user_wallets(
+            world,
+            step,
+            coin_split_outputs,
+            coin_split_value,
+            transactions,
+            value,
+            cycles,
+        ),
+    )
+    .await
+    .map_err(|_| StepError::Timeout {
+        message: format!(
+            "continuous user wallet transactions did not finish within {timeout_seconds} seconds"
+        ),
+    })?
 }
 
 #[when(
