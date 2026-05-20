@@ -12,7 +12,7 @@ const DEFAULT_DEBUG_TARGETS: &[&str] = &[
     "cryptarchia",
     "ledger",
 ];
-const DEFAULT_EXTERNAL_TARGETS: &[(&str, Level)] = &[
+const DEFAULT_QUIET_TARGETS: &[(&str, Level)] = &[
     ("libp2p_gossipsub", Level::ERROR),
     ("h2", Level::WARN),
     ("hyper", Level::WARN),
