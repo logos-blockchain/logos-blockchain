@@ -83,10 +83,10 @@ where
 
     while let Some((id, slot)) = chain.next().await {
         let epoch = config.epoch(slot);
-        let is_last_block_of_epoch = match prev_epoch {
-            Some(prev_epoch) => epoch != prev_epoch, // just crossed an epoch boundary
-            None => slot == config.last_slot(epoch), // block is on the last slot of its epoch
-        };
+        let is_last_block_of_epoch = prev_epoch.map_or_else(
+            || slot == config.last_slot(epoch), // block is on the last slot of its epoch
+            |prev_epoch| epoch != prev_epoch,   // just crossed an epoch boundary
+        );
 
         if is_last_block_of_epoch
             && epoch <= current_epoch.saturating_sub(SNAPSHOT_FINALIZATION_DELAY)
