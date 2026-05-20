@@ -8,7 +8,6 @@ const LOCAL_API_HOST: &str = "127.0.0.1";
 pub struct GeneralApiConfig {
     pub address: SocketAddr,
     pub testing_http_address: SocketAddr,
-    pub admin_http_address: SocketAddr,
 }
 
 #[must_use]
@@ -22,12 +21,6 @@ pub fn create_api_configs(ids: &[[u8; 32]]) -> Vec<GeneralApiConfig> {
             .parse()
             .unwrap(),
             testing_http_address: format!(
-                "{LOCAL_API_HOST}:{}",
-                get_reserved_available_tcp_port().unwrap()
-            )
-            .parse()
-            .unwrap(),
-            admin_http_address: format!(
                 "{LOCAL_API_HOST}:{}",
                 get_reserved_available_tcp_port().unwrap()
             )

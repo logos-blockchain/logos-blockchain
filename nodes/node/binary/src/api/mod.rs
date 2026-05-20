@@ -1,4 +1,3 @@
-pub mod admin;
 pub mod backend;
 mod errors;
 pub mod handlers;
@@ -7,3 +6,4 @@ mod queries;
 mod responses;
 mod serializers;
 pub mod testing;
+mod tracing;
