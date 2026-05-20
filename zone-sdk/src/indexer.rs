@@ -173,7 +173,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
@@ -193,7 +193,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
                 Slot::new(1),
             ),
             (block_msg(2, &[2]), Slot::new(2)), // after LIB
@@ -212,12 +212,12 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), 0, &[11]),
                 Slot::new(2),
             ),
             (block_msg(3, &[3]), Slot::new(2)),
@@ -240,12 +240,12 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), 0, &[11]),
                 Slot::new(2),
             ),
             (block_msg(4, &[4]), Slot::new(2)),
@@ -269,7 +269,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
@@ -291,7 +291,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
                 BATCH_SIZE,
             ),
             (
@@ -303,7 +303,7 @@ mod tests {
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
             ),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
+                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), 0, &[11]),
                 BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
             ),
             (
@@ -348,9 +348,10 @@ mod tests {
         })
     }
 
-    fn deposit_msg(inputs: Inputs, metadata: &[u8]) -> ZoneMessage {
+    fn deposit_msg(inputs: Inputs, amount: u64, metadata: &[u8]) -> ZoneMessage {
         ZoneMessage::Deposit(Deposit {
             inputs,
+            amount,
             metadata: metadata.to_vec(),
         })
     }
@@ -408,6 +409,13 @@ mod tests {
             &self,
             _id: HeaderId,
         ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
+            Ok(None)
+        }
+
+        async fn block_events(
+            &self,
+            _id: HeaderId,
+        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
             Ok(None)
         }
 

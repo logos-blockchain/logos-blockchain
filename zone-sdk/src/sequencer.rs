@@ -2211,6 +2211,13 @@ mod tests {
             unimplemented!()
         }
 
+        async fn block_events(
+            &self,
+            _id: HeaderId,
+        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
+            Ok(None)
+        }
+
         async fn immutable_blocks(
             &self,
             _slot_from: Slot,

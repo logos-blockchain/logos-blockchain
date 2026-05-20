@@ -795,10 +795,12 @@ async fn count_indexed_payload(
     }
 }
 
-/// Waits until the zone indexer observes the expected channel deposit.
+/// Waits until the zone indexer observes the expected channel deposit,
+/// including its amount.
 pub async fn wait_for_deposit(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
     expected: &DepositOp,
+    expected_amount: Value,
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
     poll_zone_indexer_until(
@@ -808,6 +810,7 @@ pub async fn wait_for_deposit(
         |message| match message {
             ZoneMessage::Deposit(deposit)
                 if deposit.inputs == expected.inputs
+                    && deposit.amount == expected_amount
                     && deposit.metadata() == expected.metadata.as_slice() =>
             {
                 Some(())

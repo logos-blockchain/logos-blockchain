@@ -751,15 +751,20 @@ async fn step_zone_indexer_returns_finalized_deposit(
     deposit_alias: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    let deposit = world
+    let (deposit, amount) = world
         .zone
         .resolve_submitted_deposit(&deposit_alias)?
         .clone();
     let indexer = log_step_error(step, world.zone.indexer())?;
 
-    wait_for_deposit(indexer, &deposit, Duration::from_secs(timeout_seconds))
-        .await
-        .map_err(|error| zone_step_error(step, &error))
+    wait_for_deposit(
+        indexer,
+        &deposit,
+        amount,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(expr = "the zone indexer returns finalized withdraw {string} in {int} seconds")]
