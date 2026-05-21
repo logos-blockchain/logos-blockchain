@@ -49,13 +49,14 @@ use super::handlers::{
     mantle_metrics, mantle_status, transaction, wallet,
 };
 use crate::{
-    BlendBroadcastSettings, BlendService, WalletService,
+    BlendBroadcastSettings, BlendService, TracingService, WalletService,
     api::{
         handlers::{
             channel, channel_deposit, leader_claim, post_activity, post_declaration,
             post_set_declaration_id, post_withdrawal,
         },
         openapi::ApiDoc,
+        tracing::reload_tracing_filter,
     },
 };
 
@@ -165,7 +166,8 @@ where
         >
         + AsServiceId<WalletService>
         + AsServiceId<ChainLeader>
-        + AsServiceId<BlendService>,
+        + AsServiceId<BlendService>
+        + AsServiceId<TracingService>,
 {
     type Error = std::io::Error;
     type Settings = AxumBackendSettings;
@@ -310,6 +312,10 @@ where
             .route(
                 paths::wallet::SIGN_TX_ZK,
                 routing::post(wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>),
+            )
+            .route(
+                paths::admin::TRACING_FILTER,
+                routing::put(reload_tracing_filter::<RuntimeServiceId>),
             );
 
         let app = app.route(

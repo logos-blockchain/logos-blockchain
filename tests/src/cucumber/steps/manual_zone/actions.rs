@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use cucumber::gherkin::Step;
 use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
-use lb_core::mantle::ops::channel::inscribe::Inscription;
+use lb_core::mantle::{TxHash, Utxo, ops::channel::inscribe::Inscription};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::LbcManualCluster;
 use lb_zone_sdk::{
@@ -18,24 +18,29 @@ use super::{
     errors::{log_step_error, zone_step_error},
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
-        DiscardedPayloads, PublishDeadline, StartedZoneNode, ZoneAccountBalances,
-        balance_update_payload, build_zone_deposit, ensure_zone_transactions_included, keygen,
-        prepare_zone_cluster, publish_atomic_zone_withdraw, publish_message_with_retry,
-        sequencer_config, start_balance_aware_policy, start_republish_policy,
-        start_sequencer_event_loop, start_sorted_conflict_policy, start_zone_node,
-        submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
-        wait_for_zone_network_ready,
+        AtomicZoneDepositRequest, DiscardedPayloads, PublishDeadline, StartedZoneNode,
+        ZoneAccountBalances, ZoneDeposit, balance_update_payload, build_zone_deposit,
+        ensure_zone_transactions_included, keygen, prepare_zone_cluster,
+        publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
+        start_balance_aware_policy, start_republish_policy, start_sequencer_event_loop,
+        start_sorted_conflict_policy, start_zone_node, submit_atomic_zone_deposit,
+        submit_zone_deposit, submit_zone_withdraw, wait_for_zone_network_ready,
     },
     tables::{ConcurrentZoneMessageRow, ZoneBalanceRow, group_zone_messages_by_sequencer},
 };
-use crate::cucumber::{
-    error::{StepError, StepResult},
-    steps::TARGET,
-    world::{CucumberWorld, NodeInfo},
+use crate::{
+    common::wallet::WalletReservedInputs,
+    cucumber::{
+        error::{StepError, StepResult},
+        steps::TARGET,
+        wallet::sync::sync_wallet_state_from_chain,
+        world::{CucumberWorld, NodeInfo},
+    },
 };
 
 const ZONE_CHANNEL_WITHDRAW_THRESHOLD: u16 = 1;
 const ZONE_CHANNEL_DEPOSIT_THRESHOLD: u16 = 1;
+const ZONE_FUNDING_WALLET_NAME: &str = "zone-funding";
 
 pub(super) enum DriveMode {
     Passive,
@@ -85,6 +90,7 @@ pub(super) async fn start_zone_cluster(world: &mut CucumberWorld, step: &Step) -
         .map_err(|error| zone_step_error(step, &error))?;
 
     let funding_public_key = zone_cluster.funding_public_key;
+    let genesis_block_utxos = zone_cluster.genesis_block_utxos;
     let cluster = zone_cluster.cluster;
 
     let started_zone_node = start_zone_node(&cluster, &world.scenario_base_dir)
@@ -97,7 +103,13 @@ pub(super) async fn start_zone_cluster(world: &mut CucumberWorld, step: &Step) -
 
     let client = started_zone_node.started_node.client.clone();
 
-    remember_zone_cluster(world, cluster, started_zone_node, funding_public_key);
+    remember_zone_cluster(
+        world,
+        cluster,
+        started_zone_node,
+        funding_public_key,
+        genesis_block_utxos,
+    );
 
     info!(target: TARGET, node_url = %client.base_url(), "Started zone cluster");
 
@@ -109,9 +121,11 @@ fn remember_zone_cluster(
     cluster: LbcManualCluster,
     started_zone_node: StartedZoneNode,
     funding_public_key: ZkPublicKey,
+    genesis_block_utxos: Vec<Utxo>,
 ) {
     let node_name = "NODE_1".to_owned();
 
+    world.genesis_block_utxos = genesis_block_utxos;
     world.local_cluster = Some(cluster);
     world.nodes_info.insert(
         node_name.clone(),
@@ -215,6 +229,39 @@ fn remember_published_zone_message(
     );
 }
 
+async fn sync_zone_funding_wallet_utxos(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> Result<Vec<Utxo>, StepError> {
+    let node_name = world.zone.node_name()?.to_owned();
+    let funding_public_key = world.zone.funding_public_key()?;
+
+    Ok(sync_wallet_state_from_chain(
+        world,
+        ZONE_FUNDING_WALLET_NAME,
+        &node_name,
+        funding_public_key,
+    )
+    .await
+    .inspect_err(|e| {
+        tracing::warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?
+    .into_available_utxos())
+}
+
+fn record_zone_wallet_submission(
+    world: &mut CucumberWorld,
+    tx_hash: TxHash,
+    reserved_inputs: Vec<Utxo>,
+) {
+    world.wallets.record_wallet_reservation(
+        ZONE_FUNDING_WALLET_NAME.to_owned(),
+        tx_hash,
+        WalletReservedInputs::new(reserved_inputs, Vec::new()),
+        0,
+    );
+}
+
 pub(super) async fn submit_zone_deposit_transaction(
     world: &mut CucumberWorld,
     step: &Step,
@@ -225,14 +272,16 @@ pub(super) async fn submit_zone_deposit_transaction(
 ) -> StepResult {
     let node_url = log_step_error(step, world.zone_node_url())?;
     let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
-    let deposit = build_zone_deposit(
-        &node_url,
+    let available_utxos = sync_zone_funding_wallet_utxos(world, step).await?;
+    let ZoneDeposit {
+        deposit,
+        reserved_inputs,
+    } = build_zone_deposit(
+        available_utxos,
         world.zone.sequencer_channel_id(&channel_alias)?,
-        funding_public_key,
         amount,
         metadata.into_bytes(),
     )
-    .await
     .map_err(|error| zone_step_error(step, &error))?;
 
     let response = submit_zone_deposit(&node_url, &deposit, funding_public_key)
@@ -242,6 +291,7 @@ pub(super) async fn submit_zone_deposit_transaction(
     world
         .zone
         .remember_submitted_deposit(transaction_alias.clone(), deposit);
+    record_zone_wallet_submission(world, response, reserved_inputs);
     world.remember_submitted_transaction(transaction_alias, response);
 
     Ok(())
@@ -258,17 +308,21 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
 ) -> StepResult {
     let node_url = log_step_error(step, world.zone_node_url())?;
     let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
+    let available_utxos = sync_zone_funding_wallet_utxos(world, step).await?;
     let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
     let inscription_data = format!("Mint {amount} to Alice").into_bytes();
 
     let submission = submit_atomic_zone_deposit(
         &node_url,
         sequencer,
-        world.zone.sequencer_channel_id(sequencer_alias)?,
-        funding_public_key,
-        amount,
-        metadata.into_bytes(),
-        inscription_data.clone(),
+        AtomicZoneDepositRequest {
+            channel_id: world.zone.sequencer_channel_id(sequencer_alias)?,
+            funding_public_key,
+            available_utxos,
+            amount,
+            metadata: metadata.into_bytes(),
+            inscription_data: inscription_data.clone(),
+        },
     )
     .await
     .map_err(|error| zone_step_error(step, &error))?;
@@ -282,6 +336,11 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
         message_alias,
         inscription_data,
         &submission.publish,
+    );
+    record_zone_wallet_submission(
+        world,
+        submission.publish.inscription_id,
+        submission.reserved_inputs,
     );
     world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id);
 

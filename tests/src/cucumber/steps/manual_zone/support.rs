@@ -18,7 +18,7 @@ use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_config::consensus::{ProviderInfo, create_genesis_block_with_declarations};
 use lb_core::{
     mantle::{
-        GenesisTx as _, MantleTx, Note, NoteId, Op, OpProof, Transaction as _, Value,
+        GenesisTx as _, MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
         ledger::{Inputs, Outputs},
         ops::{
             channel::{
@@ -32,10 +32,7 @@ use lb_core::{
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-    wallet::{
-        balance::WalletBalanceResponseBody,
-        sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
-    },
+    wallet::sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
 };
 use lb_key_management_system_service::keys::{
     Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey as _,
@@ -66,7 +63,7 @@ use tokio::{
 use tracing::warn;
 
 use crate::{
-    common::chain::wait_for_transactions_inclusion,
+    common::{chain::wait_for_transactions_inclusion, wallet::build_wallet_funded_transfer},
     cucumber::utils::{extract_child_dir_name, matching_child_dirs},
 };
 
@@ -102,10 +99,6 @@ pub enum ZoneTestError {
     FinalizationTimeout,
     #[error("timed out waiting for zone LIB to advance")]
     LibAdvanceTimeout,
-    #[error("failed to fetch wallet balance while preparing a zone deposit: {message}")]
-    WalletBalance { message: String },
-    #[error("failed to find a funding note with value at least {min_value}")]
-    MissingFundingNote { min_value: Value },
     #[error("failed to find a funding note with exact value {value}")]
     MissingExactFundingNote { value: Value },
     #[error("failed to submit zone deposit: {message}")]
@@ -126,6 +119,7 @@ pub enum ZoneTestError {
 pub struct ZoneClusterTemplate {
     pub cluster: LbcManualCluster,
     pub funding_public_key: ZkPublicKey,
+    pub genesis_block_utxos: Vec<Utxo>,
 }
 
 /// A started single-node zone chain plus the resolved runtime directory used
@@ -140,6 +134,16 @@ pub struct StartedZoneNode {
 pub struct AtomicZoneDepositSubmission {
     pub deposit: DepositOp,
     pub publish: PublishResult,
+    pub reserved_inputs: Vec<Utxo>,
+}
+
+pub struct AtomicZoneDepositRequest {
+    pub channel_id: ChannelId,
+    pub funding_public_key: ZkPublicKey,
+    pub available_utxos: Vec<Utxo>,
+    pub amount: Value,
+    pub metadata: Vec<u8>,
+    pub inscription_data: Vec<u8>,
 }
 
 /// Result of a withdraw scenario where the zone sequencer signs the channel
@@ -149,9 +153,9 @@ pub struct ZoneWithdrawSubmission {
     pub publish: PublishResult,
 }
 
-struct SelectedNote {
-    id: NoteId,
-    value: Value,
+pub struct ZoneDeposit {
+    pub deposit: DepositOp,
+    pub reserved_inputs: Vec<Utxo>,
 }
 
 pub type DiscardedPayloads = Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
@@ -200,12 +204,23 @@ pub fn prepare_zone_cluster(
         .consensus_config
         .funding_sk
         .as_public_key();
+    let genesis_block_utxos = deployment
+        .config
+        .genesis_block
+        .as_ref()
+        .map(|genesis_block| {
+            crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(
+                &genesis_block.genesis_tx(),
+            )
+        })
+        .unwrap_or_default();
 
     let cluster = LbcLocalDeployer::new().manual_cluster_from_descriptors(deployment);
 
     Ok(ZoneClusterTemplate {
         cluster,
         funding_public_key,
+        genesis_block_utxos,
     })
 }
 
@@ -967,19 +982,24 @@ pub async fn wait_for_lib_advance(
 
 /// Builds a regular channel deposit for an existing funding note with the
 /// exact deposit value.
-pub async fn build_zone_deposit(
-    node_url: &Url,
+pub fn build_zone_deposit(
+    available_utxos: Vec<Utxo>,
     channel_id: ChannelId,
-    funding_public_key: ZkPublicKey,
     amount: Value,
     metadata: Vec<u8>,
-) -> Result<DepositOp, ZoneTestError> {
-    let note = get_note_with_exact_value(node_url, funding_public_key, amount).await?;
+) -> Result<ZoneDeposit, ZoneTestError> {
+    let note = available_utxos
+        .into_iter()
+        .find(|utxo| utxo.note.value == amount)
+        .ok_or(ZoneTestError::MissingExactFundingNote { value: amount })?;
 
-    Ok(DepositOp {
-        channel_id,
-        inputs: Inputs::new(vec![note.id]),
-        metadata,
+    Ok(ZoneDeposit {
+        deposit: DepositOp {
+            channel_id,
+            inputs: Inputs::new(vec![note.id()]),
+            metadata,
+        },
+        reserved_inputs: vec![note],
     })
 }
 
@@ -1019,13 +1039,18 @@ pub async fn submit_zone_deposit(
 pub async fn submit_atomic_zone_deposit(
     node_url: &Url,
     sequencer: &SequencerHandle<ZoneNodeHttpClient>,
-    channel_id: ChannelId,
-    funding_public_key: ZkPublicKey,
-    amount: Value,
-    metadata: Vec<u8>,
-    inscription_data: Vec<u8>,
+    request: AtomicZoneDepositRequest,
 ) -> Result<AtomicZoneDepositSubmission, ZoneTestError> {
-    let transfer = build_atomic_deposit_transfer(node_url, funding_public_key, amount).await?;
+    let AtomicZoneDepositRequest {
+        channel_id,
+        funding_public_key,
+        available_utxos,
+        amount,
+        metadata,
+        inscription_data,
+    } = request;
+    let (transfer, reserved_inputs) =
+        build_atomic_deposit_transfer(available_utxos, funding_public_key, amount)?;
     let deposit = build_atomic_deposit_op(channel_id, metadata, &transfer)?;
 
     let (tx, msg_id, sequencer_sig) = sequencer
@@ -1061,31 +1086,25 @@ pub async fn submit_atomic_zone_deposit(
     Ok(AtomicZoneDepositSubmission {
         deposit,
         publish: result,
+        reserved_inputs,
     })
 }
 
 /// Builds the funding transfer that creates the note consumed by an atomic
 /// zone deposit.
-async fn build_atomic_deposit_transfer(
-    node_url: &Url,
+fn build_atomic_deposit_transfer(
+    available_utxos: Vec<Utxo>,
     funding_public_key: ZkPublicKey,
     amount: Value,
-) -> Result<TransferOp, ZoneTestError> {
-    let funding_note = get_note_with_value(node_url, funding_public_key, amount).await?;
+) -> Result<(TransferOp, Vec<Utxo>), ZoneTestError> {
     let deposit_note = Note::new(amount, funding_public_key);
-    let change = funding_note.value.checked_sub(amount).ok_or_else(|| {
-        ZoneTestError::BuildAtomicDeposit {
-            message: format!(
-                "selected funding note value {} is below deposit amount {amount}",
-                funding_note.value
-            ),
-        }
-    })?;
+    let funded_transfer =
+        build_wallet_funded_transfer(available_utxos, vec![deposit_note], funding_public_key)
+            .map_err(|error| ZoneTestError::BuildAtomicDeposit {
+                message: error.to_string(),
+            })?;
 
-    Ok(TransferOp {
-        inputs: Inputs::new(vec![funding_note.id]),
-        outputs: build_atomic_deposit_outputs(deposit_note, change, funding_public_key),
-    })
+    Ok(funded_transfer.into_parts())
 }
 
 /// Points the channel deposit at the note created by the atomic funding
@@ -1270,60 +1289,6 @@ pub async fn publish_atomic_zone_withdraw(
     })?
 }
 
-/// Selects a wallet note large enough to fund a zone operation.
-async fn get_note_with_value(
-    node_url: &Url,
-    public_key: ZkPublicKey,
-    min_value: Value,
-) -> Result<SelectedNote, ZoneTestError> {
-    let balance = get_wallet_balance(node_url, public_key).await?;
-
-    balance
-        .notes
-        .into_iter()
-        .find(|(_, value)| *value >= min_value)
-        .map(|(id, value)| SelectedNote { id, value })
-        .ok_or(ZoneTestError::MissingFundingNote { min_value })
-}
-
-/// Selects a wallet note that must be consumed directly by a deposit test.
-async fn get_note_with_exact_value(
-    node_url: &Url,
-    public_key: ZkPublicKey,
-    value: Value,
-) -> Result<SelectedNote, ZoneTestError> {
-    let balance = get_wallet_balance(node_url, public_key).await?;
-
-    balance
-        .notes
-        .into_iter()
-        .find(|(_, note_value)| *note_value == value)
-        .map(|(id, value)| SelectedNote { id, value })
-        .ok_or(ZoneTestError::MissingExactFundingNote { value })
-}
-
-/// Reads wallet-visible notes for the test funding key from the node API.
-async fn get_wallet_balance(
-    node_url: &Url,
-    public_key: ZkPublicKey,
-) -> Result<WalletBalanceResponseBody, ZoneTestError> {
-    let request_url = node_url
-        .join(&format!(
-            "wallet/{}/balance",
-            hex::encode(lb_groth16::fr_to_bytes(&public_key.into()))
-        ))
-        .map_err(|error| ZoneTestError::WalletBalance {
-            message: error.to_string(),
-        })?;
-
-    CommonHttpClient::new(None)
-        .get::<(), WalletBalanceResponseBody>(request_url, None)
-        .await
-        .map_err(|error| ZoneTestError::WalletBalance {
-            message: error.to_string(),
-        })
-}
-
 /// Asks the node wallet service to sign a Mantle transaction for the requested
 /// ZK keys.
 async fn sign_tx_zk(
@@ -1351,20 +1316,6 @@ async fn sign_tx_zk(
         })?;
 
     Ok(response.sig)
-}
-
-/// Preserves leftover value from an atomic deposit funding note as wallet
-/// change.
-fn build_atomic_deposit_outputs(
-    deposit_note: Note,
-    change: Value,
-    funding_public_key: ZkPublicKey,
-) -> Outputs {
-    if change > 0 {
-        Outputs::new(vec![deposit_note, Note::new(change, funding_public_key)])
-    } else {
-        Outputs::new(vec![deposit_note])
-    }
 }
 
 /// Builds the single-node deployment shape used by all migrated zone tests.

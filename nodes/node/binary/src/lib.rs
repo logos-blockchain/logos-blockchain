@@ -120,9 +120,6 @@ pub type SystemSigService = SystemSig<RuntimeServiceId>;
 type TestingApiService<RuntimeServiceId> =
     lb_api_service::ApiService<api::testing::backend::TestAxumBackend, RuntimeServiceId>;
 
-type AdminApiService<RuntimeServiceId> =
-    lb_api_service::ApiService<api::admin::backend::AdminAxumBackend, RuntimeServiceId>;
-
 #[derive_services]
 pub struct LogosBlockchain {
     network: NetworkService,
@@ -144,8 +141,6 @@ pub struct LogosBlockchain {
 
     #[cfg(feature = "testing")]
     testing_http: TestingApiService<RuntimeServiceId>,
-
-    admin_http: AdminApiService<RuntimeServiceId>,
 
     tracing: TracingService,
 }
@@ -223,8 +218,6 @@ pub fn run_node_from_config(
     #[cfg(feature = "testing")]
     let testing_config = api_config.testing_settings();
 
-    let admin_config = api_config.admin_settings();
-
     set_hook(Box::new(log_and_exit_hook));
 
     let app = OverwatchRunner::<LogosBlockchain>::run(
@@ -250,8 +243,6 @@ pub fn run_node_from_config(
 
             #[cfg(feature = "testing")]
             testing_http: testing_config,
-
-            admin_http: admin_config,
         },
         handle,
     )

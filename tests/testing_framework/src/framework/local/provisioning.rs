@@ -526,11 +526,6 @@ fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },
-            admin: api::serde::AxumBackendSettings {
-                listen_address: config.api_config.admin_http_address,
-                max_concurrent_requests: 1000,
-                ..Default::default()
-            },
         },
         storage: storage::serde::Config::default(),
         sdp: sdp::serde::Config {

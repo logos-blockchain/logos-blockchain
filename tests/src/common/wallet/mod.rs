@@ -15,11 +15,12 @@ pub use chain::{
         WalletSyncedSpend, WalletUtxos, sync_batch_from_chain, sync_batches_from_chain,
     },
 };
+pub use funding::{
+    WalletFundedTransfer, WalletFundingPolicy, WalletFundingResources, WalletFundingSource,
+    WalletReservedInputs, build_wallet_funded_transfer,
+};
 pub(crate) use funding::{
     WalletFundingOutcome, WalletFundingPlan, WalletFundingUtxos, WalletSelectedInputs,
-};
-pub use funding::{
-    WalletFundingPolicy, WalletFundingResources, WalletFundingSource, WalletReservedInputs,
 };
 pub use funding_from_chain::{
     DirectWalletSourceError, WalletFundingSourceFromChainError, current_wallet_funding_source,

@@ -114,11 +114,16 @@ where
             })
             .ok_or(Error::InvalidProof)?;
 
+        tracing::trace!(
+            "Verifying activity proof {:?} with session randomness: {:?}",
+            verified_proof.token().signing_key(),
+            current_session_state.session_randomness()
+        );
         let Some(hamming_distance) = self.token_evaluation.evaluate(
             verified_proof.token(),
             current_session_state.session_randomness(),
         ) else {
-            return Err(Error::InvalidProof);
+            return Err(Error::HammingDistanceTooLarge);
         };
 
         Ok((zk_id, hamming_distance))

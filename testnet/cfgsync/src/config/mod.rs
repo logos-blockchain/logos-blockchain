@@ -83,9 +83,6 @@ pub fn create_node_configs(
         .map(|host| GeneralApiConfig {
             address: format!("{BIND_HOST}:{}", host.api_port).parse().unwrap(),
             testing_http_address: format!("{BIND_HOST}:{}", host.api_port).parse().unwrap(),
-            admin_http_address: format!("{BIND_HOST}:{}", host.admin_api_port)
-                .parse()
-                .unwrap(),
         })
         .collect::<Vec<_>>();
     let mut configured_hosts = HashMap::new();
@@ -213,9 +210,6 @@ pub fn create_node_config_from_template(
                 .parse()
                 .unwrap(),
             testing_http_address: format!("{BIND_HOST}:{}", new_host.api_port)
-                .parse()
-                .unwrap(),
-            admin_http_address: format!("{BIND_HOST}:{}", new_host.admin_api_port)
                 .parse()
                 .unwrap(),
         },

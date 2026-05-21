@@ -8,7 +8,7 @@ use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 
 use crate::{TracingService, make_request_and_return_response};
 
-const FILTER_RELOAD_LOG_TARGET: &str = "admin_tracing_filter_reload";
+const FILTER_RELOAD_LOG_TARGET: &str = "tracing_filter_reload";
 
 pub async fn reload_tracing_filter<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,

@@ -129,7 +129,7 @@ pub struct InitArgs {
     pub blend_port: u16,
 
     /// HTTP API listen address
-    #[clap(long = "http-addr", default_value = "0.0.0.0:8080")]
+    #[clap(long = "http-addr", default_value = "127.0.0.1:8080")]
     pub http_addr: SocketAddr,
 
     /// External address for nodes with a known public IP (disables NAT

@@ -1,6 +1,10 @@
 use std::cmp::Reverse;
 
-use lb_core::mantle::Utxo;
+use lb_core::mantle::{
+    Note, Utxo,
+    ledger::{Inputs, Outputs},
+    ops::transfer::TransferOp,
+};
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use lb_testing_framework::configs::wallet::WalletAccount;
 use lb_wallet::WalletError;
@@ -181,6 +185,52 @@ impl WalletSelectedInputs {
     }
 }
 
+pub struct WalletFundedTransfer {
+    transfer: TransferOp,
+    selected_inputs: Vec<Utxo>,
+}
+
+impl WalletFundedTransfer {
+    #[must_use]
+    pub const fn transfer(&self) -> &TransferOp {
+        &self.transfer
+    }
+
+    #[must_use]
+    pub fn into_parts(self) -> (TransferOp, Vec<Utxo>) {
+        (self.transfer, self.selected_inputs)
+    }
+}
+
+pub fn build_wallet_funded_transfer(
+    available_utxos: Vec<Utxo>,
+    outputs: Vec<Note>,
+    change_pk: ZkPublicKey,
+) -> Result<WalletFundedTransfer, WalletError> {
+    let output_total = outputs
+        .iter()
+        .fold(0u64, |total, output| total.saturating_add(output.value));
+    let selected_inputs =
+        WalletSelectedInputs::largest_first_covering(available_utxos, output_total)?;
+    let change = selected_inputs.total() - output_total;
+    let mut transfer_outputs = outputs;
+
+    if change > 0 {
+        transfer_outputs.push(Note::new(change, change_pk));
+    }
+
+    let selected_inputs = selected_inputs.into_utxos();
+    let transfer = TransferOp {
+        inputs: Inputs::new(selected_inputs.iter().map(Utxo::id).collect()),
+        outputs: Outputs::new(transfer_outputs),
+    };
+
+    Ok(WalletFundedTransfer {
+        transfer,
+        selected_inputs,
+    })
+}
+
 pub enum WalletFundingOutcome<T> {
     NeedsMoreInputs,
     Funded(T),
@@ -268,8 +318,6 @@ impl WalletReservedInputs {
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::Note;
-
     use super::*;
 
     fn utxo(value: u64, output_index: usize) -> Utxo {
