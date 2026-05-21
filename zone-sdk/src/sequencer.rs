@@ -1597,12 +1597,12 @@ where
                     channel_id,
                 )
                 .await;
-                let mut bundle_withdraws = bundle_withdraws_for(state, &our_txs);
+                let bundle_withdraws = bundle_withdraws_for(state, &our_txs);
                 let block_items = extract_finalized_items(
                     &block.transactions,
                     channel_id,
                     &deposit_amounts,
-                    &mut bundle_withdraws,
+                    bundle_withdraws,
                 );
 
                 result.our_tx_hashes.extend(our_txs.iter().copied());
@@ -1683,15 +1683,20 @@ where
 /// the on-chain op execution order and letting consumers (e.g. LEZ's bridge)
 /// validate references from inscriptions back to deposits in the same tx.
 ///
-/// `bundle_withdraws` is consumed when an inscription's `tx_hash` is found in
-/// it — those become [`PublishedTx::AtomicWithdraw`]; otherwise plain
-/// [`PublishedTx::Inscription`]. Deposits without a matching event entry are
-/// skipped with a warning.
+/// Inscriptions are emitted in tx order. The channel protocol guarantees a
+/// linear parent-child chain per channel within a block, so tx order already
+/// equals parent-chain order — do NOT add a topological sort here, it would
+/// mask any real protocol violation rather than fix it.
+///
+/// `bundle_withdraws` is consumed: entries are removed when an inscription's
+/// `tx_hash` matches, producing a [`PublishedTx::AtomicWithdraw`]; otherwise
+/// the inscription surfaces as a plain [`PublishedTx::Inscription`]. Deposits
+/// without a matching event entry are skipped with a warning.
 fn extract_finalized_items(
     transactions: &[SignedMantleTx],
     channel_id: ChannelId,
     deposit_amounts: &HashMap<(TxHash, Hash), Value>,
-    bundle_withdraws: &mut HashMap<TxHash, Vec<WithdrawInfo>>,
+    mut bundle_withdraws: HashMap<TxHash, Vec<WithdrawInfo>>,
 ) -> Vec<PublishedTx> {
     let mut items: Vec<PublishedTx> = Vec::new();
     let mut last_in_block: Option<MsgId> = None;
@@ -2201,8 +2206,7 @@ mod tests {
         channel_id: ChannelId,
         amounts: &HashMap<(TxHash, Hash), u64>,
     ) -> Vec<DepositInfo> {
-        let mut bw = HashMap::new();
-        extract_finalized_items(transactions, channel_id, amounts, &mut bw)
+        extract_finalized_items(transactions, channel_id, amounts, HashMap::new())
             .into_iter()
             .filter_map(|item| match item {
                 PublishedTx::Deposit(d) => Some(d),
@@ -2313,9 +2317,12 @@ mod tests {
         let mut amounts = HashMap::new();
         amounts.insert((tx_hash, dep_op_id), 500u64);
 
-        let mut bw = HashMap::new();
-        let items =
-            extract_finalized_items(std::slice::from_ref(&tx), channel_id, &amounts, &mut bw);
+        let items = extract_finalized_items(
+            std::slice::from_ref(&tx),
+            channel_id,
+            &amounts,
+            HashMap::new(),
+        );
 
         assert_eq!(items.len(), 2);
         assert!(matches!(items[0], PublishedTx::Deposit(_)));
