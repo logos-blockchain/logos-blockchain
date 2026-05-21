@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use lb_log_targets::api;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     overwatch::handle::OverwatchHandle,
@@ -10,6 +11,8 @@ use overwatch::{
 };
 
 pub mod http;
+
+const LOG_TARGET: &str = api::ROOT;
 
 /// A simple abstraction so that we can easily
 /// change the underlying http server
@@ -72,6 +75,7 @@ where
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );

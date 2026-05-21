@@ -15,6 +15,7 @@ use lb_core::{
     mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
     sdp::Declaration,
 };
+use lb_log_targets::api;
 use lb_storage_service::{
     StorageMsg, StorageService,
     api::{
@@ -37,6 +38,8 @@ use crate::http::{
     consensus::{Cryptarchia, cryptarchia_ledger_state},
     errors::BlockSlotRangeError,
 };
+
+const LOG_TARGET: &str = api::http::MANTLE;
 
 /// A block along with the current chain state (tip and LIB) at the time it was
 /// processed. This allows clients to track the canonical chain without needing
@@ -333,7 +336,10 @@ where
     let mut blocks = Vec::with_capacity(header_ids.len().min(blocks_limit));
     for header_id in header_ids {
         let Some(block) = storage_adapter.get_block(&header_id).await else {
-            warn!("missing block body for indexed header {header_id}, skipping");
+            warn!(
+                target: LOG_TARGET,
+                "missing block body for indexed header {header_id}, skipping"
+            );
             continue;
         };
         blocks.push(BlockWithChainState {

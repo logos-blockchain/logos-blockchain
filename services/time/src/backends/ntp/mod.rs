@@ -9,6 +9,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_cryptarchia_engine::{EpochConfig, Slot, time::SlotConfig};
+use lb_log_targets::time as log_targets_time;
 use lb_utils::bounded_duration::{MinimalBoundedDuration, NANO};
 use sntpc::{NtpResult, fraction_to_nanoseconds};
 use time::OffsetDateTime;
@@ -23,6 +24,8 @@ use crate::{
         ntp::async_client::{AsyncNTPClient, NTPClientSettings},
     },
 };
+
+const LOG_TARGET: &str = log_targets_time::ntp::ROOT;
 
 #[serde_with::serde_as]
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -65,7 +68,10 @@ impl TimeBackend for NtpTimeBackend {
                         match client.request_timestamp(ntp_server.clone()).await {
                             Ok(result) => Some(result),
                             Err(e) => {
-                                tracing::warn!("NTP sync failed from {ntp_server}: {e}");
+                                tracing::warn!(
+                                    target: LOG_TARGET,
+                                    "NTP sync failed from {ntp_server}: {e}"
+                                );
                                 None
                             }
                         }
@@ -149,6 +155,7 @@ impl NtpStream {
             Ok(ts_nanos) => ts_nanos,
             Err(e) => {
                 tracing::warn!(
+                    target: LOG_TARGET,
                     "Skipping invalid NTP timestamp {ts_nanos_u128} vs. {}: {e}",
                     i128::MAX
                 );
@@ -159,7 +166,10 @@ impl NtpStream {
         let date = match OffsetDateTime::from_unix_timestamp_nanos(ts_nanos_i128) {
             Ok(date) => date,
             Err(e) => {
-                tracing::warn!("Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos_i128})");
+                tracing::warn!(
+                    target: LOG_TARGET,
+                    "Skipping invalid NTP timestamp: {e:?} (ts_nanos={ts_nanos_i128})"
+                );
                 return;
             }
         };
@@ -167,6 +177,7 @@ impl NtpStream {
         let current_slot = Slot::from_offset_and_config(date, this.slot_config);
         if current_slot < this.last_emitted_slot {
             tracing::warn!(
+                target: LOG_TARGET,
                 "NTP resync moved backwards: computed_slot={current_slot:?}, \
                 last_emitted_slot={:?}; clamping",
                 this.last_emitted_slot
@@ -174,6 +185,7 @@ impl NtpStream {
             return;
         }
         tracing::trace!(
+            target: LOG_TARGET,
             "Applying NTP clock update for slot {current_slot:?} with roundtrip {}us",
             roundtrip.as_micros()
         );
