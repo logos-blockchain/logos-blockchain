@@ -10,7 +10,7 @@ use crate::{MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE};
 /// Query parameters for the blocks stream endpoint, with validation and
 /// `OpenAPI` schema generation. Note: Literals in `param` are duplicated due to
 /// utoipa attribute limitations.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, IntoParams, Deserialize, Validate)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, IntoParams, Deserialize, Serialize, Validate)]
 #[into_params(parameter_in = Query)]
 pub struct BlocksStreamQuery {
     /// If omitted, the server chooses a default lower bound.
@@ -19,35 +19,35 @@ pub struct BlocksStreamQuery {
     /// slots-per-block and `blocks_limit`, biased so the stream ends near
     /// `slot_to`. This may return fewer than `blocks_limit` blocks; callers
     /// can refine by specifying `slot_from` explicitly.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(minimum = 0)]
     pub slot_from: Option<u64>,
     /// Upper bound slot (inclusive). Defaults to tip slot, or LIB slot when
     /// `immutable_only=true`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[param(minimum = 0)]
     pub slot_to: Option<u64>,
     /// Sort direction. Defaults to descending.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub order: Option<BlockSortOrder>,
     /// The maximum number of actual blocks to return. If omitted:
     /// - explicit bounded slot range (`slot_from` and `slot_to`) defaults to
     ///   the server maximum (`630_720_000`);
     /// - otherwise defaults to `100`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(custom(function = "validate_blocks_limit"))]
     #[param(minimum = 1, maximum = 630_720_000, default = 100, example = 100)]
     pub blocks_limit: Option<NonZero<usize>>,
     /// Server chunk size hint for streamed delivery. Defaults to `100` ,
     /// maximum `1000`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[validate(custom(function = "validate_server_batch_size"))]
     #[param(minimum = 1, maximum = 1_000, default = 100, example = 100)]
     pub server_batch_size: Option<NonZero<usize>>,
     /// When true, include only immutable blocks.
     /// If `slot_to` is omitted, the default anchor is LIB slot.
     /// Defaults to `false`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_filter: Option<BlockFilter>,
 }
 
@@ -98,44 +98,18 @@ impl BlocksStreamQuery {
             && self.block_filter.is_none()
     }
 
-    /// Append the parameters as query pairs to the given URL. Only parameters
-    /// that are `Some` are appended; `None` parameters are omitted to allow
-    /// server defaults.
+    /// Append query parameters to the given URL.
+    ///
+    /// Fields that are `None` are omitted so server defaults apply.
     pub fn append_to_url(&self, request_url: &mut Url) {
         if self.params_is_none() {
             return;
         }
 
-        let mut query = request_url.query_pairs_mut();
-
-        if let Some(blocks_limit) = self.blocks_limit {
-            query.append_pair("blocks_limit", &blocks_limit.to_string());
-        }
-        if let Some(slot_from) = self.slot_from {
-            query.append_pair("slot_from", &slot_from.to_string());
-        }
-        if let Some(slot_to) = self.slot_to {
-            query.append_pair("slot_to", &slot_to.to_string());
-        }
-        if let Some(order) = self.order {
-            query.append_pair(
-                "order",
-                match order {
-                    BlockSortOrder::Ascending => "ascending",
-                    BlockSortOrder::Descending => "descending",
-                },
-            );
-        }
-        if let Some(server_batch_size) = self.server_batch_size {
-            query.append_pair("server_batch_size", &server_batch_size.to_string());
-        }
-        if let Some(filter) = self.block_filter {
-            query.append_pair(
-                "block_filter",
-                match filter {
-                    BlockFilter::ImmutableOnly => "immutable_only",
-                    BlockFilter::MutableAndImmutable => "mutable_and_immutable",
-                },
+        if let Ok(encoded) = serde_urlencoded::to_string(self) {
+            request_url.query_pairs_mut().extend_pairs(
+                url::form_urlencoded::parse(encoded.as_bytes())
+                    .map(|(k, v)| (k.into_owned(), v.into_owned())),
             );
         }
     }
@@ -186,7 +160,7 @@ mod tests {
         assert_eq!(
             request_url.query(),
             Some(
-                "blocks_limit=50&slot_from=10&slot_to=20&order=ascending&server_batch_size=5&block_filter=immutable_only"
+                "slot_from=10&slot_to=20&order=ascending&blocks_limit=50&server_batch_size=5&block_filter=immutable_only"
             )
         );
 
@@ -204,7 +178,7 @@ mod tests {
         assert_eq!(
             request_url.query(),
             Some(
-                "blocks_limit=50&slot_from=10&slot_to=20&order=descending&server_batch_size=5&block_filter=mutable_and_immutable"
+                "slot_from=10&slot_to=20&order=descending&blocks_limit=50&server_batch_size=5&block_filter=mutable_and_immutable"
             )
         );
     }
