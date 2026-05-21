@@ -9,9 +9,8 @@ use async_trait::async_trait;
 use futures::Stream;
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
-use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
+use lb_core::proofs::leader_proof::LeaderPublic;
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::Fr;
 use lb_ledger::EpochState;
 use lb_log_targets::blend;
 use lb_time_service::SlotTick;
@@ -78,40 +77,16 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(test, derive(Default))]
-pub struct LeaderInputsMinusQuota {
-    pub pol_ledger_aged: ZkHash,
-    pub pol_epoch_nonce: ZkHash,
-    pub lottery_0: Fr,
-    pub lottery_1: Fr,
-}
-
-impl From<EpochState> for LeaderInputsMinusQuota {
-    fn from(
-        EpochState {
-            nonce,
-            utxos,
-            lottery_0,
-            lottery_1,
-            ..
-        }: EpochState,
-    ) -> Self {
-        Self {
-            pol_epoch_nonce: nonce,
-            pol_ledger_aged: utxos.root(),
-            lottery_0,
-            lottery_1,
-        }
-    }
-}
-
 /// Event related to a given epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Carries the full [`EpochState`] so consumers derive whatever they need
+/// (leader inputs, membership) from the one package — keeping every per-epoch
+/// value on the same clock and avoiding cross-stream timing drift.
+#[derive(Debug, Clone, PartialEq)]
 pub enum EpochEvent {
     /// A new epoch is available, which is either ongoing (if the handler is
     /// started mid-epoch) or has just started.
-    NewEpoch((LeaderInputsMinusQuota, Epoch)),
+    NewEpoch((EpochState, Epoch)),
     /// The information about the previous epoch the handler was tracking can
     /// now be discarded since its transition period has elapsed.
     OldEpochTransitionPeriodExpired,
@@ -130,7 +105,7 @@ pub enum EpochEvent {
     /// the epoch that can now be discarded, while `rotate_epoch`
     /// would move from the previous epoch to the new one that is notified about
     /// in this event.
-    NewEpochAndOldEpochTransitionExpired((LeaderInputsMinusQuota, Epoch)),
+    NewEpochAndOldEpochTransitionExpired((EpochState, Epoch)),
 }
 
 /// A slot tick whose values against the previous tick have been validated.
@@ -328,9 +303,9 @@ where
         let epoch_event = if should_notify_about_two_epochs_back
             || self.check_and_consume_past_epoch_transition_period(validated_slot_tick)
         {
-            EpochEvent::NewEpochAndOldEpochTransitionExpired((epoch_state.into(), new_tick.epoch))
+            EpochEvent::NewEpochAndOldEpochTransitionExpired((epoch_state, new_tick.epoch))
         } else {
-            EpochEvent::NewEpoch((epoch_state.into(), new_tick.epoch))
+            EpochEvent::NewEpoch((epoch_state, new_tick.epoch))
         };
 
         Some(epoch_event)
@@ -365,7 +340,7 @@ mod tests {
     use test_log::test;
 
     use crate::{
-        epoch_info::{EpochEvent, EpochHandler, EpochTrackingState, LeaderInputsMinusQuota},
+        epoch_info::{EpochEvent, EpochHandler, EpochTrackingState},
         test_utils::epoch::{TestChainService, default_epoch_state},
     };
 
@@ -408,7 +383,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpoch((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 1.into()
             )))
         );
@@ -455,7 +430,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpoch((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 2.into()
             )))
         );
@@ -502,7 +477,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpoch((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 1.into()
             )))
         );
@@ -528,7 +503,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpochAndOldEpochTransitionExpired((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 2.into()
             )))
         );
@@ -545,7 +520,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpochAndOldEpochTransitionExpired((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 3.into()
             )))
         );
@@ -607,7 +582,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpoch((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 1.into()
             )))
         );
@@ -633,7 +608,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpoch((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 2.into()
             )))
         );
@@ -662,7 +637,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpoch((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 3.into()
             )))
         );
@@ -680,7 +655,7 @@ mod tests {
         assert_eq!(
             next_tick,
             Some(EpochEvent::NewEpochAndOldEpochTransitionExpired((
-                LeaderInputsMinusQuota::from(default_epoch_state()),
+                default_epoch_state(),
                 4.into()
             )))
         );
