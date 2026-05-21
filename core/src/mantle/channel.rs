@@ -308,7 +308,7 @@ mod tests {
                 channels: rpds::HashTrieMapSync::new_sync().insert(
                     channel_id,
                     ChannelState {
-                        accredited_keys: Keys::from([test_public_key(7)]).into(),
+                        accredited_keys: Keys::from(test_public_key(7)).into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         tip_slot: Slot::default(),
@@ -336,7 +336,7 @@ mod tests {
                 .insert(
                     first_id,
                     ChannelState {
-                        accredited_keys: Keys::from([test_public_key(11)]).into(),
+                        accredited_keys: Keys::from(test_public_key(11)).into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         tip_slot: Slot::default(),

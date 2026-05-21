@@ -964,7 +964,7 @@ mod tests {
             }),
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
-                keys: [signing_key.public_key()].into(),
+                keys: signing_key.public_key().into(),
                 posting_timeframe: 1.into(),
                 posting_timeout: 2.into(),
                 configuration_threshold: 3,
@@ -1344,7 +1344,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xCC; 32]),
-            keys: [signing_key.public_key()].into(),
+            keys: signing_key.public_key().into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
@@ -1703,7 +1703,7 @@ mod tests {
         let ops = vec![
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
-                keys: [Ed25519Key::from_bytes(&[1; 32]).public_key()].into(),
+                keys: Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
                 configuration_threshold: 0,
@@ -1809,8 +1809,11 @@ mod tests {
 
         // Add MAX_KEY_COUNT Ed25519 public keys (each 32 bytes)
         for i in 0..u16::MAX {
-            let mut key_input = i.to_le_bytes().to_vec();
-            key_input.resize(32, 0);
+            let key_input = {
+                let mut input = i.to_le_bytes().to_vec();
+                input.resize(32, 0);
+                input
+            };
             let sk = Ed25519Key::from_bytes(&key_input.try_into().unwrap());
             let pk = sk.public_key();
             valid_input.extend_from_slice(&pk.to_bytes());

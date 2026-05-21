@@ -48,7 +48,6 @@ impl NomDecode for u16 {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        // UINT16 = 2BYTE
         le_u16(bytes)
     }
 }
@@ -63,7 +62,6 @@ impl NomDecode for u32 {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        // UINT32 = 4BYTE
         le_u32(bytes)
     }
 }

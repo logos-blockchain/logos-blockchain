@@ -53,6 +53,8 @@ impl<T, const MIN: usize, const MAX: usize> BoundedVec<T, MIN, MAX> {
     }
 
     #[must_use]
+    // TODO: This function should not return an `Option` when `MIN >= 1`, but at the
+    // moment this is not possible in the current Rust version.
     pub fn first(&self) -> Option<&T> {
         self.0.first()
     }

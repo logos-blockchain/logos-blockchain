@@ -952,7 +952,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: channel_id,
-            keys: [verifying_key].into(),
+            keys: verifying_key.into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
@@ -990,7 +990,7 @@ mod tests {
                 .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
-            [verifying_key].into()
+            verifying_key.into()
         );
         assert!(events.is_empty());
     }

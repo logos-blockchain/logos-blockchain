@@ -164,6 +164,9 @@ where
     NodeId: node_id::TryFrom,
 {
     let provider_id = provider_id.0.as_bytes();
+    // TODO: Once we provide a proper API for non-empty vectors, we can expose a
+    // `first()` method that returns `&T` instead of `Option<&T>`, and remove this
+    // `expect`.
     let address = locators
         .first()
         .expect("Locators set cannot be empty")
