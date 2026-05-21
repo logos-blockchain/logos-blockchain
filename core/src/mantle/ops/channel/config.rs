@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Slot;
-use lb_utils::bounded_vec::BoundedVec;
+use lb_utils::bounded_vec::NonEmptyBoundedVec;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 
@@ -16,8 +16,9 @@ use crate::{
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
-pub type Keys = BoundedVec<Ed25519PublicKey, { u8::MAX as usize }>;
-type NomKeys<'a> = NomBoundedVec<'a, Ed25519PublicKey, { u8::MAX as usize }, 1>;
+pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
+pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
+type NomKeys<'a> = NomBoundedVec<'a, Ed25519PublicKey, { Keys::MIN }, { Keys::MAX }, 2>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ChannelConfigOp {

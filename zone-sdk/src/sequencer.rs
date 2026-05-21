@@ -1778,7 +1778,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
                     tx_hash,
                     parent_msg,
                     this_msg: config.id(),
-                    payload: Inscription::default(),
+                    payload: [].into(),
                 };
                 last_in_block = Some(info.this_msg);
                 items.push(info);

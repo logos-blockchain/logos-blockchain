@@ -1,0 +1,159 @@
+blend:
+  common:
+    num_blend_layers: 1
+    minimum_network_size: 2
+    protocol_name: /logos-blockchain-devnet/blend/1.0.0
+    data_replication_factor: 0
+  core:
+    scheduler:
+      cover:
+        message_frequency_per_round: 1.0
+        intervals_for_safety_buffer: 100
+      delayer:
+        maximum_release_delay_in_rounds: 1
+    minimum_messages_coefficient: 1
+    normalization_constant: 1.03
+    activity_threshold_sensitivity: 1
+network:
+  kademlia_protocol_name: /logos-blockchain-devnet/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-devnet/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-devnet/chainsync/1.0.0
+cryptarchia:
+  epoch_config:
+    epoch_stake_distribution_stabilization: 3
+    epoch_period_nonce_buffer: 3
+    epoch_period_nonce_stabilization: 4
+  security_param: 30
+  slot_activation_coeff:
+    numerator: 1
+    denominator: 20
+  learning_rate: 0.5
+  sdp_config:
+    service_params:
+      BN:
+        lock_period: 10
+        inactivity_period: 1
+        retention_period: 1
+        timestamp: 0
+    min_stake:
+      threshold: 1
+      timestamp: 0
+  gossipsub_protocol: /logos-blockchain-devnet/cryptarchia/1.0.0
+  genesis_block:
+    header:
+      version: Bedrock
+      parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
+      slot: 0
+      block_root: a9d69e3ba9902f627247e7a91caec8b8f392668b2f624f72bdddaa8b4e31c5fe
+      proof_of_leadership:
+        proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
+        leader_key: '0000000000000000000000000000000000000000000000000000000000000000'
+        voucher_cm: '0000000000000000000000000000000000000000000000000000000000000000'
+    signature: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    transactions:
+    - mantle_tx:
+        ops:
+        - opcode: 0
+          payload:
+            inputs: []
+            outputs:
+            - value: 100000
+              pk: 01c795c47610eaa0762eca6a3e6781e0e690ce82bf52ceaa83d5abca6337b324
+            - value: 1
+              pk: f85cd429043eab5c2d8d9a8c6021f33e69ea9c0fbdf31b5e4bf94ed9b63c9b2c
+            - value: 100
+              pk: cd0daa0acf88171383ef0564a1b57f23e14e27c95b2a52921940d3683e6eee2c
+            - value: 100000
+              pk: c479c2c7d81a5db7cc03951b6f7ab6f1b836c04dfd2d081c2ff333f1373a8f2f
+            - value: 1
+              pk: 392ee1caa6f4ffd8f8d1f9df8f9293ad3c43c5d28d2bc168e153eb4aef3db710
+            - value: 100
+              pk: b8100567d91e8d46ae0e313a7716f7f5e8289a131ad6ee29dc6f5e7df6eec11e
+            - value: 100000
+              pk: 672478485bef2998dcefaf563363bb00944d531847e3c71c806e54b58f1d4f2e
+            - value: 1
+              pk: e192a42f8c0d2d0aa364bc1c30f7cb74534b04dcd1276a114ceb717038197816
+            - value: 100
+              pk: b7e952c37aaf9da7e4d6e15b8bc5ae0e69e90ba98c2716ccf9e9be6049dd390d
+            - value: 100000
+              pk: 8336b77a0181375dbcd3631b4dae108a8dada22a2d096f60df83a4922b68510c
+            - value: 1
+              pk: 12ce9ab497c562b960bfc736034427e3f3121a258fa5502e4e8da62d4c6b6123
+            - value: 100
+              pk: a3c03fc08546013762c9fc62e4be8ab8d50ef7e218414d5a86d66f7c93b42825
+            - value: 18446744073709151211
+              pk: 8e22f182e0875f9cec7758c6cc9986db07f7547c8287e139a02df5f67a3e8b00
+        - opcode: 17
+          payload:
+            channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
+            inscription: 4c0000000000000070726f636573735f73746172745f6e6f6e63653d313862313962336134373135343030302d30303031336235342c20746573745f656e74726f70793d36313434386133623739636634326131b2170f6a000000000000000000000000000000000000000000000000000000000000000000000000
+            parent: '0000000000000000000000000000000000000000000000000000000000000000'
+            signer: '0000000000000000000000000000000000000000000000000000000000000000'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/127.0.0.0/udp/3400/quic-v1
+            provider_id: d6def93fc43b3c3086ea1622c8b430467bdbf6f1610331b80fd2dbc776e16c9b
+            zk_id: bb4fe16b393d7271177352727b291486fc785bb41f4d558a89f8fa6c5f2bf825
+            locked_note_id: 51fb13e01e0716b7a26b80985f16be1282138c1c3893d4f5bccbf950b7dd7912
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/127.0.0.1/udp/3400/quic-v1
+            provider_id: 71b913e4d60d4cf3fbeebf22eb81617432fa5351cf4c9c32aa413c5e67b19065
+            zk_id: 649dc868fe11f0d6d050cb10fbbdf606959b7dfa60170ba5677cffaa32717425
+            locked_note_id: ed1ca7f5c3afb995e195ccab10f3f5ad3d787736f014761b4e51052a1b394d17
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/127.0.0.2/udp/3400/quic-v1
+            provider_id: 4bdbf4f79f9e5b0652059754908a1cccea5efaa8fb6a1c121b48e05712378f6f
+            zk_id: 8313c742573b9b79b6511285788c7c098d2b54f207380aad1ba44fdab0ee622d
+            locked_note_id: b5ed99b1240f1d436ad29278447de26582e5a4e72b6714719c5c2f72949a4706
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/127.0.0.3/udp/3400/quic-v1
+            provider_id: 955cbcfd2bcb9a0a822204fd466afff1c1ccb9341f9c74d0370ade6127b9ba12
+            zk_id: 6c15f277e689ced21d493906711b5e1d8df0c6339059b80a55932a3c0dd24e2b
+            locked_note_id: 04e4f9adcf4df723a732a6384fe22828e3baeac2cd27882d637999ac1950dc17
+      ops_proofs:
+      - !ZkSig
+        pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+        pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: e7dbd24ce27d1670819d8929e1ecdd9581de5785a3457d1a5fd5e6266e38958f
+          pi_b: 13598e458820f3e19b13e96d120eb5935f70cae5cb4fb3479af3c461fa5772091ad8e26464af0abc32b0356dba9cc9332cbcb4ad139d3b0a87620244b406b709
+          pi_c: d1896a5901dbc440f98346111cb8a15ef609b828118063792d60482d729bf70e
+        ed25519_sig: b9e3454e91966bf8120b76424c4adc07e6a4d00f31bbf325aa04fa0f70845450da4be40e5f10c5b7c6d080ad0cf2d8e44f37d9b0d8e07b9499c15460b2095309
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: 53ad73e90a7e9cf77bb8cf196c16725be97f86e70b78a90a8c221a70f5f2b80d
+          pi_b: 7d6b5db0b5a652431be2070f8d0b223c9a4008065b578787ae6978765153230a91b9aa5d6a1399b0eacbf3543b0b553c6ff6f579b38dee35a33af5f40d183026
+          pi_c: 947f2596bb7a761b6379478e4c677597f58a448d17783f4a899ce63ac0f93992
+        ed25519_sig: cd663ffa751cba46024a083e651a6e2e35eae61ede5fa17c3d3c1a7093050075a5c4c781b3695104f8cb88a3cd06beb121a23178043e75a84d88b9282461c609
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: 77688037b6f264899ed053c82fedf5333a015df66f37abf27c901f0af7bd5b10
+          pi_b: 0ebb2ab5fdce4f9fb218626a19f48cbe87856bba360cbb347acb818556720a16efb2cd611371dd1e146f23fe876f23a29ae1bf1f0699e32ab274786ae4ca64a4
+          pi_c: 0f495da11ec0f06a9cafd260d2788d10277468e42d1df1f66c1632c378ab26a0
+        ed25519_sig: e7722259d06fad34c90541fba40c279b981d791de70624b05a8084cd76efbf66ec06d42e45656f394c418741830738c844672685ffb33c10fbab758faae1350d
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: 9ccfce92d1b66ff4f0d7d8a1d844cf3ec028271df2365e4cdfda28dd73b1f305
+          pi_b: e1534e32dca56a5ea10baf880002f686b92cdc9e90b415de241ab967cf9ac5162082040746806d35f2db429451e2d08dfe901e81a42d40b45db3456d7c454691
+          pi_c: e5cceb675d5c533f7d6cde98d472e99689166697a42cf5e50c4032e26143782d
+        ed25519_sig: 3a93ac29ecf58cc1d1ca71d54471cd14bc4fa96b5307844da09287118d84520240c3bfcfcd3125d38b2eb780a9d48f981a82148ffeb82de5da71003970e73c0f
+  faucet_pk: 8e22f182e0875f9cec7758c6cc9986db07f7547c8287e139a02df5f67a3e8b00
+time:
+  slot_duration: '1.000000000'
+mempool:
+  pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0

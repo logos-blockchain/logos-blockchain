@@ -229,7 +229,7 @@ mod tests {
     use ark_ff::Field as _;
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
-    use lb_utils::{blake_rng::RngCore as _, bounded_vec::BoundedVec};
+    use lb_utils::blake_rng::RngCore as _;
     use rand::thread_rng;
 
     use super::*;
@@ -261,7 +261,7 @@ mod tests {
         tip_sequencer_starting_slot: u64,
         posting_timeframe: u32,
         posting_timeout: u32,
-        num_keys: usize,
+        num_keys: u8,
     ) -> ChannelState {
         ChannelState {
             tip_slot: Slot::new(tip_slot),
@@ -271,8 +271,8 @@ mod tests {
             posting_timeout: SlotTimeout(posting_timeout),
             balance: 0,
             withdrawal_nonce: 0,
-            accredited_keys: BoundedVec::new_unchecked(
-                (0..num_keys as u8).map(test_public_key).collect::<Vec<_>>(),
+            accredited_keys: Keys::new_unchecked(
+                (0..num_keys).map(test_public_key).collect::<Vec<_>>(),
             )
             .into(),
             configuration_threshold: 0,
@@ -308,7 +308,7 @@ mod tests {
                 channels: rpds::HashTrieMapSync::new_sync().insert(
                     channel_id,
                     ChannelState {
-                        accredited_keys: BoundedVec::from([test_public_key(7)]).into(),
+                        accredited_keys: Keys::from([test_public_key(7)]).into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         tip_slot: Slot::default(),
@@ -336,7 +336,7 @@ mod tests {
                 .insert(
                     first_id,
                     ChannelState {
-                        accredited_keys: BoundedVec::from([test_public_key(11)]).into(),
+                        accredited_keys: Keys::from([test_public_key(11)]).into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         tip_slot: Slot::default(),
@@ -352,11 +352,8 @@ mod tests {
                 .insert(
                     second_id,
                     ChannelState {
-                        accredited_keys: BoundedVec::from([
-                            test_public_key(22),
-                            test_public_key(23),
-                        ])
-                        .into(),
+                        accredited_keys: Keys::from([test_public_key(22), test_public_key(23)])
+                            .into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         tip_slot: Slot::default(),

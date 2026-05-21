@@ -6,7 +6,7 @@ use std::hash::Hash;
 
 use blake2::{Blake2b, Digest as _};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::NonEmptyBoundedVec;
+use lb_utils::bounded_vec::LowerBoundedVec;
 use multiaddr::{Multiaddr, Protocol};
 use nom::{IResult, Parser as _, bytes::complete::take};
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,9 @@ impl ServiceParameters {
     }
 }
 
-pub type Locators = NonEmptyBoundedVec<Locator, { usize::MAX }>;
+// TODO: Check spec for max limit once we migrate the SDP Declare op to use the
+// `NomEncode` and `NomDecode` traits.
+pub type Locators = LowerBoundedVec<Locator, 1>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
@@ -377,7 +379,7 @@ mod tests {
             serde_json::from_str::<Locators>(&serialized)
                 .unwrap_err()
                 .to_string(),
-            "At least one locator is required"
+            "Input cannot be empty."
         );
     }
 }

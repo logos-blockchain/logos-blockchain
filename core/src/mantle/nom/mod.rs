@@ -113,11 +113,16 @@ where
     }
 }
 
-pub struct NomBoundedVec<'a, T, const N: usize, const N_BYTES: usize>(&'a BoundedVec<T::Output, N>)
+/// Nom encoder for bounded vectors with a specified number of bytes for the
+/// length prefix.
+pub struct NomBoundedVec<'a, T, const MIN: usize, const MAX: usize, const N_BYTES: usize>(
+    &'a BoundedVec<T::Output, MIN, MAX>,
+)
 where
     T: NomDecode;
 
-impl<T, const N: usize, const N_BYTES: usize> NomBoundedVec<'_, T, N, N_BYTES>
+impl<T, const MIN: usize, const MAX: usize, const N_BYTES: usize>
+    NomBoundedVec<'_, T, MIN, MAX, N_BYTES>
 where
     T: NomDecode,
 {
@@ -131,23 +136,27 @@ where
         } else {
             (1u64 << (N_BYTES * 8)) - 1
         };
-        assert!(N as u64 <= max_repr, "N exceeds what N_BYTES can encode");
+        assert!(
+            MAX as u64 <= max_repr,
+            "MAX exceeds what N_BYTES can encode"
+        );
     };
 }
 
-impl<'a, T, const N: usize, const N_BYTES: usize> From<&'a BoundedVec<T::Output, N>>
-    for NomBoundedVec<'a, T, N, N_BYTES>
+impl<'a, T, const MIN: usize, const MAX: usize, const N_BYTES: usize>
+    From<&'a BoundedVec<T::Output, MIN, MAX>> for NomBoundedVec<'a, T, MIN, MAX, N_BYTES>
 where
     T: NomDecode,
 {
-    fn from(vec: &'a BoundedVec<T::Output, N>) -> Self {
+    fn from(vec: &'a BoundedVec<T::Output, MIN, MAX>) -> Self {
         let () = Self::_N_BYTES_VALUE_CHECK;
 
         Self(vec)
     }
 }
 
-impl<T, const N: usize, const N_BYTES: usize> NomEncode for NomBoundedVec<'_, T, N, N_BYTES>
+impl<T, const MIN: usize, const MAX: usize, const N_BYTES: usize> NomEncode
+    for NomBoundedVec<'_, T, MIN, MAX, N_BYTES>
 where
     T: NomDecode<Output: NomEncode>,
 {
@@ -162,11 +171,12 @@ where
     }
 }
 
-impl<T, const N: usize, const N_BYTES: usize> NomDecode for NomBoundedVec<'_, T, N, N_BYTES>
+impl<T, const MIN: usize, const MAX: usize, const N_BYTES: usize> NomDecode
+    for NomBoundedVec<'_, T, MIN, MAX, N_BYTES>
 where
     T: NomDecode,
 {
-    type Output = BoundedVec<T::Output, N>;
+    type Output = BoundedVec<T::Output, MIN, MAX>;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let () = Self::_N_BYTES_VALUE_CHECK;
@@ -176,7 +186,7 @@ where
         buf[..N_BYTES].copy_from_slice(len_bytes);
         let len = u64::from_le_bytes(buf) as usize;
 
-        if len > N {
+        if len > MAX {
             return Err(nom::Err::Error(Error::new(bytes, ErrorKind::TooLarge)));
         }
 

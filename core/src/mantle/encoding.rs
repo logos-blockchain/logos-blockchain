@@ -1,6 +1,6 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
-use lb_utils::bounded_vec::BoundedVec;
+use lb_utils::bounded_vec::UpperBoundedVec;
 use multiaddr::Multiaddr;
 use nom::{
     IResult, Parser as _,
@@ -47,8 +47,9 @@ const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed
 // Maximum byte size allowed for a locator in SDPDeclare operations.
 const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 
-pub type Ops = BoundedVec<Op, { u8::MAX as usize }>;
-type NomOps<'a> = NomBoundedVec<'a, Op, { u8::MAX as usize }, 1>;
+pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
+pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
+type NomOps<'a> = NomBoundedVec<'a, Op, { Ops::MIN }, { Ops::MAX }, 1>;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -1804,11 +1805,13 @@ mod tests {
         valid_input.extend_from_slice(&[0x42; 32]);
 
         // KeyCount = MAX_KEY_COUNT
-        valid_input.push(u8::MAX);
+        valid_input.extend_from_slice(&u16::MAX.encode());
 
         // Add MAX_KEY_COUNT Ed25519 public keys (each 32 bytes)
-        for i in 0..u8::MAX {
-            let sk = Ed25519Key::from_bytes(&[i; 32]);
+        for i in 0..u16::MAX {
+            let mut key_input = i.to_le_bytes().to_vec();
+            key_input.resize(32, 0);
+            let sk = Ed25519Key::from_bytes(&key_input.try_into().unwrap());
             let pk = sk.public_key();
             valid_input.extend_from_slice(&pk.to_bytes());
         }
@@ -1829,7 +1832,7 @@ mod tests {
         assert!(result.is_ok(), "Should accept max key count: {result:?}");
 
         let (_, set_keys_op) = result.unwrap();
-        assert_eq!(set_keys_op.keys.len(), u8::MAX as usize);
+        assert_eq!(set_keys_op.keys.len(), u16::MAX as usize);
     }
 
     #[test]

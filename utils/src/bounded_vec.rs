@@ -15,24 +15,23 @@ pub enum BoundedError {
     TooLong { actual: usize, max: usize },
 }
 
-/// `Vec<T>` whose length is statically capped at `MAX`. The cap is enforced at
-/// every construction site (`new`, `TryFrom<Vec<T>>`, deserialization), so an
-/// instance can never hold more than `MAX` elements.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
+/// `Vec<T>` whose length is statically enforced to be in the range `[MIN,
+/// MAX]`.
+///
+/// The invariant is enforced at every construction site (`TryFrom<Vec<T>>`,
+/// deserialization), so an instance can never be empty nor have more than `MAX`
+/// elements.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(
     into = "Vec<T>",
     try_from = "Vec<T>",
     bound(serialize = "T: Clone + Serialize")
 )]
-pub struct BoundedVec<T, const MAX: usize>(Vec<T>);
+pub struct BoundedVec<T, const MIN: usize, const MAX: usize>(Vec<T>);
 
-impl<T, const MAX: usize> BoundedVec<T, MAX> {
+impl<T, const MIN: usize, const MAX: usize> BoundedVec<T, MIN, MAX> {
+    pub const MIN: usize = MIN;
     pub const MAX: usize = MAX;
-
-    #[must_use]
-    pub const fn new() -> Self {
-        Self(Vec::new())
-    }
 
     /// Construct without checking the cap.
     ///
@@ -53,6 +52,11 @@ impl<T, const MAX: usize> BoundedVec<T, MAX> {
         self.0.is_empty()
     }
 
+    #[must_use]
+    pub fn first(&self) -> Option<&T> {
+        self.0.first()
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         self.0.iter()
     }
@@ -68,9 +72,9 @@ impl<T, const MAX: usize> BoundedVec<T, MAX> {
     }
 
     pub fn try_push(&mut self, item: T) -> Result<(), BoundedError> {
-        if self.0.len() >= MAX {
+        if self.len() >= MAX {
             return Err(BoundedError::TooLong {
-                actual: self.0.len() + 1,
+                actual: self.len() + 1,
                 max: MAX,
             });
         }
@@ -79,10 +83,13 @@ impl<T, const MAX: usize> BoundedVec<T, MAX> {
     }
 }
 
-impl<T, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MAX> {
+impl<T, const MIN: usize, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MIN, MAX> {
     type Error = BoundedError;
 
     fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
+        if value.len() < MIN {
+            return Err(BoundedError::EmptyInput);
+        }
         if value.len() > MAX {
             return Err(BoundedError::TooLong {
                 actual: value.len(),
@@ -93,14 +100,25 @@ impl<T, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MAX> {
     }
 }
 
-impl<T, const INPUT_SIZE: usize, const MAX: usize> From<[T; INPUT_SIZE]> for BoundedVec<T, MAX> {
+impl<T, const MIN: usize, const MAX: usize> From<T> for BoundedVec<T, MIN, MAX> {
+    fn from(value: T) -> Self {
+        const { assert!(MIN >= 1, "Min size cannot be zero.") }
+        Self([value].into())
+    }
+}
+
+impl<T, const MIN: usize, const MAX: usize, const INPUT_SIZE: usize> From<[T; INPUT_SIZE]>
+    for BoundedVec<T, MIN, MAX>
+{
     fn from(value: [T; INPUT_SIZE]) -> Self {
+        const { assert!(INPUT_SIZE >= MIN, "Array length is below BoundedVec MIN") }
         const { assert!(INPUT_SIZE <= MAX, "Array length exceeds BoundedVec MAX") }
         Self(value.into())
     }
 }
 
-impl<T, const INPUT_SIZE: usize, const MAX: usize> From<&[T; INPUT_SIZE]> for BoundedVec<T, MAX>
+impl<T, const MIN: usize, const MAX: usize, const INPUT_SIZE: usize> From<&[T; INPUT_SIZE]>
+    for BoundedVec<T, MIN, MAX>
 where
     T: Clone,
 {
@@ -109,19 +127,19 @@ where
     }
 }
 
-impl<T, const MAX: usize> From<BoundedVec<T, MAX>> for Vec<T> {
-    fn from(value: BoundedVec<T, MAX>) -> Self {
+impl<T, const MIN: usize, const MAX: usize> From<BoundedVec<T, MIN, MAX>> for Vec<T> {
+    fn from(value: BoundedVec<T, MIN, MAX>) -> Self {
         value.0
     }
 }
 
-impl<T, const MAX: usize> AsRef<[T]> for BoundedVec<T, MAX> {
+impl<T, const MIN: usize, const MAX: usize> AsRef<[T]> for BoundedVec<T, MIN, MAX> {
     fn as_ref(&self) -> &[T] {
         &self.0
     }
 }
 
-impl<T, const MAX: usize> Deref for BoundedVec<T, MAX> {
+impl<T, const MIN: usize, const MAX: usize> Deref for BoundedVec<T, MIN, MAX> {
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
@@ -129,19 +147,19 @@ impl<T, const MAX: usize> Deref for BoundedVec<T, MAX> {
     }
 }
 
-impl<T, const MAX: usize> DerefMut for BoundedVec<T, MAX> {
+impl<T, const MIN: usize, const MAX: usize> DerefMut for BoundedVec<T, MIN, MAX> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
 }
 
-impl<T, const MAX: usize> AsRef<Vec<T>> for BoundedVec<T, MAX> {
+impl<T, const MIN: usize, const MAX: usize> AsRef<Vec<T>> for BoundedVec<T, MIN, MAX> {
     fn as_ref(&self) -> &Vec<T> {
         &self.0
     }
 }
 
-impl<'a, T, const MAX: usize> IntoIterator for &'a BoundedVec<T, MAX> {
+impl<'a, T, const MIN: usize, const MAX: usize> IntoIterator for &'a BoundedVec<T, MIN, MAX> {
     type Item = &'a T;
     type IntoIter = Iter<'a, T>;
 
@@ -150,7 +168,7 @@ impl<'a, T, const MAX: usize> IntoIterator for &'a BoundedVec<T, MAX> {
     }
 }
 
-impl<T, const MAX: usize> IntoIterator for BoundedVec<T, MAX> {
+impl<T, const MIN: usize, const MAX: usize> IntoIterator for BoundedVec<T, MIN, MAX> {
     type Item = T;
     type IntoIter = IntoIter<T>;
 
@@ -159,149 +177,9 @@ impl<T, const MAX: usize> IntoIterator for BoundedVec<T, MAX> {
     }
 }
 
-/// `Vec<T>` whose length is statically capped between `1` and `MAX`.
-///
-/// The cap is enforced at every construction site (`new`, `TryFrom<Vec<T>>`,
-/// deserialization), so an instance can never hold more than `MAX` elements.
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize)]
-#[serde(
-    into = "Vec<T>",
-    try_from = "Vec<T>",
-    bound(serialize = "T: Clone + Serialize")
-)]
-// We cannot use `BoundedVec<T, {MAX - 1}>` here because const generics don't
-// yet support arithmetic operations.
-pub struct NonEmptyBoundedVec<T, const MAX: usize>(BoundedVec<T, MAX>);
-
-impl<T, const MAX: usize> NonEmptyBoundedVec<T, MAX> {
-    pub const MAX: usize = MAX;
-
-    /// Construct without checking the caps.
-    ///
-    /// Reserved for callers that have already validated the length. Prefer
-    /// [`Self::try_from<Vec<T>>`] at trust boundaries.
-    #[must_use]
-    pub const fn new_unchecked(items: Vec<T>) -> Self {
-        Self(BoundedVec::new_unchecked(items))
-    }
-
-    #[must_use]
-    pub fn first(&self) -> &T {
-        &self.0[0]
-    }
-
-    #[must_use]
-    #[expect(
-        clippy::len_without_is_empty,
-        reason = "The non-empty invariant is enforced at construction, so `is_empty` would be redundant and misleading."
-    )]
-    pub const fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &T> {
-        self.0.iter()
-    }
-
-    #[must_use]
-    pub fn into_inner(self) -> Vec<T> {
-        self.0.into_inner()
-    }
-
-    pub fn try_push(&mut self, item: T) -> Result<(), BoundedError> {
-        self.0.try_push(item)
-    }
-}
-
-impl<T, const MAX: usize> TryFrom<Vec<T>> for NonEmptyBoundedVec<T, MAX> {
-    type Error = BoundedError;
-
-    fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
-        if value.is_empty() {
-            return Err(BoundedError::EmptyInput);
-        }
-
-        Ok(Self(BoundedVec::new_unchecked(value)))
-    }
-}
-
-impl<T, const MAX: usize> From<T> for NonEmptyBoundedVec<T, MAX>
-where
-    T: Clone,
-{
-    fn from(value: T) -> Self {
-        Self([value].into())
-    }
-}
-
-impl<T, const INPUT_SIZE: usize, const MAX: usize> From<[T; INPUT_SIZE]>
-    for NonEmptyBoundedVec<T, MAX>
-where
-    T: Clone,
-{
-    fn from(value: [T; INPUT_SIZE]) -> Self {
-        const { assert!(INPUT_SIZE > 0, "Array length must be greater than 0") }
-        Self(value.into())
-    }
-}
-
-impl<T, const INPUT_SIZE: usize, const MAX: usize> From<&[T; INPUT_SIZE]>
-    for NonEmptyBoundedVec<T, MAX>
-where
-    T: Clone,
-{
-    fn from(value: &[T; INPUT_SIZE]) -> Self {
-        const { assert!(INPUT_SIZE > 0, "Slice length must be greater than 0") }
-        Self(value.into())
-    }
-}
-
-impl<T, const MAX: usize> From<NonEmptyBoundedVec<T, MAX>> for Vec<T> {
-    fn from(value: NonEmptyBoundedVec<T, MAX>) -> Self {
-        value.0.into()
-    }
-}
-
-impl<T, const MAX: usize> AsRef<[T]> for NonEmptyBoundedVec<T, MAX> {
-    fn as_ref(&self) -> &[T] {
-        &self.0
-    }
-}
-
-impl<T, const MAX: usize> Deref for NonEmptyBoundedVec<T, MAX> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T, const MAX: usize> DerefMut for NonEmptyBoundedVec<T, MAX> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl<T, const MAX: usize> AsRef<Vec<T>> for NonEmptyBoundedVec<T, MAX> {
-    fn as_ref(&self) -> &Vec<T> {
-        self.0.as_ref()
-    }
-}
-
-impl<'a, T, const MAX: usize> IntoIterator for &'a NonEmptyBoundedVec<T, MAX> {
-    type Item = &'a T;
-    type IntoIter = Iter<'a, T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        (&self.0).into_iter()
-    }
-}
-
-impl<T, const MAX: usize> IntoIterator for NonEmptyBoundedVec<T, MAX> {
-    type Item = T;
-    type IntoIter = IntoIter<T>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
-    }
-}
+// `[0, MAX]` elements.
+pub type UpperBoundedVec<T, const MAX: usize> = BoundedVec<T, 0, MAX>;
+// `[MIN, usize::MAX]` elements.
+pub type LowerBoundedVec<T, const MIN: usize> = BoundedVec<T, MIN, { usize::MAX }>;
+// `[1, MAX]` elements.
+pub type NonEmptyBoundedVec<T, const MAX: usize> = BoundedVec<T, 1, MAX>;
