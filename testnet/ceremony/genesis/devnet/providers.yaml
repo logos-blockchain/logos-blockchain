@@ -1,5 +1,20 @@
-- provider_id: d753718c843490d46d5dcc1b04fb0eae04116fdcd2ec345e2f40f86810785ca8
-  zk_id: 870a752d28856f77d1ce8f1c68a2279de213640aa97ca30e5bdba461d3ddd624
-  locators: 
-    - /ip4/65.109.51.37/udp/3000/quic-v1
+- provider_id: 1b5e78fd18f5bc9e3d30c5d213b6dac905da3b7d1b0698b25d28ac168d3500f7
+  zk_id: 7dfab2c05ee11439587776a9704a86b166d7802606c01505719fc27af1bc7b1e
+  locators:
+    - /ip4/65.108.203.235/udp/3400/quic-v1
+  service_type: BN
+- provider_id: c5e20d6ac656d11228d03ef05d118c2c639823108782279e6e3590fdec8986e9
+  zk_id: dbfde040040915600148de9ef99aca409b0707b012f23ced36a361d32ec59b17
+  locators:
+    - /ip4/65.108.203.235/udp/3401/quic-v1
+  service_type: BN
+- provider_id: 29442739347e970e624102d52f80847649653e24f6a57f422db85678aa3ceefc
+  zk_id: bd6dd65543fdabb10e155c1ae982ecf6e9ed02fa58140a0e5249f52aac66cb17
+  locators:
+    - /ip4/65.108.203.235/udp/3402/quic-v1
+  service_type: BN
+- provider_id: f86b02bb9c24d6ecb1fcf2056572cf1a8741406698a86a78cc71d0491464ff1e
+  zk_id: 3bd893ccdf4f4276d9eeeb0b65ba5817082a001adc84206b9705c10fe293b001
+  locators:
+    - /ip4/65.108.203.235/udp/3403/quic-v1
   service_type: BN
