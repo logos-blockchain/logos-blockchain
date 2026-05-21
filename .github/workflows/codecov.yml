@@ -19,18 +19,20 @@ jobs:
       - name: Add llvm-tools-preview component
         run: rustup component add llvm-tools-preview
       - name: Build required binaries
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
-        with:
-          command: build
-          args: --all-features -p logos-blockchain-node
+        env:
+          CARGO_BUILD_JOBS: 4
+        run: |
+          taskset -c 0-3 nice -n 10 \
+            cargo build --all-features -p logos-blockchain-node
       - name: Run tests
-        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/debug/logos-blockchain-node
           LOGOS_BLOCKCHAIN_KZGRS_PARAMS_PATH: ${{ github.workspace }}/tests/kzgrs
-        with:
-          command: test
-          args: --all --all-features
+          CARGO_BUILD_JOBS: 4
+          RUST_TEST_THREADS: 4
+        run: |
+          taskset -c 0-3 nice -n 10 \
+            cargo test --all --all-features
       - name: Run Grcov
         run: |
           rm -rf /tmp/coverage 
