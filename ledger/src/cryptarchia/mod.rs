@@ -520,6 +520,20 @@ impl LedgerState {
         &self.next_epoch_state
     }
 
+    /// Seeds the genesis epoch-state snapshots with the genesis SDP ledger.
+    ///
+    /// At genesis the cryptarchia ledger is built before the mantle `SdpLedger`
+    /// exists (the mantle ledger is derived from the cryptarchia epoch state),
+    /// so the initial epoch states start with an empty SDP snapshot. Once the
+    /// genesis `SdpLedger` is available, this seeds it into the epoch 0/1
+    /// snapshots so they carry the genesis membership. Genesis use only.
+    #[must_use]
+    pub fn with_genesis_sdp(mut self, sdp: SdpLedger) -> Self {
+        self.next_epoch_state.sdp = sdp.clone();
+        self.epoch_state.sdp = sdp;
+        self
+    }
+
     #[must_use]
     pub const fn latest_utxos(&self) -> &UtxoTree {
         &self.utxos
