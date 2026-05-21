@@ -225,7 +225,7 @@ impl Node for NodeHttpClient {
 }
 
 /// Returns true if `transactions` contains any deposit op on `channel_id`.
-fn has_channel_deposit(transactions: &[SignedMantleTx], channel_id: ChannelId) -> bool {
+pub(crate) fn has_channel_deposit(transactions: &[SignedMantleTx], channel_id: ChannelId) -> bool {
     transactions.iter().any(|tx| {
         tx.mantle_tx
             .0
@@ -236,7 +236,7 @@ fn has_channel_deposit(transactions: &[SignedMantleTx], channel_id: ChannelId) -
 
 /// Builds a `(tx_hash, op_id) -> amount` lookup from a block's events,
 /// keeping only deposit events.
-fn build_deposit_amounts(events: &Events) -> HashMap<(TxHash, Hash), Value> {
+pub(crate) fn build_deposit_amounts(events: &Events) -> HashMap<(TxHash, Hash), Value> {
     events
         .iter()
         .filter_map(|event| match event {

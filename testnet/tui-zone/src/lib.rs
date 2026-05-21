@@ -111,16 +111,23 @@ async fn handle_event(
             handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
         Event::TxsFinalized { txs, .. } => {
-            let inscriptions: Vec<InscriptionInfo> =
-                txs.iter().map(|t| t.inscription().clone()).collect();
+            // TUI only cares about inscriptions for rendering; ignore Deposit
+            // entries which have no inscription payload.
+            let inscriptions: Vec<InscriptionInfo> = txs
+                .iter()
+                .filter_map(|t| t.inscription().cloned())
+                .collect();
             state.on_finalized(&inscriptions);
             ui::render_state(state);
             ui::prompt();
         }
         Event::Published { tx, checkpoint } => {
-            let info = tx.inscription();
-            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
-            state.on_published(info);
+            // `publish_*` APIs only emit inscription / atomic-withdraw — never
+            // a deposit — so `inscription()` is `Some` here in practice.
+            if let Some(info) = tx.inscription() {
+                debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
+                state.on_published(info);
+            }
             state.save_checkpoint(checkpoint);
             ui::render_state(state);
             ui::prompt();

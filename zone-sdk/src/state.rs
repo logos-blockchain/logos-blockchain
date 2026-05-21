@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
+    crypto::Hash,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Transaction as _,
-        ops::channel::{MsgId, inscribe::Inscription, withdraw::ChannelWithdrawOp},
+        SignedMantleTx, Transaction as _, Value,
+        ledger::Inputs,
+        ops::channel::{ChannelId, MsgId, inscribe::Inscription, withdraw::ChannelWithdrawOp},
         tx::TxHash,
     },
 };
@@ -42,8 +44,29 @@ pub struct AtomicWithdrawInfo {
     pub withdraws: Vec<WithdrawInfo>,
 }
 
-/// A tx tracked by the SDK — either a plain inscription or an atomic
-/// inscription+withdraw bundle. Used in event payloads for
+/// A channel deposit observed in a finalized L1 block. Sequencers do not
+/// publish deposits — these are pure observations enriched with the deposit
+/// `amount` from the chain events API.
+#[derive(Debug, Clone)]
+pub struct DepositInfo {
+    /// The transaction hash containing this deposit op.
+    pub tx_hash: TxHash,
+    /// The `op_id` of the deposit op (stable identity within the tx).
+    pub op_id: Hash,
+    /// Target channel.
+    pub channel_id: ChannelId,
+    /// Notes consumed by the deposit (spent-once at the UTXO layer).
+    pub inputs: Inputs,
+    /// Total value deposited, sourced from the block's events.
+    pub amount: Value,
+    /// Opaque metadata associated with this deposit.
+    pub metadata: Vec<u8>,
+}
+
+/// A tx surfaced by the SDK in event payloads.
+///
+/// Either our own publish (inscription / atomic withdraw bundle), or an
+/// observed deposit from a finalized L1 block. Used for
 /// adopted/published/finalized observations.
 #[derive(Debug, Clone)]
 pub enum PublishedTx {
@@ -52,6 +75,10 @@ pub enum PublishedTx {
     /// A bundled inscription+withdraw(s) published via
     /// `publish_atomic_withdraw`.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// An observed channel deposit (finalized on L1). Sequencers never
+    /// publish deposits — these are surfaced for consumers (e.g. bridge
+    /// implementations) that need to react to finalized deposits.
+    Deposit(DepositInfo),
 }
 
 impl PublishedTx {
@@ -61,16 +88,18 @@ impl PublishedTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
+            Self::Deposit(d) => d.tx_hash,
         }
     }
 
-    /// The inscription info for this entry. Atomic-withdraw bundles always
-    /// carry exactly one inscription.
+    /// The inscription info for this entry. Returns `None` for
+    /// [`PublishedTx::Deposit`] which has no inscription.
     #[must_use]
-    pub const fn inscription(&self) -> &InscriptionInfo {
+    pub const fn inscription(&self) -> Option<&InscriptionInfo> {
         match self {
-            Self::Inscription(i) => i,
-            Self::AtomicWithdraw(a) => &a.inscription,
+            Self::Inscription(i) => Some(i),
+            Self::AtomicWithdraw(a) => Some(&a.inscription),
+            Self::Deposit(_) => None,
         }
     }
 }
