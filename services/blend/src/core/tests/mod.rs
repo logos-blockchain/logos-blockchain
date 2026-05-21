@@ -1439,18 +1439,22 @@ async fn test_handle_clock_event_new_epoch() {
         EpochHandler::new(TestChainService, 1.try_into().unwrap());
 
     // First tick initializes the epoch handler.
-    let (updated_info, updated_epoch) = handle_clock_event(
-        SlotTick {
+    let (updated_info, updated_epoch) = match epoch_handler
+        .tick(SlotTick {
             epoch: 1.into(),
             slot: 1.into(),
-        },
-        &settings,
-        &mut epoch_handler,
-        &mut processor,
-        public_info.clone(),
-        initial_epoch,
-    )
-    .await;
+        })
+        .await
+    {
+        Some(epoch_event) => handle_clock_event(
+            epoch_event,
+            &settings,
+            &mut processor,
+            public_info.clone(),
+            initial_epoch,
+        ),
+        None => (public_info.clone(), initial_epoch),
+    };
     assert_eq!(
         updated_epoch,
         Epoch::new(1),
@@ -1464,34 +1468,42 @@ async fn test_handle_clock_event_new_epoch() {
     );
 
     // Tick in the same epoch should not change epoch.
-    let (unchanged_info, unchanged_epoch) = handle_clock_event(
-        SlotTick {
+    let (unchanged_info, unchanged_epoch) = match epoch_handler
+        .tick(SlotTick {
             epoch: 1.into(),
             slot: 2.into(),
-        },
-        &settings,
-        &mut epoch_handler,
-        &mut processor,
-        updated_info.clone(),
-        updated_epoch,
-    )
-    .await;
+        })
+        .await
+    {
+        Some(epoch_event) => handle_clock_event(
+            epoch_event,
+            &settings,
+            &mut processor,
+            updated_info.clone(),
+            updated_epoch,
+        ),
+        None => (updated_info.clone(), updated_epoch),
+    };
     assert_eq!(unchanged_epoch, Epoch::new(1));
     assert_eq!(unchanged_info.epoch, updated_info.epoch);
 
     // Tick in a new epoch should advance again.
-    let (final_info, final_epoch) = handle_clock_event(
-        SlotTick {
+    let (final_info, final_epoch) = match epoch_handler
+        .tick(SlotTick {
             epoch: 2.into(),
             slot: 3.into(),
-        },
-        &settings,
-        &mut epoch_handler,
-        &mut processor,
-        unchanged_info.clone(),
-        unchanged_epoch,
-    )
-    .await;
+        })
+        .await
+    {
+        Some(epoch_event) => handle_clock_event(
+            epoch_event,
+            &settings,
+            &mut processor,
+            unchanged_info.clone(),
+            unchanged_epoch,
+        ),
+        None => (unchanged_info.clone(), unchanged_epoch),
+    };
     assert_eq!(
         final_epoch,
         Epoch::new(2),

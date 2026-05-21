@@ -933,7 +933,9 @@ where
                 handle_release_round_for_old_session(processed_messages_to_release, rng, backend, network_adapter, previous_session_number).await;
             }
             Some(clock_tick) = remaining_clock_stream.next() => {
-                (public_info, epoch) = handle_clock_event(clock_tick, blend_config, epoch_handler, &mut crypto_processor, public_info, epoch).await;
+                if let Some(epoch_event) = epoch_handler.tick(clock_tick).await {
+                    (public_info, epoch) = handle_clock_event(epoch_event, blend_config, &mut crypto_processor, public_info, epoch);
+                }
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
                 if let Some(new_leader_inputs) = handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor, epoch) {
@@ -1047,7 +1049,9 @@ async fn retire<
                 handle_release_round_for_old_session(processed_messages_to_release, &mut rng, &backend, &network_adapter, crypto_processor.session()).await;
             }
             Some(clock_tick) = remaining_clock_stream.next() => {
-                (public_info, epoch) = handle_clock_event(clock_tick, blend_config, &mut epoch_handler, &mut crypto_processor, public_info, epoch).await;
+                if let Some(epoch_event) = epoch_handler.tick(clock_tick).await {
+                    (public_info, epoch) = handle_clock_event(epoch_event, blend_config, &mut crypto_processor, public_info, epoch);
+                }
             }
             Some(SessionEvent::TransitionPeriodExpired) = remaining_session_stream.next() => {
                 handle_session_transition_expired(&mut backend, blending_token_collector, &sdp_relay).await;
@@ -2061,18 +2065,9 @@ where
 /// complete.
 ///
 /// Returns the updated public info and the new tracked epoch.
-async fn handle_clock_event<
-    NodeId,
-    ProofsGenerator,
-    ProofsVerifier,
-    ChainService,
-    BackendSettings,
-    CorePoQGenerator,
-    RuntimeServiceId,
->(
-    slot_tick: SlotTick,
+fn handle_clock_event<NodeId, ProofsGenerator, ProofsVerifier, BackendSettings, CorePoQGenerator>(
+    epoch_event: EpochEvent,
     settings: &RunningBlendConfig<BackendSettings>,
-    epoch_handler: &mut EpochHandler<ChainService, RuntimeServiceId>,
     cryptographic_processor: &mut CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -2086,13 +2081,7 @@ where
     BackendSettings: Sync,
     ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
     ProofsVerifier: ProofsVerifierTrait,
-    ChainService: ChainApi<RuntimeServiceId> + Sync,
-    RuntimeServiceId: Sync,
 {
-    let Some(epoch_event) = epoch_handler.tick(slot_tick).await else {
-        return (current_public_info, current_epoch);
-    };
-
     match epoch_event {
         EpochEvent::NewEpoch((epoch_state, new_epoch)) => {
             tracing::debug!(target: LOG_TARGET, "New epoch {new_epoch:?} with nonce {:?} started", epoch_state.nonce);
