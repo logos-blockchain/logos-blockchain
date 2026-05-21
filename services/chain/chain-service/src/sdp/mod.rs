@@ -67,8 +67,8 @@ where
 /// - which is older than LIB.
 ///
 /// If LIB is the 'current' last block of an epoch, and if there are still
-/// some newer slots in the epoch (i.e. if LIB is not on the last slot of the epoch),
-/// skip the epoch because newer blocks may be added to the epoch later.
+/// some newer slots in the epoch (i.e. if LIB is not on the last slot of the
+/// epoch), skip the epoch because newer blocks may be added to the epoch later.
 async fn find_sdp_snapshot_block<Storage>(
     current_epoch: Epoch,
     lib_id: HeaderId,

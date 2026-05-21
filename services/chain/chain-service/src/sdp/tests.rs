@@ -181,7 +181,8 @@ async fn snapshot_at_older_epoch_if_lib_is_old() {
 }
 
 // For epoch 2+, if there is no block in `current_epoch - 2`,
-// the snapshot should be taken at the last block of the most recent older epoch.
+// the snapshot should be taken at the last block of the most recent older
+// epoch.
 #[tokio::test]
 async fn snapshot_at_older_block_if_no_blocks_in_epoch_minus_2() {
     let config = config();
@@ -202,7 +203,8 @@ async fn snapshot_at_older_block_if_no_blocks_in_epoch_minus_2() {
             .await
             .unwrap();
     // snapshot should be taken at id(1) which is the last block of epoch 0
-    // because there's no block in epoch 2 and there's no last block finalized in epoch 1.
+    // because there's no block in epoch 2 and there's no last block finalized in
+    // epoch 1.
     assert_eq!(snapshot, genesis_decls);
     assert_broadcast(&mut rx, 4.into(), &genesis_decls).await;
 }
