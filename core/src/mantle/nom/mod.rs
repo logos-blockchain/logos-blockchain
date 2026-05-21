@@ -5,7 +5,7 @@ use nom::{
     combinator::{map, map_res},
     error::{Error, ErrorKind},
     multi::count,
-    number::complete::u8,
+    number::complete::{le_u16, le_u32, u8},
 };
 
 use crate::mantle::{
@@ -41,9 +41,24 @@ impl NomDecode for u8 {
     }
 }
 
+impl NomEncode for u16 {
+    fn encode(&self) -> Vec<u8> {
+        self.to_le_bytes().to_vec()
+    }
+}
+
+impl NomDecode for u16 {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        // UINT16 = 2BYTE
+        le_u16(bytes)
+    }
+}
+
 impl NomEncode for u32 {
     fn encode(&self) -> Vec<u8> {
-        encode_uint32(*self)
+        self.to_le_bytes().to_vec()
     }
 }
 
@@ -51,7 +66,8 @@ impl NomDecode for u32 {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        decode_uint32(bytes)
+        // UINT32 = 4BYTE
+        le_u32(bytes)
     }
 }
 

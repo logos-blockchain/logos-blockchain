@@ -147,7 +147,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             .get(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
-                accredited_keys: vec![self.signer].into(),
+                accredited_keys: BoundedVec::from([self.signer]).into(),
                 configuration_threshold: 1,
                 tip_message: MsgId::root(),
                 tip_slot: ctx.block_slot,

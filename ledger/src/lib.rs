@@ -952,7 +952,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: channel_id,
-            keys: vec![verifying_key],
+            keys: [verifying_key].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
@@ -983,14 +983,14 @@ mod tests {
                 .contains_key(&channel_id)
         );
         assert_eq!(
-            new_state
+            *new_state
                 .mantle_ledger
                 .channels()
                 .channels
                 .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
-            vec![verifying_key].into()
+            [verifying_key].into()
         );
         assert!(events.is_empty());
     }
@@ -1379,7 +1379,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: channel_id,
-            keys: vec![],
+            keys: [].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
@@ -1441,7 +1441,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: channel1,
-            keys: vec![vk3, vk4],
+            keys: [vk3, vk4].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
