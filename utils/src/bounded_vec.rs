@@ -187,7 +187,7 @@ impl<T, const MAX: usize> NonEmptyBoundedVec<T, MAX> {
 
     #[must_use]
     pub fn first(&self) -> &T {
-        self.0.first().expect("Stored vector is not empty.")
+        &self.0[0]
     }
 
     #[must_use]
