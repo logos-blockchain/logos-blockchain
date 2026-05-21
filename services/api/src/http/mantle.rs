@@ -10,6 +10,7 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::Block,
+    events::Events,
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
     sdp::{Declaration, Declarations},
@@ -226,6 +227,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     ConsensusService: ServiceData<Message = ConsensusMsg<Transaction>>,
     RuntimeServiceId: Debug
         + Sync
@@ -325,6 +327,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -403,6 +406,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -497,6 +501,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -542,6 +547,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -723,6 +729,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -779,6 +786,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -824,6 +832,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -867,6 +876,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Sync
         + Display

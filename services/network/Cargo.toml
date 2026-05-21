@@ -18,6 +18,7 @@ futures             = { workspace = true }
 lb-core             = { workspace = true }
 lb-cryptarchia-sync = { workspace = true }
 lb-libp2p           = { workspace = true }
+lb-log-targets      = { workspace = true }
 lb-tracing          = { workspace = true }
 overwatch           = { workspace = true }
 rand                = { features = ["std"], workspace = true }

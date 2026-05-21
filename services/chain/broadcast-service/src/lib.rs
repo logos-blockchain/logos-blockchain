@@ -19,7 +19,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot};
 use tokio_stream::wrappers::BroadcastStream;
-use tracing::{debug, error, info};
+use tracing::{error, info, trace};
 
 const BROADCAST_CHANNEL_SIZE: usize = 128;
 
@@ -97,13 +97,13 @@ where
             match msg {
                 BlockBroadcastMsg::BroadcastFinalizedBlock(block) => {
                     if self.finalized_blocks.send(block).is_err() {
-                        debug!("No listener for finalized blocks. Not broadcasting. ");
+                        trace!("No listener for finalized blocks. Not broadcasting. ");
                     }
                 }
                 BlockBroadcastMsg::BroadcastBlendProviders(providers) => {
                     self.last_blend_providers = Some(providers.clone());
                     if self.blend_providers.send(providers).is_err() {
-                        debug!("No listener for blend active providers. Not broadcasting. ");
+                        trace!("No listener for blend active providers. Not broadcasting. ");
                     }
                 }
                 BlockBroadcastMsg::SubscribeToFinalizedBlocks { result_sender } => {

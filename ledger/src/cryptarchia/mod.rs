@@ -6,6 +6,7 @@ use std::sync::{Arc, LazyLock};
 use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
+    events::Events,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
@@ -410,7 +411,7 @@ impl LedgerState {
         transfer_op: &TransferOp,
         transfer_sig: &ZkSignature,
         tx_hash: TxHash,
-    ) -> Result<(Self, Balance), LedgerError<Id>> {
+    ) -> Result<(Self, Balance, Events), LedgerError<Id>> {
         //validate the transfer
         transfer_op
             .validate(&TransferValidationContext {
@@ -427,10 +428,11 @@ impl LedgerState {
             .map_err(mantle::Error::Transfer)?;
 
         //execute the transfer
-        self.utxos = transfer_op
+        let (result, events) = transfer_op
             .execute(self.utxos)
             .map_err(mantle::Error::Transfer)?;
-        Ok((self, balance))
+        self.utxos = result;
+        Ok((self, balance, events))
     }
 
     fn update_nonce(self, contrib: &Fr, slot: Slot) -> Self {
@@ -766,7 +768,7 @@ pub mod tests {
             .unwrap();
         let id = make_id(parent, slot, utxo);
         let proof = generate_proof(&ledger_state, &utxo, slot);
-        let (_, state) = ledger.prepare_update::<_, MainnetGasConstants>(
+        let (_, state, _) = ledger.prepare_update::<_, MainnetGasConstants>(
             id,
             parent,
             slot,
@@ -1279,7 +1281,7 @@ pub mod tests {
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
         let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
-        let mantle_tx = MantleTx(vec![Op::Transfer(transfer_op.clone())]);
+        let mantle_tx = MantleTx([Op::Transfer(transfer_op.clone())].into());
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();
         (
             SignedMantleTx {
@@ -1345,7 +1347,7 @@ pub mod tests {
 
         let _fees =
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
-        let (new_state, balance) = ledger_state
+        let (new_state, balance, events) = ledger_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
                 &transfer_op,
@@ -1358,6 +1360,7 @@ pub mod tests {
             balance,
             i128::from(input_note.value - output_note1.value - output_note2.value)
         );
+        assert!(events.is_empty());
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));
@@ -1382,7 +1385,7 @@ pub mod tests {
         let locked_notes = LockedNotes::new();
         let _fees =
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
-        let (final_state, final_balance) = new_state
+        let (final_state, final_balance, events) = new_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
                 &transfer_op,
@@ -1396,6 +1399,7 @@ pub mod tests {
         );
         assert!(!final_state.utxos.contains(&output_utxo1.id()));
         assert!(!final_state.utxos.contains(&output_utxo2.id()));
+        assert!(events.is_empty());
     }
 
     #[test]
@@ -1467,7 +1471,7 @@ pub mod tests {
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note, output_note]);
 
-        let (_, balance) = ledger_state
+        let (_, balance, events) = ledger_state
             .clone()
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
@@ -1477,6 +1481,7 @@ pub mod tests {
             )
             .unwrap();
         assert_eq!(balance, -1);
+        assert!(events.is_empty());
 
         let (tx, transfer_op, transfer_sig) =
             create_tx_with_transfer(&[(&input_sk, &input_utxo)], vec![output_note]);
@@ -1519,8 +1524,9 @@ pub mod tests {
         );
         assert!(result.is_ok());
 
-        let (new_state, balance) = result.unwrap();
+        let (new_state, balance, events) = result.unwrap();
         assert_eq!(balance, 10000);
+        assert!(events.is_empty());
 
         // Verify input was consumed
         assert!(!new_state.utxos.contains(&input_utxo.id()));

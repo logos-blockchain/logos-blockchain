@@ -8,17 +8,22 @@ use futures::stream::{self, StreamExt as _};
 use lb_common_http_client::ProcessedBlockEvent;
 use lb_core::header::HeaderId;
 use lb_http_api_common::{DEFAULT_NUMBER_OF_BLOCKS_TO_STREAM, paths::BLOCKS_RANGE_STREAM};
-use logos_blockchain_tests::{
-    common::time::max_block_propagation_time,
-    nodes::{Validator, create_validator_config},
-    topology::configs::{
-        create_general_configs, deployment::e2e_deployment_settings_with_genesis_block,
-    },
+use lb_node::config::RunConfig;
+use lb_testing_framework::{
+    DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+};
+use logos_blockchain_tests::common::manual_cluster::{
+    LocalManualClusterHarnessBase, ManualNodeLayout, start_local_manual_cluster_with_layout,
 };
 use serial_test::serial;
+use testing_framework_core::scenario::{DynError, StartedNode};
 use tokio::time::timeout;
 
-const CHAIN_LENGTH_MULTIPLIER: u32 = 3;
+const NODE_COUNT: usize = 2;
+const SECURITY_PARAM: u32 = 7;
+const MIN_LIB_HEIGHT: usize = 3;
+const MIN_BLOCKS_ABOVE_LIB: usize = 2;
+const WAIT_FOR_LIB_AND_TIP_TIMEOUT: Duration = Duration::from_mins(10);
 
 #[derive(Clone)]
 struct CanonicalChain {
@@ -40,48 +45,45 @@ impl CanonicalChain {
     }
 }
 
-async fn spawn_two_validators(test_name: &str) -> [Validator; 2] {
-    let (configs, genesis_block) = create_general_configs(2, Some(test_name));
-    let deployment_settings = e2e_deployment_settings_with_genesis_block(&genesis_block);
-
-    let configs = configs
-        .into_iter()
-        .map(|c| {
-            let mut config = create_validator_config(c, deployment_settings.clone());
-            config.deployment.time.slot_duration = Duration::from_secs(1);
-            config
-                .user
-                .cryptarchia
-                .service
-                .bootstrap
-                .prolonged_bootstrap_period = Duration::ZERO;
-            config.deployment.cryptarchia.security_param = NonZero::new(7).unwrap();
-            config
-        })
-        .collect::<Vec<_>>();
-
-    let nodes = futures_util::future::join_all(configs.into_iter().map(Validator::spawn))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-
-    let mut iter = nodes.into_iter();
-    [iter.next().unwrap(), iter.next().unwrap()]
+async fn start_blocks_streaming_cluster(
+    test_name: &str,
+) -> (LocalManualClusterHarnessBase, Vec<StartedNode<LbcEnv>>) {
+    start_local_manual_cluster_with_layout(
+        test_name,
+        "cryptarchia-blocks-streaming",
+        DeploymentBuilder::new(
+            TfTopologyConfig::with_node_numbers(NODE_COUNT)
+                .with_test_context(Some(test_name.to_owned())),
+        ),
+        NODE_COUNT,
+        ManualNodeLayout::SelectNodeSeed(0),
+        |config| Ok::<_, DynError>(blocks_streaming_config(config)),
+    )
+    .await
 }
 
-async fn wait_for_lib_and_tip(nodes: &[Validator; 2]) -> lb_chain_service::CryptarchiaInfo {
-    let config = nodes[0].config();
+const fn blocks_streaming_config(mut config: RunConfig) -> RunConfig {
+    config.deployment.time.slot_duration = Duration::from_secs(1);
+    config
+        .user
+        .cryptarchia
+        .service
+        .bootstrap
+        .prolonged_bootstrap_period = Duration::ZERO;
+    config.deployment.cryptarchia.security_param = NonZero::new(SECURITY_PARAM).unwrap();
 
-    let min_height = config.deployment.cryptarchia.security_param.get() * 2 - 1;
-    let timeout = max_block_propagation_time(
-        min_height * CHAIN_LENGTH_MULTIPLIER,
-        nodes.len().try_into().unwrap(),
-        &config.deployment,
-        3.0,
-    );
+    config
+}
+
+fn required_tip_height() -> u64 {
+    u64::from(SECURITY_PARAM) + MIN_LIB_HEIGHT as u64 + MIN_BLOCKS_ABOVE_LIB as u64
+}
+
+async fn wait_for_lib_and_tip(nodes: &[StartedNode<LbcEnv>]) -> lb_chain_service::CryptarchiaInfo {
+    let min_height = required_tip_height();
+    let timeout = WAIT_FOR_LIB_AND_TIP_TIMEOUT;
     println!(
-        "waiting for canonical chain with height >= {min_height}, lib height >= 3 and tip at least 2 above LIB: timeout:{timeout:?}",
+        "waiting for canonical chain with height >= {min_height}, lib height >= {MIN_LIB_HEIGHT} and tip at least {MIN_BLOCKS_ABOVE_LIB} above LIB: timeout:{timeout:?}",
     );
     let timeout = tokio::time::sleep(timeout);
     let mut tick: u32 = 0;
@@ -89,19 +91,20 @@ async fn wait_for_lib_and_tip(nodes: &[Validator; 2]) -> lb_chain_service::Crypt
         () = timeout => panic!("timed out waiting for 'lib_slot >= 1 && tip_slot > lib_slot'"),
 
         () = async { loop {
-                let infos = stream::iter(nodes)
-                    .then(async |n| n.consensus_info(tick == 0).await)
-                    .map(|v|v.cryptarchia_info)
-                    .collect::<Vec<_>>()
-                    .await;
+                let Some(infos) = collect_cryptarchia_infos(nodes).await else {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    continue;
+                };
 
                 let all_reached_min_height = infos
                     .iter()
-                    .all(|info| info.height >= u64::from(min_height));
+                    .all(|info| info.height >= min_height);
 
                 if all_reached_min_height {
-                    let chain = canonical_chain(&nodes[0], &infos[0]).await;
-                    if chain.lib_height >= 3 && chain.tip_height >= chain.lib_height + 2 {
+                    let chain = canonical_chain(&nodes[0].client, &infos[0]).await;
+                    if chain.lib_height >= MIN_LIB_HEIGHT
+                        && chain.tip_height >= chain.lib_height + MIN_BLOCKS_ABOVE_LIB
+                    {
                         break;
                     }
                 }
@@ -122,20 +125,40 @@ async fn wait_for_lib_and_tip(nodes: &[Validator; 2]) -> lb_chain_service::Crypt
         } => {}
     }
     // Print final stats
-    let final_infos = stream::iter(nodes)
-        .then(async |n| {
-            let info = n.consensus_info(false).await.cryptarchia_info;
-            format!("{}/{:?}/{:?}", info.height, info.slot, info.lib_slot)
-        })
-        .collect::<Vec<_>>()
-        .await;
+    let final_infos = collect_cryptarchia_infos(nodes)
+        .await
+        .expect("fetching final consensus info should succeed")
+        .into_iter()
+        .map(|info| format!("{}/{:?}/{:?}", info.height, info.slot, info.lib_slot))
+        .collect::<Vec<_>>();
     println!("final: {}", final_infos.join(" | "));
 
-    nodes[0].consensus_info(false).await.cryptarchia_info
+    nodes[0]
+        .client
+        .consensus_info()
+        .await
+        .expect("fetching final consensus info should succeed")
+        .cryptarchia_info
+}
+
+async fn collect_cryptarchia_infos(
+    nodes: &[StartedNode<LbcEnv>],
+) -> Option<Vec<lb_chain_service::CryptarchiaInfo>> {
+    let infos = stream::iter(nodes)
+        .then(async |node| node.client.consensus_info().await.ok())
+        .collect::<Vec<_>>()
+        .await;
+
+    infos.into_iter().collect::<Option<Vec<_>>>().map(|infos| {
+        infos
+            .into_iter()
+            .map(|info| info.cryptarchia_info)
+            .collect()
+    })
 }
 
 async fn canonical_chain(
-    node: &Validator,
+    node: &NodeHttpClient,
     final_info: &lb_chain_service::CryptarchiaInfo,
 ) -> CanonicalChain {
     let mut ids_by_height = BTreeMap::new();
@@ -147,7 +170,7 @@ async fn canonical_chain(
 
     while current_height >= 1 {
         let block = node
-            .get_api_block(current_id)
+            .block(&current_id)
             .await
             .expect("canonical block request should succeed")
             .expect("canonical block should exist");
@@ -190,11 +213,17 @@ async fn canonical_chain(
     }
 }
 
-async fn setup_nodes_and_chain(test_name: &str) -> ([Validator; 2], CanonicalChain) {
-    let nodes = spawn_two_validators(test_name).await;
+async fn setup_nodes_and_chain(
+    test_name: &str,
+) -> (
+    LocalManualClusterHarnessBase,
+    Vec<StartedNode<LbcEnv>>,
+    CanonicalChain,
+) {
+    let (base, nodes) = start_blocks_streaming_cluster(test_name).await;
     let final_info = wait_for_lib_and_tip(&nodes).await;
-    let chain = canonical_chain(&nodes[0], &final_info).await;
-    (nodes, chain)
+    let chain = canonical_chain(&nodes[0].client, &final_info).await;
+    (base, nodes, chain)
 }
 
 fn slot_for_height(chain: &CanonicalChain, height: usize) -> u64 {
@@ -206,7 +235,7 @@ fn slot_for_height(chain: &CanonicalChain, height: usize) -> u64 {
 }
 
 async fn request_stream_events(
-    node: &Validator,
+    node: &NodeHttpClient,
     blocks_limit: Option<NonZero<usize>>,
     slot_from: Option<u64>,
     slot_to: Option<u64>,
@@ -222,7 +251,7 @@ async fn request_stream_events(
     );
 
     let stream = node
-        .get_blocks_stream_in_range_with_chunk_size(
+        .blocks_range_stream(
             blocks_limit,
             slot_from,
             slot_to,
@@ -267,8 +296,12 @@ fn assert_stream_integrity(_chain: &CanonicalChain, events: &[ProcessedBlockEven
     );
 }
 
-async fn refresh_chain(node: &Validator, chain: &CanonicalChain) -> CanonicalChain {
-    let info = node.consensus_info(false).await.cryptarchia_info;
+async fn refresh_chain(node: &NodeHttpClient, chain: &CanonicalChain) -> CanonicalChain {
+    let info = node
+        .consensus_info()
+        .await
+        .expect("fetching consensus info should succeed")
+        .cryptarchia_info;
     if let Some(current_tip) = chain.get_tip_id()
         && let Some(current_lib) = chain.get_lib_id()
         && info.tip == current_tip
@@ -329,8 +362,10 @@ fn assert_event_order_matches_expected(events: &[ProcessedBlockEvent], expected_
 #[tokio::test]
 #[serial]
 async fn test_blocks_streaming() {
-    let (nodes, mut chain) =
+    let (_base, nodes, mut chain) =
         setup_nodes_and_chain("blocks_streaming_use_cases_share_one_setup").await;
+    let node = &nodes[0].client;
+
     assert!(
         chain.lib_height > 1,
         "lib height must allow a block below LIB"
@@ -360,9 +395,9 @@ async fn test_blocks_streaming() {
         Some(nz(chain.tip_height + 10)),
     ] {
         for descending in [false, true] {
-            chain = refresh_chain(&nodes[0], &chain).await;
+            chain = refresh_chain(node, &chain).await;
             let events = request_stream_events(
-                &nodes[0],
+                node,
                 blocks_limit,
                 None,
                 None,
@@ -387,11 +422,11 @@ async fn test_blocks_streaming() {
     // case: single block below LIB
     println!("case: single block below LIB");
 
-    chain = refresh_chain(&nodes[0], &chain).await;
+    chain = refresh_chain(node, &chain).await;
     let target_height = nz(chain.lib_height - 3);
     let (slot_from, slot_to) = blocks_request(&chain, target_height, target_height);
     let events = request_stream_events(
-        &nodes[0],
+        node,
         None,
         Some(slot_from),
         Some(slot_to),
@@ -417,11 +452,11 @@ async fn test_blocks_streaming() {
     // case: single block at LIB
     println!("case: single block at LIB");
 
-    chain = refresh_chain(&nodes[0], &chain).await;
+    chain = refresh_chain(node, &chain).await;
     let target_height = nz(chain.lib_height);
     let (slot_from, slot_to) = (chain.lib_slot, chain.lib_slot);
     let events = request_stream_events(
-        &nodes[0],
+        node,
         None,
         Some(slot_from),
         Some(slot_to),
@@ -446,11 +481,11 @@ async fn test_blocks_streaming() {
     // case: single block above LIB
     println!("case: single block above LIB");
 
-    chain = refresh_chain(&nodes[0], &chain).await;
+    chain = refresh_chain(node, &chain).await;
     let target_height = nz(chain.lib_height + 1);
     let (slot_from, slot_to) = blocks_request(&chain, target_height, target_height);
     let events = request_stream_events(
-        &nodes[0],
+        node,
         None,
         Some(slot_from),
         Some(slot_to),
@@ -483,12 +518,12 @@ async fn test_blocks_streaming() {
         Some(nz(chain.tip_height + 10)),
     ] {
         for descending in [false, true] {
-            chain = refresh_chain(&nodes[0], &chain).await;
+            chain = refresh_chain(node, &chain).await;
             let blocks_from = nz(chain.lib_height - 2);
             let blocks_to = nz(chain.lib_height);
             let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
             let events = request_stream_events(
-                &nodes[0],
+                node,
                 blocks_limit,
                 Some(slot_from),
                 Some(slot_to),
@@ -517,12 +552,12 @@ async fn test_blocks_streaming() {
         Some(nz(chain.tip_height + 10)),
     ] {
         for descending in [false, true] {
-            chain = refresh_chain(&nodes[0], &chain).await;
+            chain = refresh_chain(node, &chain).await;
             let blocks_from = nz(chain.lib_height);
             let blocks_to = nz(chain.lib_height + 2);
             let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
             let events = request_stream_events(
-                &nodes[0],
+                node,
                 blocks_limit,
                 Some(slot_from),
                 Some(slot_to),
@@ -551,10 +586,10 @@ async fn test_blocks_streaming() {
         Some(nz(chain.tip_height + 10)),
     ] {
         for descending in [false, true] {
-            chain = refresh_chain(&nodes[0], &chain).await;
+            chain = refresh_chain(node, &chain).await;
             let (slot_from, slot_to) = (0, chain.tip_slot);
             let events = request_stream_events(
-                &nodes[0],
+                node,
                 blocks_limit,
                 Some(slot_from),
                 Some(slot_to),
@@ -583,10 +618,10 @@ async fn test_blocks_streaming() {
         Some(nz(chain.tip_height + 10)),
     ] {
         for descending in [false, true] {
-            chain = refresh_chain(&nodes[0], &chain).await;
+            chain = refresh_chain(node, &chain).await;
             let (slot_from, slot_to) = (0, chain.tip_slot);
             let events = request_stream_events(
-                &nodes[0],
+                node,
                 blocks_limit,
                 Some(slot_from),
                 Some(slot_to),
@@ -606,11 +641,11 @@ async fn test_blocks_streaming() {
     // case: ascending above LIB without slot_from is best-effort bounded
     println!("case: ascending above LIB without slot_from is best-effort bounded");
 
-    chain = refresh_chain(&nodes[0], &chain).await;
+    chain = refresh_chain(node, &chain).await;
     let tip_slot = chain.tip_slot;
     let blocks_limit = 7;
     let events = request_stream_events(
-        &nodes[0],
+        node,
         Some(nz(blocks_limit)),
         None,
         Some(tip_slot),
@@ -640,18 +675,11 @@ async fn test_blocks_streaming() {
     // case: single block above LIB (immutable only, should fail)
     println!("case: single block above LIB (immutable only, should fail)");
 
-    chain = refresh_chain(&nodes[0], &chain).await;
+    chain = refresh_chain(node, &chain).await;
     let target_height = nz(chain.lib_height + 3);
     let (slot_from, slot_to) = blocks_request(&chain, target_height, target_height);
-    let Err(err) = nodes[0]
-        .get_blocks_stream_in_range_with_chunk_size(
-            None,
-            Some(slot_from),
-            Some(slot_to),
-            None,
-            None,
-            Some(true),
-        )
+    let Err(err) = node
+        .blocks_range_stream(None, Some(slot_from), Some(slot_to), None, None, Some(true))
         .await
     else {
         panic!("immutable-only request above LIB should fail");
@@ -664,19 +692,12 @@ async fn test_blocks_streaming() {
     // case: three blocks from LIB and up (immutable only, should fail)
     println!("case: three blocks from LIB and up (immutable only, should fail)");
 
-    chain = refresh_chain(&nodes[0], &chain).await;
+    chain = refresh_chain(node, &chain).await;
     let blocks_from = nz(chain.lib_height);
     let blocks_to = nz(chain.lib_height + 2);
     let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
-    let Err(err) = nodes[0]
-        .get_blocks_stream_in_range_with_chunk_size(
-            None,
-            Some(slot_from),
-            Some(slot_to),
-            None,
-            None,
-            Some(true),
-        )
+    let Err(err) = node
+        .blocks_range_stream(None, Some(slot_from), Some(slot_to), None, None, Some(true))
         .await
     else {
         panic!("immutable-only request above LIB should fail");
@@ -689,12 +710,12 @@ async fn test_blocks_streaming() {
     // case: all blocks, small chunked (immutable only, should fail above LIB)
     println!("case: all blocks, small chunked (immutable only, should fail above LIB)");
 
-    chain = refresh_chain(&nodes[0], &chain).await;
+    chain = refresh_chain(node, &chain).await;
     let blocks_from = nz(1);
     let blocks_to = nz(chain.tip_height);
     let (slot_from, slot_to) = blocks_request(&chain, blocks_from, blocks_to);
-    let Err(err) = nodes[0]
-        .get_blocks_stream_in_range_with_chunk_size(
+    let Err(err) = node
+        .blocks_range_stream(
             None,
             Some(slot_from),
             Some(slot_to),
@@ -714,12 +735,16 @@ async fn test_blocks_streaming() {
     // case: blocks_limit=0 should fail (400) via raw HTTP query
     println!("case: blocks_limit=0 should fail (400) via raw HTTP query");
 
-    let tip_slot = u64::from(nodes[0].consensus_info(false).await.cryptarchia_info.slot);
+    let tip_slot = u64::from(
+        node.consensus_info()
+            .await
+            .expect("fetching consensus info should succeed")
+            .cryptarchia_info
+            .slot,
+    );
     let client = reqwest::Client::new();
 
-    let mut url = nodes[0]
-        .base_url()
-        .expect("validator base URL should be available");
+    let mut url = node.base_url().clone();
     url.set_path(BLOCKS_RANGE_STREAM);
     url.set_query(Some(&format!("blocks_limit=0&slot_to={tip_slot}")));
 
@@ -747,9 +772,7 @@ async fn test_blocks_streaming() {
     // case: slot_to above tip should fail (400)
     println!("case: slot_to above tip should fail (400) via raw HTTP query");
 
-    let mut url = nodes[0]
-        .base_url()
-        .expect("validator base URL should be available");
+    let mut url = node.base_url().clone();
     url.set_path(BLOCKS_RANGE_STREAM);
     url.set_query(Some(&format!("slot_to={}", tip_slot + 1)));
 
@@ -780,15 +803,13 @@ async fn test_blocks_streaming() {
     );
 
     let lib_slot = u64::from(
-        nodes[0]
-            .consensus_info(false)
+        node.consensus_info()
             .await
+            .expect("fetching consensus info should succeed")
             .cryptarchia_info
             .lib_slot,
     );
-    let mut url = nodes[0]
-        .base_url()
-        .expect("validator base URL should be available");
+    let mut url = node.base_url().clone();
     url.set_path(BLOCKS_RANGE_STREAM);
     url.set_query(Some(&format!(
         "slot_to={}&immutable_only=true",

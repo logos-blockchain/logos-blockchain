@@ -190,7 +190,9 @@ pub fn genesis_block(
                 genesis_time: OffsetDateTime::now_utc(),
                 epoch_nonce: Fr::ZERO,
             }
-            .encode(),
+            .encode()
+            .try_into()
+            .unwrap(),
             parent: MsgId::root(),
             signer: Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
         })
@@ -207,9 +209,9 @@ pub fn genesis_block(
             let locked_note = transfer_op.outputs.utxo_by_index(i, &transfer_op).unwrap();
             ops.push(Op::SDPDeclare(SDPDeclareOp {
                 service_type: ServiceType::BlendNetwork,
-                locators: vec![
-                    Locator::from_str(format!("/ip4/198.51.100.{i}/tcp/4242").as_str()).unwrap(),
-                ],
+                locators: Locator::from_str(format!("/ip4/198.51.100.{i}/tcp/4242").as_str())
+                    .unwrap()
+                    .into(),
                 provider_id: ed_key.public_key().into(),
                 zk_id: zk_key.to_public_key(),
                 locked_note_id: locked_note.id(),
@@ -217,7 +219,7 @@ pub fn genesis_block(
             locked_note
         })
         .collect::<Vec<_>>();
-    let mantle_tx = MantleTx(ops);
+    let mantle_tx = MantleTx(ops.try_into().unwrap());
     let mantle_tx_hash = mantle_tx.hash();
 
     let mut ops_proofs = vec![

@@ -15,9 +15,7 @@ use crate::{
     StorageMsg, StorageServiceError,
     api::{
         StorageApiRequest, StorageBackendApi, StorageOperation,
-        backend::rocksdb::chain::{
-            streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec,
-        },
+        backend::{streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec},
         chain::StorageChainApi,
     },
     backends::StorageBackend,
@@ -33,6 +31,7 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         parent_id: HeaderId,
         block: <Backend as StorageChainApi>::Block,
         sdp_declarations: <Backend as StorageChainApi>::SdpDeclarations,
+        events: <Backend as StorageChainApi>::Events,
     },
     RemoveBlock {
         header_id: HeaderId,
@@ -45,6 +44,10 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
     GetSdpDeclarations {
         header_id: HeaderId,
         response_tx: Sender<Option<<Backend as StorageChainApi>::SdpDeclarations>>,
+    },
+    GetBlockEvents {
+        header_id: HeaderId,
+        response_tx: Sender<Option<Backend::Events>>,
     },
     StoreImmutableBlockIds {
         ids: BTreeMap<Slot, HeaderId>,
@@ -90,7 +93,18 @@ where
                 parent_id,
                 block,
                 sdp_declarations,
-            } => handle_store_block(backend, header_id, parent_id, block, sdp_declarations).await,
+                events,
+            } => {
+                handle_store_block(
+                    backend,
+                    header_id,
+                    parent_id,
+                    block,
+                    sdp_declarations,
+                    events,
+                )
+                .await
+            }
             Self::RemoveBlock {
                 header_id,
                 response_tx,
@@ -103,6 +117,10 @@ where
                 header_id,
                 response_tx,
             } => handle_get_sdp_declarations(backend, header_id, response_tx).await,
+            Self::GetBlockEvents {
+                header_id,
+                response_tx,
+            } => handle_get_block_events(backend, header_id, response_tx).await,
             Self::StoreImmutableBlockIds { ids: block_ids } => {
                 handle_store_immutable_block_ids(backend, block_ids).await
             }
@@ -163,9 +181,10 @@ async fn handle_store_block<Backend: StorageBackend>(
     parent_id: HeaderId,
     block: Backend::Block,
     sdp_declarations: Backend::SdpDeclarations,
+    events: Backend::Events,
 ) -> Result<(), StorageServiceError> {
     backend
-        .store_block(header_id, parent_id, block, sdp_declarations)
+        .store_block(header_id, parent_id, block, sdp_declarations, events)
         .await
         .map_err(|e| StorageServiceError::BackendError(e.into()))
 }
@@ -205,6 +224,27 @@ async fn handle_get_sdp_declarations<Backend: StorageBackend>(
         return Err(StorageServiceError::ReplyError {
             message: format!(
                 "Failed to send reply for get SDP declarations request for {header_id:?}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+async fn handle_get_block_events<Backend: StorageBackend>(
+    backend: &mut Backend,
+    header_id: HeaderId,
+    response_tx: Sender<Option<Backend::Events>>,
+) -> Result<(), StorageServiceError> {
+    let result = backend
+        .get_block_events(header_id)
+        .await
+        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
+
+    if response_tx.send(result).is_err() {
+        return Err(StorageServiceError::ReplyError {
+            message: format!(
+                "Failed to send reply for get block events request by header_id: {header_id}"
             ),
         });
     }
@@ -316,6 +356,7 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         parent_id: HeaderId,
         block: <Api as StorageChainApi>::Block,
         sdp_declarations: <Api as StorageChainApi>::SdpDeclarations,
+        events: <Api as StorageChainApi>::Events,
     ) -> Self {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::StoreBlock {
@@ -323,6 +364,7 @@ impl<Api: StorageBackend> StorageMsg<Api> {
                 parent_id,
                 block,
                 sdp_declarations,
+                events,
             }),
         }
     }
@@ -347,6 +389,19 @@ impl<Api: StorageBackend> StorageMsg<Api> {
     ) -> Self {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::GetSdpDeclarations {
+                header_id,
+                response_tx,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn get_block_events_request(
+        header_id: HeaderId,
+        response_tx: Sender<Option<<Api as StorageChainApi>::Events>>,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Chain(ChainApiRequest::GetBlockEvents {
                 header_id,
                 response_tx,
             }),

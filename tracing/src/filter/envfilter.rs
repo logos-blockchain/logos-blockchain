@@ -6,13 +6,13 @@ use tracing_subscriber::EnvFilter;
 
 const DEFAULT_DEBUG_TARGETS: &[&str] = &[
     "logos_blockchain",
-    "blend",
     "chain",
     "chain_network",
     "chain_leader",
     "cryptarchia",
     "ledger",
 ];
+const DEFAULT_QUIET_TARGETS: &[(&str, Level)] = &[("libp2p_gossipsub", Level::ERROR)];
 const ENVFILTER_GLOBAL_TARGET: &str = "*";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -48,6 +48,11 @@ pub fn default_debug_log_filter(level: Level) -> HashMap<String, Level> {
         DEFAULT_DEBUG_TARGETS
             .iter()
             .map(|target| ((*target).to_owned(), level)),
+    );
+    filters.extend(
+        DEFAULT_QUIET_TARGETS
+            .iter()
+            .map(|(target, level)| ((*target).to_owned(), *level)),
     );
     filters
 }
@@ -183,8 +188,8 @@ mod tests {
     use tracing::Level;
 
     use super::{
-        ENVFILTER_GLOBAL_TARGET, EnvFilterConfig, create_envfilter_layer, parse_filter_directives,
-        validate_log_filter_target,
+        ENVFILTER_GLOBAL_TARGET, EnvFilterConfig, create_envfilter_layer, default_debug_log_filter,
+        parse_filter_directives, validate_log_filter_target,
     };
 
     #[test]
@@ -201,11 +206,21 @@ mod tests {
     }
 
     #[test]
+    fn default_debug_log_filter_quiets_noisy_gossipsub_internals() {
+        let filters = default_debug_log_filter(Level::DEBUG);
+
+        assert_eq!(filters.get("libp2p_gossipsub"), Some(&Level::ERROR));
+    }
+
+    #[test]
     fn validate_log_filter_target_rejects_unknown_blend_target() {
-        let error = validate_log_filter_target("blend::service::missing")
+        let error = validate_log_filter_target("logos_blockchain::blend::service::missing")
             .expect_err("unknown blend target should fail");
 
-        assert_eq!(error, "unknown log filter target `blend::service::missing`");
+        assert_eq!(
+            error,
+            "unknown log filter target `logos_blockchain::blend::service::missing`"
+        );
     }
 
     #[test]
@@ -215,11 +230,15 @@ mod tests {
 
     #[test]
     fn parse_filter_directives_accepts_global_and_target_directives() {
-        let filters = parse_filter_directives("warn,blend::service=debug,libp2p=info")
-            .expect("filter directives should parse");
+        let filters =
+            parse_filter_directives("warn,logos_blockchain::blend::service=debug,libp2p=info")
+                .expect("filter directives should parse");
 
         assert_eq!(filters.get(ENVFILTER_GLOBAL_TARGET), Some(&Level::WARN));
-        assert_eq!(filters.get("blend::service"), Some(&Level::DEBUG));
+        assert_eq!(
+            filters.get("logos_blockchain::blend::service"),
+            Some(&Level::DEBUG)
+        );
         assert_eq!(filters.get("libp2p"), Some(&Level::INFO));
     }
 }

@@ -19,9 +19,10 @@ use lb_api_service::http::{
 };
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
-use lb_chain_service::{ConsensusMsg, Slot};
+use lb_chain_service::{ConsensusMsg, Slot, api::CryptarchiaServiceApi};
 use lb_core::{
     block::Block,
+    events::Events,
     header::HeaderId,
     mantle::{
         Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
@@ -177,6 +178,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -236,6 +238,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -963,6 +966,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Sync
         + Display
@@ -1012,6 +1016,37 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::BLOCK_EVENTS,
+    responses(
+        (status = 200, description = "Block events", body = Events),
+        (status = 404, description = "Block not found"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn block_events<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Path(id): Path<HeaderId>,
+) -> Response
+where
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+
+    match chain_api.get_block_events(id).await {
+        Ok(Some(events)) => (StatusCode::OK, Json(events)).into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "Block not found").into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
     path = paths::BLOCKS_STREAM,
     responses(
         (status = 200, description = "Stream of processed blocks with chain state"),
@@ -1029,6 +1064,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     ConsensusService: ServiceData<Message = ConsensusMsg<SignedMantleTx>> + 'static,
     RuntimeServiceId: Debug
         + Sync
@@ -1070,6 +1106,7 @@ where
     <StorageBackend as StorageChainApi>::SdpDeclarations:
         TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
         + Send
         + Sync

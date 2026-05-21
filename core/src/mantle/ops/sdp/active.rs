@@ -3,9 +3,12 @@ use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use tracing::info;
 
 use super::{SDPActiveOp, SdpError};
-use crate::mantle::{
-    TxHash,
-    ledger::{Declarations, Operation},
+use crate::{
+    events::Events,
+    mantle::{
+        TxHash,
+        ledger::{Declarations, Operation},
+    },
 };
 
 pub struct SDPActiveValidationContext<'a> {
@@ -19,18 +22,14 @@ pub struct SDPActiveExecutionContext {
     pub declarations: Declarations,
 }
 
-impl Operation for SDPActiveOp {
-    type ValidationContext<'a>
-        = SDPActiveValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
     type ExecutionContext<'a>
         = SDPActiveExecutionContext
     where
         Self: 'a;
     type Error = SdpError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &SDPActiveValidationContext<'_>) -> Result<(), Self::Error> {
         // Check the declaration exist
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -56,7 +55,7 @@ impl Operation for SDPActiveOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         let declaration = ctx
             .declarations
             .get_mut(&self.declaration_id)
@@ -71,6 +70,6 @@ impl Operation for SDPActiveOp {
             "updated declaration with active message"
         );
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }

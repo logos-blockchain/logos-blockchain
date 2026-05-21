@@ -13,7 +13,7 @@ use overwatch::{
     services::{ServiceData, relay::OutboundRelay},
 };
 use tokio::sync::oneshot;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::membership::{MembershipInfo, MembershipStream, ServiceMessage, ZkInfo, node_id};
 
@@ -96,11 +96,18 @@ where
                         .expect(
                             "Should not fail to build Merkle tree of core nodes' zk public keys.",
                         );
-                        let core_and_path_selectors = maybe_zk_public_key.map(|zk_public_key| {
-                            zk_tree.get_proof_for_key(zk_public_key.as_fr()).expect(
-                                "Zk public key of core node should be part of membership info.",
-                            )
-                        });
+                        let core_and_path_selectors =
+                            maybe_zk_public_key.and_then(|zk_public_key| {
+                                let Some(proof) =
+                                    zk_tree.get_proof_for_key(zk_public_key.as_fr())
+                                else {
+                                    debug!(
+                                        "Local node's ZK public key not found in membership Merkle tree: node is not a core member."
+                                    );
+                                    return None;
+                                };
+                                Some(proof)
+                            });
                         Some(ZkInfo {
                             core_and_path_selectors,
                             root: zk_tree.root(),
@@ -153,7 +160,7 @@ where
     NodeId: node_id::TryFrom,
 {
     let provider_id = provider_id.0.as_bytes();
-    let address = locators.first()?.clone();
+    let address = locators.first().clone();
     let id = NodeId::try_from_provider_id(provider_id)
         .map_err(|e| {
             warn!("Failed to decode provider_id to node ID: {e:?}");

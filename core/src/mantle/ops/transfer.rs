@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    events::Events,
     mantle::{
         TxHash,
         encoding::encode_transfer_op,
-        ledger,
-        ledger::{Inputs, Operation, Outputs, Utxos},
+        ledger::{self, Inputs, Operation, Outputs, Utxos},
         ops::OpId,
     },
     sdp::locked_notes::LockedNotes,
@@ -66,18 +66,14 @@ pub struct TransferValidationContext<'a> {
     pub transfer_sig: &'a ZkSignature,
 }
 
-impl Operation for TransferOp {
-    type ValidationContext<'a>
-        = TransferValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<TransferValidationContext<'_>> for TransferOp {
     type ExecutionContext<'a>
         = Utxos
     where
         Self: 'a;
     type Error = TransferError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &TransferValidationContext<'_>) -> Result<(), Self::Error> {
         // Ensure the inputs is non-empty
         if self.inputs.is_empty() {
             return Err(TransferError::NoInputTransfer);
@@ -97,12 +93,12 @@ impl Operation for TransferOp {
     fn execute(
         &self,
         mut utxos: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger
         utxos = self.outputs.execute(utxos, self);
-        Ok(utxos)
+        Ok((utxos, Events::new()))
     }
 }
 

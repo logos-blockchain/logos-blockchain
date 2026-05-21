@@ -157,6 +157,7 @@ jobs:
             -- nodes/node/standalone-node-config.yaml --check-config --deployment nodes/node/standalone-deployment-config.yaml
 
       - name: Install cargo-nextest
+        if: ${{ !cancelled()}}
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
         with:
           tool: cargo-nextest

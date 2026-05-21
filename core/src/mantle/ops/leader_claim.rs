@@ -8,6 +8,7 @@ use thiserror::Error;
 
 use crate::{
     crypto::ZkHasher,
+    events::Events,
     mantle::{
         Note, TxHash, Utxo, Value,
         encoding::encode_leader_claim,
@@ -169,18 +170,14 @@ pub struct LeaderClaimExecutionContext {
     pub utxos: Utxos,
 }
 
-impl Operation for LeaderClaimOp {
-    type ValidationContext<'a>
-        = LeaderClaimValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
     type ExecutionContext<'a>
         = LeaderClaimExecutionContext
     where
         Self: 'a;
     type Error = LeaderClaimError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &LeaderClaimValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the nullifier isn't in the set
         if ctx.nullifiers.contains(&self.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
@@ -205,7 +202,7 @@ impl Operation for LeaderClaimOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier);
 
@@ -216,7 +213,7 @@ impl Operation for LeaderClaimOp {
         // Remove the distributed rewards from the pool
         ctx.claimable_rewards -= ctx.reward_amount;
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }
 

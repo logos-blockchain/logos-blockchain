@@ -1,13 +1,13 @@
 use std::path::Path;
 
-use clap::Parser as _;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use tracing::Level;
 
 use crate::{
     UserConfig,
+    cli::CliArgs,
     config::{
-        CliArgs, DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
+        DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
         blend::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
@@ -33,6 +33,7 @@ use crate::{
 
 #[test]
 fn parse_config_path() {
+    use clap::Parser as _;
     let parsed_args = CliArgs::parse_from(["", "test_cfg.yaml"]);
     assert_eq!(parsed_args.config_path().to_str().unwrap(), "test_cfg.yaml");
 }
@@ -173,13 +174,13 @@ fn parse_log_filter_layer_rejects_empty_directive() {
 
 #[test]
 fn parse_log_filter_layer_rejects_unknown_blend_target() {
-    let error = parse_log_filter_layer("blend::service::missing=debug")
+    let error = parse_log_filter_layer("logos_blockchain::blend::service::missing=debug")
         .expect_err("unknown blend target should fail");
 
     assert!(
         error
             .to_string()
-            .contains("unknown log filter target `blend::service::missing`")
+            .contains("unknown log filter target `logos_blockchain::blend::service::missing`")
     );
 }
 
@@ -215,13 +216,65 @@ fn env_config_deserialization_rejects_invalid_level() {
 
 #[test]
 fn env_config_deserialization_rejects_unknown_blend_target() {
-    let error =
-        serde_json::from_str::<EnvConfig>(r#"{"filters":{"blend::service::missing":"debug"}}"#)
-            .expect_err("unknown blend target should fail");
+    let error = serde_json::from_str::<EnvConfig>(
+        r#"{"filters":{"logos_blockchain::blend::service::missing":"debug"}}"#,
+    )
+    .expect_err("unknown blend target should fail");
 
     assert!(
         error
             .to_string()
-            .contains("unknown log filter target `blend::service::missing`")
+            .contains("unknown log filter target `logos_blockchain::blend::service::missing`")
+    );
+}
+
+fn repo_file(path_from_crate_root: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(path_from_crate_root)
+}
+
+#[test]
+fn standalone_node_config_deserializes() {
+    let yaml_path = repo_file("../standalone-node-config.yaml");
+    assert!(
+        yaml_path.exists(),
+        "standalone node config should exist at {yaml_path:?}"
+    );
+    let bytes = std::fs::read(&yaml_path).expect("standalone node config should exist");
+
+    let parsed: Result<UserConfig, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
+    assert!(parsed.is_ok(), "standalone node config should deserialize");
+
+    let parsed =
+        super::deserialize_config_at_path::<UserConfig>(&yaml_path, super::OnUnknownKeys::Fail);
+    assert!(
+        parsed.is_ok(),
+        "standalone node config should deserialize via loader, got: {:?}",
+        parsed.err()
+    );
+}
+
+#[test]
+fn standalone_deployment_config_deserializes() {
+    let yaml_path = repo_file("../standalone-deployment-config.yaml");
+    assert!(
+        yaml_path.exists(),
+        "standalone deployment config should exist at {yaml_path:?}"
+    );
+    let bytes = std::fs::read(&yaml_path).expect("standalone deployment config should exist");
+
+    let parsed: Result<DeploymentSettings, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
+    assert!(
+        parsed.is_ok(),
+        "standalone deployment config should deserialize"
+    );
+
+    let parsed = super::deserialize_config_at_path::<DeploymentSettings>(
+        &yaml_path,
+        super::OnUnknownKeys::Fail,
+    );
+    assert!(
+        parsed.is_ok(),
+        "standalone deployment config should deserialize via loader, got: {:?}",
+        parsed.err()
     );
 }

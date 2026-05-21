@@ -76,11 +76,12 @@ impl ServiceState for CryptarchiaConsensusState {
                         .transactions()
                         .next()
                         .expect("Genesis block should be valid");
-                    let ledger = LedgerState::from_genesis_tx(
+                    let (ledger, _events) = LedgerState::from_genesis_tx(
                         genesis_tx,
                         &settings.config,
                         genesis_tx.cryptarchia_parameter().epoch_nonce,
                     )?;
+                    // TODO: store genesis block, declarations, and events to DB: https://github.com/logos-blockchain/logos-blockchain/issues/2747
                     (lib_id, lib_id, ledger.sdp_declarations(), ledger)
                 }
                 StartingState::Lib {
@@ -121,12 +122,13 @@ mod tests {
     use std::{
         collections::HashMap,
         num::{NonZero, NonZeroU64},
+        str::FromStr as _,
         sync::Arc,
     };
 
     use lb_core::{
         mantle::NoteId,
-        sdp::{Declaration, DeclarationMessage, MinStake, ServiceParameters, ServiceType},
+        sdp::{Declaration, DeclarationMessage, Locator, MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::State::Bootstrapping;
     use lb_groth16::{Field as _, Fr};
@@ -277,7 +279,7 @@ mod tests {
         let genesis_header_id: HeaderId = [0; 32].into();
         let genesis_decl = DeclarationMessage {
             service_type: ServiceType::BlendNetwork,
-            locators: vec![],
+            locators: Locator::from_str("/ip4/1.1.1.1/udp/7777").unwrap().into(),
             provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
             zk_id: ZkKey::zero().to_public_key(),
             locked_note_id: NoteId::from(Fr::ZERO),

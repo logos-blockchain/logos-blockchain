@@ -9,6 +9,7 @@ use futures::{Stream, StreamExt as _, stream};
 use lb_core::{
     block::Block,
     codec::{DeserializeOp as _, SerializeOp as _},
+    events::Events,
     header::HeaderId,
     mantle::{Transaction, TxHash},
     sdp::Declarations,
@@ -52,6 +53,7 @@ where
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     Tx: Clone
         + Eq
         + Serialize
@@ -66,6 +68,7 @@ where
     type Block = Block<Tx>;
     type SdpDeclarations = Declarations;
     type Tx = Tx;
+    type Events = Events;
 
     async fn new(
         storage_relay: OutboundRelay<
@@ -101,6 +104,7 @@ where
         parent_id: HeaderId,
         block: Self::Block,
         sdp_declarations: Self::SdpDeclarations,
+        events: Self::Events,
     ) -> Result<(), overwatch::DynError> {
         let block = block
             .try_into()
@@ -108,6 +112,9 @@ where
         let sdp_declarations = sdp_declarations
             .try_into()
             .map_err(|_| "Failed to convert sdp_declarations to storage format")?;
+        let events = events
+            .try_into()
+            .map_err(|_| "Failed to convert events to storage format")?;
 
         self.storage_relay
             .send(StorageMsg::store_block_request(
@@ -115,6 +122,7 @@ where
                 parent_id,
                 block,
                 sdp_declarations,
+                events,
             ))
             .await
             .map_err(|_| "Failed to send store block request to storage relay")?;
@@ -174,6 +182,27 @@ where
                 Some((block, (this, parent_id)))
             },
         ))
+    }
+
+    async fn get_block_events(&self, header_id: &HeaderId) -> Option<Self::Events> {
+        let (sender, receiver) = oneshot::channel();
+
+        self.storage_relay
+            .send(StorageMsg::get_block_events_request(*header_id, sender))
+            .await
+            .unwrap();
+
+        let Ok(maybe_events) = receiver.await else {
+            tracing::error!("Failed to receive block events from storage relay");
+            return None;
+        };
+
+        let events = maybe_events?;
+        let Ok(events) = events.try_into() else {
+            tracing::error!("Failed to convert block events loaded from storage");
+            return None;
+        };
+        Some(events)
     }
 
     async fn remove_block(
@@ -267,11 +296,11 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZero;
+    use std::{num::NonZero, str::FromStr as _};
 
     use lb_core::{
         mantle::SignedMantleTx,
-        sdp::{Declaration, DeclarationMessage, ServiceType},
+        sdp::{Declaration, DeclarationMessage, Locator, ServiceType},
     };
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
@@ -301,6 +330,7 @@ mod tests {
                     block.header().parent(),
                     block.clone(),
                     Declarations::from(HashMap::new()),
+                    Events::default(),
                 )
                 .await
                 .unwrap();
@@ -326,7 +356,7 @@ mod tests {
 
         let decl = DeclarationMessage {
             service_type: ServiceType::BlendNetwork,
-            locators: vec![],
+            locators: Locator::from_str("/ip4/1.1.1.1/udp/7777").unwrap().into(),
             provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
             zk_id: ZkKey::zero().to_public_key(),
             locked_note_id: Fr::ZERO.into(),
@@ -342,6 +372,7 @@ mod tests {
                 blocks[0].header().parent(),
                 blocks[0].clone(),
                 decls_a.clone(),
+                Events::default(),
             )
             .await
             .unwrap();
@@ -351,6 +382,7 @@ mod tests {
                 blocks[1].header().parent(),
                 blocks[1].clone(),
                 decls_b.clone(),
+                Events::default(),
             )
             .await
             .unwrap();

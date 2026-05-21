@@ -60,6 +60,8 @@ pub enum Error {
     InvalidInscription(Box<Op>),
     #[error("Invalid cryptarchia inscription: {0}")]
     InvalidCryptarchiaParameter(String),
+    #[error("Too many operations in genesis transaction: {count}")]
+    TooManyOps { count: usize },
 }
 
 impl GenesisTx {
@@ -122,7 +124,7 @@ fn valid_cryptarchia_inscription(
         ))));
     }
 
-    CryptarchiaParameter::decode(&inscription.inscription)
+    CryptarchiaParameter::decode(inscription.inscription.as_ref())
 }
 
 impl Transaction for GenesisTx {
@@ -290,10 +292,11 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
+            encoding::Ops,
             ledger::{Inputs, Note, Outputs, Utxo, Value},
-            ops::channel::Ed25519PublicKey,
+            ops::channel::{Ed25519PublicKey, inscribe::Inscription},
         },
-        sdp::{ProviderId, ServiceType},
+        sdp::{Locator, ProviderId, ServiceType},
     };
 
     fn inscription_op(
@@ -304,7 +307,7 @@ mod tests {
     ) -> InscriptionOp {
         InscriptionOp {
             channel_id,
-            inscription: cryptarchia_param.encode(),
+            inscription: Inscription::new_unchecked(cryptarchia_param.encode()),
             parent,
             signer,
         }
@@ -328,7 +331,7 @@ mod tests {
             locked_note_id: utxo_to_use.id(),
             zk_id: ZkPublicKey::new(BigUint::from(zk_id_value).into()),
             provider_id: ProviderId(verifying_key),
-            locators: [].into(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         }
     }
 
@@ -346,7 +349,7 @@ mod tests {
         );
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
-        let mantle_tx = MantleTx(new_ops);
+        let mantle_tx = MantleTx(Ops::new_unchecked(new_ops));
         let mut new_op_proofs = vec![OpProof::ZkSig(
             ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr()).unwrap(),
         )];

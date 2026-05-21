@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod backend;
 mod errors;
 pub mod handlers;

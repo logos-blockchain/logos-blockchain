@@ -13,12 +13,13 @@ use lb_chain_service::{
 };
 use lb_core::{
     block::Block,
+    events::Events,
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
         gas::MainnetGasConstants,
         ops::{
-            channel::{ChannelId, inscribe::InscriptionOp, set_keys::SetKeysOp},
+            channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
                 LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier, VoucherSecret,
             },
@@ -111,7 +112,7 @@ pub enum WalletServiceError {
     TaskJoin(#[from] JoinError),
 
     #[error("Failed to fetch Channel Withdraw proof for op index {0} from the TxBuilder")]
-    ChannelWithdrawProofNotFound(usize),
+    ChannelMultiSigProofNotFound(usize),
 }
 
 #[derive(Debug)]
@@ -241,6 +242,7 @@ where
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<Cryptarchia>
         + AsServiceId<lb_storage_service::StorageService<Storage, RuntimeServiceId>>
@@ -395,6 +397,7 @@ where
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: AsServiceId<Cryptarchia>
         + AsServiceId<Kms>
         + std::fmt::Debug
@@ -610,7 +613,7 @@ where
 
     async fn sign_channel_set_key(
         tx_hash: TxHash,
-        set_keys_op: &SetKeysOp,
+        set_keys_op: &ChannelConfigOp,
         ledger: &LedgerState,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<OpProof, WalletServiceError> {
@@ -620,7 +623,7 @@ where
             .channel_state(&set_keys_op.channel)
             .ok_or(WalletServiceError::MissingChannelState(set_keys_op.channel))?;
 
-        let authorized_key = channel.keys[0]; // First key is authorized key (guaranteed non-empty)
+        let authorized_key = channel.accredited_keys[0]; // First key is authorized key (guaranteed non-empty)
         let ed25519_sig = Self::sign_ed25519(tx_hash, authorized_key, kms).await?;
 
         Ok(OpProof::Ed25519Sig(ed25519_sig))
@@ -754,7 +757,7 @@ where
         wallet: &Wallet,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
-        let mut channel_withdraw_proofs = tx_builder.channel_withdraw_proofs().clone();
+        let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
         let mantle_tx = tx_builder.clone().build();
         let tx_hash = mantle_tx.hash();
 
@@ -764,7 +767,7 @@ where
                 Op::ChannelInscribe(inscribe_op) => {
                     Self::sign_inscription(tx_hash, inscribe_op, kms).await?
                 }
-                Op::ChannelSetKeys(set_keys_op) => {
+                Op::ChannelConfig(set_keys_op) => {
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &tip_leader, kms).await?
                 }
                 Op::ChannelDeposit(deposit_op) => {
@@ -777,10 +780,10 @@ where
                     .await?
                 }
                 Op::ChannelWithdraw(_channel_withdraw_op) => {
-                    let proof = channel_withdraw_proofs
+                    let proof = channel_multi_sig_proofs
                         .remove(&i)
-                        .ok_or(WalletServiceError::ChannelWithdrawProofNotFound(i))?;
-                    OpProof::ChannelWithdrawProof(proof)
+                        .ok_or(WalletServiceError::ChannelMultiSigProofNotFound(i))?;
+                    OpProof::ChannelMultiSigProof(proof)
                 }
                 Op::SDPDeclare(declare_op) => {
                     Self::sign_sdp_declare(tx_hash, declare_op, &tip_leader, kms).await?
@@ -1131,12 +1134,7 @@ where
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
         state: &mut ServiceState<'_>,
     ) {
-        debug!(
-            new_lib = ?lib_update.new_lib,
-            stale_blocks_count = lib_update.pruned_blocks.stale_blocks.len(),
-            immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len(),
-            "Received LIB update"
-        );
+        log_lib_update(lib_update);
 
         state.advance_lib(
             lib_update.new_lib,
@@ -1278,6 +1276,26 @@ where
         if let Err(e) = resp_tx.send(Ok(ledger_state.tx_context())) {
             error!(err = ?e, "Failed to send gas context response");
         }
+    }
+}
+
+fn log_lib_update(lib_update: &LibUpdate) {
+    let stale_blocks_count = lib_update.pruned_blocks.stale_blocks.len();
+    let immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len();
+    if stale_blocks_count == 0 && immutable_blocks_count == 1 {
+        trace!(
+            new_lib = ?lib_update.new_lib,
+            stale_blocks_count,
+            immutable_blocks_count,
+            "Received LIB update"
+        );
+    } else {
+        debug!(
+            new_lib = ?lib_update.new_lib,
+            stale_blocks_count,
+            immutable_blocks_count,
+            "Received LIB update"
+        );
     }
 }
 

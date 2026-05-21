@@ -4,6 +4,7 @@ use tracing::info;
 
 use super::{SDPWithdrawOp, SdpError};
 use crate::{
+    events::Events,
     mantle::{
         TxHash,
         ledger::{Declarations, Operation},
@@ -25,18 +26,14 @@ pub struct SDPWithdrawExecutionContext {
     pub locked_notes: LockedNotes,
 }
 
-impl Operation for SDPWithdrawOp {
-    type ValidationContext<'a>
-        = SDPWithdrawValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
     type ExecutionContext<'a>
         = SDPWithdrawExecutionContext
     where
         Self: 'a;
     type Error = SdpError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &SDPWithdrawValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the declaration exists
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -95,7 +92,7 @@ impl Operation for SDPWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         let declaration = ctx
             .declarations
             .get(&self.declaration_id)
@@ -116,6 +113,6 @@ impl Operation for SDPWithdrawOp {
 
         ctx.declarations = ctx.declarations.remove(&self.declaration_id);
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }

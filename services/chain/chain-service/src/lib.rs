@@ -25,6 +25,7 @@ use futures::{Stream, StreamExt as _, TryStreamExt as _, future::join_all, strea
 use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_core::{
     block::{Block, genesis::GenesisBlock},
+    events::Events,
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
@@ -143,6 +144,10 @@ pub enum ConsensusMsg<Tx> {
             lb_cryptarchia_engine::Config,
         )>,
     },
+    GetBlockEvents {
+        id: HeaderId,
+        reply_channel: oneshot::Sender<Option<Events>>,
+    },
     /// Apply a block to the chain,
     /// and return the tip and reorged txs if successful.
     ApplyBlock {
@@ -237,6 +242,43 @@ impl PrunedBlocksInfo {
     }
 }
 
+fn log_pruned_ledger_states(pruned_states_count: usize) {
+    if pruned_states_count <= 1 {
+        tracing::trace!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+    } else {
+        tracing::debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+    }
+}
+
+fn log_process_block_error(error: &Error) {
+    let error_msg = format!("Failed to process block: {error:?}");
+    if matches!(error, Error::FutureBlock { .. }) {
+        trace!(target: LOG_TARGET, "{}", error_msg);
+    } else {
+        error!(target: LOG_TARGET, "{}", error_msg);
+    }
+}
+
+fn log_lib_advanced(
+    prev_lib: &HeaderId,
+    new_lib: &HeaderId,
+    stale_blocks_count: usize,
+    immutable_blocks_count: usize,
+    reorged_blocks_count: usize,
+) {
+    if stale_blocks_count == 0 && immutable_blocks_count == 1 && reorged_blocks_count == 0 {
+        trace!(
+            target: LOG_TARGET,
+            "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={stale_blocks_count}, immutable_blocks={immutable_blocks_count}, reorged_blocks={reorged_blocks_count}",
+        );
+    } else {
+        debug!(
+            target: LOG_TARGET,
+            "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={stale_blocks_count}, immutable_blocks={immutable_blocks_count}, reorged_blocks={reorged_blocks_count}",
+        );
+    }
+}
+
 #[derive(Clone)]
 pub struct Cryptarchia {
     pub ledger: lb_ledger::Ledger<HeaderId>,
@@ -316,7 +358,7 @@ impl Cryptarchia {
         &mut self,
         block: &Block<Tx>,
         current_slot: Slot,
-    ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>), Error>
+    ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
         Tx: AuthenticatedMantleTx<Context = GasPrices>,
     {
@@ -334,7 +376,7 @@ impl Cryptarchia {
         }
 
         // A block number of this block if it's applied to the chain.
-        let (_, state) = self
+        let (_, state, events) = self
             .ledger
             .prepare_update::<_, MainnetGasConstants>(
                 id,
@@ -369,7 +411,7 @@ impl Cryptarchia {
 
         metrics::emit_consensus_metrics(&self.consensus, &self.ledger);
         metrics::emit_block_imported_metric();
-        Ok((pruned_blocks, reorged_blocks))
+        Ok((pruned_blocks, reorged_blocks, events))
     }
 
     fn epoch_state_for_slot(&self, slot: Slot) -> Result<EpochState, Error> {
@@ -396,7 +438,7 @@ impl Cryptarchia {
                 );
             }
         }
-        tracing::debug!(target: LOG_TARGET, "Pruned {pruned_states_count} old forks and their ledger states.");
+        log_pruned_ledger_states(pruned_states_count);
     }
 
     /// Shrinks the memory held by the ledger states.
@@ -527,6 +569,7 @@ where
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
     <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     RuntimeServiceId: Debug
@@ -717,8 +760,7 @@ where
                                         });
                                     }
                                     Err(e) => {
-                                        let error_msg = format!("Failed to process block: {e:?}");
-                                        error!(target: LOG_TARGET, "{}", error_msg);
+                                        log_process_block_error(&e);
                                         reply_channel.send(Err(e)).unwrap_or_else(|_| {
                                             error!("Could not send process block error through channel");
                                         });
@@ -743,7 +785,7 @@ where
                                 });
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, &sdp_snapshot, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter());
+                                Self::process_message(&cryptarchia, &sdp_snapshot, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
                             }
                         }
                     }
@@ -798,6 +840,7 @@ where
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>> + Into<Bytes>,
     <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
+    <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     TimeBackend: lb_time_service::backends::TimeBackend,
     RuntimeServiceId: Display + AsServiceId<Self> + 'static,
 {
@@ -838,7 +881,7 @@ where
         Ok((current_slot, slot_timer))
     }
 
-    fn process_message(
+    async fn process_message(
         cryptarchia: &Cryptarchia,
         sdp_snapshot: &Declarations,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
@@ -918,6 +961,12 @@ where
                     .unwrap_or_else(|_| {
                         error!("Could not send epoch config through channel");
                     });
+            }
+            ConsensusMsg::GetBlockEvents { id, reply_channel } => {
+                let events = storage_adapter.get_block_events(&id).await;
+                reply_channel.send(events).unwrap_or_else(|_| {
+                    error!("Could not send block events through channel");
+                });
             }
             ConsensusMsg::Info { .. } => {
                 // Info is handled separately in the run loop where we have async
@@ -1025,11 +1074,12 @@ where
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
     ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
-        debug!("Received proposal with ID: {:?}", block.header().id());
+        trace!("Received proposal with ID: {:?}", block.header().id());
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
-        let (pruned_blocks, reorged_blocks) = cryptarchia.try_apply_block(&block, current_slot)?;
+        let (pruned_blocks, reorged_blocks, events) =
+            cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
 
         let tx_count = block.transactions().count();
@@ -1044,6 +1094,7 @@ where
                 cryptarchia
                     .sdp_declarations_at(&header.id())
                     .expect("sdp_declarations for the block just processed must exist"),
+                events,
             )
             .await
             .map_err(|e| Error::Storage(format!("Failed to store block: {e}")))?;
@@ -1073,13 +1124,14 @@ where
         }
 
         if prev_lib != new_lib {
-            debug!(
-                target: LOG_TARGET,
-                "LIB advanced from {prev_lib:?} to {new_lib:?}; stale_blocks={}, immutable_blocks={}, reorged_blocks={}",
+            log_lib_advanced(
+                &prev_lib,
+                &new_lib,
                 pruned_blocks.stale_blocks().count(),
                 pruned_blocks.immutable_blocks().len(),
-                reorged_blocks.len()
+                reorged_blocks.len(),
             );
+
             let height = cryptarchia
                 .consensus
                 .branches()

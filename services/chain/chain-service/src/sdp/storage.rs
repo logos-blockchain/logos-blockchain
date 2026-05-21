@@ -5,6 +5,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt as _};
 use lb_core::{
     block::Block,
+    events::Events,
     header::HeaderId,
     mantle::{Transaction, TxHash},
     sdp::Declarations,
@@ -42,6 +43,7 @@ where
     <S as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
     <S as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <S as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
+    <S as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     Tx: Clone
         + Eq
         + Serialize

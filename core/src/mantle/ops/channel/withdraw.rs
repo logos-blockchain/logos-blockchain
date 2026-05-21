@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    events::Events,
     mantle::{
         TxHash,
         channel::{Channels, Error},
@@ -8,7 +9,7 @@ use crate::{
         ledger::{Operation, Outputs, Utxos},
         ops::{OpId, channel::ChannelId},
     },
-    proofs::channel_withdraw_proof::ChannelWithdrawProof,
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -27,7 +28,7 @@ impl OpId for ChannelWithdrawOp {
 pub struct WithdrawValidationContext<'a> {
     pub channels: &'a Channels,
     pub tx_hash: &'a TxHash,
-    pub withdraw_sigs: &'a ChannelWithdrawProof,
+    pub withdraw_sigs: &'a ChannelMultiSigProof,
 }
 
 pub struct WithdrawExecutionContext {
@@ -35,18 +36,14 @@ pub struct WithdrawExecutionContext {
     pub utxos: Utxos,
 }
 
-impl Operation for ChannelWithdrawOp {
-    type ValidationContext<'a>
-        = WithdrawValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     type ExecutionContext<'a>
         = WithdrawExecutionContext
     where
         Self: 'a;
     type Error = Error;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the outputs are valid
         self.outputs.validate()?;
 
@@ -74,13 +71,13 @@ impl Operation for ChannelWithdrawOp {
             return Err(Error::InsufficientFunds);
         }
 
-        // Check that there is enough signatures and that the indexes are unique
-        // This is enforced by the structure that enforces it
+        // Check that the indexes are unique and there is the same number of proof and
+        // index. This is enforced by the proof structure that enforces it.
 
-        // Check the signature
+        // Check there is enough signatures
         let signatures = ctx.withdraw_sigs.signatures();
         if signatures.len() != channel.withdraw_threshold as usize {
-            return Err(Error::WithdrawThresholdUnmet {
+            return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
                 threshold: channel.withdraw_threshold,
                 actual: ctx.withdraw_sigs.signatures().len(),
@@ -89,7 +86,7 @@ impl Operation for ChannelWithdrawOp {
 
         // Check the signatures
         for sig in signatures {
-            if channel.keys[sig.channel_key_index as usize]
+            if channel.accredited_keys[sig.channel_key_index as usize]
                 .verify(ctx.tx_hash.as_signing_bytes().as_ref(), &sig.signature)
                 .is_err()
             {
@@ -103,7 +100,7 @@ impl Operation for ChannelWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // Get the amount withdraw
         let amount_withdraw = self.outputs.amount()?;
 
@@ -127,6 +124,6 @@ impl Operation for ChannelWithdrawOp {
         // Add the ouputs to the ledger
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }

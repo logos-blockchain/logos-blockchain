@@ -890,7 +890,7 @@ mod tests {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscription = Op::ChannelInscribe(InscriptionOp {
             channel_id: ChannelId::from([0xAA; 32]),
-            inscription: vec![0xAB; 1000],
+            inscription: [0xAB; 1000].into(),
             parent: MsgId::from([0xBB; 32]),
             signer: signing_key.public_key(),
         });

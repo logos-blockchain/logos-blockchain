@@ -1,4 +1,4 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc, time::Duration};
+use std::{collections::HashMap, pin::Pin, str::FromStr as _, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use futures::{Stream, stream};
@@ -6,7 +6,7 @@ use lb_chain_broadcast_service::BlockBroadcastMsg;
 use lb_core::{
     mantle::ledger::NoteId,
     sdp::{
-        Declaration, DeclarationMessage, Declarations, MinStake, ProviderId, ProviderInfo,
+        Declaration, DeclarationMessage, Declarations, Locator, MinStake, ProviderId, ProviderInfo,
         ServiceParameters, ServiceType,
     },
 };
@@ -242,7 +242,7 @@ fn id(byte: u8) -> HeaderId {
 fn decls(marker: u8, epoch: Epoch) -> Declarations {
     let decl = DeclarationMessage {
         service_type: ServiceType::BlendNetwork,
-        locators: vec![],
+        locators: Locator::from_str("/ip4/1.1.1.1/udp/7777").unwrap().into(),
         provider_id: ProviderId(Ed25519Key::from_bytes(&[marker; 32]).public_key()),
         zk_id: ZkKey::from(lb_groth16::Fr::from(u64::from(marker))).to_public_key(),
         locked_note_id: NoteId(lb_groth16::Fr::from(u64::from(marker))),

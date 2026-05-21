@@ -104,6 +104,22 @@ impl Slot {
     }
 }
 
+impl Add for Slot {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Sub for Slot {
+    type Output = Self;
+
+    fn sub(self, rhs: Self) -> Self::Output {
+        self.saturating_sub(rhs)
+    }
+}
+
 impl From<u32> for Epoch {
     fn from(epoch: u32) -> Self {
         Self(epoch)

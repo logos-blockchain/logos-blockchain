@@ -17,6 +17,7 @@ pub trait StorageAdapter<RuntimeServiceId> {
     type Block: Send;
     type SdpDeclarations: Send;
     type Tx: Send;
+    type Events: Send;
 
     async fn new(
         network_relay: OutboundRelay<
@@ -38,6 +39,7 @@ pub trait StorageAdapter<RuntimeServiceId> {
         parent_id: HeaderId,
         block: Self::Block,
         sdp_declarations: Self::SdpDeclarations,
+        events: Self::Events,
     ) -> Result<(), overwatch::DynError>;
 
     async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId>;
@@ -53,6 +55,8 @@ pub trait StorageAdapter<RuntimeServiceId> {
         &self,
         from_descendant: HeaderId,
     ) -> Pin<Box<dyn Stream<Item = Self::Block> + Send>>;
+
+    async fn get_block_events(&self, header_id: &HeaderId) -> Option<Self::Events>;
 
     /// Remove a block from the storage layer.
     ///

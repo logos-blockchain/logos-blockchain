@@ -1,6 +1,9 @@
 use std::{fs, path::Path};
 
-use crate::cucumber::{error::StepError, steps::manual_transactions::utils::WalletStateType};
+use crate::cucumber::{
+    error::StepError,
+    steps::manual_transactions::utils::{WalletOutputState, parse_wallet_output_state},
+};
 
 #[cfg_attr(test, derive(strum_macros::EnumCount))]
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -22,7 +25,7 @@ pub enum ManualCommand {
         outputs: Option<usize>,
         value: Option<u64>,
         time_out: u64,
-        wallet_state_type: WalletStateType,
+        wallet_state_type: WalletOutputState,
         verify_max: bool,
     },
     WalletBalance {
@@ -41,12 +44,26 @@ pub enum ManualCommand {
         from: String,
         to: String,
     },
-    ContinuousUserWallets {
+    ContinuousRoundRobinUserWallets {
         coin_split_outputs: usize,
         coin_split_value: u64,
         transactions: usize,
         value: u64,
         cycles: usize,
+    },
+    CoinSplitAllUserWallets {
+        splits_per_wallet: usize,
+        outputs: usize,
+        value: u64,
+    },
+    VerifyMinAvailableOutputsAllUserWallets {
+        min_outputs: usize,
+        timeout_seconds: u64,
+    },
+    ContinuousNextWalletUserWallets {
+        cycles: usize,
+        transactions_per_wallet: usize,
+        value: u64,
     },
     FaucetFundsAllUserWallets {
         rounds: usize,
@@ -134,6 +151,7 @@ pub(crate) fn take_next_command(path: &Path) -> Result<Option<ManualCommand>, St
     Ok(selected)
 }
 
+#[expect(clippy::too_many_lines, reason = "Match statement to cover all arms.")]
 fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
     let parts: Vec<String> = raw
         .split(',')
@@ -150,6 +168,7 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
 
     let binding = action.to_ascii_uppercase();
     let command = binding.as_str();
+
     match command {
         "CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES" => {
             Ok(ManualCommand::CreateBlockchainSnapshotAllNodes {
@@ -179,10 +198,9 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
             let time_out = parse_u64_field(&parts, "time_out")?;
             let wallet_state_type =
                 parse_quoted_field(&parts, "wallet_state_type").and_then(|s| {
-                    s.parse::<WalletStateType>()
-                        .map_err(|e| StepError::InvalidArgument {
-                            message: format!("Invalid 'wallet_state_type' value: {e}"),
-                        })
+                    parse_wallet_output_state(&s).map_err(|e| StepError::InvalidArgument {
+                        message: format!("Invalid 'wallet_state_type' value: {e}"),
+                    })
                 })?;
             Ok(ManualCommand::Verify {
                 wallet,
@@ -209,13 +227,33 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
             from: parse_quoted_field(&parts, "from")?,
             to: parse_quoted_field(&parts, "to")?,
         }),
-        "CONTINUOUS_USER_WALLETS" => Ok(ManualCommand::ContinuousUserWallets {
-            coin_split_outputs: parse_usize_field(&parts, "coin_split_outputs")?,
-            coin_split_value: parse_u64_field(&parts, "coin_split_value")?,
-            transactions: parse_usize_field(&parts, "transactions")?,
+        "CONTINUOUS_ROUND_ROBIN_USER_WALLETS" => {
+            Ok(ManualCommand::ContinuousRoundRobinUserWallets {
+                coin_split_outputs: parse_usize_field(&parts, "coin_split_outputs")?,
+                coin_split_value: parse_u64_field(&parts, "coin_split_value")?,
+                transactions: parse_usize_field(&parts, "transactions")?,
+                value: parse_u64_field(&parts, "value")?,
+                cycles: parse_usize_field(&parts, "cycles")?,
+            })
+        }
+        "COIN_SPLIT_ALL_USER_WALLETS" => Ok(ManualCommand::CoinSplitAllUserWallets {
+            splits_per_wallet: parse_usize_field(&parts, "splits_per_wallet")?,
+            outputs: parse_usize_field(&parts, "outputs")?,
             value: parse_u64_field(&parts, "value")?,
-            cycles: parse_usize_field(&parts, "cycles")?,
         }),
+        "VERIFY_MIN_AVAILABLE_OUTPUTS_ALL_USER_WALLETS" => {
+            Ok(ManualCommand::VerifyMinAvailableOutputsAllUserWallets {
+                min_outputs: parse_usize_field(&parts, "min_outputs")?,
+                timeout_seconds: parse_u64_field(&parts, "timeout_seconds")?,
+            })
+        }
+        "CONTINUOUS_NEXT_WALLET_USER_WALLETS" => {
+            Ok(ManualCommand::ContinuousNextWalletUserWallets {
+                cycles: parse_usize_field(&parts, "cycles")?,
+                transactions_per_wallet: parse_usize_field(&parts, "transactions_per_wallet")?,
+                value: parse_u64_field(&parts, "value")?,
+            })
+        }
         "FAUCET_ALL_USER_WALLETS" => Ok(ManualCommand::FaucetFundsAllUserWallets {
             rounds: parse_usize_field(&parts, "rounds")?,
         }),
@@ -309,7 +347,7 @@ fn parse_optional_number_field<'a>(parts: &'a [String], key: &str) -> Option<&'a
 mod tests {
     use strum::EnumCount as _;
 
-    use super::{ManualCommand, WalletStateType, parse_manual_command};
+    use super::{ManualCommand, WalletOutputState, parse_manual_command};
 
     fn parse_ok(raw: &str) -> ManualCommand {
         parse_manual_command(raw)
@@ -366,7 +404,7 @@ mod tests {
                 outputs,
                 value,
                 time_out,
-                wallet_state_type: WalletStateType::Encumbered,
+                wallet_state_type: WalletOutputState::Reserved,
                 verify_max,
             } if wallet == "WALLET_1A"
                 && outputs == Some(0)
@@ -388,7 +426,7 @@ mod tests {
                 outputs,
                 value,
                 time_out,
-                wallet_state_type: WalletStateType::OnChain,
+                wallet_state_type: WalletOutputState::OnChain,
                 verify_max,
             } if wallet == "WALLET_2A"
                 && outputs == Some(1)
@@ -462,14 +500,14 @@ mod tests {
         ));
     }
 
-    fn assert_continuous_user_wallets_command() {
+    fn assert_continuous_round_robin_user_wallets_command() {
         let command = parse_ok(
-            "CONTINUOUS_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, transactions 4, value 50, cycles 3",
+            "CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, transactions 4, value 50, cycles 3",
         );
 
         assert!(matches!(
             command,
-            ManualCommand::ContinuousUserWallets {
+            ManualCommand::ContinuousRoundRobinUserWallets {
                 coin_split_outputs,
                 coin_split_value,
                 transactions,
@@ -498,6 +536,49 @@ mod tests {
         assert!(matches!(
             command,
             ManualCommand::FaucetFundsAllFundingWallets { rounds } if rounds == 2
+        ));
+    }
+
+    fn assert_coin_split_all_user_wallets_command() {
+        let command =
+            parse_ok("COIN_SPLIT_ALL_USER_WALLETS, splits_per_wallet 3, outputs 10, value 100");
+
+        assert!(matches!(
+            command,
+            ManualCommand::CoinSplitAllUserWallets {
+                splits_per_wallet,
+                outputs,
+                value,
+            } if splits_per_wallet == 3 && outputs == 10 && value == 100
+        ));
+    }
+
+    fn assert_verify_min_available_outputs_all_user_wallets_command() {
+        let command = parse_ok(
+            "VERIFY_MIN_AVAILABLE_OUTPUTS_ALL_USER_WALLETS, min_outputs 30, timeout_seconds 300",
+        );
+
+        assert!(matches!(
+            command,
+            ManualCommand::VerifyMinAvailableOutputsAllUserWallets {
+                min_outputs,
+                timeout_seconds,
+            } if min_outputs == 30 && timeout_seconds == 300
+        ));
+    }
+
+    fn assert_continuous_next_wallet_user_wallets_command() {
+        let command = parse_ok(
+            "CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles 3, transactions_per_wallet 30, value 100",
+        );
+
+        assert!(matches!(
+            command,
+            ManualCommand::ContinuousNextWalletUserWallets {
+                cycles,
+                transactions_per_wallet,
+                value,
+            } if cycles == 3 && transactions_per_wallet == 30 && value == 100
         ));
     }
 
@@ -543,7 +624,7 @@ mod tests {
                 outputs: None,
                 value: None,
                 time_out: 0,
-                wallet_state_type: WalletStateType::OnChain,
+                wallet_state_type: WalletOutputState::OnChain,
                 verify_max: false,
             },
             ManualCommand::WalletBalance {
@@ -562,12 +643,26 @@ mod tests {
                 from: String::new(),
                 to: String::new(),
             },
-            ManualCommand::ContinuousUserWallets {
+            ManualCommand::ContinuousRoundRobinUserWallets {
                 coin_split_outputs: 0,
                 coin_split_value: 0,
                 transactions: 0,
                 value: 0,
                 cycles: 0,
+            },
+            ManualCommand::CoinSplitAllUserWallets {
+                splits_per_wallet: 0,
+                outputs: 0,
+                value: 0,
+            },
+            ManualCommand::VerifyMinAvailableOutputsAllUserWallets {
+                min_outputs: 0,
+                timeout_seconds: 0,
+            },
+            ManualCommand::ContinuousNextWalletUserWallets {
+                cycles: 0,
+                transactions_per_wallet: 0,
+                value: 0,
             },
             ManualCommand::FaucetFundsAllUserWallets { rounds: 0 },
             ManualCommand::FaucetFundsAllFundingWallets { rounds: 0 },
@@ -643,8 +738,20 @@ mod tests {
                     assert_send_command();
                     visited += 1;
                 }
-                ManualCommand::ContinuousUserWallets { .. } => {
-                    assert_continuous_user_wallets_command();
+                ManualCommand::ContinuousRoundRobinUserWallets { .. } => {
+                    assert_continuous_round_robin_user_wallets_command();
+                    visited += 1;
+                }
+                ManualCommand::CoinSplitAllUserWallets { .. } => {
+                    assert_coin_split_all_user_wallets_command();
+                    visited += 1;
+                }
+                ManualCommand::VerifyMinAvailableOutputsAllUserWallets { .. } => {
+                    assert_verify_min_available_outputs_all_user_wallets_command();
+                    visited += 1;
+                }
+                ManualCommand::ContinuousNextWalletUserWallets { .. } => {
+                    assert_continuous_next_wallet_user_wallets_command();
                     visited += 1;
                 }
                 ManualCommand::FaucetFundsAllUserWallets { .. } => {

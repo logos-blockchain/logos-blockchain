@@ -7,27 +7,26 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use futures::{Stream, StreamExt as _, TryStreamExt as _, stream};
+use futures::{Stream, StreamExt as _, stream};
 use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 use rocksdb::WriteBatch;
 
 use crate::{
-    StorageServiceError,
     api::{
-        backend::rocksdb::{Error, utils::key_bytes},
+        backend::{
+            HeaderIdStream,
+            rocksdb::{Error, utils::key_bytes},
+        },
         chain::StorageChainApi,
     },
-    backends::{StorageBackend, rocksdb::RocksBackend},
+    backends::{StorageBackend as _, rocksdb::RocksBackend},
 };
 
 const IMMUTABLE_BLOCK_PREFIX: &str = "immutable_block/slot/";
 const BLOCK_PARENT_PREFIX: &str = "block_parent/";
 const BLOCK_SDP_DECLARATIONS_PREFIX: &str = "block_sdp/";
-/// A stream of `HeaderId`s, used for scanning immutable header IDs. We return a
-/// stream here to allow for efficient pagination of large ranges of immutable
-/// blocks.
-pub type HeaderIdStream = Pin<Box<dyn Stream<Item = Result<HeaderId, Error>> + Send>>;
+const BLOCK_EVENTS_PREFIX: &str = "block_events/";
 
 #[async_trait]
 impl StorageChainApi for RocksBackend {
@@ -35,6 +34,7 @@ impl StorageChainApi for RocksBackend {
     type Block = Bytes;
     type SdpDeclarations = Bytes;
     type Tx = Bytes;
+    type Events = Bytes;
 
     async fn get_block(&mut self, header_id: HeaderId) -> Result<Option<Self::Block>, Self::Error> {
         let header_id: [u8; 32] = header_id.into();
@@ -48,6 +48,7 @@ impl StorageChainApi for RocksBackend {
         parent_id: HeaderId,
         block: Self::Block,
         sdp_declarations: Self::SdpDeclarations,
+        events: Self::Events,
     ) -> Result<(), Self::Error> {
         let header_bytes: [u8; 32] = header_id.into();
         let block_key = Bytes::copy_from_slice(&header_bytes);
@@ -55,6 +56,7 @@ impl StorageChainApi for RocksBackend {
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, header_bytes);
         let parent_bytes: [u8; 32] = parent_id.into();
         let parent_value = Bytes::copy_from_slice(&parent_bytes);
+        let events_key = key_bytes(BLOCK_EVENTS_PREFIX, header_bytes);
 
         let sdp_key = key_bytes(BLOCK_SDP_DECLARATIONS_PREFIX, header_bytes);
 
@@ -63,6 +65,7 @@ impl StorageChainApi for RocksBackend {
             batch.put(block_key, block);
             batch.put(parent_key, parent_value);
             batch.put(sdp_key, sdp_declarations);
+            batch.put(events_key, events);
             db.write(batch)?;
             Ok(None)
         });
@@ -78,6 +81,7 @@ impl StorageChainApi for RocksBackend {
         let block_key = Bytes::copy_from_slice(&encoded_header_id);
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, encoded_header_id);
         let sdp_key = key_bytes(BLOCK_SDP_DECLARATIONS_PREFIX, encoded_header_id);
+        let events_key = key_bytes(BLOCK_EVENTS_PREFIX, encoded_header_id);
 
         // Load the block first so we can return it.
         let val = self.load(&block_key).await?;
@@ -87,6 +91,7 @@ impl StorageChainApi for RocksBackend {
             batch.delete(block_key);
             batch.delete(parent_key);
             batch.delete(sdp_key);
+            batch.delete(events_key);
             db.write(batch)?;
             Ok(None)
         });
@@ -112,6 +117,15 @@ impl StorageChainApi for RocksBackend {
     ) -> Result<Option<Self::SdpDeclarations>, Self::Error> {
         let header_bytes: [u8; 32] = header_id.into();
         let key = key_bytes(BLOCK_SDP_DECLARATIONS_PREFIX, header_bytes);
+        self.load(&key).await.map_err(Into::into)
+    }
+
+    async fn get_block_events(
+        &mut self,
+        header_id: HeaderId,
+    ) -> Result<Option<Self::Events>, Self::Error> {
+        let header_bytes: [u8; 32] = header_id.into();
+        let key = key_bytes(BLOCK_EVENTS_PREFIX, header_bytes);
         self.load(&key).await.map_err(Into::into)
     }
 
@@ -257,38 +271,6 @@ impl StorageChainApi for RocksBackend {
     }
 }
 
-/// Helper to collect a stream of immutable `HeaderId`s into a `Vec`.
-pub async fn streamed_immutable_block_ids_vec<Backend: StorageBackend>(
-    backend: &mut Backend,
-    slot_range: RangeInclusive<Slot>,
-    limit: NonZeroUsize,
-) -> Result<Vec<HeaderId>, StorageServiceError> {
-    let stream = backend
-        .scan_immutable_block_ids(slot_range, limit)
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-    stream
-        .try_collect::<Vec<HeaderId>>()
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))
-}
-
-/// Helper to collect a stream of immutable `HeaderId`s into a reversed `Vec`.
-pub async fn streamed_immutable_block_ids_reverse_vec<Backend: StorageBackend>(
-    backend: &mut Backend,
-    slot_range: RangeInclusive<Slot>,
-    limit: NonZeroUsize,
-) -> Result<Vec<HeaderId>, StorageServiceError> {
-    let stream = backend
-        .scan_immutable_block_ids_reverse(slot_range, limit)
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-    stream
-        .try_collect::<Vec<HeaderId>>()
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))
-}
-
 #[cfg(test)]
 mod tests {
     use std::iter;
@@ -296,7 +278,12 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::backends::rocksdb::RocksBackendSettings;
+    use crate::{
+        api::backend::{
+            streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec,
+        },
+        backends::rocksdb::RocksBackendSettings,
+    };
 
     #[tokio::test]
     async fn immutable_block_ids() {

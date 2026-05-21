@@ -4,10 +4,13 @@ use lb_libp2p::{
     PeerId,
     cryptarchia_sync::{BoxedStream, ChainSyncError, GetTipResponse, HeaderId, SerialisedBlock},
 };
+use lb_log_targets::network_service;
 use rand::RngCore;
 use tokio::sync::oneshot;
 
 use crate::{backends::libp2p::swarm::SwarmHandler, message::ChainSyncEvent};
+
+const LOG_TARGET: &str = network_service::backends::libp2p::CHAINSYNC;
 
 type SerialisedBlockStream = BoxedStream<Result<SerialisedBlock, ChainSyncError>>;
 
@@ -56,7 +59,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         match command {
             ChainSyncCommand::RequestTip { peer, reply_sender } => {
                 if let Err(e) = self.swarm.request_tip(peer, reply_sender) {
-                    tracing::error!("failed to request tip: {e:?}");
+                    tracing::error!(target: LOG_TARGET, "failed to request tip: {e:?}");
                 }
             }
             ChainSyncCommand::DownloadBlocks {
@@ -75,7 +78,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     additional_blocks,
                     reply_sender,
                 ) {
-                    tracing::error!("failed to request blocks download: {e:?}");
+                    tracing::error!(
+                        target: LOG_TARGET,
+                        "failed to request blocks download: {e:?}"
+                    );
                 }
             }
         }
@@ -84,7 +90,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
     pub(super) fn handle_chainsync_event(&self, event: lb_cryptarchia_sync::Event) {
         let event = ChainSyncEvent::from(event);
         if let Err(e) = self.chainsync_events_tx.send(event) {
-            tracing::error!("failed to send chainsync event: {e:?}");
+            tracing::error!(target: LOG_TARGET, "failed to send chainsync event: {e:?}");
         }
     }
 }

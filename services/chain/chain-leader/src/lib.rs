@@ -602,7 +602,7 @@ where
                     ledger_config,
                     iter::once(tx.clone()),
                 ) {
-                Ok(new_state) => {
+                Ok((new_state, _events)) => {
                     ledger_state = new_state;
                     valid_txs.push(tx);
                 }

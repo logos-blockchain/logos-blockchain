@@ -14,7 +14,7 @@ use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 
-use crate::api::backend::rocksdb::chain::HeaderIdStream;
+use crate::api::backend::HeaderIdStream;
 
 #[async_trait]
 pub trait StorageChainApi {
@@ -22,6 +22,7 @@ pub trait StorageChainApi {
     type Block: Send + Sync;
     type SdpDeclarations: Send + Sync;
     type Tx: Send + Sync;
+    type Events: Send + Sync;
 
     async fn get_block(&mut self, header_id: HeaderId) -> Result<Option<Self::Block>, Self::Error>;
 
@@ -31,6 +32,7 @@ pub trait StorageChainApi {
         parent_id: HeaderId,
         block: Self::Block,
         sdp_declarations: Self::SdpDeclarations,
+        events: Self::Events,
     ) -> Result<(), Self::Error>;
 
     async fn remove_block(
@@ -47,6 +49,11 @@ pub trait StorageChainApi {
         &mut self,
         header_id: HeaderId,
     ) -> Result<Option<Self::SdpDeclarations>, Self::Error>;
+
+    async fn get_block_events(
+        &mut self,
+        header_id: HeaderId,
+    ) -> Result<Option<Self::Events>, Self::Error>;
 
     async fn store_immutable_block_ids(
         &mut self,
