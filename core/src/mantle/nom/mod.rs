@@ -8,10 +8,7 @@ use nom::{
     number::complete::{le_u16, le_u32, u8},
 };
 
-use crate::mantle::{
-    encoding::{decode_uint32, encode_uint32},
-    ops::channel::{ChannelId, Ed25519PublicKey, MsgId},
-};
+use crate::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
 
 pub trait NomEncode {
     // TODO: This could be turned into a `BoundedVec<u8, MAX_BYTES>` if we are

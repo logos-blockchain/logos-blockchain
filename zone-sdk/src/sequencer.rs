@@ -12,7 +12,7 @@ use lb_core::{
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId,
+                ChannelId, ChannelKeyIndex, MsgId,
                 config::{ChannelConfigOp, Keys},
                 inscribe::{Inscription, InscriptionOp},
                 withdraw::ChannelWithdrawOp,

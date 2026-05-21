@@ -191,6 +191,10 @@ impl<T, const MAX: usize> NonEmptyBoundedVec<T, MAX> {
     }
 
     #[must_use]
+    #[expect(
+        clippy::len_without_is_empty,
+        reason = "The non-empty invariant is enforced at construction, so `is_empty` would be redundant and misleading."
+    )]
     pub const fn len(&self) -> usize {
         self.0.len()
     }

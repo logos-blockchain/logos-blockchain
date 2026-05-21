@@ -3,7 +3,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use cucumber::gherkin::Step;
 use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
-use lb_core::mantle::{TxHash, Utxo, ops::channel::inscribe::Inscription};
+use lb_core::mantle::{
+    TxHash, Utxo,
+    ops::channel::{config::Keys, inscribe::Inscription},
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::LbcManualCluster;
 use lb_zone_sdk::{
@@ -165,7 +168,7 @@ pub(super) async fn submit_zone_channel_config(
 
     let (result, finalized) = handle
         .channel_config(
-            authorized_keys,
+            Keys::new_unchecked(authorized_keys),
             posting_timeframe.into(),
             posting_timeout.into(),
             ZONE_CHANNEL_WITHDRAW_THRESHOLD,

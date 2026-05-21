@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
-use nom::{IResult, Parser, combinator::map};
+use nom::{IResult, Parser as _, combinator::map};
 use serde::{Deserialize, Serialize};
 
 use crate::{

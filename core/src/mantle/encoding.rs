@@ -19,7 +19,7 @@ use crate::{
         nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey, config::ChannelConfigOp, deposit::DepositOp},
+            channel::{ChannelId, Ed25519PublicKey, deposit::DepositOp},
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
@@ -127,7 +127,8 @@ pub(crate) fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
         .into_iter()
         .map(Locator::try_from)
         .collect::<Result<Vec<_>, _>>()
-        .and_then(TryInto::try_into)
+        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?
+        .try_into()
         .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
     let (input, provider_key) = decode_ed25519_public_key(input)?;
     let provider_id = ProviderId(provider_key);
@@ -466,7 +467,6 @@ use lb_groth16::fr_to_bytes;
 
 use crate::{
     mantle::{
-        channel::{SlotTimeframe, SlotTimeout},
         ledger::{Inputs, Outputs},
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
@@ -802,7 +802,7 @@ mod tests {
             Transaction as _,
             ops::channel::{
                 MsgId,
-                config::Keys,
+                config::ChannelConfigOp,
                 inscribe::{self, Inscription, InscriptionOp},
             },
             tx::GasPrices,
