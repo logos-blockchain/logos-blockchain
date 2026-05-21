@@ -32,6 +32,15 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Inject Variables into Template
+        run: |
+          cp testnet/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
+            /tmp/deployment-generated.yaml
+
+          # We use '|' as a delimiter so that slashes in paths don't break the command
+          sed -i "s|ENV_PLACEHOLDER|$LB_TARGET_ENV|g" /tmp/deployment-generated.yaml
+          sed -i "s|VERSION_PLACEHOLDER|$LB_VERSION|g" /tmp/deployment-generated.yaml
+
       - name: Run Ceremony
         run: |
           cargo run --locked --bin logos-blockchain-tools-genesis -- ceremony \
@@ -39,7 +48,7 @@ jobs:
             --stake-holders testnet/ceremony/genesis/$LB_TARGET_ENV/stakeholders.yaml \
             --providers testnet/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
             --faucet testnet/ceremony/genesis/$LB_TARGET_ENV/faucet.yaml \
-            --deployment testnet/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \
+            --deployment /tmp/deployment-generated.yaml \
             --output nodes/node/binary/src/config/deployment/devnet/deployment.yaml
 
       - name: Commit and Push changes
