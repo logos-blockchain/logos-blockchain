@@ -314,16 +314,11 @@ pub fn start_republish_policy(
                         local_pending.insert(info.this_msg);
                     }
                 }
-                Some(Event::TxsFinalized { txs, .. }) => {
-                    for tx in txs {
+                Some(Event::TxsFinalized { items }) => {
+                    for tx in items {
                         if let Some(info) = tx.inscription() {
                             local_pending.remove(&info.this_msg);
                         }
-                    }
-                }
-                Some(Event::FinalizedInscriptions { inscriptions }) => {
-                    for inscription in inscriptions {
-                        local_pending.remove(&inscription.this_msg);
                     }
                 }
                 Some(Event::ChannelUpdate { orphaned, .. }) => {

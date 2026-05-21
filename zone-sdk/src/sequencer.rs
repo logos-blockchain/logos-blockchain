@@ -119,25 +119,28 @@ pub enum Error {
 /// Events emitted by the sequencer.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Transactions finalized (at or below LIB).
+    /// Transactions finalized (at or below LIB), in chain-execution order.
     ///
-    /// `tx_hashes` covers every finalized tx that was in our pending set
-    /// (inscription, atomic-withdraw bundle, or other op). `txs` carries the
-    /// typed payload for each finalized channel tx:
+    /// Emitted in both regimes with identical semantics — consumers write a
+    /// single apply loop:
+    /// - during cold-start catch-up, multiple `TxsFinalized` events stream in
+    ///   (one per backfill batch) before [`Event::Ready`]
+    /// - during live operation, one `TxsFinalized` is emitted whenever LIB
+    ///   advances and brings new finalized channel txs
+    ///
+    /// `items` covers every finalized channel tx in the order it appeared
+    /// on chain (tx order within block, op order within tx):
     /// - our own bundles → [`PublishedTx::AtomicWithdraw`] with full bundle
     ///   info
     /// - observed-but-not-ours inscriptions → [`PublishedTx::Inscription`] (we
     ///   do not extract per-block withdraws for other sequencers)
     /// - observed deposits → [`PublishedTx::Deposit`] enriched with `amount`
-    ///   from the chain events API. Deposits are emitted only for finalized
-    ///   blocks; sequencers never publish deposits.
+    ///   from the chain events API
     ///
-    /// Within `txs`, inscriptions come first (in block / tx order) followed
-    /// by deposits (also in block / tx / op order).
-    TxsFinalized {
-        tx_hashes: Vec<TxHash>,
-        txs: Vec<PublishedTx>,
-    },
+    /// Consumers can filter to "ours" via [`Event::Published`] — every tx
+    /// this sequencer submits has its hash surfaced there, so the consumer
+    /// can match against `items[i].tx_hash()`.
+    TxsFinalized { items: Vec<PublishedTx> },
     /// Channel state changed.
     ///
     /// Emitted when at least one of `orphaned` or `adopted` is non-empty.
@@ -185,9 +188,6 @@ pub enum Event {
         /// against the internal outbox. See `Event::Published` for our own).
         adopted: Vec<InscriptionInfo>,
     },
-    /// Batch of finalized inscriptions discovered during backfill catch-up.
-    /// Emitted incrementally when the sequencer catches up from a checkpoint.
-    FinalizedInscriptions { inscriptions: Vec<InscriptionInfo> },
     /// Sequencer is connected, backfill complete, ready to accept publishes.
     Ready,
     /// A tx (plain inscription or atomic-withdraw bundle) was created and
@@ -197,7 +197,7 @@ pub enum Event {
     /// from [`SequencerHandle::publish_message`] or
     /// [`SequencerHandle::publish_atomic_withdraw`]. `this_msg` on the
     /// inscription is the lineage key for correlating later
-    /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.txs`
+    /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.items`
     /// entries back to the originating publish call.
     Published {
         tx: Box<PublishedTx>,
@@ -449,8 +449,8 @@ where
         let finalized = async move {
             loop {
                 match event_rx.recv().await {
-                    Ok(Event::TxsFinalized { ref tx_hashes, .. })
-                        if tx_hashes.contains(&tx_hash) =>
+                    Ok(Event::TxsFinalized { ref items })
+                        if items.iter().any(|i| i.tx_hash() == tx_hash) =>
                     {
                         return Ok(());
                     }
@@ -796,20 +796,32 @@ where
 
         self.backfill_from = Some(Slot::from(batch_end + 1));
 
-        if let Some(last) = batch.inscriptions.last() {
-            self.last_msg_id = last.this_msg;
+        // Advance the channel-tip marker using the last inscription in the
+        // batch. Deposits don't have a `this_msg` lineage, so we skip them.
+        if let Some(last_inscription) = batch.items.iter().rev().find_map(PublishedTx::inscription)
+        {
+            self.last_msg_id = last_inscription.this_msg;
             if let Some(s) = self.state.as_mut() {
-                s.set_finalized_msg(last.this_msg);
+                s.set_finalized_msg(last_inscription.this_msg);
             }
         }
 
-        if batch.inscriptions.is_empty() {
+        // Clean up our pending set for txs that finalized in this batch.
+        // Mirrors the cleanup in `handle_block_event`. Without this, restored
+        // pending txs whose blocks were already finalized during downtime
+        // would leak in `state.pending` and risk being mis-classified as
+        // orphaned by `shed_off_branch_pending` once a live block arrives.
+        if let Some(s) = self.state.as_mut() {
+            for tx_hash in &batch.our_tx_hashes {
+                s.remove_pending(tx_hash);
+            }
+        }
+
+        if batch.items.is_empty() {
             return Some(None);
         }
 
-        let event = Event::FinalizedInscriptions {
-            inscriptions: batch.inscriptions,
-        };
+        let event = Event::TxsFinalized { items: batch.items };
         drop(self.event_tx.send(event.clone()));
         Some(Some(event))
     }
@@ -922,11 +934,8 @@ where
 
         let channel_event = result.channel_update.map(|u| self.build_channel_event(u));
 
-        let finalized_event = (!result.finalized_tx_hashes.is_empty()
-            || !result.finalized_txs.is_empty())
-        .then_some(Event::TxsFinalized {
-            tx_hashes: result.finalized_tx_hashes,
-            txs: result.finalized_txs,
+        let finalized_event = (!result.finalized_items.is_empty()).then_some(Event::TxsFinalized {
+            items: result.finalized_items,
         });
 
         match (channel_event, finalized_event) {
@@ -1381,14 +1390,14 @@ fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: Chann
 
 /// Result of processing a block event.
 struct BlockEventResult {
-    finalized_tx_hashes: Vec<TxHash>,
-    /// Finalized channel txs in typed form. Our own bundles surface as
+    /// Finalized channel items in typed form, in chain-execution order
+    /// (tx/op order across blocks). Our own bundles surface as
     /// [`PublishedTx::AtomicWithdraw`]; observed inscriptions (ours or
     /// others') surface as [`PublishedTx::Inscription`]; observed deposits
-    /// (always from another party, since sequencers never publish deposits)
-    /// surface as [`PublishedTx::Deposit`] with the `amount` populated from
-    /// the chain events API.
-    finalized_txs: Vec<PublishedTx>,
+    /// (always from another party — sequencers never publish deposits)
+    /// surface as [`PublishedTx::Deposit`] with `amount` populated from the
+    /// chain events API.
+    finalized_items: Vec<PublishedTx>,
     channel_update: Option<crate::state::ChannelUpdateInfo>,
 }
 
@@ -1417,8 +1426,7 @@ where
 
     let Some(s) = state.as_mut() else {
         return BlockEventResult {
-            finalized_tx_hashes: Vec::new(),
-            finalized_txs: Vec::new(),
+            finalized_items: Vec::new(),
             channel_update: None,
         };
     };
@@ -1428,8 +1436,7 @@ where
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
     let mut lib_finalized = Vec::new();
-    let mut lib_inscriptions = Vec::new();
-    let mut lib_deposits = Vec::new();
+    let mut finalized_items: Vec<PublishedTx> = Vec::new();
     if lib != s.lib() {
         let new_lib_slot = event.lib_slot;
         let from: u64 = (*lib_slot).into();
@@ -1437,8 +1444,7 @@ where
         if from < to {
             let batch = fetch_and_process_blocks(s, from + 1, to, channel_id, node).await;
             lib_finalized = batch.our_tx_hashes;
-            lib_inscriptions = batch.inscriptions;
-            lib_deposits = batch.deposits;
+            finalized_items = batch.items;
         }
         *lib_slot = new_lib_slot;
     }
@@ -1462,49 +1468,12 @@ where
     // Process the actual event block
     s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
 
-    // Remove our pending txs that were finalized in backfilled LIB blocks.
-    // Capture each finalized bundle's withdraw info BEFORE remove_pending
-    // strips it, so the finalized event can surface the right typed variant.
-    let mut finalized_tx_hashes = Vec::new();
-    let mut bundle_withdraws: HashMap<TxHash, Vec<WithdrawInfo>> = HashMap::new();
+    // Remove our pending txs that were finalized in the backfilled LIB blocks.
+    // `finalized_items` already carries the typed payloads (built before
+    // pending was mutated) so we just need to clean up state here.
     for tx_hash in &lib_finalized {
-        if let Some(withdraws) = s
-            .pending_inscription(tx_hash)
-            .and_then(|p| p.withdraws.clone())
-        {
-            bundle_withdraws.insert(*tx_hash, withdraws);
-        }
-        if s.remove_pending(tx_hash).is_some() {
-            finalized_tx_hashes.push(*tx_hash);
-        }
+        s.remove_pending(tx_hash);
     }
-
-    // All channel inscriptions from backfilled LIB blocks — includes both
-    // our own and other sequencers' inscriptions. Consumers need the full
-    // picture to update their local state correctly.
-    let mut finalized_txs: Vec<PublishedTx> = lib_inscriptions
-        .into_iter()
-        .map(|info| {
-            tracing::trace!(
-                " Backfill-finalized: payload={:?}, tx={}",
-                String::from_utf8_lossy(&info.payload),
-                hex::encode(info.tx_hash.0),
-            );
-            match bundle_withdraws.remove(&info.tx_hash) {
-                Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
-                    tx_hash: info.tx_hash,
-                    inscription: info,
-                    withdraws,
-                }),
-                None => PublishedTx::Inscription(info),
-            }
-        })
-        .collect();
-    // Append finalized deposits observed during backfill. Deposits are not
-    // published by sequencers — they are pure observations, surfaced here
-    // so consumers (e.g. bridge implementations) can react to them on the
-    // same event stream as inscriptions.
-    finalized_txs.extend(lib_deposits.into_iter().map(PublishedTx::Deposit));
     *current_tip = Some(tip);
 
     // Detect channel changes.
@@ -1532,8 +1501,7 @@ where
     };
 
     BlockEventResult {
-        finalized_tx_hashes,
-        finalized_txs,
+        finalized_items,
         channel_update,
     }
 }
@@ -1576,16 +1544,19 @@ fn orphan_from_shed(entry: PublishedTx) -> Option<OrphanedTx> {
 
 /// Result of fetching and processing a slot range.
 struct FetchedBatch {
+    /// Tx hashes of txs that match our channel (any op). Used internally to
+    /// clean up our pending set.
     our_tx_hashes: Vec<TxHash>,
-    inscriptions: Vec<InscriptionInfo>,
-    /// Finalized deposits observed in the fetched range, in tx/op order
-    /// across blocks. Each deposit is enriched with `amount` from the block's
-    /// events.
-    deposits: Vec<DepositInfo>,
+    /// User-facing finalized items, in chain-execution order across blocks
+    /// (tx order within block, op order within tx). Inscriptions, deposits,
+    /// and `ChannelConfig` synthetic entries are interleaved as they
+    /// appeared on chain.
+    items: Vec<PublishedTx>,
 }
 
-/// Fetch blocks in a slot range, process them into state, and return
-/// discovered tx hashes, inscriptions, and deposits.
+/// Fetch blocks in a slot range, process them into state, and return our
+/// finalized tx hashes plus the user-facing items (inscriptions + deposits in
+/// chain-execution order).
 async fn fetch_and_process_blocks<Node>(
     state: &mut TxState,
     from_slot: u64,
@@ -1598,8 +1569,7 @@ where
 {
     let mut result = FetchedBatch {
         our_tx_hashes: Vec::new(),
-        inscriptions: Vec::new(),
-        deposits: Vec::new(),
+        items: Vec::new(),
     };
 
     match node
@@ -1617,13 +1587,26 @@ where
 
                 let inscriptions = extract_inscriptions(&block.transactions, channel_id);
 
-                let deposits =
-                    fetch_block_deposits(node, block.header.id, &block.transactions, channel_id)
-                        .await;
+                // Build the user-facing items for this block before
+                // process_block / pending cleanup, so that our atomic-withdraw
+                // bundles can still be looked up from pending.
+                let deposit_amounts = fetch_block_deposit_amounts(
+                    node,
+                    block.header.id,
+                    &block.transactions,
+                    channel_id,
+                )
+                .await;
+                let mut bundle_withdraws = bundle_withdraws_for(state, &our_txs);
+                let block_items = extract_finalized_items(
+                    &block.transactions,
+                    channel_id,
+                    &deposit_amounts,
+                    &mut bundle_withdraws,
+                );
 
                 result.our_tx_hashes.extend(our_txs.iter().copied());
-                result.inscriptions.extend(inscriptions.clone());
-                result.deposits.extend(deposits);
+                result.items.extend(block_items);
 
                 let current_lib = state.lib();
                 state.process_block(
@@ -1643,74 +1626,137 @@ where
     result
 }
 
-/// Returns the deposits for `channel_id` observed in `transactions`, paired
-/// with their `amount` from the block's events. Returns an empty vec if there
-/// are no deposits, fetching events only when needed.
-async fn fetch_block_deposits<Node>(
+/// Build `(tx_hash → withdraws)` map for the subset of `our_tx_hashes` that
+/// have atomic-withdraw bundle info in `state.pending`. Other entries (plain
+/// inscriptions, or txs not in our pending) are absent — they will surface as
+/// [`PublishedTx::Inscription`].
+fn bundle_withdraws_for(
+    state: &TxState,
+    our_tx_hashes: &[TxHash],
+) -> HashMap<TxHash, Vec<WithdrawInfo>> {
+    let mut map = HashMap::new();
+    for tx_hash in our_tx_hashes {
+        if let Some(withdraws) = state
+            .pending_inscription(tx_hash)
+            .and_then(|p| p.withdraws.clone())
+        {
+            map.insert(*tx_hash, withdraws);
+        }
+    }
+    map
+}
+
+/// Fetch the deposit-amount lookup for a single block, gated on whether the
+/// block has any deposit op for our channel.
+async fn fetch_block_deposit_amounts<Node>(
     node: &Node,
     block_id: HeaderId,
     transactions: &[SignedMantleTx],
     channel_id: ChannelId,
-) -> Vec<DepositInfo>
+) -> HashMap<(TxHash, Hash), Value>
 where
     Node: adapter::Node + Sync,
 {
     if !has_channel_deposit(transactions, channel_id) {
-        return Vec::new();
+        return HashMap::new();
     }
-
-    let events = match node.block_events(block_id).await {
-        Ok(Some(events)) => events,
+    match node.block_events(block_id).await {
+        Ok(Some(events)) => build_deposit_amounts(&events),
         Ok(None) => {
             warn!("No events found for block {block_id}; skipping deposit emission");
-            return Vec::new();
+            HashMap::new()
         }
         Err(err) => {
             warn!("Failed to fetch events for block {block_id}: {err}");
-            return Vec::new();
+            HashMap::new()
         }
-    };
-    let amounts = build_deposit_amounts(&events);
-    extract_deposits(transactions, channel_id, &amounts)
+    }
 }
 
-/// Walks `transactions` (in tx/op order) and returns the deposits for
-/// `channel_id`, enriched with the amount looked up from `deposit_amounts`.
-/// Deposits without a matching event are skipped with a warning — the
-/// `amount` is required for consumers to be useful.
-fn extract_deposits(
+/// Walks `transactions` in tx/op order and emits a single ordered
+/// [`PublishedTx`] stream covering inscriptions (with atomic-withdraw bundle
+/// detection for our own pending), `ChannelConfig` synthetic entries, and
+/// deposits (with amount lookup from `deposit_amounts`).
+///
+/// Order is natural chain-execution order: within a Mantle tx that contains
+/// both a deposit and an inscription, the deposit is emitted first — matching
+/// the on-chain op execution order and letting consumers (e.g. LEZ's bridge)
+/// validate references from inscriptions back to deposits in the same tx.
+///
+/// `bundle_withdraws` is consumed when an inscription's `tx_hash` is found in
+/// it — those become [`PublishedTx::AtomicWithdraw`]; otherwise plain
+/// [`PublishedTx::Inscription`]. Deposits without a matching event entry are
+/// skipped with a warning.
+fn extract_finalized_items(
     transactions: &[SignedMantleTx],
     channel_id: ChannelId,
     deposit_amounts: &HashMap<(TxHash, Hash), Value>,
-) -> Vec<DepositInfo> {
-    let mut deposits = Vec::new();
+    bundle_withdraws: &mut HashMap<TxHash, Vec<WithdrawInfo>>,
+) -> Vec<PublishedTx> {
+    let mut items: Vec<PublishedTx> = Vec::new();
+    let mut last_in_block: Option<MsgId> = None;
+
     for tx in transactions {
         let tx_hash = tx.mantle_tx.hash();
         for op in tx.mantle_tx.ops() {
-            if let Op::ChannelDeposit(deposit) = op
-                && deposit.channel_id == channel_id
-            {
-                let op_id = deposit.op_id();
-                if let Some(&amount) = deposit_amounts.get(&(tx_hash, op_id)) {
-                    deposits.push(DepositInfo {
+            match op {
+                Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                    let info = InscriptionInfo {
                         tx_hash,
-                        op_id,
-                        channel_id,
-                        inputs: deposit.inputs.clone(),
-                        amount,
-                        metadata: deposit.metadata.clone(),
-                    });
-                } else {
-                    warn!(
-                        ?tx_hash,
-                        ?op_id,
-                        "Deposit op has no matching event in block; skipping"
-                    );
+                        parent_msg: inscribe.parent,
+                        this_msg: inscribe.id(),
+                        payload: inscribe.inscription.clone(),
+                    };
+                    last_in_block = Some(info.this_msg);
+                    let item = match bundle_withdraws.remove(&tx_hash) {
+                        Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                            tx_hash,
+                            inscription: info,
+                            withdraws,
+                        }),
+                        None => PublishedTx::Inscription(info),
+                    };
+                    items.push(item);
                 }
+                Op::ChannelConfig(config) if config.channel == channel_id => {
+                    // Synthetic entry — keeps `channel_tip` in sync when the
+                    // chain `ChannelConfig` resets it. Empty payload so
+                    // payload-keyed consumers ignore it naturally.
+                    let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
+                    let info = InscriptionInfo {
+                        tx_hash,
+                        parent_msg,
+                        this_msg: config.id(),
+                        payload: Inscription::default(),
+                    };
+                    last_in_block = Some(info.this_msg);
+                    items.push(PublishedTx::Inscription(info));
+                }
+                Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
+                    let op_id = deposit.op_id();
+                    if let Some(&amount) = deposit_amounts.get(&(tx_hash, op_id)) {
+                        items.push(PublishedTx::Deposit(DepositInfo {
+                            tx_hash,
+                            op_id,
+                            channel_id,
+                            inputs: deposit.inputs.clone(),
+                            amount,
+                            metadata: deposit.metadata.clone(),
+                        }));
+                    } else {
+                        warn!(
+                            ?tx_hash,
+                            ?op_id,
+                            "Deposit op has no matching event in block; skipping"
+                        );
+                    }
+                }
+                _ => {}
             }
         }
     }
-    deposits
+
+    items
 }
 
 /// Backfill canonical chain backwards from a missing parent to LIB.
@@ -2148,6 +2194,23 @@ mod tests {
         }
     }
 
+    /// Extract deposits via the unified walker and filter to deposit entries
+    /// for assertion clarity.
+    fn extract_deposits_for_test(
+        transactions: &[SignedMantleTx],
+        channel_id: ChannelId,
+        amounts: &HashMap<(TxHash, Hash), u64>,
+    ) -> Vec<DepositInfo> {
+        let mut bw = HashMap::new();
+        extract_finalized_items(transactions, channel_id, amounts, &mut bw)
+            .into_iter()
+            .filter_map(|item| match item {
+                PublishedTx::Deposit(d) => Some(d),
+                _ => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn extract_deposits_returns_matching_amount() {
         let channel_id = ChannelId::from([0; 32]);
@@ -2166,7 +2229,7 @@ mod tests {
         let mut amounts = HashMap::new();
         amounts.insert((tx_hash, our_op_id), 1234u64);
 
-        let deposits = extract_deposits(std::slice::from_ref(&tx), channel_id, &amounts);
+        let deposits = extract_deposits_for_test(std::slice::from_ref(&tx), channel_id, &amounts);
         assert_eq!(
             deposits.len(),
             1,
@@ -2190,7 +2253,8 @@ mod tests {
         let op = deposit_op(channel_id, 1, b"to Alice");
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op)]);
 
-        let deposits = extract_deposits(std::slice::from_ref(&tx), channel_id, &HashMap::new());
+        let deposits =
+            extract_deposits_for_test(std::slice::from_ref(&tx), channel_id, &HashMap::new());
         assert!(deposits.is_empty());
     }
 
@@ -2215,7 +2279,7 @@ mod tests {
         amounts.insert((hash_a, id2), 20);
         amounts.insert((hash_b, id3), 30);
 
-        let deposits = extract_deposits(&[tx_a, tx_b], channel_id, &amounts);
+        let deposits = extract_deposits_for_test(&[tx_a, tx_b], channel_id, &amounts);
         let metadata_in_order: Vec<&[u8]> =
             deposits.iter().map(|d| d.metadata.as_slice()).collect();
         assert_eq!(
@@ -2223,6 +2287,39 @@ mod tests {
             vec![b"first" as &[u8], b"second", b"third"],
             "deposits emitted in tx/op order across transactions"
         );
+    }
+
+    #[test]
+    fn extract_finalized_items_interleaves_deposit_then_inscription_in_same_tx() {
+        // The atomic deposit+inscription pattern: one Mantle tx with
+        // [ChannelDeposit, ChannelInscribe]. The bridge use case requires the
+        // deposit to be emitted BEFORE the inscription so that consumers
+        // (e.g. LEZ) can validate references from the inscription back to
+        // the just-finalized deposit.
+        let channel_id = ChannelId::from([0; 32]);
+        let dep = deposit_op(channel_id, 1, b"deposit-meta");
+        let dep_op_id = dep.op_id();
+        let inscribe = InscriptionOp {
+            channel_id,
+            parent: MsgId::root(),
+            inscription: Inscription::default(),
+            signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+        };
+
+        let tx =
+            unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
+        let tx_hash = tx.mantle_tx.hash();
+
+        let mut amounts = HashMap::new();
+        amounts.insert((tx_hash, dep_op_id), 500u64);
+
+        let mut bw = HashMap::new();
+        let items =
+            extract_finalized_items(std::slice::from_ref(&tx), channel_id, &amounts, &mut bw);
+
+        assert_eq!(items.len(), 2);
+        assert!(matches!(items[0], PublishedTx::Deposit(_)));
+        assert!(matches!(items[1], PublishedTx::Inscription(_)));
     }
 
     #[derive(Clone)]

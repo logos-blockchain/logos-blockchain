@@ -110,10 +110,10 @@ async fn handle_event(
         Event::ChannelUpdate { orphaned, adopted } => {
             handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
-        Event::TxsFinalized { txs, .. } => {
+        Event::TxsFinalized { items } => {
             // TUI only cares about inscriptions for rendering; ignore Deposit
             // entries which have no inscription payload.
-            let inscriptions: Vec<InscriptionInfo> = txs
+            let inscriptions: Vec<InscriptionInfo> = items
                 .iter()
                 .filter_map(|t| t.inscription().cloned())
                 .collect();
@@ -131,9 +131,6 @@ async fn handle_event(
             state.save_checkpoint(checkpoint);
             ui::render_state(state);
             ui::prompt();
-        }
-        Event::FinalizedInscriptions { inscriptions } => {
-            state.on_finalized(&inscriptions);
         }
     }
 }
