@@ -641,6 +641,7 @@ mod tests {
             total_stake: 100,
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
+            sdp: SdpLedger::new(epoch),
         }
     }
 

@@ -244,7 +244,15 @@ impl LedgerState {
     {
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
-            .try_apply_header::<LeaderProof, Id>(slot, proof, config)?;
+            .try_apply_header::<LeaderProof, Id>(
+                slot,
+                proof,
+                // TODO: threading SDP here because EpochState is currently embedded in
+                // CryptarchiaLedger.
+                // In the future, we will pull EpochState up into LedgerState.
+                &self.mantle_ledger.sdp,
+                config,
+            )?;
         let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
@@ -474,7 +482,8 @@ impl LedgerState {
         slot: Slot,
         config: &Config,
     ) -> Result<EpochState, LedgerError<Id>> {
-        self.cryptarchia_ledger.epoch_state_for_slot(slot, config)
+        self.cryptarchia_ledger
+            .epoch_state_for_slot(slot, &self.mantle_ledger.sdp, config)
     }
 
     #[must_use]

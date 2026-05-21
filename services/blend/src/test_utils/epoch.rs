@@ -19,6 +19,7 @@ pub fn default_epoch_state() -> EpochState {
         utxos: UtxoTree::new(),
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
+        sdp: lb_ledger::mantle::sdp::SdpLedger::new(1.into()),
     }
 }
 

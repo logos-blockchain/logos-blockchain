@@ -425,6 +425,7 @@ mod pol_tests {
             total_stake,
             lottery_0,
             lottery_1,
+            sdp: lb_ledger::mantle::sdp::SdpLedger::new(1.into()),
         };
 
         // Create notifier channel (not used in this test)

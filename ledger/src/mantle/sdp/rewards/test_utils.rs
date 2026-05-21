@@ -66,5 +66,6 @@ pub fn dummy_epoch_state_with(epoch: u32, nonce: u64) -> EpochState {
         total_stake: 0,
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
+        sdp: crate::mantle::sdp::SdpLedger::new(epoch.into()),
     }
 }
