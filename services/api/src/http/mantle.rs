@@ -415,17 +415,31 @@ where
 
     let mut blocks = Vec::with_capacity(limit.min(1024));
     let mut current_id = chain_info.tip;
+    let gated_slot_from = slot_from.max(chain_info.lib_slot + 1);
+    if gated_slot_from > slot_to {
+        return Ok(Vec::new());
+    }
     let mut retried = false;
 
     loop {
+        // This function only serves the mutable window. Once we hit LIB we are below
+        // the requested mutable range and should stop without loading the body.
+        if current_id == chain_info.lib {
+            break;
+        }
+
         let Some(block) = storage_adapter.get_block(&current_id).await else {
             if retried {
                 return Err(format!(
-                    "canonical chain inconsistency: missing block for canonical header {current_id}"
+                    "canonical chain inconsistency: missing block {current_id} while traversing \
+                    mutable chain anchored at LIB {}",
+                    chain_info.lib
                 )
                 .into());
             }
 
+            // Retry once from the latest tip if the original tip is not yet available.
+            // The original LIB remains the anchor for this request.
             let refreshed_info =
                 crate::http::consensus::cryptarchia_info::<RuntimeServiceId>(handle).await?;
             current_id = refreshed_info.cryptarchia_info.tip;
@@ -438,7 +452,7 @@ where
         let slot = header.slot();
         let parent_id = header.parent_block();
 
-        if slot < slot_from {
+        if slot < gated_slot_from {
             break;
         }
 
@@ -456,8 +470,14 @@ where
             }
         }
 
+        // Defensive guard against malformed/self-parenting headers.
         if parent_id == current_id {
-            break;
+            return Err(format!(
+                "canonical chain inconsistency: block {current_id} at slot {slot:?} is its own\
+                 parent before anchored LIB {}",
+                chain_info.lib
+            )
+            .into());
         }
         current_id = parent_id;
     }

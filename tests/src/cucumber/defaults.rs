@@ -16,6 +16,7 @@ const TARGET: &str = "cucumber_defaults";
 
 const LOGOS_BLOCKCHAIN_TESTS_TRACING: &str = "LOGOS_BLOCKCHAIN_TESTS_TRACING";
 const TF_KEEP_LOGS: &str = "TF_KEEP_LOGS";
+pub const E2E_KEEP_LOGS: &str = "E2E_KEEP_LOGS";
 const CUCUMBER_LOG_LEVEL: &str = "CUCUMBER_LOG_LEVEL";
 const RUST_LOG: &str = "RUST_LOG";
 const LOGOS_BLOCKCHAIN_LOG_DIR: &str = "LOGOS_BLOCKCHAIN_LOG_DIR";

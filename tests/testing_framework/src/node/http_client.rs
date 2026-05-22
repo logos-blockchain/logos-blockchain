@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, num::NonZero, pin::Pin};
+use std::{net::SocketAddr, pin::Pin};
 
 use common_http_client::{
     ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
@@ -12,6 +12,7 @@ use lb_http_api_common::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
     paths::{BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
+    queries::BlocksStreamQuery,
 };
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
@@ -113,24 +114,11 @@ impl NodeHttpClient {
     /// range.
     pub async fn blocks_range_stream(
         &self,
-        blocks_limit: Option<NonZero<usize>>,
-        slot_from: Option<u64>,
-        slot_to: Option<u64>,
-        descending: Option<bool>,
-        server_batch_size: Option<NonZero<usize>>,
-        immutable_only: Option<bool>,
+        params: BlocksStreamQuery,
     ) -> Result<Pin<Box<dyn Stream<Item = ProcessedBlockEvent> + Send + '_>>, Error> {
         let stream = self
             .http_client
-            .get_blocks_range_stream(
-                self.base_url.clone(),
-                blocks_limit,
-                slot_from,
-                slot_to,
-                descending,
-                server_batch_size,
-                immutable_only,
-            )
+            .get_blocks_range_stream(self.base_url.clone(), params)
             .await?;
         Ok(Box::pin(stream))
     }
