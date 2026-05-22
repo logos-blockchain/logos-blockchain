@@ -9,10 +9,12 @@ use async_trait::async_trait;
 use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use lb_blend::scheduling::session::UninitializedSessionEventStream;
+use lb_chain_service::api::CryptarchiaServiceData;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
+use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -34,7 +36,7 @@ use crate::{
     instance::{Instance, Mode},
     kms::PreloadKmsService,
     membership::{
-        Adapter as _, MembershipInfo,
+        MembershipInfo,
         node_id::{self, TryFrom as _},
     },
     settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, Settings},
@@ -108,8 +110,11 @@ where
     EdgeService: ServiceData<Message = CoreService::Message>
         // We tie the core and edge proofs generator to be the same type, to avoid mistakes in the
         // node configuration where the two services use different verification logic
-        + EdgeServiceComponents<BackendSettings: Clone + Send + Sync>
-        + Send
+        + EdgeServiceComponents<
+            BackendSettings: Clone + Send + Sync,
+            ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
+            TimeBackend: lb_time_service::backends::TimeBackend + Send,
+        > + Send
         + 'static,
     EdgeService::MembershipAdapter:
         membership::Adapter<NodeId = CoreService::NodeId, Error: Send + Sync + 'static> + Send,
@@ -118,7 +123,10 @@ where
         + AsServiceId<CoreService>
         + AsServiceId<EdgeService>
         + AsServiceId<MembershipService<EdgeService>>
-        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + AsServiceId<<EdgeService as EdgeServiceComponents>::ChainService>
+        + AsServiceId<
+            TimeService<<EdgeService as EdgeServiceComponents>::TimeBackend, RuntimeServiceId>,
+        > + AsServiceId<PreloadKmsService<RuntimeServiceId>>
         + AsServiceId<
             NetworkService<
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
@@ -129,6 +137,7 @@ where
         + Clone
         + Send
         + Sync
+        + Unpin
         + 'static,
 {
     fn init(
@@ -180,17 +189,20 @@ where
             CoreService::NodeId::try_from_provider_id(non_ephemeral_signing_key_public.as_bytes())
                 .expect("non-ephemeral signing public key should decode into a valid node id");
 
-        let membership_stream = <MembershipAdapter<EdgeService> as membership::Adapter>::new(
-            overwatch_handle
-                .relay::<MembershipService<EdgeService>>()
-                .await?,
+        let membership_stream = membership::chain::subscribe::<
+            <EdgeService as EdgeServiceComponents>::ChainService,
+            CoreService::NodeId,
+            <EdgeService as EdgeServiceComponents>::TimeBackend,
+            RuntimeServiceId,
+        >(
+            overwatch_handle,
             non_ephemeral_signing_key_public,
             // We don't need to generate secret zk info in the proxy service, so we ignore the
             // secret key at this level.
             None,
+            settings.common.time.epoch_transition_period_in_slots,
         )
-        .subscribe()
-        .await?;
+        .await;
 
         let (MembershipInfo { membership, .. }, mut remaining_session_stream) =
             UninitializedSessionEventStream::new(

@@ -10,6 +10,10 @@ pub trait ServiceComponents {
     type MembershipAdapter;
     type ProofsGenerator;
     type BackendSettings;
+    /// Chain service, used by the proxy to derive membership from the chain.
+    type ChainService;
+    /// Time backend, used by the proxy to subscribe to slot ticks.
+    type TimeBackend;
 }
 
 impl<
@@ -42,4 +46,6 @@ where
     type BroadcastSettings = BroadcastSettings;
     type MembershipAdapter = MembershipAdapter;
     type ProofsGenerator = ProofsGenerator;
+    type ChainService = ChainService;
+    type TimeBackend = TimeBackend;
 }
