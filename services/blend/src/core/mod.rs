@@ -98,8 +98,7 @@ use crate::{
         state::{RecoveryServiceState, ServiceState, StateUpdater as ServiceStateUpdater},
     },
     epoch_info::{
-        ChainApi, EpochEvent, EpochHandler, PolEpochInfo,
-        PolInfoProvider as PolInfoProviderTrait,
+        ChainApi, EpochEvent, EpochHandler, PolEpochInfo, PolInfoProvider as PolInfoProviderTrait,
     },
     kms::PreloadKmsService,
     membership::{self, MembershipInfo, ZkInfo},
@@ -230,7 +229,7 @@ impl<
     >
 where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
-    NodeId: Clone + Debug + Send + Eq + Hash + Sync + 'static,
+    NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
     MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
     membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
@@ -359,17 +358,14 @@ where
                 .expect("Failed to retrieve non-ephemeral signing key from KMS.")
         };
 
-        let membership_stream = MembershipAdapter::new(
-            overwatch_handle
-                .relay::<<MembershipAdapter as membership::Adapter>::Service>()
-                .await
-                .expect("Failed to get relay channel with membership service."),
-            non_ephemeral_signing_key.public_key(),
-            Some(zk_public_key),
-        )
-        .subscribe()
-        .await
-        .expect("Failed to get membership stream from membership service.");
+        let membership_stream =
+            membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
+                overwatch_handle,
+                non_ephemeral_signing_key.public_key(),
+                Some(zk_public_key),
+                blend_config.time.epoch_transition_period_in_slots,
+            )
+            .await;
 
         let sdp_relay = overwatch_handle
             .relay::<SdpService>()

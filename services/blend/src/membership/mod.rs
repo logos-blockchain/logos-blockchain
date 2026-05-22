@@ -1,3 +1,4 @@
+pub mod chain;
 pub mod node_id;
 pub mod service;
 

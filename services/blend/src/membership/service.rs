@@ -6,8 +6,9 @@ use lb_blend::{
     scheduling::membership::{Membership, Node},
 };
 use lb_chain_broadcast_service::{ActiveProviders, ActiveProvidersSubscription, BlockBroadcastMsg};
-use lb_core::sdp::{ProviderId, ProviderInfo};
+use lb_core::sdp::{ProviderId, ProviderInfo, ServiceType};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_ledger::EpochState;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
@@ -126,6 +127,71 @@ where
                     }
                 }),
         ))
+    }
+}
+
+/// Build [`MembershipInfo`] from the SDP membership snapshot frozen into
+/// `epoch_state` (queried from the chain). This is the chain-derived
+/// replacement for the pushed [`ActiveProviders`] broadcast: the membership for
+/// the epoch is read from `EpochState.sdp` instead of a broadcast stream.
+///
+/// Note: this intentionally duplicates the node/Merkle construction in
+/// `Adapter::subscribe` rather than sharing it, because the broadcast
+/// `subscribe` path is slated for removal once this becomes the membership
+/// source; sharing logic with code about to be deleted is not worth the churn.
+#[must_use]
+pub fn membership_info_from_epoch_state<NodeId>(
+    epoch_state: &EpochState,
+    signing_public_key: &Ed25519PublicKey,
+    maybe_zk_public_key: Option<ZkPublicKey>,
+) -> MembershipInfo<NodeId>
+where
+    NodeId: node_id::TryFrom + Clone + Hash + Eq,
+{
+    let declarations = epoch_state.sdp.declarations();
+    let mut nodes: Vec<ZkNode<NodeId>> = declarations
+        .iter()
+        .filter(|(service_type, _)| matches!(service_type, ServiceType::BlendNetwork))
+        .flat_map(|(_, declarations)| declarations.values())
+        .filter_map(|declaration| {
+            let provider_info = ProviderInfo {
+                locators: declaration.locators.clone(),
+                zk_id: declaration.zk_id,
+            };
+            node_from_provider::<NodeId>(&declaration.provider_id, &provider_info)
+        })
+        .collect();
+
+    let zk_info = if nodes.is_empty() {
+        None
+    } else {
+        let zk_tree =
+            sort_nodes_and_build_merkle_tree(&mut nodes, |ZkNode { zk_key, .. }| zk_key.into_inner())
+                .expect("Should not fail to build Merkle tree of core nodes' zk public keys.");
+        let core_and_path_selectors = maybe_zk_public_key.and_then(|zk_public_key| {
+            let Some(proof) = zk_tree.get_proof_for_key(zk_public_key.as_fr()) else {
+                debug!(
+                    "Local node's ZK public key not found in membership Merkle tree: node is not a core member."
+                );
+                return None;
+            };
+            Some(proof)
+        });
+        Some(ZkInfo {
+            core_and_path_selectors,
+            root: zk_tree.root(),
+        })
+    };
+    let membership_nodes = nodes
+        .into_iter()
+        .map(|ZkNode { node, .. }| node)
+        .collect::<Vec<_>>();
+    let membership = Membership::new(&membership_nodes, signing_public_key);
+    MembershipInfo {
+        membership,
+        zk: zk_info,
+        // TODO: change `session_number` to `epoch`
+        session_number: epoch_state.epoch().into_inner().into(),
     }
 }
 
