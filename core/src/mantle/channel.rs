@@ -271,10 +271,9 @@ mod tests {
             posting_timeout: SlotTimeout(posting_timeout),
             balance: 0,
             withdrawal_nonce: 0,
-            accredited_keys: Keys::new_unchecked(
-                (0..num_keys).map(test_public_key).collect::<Vec<_>>(),
-            )
-            .into(),
+            accredited_keys: Keys::try_from((0..num_keys).map(test_public_key).collect::<Vec<_>>())
+                .unwrap()
+                .into(),
             configuration_threshold: 0,
             tip_message: MsgId::root(),
             withdraw_threshold: 0,
