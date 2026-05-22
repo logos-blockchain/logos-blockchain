@@ -5,7 +5,6 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_common_http_client::Slot;
-use lb_core::mantle::ops::channel::MsgId;
 use lb_zone_sdk::{
     ZoneMessage, adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer,
 };
@@ -97,7 +96,7 @@ pub(super) async fn wait_until_sorted_conflict_settles(
 
 async fn read_next_indexed_blocks(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
-    cursor: &mut Option<(MsgId, Slot)>,
+    cursor: &mut Option<Slot>,
     mut visit: impl FnMut(Vec<u8>),
 ) -> Result<bool, ZoneTestError> {
     let stream = indexer
@@ -111,13 +110,11 @@ async fn read_next_indexed_blocks(
     let mut saw_message = false;
 
     while let Some((message, slot)) = stream.next().await {
-        let ZoneMessage::Block(block) = message else {
-            continue;
-        };
-
         saw_message = true;
-        *cursor = Some((block.id, slot));
-        visit(block.data);
+        *cursor = Some(slot);
+        if let ZoneMessage::Block(block) = message {
+            visit(block.data);
+        }
     }
 
     Ok(saw_message)

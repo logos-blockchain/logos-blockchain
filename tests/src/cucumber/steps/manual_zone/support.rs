@@ -711,14 +711,12 @@ pub async fn collect_indexed_messages_exactly_once(
                 let mut saw_message = false;
 
                 while let Some((message, slot)) = stream.next().await {
-                    let ZoneMessage::Block(block) = message else {
-                        continue;
-                    };
-
                     saw_message = true;
-                    cursor = Some((block.id, slot));
+                    cursor = Some(slot);
 
-                    if expected.contains(&block.data) {
+                    if let ZoneMessage::Block(block) = message
+                        && expected.contains(&block.data)
+                    {
                         ordered.push(block.data);
                     }
                 }
@@ -797,13 +795,11 @@ async fn count_indexed_payload(
         let mut saw_message = false;
 
         while let Some((message, slot)) = stream.next().await {
-            let ZoneMessage::Block(block) = message else {
-                continue;
-            };
-
             saw_message = true;
-            cursor = Some((block.id, slot));
-            if block.data == expected_payload {
+            cursor = Some(slot);
+            if let ZoneMessage::Block(block) = message
+                && block.data == expected_payload
+            {
                 count += 1;
             }
         }
@@ -860,9 +856,7 @@ async fn poll_zone_indexer_until<T>(
             futures::pin_mut!(stream);
 
             while let Some((message, slot)) = stream.next().await {
-                if let ZoneMessage::Block(block) = &message {
-                    cursor = Some((block.id, slot));
-                }
+                cursor = Some(slot);
 
                 if let Some(result) = predicate(&message) {
                     return Ok(result);

@@ -538,6 +538,11 @@ pub struct ZoneSequencer<Node> {
     // Incremental backfill state — processes one batch per next_event() call
     backfill_from: Option<Slot>,
     backfill_to: Option<Slot>,
+    // True until the cold-start backfill has been scheduled. Distinguishes
+    // `lib_slot == genesis()` because we haven't started yet from
+    // `lib_slot == genesis()` from a checkpoint, so the genesis slot itself
+    // gets backfilled exactly once.
+    cold_start: bool,
 
     // Broadcast channel for events — handles subscribe to receive events
     event_tx: broadcast::Sender<Event>,
@@ -587,7 +592,7 @@ where
     ) -> (Self, SequencerHandle<Node>) {
         let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
 
-        let (state, lib_slot, last_msg_id) = if let Some(cp) = checkpoint {
+        let (state, lib_slot, last_msg_id, cold_start) = if let Some(cp) = checkpoint {
             info!(
                 "Restoring from checkpoint: {} pending txs, lib={:?}, lib_slot={:?}",
                 cp.pending_txs.len(),
@@ -598,10 +603,10 @@ where
             for (_hash, tx) in cp.pending_txs {
                 restore_pending_tx(&mut tx_state, tx, channel_id);
             }
-            (Some(tx_state), cp.lib_slot, cp.last_msg_id)
+            (Some(tx_state), cp.lib_slot, cp.last_msg_id, false)
         } else {
             info!("Starting fresh (no checkpoint)");
-            (None, Slot::genesis(), MsgId::root())
+            (None, Slot::genesis(), MsgId::root(), true)
         };
 
         let resubmit_interval = tokio::time::interval(config.resubmit_interval);
@@ -632,6 +637,7 @@ where
             buffered_event: None,
             backfill_from: None,
             backfill_to: None,
+            cold_start,
             event_tx,
             ready_tx,
         };
@@ -891,6 +897,11 @@ where
     /// Check whether an incremental backfill range is needed (checkpoint lib
     /// behind current network lib). Returns `false` if a backfill was set up
     /// (caller defers readiness until backfill completes).
+    ///
+    /// On cold start the genesis slot is included (`backfill_from = 0`); a
+    /// channel could be inscribed at genesis, and without this it would be
+    /// silently dropped. On warm restart the checkpoint slot has already been
+    /// processed, so we start at `from + 1`.
     async fn setup_backfill_range(&mut self) -> bool {
         if self.state.is_none() || self.backfill_from.is_some() {
             return true;
@@ -902,9 +913,15 @@ where
                 let network_lib_slot = cryptarchia_info.lib_slot;
                 let from: u64 = self.lib_slot.into();
                 let to: u64 = network_lib_slot.into();
-                if from < to {
-                    debug!("Starting incremental backfill from slot {from} to {to}");
-                    self.backfill_from = Some(Slot::from(from + 1));
+                let (start, run) = if self.cold_start {
+                    self.cold_start = false;
+                    (from, true)
+                } else {
+                    (from + 1, from < to)
+                };
+                if run {
+                    debug!("Starting incremental backfill from slot {start} to {to}");
+                    self.backfill_from = Some(Slot::from(start));
                     self.backfill_to = Some(network_lib_slot);
                     self.lib_slot = network_lib_slot;
                     return false;
@@ -2533,7 +2550,7 @@ mod tests {
             _slot_from: Slot,
             _slot_to: Slot,
         ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            unimplemented!()
+            Ok(Vec::new())
         }
 
         async fn zone_messages_in_block(

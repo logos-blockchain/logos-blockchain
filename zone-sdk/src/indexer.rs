@@ -1,6 +1,6 @@
-use futures::{Stream, StreamExt as _, future};
+use futures::{Stream, StreamExt as _};
 use lb_common_http_client::Slot;
-use lb_core::mantle::ops::channel::{ChannelId, MsgId};
+use lb_core::mantle::ops::channel::ChannelId;
 use tracing::warn;
 
 use crate::{ZoneMessage, adapter};
@@ -58,23 +58,28 @@ where
         Ok(stream.flatten())
     }
 
-    /// Stream finalized [`ZoneMessage`]s from `last_zone_block` (excluded)
-    /// up to LIB.
+    /// Stream finalized [`ZoneMessage`]s from `last_slot` (exclusive) up to
+    /// LIB.
+    ///
+    /// `last_slot` is the last slot the caller has fully consumed. `None`
+    /// means cold start — streaming begins from genesis. The caller is
+    /// responsible for persisting `last_slot` only after the messages of that
+    /// slot are durably processed; on crash before persist, restart with the
+    /// previous cursor and re-process. Deposits/withdraws carry no `MsgId`,
+    /// so this is the only safe resume point — a finer-grained cursor would
+    /// either skip them or replay them inconsistently across restarts.
     pub async fn next_messages(
         &self,
-        last_zone_block: Option<(MsgId, Slot)>,
+        last_slot: Option<Slot>,
     ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_, Error> {
         let lib_slot = self.node.consensus_info().await?.cryptarchia_info.lib_slot;
-        let current_slot = last_zone_block
-            .as_ref()
-            .map_or_else(Slot::genesis, |(_, slot)| *slot);
-        let mut skip_until = last_zone_block;
+        let start_slot = last_slot.map_or_else(Slot::genesis, |s| s + 1);
 
         #[expect(
             closure_returning_async_block,
             reason = "Signature expected by `unfold`"
         )]
-        let stream = futures::stream::unfold(current_slot, move |current_slot| async move {
+        let stream = futures::stream::unfold(start_slot, move |current_slot| async move {
             if current_slot > lib_slot {
                 return None;
             }
@@ -104,41 +109,10 @@ where
                 }
             }
         })
-        .flatten()
-        .skip_while(move |(message, slot)| {
-            future::ready(should_skip(message, *slot, &mut skip_until))
-        });
+        .flatten();
 
         Ok(stream)
     }
-}
-
-/// Returns `true` if the message should be skipped.
-///
-/// `skip_until` is set to `None` once there is no need to skip anymore.
-/// (e.g., once the cursor message is found, or cursor slot has already passed)
-fn should_skip(message: &ZoneMessage, slot: Slot, skip_until: &mut Option<(MsgId, Slot)>) -> bool {
-    let Some((cursor_msg_id, cursor_msg_slot)) = *skip_until else {
-        return false;
-    };
-
-    // Passed the cursor slot — stop skipping.
-    if slot > cursor_msg_slot {
-        *skip_until = None;
-        return false;
-    }
-
-    match message {
-        ZoneMessage::Block(block) => {
-            if block.id == cursor_msg_id {
-                // Found the cursor message — stop skipping after this.
-                *skip_until = None;
-            }
-        }
-        // Deposits/withdraws have no ID, so keep skipping.
-        ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => {}
-    }
-    true
 }
 
 #[cfg(test)]
@@ -152,7 +126,7 @@ mod tests {
     };
     use lb_core::{
         header::HeaderId,
-        mantle::{NoteId, SignedMantleTx, ledger::Inputs},
+        mantle::{NoteId, SignedMantleTx, ledger::Inputs, ops::channel::MsgId},
     };
     use lb_groth16::Fr;
 
@@ -208,7 +182,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn next_messages_skip() {
+    async fn next_messages_resume_from_cursor() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
@@ -224,11 +198,8 @@ mod tests {
         ];
         let indexer = indexer(Slot::new(2), messages.clone());
 
-        // Skip until msg_id(2) in slot 1
-        let stream = indexer
-            .next_messages(Some((msg_id(2), 1.into())))
-            .await
-            .unwrap();
+        // Last fully consumed slot is 1; resume from slot 2.
+        let stream = indexer.next_messages(Some(Slot::new(1))).await.unwrap();
         futures::pin_mut!(stream);
         assert_eq!(stream.next().await.as_ref(), Some(&messages[3]));
         assert_eq!(stream.next().await.as_ref(), Some(&messages[4]));
@@ -236,36 +207,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn next_messages_skip_msg_not_found() {
-        let messages = vec![
-            (block_msg(1, &[1]), Slot::new(0)),
-            (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
-                Slot::new(0),
-            ),
-            (block_msg(2, &[2]), Slot::new(1)),
-            (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), 0, &[11]),
-                Slot::new(2),
-            ),
-            (block_msg(4, &[4]), Slot::new(2)),
-        ];
-        let indexer = indexer(Slot::new(2), messages.clone());
-
-        // Skip until msg_id(3) in slot 1, but it doesn't exist.
-        // Then, all msgs after slot 1 must be returned.
-        let stream = indexer
-            .next_messages(Some((msg_id(3), 1.into())))
-            .await
-            .unwrap();
-        futures::pin_mut!(stream);
-        assert_eq!(stream.next().await.as_ref(), Some(&messages[3]));
-        assert_eq!(stream.next().await.as_ref(), Some(&messages[4]));
-        assert!(stream.next().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn next_messages_skip_but_nothing_left() {
+    async fn next_messages_cursor_at_lib_emits_nothing() {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
@@ -274,15 +216,28 @@ mod tests {
             ),
             (block_msg(2, &[2]), Slot::new(1)),
         ];
-        let indexer = indexer(Slot::new(2), messages.clone());
+        let indexer = indexer(Slot::new(1), messages);
 
-        // Skip until msg_id(3) in slot 1, but it doesn't exist.
-        // Then, all msgs after slot 1 must be returned.
-        let stream = indexer
-            .next_messages(Some((msg_id(3), 1.into())))
-            .await
-            .unwrap();
+        // Cursor at LIB — nothing new to emit.
+        let stream = indexer.next_messages(Some(Slot::new(1))).await.unwrap();
         futures::pin_mut!(stream);
+        assert!(stream.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn next_messages_cold_start_includes_genesis() {
+        // Inscription at slot 0 (genesis) must be emitted on cold start
+        // (cursor None).
+        let messages = vec![
+            (block_msg(1, &[1]), Slot::genesis()),
+            (block_msg(2, &[2]), Slot::new(1)),
+        ];
+        let indexer = indexer(Slot::new(1), messages.clone());
+
+        let stream = indexer.next_messages(None).await.unwrap();
+        futures::pin_mut!(stream);
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[0]));
+        assert_eq!(stream.next().await.as_ref(), Some(&messages[1]));
         assert!(stream.next().await.is_none());
     }
 
@@ -320,15 +275,13 @@ mod tests {
             messages.clone(),
         );
 
+        // Cursor at slot 200 — resume from slot 201, which spans multiple
+        // batches up to LIB at slot 400.
         let stream = indexer
-            .next_messages(Some((
-                msg_id(2),
-                BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
-            )))
+            .next_messages(Some(BATCH_SIZE.into_inner().checked_mul(2).unwrap().into()))
             .await
             .unwrap();
         futures::pin_mut!(stream);
-        assert_eq!(stream.next().await.as_ref(), Some(&messages[3]));
         assert_eq!(stream.next().await.as_ref(), Some(&messages[4]));
         assert_eq!(stream.next().await.as_ref(), Some(&messages[5]));
         assert_eq!(stream.next().await.as_ref(), Some(&messages[6]));
