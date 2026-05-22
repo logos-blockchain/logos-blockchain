@@ -20,13 +20,9 @@ pub struct UninitializedSessionEventStream<Stream> {
 
 impl<Stream> UninitializedSessionEventStream<Stream> {
     #[must_use]
-    pub const fn new(
-        session_stream: Stream,
-        first_ready_timeout: Duration,
-        transition_period: Duration,
-    ) -> Self {
+    pub const fn new(session_stream: Stream, transition_period: Duration) -> Self {
         Self {
-            stream: UninitializedFirstReadyStream::new(session_stream, first_ready_timeout),
+            stream: UninitializedFirstReadyStream::new(session_stream),
             transition_period,
         }
     }
@@ -40,9 +36,10 @@ where
     /// from the underlying stream.
     ///
     /// It returns the first [`Session`] and the initialized
-    /// [`SessionEventStream`].
-    /// It returns an error if the first session is not yielded within the
-    /// configured timeout.
+    /// [`SessionEventStream`], awaiting the first session for as long as
+    /// necessary.
+    /// It returns an error only if the underlying stream closes before yielding
+    /// a session.
     pub async fn await_first_ready(
         self,
     ) -> Result<(Session, SessionEventStream<Stream>), FirstReadyStreamError> {
@@ -127,7 +124,7 @@ where
 #[cfg(test)]
 mod tests {
     use futures::StreamExt as _;
-    use tokio::time::{Instant, interval, interval_at};
+    use tokio::time::{Instant, interval};
     use tokio_stream::wrappers::IntervalStream;
 
     use super::*;
@@ -232,7 +229,6 @@ mod tests {
             IntervalStream::new(interval(Duration::from_secs(1)))
                 .enumerate()
                 .map(|(i, _)| i),
-            Duration::from_millis(100),
         );
 
         let (first, mut stream) = stream.first().await.expect("first item should be yielded");
@@ -240,23 +236,5 @@ mod tests {
         // Next items are yielded normally.
         assert_eq!(stream.next().await, Some(1));
         assert_eq!(stream.next().await, Some(2));
-    }
-
-    #[tokio::test]
-    async fn first_relay_stream_fails_if_first_item_is_not_ready() {
-        // Use an underlying stream that yield the first item too late.
-        let stream = UninitializedFirstReadyStream::new(
-            IntervalStream::new(interval_at(
-                // The first time will be yieled after 2s.
-                Instant::now() + Duration::from_secs(2),
-                Duration::from_secs(1),
-            )),
-            Duration::from_millis(100),
-        );
-
-        assert!(matches!(
-            stream.first().await,
-            Err(FirstReadyStreamError::FirstItemNotReady)
-        ));
     }
 }

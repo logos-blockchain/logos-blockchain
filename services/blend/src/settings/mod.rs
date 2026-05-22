@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -15,8 +13,6 @@ mod edge;
 pub use self::edge::EdgeSettings;
 mod timing;
 pub use self::timing::TimingSettings;
-
-pub(crate) const FIRST_STREAM_ITEM_READY_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings<CoreBackendSettings, EdgeBackendSettings> {

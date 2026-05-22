@@ -39,7 +39,7 @@ use crate::{
         MembershipInfo,
         node_id::{self, TryFrom as _},
     },
-    settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, Settings},
+    settings::Settings,
 };
 
 pub mod core;
@@ -207,7 +207,6 @@ where
         let (MembershipInfo { membership, .. }, mut remaining_session_stream) =
             UninitializedSessionEventStream::new(
                 membership_stream,
-                FIRST_STREAM_ITEM_READY_TIMEOUT,
                 settings.common.time.session_transition_period(),
             )
             .await_first_ready()

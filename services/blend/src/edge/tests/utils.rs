@@ -29,7 +29,7 @@ use crate::{
     },
     epoch_info::EpochHandler,
     membership::MembershipInfo,
-    settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, TimingSettings},
+    settings::TimingSettings,
     test_utils::{
         crypto::mock_blend_proof,
         epoch::{OncePolStreamProvider, TestChainService},
@@ -95,11 +95,7 @@ pub async fn spawn_run(
             OncePolStreamProvider,
             _,
         >(
-            UninitializedSessionEventStream::new(
-                session_stream,
-                FIRST_STREAM_ITEM_READY_TIMEOUT,
-                Duration::ZERO,
-            ),
+            UninitializedSessionEventStream::new(session_stream, Duration::ZERO),
             once(ready(SlotTick {
                 epoch: 1.into(),
                 slot: 1.into(),

@@ -57,7 +57,6 @@ use crate::{
     kms::PreloadKmsService,
     membership::{self, MembershipInfo, node_id},
     message::{NetworkInfo, NetworkMessage, ServiceMessage},
-    settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
 const LOG_TARGET: &str = blend::service::EDGE;
@@ -291,7 +290,6 @@ where
         run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
             UninitializedSessionEventStream::new(
                 session_stream,
-                FIRST_STREAM_ITEM_READY_TIMEOUT,
                 settings.time.session_transition_period(),
             ),
             clock_stream,

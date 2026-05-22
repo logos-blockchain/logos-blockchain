@@ -104,7 +104,6 @@ use crate::{
     membership::{self, MembershipInfo, ZkInfo},
     message::{NetworkMessage, ProcessedMessage, ServiceMessage},
     session::{CoreSessionInfo, CoreSessionPublicInfo, MaybeEmptyCoreSessionInfo},
-    settings::FIRST_STREAM_ITEM_READY_TIMEOUT,
 };
 
 pub mod backends;
@@ -617,7 +616,6 @@ where
     let (current_membership_info, remaining_session_stream) = Box::pin(
         UninitializedSessionEventStream::new(
             session_stream,
-            FIRST_STREAM_ITEM_READY_TIMEOUT,
             blend_config.time.session_transition_period(),
         )
         .await_first_ready(),
@@ -633,7 +631,7 @@ where
 
     let ((epoch_state, current_epoch), remaining_clock_stream) = async {
         let (clock_tick, remaining_clock_stream) =
-            UninitializedFirstReadyStream::new(clock_stream, Duration::from_secs(5))
+            UninitializedFirstReadyStream::new(clock_stream)
                 .first()
                 .await
                 .expect("The clock system must be available.");
