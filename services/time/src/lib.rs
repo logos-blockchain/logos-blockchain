@@ -6,6 +6,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
+use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -21,6 +22,8 @@ use crate::backends::TimeBackend;
 
 pub mod backends;
 mod metrics;
+
+const LOG_TARGET: &str = log_targets_time::ROOT;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SlotTick {
@@ -112,6 +115,7 @@ where
 
         service_resources_handle.status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -127,7 +131,7 @@ where
                     metrics::time_current_epoch(u32::from(slot_tick.epoch));
 
                     if let Err(e) = watch_sender.send(slot_tick) {
-                        error!("Error updating slot tick: {e}");
+                        error!(target: LOG_TARGET, "Error updating slot tick: {e}");
                         metrics::time_broadcast_errors();
                     }
                 }
@@ -145,12 +149,12 @@ fn handle_service_message(
         TimeServiceMessage::Subscribe { sender } => {
             let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));
             if sender.send(stream).is_err() {
-                error!("Couldn't send back a Subscribe response");
+                error!(target: LOG_TARGET, "Couldn't send back a Subscribe response");
             }
         }
         TimeServiceMessage::CurrentSlot { sender } => {
             if sender.send(*current_slot_tick).is_err() {
-                error!("Couldn't send back a CurrentSlot response");
+                error!(target: LOG_TARGET, "Couldn't send back a CurrentSlot response");
             }
         }
     }

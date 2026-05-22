@@ -687,7 +687,7 @@ mod tests {
                 &params,
             )
             .unwrap_err();
-        assert_eq!(err, Error::InvalidProof);
+        assert_eq!(err, Error::HammingDistanceTooLarge);
 
         // No reward should be calculated after session 1.
         let (_, rewards) = rewards_tracker.update_session(

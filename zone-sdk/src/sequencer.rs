@@ -2096,7 +2096,6 @@ fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZero;
 
     use async_trait::async_trait;
     use lb_common_http_client::{
@@ -2107,6 +2106,7 @@ mod tests {
         mantle::{Note, Utxo, ledger::Inputs, ops::channel::deposit::DepositOp},
         proofs::leader_proof::Groth16LeaderProof,
     };
+    use lb_http_api_common::queries::BlocksStreamQuery;
     use lb_key_management_system_service::keys::ZkKey;
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -2517,12 +2517,7 @@ mod tests {
 
         async fn blocks_range_stream(
             &self,
-            _blocks_limit: Option<NonZero<usize>>,
-            _slot_from: Option<u64>,
-            _slot_to: Option<u64>,
-            _descending: Option<bool>,
-            _server_batch_size: Option<NonZero<usize>>,
-            _immutable_only: Option<bool>,
+            _params: BlocksStreamQuery,
         ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
             unimplemented!()
         }

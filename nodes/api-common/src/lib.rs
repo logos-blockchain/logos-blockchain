@@ -3,6 +3,7 @@ pub mod metrics;
 pub mod paths;
 #[cfg(feature = "profiling")]
 pub mod pprof;
+pub mod queries;
 pub mod settings;
 
 #[cfg(all(feature = "profiling", target_os = "windows"))]

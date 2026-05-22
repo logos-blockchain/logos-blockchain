@@ -95,6 +95,8 @@ pub enum Error {
     InvalidProofType,
     #[error("Invalid proof")]
     InvalidProof,
+    #[error("Hamming distance too large")]
+    HammingDistanceTooLarge,
     #[error("Unknown provider: {0:?}")]
     UnknownProvider(Box<ProviderId>),
 }

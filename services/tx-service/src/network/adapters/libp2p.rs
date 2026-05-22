@@ -1,5 +1,6 @@
 use futures::Stream;
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
+use lb_log_targets::mempool;
 use lb_network_service::{
     NetworkService,
     backends::libp2p::{Command, Libp2p, Message, PubSubCommand, TopicHash},
@@ -10,6 +11,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use tokio_stream::StreamExt as _;
 
 use crate::network::NetworkAdapter;
+
+const LOG_TARGET: &str = mempool::network::LIBP2P;
 
 pub struct Libp2pAdapter<Item, Key, RuntimeServiceId> {
     network_relay:
@@ -35,7 +38,11 @@ where
             <NetworkService<Self::Backend, RuntimeServiceId> as ServiceData>::Message,
         >,
     ) -> Self {
-        tracing::debug!("Subscribing tx adapter to pubsub topic {}", settings.topic);
+        tracing::debug!(
+            target: LOG_TARGET,
+            "Subscribing tx adapter to pubsub topic {}",
+            settings.topic
+        );
         network_relay
             .send(NetworkMsg::Process(Command::PubSub(
                 PubSubCommand::Subscribe(settings.topic.clone()),
@@ -64,7 +71,7 @@ where
                 match Item::from_bytes(&data) {
                     Ok(item) => Some((id(&item), item)),
                     Err(e) => {
-                        tracing::debug!("Unrecognized message: {e}");
+                        tracing::debug!(target: LOG_TARGET, "Unrecognized message: {e}");
                         None
                     }
                 }
@@ -88,7 +95,7 @@ where
                 )))
                 .await
             {
-                tracing::error!("failed to send item to topic: {e}");
+                tracing::error!(target: LOG_TARGET, "failed to send item to topic: {e}");
             }
         }
     }

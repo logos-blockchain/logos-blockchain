@@ -36,17 +36,4 @@ impl ServiceConfig {
             },
         }
     }
-
-    #[must_use]
-    pub fn admin_settings(&self) -> ApiServiceSettings<AxumBackendSettings> {
-        ApiServiceSettings {
-            backend_settings: AxumBackendSettings {
-                address: self.user.admin.listen_address,
-                cors_origins: self.user.admin.cors_origins.clone(),
-                timeout: self.user.admin.timeout,
-                max_body_size: self.user.admin.max_body_size as usize,
-                max_concurrent_requests: self.user.admin.max_concurrent_requests as usize,
-            },
-        }
-    }
 }

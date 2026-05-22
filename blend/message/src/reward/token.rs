@@ -48,7 +48,8 @@ impl BlendingToken {
         HammingDistance::new(&token_hash, &session_randomness_hash)
     }
 
-    pub(crate) const fn signing_key(&self) -> &Ed25519PublicKey {
+    #[must_use]
+    pub const fn signing_key(&self) -> &Ed25519PublicKey {
         &self.signing_key
     }
 

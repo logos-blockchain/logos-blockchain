@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use futures::Stream;
+use lb_log_targets::mempool;
 use serde::{Deserialize, Serialize};
 
 use super::Status;
@@ -18,6 +19,7 @@ use crate::{
 };
 
 const REMOVED_ITEM_GRACE_PERIOD: Duration = Duration::from_mins(10);
+const LOG_TARGET: &str = mempool::POOL;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PoolRecoveryState<Key>
@@ -104,6 +106,7 @@ where
         self.pending_items.insert(key);
         self.last_item_timestamp = timestamp;
         tracing::debug!(
+            target: LOG_TARGET,
             "Added item to mempool; pending_items={}, last_item_timestamp={}",
             self.pending_items.len(),
             self.last_item_timestamp
@@ -238,7 +241,7 @@ where
         }
 
         if let Err(e) = self.storage_adapter.remove_items(&expired_keys).await {
-            tracing::warn!("Failed to prune removed items from storage: {e:?}");
+            tracing::warn!(target: LOG_TARGET, "Failed to prune removed items from storage: {e:?}");
             return;
         }
 
@@ -258,10 +261,12 @@ fn current_timestamp_millis() -> u64 {
 fn log_removed_items(removed_count: usize, pending_items: usize) {
     if removed_count == 0 {
         tracing::trace!(
+            target: LOG_TARGET,
             "Removed {removed_count} items from mempool; pending_items={pending_items}"
         );
     } else {
         tracing::debug!(
+            target: LOG_TARGET,
             "Removed {removed_count} items from mempool; pending_items={pending_items}"
         );
     }

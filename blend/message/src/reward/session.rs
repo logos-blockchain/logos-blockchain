@@ -1,3 +1,4 @@
+use core::fmt::{self, Debug, Formatter};
 use std::ops::{Add as _, Deref};
 
 use lb_blend_crypto::blake2b512;
@@ -79,13 +80,28 @@ impl BlendingTokenEvaluation {
         next_session_randomness: SessionRandomness,
     ) -> Option<HammingDistance> {
         let distance = token.hamming_distance(self.token_count_byte_len, next_session_randomness);
+        tracing::trace!(
+            "Evaluated blending token {:?} for activity proof. Calculated Hamming distance = {distance:?}",
+            token.signing_key()
+        );
         (distance <= self.activity_threshold).then_some(distance)
+    }
+
+    #[must_use]
+    pub const fn activity_threshold(&self) -> HammingDistance {
+        self.activity_threshold
     }
 }
 
 /// Deterministic unbiased randomness for a session.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionRandomness(#[serde(with = "serde_big_array::BigArray")] [u8; 64]);
+
+impl Debug for SessionRandomness {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "SessionRandomness({})", hex::encode(self.0))
+    }
+}
 
 impl Deref for SessionRandomness {
     type Target = [u8];

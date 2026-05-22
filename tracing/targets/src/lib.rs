@@ -1,8 +1,13 @@
 use std::collections::HashSet;
 
+pub mod api;
 pub mod blend;
 pub mod libp2p;
+pub mod mempool;
 pub mod network_service;
+pub mod storage;
+pub mod system_sig;
+pub mod time;
 
 pub const ROOT: &str = "logos_blockchain";
 
@@ -28,9 +33,14 @@ fn target_root(target: &str) -> &str {
 #[must_use]
 pub fn all_targets() -> HashSet<&'static str> {
     std::iter::once(ROOT)
+        .chain(api::all_targets())
         .chain(blend::all_targets())
         .chain(libp2p::all_targets())
+        .chain(mempool::all_targets())
         .chain(network_service::all_targets())
+        .chain(storage::all_targets())
+        .chain(system_sig::all_targets())
+        .chain(time::all_targets())
         .collect()
 }
 

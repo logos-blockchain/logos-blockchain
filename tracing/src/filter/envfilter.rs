@@ -12,7 +12,18 @@ const DEFAULT_DEBUG_TARGETS: &[&str] = &[
     "cryptarchia",
     "ledger",
 ];
-const DEFAULT_QUIET_TARGETS: &[(&str, Level)] = &[("libp2p_gossipsub", Level::ERROR)];
+const DEFAULT_QUIET_TARGETS: &[(&str, Level)] = &[
+    ("libp2p_gossipsub", Level::ERROR),
+    ("h2", Level::WARN),
+    ("hyper", Level::WARN),
+    ("hyper_util", Level::WARN),
+    ("tonic", Level::WARN),
+    ("tower", Level::WARN),
+    ("reqwest", Level::WARN),
+    ("opentelemetry", Level::WARN),
+    ("opentelemetry_sdk", Level::WARN),
+    ("rustls", Level::WARN),
+];
 const ENVFILTER_GLOBAL_TARGET: &str = "*";
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
