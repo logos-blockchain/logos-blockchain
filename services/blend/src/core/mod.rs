@@ -630,11 +630,10 @@ where
     .expect("The current session info must be available.");
 
     let ((epoch_state, current_epoch), remaining_clock_stream) = async {
-        let (clock_tick, remaining_clock_stream) =
-            UninitializedFirstReadyStream::new(clock_stream)
-                .first()
-                .await
-                .expect("The clock system must be available.");
+        let (clock_tick, remaining_clock_stream) = UninitializedFirstReadyStream::new(clock_stream)
+            .first()
+            .await
+            .expect("The clock system must be available.");
         let Some(EpochEvent::NewEpoch(new_epoch_info)) = epoch_handler.tick(clock_tick).await
         else {
             panic!("First poll result of epoch stream should be a `NewEpoch` event.");

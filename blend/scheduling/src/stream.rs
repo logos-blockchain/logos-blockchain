@@ -21,8 +21,9 @@ impl<Stream> UninitializedFirstReadyStream<Stream>
 where
     Stream: futures::Stream + Unpin,
 {
-    /// Yields the first item from the underlying stream, awaiting it for as long
-    /// as necessary. The remaining stream is also returned for continued use.
+    /// Yields the first item from the underlying stream, awaiting it for as
+    /// long as necessary. The remaining stream is also returned for
+    /// continued use.
     ///
     /// Returns [`FirstReadyStreamError::StreamClosed`] if the underlying stream
     /// ends before yielding any item.
