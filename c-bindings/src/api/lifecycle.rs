@@ -218,7 +218,7 @@ mod test {
                 STANDALONE_DEPLOYMENT_CONFIG_PATH.as_path(),
                 &deployment_config_path,
             )
-                .expect("Failed to copy standalone deployment config");
+            .expect("Failed to copy standalone deployment config");
 
             let node_config = CString::new(node_config_path.to_string_lossy().as_bytes())
                 .expect("Node config path should not contain NUL");
