@@ -135,6 +135,10 @@ impl NtpStream {
     ///   reaches a slot strictly greater than the last emitted one.
     /// - Forward NTP corrections replace the synthetic timer immediately. This
     ///   can skip intermediate slot numbers if NTP jumps ahead.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     fn handle_ntp_update(self: Pin<&mut Self>, cx: &mut Context<'_>) {
         let this = self.get_mut();
 
