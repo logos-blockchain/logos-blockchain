@@ -102,6 +102,17 @@ impl<T, const MIN: usize, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MI
     }
 }
 
+impl<T, const MIN: usize, const MAX: usize> TryFrom<&[T]> for BoundedVec<T, MIN, MAX>
+where
+    T: Clone,
+{
+    type Error = BoundedError;
+
+    fn try_from(value: &[T]) -> Result<Self, Self::Error> {
+        Self::try_from(value.to_vec())
+    }
+}
+
 impl<T, const MIN: usize, const MAX: usize> From<T> for BoundedVec<T, MIN, MAX> {
     fn from(value: T) -> Self {
         const { assert!(MIN >= 1, "Min size cannot be zero.") }
@@ -116,6 +127,14 @@ impl<T, const MIN: usize, const MAX: usize, const INPUT_SIZE: usize> From<[T; IN
         const { assert!(INPUT_SIZE >= MIN, "Array length is below BoundedVec MIN") }
         const { assert!(INPUT_SIZE <= MAX, "Array length exceeds BoundedVec MAX") }
         Self(value.into())
+    }
+}
+
+impl<const MAX: usize> FromStr for BoundedVec<u8, 0, MAX> {
+    type Err = BoundedError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::try_from(s.as_bytes().to_vec())
     }
 }
 

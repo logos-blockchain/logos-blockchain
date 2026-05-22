@@ -1480,7 +1480,7 @@ where
         }
 
         match request {
-            ActorRequest::PublishMessage { data } => self.handle_publish(data).await,
+            ActorRequest::PublishMessage { data } => self.handle_publish(data),
             ActorRequest::PrepareTx { ops, msg, reply } => {
                 let result = prepare_tx(
                     ops,
@@ -1550,7 +1550,7 @@ where
         }
     }
 
-    async fn handle_publish(&mut self, data: Inscription) -> Option<Event> {
+    fn handle_publish(&mut self, data: Inscription) -> Option<Event> {
         self.build_pending_publish(data);
         self.enqueue_pending_submit();
         None
