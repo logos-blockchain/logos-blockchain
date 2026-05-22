@@ -9,6 +9,7 @@
 //! log_targets! {
 //!     root = blend;
 //!
+//!     SERVICE,
 //!     service::{CORE, core::KMS_POQ_GENERATOR},
 //!     network::core::handler::{CORE_EDGE},
 //! }
@@ -37,6 +38,7 @@ const LOG_TARGET_PREFIX: &str = "logos_blockchain";
 /// log_targets! {
 ///     root = blend;
 ///
+///     SERVICE,
 ///     service::{CORE, core::KMS_POQ_GENERATOR},
 /// }
 /// ```
@@ -49,6 +51,7 @@ const LOG_TARGET_PREFIX: &str = "logos_blockchain";
 /// log_targets! {
 ///     root = blend;
 ///
+///     SERVICE,
 ///     service::{CORE, core::KMS_POQ_GENERATOR},
 ///     network::core::handler::{CORE_EDGE},
 /// }
@@ -58,6 +61,7 @@ const LOG_TARGET_PREFIX: &str = "logos_blockchain";
 /// strings with `logos_blockchain`. For example, when invoked from `blend.rs`,
 /// this exposes nested modules and constants such as:
 /// - `blend::ROOT`
+/// - `blend::SERVICE`
 /// - `blend::service::ROOT`
 /// - `blend::service::CORE`
 /// - `blend::service::core::KMS_POQ_GENERATOR`
@@ -80,8 +84,9 @@ pub fn log_targets(input: TokenStream) -> TokenStream {
 struct TargetList {
     /// Top-level namespace root from `root = <ident>;`.
     root: Ident,
-    /// Comma-separated grouped declarations such as `service::{CORE}`.
-    groups: Punctuated<TargetGroup, Token![,]>,
+    /// Comma-separated target declarations such as `SERVICE` or
+    /// `service::{CORE}`.
+    items: Punctuated<TargetItem, Token![,]>,
 }
 
 /// One grouped declaration block such as `service::{CORE, core::LEAF}`.
@@ -140,7 +145,7 @@ impl Parse for TargetList {
 
         Ok(Self {
             root,
-            groups: Punctuated::parse_terminated(input)?,
+            items: Punctuated::parse_terminated(input)?,
         })
     }
 }
@@ -229,6 +234,16 @@ fn parse_path_segments(input: ParseStream<'_>) -> Result<Vec<Ident>> {
 }
 
 impl ModuleNode {
+    /// Ensure one module path exists in the generated tree.
+    fn ensure_module(&mut self, modules: &[Ident]) -> Result<()> {
+        let mut current = self;
+        for module in modules {
+            current = current.child_mut(module)?;
+        }
+
+        Ok(())
+    }
+
     /// Insert one parsed target path into the module tree.
     ///
     /// This also rejects invalid declarations where a leaf conflicts with a
@@ -287,8 +302,8 @@ impl ModuleNode {
 fn expand_target_list(input: TargetList) -> Result<TokenStream2> {
     let mut root = ModuleNode::default();
 
-    for group in input.groups {
-        flatten_group(group, &mut root)?;
+    for item in input.items {
+        flatten_item(item, &[], &mut root)?;
     }
 
     let module_root = input.root.to_string();
@@ -297,22 +312,13 @@ fn expand_target_list(input: TargetList) -> Result<TokenStream2> {
     Ok(emit_root_contents(&module_root, &target_root, &root))
 }
 
-fn flatten_group(group: TargetGroup, root: &mut ModuleNode) -> Result<()> {
-    let prefix = group.prefix;
-
-    for item in group.items {
-        flatten_item(item, &prefix, root)?;
-    }
-
-    Ok(())
-}
-
 fn flatten_item(item: TargetItem, parent_prefix: &[Ident], root: &mut ModuleNode) -> Result<()> {
     match item {
         TargetItem::Leaf(leaf) => insert_leaf(parent_prefix, leaf, root),
         TargetItem::Group(group) => {
             let mut prefix = parent_prefix.to_vec();
             prefix.extend(group.prefix);
+            root.ensure_module(&prefix)?;
             for child in group.items {
                 flatten_item(child, &prefix, root)?;
             }
