@@ -1,11 +1,11 @@
 //! Chain-derived membership.
 //!
 //! The membership for each epoch is read from the SDP snapshot frozen into that
-//! epoch's [`EpochState`](lb_ledger::EpochState), queried from the chain on slot
-//! ticks. This puts membership on the **same slot-tick clock** as the leader
-//! inputs (the [`EpochHandler`] PoL path), so both halves share the chain's
-//! per-epoch view and cannot drift — replacing the pushed `ActiveProviders`
-//! broadcast.
+//! epoch's [`EpochState`](lb_ledger::EpochState), queried from the chain on
+//! slot ticks. This puts membership on the **same slot-tick clock** as the
+//! leader inputs (the [`EpochHandler`] `PoL` path), so both halves share the
+//! chain's per-epoch view and cannot drift — replacing the pushed
+//! `ActiveProviders` broadcast.
 
 use core::{hash::Hash, num::NonZeroU64, pin::Pin};
 use std::fmt::{Debug, Display};
@@ -30,7 +30,8 @@ use crate::{
 pub type ChainMembershipStream<NodeId> =
     Pin<Box<dyn Stream<Item = MembershipInfo<NodeId>> + Send + 'static>>;
 
-/// Subscribe to a chain-derived stream of [`MembershipInfo`](super::MembershipInfo).
+/// Subscribe to a chain-derived stream of
+/// [`MembershipInfo`](super::MembershipInfo).
 ///
 /// On every slot tick the chain is queried for the current epoch's
 /// `EpochState`; on each new epoch the membership frozen into its SDP snapshot

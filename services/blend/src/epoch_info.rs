@@ -382,10 +382,7 @@ mod tests {
         );
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpoch((
-                default_epoch_state(),
-                1.into()
-            )))
+            Some(EpochEvent::NewEpoch((default_epoch_state(), 1.into())))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -429,10 +426,7 @@ mod tests {
         );
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpoch((
-                default_epoch_state(),
-                2.into()
-            )))
+            Some(EpochEvent::NewEpoch((default_epoch_state(), 2.into())))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -476,10 +470,7 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpoch((
-                default_epoch_state(),
-                1.into()
-            )))
+            Some(EpochEvent::NewEpoch((default_epoch_state(), 1.into())))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -581,10 +572,7 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpoch((
-                default_epoch_state(),
-                1.into()
-            )))
+            Some(EpochEvent::NewEpoch((default_epoch_state(), 1.into())))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -607,10 +595,7 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpoch((
-                default_epoch_state(),
-                2.into()
-            )))
+            Some(EpochEvent::NewEpoch((default_epoch_state(), 2.into())))
         );
         assert_eq!(
             stream.epoch_tracking_state,
@@ -636,10 +621,7 @@ mod tests {
         let next_tick = stream.tick(ticks_iter.next().unwrap()).await;
         assert_eq!(
             next_tick,
-            Some(EpochEvent::NewEpoch((
-                default_epoch_state(),
-                3.into()
-            )))
+            Some(EpochEvent::NewEpoch((default_epoch_state(), 3.into())))
         );
         assert_eq!(
             stream.epoch_tracking_state,

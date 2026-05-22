@@ -1668,7 +1668,12 @@ pub mod tests {
         assert_eq!(config.epoch(slot), 0.into());
         let proof = generate_proof(&genesis_state, &utxo, slot);
         let ledger_state_1 = genesis_state
-            .try_apply_header::<DummyProof, HeaderId>(slot, &proof, &SdpLedger::new(0.into()), &config)
+            .try_apply_header::<DummyProof, HeaderId>(
+                slot,
+                &proof,
+                &SdpLedger::new(0.into()),
+                &config,
+            )
             .unwrap();
 
         // Now, apply a header from the 2nd slot of epoch 2
@@ -1690,7 +1695,12 @@ pub mod tests {
         // correctly to epoch 2 as the same as `synthesized_ledger_state`.
         let ledger_state_2 = ledger_state_1
             .clone()
-            .try_apply_header::<DummyProof, HeaderId>(slot, &proof, &SdpLedger::new(0.into()), &config)
+            .try_apply_header::<DummyProof, HeaderId>(
+                slot,
+                &proof,
+                &SdpLedger::new(0.into()),
+                &config,
+            )
             .unwrap();
         assert_eq!(ledger_state_2.slot, slot);
         assert_ne!(ledger_state_2.nonce, ledger_state_1.nonce); // advanced

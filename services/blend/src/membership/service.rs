@@ -131,9 +131,11 @@ where
 }
 
 /// Build [`MembershipInfo`] from the SDP membership snapshot frozen into
-/// `epoch_state` (queried from the chain). This is the chain-derived
-/// replacement for the pushed [`ActiveProviders`] broadcast: the membership for
-/// the epoch is read from `EpochState.sdp` instead of a broadcast stream.
+/// `epoch_state`.
+///
+/// This is the chain-derived replacement for the pushed [`ActiveProviders`]
+/// broadcast: the membership for the epoch is read from `EpochState.sdp`
+/// instead of a broadcast stream.
 ///
 /// Note: this intentionally duplicates the node/Merkle construction in
 /// `Adapter::subscribe` rather than sharing it, because the broadcast
@@ -165,9 +167,10 @@ where
     let zk_info = if nodes.is_empty() {
         None
     } else {
-        let zk_tree =
-            sort_nodes_and_build_merkle_tree(&mut nodes, |ZkNode { zk_key, .. }| zk_key.into_inner())
-                .expect("Should not fail to build Merkle tree of core nodes' zk public keys.");
+        let zk_tree = sort_nodes_and_build_merkle_tree(&mut nodes, |ZkNode { zk_key, .. }| {
+            zk_key.into_inner()
+        })
+        .expect("Should not fail to build Merkle tree of core nodes' zk public keys.");
         let core_and_path_selectors = maybe_zk_public_key.and_then(|zk_public_key| {
             let Some(proof) = zk_tree.get_proof_for_key(zk_public_key.as_fr()) else {
                 debug!(
