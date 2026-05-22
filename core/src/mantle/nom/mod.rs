@@ -1,14 +1,16 @@
-use lb_utils::bounded_vec::BoundedVec;
 use nom::{
     IResult, Parser as _,
-    bytes::take,
     combinator::{map, map_res},
     error::{Error, ErrorKind},
-    multi::count,
     number::complete::{le_u16, le_u32, u8},
 };
 
 use crate::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
+
+pub mod array;
+pub use self::array::NomArray;
+pub mod bounded_vec;
+pub use self::bounded_vec::NomBoundedVec;
 
 pub trait NomEncode {
     // TODO: This could be turned into a `BoundedVec<u8, MAX_BYTES>` if we are
@@ -71,131 +73,6 @@ impl NomDecode for u32 {
 // `[T]` since that could be misleading.
 fn encode_slice<T: NomEncode>(items: &[T]) -> Vec<u8> {
     items.iter().flat_map(NomEncode::encode).collect()
-}
-
-pub struct NomArray<'a, T, const N: usize>(&'a [T::Output; N])
-where
-    T: NomDecode;
-
-impl<'a, T, const N: usize> From<&'a [T::Output; N]> for NomArray<'a, T, N>
-where
-    T: NomDecode,
-{
-    fn from(array: &'a [T::Output; N]) -> Self {
-        Self(array)
-    }
-}
-
-impl<T, const N: usize> NomEncode for NomArray<'_, T, N>
-where
-    T: NomDecode<Output: NomEncode>,
-{
-    fn encode(&self) -> Vec<u8> {
-        encode_slice(self.0.as_slice())
-    }
-}
-
-impl<T, const N: usize> NomDecode for NomArray<'_, T, N>
-where
-    T: NomDecode,
-{
-    type Output = [T::Output; N];
-
-    fn decode(input: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (input, items) = count(T::decode, N).parse(input)?;
-
-        let Ok(items) = items.try_into() else {
-            panic!("Decoded `N` elements.");
-        };
-        Ok((input, items))
-    }
-}
-
-/// Nom encoder for bounded vectors with a specified number of bytes for the
-/// length prefix.
-pub struct NomBoundedVec<'a, T, const MIN: usize, const MAX: usize, const N_BYTES: usize>(
-    &'a BoundedVec<T::Output, MIN, MAX>,
-)
-where
-    T: NomDecode;
-
-impl<T, const MIN: usize, const MAX: usize, const N_BYTES: usize>
-    NomBoundedVec<'_, T, MIN, MAX, N_BYTES>
-where
-    T: NomDecode,
-{
-    const _N_BYTES_VALUE_CHECK: () = {
-        assert!(
-            matches!(N_BYTES, 1 | 2 | 4 | 8),
-            "N_BYTES must be 1, 2, 4, or 8",
-        );
-        let max_repr: u64 = if N_BYTES == 8 {
-            u64::MAX
-        } else {
-            (1u64 << (N_BYTES * 8)) - 1
-        };
-        assert!(
-            MAX as u64 <= max_repr,
-            "MAX exceeds what N_BYTES can encode"
-        );
-    };
-}
-
-impl<'a, T, const MIN: usize, const MAX: usize, const N_BYTES: usize>
-    From<&'a BoundedVec<T::Output, MIN, MAX>> for NomBoundedVec<'a, T, MIN, MAX, N_BYTES>
-where
-    T: NomDecode,
-{
-    fn from(vec: &'a BoundedVec<T::Output, MIN, MAX>) -> Self {
-        let () = Self::_N_BYTES_VALUE_CHECK;
-
-        Self(vec)
-    }
-}
-
-impl<T, const MIN: usize, const MAX: usize, const N_BYTES: usize> NomEncode
-    for NomBoundedVec<'_, T, MIN, MAX, N_BYTES>
-where
-    T: NomDecode<Output: NomEncode>,
-{
-    fn encode(&self) -> Vec<u8> {
-        let () = Self::_N_BYTES_VALUE_CHECK;
-
-        // Initialize `bytes` with the encoded length prefix.
-        let mut bytes = (self.0.len() as u64).to_le_bytes()[..N_BYTES].to_vec();
-        bytes.extend(encode_slice(self.0.as_slice()));
-
-        bytes
-    }
-}
-
-impl<T, const MIN: usize, const MAX: usize, const N_BYTES: usize> NomDecode
-    for NomBoundedVec<'_, T, MIN, MAX, N_BYTES>
-where
-    T: NomDecode,
-{
-    type Output = BoundedVec<T::Output, MIN, MAX>;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let () = Self::_N_BYTES_VALUE_CHECK;
-
-        let (bytes, len_bytes): (&[u8], &[u8]) = take(N_BYTES).parse(bytes)?;
-        let mut buf = [0u8; 8];
-        buf[..N_BYTES].copy_from_slice(len_bytes);
-        let len = u64::from_le_bytes(buf) as usize;
-
-        // We check length first instead of relying on `BoundedVec::try_from` to avoid
-        // decoding a payload that is too large.
-        if len < MIN {
-            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::LengthValue)));
-        }
-        if len > MAX {
-            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::TooLarge)));
-        }
-
-        let (bytes, items) = count(T::decode, len).parse(bytes)?;
-        Ok((bytes, BoundedVec::new_unchecked(items)))
-    }
 }
 
 impl NomEncode for ChannelId {
