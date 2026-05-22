@@ -318,39 +318,18 @@ pub fn start_republish_policy(
     handle: SequencerHandle<ZoneNodeHttpClient>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut local_pending = HashSet::new();
-
         loop {
-            match sequencer.next_event().await {
-                Some(Event::Published { tx, .. }) => {
-                    local_pending.insert(tx.inscription().this_msg);
-                }
-                Some(Event::TxsFinalized { txs, .. }) => {
-                    for tx in txs {
-                        local_pending.remove(&tx.inscription().this_msg);
-                    }
-                }
-                Some(Event::FinalizedInscriptions { inscriptions }) => {
-                    for inscription in inscriptions {
-                        local_pending.remove(&inscription.this_msg);
-                    }
-                }
-                Some(Event::ChannelUpdate { orphaned, .. }) => {
-                    for entry in orphaned {
-                        let OrphanedTx::Inscription(inscription) = entry else {
-                            // Republish-by-payload helper doesn't handle bundles.
-                            continue;
-                        };
-                        if !local_pending.remove(&inscription.this_msg) {
-                            continue;
-                        }
+            if let Some(Event::ChannelUpdate { orphaned, .. }) = sequencer.next_event().await {
+                for entry in orphaned {
+                    let OrphanedTx::Inscription(inscription) = entry else {
+                        // Republish-by-payload helper doesn't handle bundles.
+                        continue;
+                    };
 
-                        if let Err(error) = handle.publish_message(inscription.payload).await {
-                            warn!(%error, "Failed to re-publish orphaned zone payload");
-                        }
+                    if let Err(error) = handle.publish_message(inscription.payload).await {
+                        warn!(%error, "Failed to re-publish orphaned zone payload");
                     }
                 }
-                _ => {}
             }
         }
     })
@@ -643,11 +622,11 @@ pub fn sequencer_config() -> SequencerConfig {
 /// Uses the same retry profile while reserving enough turn time for the SDK's
 /// round-robin admission checks.
 #[must_use]
-pub fn round_robin_sequencer_config(queued_publish_drain_limit: Option<usize>) -> SequencerConfig {
+pub fn round_robin_sequencer_config(max_pending_publish_depth: usize) -> SequencerConfig {
     SequencerConfig {
         auto_requeue_orphaned: true,
         min_slots_remaining_in_turn: 2,
-        queued_publish_drain_limit,
+        max_pending_publish_depth,
         ..sequencer_config()
     }
 }
@@ -706,6 +685,45 @@ pub async fn wait_for_published_payload(
     duration: Duration,
 ) -> Result<PublishResult, ZoneTestError> {
     wait_for_published_event(sequencer_events, data, PublishDeadline::from_now(duration)).await
+}
+
+/// Waits for all listed payloads to emit matching `Published` events.
+pub async fn wait_for_published_payloads(
+    sequencer_events: &mut tokio::sync::mpsc::Receiver<Event>,
+    data: &[Inscription],
+    duration: Duration,
+) -> Result<Vec<PublishResult>, ZoneTestError> {
+    timeout(duration, async {
+        let mut results: Vec<Option<PublishResult>> =
+            std::iter::repeat_with(|| None).take(data.len()).collect();
+        let mut remaining = data.len();
+
+        while remaining > 0 {
+            let Some(event) = sequencer_events.recv().await else {
+                return Err(ZoneTestError::PublishTimeout);
+            };
+            let Event::Published { tx, checkpoint } = event else {
+                continue;
+            };
+
+            let payload = tx.inscription().payload.as_slice();
+            let Some(index) = data.iter().enumerate().find_map(|(index, expected)| {
+                (results[index].is_none() && payload == expected.as_slice()).then_some(index)
+            }) else {
+                continue;
+            };
+
+            results[index] = Some(PublishResult {
+                inscription_id: tx.tx_hash(),
+                checkpoint,
+            });
+            remaining -= 1;
+        }
+
+        Ok(results.into_iter().flatten().collect())
+    })
+    .await
+    .map_err(|_| ZoneTestError::PublishTimeout)?
 }
 
 /// Waits until the subscribed channel view satisfies the supplied predicate.

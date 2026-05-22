@@ -28,7 +28,7 @@ use super::{
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
         parse_balance_payload, publish_message_with_retry, wait_for_channel_view, wait_for_deposit,
         wait_for_exact_indexed_payload_count, wait_for_lib_advance, wait_for_published_payload,
-        wait_for_transactions_finalized, wait_for_withdraw,
+        wait_for_published_payloads, wait_for_transactions_finalized, wait_for_withdraw,
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
@@ -47,33 +47,26 @@ use crate::{
 
 pub(super) const DEFAULT_ZONE_SEQUENCER: &str = "SEQ_A";
 
-fn parse_queue_limit(step: &Step, value: &str) -> Result<Option<usize>, StepError> {
+fn parse_submit_depth(step: &Step, value: &str) -> Result<usize, StepError> {
     if value == "None" {
-        return Ok(None);
+        return Ok(usize::MAX);
     }
 
-    let Some(inner) = value
+    let inner = value
         .strip_prefix("Some(")
         .and_then(|rest| rest.strip_suffix(')'))
-    else {
-        return Err(StepError::LogicalError {
-            message: format!(
-                "Invalid auto-drain queue limit '{value}' in step '{}'; expected 'None' or 'Some(<usize>)'",
-                step.value
-            ),
-        });
-    };
+        .unwrap_or(value);
 
     let limit = inner
         .parse::<usize>()
         .map_err(|error| StepError::LogicalError {
             message: format!(
-                "Invalid auto-drain queue limit '{value}' in step '{}': {error}",
+                "Invalid pending submit depth '{value}' in step '{}': {error}",
                 step.value
             ),
         })?;
 
-    Ok(Some(limit))
+    Ok(limit)
 }
 const CONCURRENT_DUPLICATE_SETTLE_SECS: u64 = 30;
 
@@ -159,15 +152,8 @@ async fn step_start_round_robin_zone_sequencer(
     step: &Step,
     sequencer_alias: String,
 ) -> StepResult {
-    start_named_round_robin_sequencer(
-        world,
-        step,
-        sequencer_alias,
-        None,
-        DriveMode::Passive,
-        Some(2),
-    )
-    .await
+    start_named_round_robin_sequencer(world, step, sequencer_alias, None, DriveMode::Passive, 2)
+        .await
 }
 
 #[when(expr = "I start round-robin zone sequencer {string} with indexer")]
@@ -176,24 +162,17 @@ async fn step_start_round_robin_zone_sequencer_with_indexer(
     step: &Step,
     sequencer_alias: String,
 ) -> StepResult {
-    start_named_round_robin_sequencer(
-        world,
-        step,
-        &sequencer_alias,
-        None,
-        DriveMode::Passive,
-        Some(2),
-    )
-    .await?;
+    start_named_round_robin_sequencer(world, step, &sequencer_alias, None, DriveMode::Passive, 2)
+        .await?;
     initialize_zone_indexer(world, step, &sequencer_alias)
 }
 
-#[when(expr = "I start round-robin zone sequencer {string} with auto-drain queue limit {string}")]
-async fn step_start_round_robin_zone_sequencer_with_limit(
+#[when(expr = "I start round-robin zone sequencer {string} with pending submit depth {string}")]
+async fn step_start_round_robin_zone_sequencer_with_submit_depth(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: String,
-    drain_limit: String,
+    submit_depth: String,
 ) -> StepResult {
     start_named_round_robin_sequencer(
         world,
@@ -201,19 +180,19 @@ async fn step_start_round_robin_zone_sequencer_with_limit(
         sequencer_alias,
         None,
         DriveMode::Passive,
-        parse_queue_limit(step, &drain_limit)?,
+        parse_submit_depth(step, &submit_depth)?,
     )
     .await
 }
 
 #[when(
-    expr = "I start round-robin zone sequencer {string} with auto-drain queue limit {string} with indexer"
+    expr = "I start round-robin zone sequencer {string} with pending submit depth {string} with indexer"
 )]
-async fn step_start_round_robin_zone_sequencer_with_limit_and_indexer(
+async fn step_start_round_robin_zone_sequencer_with_submit_depth_and_indexer(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: String,
-    drain_limit: String,
+    submit_depth: String,
 ) -> StepResult {
     start_named_round_robin_sequencer(
         world,
@@ -221,7 +200,7 @@ async fn step_start_round_robin_zone_sequencer_with_limit_and_indexer(
         &sequencer_alias,
         None,
         DriveMode::Passive,
-        parse_queue_limit(step, &drain_limit)?,
+        parse_submit_depth(step, &submit_depth)?,
     )
     .await?;
     initialize_zone_indexer(world, step, &sequencer_alias)
@@ -461,7 +440,7 @@ async fn step_restart_round_robin_zone_sequencer_from_checkpoint(
     checkpoint_alias: String,
 ) -> StepResult {
     let checkpoint = world.zone.resolve_checkpoint(checkpoint_alias)?;
-    let queued_publish_drain_limit = world.zone.round_robin_queue_limit_for(&sequencer_alias)?;
+    let max_pending_publish_depth = world.zone.round_robin_submit_depth_for(&sequencer_alias)?;
 
     start_named_round_robin_sequencer(
         world,
@@ -469,7 +448,7 @@ async fn step_restart_round_robin_zone_sequencer_from_checkpoint(
         &sequencer_alias,
         Some(checkpoint),
         DriveMode::Passive,
-        queued_publish_drain_limit,
+        max_pending_publish_depth,
     )
     .await
 }
@@ -849,7 +828,7 @@ async fn step_publish_zone_balance_updates_with_balance_policy(
 }
 
 #[cucumber::then(
-    expr = "sequencer {string} reaches round-robin state OWN_KEY_INDEX {int} NOT_OUR_TURN with {int} queued messages in {int} seconds"
+    expr = "sequencer {string} reaches round-robin state OWN_KEY_INDEX {int} NOT_OUR_TURN with {int} pending publish txs in {int} seconds"
 )]
 #[expect(
     clippy::needless_pass_by_ref_mut,
@@ -860,7 +839,7 @@ async fn step_sequencer_reaches_round_robin_state_not_our_turn(
     step: &Step,
     sequencer_alias: String,
     own_key_index: usize,
-    queued_messages: usize,
+    pending_publish_txs: usize,
     timeout_seconds: u64,
 ) -> StepResult {
     let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
@@ -874,7 +853,7 @@ async fn step_sequencer_reaches_round_robin_state_not_our_turn(
                 && view.authorized_key_index.is_some()
                 && !view.is_our_turn
                 && view.authorized_key_index != view.own_key_index
-                && view.queued_messages == queued_messages
+                && view.pending_publish_txs == pending_publish_txs
         },
     )
     .await
@@ -884,7 +863,7 @@ async fn step_sequencer_reaches_round_robin_state_not_our_turn(
 }
 
 #[cucumber::then(
-    expr = "sequencer {string} reaches round-robin state OWN_KEY_INDEX {int} OUR_TURN with {int} queued messages in {int} seconds"
+    expr = "sequencer {string} reaches round-robin state OWN_KEY_INDEX {int} OUR_TURN with {int} pending publish txs in {int} seconds"
 )]
 #[expect(
     clippy::needless_pass_by_ref_mut,
@@ -895,7 +874,7 @@ async fn step_sequencer_reaches_round_robin_state_our_turn(
     step: &Step,
     sequencer_alias: String,
     own_key_index: usize,
-    queued_messages: usize,
+    pending_publish_txs: usize,
     timeout_seconds: u64,
 ) -> StepResult {
     let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
@@ -908,7 +887,7 @@ async fn step_sequencer_reaches_round_robin_state_our_turn(
             view.own_key_index == Some(own_key_index as u16)
                 && view.authorized_key_index == Some(own_key_index as u16)
                 && view.is_our_turn
-                && view.queued_messages == queued_messages
+                && view.pending_publish_txs == pending_publish_txs
         },
     )
     .await
@@ -918,32 +897,63 @@ async fn step_sequencer_reaches_round_robin_state_our_turn(
 }
 
 #[cucumber::then(
-    expr = "sequencer {string} publishes queued zone message {string} on its turn and drains queued messages to {int} in {int} seconds"
+    expr = "sequencer {string} emits published events for queued zone messages on its turn in {int} seconds:"
 )]
-async fn step_sequencer_publishes_queued_zone_message_on_turn(
+async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: String,
-    message_alias: String,
-    expected_queued: usize,
     timeout_seconds: u64,
 ) -> StepResult {
-    let payload = message_payload(world, &message_alias)?;
+    let aliases = single_column_table(step, "alias", "zone message aliases")?;
+    let payloads = log_step_error(step, world.zone.message_payloads_for_aliases(&aliases))?;
+    let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
+    let mut view_rx = handle.subscribe_channel_view();
+    wait_for_channel_view(&mut view_rx, Duration::from_secs(timeout_seconds), |view| {
+        view.is_our_turn
+    })
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
+
     let published = {
         let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-        wait_for_published_payload(events, &payload, Duration::from_secs(timeout_seconds))
+        wait_for_published_payloads(events, &payloads, Duration::from_secs(timeout_seconds))
             .await
             .map_err(|error| zone_step_error(step, &error))?
     };
 
-    remember_published_zone_message(world, &sequencer_alias, message_alias, payload, &published);
+    for ((message_alias, payload), published) in aliases.into_iter().zip(payloads).zip(published) {
+        remember_published_zone_message(
+            world,
+            &sequencer_alias,
+            message_alias,
+            payload,
+            &published,
+        );
+    }
 
+    Ok(())
+}
+
+#[cucumber::then(expr = "sequencer {string} has {int} pending publish txs in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_sequencer_has_pending_publish_txs(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    pending_publish_txs: usize,
+    timeout_seconds: u64,
+) -> StepResult {
     let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
     let mut view_rx = handle.subscribe_channel_view();
+
     wait_for_channel_view(
         &mut view_rx,
         Duration::from_secs(timeout_seconds),
-        move |view| view.is_our_turn && view.queued_messages == expected_queued,
+        move |view| view.pending_publish_txs == pending_publish_txs,
     )
     .await
     .map_err(|error| zone_step_error(step, &error))?;
@@ -970,14 +980,6 @@ async fn step_sequencer_publishes_immediately_while_in_turn(
     };
 
     remember_published_zone_message(world, &sequencer_alias, message_alias, payload, &published);
-
-    let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
-    let mut view_rx = handle.subscribe_channel_view();
-    wait_for_channel_view(&mut view_rx, Duration::from_secs(timeout_seconds), |view| {
-        view.queued_messages == 0
-    })
-    .await
-    .map_err(|error| zone_step_error(step, &error))?;
 
     Ok(())
 }

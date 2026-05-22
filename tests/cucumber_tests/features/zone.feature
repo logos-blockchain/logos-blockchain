@@ -205,73 +205,84 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
-  Scenario: Round-robin waits for turn and drains queued messages
+  Scenario: Round-robin waits for turn and submits pending messages
     Given I have a zone cluster
     And the following zone sequencers exist:
       | alias |
       | SEQ_A |
       | SEQ_B |
     When the zone node is at height 1 in 120 seconds
-    And I start round-robin zone sequencer "SEQ_A" with auto-drain queue limit "Some(2)" with indexer
+    And I start round-robin zone sequencer "SEQ_A" with pending submit depth "2" with indexer
     And sequencer "SEQ_A" submits zone config transaction "CHANNEL_CONFIG_1" with posting timeframe 2 and timeout 0 authorizing:
       | alias |
       | SEQ_A |
       | SEQ_B |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
-    When I start round-robin zone sequencer "SEQ_B" with auto-drain queue limit "Some(2)"
-    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 0 queued messages in 120 seconds
-    # Queue three messages while SEQ_B is not on turn — tests Some(2) bounded drain acceptance
+    When I start round-robin zone sequencer "SEQ_B" with pending submit depth "2"
+    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 0 pending publish txs in 120 seconds
+    # Prepare three signed pending messages while SEQ_B is not on turn — tests bounded submit depth
     When sequencer "SEQ_B" submits the following zone messages to queue immediately:
       | alias  | data         |
       | MSG_B1 | rr-queued-b1 |
       | MSG_B2 | rr-queued-b2 |
       | MSG_B3 | rr-queued-b3 |
-    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 3 queued messages in 120 seconds
-    # Save checkpoint with queue non-empty, restart, verify queue restored — tests pending_turn_queue persistence
-    When I save current checkpoint of sequencer "SEQ_B" as "CHECKPOINT_B_QUEUED"
+    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 3 pending publish txs in 120 seconds
+    # Save checkpoint with signed pending txs, restart, verify pending outbox restored
+    When I save current checkpoint of sequencer "SEQ_B" as "CHECKPOINT_B_PENDING"
     And I stop zone sequencer "SEQ_B"
-    And I restart round-robin zone sequencer "SEQ_B" from checkpoint "CHECKPOINT_B_QUEUED"
-    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 3 queued messages in 120 seconds
-    # One wakeup drains only the configured limit, so one message remains queued
-    And sequencer "SEQ_B" publishes queued zone message "MSG_B1" on its turn and drains queued messages to 1 in 180 seconds
+    And I restart round-robin zone sequencer "SEQ_B" from checkpoint "CHECKPOINT_B_PENDING"
+    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 3 pending publish txs in 120 seconds
+    # The first turn submits only the configured active depth, so two txs are posted but remain pending until finalized
+    And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
+      | alias  |
+      | MSG_B1 |
+      | MSG_B2 |
+    Then sequencer "SEQ_B" has 3 pending publish txs in 180 seconds
     And the zone indexer returns messages in any order in 360 seconds:
       | alias  |
       | MSG_B1 |
       | MSG_B2 |
+    Then sequencer "SEQ_B" has 1 pending publish txs in 180 seconds
     And I stop all nodes
 
   @zone_ci
-  Scenario: Round-robin drains all queued messages with no per-wakeup limit
+  Scenario: Round-robin submits all pending messages with no active depth limit
     Given I have a zone cluster
     And the following zone sequencers exist:
       | alias |
       | SEQ_A |
       | SEQ_B |
     When the zone node is at height 1 in 120 seconds
-    And I start round-robin zone sequencer "SEQ_A" with auto-drain queue limit "None" with indexer
+    And I start round-robin zone sequencer "SEQ_A" with pending submit depth "None" with indexer
     And sequencer "SEQ_A" submits zone config transaction "CHANNEL_CONFIG_1" with posting timeframe 2 and timeout 0 authorizing:
       | alias |
       | SEQ_A |
       | SEQ_B |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
-    When I start round-robin zone sequencer "SEQ_B" with auto-drain queue limit "None"
-    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 0 queued messages in 120 seconds
+    When I start round-robin zone sequencer "SEQ_B" with pending submit depth "None"
+    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 0 pending publish txs in 120 seconds
     When sequencer "SEQ_B" submits the following zone messages to queue immediately:
       | alias  | data           |
       | MSG_C1 | rr-unbounded-1 |
       | MSG_C2 | rr-unbounded-2 |
       | MSG_C3 | rr-unbounded-3 |
-    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 3 queued messages in 120 seconds
+    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 3 pending publish txs in 120 seconds
     When I save current checkpoint of sequencer "SEQ_B" as "CHECKPOINT_B_NO_LIMIT"
     And I stop zone sequencer "SEQ_B"
     And I restart round-robin zone sequencer "SEQ_B" from checkpoint "CHECKPOINT_B_NO_LIMIT"
-    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 3 queued messages in 120 seconds
-    And sequencer "SEQ_B" publishes queued zone message "MSG_C1" on its turn and drains queued messages to 0 in 180 seconds
+    Then sequencer "SEQ_B" reaches round-robin state OWN_KEY_INDEX 1 NOT_OUR_TURN with 3 pending publish txs in 120 seconds
+    And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
+      | alias  |
+      | MSG_C1 |
+      | MSG_C2 |
+      | MSG_C3 |
+    Then sequencer "SEQ_B" has 3 pending publish txs in 180 seconds
     And the zone indexer returns messages in any order in 360 seconds:
       | alias  |
       | MSG_C1 |
       | MSG_C2 |
       | MSG_C3 |
+    Then sequencer "SEQ_B" has 0 pending publish txs in 180 seconds
     And I stop all nodes
 
   @zone_ci
@@ -289,7 +300,7 @@ Feature: Zone SDK
       | SEQ_B |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
     When I start round-robin zone sequencer "SEQ_B"
-    Then sequencer "SEQ_A" reaches round-robin state OWN_KEY_INDEX 0 OUR_TURN with 0 queued messages in 120 seconds
+    Then sequencer "SEQ_A" reaches round-robin state OWN_KEY_INDEX 0 OUR_TURN with 0 pending publish txs in 120 seconds
     When I submit zone message "MSG_A1" to sequencer "SEQ_A" with data "decentralized-immediate-publish" immediately
     Then sequencer "SEQ_A" publishes "MSG_A1" immediately while in turn in 120 seconds
     And the zone indexer returns messages in any order in 360 seconds:

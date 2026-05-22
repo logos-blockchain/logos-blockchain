@@ -626,12 +626,12 @@ pub(super) async fn start_named_round_robin_sequencer(
     sequencer_alias: impl AsRef<str>,
     checkpoint: Option<SequencerCheckpoint>,
     mode: DriveMode,
-    queued_publish_drain_limit: Option<usize>,
+    max_pending_publish_depth: usize,
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref().to_owned();
     world
         .zone
-        .set_round_robin_queue_limit(&sequencer_alias, queued_publish_drain_limit);
+        .set_round_robin_submit_depth(&sequencer_alias, max_pending_publish_depth);
 
     start_named_sequencer_with_config(
         world,
@@ -639,7 +639,7 @@ pub(super) async fn start_named_round_robin_sequencer(
         &sequencer_alias,
         checkpoint,
         mode,
-        round_robin_sequencer_config(queued_publish_drain_limit),
+        round_robin_sequencer_config(max_pending_publish_depth),
     )
     .await
 }

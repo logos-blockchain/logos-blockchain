@@ -165,7 +165,7 @@ pub struct ZoneState {
     published_order: Vec<String>,
     checkpoints: HashMap<String, SequencerCheckpoint>,
     latest_checkpoints: HashMap<String, SequencerCheckpoint>,
-    round_robin_queue_limits: HashMap<String, Option<usize>>,
+    round_robin_submit_depths: HashMap<String, usize>,
     sorted_total_payloads: Option<usize>,
     sorted_expected_by_sequencer: Option<HashMap<String, Vec<Inscription>>>,
 }
@@ -386,27 +386,23 @@ impl ZoneState {
             .insert(sequencer_alias.to_owned(), checkpoint);
     }
 
-    pub fn set_round_robin_queue_limit(
-        &mut self,
-        sequencer_alias: impl AsRef<str>,
-        limit: Option<usize>,
-    ) {
-        self.round_robin_queue_limits
+    pub fn set_round_robin_submit_depth(&mut self, sequencer_alias: impl AsRef<str>, limit: usize) {
+        self.round_robin_submit_depths
             .insert(sequencer_alias.as_ref().to_owned(), limit);
     }
 
-    pub fn round_robin_queue_limit_for(
+    pub fn round_robin_submit_depth_for(
         &self,
         sequencer_alias: impl AsRef<str>,
-    ) -> Result<Option<usize>, StepError> {
+    ) -> Result<usize, StepError> {
         let sequencer_alias = sequencer_alias.as_ref();
 
-        self.round_robin_queue_limits
+        self.round_robin_submit_depths
             .get(sequencer_alias)
             .copied()
             .ok_or(StepError::LogicalError {
                 message: format!(
-                    "Zone sequencer '{sequencer_alias}' has no remembered round-robin queue limit"
+                    "Zone sequencer '{sequencer_alias}' has no remembered round-robin submit depth"
                 ),
             })
     }

@@ -56,10 +56,6 @@ pub struct SequencerCheckpoint {
     pub lib: HeaderId,
     /// Last known LIB slot (for backfill range queries).
     pub lib_slot: Slot,
-    /// Publish intents accepted but not yet built/signed because this
-    /// sequencer was not authorized to publish at the time.
-    #[serde(default)]
-    pub pending_turn_queue: Vec<Inscription>,
 }
 
 /// Result of a publish operation.
@@ -107,7 +103,7 @@ pub struct SequencerConfig {
     pub chain_start_time: Option<SystemTime>,
     pub min_slots_remaining_in_turn: u64,
     pub auto_requeue_orphaned: bool,
-    pub queued_publish_drain_limit: Option<usize>,
+    pub max_pending_publish_depth: usize,
 }
 
 impl Default for SequencerConfig {
@@ -120,7 +116,7 @@ impl Default for SequencerConfig {
             chain_start_time: None,
             min_slots_remaining_in_turn: 1,
             auto_requeue_orphaned: false,
-            queued_publish_drain_limit: Some(1),
+            max_pending_publish_depth: 10,
         }
     }
 }
@@ -199,6 +195,7 @@ pub struct SequencerChannelView {
     pub authorized_key_index: Option<u16>,
     pub is_our_turn: bool,
     pub tip_message: MsgId,
+    pub pending_publish_txs: usize,
     pub queued_messages: usize,
     pub posting_timeframe: Option<u32>,
     pub posting_timeout: Option<u32>,
@@ -215,6 +212,7 @@ impl SequencerChannelView {
             authorized_key_index: None,
             is_our_turn: false,
             tip_message: MsgId::root(),
+            pending_publish_txs: 0,
             queued_messages: 0,
             posting_timeframe: None,
             posting_timeout: None,
@@ -385,7 +383,7 @@ enum ActorRequest {
 }
 
 enum InFlight {
-    ResubmittedBatch {
+    SubmittedBatch {
         results: Vec<(InscriptionId, Result<(), String>)>,
     },
 }
@@ -662,7 +660,6 @@ pub struct ZoneSequencer<Node> {
     slot_clock: Option<SlotClock>,
     channel_state: Option<ChannelState>,
     own_key_index: Option<u16>,
-    pending_turn_queue: VecDeque<Inscription>,
 
     // Block stream
     blocks_stream: Option<BoxStream<ProcessedBlockEvent>>,
@@ -728,7 +725,7 @@ where
     ) -> (Self, SequencerHandle<Node>) {
         let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
 
-        let (state, lib_slot, last_msg_id, pending_turn_queue) = if let Some(cp) = checkpoint {
+        let (state, lib_slot, last_msg_id) = if let Some(cp) = checkpoint {
             info!(target: TARGET,
                 "Restoring from checkpoint: {} pending txs, lib={:?}, lib_slot={:?}",
                 cp.pending_txs.len(),
@@ -740,21 +737,17 @@ where
                 pending_txs,
                 lib,
                 lib_slot,
-                pending_turn_queue,
             } = cp;
-            let mut tx_state = TxState::new(lib, last_msg_id);
+            let finalized_msg =
+                restored_pending_channel_tip(&pending_txs, channel_id).unwrap_or(last_msg_id);
+            let mut tx_state = TxState::new(lib, finalized_msg);
             for (_hash, tx) in pending_txs {
                 restore_pending_tx(&mut tx_state, tx, channel_id);
             }
-            (
-                Some(tx_state),
-                lib_slot,
-                last_msg_id,
-                pending_turn_queue.into_iter().collect(),
-            )
+            (Some(tx_state), lib_slot, last_msg_id)
         } else {
             info!(target: TARGET, "Starting fresh (no checkpoint)");
-            (None, Slot::genesis(), MsgId::root(), VecDeque::new())
+            (None, Slot::genesis(), MsgId::root())
         };
 
         let resubmit_interval = tokio::time::interval(config.resubmit_interval);
@@ -784,7 +777,6 @@ where
             slot_clock: None,
             channel_state: None,
             own_key_index: None,
-            pending_turn_queue,
             blocks_stream: None,
             resubmit_interval,
             resubmit_active: false,
@@ -813,7 +805,7 @@ where
     pub fn checkpoint(&self) -> Option<SequencerCheckpoint> {
         self.state
             .as_ref()
-            .map(|s| build_checkpoint(s, self.last_msg_id, self.lib_slot, &self.pending_turn_queue))
+            .map(|s| build_checkpoint(s, self.last_msg_id, self.lib_slot))
     }
 
     /// Drive the sequencer and return the next event.
@@ -852,23 +844,19 @@ where
                     .await
                     .map(|event| self.emit_now(event))
             }
+            Some(inflight_result) = self.in_flight.next(), if !self.in_flight.is_empty() => {
+                let mut events = self.handle_inflight(inflight_result);
+                let first = events.pop_front();
+                self.buffered_events.extend(events);
+                first.map(|event| self.emit_now(event))
+            }
             maybe_event = stream.next() => {
                 self.handle_stream_item(maybe_event)
                     .await
                     .map(|event| self.emit_now(event))
             }
-            Some(inflight_result) = self.in_flight.next(), if !self.in_flight.is_empty() => {
-                handle_inflight(inflight_result, &mut self.resubmit_active);
-                None
-            }
             _ = self.resubmit_interval.tick(), if self.current_tip.is_some() && !self.resubmit_active => {
-                enqueue_resubmit(
-                    self.state.as_ref().unwrap(),
-                    self.current_tip.unwrap(),
-                    &self.node,
-                    &self.in_flight,
-                    &mut self.resubmit_active,
-                );
+                self.enqueue_pending_submit();
                 None
             }
         }
@@ -908,11 +896,7 @@ where
         let became_ready = self.maybe_signal_ready();
         let mut events = self.apply_block_result(result);
 
-        let published_events = self.try_publish_queued().await.unwrap_or_else(|err| {
-            warn!(target: TARGET, "Failed to publish queued inscription: {err}");
-            VecDeque::new()
-        });
-        events.extend(published_events);
+        self.enqueue_pending_submit();
 
         if became_ready {
             // Preserve the existing public event contract: when readiness transitions,
@@ -998,6 +982,11 @@ where
             .as_ref()
             .map(|channel| channel.accredited_keys.len());
 
+        let pending_publish_txs = self
+            .state
+            .as_ref()
+            .map_or(0, TxState::pending_publish_count);
+
         SequencerChannelView {
             channel_id: self.channel_id,
             channel: self.channel_state.clone(),
@@ -1006,7 +995,8 @@ where
             authorized_key_index,
             is_our_turn: self.can_publish_now(),
             tip_message,
-            queued_messages: self.pending_turn_queue.len(),
+            pending_publish_txs,
+            queued_messages: pending_publish_txs,
             posting_timeframe,
             posting_timeout,
             accredited_key_count,
@@ -1032,7 +1022,7 @@ where
         let current_slot = slot_clock.current_slot();
 
         let Some(channel) = &self.channel_state else {
-            return self.last_msg_id == MsgId::root();
+            return true;
         };
 
         let Some(own_idx) = self.own_key_index else {
@@ -1061,57 +1051,121 @@ where
         turn_end_slot.saturating_sub(slot_to_u64(current_slot)) >= min_remaining
     }
 
-    /// Publish queued messages sequentially while the turn remains valid,
-    /// bounded by configuration to avoid starving block processing.
-    async fn try_publish_queued(&mut self) -> Result<VecDeque<Event>, Error> {
+    /// Enqueue pending signed txs for posting while the round-robin gate is
+    /// open. First-time publish posts are bounded by
+    /// `max_pending_publish_depth`; already-posted pending txs may still be
+    /// reposted for mempool recovery.
+    fn enqueue_pending_submit(&mut self) {
+        if self.resubmit_active || !self.in_flight.is_empty() {
+            return;
+        }
+
+        if !self.can_publish_now() {
+            self.publish_channel_view();
+            return;
+        }
+
+        let Some(tip) = self.current_tip else {
+            self.publish_channel_view();
+            return;
+        };
+
+        let Some(state) = self.state.as_ref() else {
+            self.publish_channel_view();
+            return;
+        };
+
+        let pending = state.pending_txs(tip);
+        let mut submit = Vec::new();
+        let mut active_publish_count = state.posted_pending_publish_count();
+        let max_depth = self.config.max_pending_publish_depth.max(1);
+
+        for (id, signed_tx) in pending {
+            let pending_publish = state.pending_inscription(&id);
+            let is_publish = pending_publish.is_some();
+            let is_first_post = pending_publish.is_some_and(|pending| !pending.posted);
+            if is_publish && is_first_post && active_publish_count >= max_depth {
+                break;
+            }
+
+            if is_publish && is_first_post {
+                active_publish_count = active_publish_count.saturating_add(1);
+            }
+            submit.push((id, signed_tx));
+        }
+
+        if submit.is_empty() {
+            self.publish_channel_view();
+            return;
+        }
+
+        debug!(target: TARGET, "Submitting {} pending transaction(s)", submit.len());
+        let node = self.node.clone();
+        self.resubmit_active = true;
+        self.in_flight.push(Box::pin(async move {
+            let mut results = Vec::with_capacity(submit.len());
+            for (id, tx) in submit {
+                let result = node
+                    .post_transaction(tx)
+                    .await
+                    .map_err(|err| err.to_string());
+                results.push((id, result));
+            }
+            InFlight::SubmittedBatch { results }
+        }));
+        self.publish_channel_view();
+    }
+
+    fn handle_inflight(&mut self, event: InFlight) -> VecDeque<Event> {
+        self.resubmit_active = false;
         let mut events = VecDeque::new();
-        let max_drains = self
-            .config
-            .queued_publish_drain_limit
-            .map(|limit| limit.max(1));
-        let mut drained = 0usize;
 
-        loop {
-            if let Some(limit) = max_drains
-                && drained >= limit
-            {
-                break;
-            }
-
-            if !self.can_publish_now() {
-                break;
-            }
-
-            let Some(payload) = self.pending_turn_queue.pop_front() else {
-                break;
-            };
-
-            match self.post_now(payload.clone()).await {
-                Ok(event) => {
-                    events.push_back(event);
-                    drained = drained.saturating_add(1);
-
-                    if let Err(err) = self.refresh_channel_state().await {
-                        warn!(target: TARGET, "Failed to refresh channel state after publish: {err}");
+        match event {
+            InFlight::SubmittedBatch { results } => {
+                for (id, result) in results {
+                    if let Err(err) = result {
+                        warn!(target: TARGET, "Failed to submit pending transaction {}: {err}", hex::encode(id.0));
+                        continue;
                     }
 
-                    self.publish_channel_view();
-                }
-                Err(err) => {
-                    self.pending_turn_queue.push_front(payload);
-
-                    if let Err(refresh_err) = self.refresh_channel_state().await {
-                        warn!(target: TARGET, "Failed to refresh channel state after publish failure: {refresh_err}");
+                    let first_post = self
+                        .state
+                        .as_mut()
+                        .is_some_and(|state| state.mark_pending_inscription_posted(&id));
+                    if first_post && let Some(event) = self.published_event(id) {
+                        events.push_back(event);
                     }
-
-                    self.publish_channel_view();
-                    return Err(err);
                 }
             }
         }
 
         self.publish_channel_view();
-        Ok(events)
+        events
+    }
+
+    fn published_event(&self, id: InscriptionId) -> Option<Event> {
+        let state = self.state.as_ref()?;
+        let pending = state.pending_inscription(&id)?;
+        let info = InscriptionInfo {
+            tx_hash: pending.tx_hash,
+            parent_msg: pending.parent_msg,
+            this_msg: pending.this_msg,
+            payload: pending.payload.clone(),
+        };
+        let tx = match pending.withdraws.clone() {
+            Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                tx_hash: pending.tx_hash,
+                inscription: info,
+                withdraws,
+            }),
+            None => PublishedTx::Inscription(info),
+        };
+        let checkpoint = build_checkpoint(state, self.last_msg_id, self.lib_slot);
+
+        Some(Event::Published {
+            tx: Box::new(tx),
+            checkpoint,
+        })
     }
 
     /// Process one batch of incremental backfill if active.
@@ -1345,22 +1399,22 @@ where
         }
     }
 
-    /// If configured to do so, re-queue orphaned inscriptions for a retry on
-    /// the next turn.
-    fn add_orphaned_to_pending_turn_queue(&mut self, orphaned: &[InscriptionInfo]) {
+    /// If configured to do so, rebuild orphaned inscriptions for a retry on
+    /// the next authorized turn.
+    fn rebuild_orphaned_inscriptions(&mut self, orphaned: &[InscriptionInfo]) {
         if self.config.auto_requeue_orphaned && !orphaned.is_empty() {
             debug!(target: TARGET,
-                "Re-queueing {} orphaned inscription(s) for rebuild on the canonical tip",
+                "Rebuilding {} orphaned inscription(s) on the canonical tip",
                 orphaned.len()
             );
             for info in orphaned {
                 debug!(target: TARGET,
-                    "  requeue orphaned: payload={:?}, tx={}, msg_id={}",
+                    "  rebuild orphaned: payload={:?}, tx={}, msg_id={}",
                     String::from_utf8_lossy(&info.payload),
                     hex::encode(info.tx_hash.0),
                     hex::encode(info.this_msg.as_ref()),
                 );
-                self.pending_turn_queue.push_back(info.payload.clone());
+                self.build_pending_publish(info.payload.clone());
             }
         }
     }
@@ -1384,7 +1438,7 @@ where
             .iter()
             .map(|entry| entry.inscription().clone())
             .collect();
-        self.add_orphaned_to_pending_turn_queue(&orphaned_inscriptions);
+        self.rebuild_orphaned_inscriptions(&orphaned_inscriptions);
 
         let adopted: Vec<InscriptionInfo> = match self.state.as_ref() {
             Some(s) => u
@@ -1447,14 +1501,7 @@ where
             ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
-                let result = submit_signed_tx(
-                    s,
-                    tx,
-                    msg_id,
-                    &mut self.last_msg_id,
-                    self.lib_slot,
-                    &self.pending_turn_queue,
-                );
+                let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
                 drop(reply.send(Ok(result)));
                 None
             }
@@ -1478,8 +1525,7 @@ where
                     withdraw_threshold,
                 );
                 s.submit_other(signed_tx.clone());
-                let checkpoint =
-                    build_checkpoint(s, self.last_msg_id, self.lib_slot, &self.pending_turn_queue);
+                let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
                 let result = PublishResult {
                     inscription_id: signed_tx.mantle_tx.hash(),
                     checkpoint,
@@ -1495,7 +1541,7 @@ where
                 .handle_publish_atomic_withdraw(inscribe, withdraws)
                 .await
             {
-                Ok(event) => Some(event),
+                Ok(event) => event,
                 Err(e) => {
                     warn!("publish_atomic_withdraw failed: {e}");
                     None
@@ -1505,24 +1551,12 @@ where
     }
 
     async fn handle_publish(&mut self, data: Inscription) -> Option<Event> {
-        // Treat publish as an actor intent: enqueue first, then let the common
-        // queue-drain path decide whether it can be posted immediately.
-        self.pending_turn_queue.push_back(data);
-
-        match self.try_publish_queued().await {
-            Ok(mut events) => {
-                let first = events.pop_front();
-                self.buffered_events.extend(events);
-                first
-            }
-            Err(err) => {
-                warn!(target: TARGET, "Failed to publish queued inscription: {err}");
-                None
-            }
-        }
+        self.build_pending_publish(data);
+        self.enqueue_pending_submit();
+        None
     }
 
-    async fn post_now(&mut self, data: Inscription) -> Result<Event, Error> {
+    fn build_pending_publish(&mut self, data: Inscription) -> InscriptionId {
         let parent = {
             let state = self.state.as_mut().unwrap();
             if let Some(tip) = self.current_tip {
@@ -1536,42 +1570,18 @@ where
         let id = signed_tx.mantle_tx.hash();
 
         debug!(target: TARGET,
-            "Publishing: payload={:?}, parent={}, msg_id={}, tx={}",
+            "Prepared publish: payload={:?}, parent={}, msg_id={}, tx={}",
             String::from_utf8_lossy(&data),
             hex::encode(parent.as_ref()),
             hex::encode(new_msg_id.as_ref()),
             hex::encode(id.0),
         );
 
-        self.node
-            .post_transaction(signed_tx.clone())
-            .await
-            .map_err(|err| {
-                debug!(target: TARGET, "Failed to post transaction: {err}");
-                Error::Network(err.to_string())
-            })?;
-
         let state = self.state.as_mut().unwrap();
-        state.submit_inscription(signed_tx, parent, new_msg_id, data.clone());
+        state.submit_inscription(signed_tx, parent, new_msg_id, data);
         self.last_msg_id = new_msg_id;
 
-        let checkpoint = build_checkpoint(
-            state,
-            self.last_msg_id,
-            self.lib_slot,
-            &self.pending_turn_queue,
-        );
-        let info = InscriptionInfo {
-            tx_hash: id,
-            parent_msg: parent,
-            this_msg: new_msg_id,
-            payload: data,
-        };
-
-        Ok(Event::Published {
-            tx: Box::new(PublishedTx::Inscription(info)),
-            checkpoint,
-        })
+        id
     }
 
     /// Build, sign, and submit an atomic inscription+withdraw bundle.
@@ -1584,7 +1594,7 @@ where
         &mut self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
-    ) -> Result<Event, Error> {
+    ) -> Result<Option<Event>, Error> {
         if withdraws.is_empty() {
             return Err(Error::Network(
                 "publish_atomic_withdraw requires at least one withdraw".into(),
@@ -1657,39 +1667,12 @@ where
 
         // Safe to unwrap — is_ready() guarantees state is initialized
         let s = self.state.as_mut().unwrap();
-        let id = signed_tx.mantle_tx.hash();
 
-        s.submit_atomic_withdraw(
-            signed_tx.clone(),
-            parent,
-            msg_id,
-            inscribe.clone(),
-            withdraw_infos.clone(),
-        );
+        s.submit_atomic_withdraw(signed_tx, parent, msg_id, inscribe, withdraw_infos);
         self.last_msg_id = msg_id;
 
-        let checkpoint =
-            build_checkpoint(s, self.last_msg_id, self.lib_slot, &self.pending_turn_queue);
-
-        // Best-effort post; resubmit timer retries on failure.
-        if let Err(e) = self.node.post_transaction(signed_tx).await {
-            warn!("Failed to post atomic withdraw transaction: {e}");
-        }
-
-        let inscription = InscriptionInfo {
-            tx_hash: id,
-            parent_msg: parent,
-            this_msg: msg_id,
-            payload: inscribe,
-        };
-        Ok(Event::Published {
-            tx: Box::new(PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
-                tx_hash: id,
-                inscription,
-                withdraws: withdraw_infos,
-            })),
-            checkpoint,
-        })
+        self.enqueue_pending_submit();
+        Ok(None)
     }
 }
 
@@ -1759,32 +1742,48 @@ fn submit_signed_tx(
     msg_id: MsgId,
     last_msg_id: &mut MsgId,
     lib_slot: Slot,
-    pending_turn_queue: &VecDeque<Inscription>,
 ) -> PublishResult {
     let id = tx.mantle_tx.hash();
     state.submit_other(tx);
     *last_msg_id = msg_id;
 
-    let checkpoint = build_checkpoint(state, *last_msg_id, lib_slot, pending_turn_queue);
+    let checkpoint = build_checkpoint(state, *last_msg_id, lib_slot);
     PublishResult {
         inscription_id: id,
         checkpoint,
     }
 }
 
-fn build_checkpoint(
-    state: &TxState,
-    last_msg_id: MsgId,
-    lib_slot: Slot,
-    pending_turn_queue: &VecDeque<Inscription>,
-) -> SequencerCheckpoint {
+fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> SequencerCheckpoint {
     SequencerCheckpoint {
         last_msg_id,
         pending_txs: state.all_pending_txs(),
         lib: state.lib(),
         lib_slot,
-        pending_turn_queue: pending_turn_queue.iter().cloned().collect(),
     }
+}
+
+fn restored_pending_channel_tip(
+    pending_txs: &[(TxHash, SignedMantleTx)],
+    channel_id: ChannelId,
+) -> Option<MsgId> {
+    let mut parents = Vec::new();
+    let mut children = std::collections::HashSet::new();
+
+    for (_, tx) in pending_txs {
+        for op in tx.mantle_tx.ops() {
+            if let Op::ChannelInscribe(ins) = op
+                && ins.channel_id == channel_id
+            {
+                parents.push(ins.parent);
+                children.insert(ins.id());
+            }
+        }
+    }
+
+    parents
+        .into_iter()
+        .find(|parent| !children.contains(parent))
 }
 
 /// Restore a single pending tx into `TxState` on checkpoint resume.
@@ -1994,19 +1993,6 @@ where
     }
 }
 
-fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
-    match event {
-        InFlight::ResubmittedBatch { results } => {
-            for (id, result) in &results {
-                if let Err(e) = result {
-                    warn!("Failed to resubmit inscription {id:?}: {e}");
-                }
-            }
-            *resubmit_active = false;
-        }
-    }
-}
-
 /// Result of fetching and processing a slot range.
 struct FetchedBatch {
     our_tx_hashes: Vec<TxHash>,
@@ -2146,55 +2132,6 @@ fn apply_backfilled_block(
 
     // Use current state lib to avoid premature finalization
     state.process_block(block_id, parent_id, lib, our_txs, inscriptions);
-}
-
-fn enqueue_resubmit<Node>(
-    state: &TxState,
-    tip: HeaderId,
-    node: &Node,
-    in_flight: &FuturesUnordered<BoxFuture<'static, InFlight>>,
-    resubmit_active: &mut bool,
-) where
-    Node: adapter::Node + Clone + Send + Sync + 'static,
-{
-    let pending: Vec<(InscriptionId, SignedMantleTx)> = state.pending_txs(tip);
-
-    if pending.is_empty() {
-        return;
-    }
-
-    for (id, tx) in &pending {
-        let payloads: Vec<String> = tx
-            .mantle_tx
-            .ops()
-            .iter()
-            .filter_map(|op| {
-                if let Op::ChannelInscribe(ins) = op {
-                    Some(String::from_utf8_lossy(&ins.inscription).to_string())
-                } else {
-                    None
-                }
-            })
-            .collect();
-        debug!(
-            "  resubmit: tx={}, payloads={payloads:?}",
-            hex::encode(id.0)
-        );
-    }
-
-    debug!("Resubmitting {} pending inscription(s)", pending.len());
-
-    let node = node.clone();
-    *resubmit_active = true;
-
-    in_flight.push(Box::pin(async move {
-        let mut results = Vec::with_capacity(pending.len());
-        for (id, tx) in pending {
-            let result = node.post_transaction(tx).await.map_err(|e| e.to_string());
-            results.push((id, result));
-        }
-        InFlight::ResubmittedBatch { results }
-    }));
 }
 
 /// Extract channel inscription info from a block's transactions, in
