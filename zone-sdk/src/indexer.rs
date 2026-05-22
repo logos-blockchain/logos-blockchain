@@ -143,7 +143,6 @@ fn should_skip(message: &ZoneMessage, slot: Slot, skip_until: &mut Option<(MsgId
 
 #[cfg(test)]
 mod tests {
-    use std::num::NonZero;
 
     use async_trait::async_trait;
     use lb_common_http_client::{
@@ -155,6 +154,7 @@ mod tests {
         mantle::{NoteId, SignedMantleTx, ledger::Inputs},
     };
     use lb_groth16::Fr;
+    use lb_http_api_common::queries::BlocksStreamQuery;
 
     use super::*;
     use crate::{Deposit, ZoneBlock, adapter::BoxStream};
@@ -390,12 +390,7 @@ mod tests {
 
         async fn blocks_range_stream(
             &self,
-            _blocks_limit: Option<NonZero<usize>>,
-            _slot_from: Option<u64>,
-            _slot_to: Option<u64>,
-            _descending: Option<bool>,
-            _server_batch_size: Option<NonZero<usize>>,
-            _immutable_only: Option<bool>,
+            _params: BlocksStreamQuery,
         ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
             Ok(Box::pin(futures::stream::empty()))
         }

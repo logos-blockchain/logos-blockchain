@@ -20,6 +20,7 @@ hex                              = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-core                          = { workspace = true }
 lb-groth16                       = { workspace = true }
+lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
 rand                             = { workspace = true }
 reqwest                          = { workspace = true }

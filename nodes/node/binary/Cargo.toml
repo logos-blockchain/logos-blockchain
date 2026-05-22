@@ -80,7 +80,8 @@ validator  = { features = ["derive"], workspace = true }
 tikv-jemallocator = { optional = true, workspace = true }
 
 [dev-dependencies]
-rand = { workspace = true }
+rand             = { workspace = true }
+serde_urlencoded = { workspace = true }
 
 [features]
 default   = ["tracing"]

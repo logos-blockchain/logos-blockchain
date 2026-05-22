@@ -18,6 +18,7 @@ use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     sdp::{Locator, ProviderId, ServiceType, SessionNumber},
 };
+use lb_log_targets::storage;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -32,6 +33,8 @@ use crate::api::{
     StorageApiRequest, StorageOperation,
     membership::requests::{MembershipApiRequest, SessionSender},
 };
+
+const LOG_TARGET: &str = storage::ROOT;
 
 /// Storage message that maps to [`StorageBackend`] trait
 pub enum StorageMsg<Backend: StorageBackend> {
@@ -307,7 +310,7 @@ where
 
         if let Err(err) = result {
             metrics::storage_request_failed();
-            tracing::error!(err = %err, "Storage request failed");
+            tracing::error!(target: LOG_TARGET, err = %err, "Storage request failed");
         } else {
             metrics::storage_observe_request_ok(started_at);
         }
@@ -441,6 +444,7 @@ where
 
         status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );

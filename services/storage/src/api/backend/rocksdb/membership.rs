@@ -6,6 +6,7 @@ use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     sdp::{Locator, ProviderId, ServiceType, SessionNumber},
 };
+use lb_log_targets::storage;
 use overwatch::DynError;
 use tracing::{debug, error};
 
@@ -19,6 +20,8 @@ pub const MEMBERSHIP_NEXT_SESSION_PREFIX: &str = "membership/next/";
 pub const MEMBERSHIP_LATEST_BLOCK_KEY: &str = "membership/latest_block";
 
 type MembershipProviders = (SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>);
+
+const LOG_TARGET: &str = storage::rocksdb::MEMBERSHIP;
 
 #[async_trait]
 impl StorageMembershipApi for RocksBackend {
@@ -41,13 +44,14 @@ impl StorageMembershipApi for RocksBackend {
         match self.store(key, serialized_data).await {
             Ok(()) => {
                 debug!(
+                    target: LOG_TARGET,
                     "Successfully stored active session {} for service {:?}",
                     session_id, service_type
                 );
                 Ok(())
             }
             Err(e) => {
-                error!("Failed to store active session: {:?}", e);
+                error!(target: LOG_TARGET, "Failed to store active session: {:?}", e);
                 Err(e.into())
             }
         }
@@ -66,19 +70,20 @@ impl StorageMembershipApi for RocksBackend {
 
         data.map_or_else(
             || {
-                debug!("No active session found for service {:?}", service_type);
+                debug!(target: LOG_TARGET, "No active session found for service {:?}", service_type);
                 Ok(None)
             },
             |bytes| match MembershipProviders::from_bytes(&bytes) {
                 Ok(session_data) => {
                     debug!(
+                        target: LOG_TARGET,
                         "Successfully loaded active session for service {:?}",
                         service_type
                     );
                     Ok(Some(session_data))
                 }
                 Err(e) => {
-                    error!("Failed to deserialize active session: {:?}", e);
+                    error!(target: LOG_TARGET, "Failed to deserialize active session: {:?}", e);
                     Ok(None)
                 }
             },
@@ -96,11 +101,11 @@ impl StorageMembershipApi for RocksBackend {
             .await
         {
             Ok(()) => {
-                debug!("Successfully stored latest block {}", block_number);
+                debug!(target: LOG_TARGET, "Successfully stored latest block {}", block_number);
                 Ok(())
             }
             Err(e) => {
-                error!("Failed to store latest block: {:?}", e);
+                error!(target: LOG_TARGET, "Failed to store latest block: {:?}", e);
                 Err(e.into())
             }
         }
@@ -111,18 +116,22 @@ impl StorageMembershipApi for RocksBackend {
 
         match data {
             None => {
-                debug!("No latest block found");
+                debug!(target: LOG_TARGET, "No latest block found");
                 Ok(None)
             }
             Some(bytes) => {
                 if bytes.len() != 8 {
-                    error!("Invalid block number bytes length: {}", bytes.len());
+                    error!(
+                        target: LOG_TARGET,
+                        "Invalid block number bytes length: {}",
+                        bytes.len()
+                    );
                     return Ok(None);
                 }
 
                 let block_bytes: [u8; 8] = bytes[..8].try_into().unwrap();
                 let block_number = BlockNumber::from_le_bytes(block_bytes);
-                debug!("Successfully loaded latest block {}", block_number);
+                debug!(target: LOG_TARGET, "Successfully loaded latest block {}", block_number);
                 Ok(Some(block_number))
             }
         }
@@ -147,13 +156,14 @@ impl StorageMembershipApi for RocksBackend {
         match self.store(key, serialized_data).await {
             Ok(()) => {
                 debug!(
+                    target: LOG_TARGET,
                     "Successfully stored next session {} for service {:?}",
                     session_id, service_type
                 );
                 Ok(())
             }
             Err(e) => {
-                error!("Failed to store next session: {:?}", e);
+                error!(target: LOG_TARGET, "Failed to store next session: {:?}", e);
                 Err(e.into())
             }
         }
@@ -172,19 +182,20 @@ impl StorageMembershipApi for RocksBackend {
 
         data.map_or_else(
             || {
-                debug!("No next session found for service {:?}", service_type);
+                debug!(target: LOG_TARGET, "No next session found for service {:?}", service_type);
                 Ok(None)
             },
             |bytes| match <MembershipProviders>::from_bytes(&bytes) {
                 Ok(session_data) => {
                     debug!(
+                        target: LOG_TARGET,
                         "Successfully loaded next session for service {:?}",
                         service_type
                     );
                     Ok(Some(session_data))
                 }
                 Err(e) => {
-                    error!("Failed to deserialize next session: {:?}", e);
+                    error!(target: LOG_TARGET, "Failed to deserialize next session: {:?}", e);
                     Ok(None)
                 }
             },
