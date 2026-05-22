@@ -53,14 +53,23 @@ local setup.
 
 ## Setup and Usage (using `cargo test`)
 
-Where tests involve spawning node binaries locally, the testing framework runs:
+Where tests involve spawning node binaries locally, the testing framework uses
+`LOGOS_BLOCKCHAIN_NODE_BIN` when it is set:
+
+```bash
+LOGOS_BLOCKCHAIN_NODE_BIN=/path/to/logos-blockchain-node cargo test ...
+```
+
+If `LOGOS_BLOCKCHAIN_NODE_BIN` is not set, local runs build the testing-featured
+release binary automatically:
 
 ```bash
 cargo build --locked --release -p logos-blockchain-node --features testing
 ```
 
-CI expects `target/release/logos-blockchain-node` to already exist, or `LOGOS_BLOCKCHAIN_NODE_BIN` to point at the
-prebuilt binary.
+CI expects `target/release/logos-blockchain-node` to already exist, or
+`LOGOS_BLOCKCHAIN_NODE_BIN` to point at the prebuilt binary. It does not build
+node binaries inside the test process.
 
 ### 1. Run a specific test
 
@@ -69,20 +78,11 @@ _**MacOS or Linux**_
 ```bash
 cargo test --test test_cryptarchia_happy_path  two_nodes_happy -- --no-capture
 ```
-or 
-```bash
-USE_RELEASE_BINARIES=1 cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
-```
 
 _**Windows (PowerShell)**_
 
 ```pwsh
 cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
-```
-or
-```pwsh
-$env:USE_RELEASE_BINARIES="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
-
 ```
 
 ### 2. Run Tests with Debug Feature Flag
