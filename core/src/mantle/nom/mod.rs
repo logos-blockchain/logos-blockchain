@@ -184,6 +184,11 @@ where
         buf[..N_BYTES].copy_from_slice(len_bytes);
         let len = u64::from_le_bytes(buf) as usize;
 
+        // We check length first instead of relying on `BoundedVec::try_from` to avoid
+        // decoding a payload that is too large.
+        if len < MIN {
+            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::LengthValue)));
+        }
         if len > MAX {
             return Err(nom::Err::Error(Error::new(bytes, ErrorKind::TooLarge)));
         }

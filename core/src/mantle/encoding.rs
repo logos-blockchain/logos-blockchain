@@ -803,7 +803,7 @@ mod tests {
             Transaction as _,
             ops::channel::{
                 MsgId,
-                config::ChannelConfigOp,
+                config::{ChannelConfigOp, Keys},
                 inscribe::{self, Inscription, InscriptionOp},
             },
             tx::GasPrices,
@@ -1794,6 +1794,29 @@ mod tests {
 
         let result2 = decode_sdp_active(&malicious_input2);
         assert!(result2.is_err(), "Should reject huge metadata length");
+    }
+
+    #[test]
+    fn test_decode_reject_zero_key_count() {
+        let encoded_config_op = ChannelConfigOp {
+            channel: ChannelId::from([0x22; 32]),
+            // Using `new_unchecked` to bypass the constructor check since we're testing decode
+            // directly.
+            keys: Keys::new_unchecked([].into()),
+            posting_timeframe: 0.into(),
+            posting_timeout: 0.into(),
+            configuration_threshold: 0,
+            withdraw_threshold: 0,
+        }
+        .encode();
+
+        assert_eq!(
+            ChannelConfigOp::decode(&encoded_config_op).unwrap_err(),
+            nom::Err::Error(Error {
+                input: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][..],
+                code: ErrorKind::LengthValue,
+            }),
+        );
     }
 
     #[test]
