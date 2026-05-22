@@ -5,7 +5,7 @@ use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     TxHash, Utxo,
-    ops::channel::{config::Keys, inscribe::Inscription},
+    ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::LbcManualCluster;
@@ -271,7 +271,7 @@ pub(super) async fn submit_zone_deposit_transaction(
     transaction_alias: String,
     channel_alias: String,
     amount: u64,
-    metadata: String,
+    metadata: Metadata,
 ) -> StepResult {
     let node_url = log_step_error(step, world.zone_node_url())?;
     let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
@@ -283,7 +283,7 @@ pub(super) async fn submit_zone_deposit_transaction(
         available_utxos,
         world.zone.sequencer_channel_id(&channel_alias)?,
         amount,
-        metadata.into_bytes(),
+        metadata,
     )
     .map_err(|error| zone_step_error(step, &error))?;
 
@@ -307,7 +307,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     transaction_alias: String,
     message_alias: String,
     amount: u64,
-    metadata: String,
+    metadata: Metadata,
 ) -> StepResult {
     let node_url = log_step_error(step, world.zone_node_url())?;
     let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
@@ -323,7 +323,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
             funding_public_key,
             available_utxos,
             amount,
-            metadata: metadata.into_bytes(),
+            metadata,
             inscription_data: inscription_data.clone(),
         },
     )

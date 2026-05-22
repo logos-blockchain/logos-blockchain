@@ -1,3 +1,4 @@
+use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 use nom::{
     IResult, Parser as _,
     combinator::{map, map_res},
@@ -75,9 +76,26 @@ fn encode_slice<T: NomEncode>(items: &[T]) -> Vec<u8> {
     items.iter().flat_map(NomEncode::encode).collect()
 }
 
+impl NomEncode for Fr {
+    fn encode(&self) -> Vec<u8> {
+        NomArray::<u8, 32>::from(&fr_to_bytes(self)).encode()
+    }
+}
+
+impl NomDecode for Fr {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        map_res(NomArray::<u8, 32>::decode, |bytes: [u8; 32]| {
+            fr_from_bytes(&bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
+        })
+        .parse(bytes)
+    }
+}
+
 impl NomEncode for ChannelId {
     fn encode(&self) -> Vec<u8> {
-        encode_slice(self.as_ref())
+        NomArray::<u8, 32>::from(self.as_ref()).encode()
     }
 }
 
@@ -91,7 +109,7 @@ impl NomDecode for ChannelId {
 
 impl NomEncode for MsgId {
     fn encode(&self) -> Vec<u8> {
-        encode_slice(self.as_ref())
+        NomArray::<u8, 32>::from(self.as_ref()).encode()
     }
 }
 
@@ -106,7 +124,7 @@ impl NomDecode for MsgId {
 // Ed25519PublicKey = 32BYTE
 impl NomEncode for Ed25519PublicKey {
     fn encode(&self) -> Vec<u8> {
-        encode_slice(&self.to_bytes())
+        NomArray::<u8, 32>::from(&self.to_bytes()).encode()
     }
 }
 

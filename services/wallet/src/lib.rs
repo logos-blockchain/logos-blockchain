@@ -18,6 +18,7 @@ use lb_core::{
     mantle::{
         AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
         gas::MainnetGasConstants,
+        ledger::Inputs,
         ops::{
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
             leader_claim::{
@@ -594,11 +595,11 @@ where
 
     async fn sign_channel_deposit(
         tx_hash: TxHash,
-        note_ids: Vec<NoteId>,
+        note_ids: Inputs,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         ledger: &LedgerState,
     ) -> Result<OpProof, WalletServiceError> {
-        let input_pks = Self::resolve_note_input_pks(ledger, note_ids)?;
+        let input_pks = Self::resolve_note_input_pks(ledger, note_ids.into_inner())?;
         let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
@@ -732,11 +733,11 @@ where
 
     async fn sign_transfer(
         tx_hash: TxHash,
-        note_ids: Vec<NoteId>,
+        note_ids: Inputs,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         ledger: &LedgerState,
     ) -> Result<OpProof, WalletServiceError> {
-        let input_pks = Self::resolve_note_input_pks(ledger, note_ids)?;
+        let input_pks = Self::resolve_note_input_pks(ledger, note_ids.into_inner())?;
         let zk_sig = Self::sign_zksig(tx_hash, input_pks, kms).await?;
 
         Ok(OpProof::ZkSig(zk_sig))
@@ -764,13 +765,8 @@ where
                     Self::sign_channel_set_key(tx_hash, set_keys_op, &tip_leader, kms).await?
                 }
                 Op::ChannelDeposit(deposit_op) => {
-                    Self::sign_channel_deposit(
-                        tx_hash,
-                        deposit_op.inputs.as_ref().clone(),
-                        kms,
-                        &tip_leader,
-                    )
-                    .await?
+                    Self::sign_channel_deposit(tx_hash, deposit_op.inputs.clone(), kms, &tip_leader)
+                        .await?
                 }
                 Op::ChannelWithdraw(_channel_withdraw_op) => {
                     let proof = channel_multi_sig_proofs
@@ -791,13 +787,8 @@ where
                     Self::sign_leader_claim(tx_hash, claim_op, tip, wallet, kms).await?
                 }
                 Op::Transfer(transfer_op) => {
-                    Self::sign_transfer(
-                        tx_hash,
-                        transfer_op.inputs.as_ref().clone(),
-                        kms,
-                        &tip_leader,
-                    )
-                    .await?
+                    Self::sign_transfer(tx_hash, transfer_op.inputs.clone(), kms, &tip_leader)
+                        .await?
                 }
             };
             ops_proofs.push(proof);

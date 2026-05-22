@@ -2178,7 +2178,7 @@ mod tests {
     };
     use lb_core::{
         header::ContentId,
-        mantle::{Note, Utxo, ledger::Inputs, ops::channel::deposit::DepositOp},
+        mantle::{Note, Utxo, ops::channel::deposit::DepositOp},
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_http_api_common::queries::BlocksStreamQuery;
@@ -2222,8 +2222,8 @@ mod tests {
         let (sk, utxo) = utxo_with_sk();
         let deposit_op = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
-            metadata: "to Alice".into(),
+            inputs: utxo.id().into(),
+            metadata: b"to Alice".into(),
         };
 
         // Prepare a `MantleTx` — drive sequencer concurrently to process the request
