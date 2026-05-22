@@ -261,6 +261,7 @@ serde_arrays                       = { default-features = false, version = "0.2.
 serde_ignored                      = { default-features = false, version = "0.1" }
 serde_json                         = { default-features = false, version = "1.0" }
 serde_path_to_error                = { default-features = false, version = "0.1" }
+serde_urlencoded                   = { default-features = false, version = "0.7.1" }
 serde_with                         = { default-features = false, version = "3.14.0" }
 serde_yaml                         = { default-features = false, version = "0.9.33" }
 serde_yml                          = { default-features = false, version = "0.0.12" }

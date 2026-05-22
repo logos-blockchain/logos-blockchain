@@ -23,6 +23,7 @@ multiaddr                     = { workspace = true }
 num-bigint                    = { workspace = true }
 overwatch                     = { workspace = true }
 serde_json                    = { workspace = true }
+tempfile                      = { workspace = true }
 tokio                         = { features = ["rt-multi-thread"], workspace = true }
 
 [build-dependencies]

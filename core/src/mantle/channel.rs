@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
+use nom::{IResult, Parser as _, combinator::map};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -8,8 +9,10 @@ use crate::{
     mantle::{
         Value,
         ledger::{self, Operation as _},
+        nom::{NomDecode, NomEncode},
         ops::channel::{
-            ChannelId, ChannelKeyIndex, Ed25519PublicKey as PublicKey, MsgId,
+            ChannelId, ChannelKeyIndex, MsgId,
+            config::Keys,
             inscribe::{InscriptionExecutionContext, InscriptionOp},
         },
     },
@@ -17,15 +20,8 @@ use crate::{
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
 pub struct SlotTimeframe(u32);
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
-pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeframe {
-    fn from(slot: u32) -> Self {
-        Self(slot)
-    }
-}
-impl From<u32> for SlotTimeout {
     fn from(slot: u32) -> Self {
         Self(slot)
     }
@@ -36,9 +32,47 @@ impl From<SlotTimeframe> for u32 {
         slot.0
     }
 }
+
+impl NomEncode for SlotTimeframe {
+    fn encode(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+}
+
+impl NomDecode for SlotTimeframe {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        map(u32::decode, Self).parse(bytes)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+pub struct SlotTimeout(u32);
+
+impl From<u32> for SlotTimeout {
+    fn from(slot: u32) -> Self {
+        Self(slot)
+    }
+}
+
 impl From<SlotTimeout> for u32 {
     fn from(slot: SlotTimeout) -> Self {
         slot.0
+    }
+}
+
+impl NomEncode for SlotTimeout {
+    fn encode(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+}
+
+impl NomDecode for SlotTimeout {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        map(u32::decode, Self).parse(bytes)
     }
 }
 
@@ -99,10 +133,10 @@ pub struct Channels {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChannelState {
     // Channel Configuration
-    pub accredited_keys: Arc<[PublicKey]>, // keys.len() <= ChannelKeyIndex::MAX
-    pub configuration_threshold: u16,      /* indicating how many keys are required to update
-                                            * the
-                                            * configuration */
+    pub accredited_keys: Arc<Keys>, // keys.len() <= ChannelKeyIndex::MAX
+    pub configuration_threshold: u16, /* indicating how many keys are required to update
+                                     * the
+                                     * configuration */
 
     // Message Ordering
     pub tip_message: MsgId,
@@ -207,6 +241,7 @@ mod tests {
             ops::{
                 OpId as _,
                 channel::{
+                    Ed25519PublicKey as PublicKey,
                     deposit::{DepositExecutionContext, DepositOp},
                     withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
                 },
@@ -226,7 +261,7 @@ mod tests {
         tip_sequencer_starting_slot: u64,
         posting_timeframe: u32,
         posting_timeout: u32,
-        num_keys: usize,
+        num_keys: u8,
     ) -> ChannelState {
         ChannelState {
             tip_slot: Slot::new(tip_slot),
@@ -236,9 +271,8 @@ mod tests {
             posting_timeout: SlotTimeout(posting_timeout),
             balance: 0,
             withdrawal_nonce: 0,
-            accredited_keys: (0..num_keys as u8)
-                .map(test_public_key)
-                .collect::<Vec<_>>()
+            accredited_keys: Keys::try_from((0..num_keys).map(test_public_key).collect::<Vec<_>>())
+                .unwrap()
                 .into(),
             configuration_threshold: 0,
             tip_message: MsgId::root(),
@@ -273,7 +307,7 @@ mod tests {
                 channels: rpds::HashTrieMapSync::new_sync().insert(
                     channel_id,
                     ChannelState {
-                        accredited_keys: vec![test_public_key(7)].into(),
+                        accredited_keys: Keys::from(test_public_key(7)).into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         tip_slot: Slot::default(),
@@ -301,7 +335,7 @@ mod tests {
                 .insert(
                     first_id,
                     ChannelState {
-                        accredited_keys: vec![test_public_key(11)].into(),
+                        accredited_keys: Keys::from(test_public_key(11)).into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         tip_slot: Slot::default(),
@@ -317,7 +351,8 @@ mod tests {
                 .insert(
                     second_id,
                     ChannelState {
-                        accredited_keys: vec![test_public_key(22), test_public_key(23)].into(),
+                        accredited_keys: Keys::from([test_public_key(22), test_public_key(23)])
+                            .into(),
                         configuration_threshold: 1,
                         tip_message: MsgId::root(),
                         tip_slot: Slot::default(),

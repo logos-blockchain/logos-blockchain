@@ -32,11 +32,10 @@ use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
         encoding::{
-            decode_channel_config, decode_channel_deposit, decode_channel_withdraw,
-            decode_leader_claim, decode_sdp_active, decode_sdp_declare, decode_sdp_withdraw,
-            decode_transfer, encode_channel_config, encode_channel_deposit,
-            encode_channel_withdraw, encode_leader_claim, encode_sdp_active, encode_sdp_declare,
-            encode_sdp_withdraw, encode_transfer_op,
+            decode_channel_deposit, decode_channel_withdraw, decode_leader_claim,
+            decode_sdp_active, decode_sdp_declare, decode_sdp_withdraw, decode_transfer,
+            encode_channel_deposit, encode_channel_withdraw, encode_leader_claim,
+            encode_sdp_active, encode_sdp_declare, encode_sdp_withdraw, encode_transfer_op,
         },
         nom::{NomDecode, NomEncode},
         ops::{
@@ -139,10 +138,10 @@ impl NomEncode for Op {
             Self::ChannelInscribe(op) => {
                 bytes.extend(op.encode());
             }
-            // TODO: Use `.encode()` once implemented for all other ops
             Self::ChannelConfig(op) => {
-                bytes.extend(encode_channel_config(op));
+                bytes.extend(op.encode());
             }
+            // TODO: Use `.encode()` once implemented for all other ops
             Self::ChannelDeposit(op) => {
                 bytes.extend(encode_channel_deposit(op));
             }
@@ -177,8 +176,8 @@ impl NomDecode for Op {
 
         match opcode {
             INSCRIBE => map(InscriptionOp::decode, Self::ChannelInscribe).parse(input),
+            CHANNEL_CONFIG => map(ChannelConfigOp::decode, Self::ChannelConfig).parse(input),
             // TODO: Use `.decode()` once implemented for all other ops
-            CHANNEL_CONFIG => map(decode_channel_config, Self::ChannelConfig).parse(input),
             CHANNEL_DEPOSIT => map(decode_channel_deposit, Self::ChannelDeposit).parse(input),
             CHANNEL_WITHDRAW => map(decode_channel_withdraw, Self::ChannelWithdraw).parse(input),
             SDP_DECLARE => map(decode_sdp_declare, Self::SDPDeclare).parse(input),

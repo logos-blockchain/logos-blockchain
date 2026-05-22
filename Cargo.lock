@@ -4026,6 +4026,7 @@ dependencies = [
  "logos-blockchain-core",
  "logos-blockchain-ledger",
  "logos-blockchain-libp2p",
+ "logos-blockchain-log-targets",
  "logos-blockchain-network-service",
  "logos-blockchain-sdp-service",
  "logos-blockchain-storage-service",
@@ -4222,6 +4223,7 @@ dependencies = [
  "num-bigint",
  "overwatch",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -4592,9 +4594,14 @@ dependencies = [
  "pprof",
  "serde",
  "serde_json",
+ "serde_urlencoded",
  "serde_with",
+ "time",
  "tokio",
  "tracing",
+ "url",
+ "utoipa",
+ "validator",
 ]
 
 [[package]]
@@ -4826,6 +4833,7 @@ dependencies = [
  "serde",
  "serde_ignored",
  "serde_json",
+ "serde_urlencoded",
  "serde_with",
  "serde_yaml",
  "thiserror 2.0.18",
@@ -4956,6 +4964,7 @@ dependencies = [
  "futures",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-log-targets",
  "logos-blockchain-tracing",
  "overwatch",
  "rocksdb",
@@ -4972,6 +4981,7 @@ version = "0.1.2"
 dependencies = [
  "async-ctrlc",
  "async-trait",
+ "logos-blockchain-log-targets",
  "overwatch",
  "tracing",
 ]
@@ -5032,6 +5042,7 @@ dependencies = [
  "futures",
  "log",
  "logos-blockchain-cryptarchia-engine",
+ "logos-blockchain-log-targets",
  "logos-blockchain-tracing",
  "logos-blockchain-utils",
  "overwatch",
@@ -5137,6 +5148,7 @@ dependencies = [
  "async-trait",
  "futures",
  "logos-blockchain-core",
+ "logos-blockchain-log-targets",
  "logos-blockchain-network-service",
  "logos-blockchain-services-utils",
  "logos-blockchain-storage-service",
@@ -5287,6 +5299,7 @@ dependencies = [
  "logos-blockchain-common-http-client",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
+ "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "num-bigint",
  "rand 0.8.6",

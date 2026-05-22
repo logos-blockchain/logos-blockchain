@@ -952,7 +952,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: channel_id,
-            keys: vec![verifying_key],
+            keys: verifying_key.into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
@@ -983,14 +983,14 @@ mod tests {
                 .contains_key(&channel_id)
         );
         assert_eq!(
-            new_state
+            *new_state
                 .mantle_ledger
                 .channels()
                 .channels
                 .get(&channel_id)
                 .unwrap()
                 .accredited_keys,
-            vec![verifying_key].into()
+            verifying_key.into()
         );
         assert!(events.is_empty());
     }
@@ -1371,45 +1371,6 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_keys_error() {
-        let test_config = config();
-        let state = LedgerState::from_utxos([utxo()], &test_config);
-        let (signing_key, _) = create_test_keys();
-        let channel_id = ChannelId::from([7; 32]);
-
-        let config_op = ChannelConfigOp {
-            channel: channel_id,
-            keys: vec![],
-            posting_timeframe: 0.into(),
-            posting_timeout: 0.into(),
-            configuration_threshold: 1,
-            withdraw_threshold: 1,
-        };
-
-        let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
-        let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
-            0,
-            signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
-        )])
-        .unwrap();
-
-        let tx = create_signed_tx(
-            Op::ChannelConfig(config_op),
-            &Key::MultiSequencer(config_proof),
-        );
-        let err = state
-            .try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx)
-            .unwrap_err();
-        assert_eq!(
-            err,
-            LedgerError::Mantle(mantle::Error::Channel(
-                mantle::channel::Error::InvalidChannelConfig
-            ))
-        );
-    }
-
-    #[test]
     fn test_multiple_operations_in_transaction() {
         // Create channel 1 by posting an inscription
         // Create channel 2 by posting an inscription
@@ -1441,7 +1402,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: channel1,
-            keys: vec![vk3, vk4],
+            keys: [vk3, vk4].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,

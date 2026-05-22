@@ -1,6 +1,6 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
-use lb_utils::bounded_vec::BoundedVec;
+use lb_utils::bounded_vec::UpperBoundedVec;
 use multiaddr::Multiaddr;
 use nom::{
     IResult, Parser as _,
@@ -19,7 +19,7 @@ use crate::{
         nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey, config::ChannelConfigOp, deposit::DepositOp},
+            channel::{ChannelId, Ed25519PublicKey, deposit::DepositOp},
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
@@ -47,8 +47,9 @@ const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed
 // Maximum byte size allowed for a locator in SDPDeclare operations.
 const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 
-pub type Ops = BoundedVec<Op, { u8::MAX as usize }>;
-type NomOps<'a> = NomBoundedVec<'a, Op, { u8::MAX as usize }, 1>;
+pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
+pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
+type NomOps<'a> = NomBoundedVec<'a, Op, { Ops::MIN }, { Ops::MAX }, 1>;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -75,32 +76,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
 // ==============================================================================
 // Channel Operation Decoders
 // ==============================================================================
-
-pub(crate) fn decode_channel_config(input: &[u8]) -> IResult<&[u8], ChannelConfigOp> {
-    // ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
-    // PostingTimeout ConfigThreshold WithdrawThreshold
-    let (input, channel) = map(decode_hash32, ChannelId::from).parse(input)?;
-    let (input, key_count) = decode_byte(input)?;
-
-    let (input, keys) = count(decode_ed25519_public_key, key_count as usize).parse(input)?;
-
-    let (input, posting_timeframe) = decode_uint32(input)?;
-    let (input, posting_timeout) = decode_uint32(input)?;
-    let (input, configuration_threshold) = decode_uint16(input)?;
-    let (input, withdraw_threshold) = decode_uint16(input)?;
-
-    Ok((
-        input,
-        ChannelConfigOp {
-            channel,
-            keys,
-            posting_timeframe: SlotTimeframe::from(posting_timeframe),
-            posting_timeout: SlotTimeout::from(posting_timeout),
-            configuration_threshold,
-            withdraw_threshold,
-        },
-    ))
-}
 
 pub(crate) fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
     // ChannelDeposit = ChannelId Amount Metadata
@@ -153,7 +128,8 @@ pub(crate) fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
         .into_iter()
         .map(Locator::try_from)
         .collect::<Result<Vec<_>, _>>()
-        .and_then(TryInto::try_into)
+        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?
+        .try_into()
         .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
     let (input, provider_key) = decode_ed25519_public_key(input)?;
     let provider_id = ProviderId(provider_key);
@@ -492,7 +468,6 @@ use lb_groth16::fr_to_bytes;
 
 use crate::{
     mantle::{
-        channel::{SlotTimeframe, SlotTimeout},
         ledger::{Inputs, Outputs},
         ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
         tx::MantleTxGasContext,
@@ -568,29 +543,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
             .into_iter()
             .chain(encode_uint16(signature.channel_key_index))
     }));
-    bytes
-}
-
-#[must_use]
-pub fn encode_channel_config(op: &ChannelConfigOp) -> Vec<u8> {
-    assert!(
-        u8::try_from(op.keys.len()).is_ok(),
-        "Fatal error in 'encode_channel_config' - {} keys clipped to {}",
-        op.keys.len(),
-        u8::MAX
-    );
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(op.channel.as_ref()));
-    bytes.extend(encode_byte(op.keys.len() as u8));
-    for key in &op.keys {
-        bytes.extend(encode_ed25519_public_key(key));
-    }
-
-    bytes.extend(encode_uint32(u32::from(op.posting_timeframe.clone())));
-    bytes.extend(encode_uint32(u32::from(op.posting_timeout.clone())));
-    bytes.extend(encode_uint16(op.configuration_threshold));
-    bytes.extend(encode_uint16(op.withdraw_threshold));
-
     bytes
 }
 
@@ -851,6 +803,7 @@ mod tests {
             Transaction as _,
             ops::channel::{
                 MsgId,
+                config::{ChannelConfigOp, Keys},
                 inscribe::{self, Inscription, InscriptionOp},
             },
             tx::GasPrices,
@@ -1011,7 +964,7 @@ mod tests {
             }),
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
-                keys: vec![signing_key.public_key()],
+                keys: signing_key.public_key().into(),
                 posting_timeframe: 1.into(),
                 posting_timeout: 2.into(),
                 configuration_threshold: 3,
@@ -1217,11 +1170,12 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xFF; 32]),
-            keys: vec![
+            keys: [
                 signing_key1.public_key(),
                 signing_key2.public_key(),
                 signing_key3.public_key(),
-            ],
+            ]
+            .into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
@@ -1390,7 +1344,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0xCC; 32]),
-            keys: vec![signing_key.public_key()],
+            keys: signing_key.public_key().into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
@@ -1495,7 +1449,7 @@ mod tests {
 
         let config_op = ChannelConfigOp {
             channel: ChannelId::from([0x33; 32]),
-            keys: vec![signing_key1.public_key(), signing_key2.public_key()],
+            keys: [signing_key1.public_key(), signing_key2.public_key()].into(),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
@@ -1749,7 +1703,7 @@ mod tests {
         let ops = vec![
             Op::ChannelConfig(ChannelConfigOp {
                 channel: ChannelId::from([0x22; 32]),
-                keys: vec![Ed25519Key::from_bytes(&[1; 32]).public_key()],
+                keys: Ed25519Key::from_bytes(&[1; 32]).public_key().into(),
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
                 configuration_threshold: 0,
@@ -1843,19 +1797,26 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_reject_excessive_key_count() {
-        let config_op = ChannelConfigOp {
+    fn test_decode_reject_zero_key_count() {
+        let encoded_config_op = ChannelConfigOp {
             channel: ChannelId::from([0x22; 32]),
-            keys: vec![Ed25519Key::from_bytes(&[1; 32]).public_key(); u8::MAX as usize + 1],
+            // Using `new_unchecked` to bypass the constructor check since we're testing decode
+            // directly.
+            keys: Keys::new_unchecked([].into()),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
             withdraw_threshold: 0,
-        };
+        }
+        .encode();
 
-        // Should panic
-        let result = panic::catch_unwind(|| encode_channel_config(&config_op));
-        assert!(result.is_err(), "Should reject excessive output count");
+        assert_eq!(
+            ChannelConfigOp::decode(&encoded_config_op).unwrap_err(),
+            nom::Err::Error(Error {
+                input: &[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0][..],
+                code: ErrorKind::LengthValue,
+            }),
+        );
     }
 
     #[test]
@@ -1867,11 +1828,16 @@ mod tests {
         valid_input.extend_from_slice(&[0x42; 32]);
 
         // KeyCount = MAX_KEY_COUNT
-        valid_input.push(u8::MAX);
+        valid_input.extend_from_slice(&u16::MAX.encode());
 
         // Add MAX_KEY_COUNT Ed25519 public keys (each 32 bytes)
-        for i in 0..u8::MAX {
-            let sk = Ed25519Key::from_bytes(&[i; 32]);
+        for i in 0..u16::MAX {
+            let key_input = {
+                let mut input = i.to_le_bytes().to_vec();
+                input.resize(32, 0);
+                input
+            };
+            let sk = Ed25519Key::from_bytes(&key_input.try_into().unwrap());
             let pk = sk.public_key();
             valid_input.extend_from_slice(&pk.to_bytes());
         }
@@ -1888,11 +1854,11 @@ mod tests {
         // Withdraw Threshold (16 bytes)
         valid_input.extend_from_slice(&[0; 16]);
 
-        let result = decode_channel_config(&valid_input);
+        let result = ChannelConfigOp::decode(&valid_input);
         assert!(result.is_ok(), "Should accept max key count: {result:?}");
 
         let (_, set_keys_op) = result.unwrap();
-        assert_eq!(set_keys_op.keys.len(), u8::MAX as usize);
+        assert_eq!(set_keys_op.keys.len(), u16::MAX as usize);
     }
 
     #[test]
