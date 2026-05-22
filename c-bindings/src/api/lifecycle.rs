@@ -40,6 +40,7 @@ pub extern "C" fn start_lb_node(
     config_path: *const c_char,
     deployment: *const c_char,
 ) -> FfiInitializedLogosBlockchainNodeResult {
+    crate::logging::install_stderr_logger();
     initialize_lb_node(config_path, deployment).map_or_else(
         FfiInitializedLogosBlockchainNodeResult::err,
         FfiInitializedLogosBlockchainNodeResult::from_value,

@@ -7,7 +7,6 @@ use lb_node::{
     ApiStorageAdapter, RuntimeServiceId, SignedMantleTx, StorageService,
     generic_services::CryptarchiaService,
 };
-use log::warn;
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
@@ -52,7 +51,7 @@ pub fn subscribe_to_new_blocks_sync(
                             log::error!("Failed to get block {:?} from storage", event.block_id);
                         }
                     }
-                    warn!("Block stream closed, subscription to new blocks ended.");
+                    log::warn!("Block stream closed, subscription to new blocks ended.");
                 });
             }
             Err(e) => {
