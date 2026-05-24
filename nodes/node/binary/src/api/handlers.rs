@@ -696,7 +696,9 @@ where
         );
 
         let tx_context = wallet.get_tx_context(None).await?;
-        let tx_builder = MantleTxBuilder::new(tx_context).push_op(Op::ChannelDeposit(req.deposit));
+        let tx_builder = MantleTxBuilder::new(tx_context)
+            .push_op(Op::ChannelDeposit(req.deposit))
+            .map_err(|e| overwatch::DynError::from(e.to_string()))?;
         let lb_wallet_service::TipResponse {
             tip,
             response: funded_tx_builder,

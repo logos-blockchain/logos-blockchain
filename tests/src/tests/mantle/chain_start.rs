@@ -98,6 +98,7 @@ fn test_config(mut config: RunConfig, genesis_time: OffsetDateTime) -> RunConfig
 
     config.deployment.cryptarchia.genesis_block = GenesisBlockBuilder::new()
         .add_notes(genesis_tx.genesis_transfer().outputs.iter().copied())
+        .unwrap()
         .set_inscription(inscription)
         .build()
         .expect("Failed to build genesis block");

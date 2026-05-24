@@ -22,7 +22,7 @@ pub(super) fn sign_prepared_wallet_transaction(
     leading_op_proofs: Vec<OpProof>,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
     let gas_prices = funded_builder.get_gas_prices();
-    let mantle_tx = funded_builder.build();
+    let mantle_tx = funded_builder.build()?;
     let mut op_proofs = leading_op_proofs;
     op_proofs.extend(transfer_proofs);
 

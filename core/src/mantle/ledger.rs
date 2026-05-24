@@ -1,4 +1,4 @@
-use std::{collections::HashSet, slice, sync::LazyLock};
+use std::{collections::HashSet, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
@@ -13,7 +13,10 @@ use thiserror::Error;
 use crate::{
     crypto::{Hash, ZkHasher},
     events::Events,
-    mantle::ops::OpId,
+    mantle::{
+        encoding::{TransferInputs, TransferOutputs},
+        ops::OpId,
+    },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
 
@@ -63,11 +66,11 @@ pub enum LedgerError {
 }
 
 #[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Outputs(Vec<Note>);
+pub struct Outputs(TransferOutputs);
 
 impl Outputs {
     #[must_use]
-    pub const fn new(notes: Vec<Note>) -> Self {
+    pub const fn new(notes: TransferOutputs) -> Self {
         Self(notes)
     }
 
@@ -124,44 +127,44 @@ impl Outputs {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> slice::Iter<'_, Note> {
+    pub fn iter(&self) -> impl Iterator<Item = &Note> {
         <&Self as IntoIterator>::into_iter(self)
     }
 }
 
-impl AsRef<Vec<Note>> for Outputs {
-    fn as_ref(&self) -> &Vec<Note> {
+impl AsRef<TransferOutputs> for Outputs {
+    fn as_ref(&self) -> &TransferOutputs {
         &self.0
     }
 }
 
-impl AsMut<Vec<Note>> for Outputs {
-    fn as_mut(&mut self) -> &mut Vec<Note> {
+impl AsMut<TransferOutputs> for Outputs {
+    fn as_mut(&mut self) -> &mut TransferOutputs {
         &mut self.0
     }
 }
 
 impl<'output> IntoIterator for &'output Outputs {
-    type Item = <slice::Iter<'output, Note> as IntoIterator>::Item;
-    type IntoIter = slice::Iter<'output, Note>;
+    type Item = <&'output TransferOutputs as IntoIterator>::Item;
+    type IntoIter = <&'output TransferOutputs as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        (&self.0).into_iter()
     }
 }
 
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
-pub struct Inputs(Vec<NoteId>);
+pub struct Inputs(TransferInputs);
 
 impl Inputs {
     #[must_use]
-    pub const fn new(note_ids: Vec<NoteId>) -> Self {
+    pub const fn new(note_ids: TransferInputs) -> Self {
         Self(note_ids)
     }
 
     #[must_use]
-    pub const fn empty() -> Self {
-        Self(vec![])
+    pub fn empty() -> Self {
+        Self(TransferInputs::default())
     }
 
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
@@ -228,28 +231,28 @@ impl Inputs {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> slice::Iter<'_, NoteId> {
+    pub fn iter(&self) -> impl Iterator<Item = &NoteId> {
         <&Self as IntoIterator>::into_iter(self)
     }
 }
 
-impl AsRef<Vec<NoteId>> for Inputs {
-    fn as_ref(&self) -> &Vec<NoteId> {
+impl AsRef<TransferInputs> for Inputs {
+    fn as_ref(&self) -> &TransferInputs {
         &self.0
     }
 }
 
-impl AsMut<Vec<NoteId>> for Inputs {
-    fn as_mut(&mut self) -> &mut Vec<NoteId> {
+impl AsMut<TransferInputs> for Inputs {
+    fn as_mut(&mut self) -> &mut TransferInputs {
         &mut self.0
     }
 }
 impl<'input> IntoIterator for &'input Inputs {
-    type Item = <slice::Iter<'input, NoteId> as IntoIterator>::Item;
-    type IntoIter = slice::Iter<'input, NoteId>;
+    type Item = <&'input TransferInputs as IntoIterator>::Item;
+    type IntoIter = <&'input TransferInputs as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        (&self.0).into_iter()
     }
 }
 

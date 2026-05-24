@@ -97,7 +97,7 @@ async fn channel_deposit() {
     assert_eq!(selected_deposit_amount, deposit_amount);
     let deposit_op = DepositOp {
         channel_id,
-        inputs: Inputs::new(vec![note_id]),
+        inputs: Inputs::new(vec![note_id].try_into().unwrap()),
         metadata: format!("Mint {deposit_amount} to Alice in Zone").into_bytes(),
     };
     let body = ChannelDepositRequestBody {

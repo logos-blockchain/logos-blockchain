@@ -996,7 +996,7 @@ pub fn build_zone_deposit(
     Ok(ZoneDeposit {
         deposit: DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![note.id()]),
+            inputs: Inputs::new(vec![note.id()].try_into().unwrap()),
             metadata,
         },
         reserved_inputs: vec![note],
@@ -1124,7 +1124,7 @@ fn build_atomic_deposit_op(
 
     Ok(DepositOp {
         channel_id,
-        inputs: Inputs::new(vec![deposit_note_id]),
+        inputs: Inputs::new(vec![deposit_note_id].try_into().unwrap()),
         metadata,
     })
 }
@@ -1140,7 +1140,11 @@ pub async fn submit_zone_withdraw(
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
     let withdraw = ChannelWithdrawOp {
         channel_id,
-        outputs: Outputs::new(vec![Note::new(amount, funding_public_key)]),
+        outputs: Outputs::new(
+            vec![Note::new(amount, funding_public_key)]
+                .try_into()
+                .unwrap(),
+        ),
         withdraw_nonce: 0,
     };
 
@@ -1235,7 +1239,9 @@ pub async fn publish_atomic_zone_withdraw(
                 amounts
                     .iter()
                     .map(|amount| Note::new(*amount, funding_public_key))
-                    .collect(),
+                    .collect::<Vec<_>>()
+                    .try_into()
+                    .unwrap(),
             ),
         })
         .collect();
@@ -1355,11 +1361,13 @@ fn add_exact_deposit_notes_to_funding_key(
         .genesis_transfer()
         .clone();
 
-    transfer_op.outputs.as_mut().extend(
-        values
-            .into_iter()
-            .map(|value| Note::new(value, funding_public_key)),
-    );
+    for value in values {
+        transfer_op
+            .outputs
+            .as_mut()
+            .try_push(Note::new(value, funding_public_key))
+            .expect("zone helper note set should stay within transfer output bounds");
+    }
 
     let providers = deployment
         .nodes()

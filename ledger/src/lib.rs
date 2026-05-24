@@ -761,7 +761,10 @@ mod tests {
     type HeaderId = [u8; 32];
 
     fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
-        let transfer_op = TransferOp::new(Inputs::new(inputs), Outputs::new(outputs));
+        let transfer_op = TransferOp::new(
+            Inputs::new(inputs.try_into().unwrap()),
+            Outputs::new(outputs.try_into().unwrap()),
+        );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
         SignedMantleTx {
             ops_proofs: vec![OpProof::ZkSig(
@@ -1022,7 +1025,7 @@ mod tests {
         // Submit a deposit operation
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
+            inputs: Inputs::new(vec![utxo.id()].try_into().unwrap()),
             metadata: vec![5, 6, 7, 8],
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
@@ -1082,7 +1085,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
+            inputs: Inputs::new(vec![utxo.id()].try_into().unwrap()),
             metadata: vec![5, 6, 7, 8],
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
@@ -1114,7 +1117,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new(vec![withdraw_note].try_into().unwrap()),
             withdraw_nonce: 0,
         };
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
@@ -1173,7 +1176,7 @@ mod tests {
         // Deposit some funds into the channel
         let deposit = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()]),
+            inputs: Inputs::new(vec![utxo.id()].try_into().unwrap()),
             metadata: vec![],
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
@@ -1201,7 +1204,7 @@ mod tests {
         };
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new(vec![withdraw_note].try_into().unwrap()),
             withdraw_nonce: 0,
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);

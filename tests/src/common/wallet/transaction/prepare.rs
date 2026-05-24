@@ -24,7 +24,7 @@ pub fn prepare_wallet_transaction(
     let input_utxos_by_note_id = input_utxos_by_note_id(&resources);
 
     let funded_builder = fund_wallet_transaction(intent, resources)?;
-    let mantle_tx = funded_builder.clone().build();
+    let mantle_tx = funded_builder.clone().build()?;
     let tx_hash = mantle_tx.hash();
     let transfer_proofs = build_transfer_proofs(mantle_tx.ops(), &tx_hash, &transfer_signers)?;
     let funding_inputs = funding_inputs_from_transfers(&mantle_tx, &input_utxos_by_note_id)?;

@@ -46,7 +46,7 @@ impl WalletTransactionIntent {
         let mut tx_builder = MantleTxBuilder::new(empty_context);
 
         for (receiver_pk, value) in receivers {
-            tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk));
+            tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk))?;
         }
 
         Self::from_builder(tx_builder)
@@ -60,7 +60,7 @@ impl WalletTransactionIntent {
 fn transfer_output_total(tx_builder: &MantleTxBuilder) -> Result<u64, WalletTransactionError> {
     tx_builder
         .clone()
-        .build()
+        .build()?
         .ops()
         .iter()
         .filter_map(|op| match op {

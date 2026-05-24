@@ -1,11 +1,14 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_utils::bounded_vec::BoundedError;
+use thiserror::Error;
 
 use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
+        encoding::TransferOutputs,
         gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
@@ -13,6 +16,31 @@ use crate::{
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
+
+#[derive(Debug, Error)]
+pub enum TxBuilderError {
+    #[error("Too many operations in transaction: attempted {actual}, max {max}")]
+    TooManyOps { actual: usize, max: usize },
+    #[error("Too many ledger inputs in transfer: attempted {actual}, max {max}")]
+    TooManyInputs { actual: usize, max: usize },
+    #[error("Too many ledger outputs in transfer: attempted {actual}, max {max}")]
+    TooManyOutputs { actual: usize, max: usize },
+    #[error("Gas computation overflow: {0}")]
+    GasOverflow(#[from] GasOverflow),
+}
+
+fn too_many_from_bounded(err: &BoundedError, kind: &'static str) -> TxBuilderError {
+    let (actual, max) = match err {
+        BoundedError::TooLong { actual, max } => (*actual, *max),
+        BoundedError::EmptyInput => (0, 0),
+    };
+
+    match kind {
+        "inputs" => TxBuilderError::TooManyInputs { actual, max },
+        "outputs" => TxBuilderError::TooManyOutputs { actual, max },
+        _ => TxBuilderError::TooManyOps { actual, max },
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {
@@ -31,7 +59,10 @@ impl MantleTxBuilder {
         Self {
             mantle_tx: MantleTx([].into()),
             ledger_inputs: vec![],
-            pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
+            pending_transfer: TransferOp::new(
+                Inputs::empty(),
+                Outputs::new(TransferOutputs::default()),
+            ),
             channel_multi_sig_proofs: HashMap::new(),
             context,
         }
@@ -42,61 +73,77 @@ impl MantleTxBuilder {
         self.context.gas_context.get_gas_prices()
     }
 
-    #[must_use]
-    pub fn push_op(self, op: Op) -> Self {
+    pub fn push_op(self, op: Op) -> Result<Self, TxBuilderError> {
         self.extend_ops([op])
     }
 
     // TODO: Change this to a `Result` if trying to push too many ops in the genesis
     // block.
-    #[must_use]
-    pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Self {
+    pub fn extend_ops(mut self, ops: impl IntoIterator<Item = Op>) -> Result<Self, TxBuilderError> {
         for op in ops {
-            self.mantle_tx.0.try_push(op).expect("Too many ops.");
+            self.mantle_tx
+                .0
+                .try_push(op)
+                .map_err(|err| too_many_from_bounded(&err, "ops"))?;
         }
-        self
+        Ok(self)
     }
 
-    #[must_use]
-    pub fn push_channel_withdraw(self, op: ChannelWithdrawOp, proof: ChannelMultiSigProof) -> Self {
-        let mut builder = self.push_op(Op::ChannelWithdraw(op));
+    pub fn push_channel_withdraw(
+        self,
+        op: ChannelWithdrawOp,
+        proof: ChannelMultiSigProof,
+    ) -> Result<Self, TxBuilderError> {
+        let mut builder = self.push_op(Op::ChannelWithdraw(op))?;
         let index = builder.mantle_tx.ops().len() - 1;
         builder.channel_multi_sig_proofs.insert(index, proof);
-        builder
+        Ok(builder)
     }
 
-    #[must_use]
-    pub fn add_ledger_input(self, utxo: Utxo) -> Self {
+    pub fn add_ledger_input(self, utxo: Utxo) -> Result<Self, TxBuilderError> {
         self.extend_ledger_inputs([utxo])
     }
 
-    #[must_use]
-    pub fn extend_ledger_inputs(mut self, utxos: impl IntoIterator<Item = Utxo>) -> Self {
+    pub fn extend_ledger_inputs(
+        mut self,
+        utxos: impl IntoIterator<Item = Utxo>,
+    ) -> Result<Self, TxBuilderError> {
         for utxo in utxos {
-            self.pending_transfer.inputs.as_mut().push(utxo.id());
+            self.pending_transfer
+                .inputs
+                .as_mut()
+                .try_push(utxo.id())
+                .map_err(|err| too_many_from_bounded(&err, "inputs"))?;
             self.ledger_inputs.push(utxo);
         }
-        self
+        Ok(self)
     }
 
-    #[must_use]
-    pub fn add_ledger_output(self, note: Note) -> Self {
+    pub fn add_ledger_output(self, note: Note) -> Result<Self, TxBuilderError> {
         self.extend_ledger_outputs([note])
     }
 
-    #[must_use]
-    pub fn extend_ledger_outputs(mut self, notes: impl IntoIterator<Item = Note>) -> Self {
-        self.pending_transfer.outputs.as_mut().extend(notes);
-        self
+    pub fn extend_ledger_outputs(
+        mut self,
+        notes: impl IntoIterator<Item = Note>,
+    ) -> Result<Self, TxBuilderError> {
+        for note in notes {
+            self.pending_transfer
+                .outputs
+                .as_mut()
+                .try_push(note)
+                .map_err(|err| too_many_from_bounded(&err, "outputs"))?;
+        }
+        Ok(self)
     }
 
     pub fn return_change<G: GasConstants>(
         self,
         change_pk: ZkPublicKey,
-    ) -> Result<Option<Self>, GasOverflow> {
+    ) -> Result<Option<Self>, TxBuilderError> {
         // Calculate the funding delta with a dummy change note to account for
         // the gas cost increase from adding the output
-        let delta_with_change = self.with_dummy_change_note().funding_delta::<G>()?;
+        let delta_with_change = self.with_dummy_change_note()?.funding_delta::<G>()?;
 
         match delta_with_change.cmp(&0) {
             Ordering::Less | Ordering::Equal => {
@@ -117,18 +164,17 @@ impl MantleTxBuilder {
                 let tx_with_change = self.add_ledger_output(Note {
                     value: change,
                     pk: change_pk,
-                });
+                })?;
 
                 // Now the net balance should exactly equal the gas cost.
-                assert_eq!(tx_with_change.funding_delta::<G>().unwrap(), 0);
+                debug_assert_eq!(tx_with_change.funding_delta::<G>()?, 0);
 
                 Ok(Some(tx_with_change))
             }
         }
     }
 
-    #[must_use]
-    pub fn with_dummy_change_note(&self) -> Self {
+    pub fn with_dummy_change_note(&self) -> Result<Self, TxBuilderError> {
         self.clone().add_ledger_output(Note {
             value: 0,
             pk: ZkPublicKey::zero(),
@@ -153,12 +199,12 @@ impl MantleTxBuilder {
         in_sum - out_sum
     }
 
-    pub fn gas_cost<G: GasConstants>(&self) -> Result<GasCost, GasOverflow> {
-        let build = self.clone().build();
-        build.total_gas_cost::<G>(&self.context.gas_context)
+    pub fn gas_cost<G: GasConstants>(&self) -> Result<GasCost, TxBuilderError> {
+        let build = self.clone().build()?;
+        Ok(build.total_gas_cost::<G>(&self.context.gas_context)?)
     }
 
-    pub fn funding_delta<G: GasConstants>(&self) -> Result<i128, GasOverflow> {
+    pub fn funding_delta<G: GasConstants>(&self) -> Result<i128, TxBuilderError> {
         Ok(self.net_balance() - i128::from(self.gas_cost::<G>()?.into_inner()))
     }
 
@@ -197,13 +243,12 @@ impl MantleTxBuilder {
 
     // TODO: Change this to a `Result` if genesis tx already contains max number of
     // ops.
-    #[must_use]
-    pub fn build(mut self) -> MantleTx {
+    pub fn build(mut self) -> Result<MantleTx, TxBuilderError> {
         self.mantle_tx
             .0
             .try_push(Op::Transfer(self.pending_transfer))
-            .expect("Failed to push transfer op. Too many ops defined.");
-        self.mantle_tx
+            .map_err(|err| too_many_from_bounded(&err, "ops"))?;
+        Ok(self.mantle_tx)
     }
 }
 
@@ -241,7 +286,9 @@ mod tests {
             gas_context: MantleTxGasContext::default(),
             leader_reward_amount: 30,
         };
-        let builder = MantleTxBuilder::new(context).push_op(Op::ChannelInscribe(op));
+        let builder = MantleTxBuilder::new(context)
+            .push_op(Op::ChannelInscribe(op))
+            .unwrap();
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
@@ -253,7 +300,7 @@ mod tests {
         // Build an operation
         let op = DepositOp {
             channel_id: [0; 32].into(),
-            inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
+            inputs: Inputs::new(vec![NoteId(Fr::ZERO)].try_into().unwrap()),
             metadata: b"Mint 1 to Alice in Zone".to_vec(),
         };
 
@@ -262,7 +309,9 @@ mod tests {
             gas_context: MantleTxGasContext::default(),
             leader_reward_amount: 30,
         };
-        let builder = MantleTxBuilder::new(context).push_op(Op::ChannelDeposit(op));
+        let builder = MantleTxBuilder::new(context)
+            .push_op(Op::ChannelDeposit(op))
+            .unwrap();
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
@@ -278,7 +327,7 @@ mod tests {
         };
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new(vec![withdraw_note].try_into().unwrap()),
             withdraw_nonce: 0,
         };
 
@@ -291,7 +340,9 @@ mod tests {
             ),
             leader_reward_amount: 30,
         };
-        let builder = MantleTxBuilder::new(context).push_op(Op::ChannelWithdraw(op));
+        let builder = MantleTxBuilder::new(context)
+            .push_op(Op::ChannelWithdraw(op))
+            .unwrap();
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
@@ -312,7 +363,9 @@ mod tests {
             gas_context: MantleTxGasContext::default(),
             leader_reward_amount: 30,
         };
-        let builder = MantleTxBuilder::new(context).push_op(Op::LeaderClaim(op));
+        let builder = MantleTxBuilder::new(context)
+            .push_op(Op::LeaderClaim(op))
+            .unwrap();
 
         // Check that the tx is already balanced because of zero gas price
         assert_eq!(builder.net_balance(), 0);
@@ -328,7 +381,9 @@ mod tests {
         };
         let builder = MantleTxBuilder::new(context)
             .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
+            .unwrap()
             .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero())));
+        let builder = builder.unwrap();
 
         // Check that the balance is 10 (= 50 - 40)
         assert_eq!(builder.net_balance(), 10);
@@ -374,22 +429,27 @@ mod tests {
                 parent: [1; 32].into(),
                 signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
             }))
+            .unwrap()
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
-                inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
+                inputs: Inputs::new(vec![NoteId(Fr::ZERO)].try_into().unwrap()),
                 metadata: b"Mint 10 to Alice in Zone".to_vec(),
             }))
+            .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: Outputs::new(vec![withdraw_note]),
+                outputs: Outputs::new(vec![withdraw_note].try_into().unwrap()),
                 withdraw_nonce: 0,
             }))
+            .unwrap()
             .push_op(Op::LeaderClaim(LeaderClaimOp {
                 rewards_root: Fr::ZERO.into(),
                 voucher_nullifier: Fr::ZERO.into(),
                 pk: ZkPublicKey::zero(),
             }))
-            .add_ledger_output(Note::new(40, ZkPublicKey::zero()));
+            .unwrap()
+            .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
+            .unwrap();
 
         // Check the balance before funding tx
         assert_eq!(builder.net_balance(), -40);
@@ -399,8 +459,9 @@ mod tests {
         );
 
         // Fund tx
-        let builder =
-            builder.add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(40, ZkPublicKey::zero())));
+        let builder = builder
+            .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(40, ZkPublicKey::zero())))
+            .unwrap();
 
         // Check the tx is balanced
         assert_eq!(builder.net_balance(), 0);
@@ -425,9 +486,10 @@ mod tests {
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id: [0; 32].into(),
-                inputs: Inputs::new(vec![deposit_input]),
+                inputs: Inputs::new(vec![deposit_input].try_into().unwrap()),
                 metadata: vec![],
             }))
+            .unwrap()
             .push_op(Op::SDPDeclare(SDPDeclareOp {
                 service_type: ServiceType::BlendNetwork,
                 locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
@@ -435,12 +497,15 @@ mod tests {
                 zk_id: ZkPublicKey::zero(),
                 locked_note_id: declare_locked,
             }))
+            .unwrap()
             .push_op(Op::SDPWithdraw(SDPWithdrawOp {
                 declaration_id: DeclarationId([0; 32]),
                 locked_note_id: withdraw_locked,
                 nonce: 1,
             }))
-            .add_ledger_input(transfer_input);
+            .unwrap()
+            .add_ledger_input(transfer_input)
+            .unwrap();
 
         let consumed_or_locked: Vec<_> = builder.consumed_or_locked_notes().collect();
         assert!(

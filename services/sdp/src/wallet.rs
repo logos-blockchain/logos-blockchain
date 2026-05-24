@@ -2,7 +2,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx,
         gas::{GasCost, GasOverflow},
-        tx_builder::MantleTxBuilder,
+        tx_builder::{MantleTxBuilder, TxBuilderError},
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
@@ -20,6 +20,8 @@ pub enum SdpWalletError {
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
+    #[error(transparent)]
+    TxBuilder(#[from] TxBuilderError),
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

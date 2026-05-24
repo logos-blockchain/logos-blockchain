@@ -173,7 +173,10 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(10u32))].try_into().unwrap()),
+                    &[10],
+                ),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
@@ -193,7 +196,10 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(10u32))].try_into().unwrap()),
+                    &[10],
+                ),
                 Slot::new(1),
             ),
             (block_msg(2, &[2]), Slot::new(2)), // after LIB
@@ -212,12 +218,18 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(10u32))].try_into().unwrap()),
+                    &[10],
+                ),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(11u32))].try_into().unwrap()),
+                    &[11],
+                ),
                 Slot::new(2),
             ),
             (block_msg(3, &[3]), Slot::new(2)),
@@ -240,12 +252,18 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(10u32))].try_into().unwrap()),
+                    &[10],
+                ),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(11u32))].try_into().unwrap()),
+                    &[11],
+                ),
                 Slot::new(2),
             ),
             (block_msg(4, &[4]), Slot::new(2)),
@@ -269,7 +287,10 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(10u32))].try_into().unwrap()),
+                    &[10],
+                ),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
@@ -291,7 +312,10 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), &[10]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(10u32))].try_into().unwrap()),
+                    &[10],
+                ),
                 BATCH_SIZE,
             ),
             (
@@ -303,7 +327,10 @@ mod tests {
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
             ),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), &[11]),
+                deposit_msg(
+                    Inputs::new(vec![NoteId::from(Fr::from(11u32))].try_into().unwrap()),
+                    &[11],
+                ),
                 BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
             ),
             (

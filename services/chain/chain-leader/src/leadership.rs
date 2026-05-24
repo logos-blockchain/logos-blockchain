@@ -404,8 +404,8 @@ mod pol_tests {
 
         // Create a UTXO
         let transfer = TransferOp::new(
-            Inputs::new(vec![]),
-            Outputs::new(vec![Note::new(1000u64, pk)]),
+            Inputs::empty(),
+            Outputs::new(vec![Note::new(1000u64, pk)].try_into().unwrap()),
         );
         let utxo = transfer.outputs.utxo_by_index(0, &transfer).unwrap();
 

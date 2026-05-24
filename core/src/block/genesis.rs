@@ -1,13 +1,14 @@
 use std::fmt::{Debug, Formatter};
 
 use lb_key_management_system_keys::keys::Ed25519Signature;
+use lb_utils::bounded_vec::BoundedError;
 
 use crate::{
     block::Block,
     header::Header,
     mantle::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
-        encoding::Ops,
+        encoding::{Ops, TransferInputs, TransferOutputs},
         genesis_tx::{self, GenesisTx},
         ledger::{Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
@@ -27,11 +28,61 @@ pub enum Error {
     /// unsupported ops).
     #[error("Invalid genesis transaction: {0}")]
     InvalidGenesisTx(#[from] genesis_tx::Error),
+    #[error("add_notes called with empty iterator")]
+    EmptyNotes,
+    #[error("too many notes for genesis transfer outputs: attempted {actual}, max {max}")]
+    TooManyNotes { actual: usize, max: usize },
 }
 
 /// Convenience [`Result`](core::result::Result) alias for genesis block
 /// construction.
 pub type Result<T> = core::result::Result<T, Error>;
+
+const fn map_notes_bounded_error(error: &BoundedError) -> Error {
+    match error {
+        BoundedError::TooLong { actual, max } => Error::TooManyNotes {
+            actual: *actual,
+            max: *max,
+        },
+        BoundedError::EmptyInput => Error::EmptyNotes,
+    }
+}
+
+fn collect_non_empty_notes<I, N>(notes: I) -> Result<TransferOutputs>
+where
+    I: IntoIterator<Item = N>,
+    N: Into<Note>,
+{
+    let notes: Vec<Note> = notes.into_iter().map(Into::into).collect();
+    if notes.is_empty() {
+        return Err(Error::EmptyNotes);
+    }
+    TransferOutputs::try_from(notes).map_err(|error| map_notes_bounded_error(&error))
+}
+
+fn push_note(mut notes: TransferOutputs, note: Note) -> Result<TransferOutputs> {
+    notes
+        .try_push(note)
+        .map_err(|error| map_notes_bounded_error(&error))?;
+    Ok(notes)
+}
+
+fn extend_non_empty_notes<I, N>(mut existing: TransferOutputs, notes: I) -> Result<TransferOutputs>
+where
+    I: IntoIterator<Item = N>,
+    N: Into<Note>,
+{
+    let mut iter = notes.into_iter().peekable();
+    if iter.peek().is_none() {
+        return Err(Error::EmptyNotes);
+    }
+    for note in iter.map(Into::into) {
+        existing
+            .try_push(note)
+            .map_err(|error| map_notes_bounded_error(&error))?;
+    }
+    Ok(existing)
+}
 
 /// A [`Block`] whose transactions are all [`GenesisTx`] values.
 ///
@@ -78,7 +129,7 @@ pub struct WithGenesisTx {
 
 /// Typestate marker: builder has genesis transfer output notes only.
 pub struct WithNotes {
-    notes: Vec<Note>,
+    notes: TransferOutputs,
 }
 
 /// Typestate marker: builder has a genesis inscription only.
@@ -93,13 +144,13 @@ pub struct WithDeclarations {
 
 /// Typestate marker: builder has genesis notes and an inscription.
 pub struct WithNotesAndInscription {
-    notes: Vec<Note>,
+    notes: TransferOutputs,
     inscription: InscriptionOp,
 }
 
 /// Typestate marker: builder has genesis notes and SDP declarations.
 pub struct WithNotesAndDeclarations {
-    notes: Vec<Note>,
+    notes: TransferOutputs,
     sdp_declarations: Vec<SDPDeclareOp>,
 }
 
@@ -117,7 +168,7 @@ pub struct WithInscriptionAndDeclarations {
 /// [`GenesisTx`] — notes, an inscription, and at least one SDP declaration.
 /// This is the only state that exposes [`GenesisBlockBuilder::build`].
 pub struct WithAll {
-    notes: Vec<Note>,
+    notes: TransferOutputs,
     inscription: InscriptionOp,
     sdp_declarations: Vec<SDPDeclareOp>,
 }
@@ -197,7 +248,9 @@ impl GenesisBlockBuilder<Empty> {
     #[must_use]
     pub fn add_note(self, note: Note) -> GenesisBlockBuilder<WithNotes> {
         GenesisBlockBuilder {
-            state: WithNotes { notes: vec![note] },
+            state: WithNotes {
+                notes: TransferOutputs::new_unchecked(vec![note]),
+            },
         }
     }
 
@@ -207,21 +260,15 @@ impl GenesisBlockBuilder<Empty> {
     /// # Panics
     ///
     /// Panics if `notes` is empty.
-    #[must_use]
     pub fn add_notes(
         self,
         notes: impl IntoIterator<Item = impl Into<Note>>,
-    ) -> GenesisBlockBuilder<WithNotes> {
-        let mut iter = notes.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_notes called with empty iterator"
-        );
-        GenesisBlockBuilder {
-            state: WithNotes {
-                notes: iter.map(Into::into).collect(),
-            },
-        }
+    ) -> Result<GenesisBlockBuilder<WithNotes>> {
+        let notes = collect_non_empty_notes(notes)?;
+
+        Ok(GenesisBlockBuilder {
+            state: WithNotes { notes },
+        })
     }
 
     /// Set the genesis inscription, transitioning to [`WithInscription`].
@@ -278,15 +325,14 @@ impl GenesisBlockBuilder<Empty> {
 
 impl GenesisBlockBuilder<WithNotes> {
     /// Append another genesis transfer output note.
-    #[must_use]
-    pub fn add_note(self, note: Note) -> Self {
+    pub fn add_note(self, note: Note) -> Result<Self> {
         let Self {
             state: WithNotes { mut notes },
         } = self;
-        notes.push(note);
-        Self {
+        notes = push_note(notes, note)?;
+        Ok(Self {
             state: WithNotes { notes },
-        }
+        })
     }
 
     /// Append multiple genesis transfer output notes at once.
@@ -294,20 +340,17 @@ impl GenesisBlockBuilder<WithNotes> {
     /// # Panics
     ///
     /// Panics if `notes` is empty.
-    #[must_use]
-    pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
-        let mut iter = notes.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_notes called with empty iterator"
-        );
+    pub fn add_notes(
+        self,
+        notes_to_add: impl IntoIterator<Item = impl Into<Note>>,
+    ) -> Result<Self> {
         let Self {
             state: WithNotes { mut notes },
         } = self;
-        notes.extend(iter.map(Into::into));
-        Self {
+        notes = extend_non_empty_notes(notes, notes_to_add)?;
+        Ok(Self {
             state: WithNotes { notes },
-        }
+        })
     }
 
     /// Set the genesis inscription, transitioning to
@@ -384,7 +427,7 @@ impl GenesisBlockBuilder<WithInscription> {
         } = self;
         GenesisBlockBuilder {
             state: WithNotesAndInscription {
-                notes: vec![note],
+                notes: TransferOutputs::new_unchecked(vec![note]),
                 inscription,
             },
         }
@@ -396,25 +439,19 @@ impl GenesisBlockBuilder<WithInscription> {
     /// # Panics
     ///
     /// Panics if `notes` is empty.
-    #[must_use]
     pub fn add_notes(
         self,
         notes: impl IntoIterator<Item = impl Into<Note>>,
-    ) -> GenesisBlockBuilder<WithNotesAndInscription> {
-        let mut iter = notes.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_notes called with empty iterator"
-        );
+    ) -> Result<GenesisBlockBuilder<WithNotesAndInscription>> {
         let Self {
             state: WithInscription { inscription },
         } = self;
-        GenesisBlockBuilder {
+        Ok(GenesisBlockBuilder {
             state: WithNotesAndInscription {
-                notes: iter.map(Into::into).collect(),
+                notes: collect_non_empty_notes(notes)?,
                 inscription,
             },
-        }
+        })
     }
 
     /// Replace the current inscription.
@@ -484,7 +521,7 @@ impl GenesisBlockBuilder<WithDeclarations> {
         } = self;
         GenesisBlockBuilder {
             state: WithNotesAndDeclarations {
-                notes: vec![note],
+                notes: TransferOutputs::new_unchecked(vec![note]),
                 sdp_declarations,
             },
         }
@@ -496,25 +533,19 @@ impl GenesisBlockBuilder<WithDeclarations> {
     /// # Panics
     ///
     /// Panics if `notes` is empty.
-    #[must_use]
     pub fn add_notes(
         self,
         notes: impl IntoIterator<Item = impl Into<Note>>,
-    ) -> GenesisBlockBuilder<WithNotesAndDeclarations> {
-        let mut iter = notes.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_notes called with empty iterator"
-        );
+    ) -> Result<GenesisBlockBuilder<WithNotesAndDeclarations>> {
         let Self {
             state: WithDeclarations { sdp_declarations },
         } = self;
-        GenesisBlockBuilder {
+        Ok(GenesisBlockBuilder {
             state: WithNotesAndDeclarations {
-                notes: iter.map(Into::into).collect(),
+                notes: collect_non_empty_notes(notes)?,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Set the genesis inscription, transitioning to
@@ -581,8 +612,7 @@ impl GenesisBlockBuilder<WithDeclarations> {
 
 impl GenesisBlockBuilder<WithNotesAndInscription> {
     /// Append another genesis transfer output note.
-    #[must_use]
-    pub fn add_note(self, note: Note) -> Self {
+    pub fn add_note(self, note: Note) -> Result<Self> {
         let Self {
             state:
                 WithNotesAndInscription {
@@ -590,10 +620,10 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
                     inscription,
                 },
         } = self;
-        notes.push(note);
-        Self {
+        notes = push_note(notes, note)?;
+        Ok(Self {
             state: WithNotesAndInscription { notes, inscription },
-        }
+        })
     }
 
     /// Append multiple genesis transfer output notes at once.
@@ -601,13 +631,10 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
     /// # Panics
     ///
     /// Panics if `notes` is empty.
-    #[must_use]
-    pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
-        let mut iter = notes.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_notes called with empty iterator"
-        );
+    pub fn add_notes(
+        self,
+        notes_to_add: impl IntoIterator<Item = impl Into<Note>>,
+    ) -> Result<Self> {
         let Self {
             state:
                 WithNotesAndInscription {
@@ -615,10 +642,10 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
                     inscription,
                 },
         } = self;
-        notes.extend(iter.map(Into::into));
-        Self {
+        notes = extend_non_empty_notes(notes, notes_to_add)?;
+        Ok(Self {
             state: WithNotesAndInscription { notes, inscription },
-        }
+        })
     }
 
     /// Replace the current inscription.
@@ -695,8 +722,7 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
 
 impl GenesisBlockBuilder<WithNotesAndDeclarations> {
     /// Append another genesis transfer output note.
-    #[must_use]
-    pub fn add_note(self, note: Note) -> Self {
+    pub fn add_note(self, note: Note) -> Result<Self> {
         let Self {
             state:
                 WithNotesAndDeclarations {
@@ -704,13 +730,13 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
                     sdp_declarations,
                 },
         } = self;
-        notes.push(note);
-        Self {
+        notes = push_note(notes, note)?;
+        Ok(Self {
             state: WithNotesAndDeclarations {
                 notes,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Append multiple genesis transfer output notes at once.
@@ -718,13 +744,10 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
     /// # Panics
     ///
     /// Panics if `notes` is empty.
-    #[must_use]
-    pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
-        let mut iter = notes.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_notes called with empty iterator"
-        );
+    pub fn add_notes(
+        self,
+        notes_to_add: impl IntoIterator<Item = impl Into<Note>>,
+    ) -> Result<Self> {
         let Self {
             state:
                 WithNotesAndDeclarations {
@@ -732,13 +755,13 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
                     sdp_declarations,
                 },
         } = self;
-        notes.extend(iter.map(Into::into));
-        Self {
+        notes = extend_non_empty_notes(notes, notes_to_add)?;
+        Ok(Self {
             state: WithNotesAndDeclarations {
                 notes,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Set the genesis inscription, completing all three pieces and
@@ -829,7 +852,7 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
         } = self;
         GenesisBlockBuilder {
             state: WithAll {
-                notes: vec![note],
+                notes: TransferOutputs::new_unchecked(vec![note]),
                 inscription,
                 sdp_declarations,
             },
@@ -842,16 +865,10 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
     /// # Panics
     ///
     /// Panics if `notes` is empty.
-    #[must_use]
     pub fn add_notes(
         self,
         notes: impl IntoIterator<Item = impl Into<Note>>,
-    ) -> GenesisBlockBuilder<WithAll> {
-        let mut iter = notes.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_notes called with empty iterator"
-        );
+    ) -> Result<GenesisBlockBuilder<WithAll>> {
         let Self {
             state:
                 WithInscriptionAndDeclarations {
@@ -859,13 +876,13 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
                     sdp_declarations,
                 },
         } = self;
-        GenesisBlockBuilder {
+        Ok(GenesisBlockBuilder {
             state: WithAll {
-                notes: iter.map(Into::into).collect(),
+                notes: collect_non_empty_notes(notes)?,
                 inscription,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Replace the current inscription.
@@ -941,8 +958,7 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
 
 impl GenesisBlockBuilder<WithAll> {
     /// Append another genesis transfer output note.
-    #[must_use]
-    pub fn add_note(self, note: Note) -> Self {
+    pub fn add_note(self, note: Note) -> Result<Self> {
         let Self {
             state:
                 WithAll {
@@ -951,14 +967,14 @@ impl GenesisBlockBuilder<WithAll> {
                     sdp_declarations,
                 },
         } = self;
-        notes.push(note);
-        Self {
+        notes = push_note(notes, note)?;
+        Ok(Self {
             state: WithAll {
                 notes,
                 inscription,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Append multiple genesis transfer output notes at once.
@@ -966,13 +982,10 @@ impl GenesisBlockBuilder<WithAll> {
     /// # Panics
     ///
     /// Panics if `notes` is empty.
-    #[must_use]
-    pub fn add_notes(self, notes: impl IntoIterator<Item = impl Into<Note>>) -> Self {
-        let mut iter = notes.into_iter().peekable();
-        assert!(
-            iter.peek().is_some(),
-            "add_notes called with empty iterator"
-        );
+    pub fn add_notes(
+        self,
+        notes_to_add: impl IntoIterator<Item = impl Into<Note>>,
+    ) -> Result<Self> {
         let Self {
             state:
                 WithAll {
@@ -981,14 +994,14 @@ impl GenesisBlockBuilder<WithAll> {
                     sdp_declarations,
                 },
         } = self;
-        notes.extend(iter.map(Into::into));
-        Self {
+        notes = extend_non_empty_notes(notes, notes_to_add)?;
+        Ok(Self {
             state: WithAll {
                 notes,
                 inscription,
                 sdp_declarations,
             },
-        }
+        })
     }
 
     /// Replace the current inscription.
@@ -1087,7 +1100,7 @@ impl GenesisBlockBuilder<WithAll> {
         } = self;
         // Order is important to keep here
         let ops: Vec<Op> = std::iter::once(Op::Transfer(TransferOp::new(
-            Inputs::new(vec![]),
+            Inputs::new(TransferInputs::default()),
             Outputs::new(notes),
         )))
         .chain(std::iter::once(Op::ChannelInscribe(inscription)))
@@ -1202,8 +1215,8 @@ mod tests {
     fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
-                Inputs::new(vec![]),
-                Outputs::new(vec![make_note(1_000)]),
+                Inputs::new(TransferInputs::default()),
+                Outputs::new(TransferOutputs::try_from(vec![make_note(1_000)]).unwrap()),
             )),
             Op::ChannelInscribe(valid_inscription()),
         ];
@@ -1339,7 +1352,9 @@ mod tests {
         let block = GenesisBlockBuilder::new()
             .add_note(make_note(100))
             .add_note(make_note(200))
+            .unwrap()
             .add_note(make_note(300))
+            .unwrap()
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(0))
             .build()
@@ -1370,9 +1385,11 @@ mod tests {
             .add_note(make_note(10))
             .add_declaration(make_sdp_decl(0))
             .add_note(make_note(20))
+            .unwrap()
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(1))
             .add_note(make_note(30))
+            .unwrap()
             .build()
             .unwrap();
 
@@ -1434,6 +1451,7 @@ mod tests {
     fn add_notes_batch_preserved() {
         let block = GenesisBlockBuilder::new()
             .add_notes([make_note(10), make_note(20), make_note(30)])
+            .unwrap()
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(0))
             .build()
@@ -1461,6 +1479,7 @@ mod tests {
         let block = GenesisBlockBuilder::new()
             .add_note(make_note(1))
             .add_notes([make_note(2), make_note(3)])
+            .unwrap()
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(0))
             .add_declarations([make_sdp_decl(1), make_sdp_decl(2)])
@@ -1473,19 +1492,20 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "add_notes called with empty iterator")]
-    fn add_notes_panics_on_empty_from_empty() {
-        drop(GenesisBlockBuilder::new().add_notes(std::iter::empty::<Note>()));
+    fn add_notes_errors_on_empty_from_empty() {
+        let err = GenesisBlockBuilder::new()
+            .add_notes(std::iter::empty::<Note>())
+            .unwrap_err();
+        assert!(matches!(err, Error::EmptyNotes));
     }
 
     #[test]
-    #[should_panic(expected = "add_notes called with empty iterator")]
-    fn add_notes_panics_on_empty_from_with_notes() {
-        drop(
-            GenesisBlockBuilder::new()
-                .add_note(make_note(1))
-                .add_notes(std::iter::empty::<Note>()),
-        );
+    fn add_notes_errors_on_empty_from_with_notes() {
+        let err = GenesisBlockBuilder::new()
+            .add_note(make_note(1))
+            .add_notes(std::iter::empty::<Note>())
+            .unwrap_err();
+        assert!(matches!(err, Error::EmptyNotes));
     }
 
     #[test]

@@ -85,6 +85,12 @@ impl<T, const MIN: usize, const MAX: usize> BoundedVec<T, MIN, MAX> {
     }
 }
 
+impl<T, const MIN: usize, const MAX: usize> Default for BoundedVec<T, MIN, MAX> {
+    fn default() -> Self {
+        Self(Vec::new())
+    }
+}
+
 impl<T, const MIN: usize, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MIN, MAX> {
     type Error = BoundedError;
 
