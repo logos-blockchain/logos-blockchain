@@ -28,7 +28,7 @@ use super::{
         AtomicZoneDepositRequest, DiscardedPayloads, PublishDeadline, StartedZoneNode,
         ZoneAccountBalances, ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included,
         keygen, prepare_zone_cluster, publish_atomic_zone_withdraw, publish_message_with_retry,
-        round_robin_sequencer_config, sequencer_config, start_balance_aware_policy,
+        sequencer_config, sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
         start_republish_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
         start_zone_node, submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
         wait_for_zone_network_ready,
@@ -623,7 +623,7 @@ pub(super) async fn start_named_sequencer(
     .await
 }
 
-pub(super) async fn start_named_round_robin_sequencer(
+pub(super) async fn start_named_sequencer_with_pending_submit_depth(
     world: &mut CucumberWorld,
     step: &Step,
     sequencer_alias: impl AsRef<str>,
@@ -634,17 +634,13 @@ pub(super) async fn start_named_round_robin_sequencer(
     let sequencer_alias = sequencer_alias.as_ref().to_owned();
     world
         .zone
-        .set_round_robin_submit_depth(&sequencer_alias, max_pending_publish_depth);
+        .set_sequencer_submit_depth(&sequencer_alias, max_pending_publish_depth);
+    let mut config = sequencer_config_with_pending_submit_depth(max_pending_publish_depth);
+    if matches!(&mode, DriveMode::Republish) {
+        config.auto_requeue_orphaned = false;
+    }
 
-    start_named_sequencer_with_config(
-        world,
-        step,
-        &sequencer_alias,
-        checkpoint,
-        mode,
-        round_robin_sequencer_config(max_pending_publish_depth),
-    )
-    .await
+    start_named_sequencer_with_config(world, step, &sequencer_alias, checkpoint, mode, config).await
 }
 
 async fn start_named_sequencer_with_config(

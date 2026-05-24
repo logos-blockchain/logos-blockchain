@@ -615,17 +615,18 @@ pub fn parse_balance_payload(payload: &Inscription) -> Option<(String, String, i
 pub fn sequencer_config() -> SequencerConfig {
     SequencerConfig {
         resubmit_interval: Duration::from_secs(3),
+        auto_requeue_orphaned: true,
+        min_slots_remaining_in_turn: 2,
         ..SequencerConfig::default()
     }
 }
 
-/// Uses the same retry profile while reserving enough turn time for the SDK's
-/// round-robin admission checks.
+/// Uses the same retry profile while overriding pending publish submit depth.
 #[must_use]
-pub fn round_robin_sequencer_config(max_pending_publish_depth: usize) -> SequencerConfig {
+pub fn sequencer_config_with_pending_submit_depth(
+    max_pending_publish_depth: usize,
+) -> SequencerConfig {
     SequencerConfig {
-        auto_requeue_orphaned: true,
-        min_slots_remaining_in_turn: 2,
         max_pending_publish_depth,
         ..sequencer_config()
     }
