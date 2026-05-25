@@ -1,4 +1,3 @@
-use core::ops::{Deref, DerefMut};
 use std::{collections::HashSet, slice, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
@@ -6,7 +5,7 @@ use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
-use lb_utils::bounded_vec::UpperBoundedVec;
+use lb_utils::bounded_vec::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -161,20 +160,6 @@ type NomInputs<'a> = NomBoundedVec<'a, NoteId, { InnerInputs::MIN }, { InnerInpu
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Inputs(InnerInputs);
 
-impl Deref for Inputs {
-    type Target = InnerInputs;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Inputs {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
 impl AsRef<[NoteId]> for Inputs {
     fn as_ref(&self) -> &[NoteId] {
         &self.0
@@ -204,6 +189,24 @@ impl Inputs {
     #[must_use]
     pub fn into_inner(self) -> InnerInputs {
         self.0
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn try_push(&mut self, note_id: NoteId) -> Result<(), BoundedError> {
+        self.0.try_push(note_id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &NoteId> {
+        self.0.iter()
     }
 
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
