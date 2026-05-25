@@ -28,6 +28,11 @@ pub struct InscriptionInfo {
 /// A channel withdraw observed on chain or bundled in a pending atomic tx.
 #[derive(Debug, Clone)]
 pub struct WithdrawInfo {
+    /// Transaction hash that contained this withdraw op. For bundled
+    /// withdraws inside [`AtomicWithdrawInfo`] this equals the bundle's
+    /// `tx_hash`; for standalone withdraws surfaced via
+    /// [`FinalizedOp::Withdraw`] this is the source tx.
+    pub tx_hash: TxHash,
     /// The withdraw op (`channel_id`, outputs, `withdraw_nonce`).
     pub op: ChannelWithdrawOp,
 }
@@ -102,6 +107,35 @@ impl PublishedTx {
             Self::Deposit(_) => None,
         }
     }
+}
+
+/// A finalized Mantle tx that touched our channel.
+///
+/// Carries the channel-relevant ops in on-chain execution order. Atomicity
+/// is structural: every [`FinalizedOp`] inside the same [`FinalizedTx`]
+/// succeeded or failed together on chain.
+#[derive(Debug, Clone)]
+pub struct FinalizedTx {
+    /// Transaction hash of the Mantle tx.
+    pub tx_hash: TxHash,
+    /// Channel-relevant ops in on-chain execution order. A tx with a
+    /// deposit and an inscription emits both, deposit-first.
+    pub ops: Vec<FinalizedOp>,
+}
+
+/// A single channel-relevant op observed in a finalized block. Surfaced as a
+/// member of [`FinalizedTx::ops`].
+#[derive(Debug, Clone)]
+pub enum FinalizedOp {
+    /// Any inscription on the channel — ours or another sequencer's.
+    Inscription(InscriptionInfo),
+    /// A finalized L1 deposit on the channel, with `amount` populated from
+    /// the chain events API.
+    Deposit(DepositInfo),
+    /// A withdraw op on the channel — standalone or part of an atomic
+    /// inscription+withdraw bundle (the bundling is implicit via the parent
+    /// [`FinalizedTx::tx_hash`]).
+    Withdraw(WithdrawInfo),
 }
 
 /// Result of channel update detection — the linear block-level delta

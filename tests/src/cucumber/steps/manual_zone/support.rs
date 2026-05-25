@@ -51,7 +51,7 @@ use lb_zone_sdk::{
         Event, InscriptionId, OrphanedTx, PublishResult, SequencerConfig, SequencerHandle,
         WithdrawArg, ZoneSequencer,
     },
-    state::{InscriptionInfo, PublishedTx},
+    state::{FinalizedOp, InscriptionInfo, PublishedTx},
 };
 use rand::{Rng as _, thread_rng};
 use reqwest::Url;
@@ -113,6 +113,8 @@ pub enum ZoneTestError {
     SubmitWithdraw { message: String },
     #[error("timed out waiting for zone withdraw to appear in the indexer")]
     WithdrawTimeout,
+    #[error("zone sequencer event stream stopped before observing the expected event")]
+    SequencerStopped,
 }
 
 /// Prepared deployment resources for the single-node zone test cluster.
@@ -316,8 +318,10 @@ pub fn start_republish_policy(
                 }
                 Some(Event::TxsFinalized { items }) => {
                     for tx in items {
-                        if let Some(info) = tx.inscription() {
-                            local_pending.remove(&info.this_msg);
+                        for op in tx.ops {
+                            if let FinalizedOp::Inscription(info) = op {
+                                local_pending.remove(&info.this_msg);
+                            }
                         }
                     }
                 }
@@ -886,6 +890,65 @@ pub async fn wait_for_withdraw(
         },
     )
     .await
+}
+
+/// Waits until the sequencer's [`Event::TxsFinalized`] stream surfaces the
+/// expected deposit (matched by `inputs`, `amount`, and `metadata`). Drains
+/// the events channel as it goes — call this after any earlier event
+/// consumers in the scenario have moved past the relevant publish events.
+pub async fn wait_for_finalized_deposit_via_sequencer(
+    events: &mut tokio::sync::mpsc::Receiver<Event>,
+    expected: &DepositOp,
+    expected_amount: Value,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    poll_sequencer_finalized_until(events, duration, ZoneTestError::IndexerTimeout, |op| {
+        matches!(op, FinalizedOp::Deposit(d)
+            if d.inputs == expected.inputs
+                && d.amount == expected_amount
+                && d.metadata == expected.metadata)
+    })
+    .await
+}
+
+/// Waits until the sequencer's [`Event::TxsFinalized`] stream surfaces the
+/// expected withdraw (matched by `outputs`). Drains the events channel as
+/// it goes.
+pub async fn wait_for_finalized_withdraw_via_sequencer(
+    events: &mut tokio::sync::mpsc::Receiver<Event>,
+    expected: &ChannelWithdrawOp,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    poll_sequencer_finalized_until(
+        events,
+        duration,
+        ZoneTestError::WithdrawTimeout,
+        |op| matches!(op, FinalizedOp::Withdraw(w) if w.op.outputs == expected.outputs),
+    )
+    .await
+}
+
+async fn poll_sequencer_finalized_until(
+    events: &mut tokio::sync::mpsc::Receiver<Event>,
+    duration: Duration,
+    timeout_error: ZoneTestError,
+    mut predicate: impl FnMut(&FinalizedOp) -> bool,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        while let Some(event) = events.recv().await {
+            let Event::TxsFinalized { items } = event else {
+                continue;
+            };
+            for tx in items {
+                if tx.ops.iter().any(&mut predicate) {
+                    return Ok(());
+                }
+            }
+        }
+        Err(ZoneTestError::SequencerStopped)
+    })
+    .await
+    .map_err(|_| timeout_error)?
 }
 
 /// Waits until node mempool/chain observation confirms the submitted zone

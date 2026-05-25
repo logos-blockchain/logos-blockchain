@@ -30,7 +30,10 @@ use tracing::{debug, error, info, warn};
 use crate::{
     adapter,
     adapter::{BoxStream, build_deposit_amounts, has_channel_deposit},
-    state::{AtomicWithdrawInfo, DepositInfo, InscriptionInfo, PublishedTx, TxState, WithdrawInfo},
+    state::{
+        AtomicWithdrawInfo, DepositInfo, FinalizedOp, FinalizedTx, InscriptionInfo, PublishedTx,
+        TxState, WithdrawInfo,
+    },
 };
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
@@ -128,19 +131,22 @@ pub enum Event {
     /// - during live operation, one `TxsFinalized` is emitted whenever LIB
     ///   advances and brings new finalized channel txs
     ///
-    /// `items` covers every finalized channel tx in the order it appeared
-    /// on chain (tx order within block, op order within tx):
-    /// - our own bundles → [`PublishedTx::AtomicWithdraw`] with full bundle
-    ///   info
-    /// - observed-but-not-ours inscriptions → [`PublishedTx::Inscription`] (we
-    ///   do not extract per-block withdraws for other sequencers)
-    /// - observed deposits → [`PublishedTx::Deposit`] enriched with `amount`
-    ///   from the chain events API
+    /// `items` is one [`FinalizedTx`] per finalized Mantle tx that touched
+    /// our channel, in block then tx order. Each [`FinalizedTx`] contains its
+    /// channel-relevant ops in on-chain execution order:
+    /// - inscriptions (ours or others') → [`FinalizedOp::Inscription`]
+    /// - deposits enriched with `amount` from the chain events API →
+    ///   [`FinalizedOp::Deposit`]
+    /// - withdraws — standalone or bundled with an inscription in the same tx →
+    ///   [`FinalizedOp::Withdraw`]
+    ///
+    /// Atomicity is structural: ops sharing a parent [`FinalizedTx`] were
+    /// applied as one Mantle tx.
     ///
     /// Consumers can filter to "ours" via [`Event::Published`] — every tx
     /// this sequencer submits has its hash surfaced there, so the consumer
-    /// can match against `items[i].tx_hash()`.
-    TxsFinalized { items: Vec<PublishedTx> },
+    /// can match against `items[i].tx_hash`.
+    TxsFinalized { items: Vec<FinalizedTx> },
     /// Channel state changed.
     ///
     /// Emitted when at least one of `orphaned` or `adopted` is non-empty.
@@ -450,7 +456,7 @@ where
             loop {
                 match event_rx.recv().await {
                     Ok(Event::TxsFinalized { ref items })
-                        if items.iter().any(|i| i.tx_hash() == tx_hash) =>
+                        if items.iter().any(|i| i.tx_hash == tx_hash) =>
                     {
                         return Ok(());
                     }
@@ -538,11 +544,14 @@ pub struct ZoneSequencer<Node> {
     // Incremental backfill state — processes one batch per next_event() call
     backfill_from: Option<Slot>,
     backfill_to: Option<Slot>,
-    // True until the cold-start backfill has been scheduled. Distinguishes
-    // `lib_slot == genesis()` because we haven't started yet from
-    // `lib_slot == genesis()` from a checkpoint, so the genesis slot itself
-    // gets backfilled exactly once.
-    cold_start: bool,
+    // True on cold start (no checkpoint), false otherwise. Tells
+    // `setup_backfill_range` to include the genesis slot in the first
+    // backfill range; cleared after that initial range is scheduled so
+    // genesis is processed exactly once. A warm restart from a checkpoint
+    // with `lib_slot == 0` looks identical without this flag, so we'd
+    // otherwise either skip or re-process genesis depending on which side
+    // of `+1` we picked.
+    backfill_from_genesis: bool,
 
     // Broadcast channel for events — handles subscribe to receive events
     event_tx: broadcast::Sender<Event>,
@@ -592,7 +601,7 @@ where
     ) -> (Self, SequencerHandle<Node>) {
         let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
 
-        let (state, lib_slot, last_msg_id, cold_start) = if let Some(cp) = checkpoint {
+        let (state, lib_slot, last_msg_id, backfill_from_genesis) = if let Some(cp) = checkpoint {
             info!(
                 "Restoring from checkpoint: {} pending txs, lib={:?}, lib_slot={:?}",
                 cp.pending_txs.len(),
@@ -637,7 +646,7 @@ where
             buffered_event: None,
             backfill_from: None,
             backfill_to: None,
-            cold_start,
+            backfill_from_genesis,
             event_tx,
             ready_tx,
         };
@@ -803,8 +812,16 @@ where
         self.backfill_from = Some(Slot::from(batch_end + 1));
 
         // Advance the channel-tip marker using the last inscription in the
-        // batch. Deposits don't have a `this_msg` lineage, so we skip them.
-        if let Some(last_inscription) = batch.items.iter().rev().find_map(PublishedTx::inscription)
+        // batch. Deposits / withdraws don't have a `this_msg` lineage.
+        if let Some(last_inscription) = batch
+            .items
+            .iter()
+            .rev()
+            .flat_map(|t| t.ops.iter().rev())
+            .find_map(|op| match op {
+                FinalizedOp::Inscription(i) => Some(i),
+                FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+            })
         {
             self.last_msg_id = last_inscription.this_msg;
             if let Some(s) = self.state.as_mut() {
@@ -898,10 +915,10 @@ where
     /// behind current network lib). Returns `false` if a backfill was set up
     /// (caller defers readiness until backfill completes).
     ///
-    /// On cold start the genesis slot is included (`backfill_from = 0`); a
-    /// channel could be inscribed at genesis, and without this it would be
-    /// silently dropped. On warm restart the checkpoint slot has already been
-    /// processed, so we start at `from + 1`.
+    /// `backfill_from_genesis` selects the inclusive start: on cold start
+    /// the range begins at slot 0 so genesis-inscribed channels are picked
+    /// up; on a warm restart from a checkpoint, the checkpoint slot is
+    /// already processed and the range starts at `from + 1`.
     async fn setup_backfill_range(&mut self) -> bool {
         if self.state.is_none() || self.backfill_from.is_some() {
             return true;
@@ -913,8 +930,8 @@ where
                 let network_lib_slot = cryptarchia_info.lib_slot;
                 let from: u64 = self.lib_slot.into();
                 let to: u64 = network_lib_slot.into();
-                let (start, run) = if self.cold_start {
-                    self.cold_start = false;
+                let (start, run) = if self.backfill_from_genesis {
+                    self.backfill_from_genesis = false;
                     (from, true)
                 } else {
                     (from + 1, from < to)
@@ -1190,14 +1207,14 @@ where
         };
 
         let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
-        let mut withdraw_infos = Vec::with_capacity(withdraws.len());
+        let mut withdraw_ops = Vec::with_capacity(withdraws.len());
         for arg in withdraws {
             let op = ChannelWithdrawOp {
                 channel_id: self.channel_id,
                 outputs: arg.outputs,
                 withdraw_nonce: next_nonce,
             };
-            withdraw_infos.push(WithdrawInfo { op: op.clone() });
+            withdraw_ops.push(op.clone());
             ops.push(Op::ChannelWithdraw(op));
             next_nonce = next_nonce
                 .checked_add(1)
@@ -1224,6 +1241,11 @@ where
         // Safe to unwrap — is_ready() guarantees state is initialized
         let s = self.state.as_mut().unwrap();
         let id = signed_tx.mantle_tx.hash();
+
+        let withdraw_infos: Vec<WithdrawInfo> = withdraw_ops
+            .into_iter()
+            .map(|op| WithdrawInfo { tx_hash: id, op })
+            .collect();
 
         s.submit_atomic_withdraw(
             signed_tx.clone(),
@@ -1366,6 +1388,7 @@ fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> Sequ
 /// We log an error and fall back to `submit_other` — the tx is still tracked
 /// for finalize/orphan, just without per-tx inscription lineage.
 fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: ChannelId) {
+    let tx_hash = tx.mantle_tx.hash();
     let mut inscribe_meta: Option<(MsgId, MsgId, Inscription)> = None;
     let mut multi_inscribe = false;
     let mut withdraws: Vec<WithdrawInfo> = Vec::new();
@@ -1379,7 +1402,10 @@ fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: Chann
                 }
             }
             Op::ChannelWithdraw(w) if w.channel_id == channel_id => {
-                withdraws.push(WithdrawInfo { op: w.clone() });
+                withdraws.push(WithdrawInfo {
+                    tx_hash,
+                    op: w.clone(),
+                });
             }
             _ => {}
         }
@@ -1407,14 +1433,12 @@ fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: Chann
 
 /// Result of processing a block event.
 struct BlockEventResult {
-    /// Finalized channel items in typed form, in chain-execution order
-    /// (tx/op order across blocks). Our own bundles surface as
-    /// [`PublishedTx::AtomicWithdraw`]; observed inscriptions (ours or
-    /// others') surface as [`PublishedTx::Inscription`]; observed deposits
-    /// (always from another party — sequencers never publish deposits)
-    /// surface as [`PublishedTx::Deposit`] with `amount` populated from the
-    /// chain events API.
-    finalized_items: Vec<PublishedTx>,
+    /// Finalized channel txs in tx/op execution order across blocks. Each
+    /// [`FinalizedTx`] groups all channel-relevant ops from a single Mantle
+    /// tx — inscriptions (ours or others'), deposits (with `amount` from the
+    /// chain events API) and withdraws (standalone or part of an atomic
+    /// inscription+withdraw bundle).
+    finalized_items: Vec<FinalizedTx>,
     channel_update: Option<crate::state::ChannelUpdateInfo>,
 }
 
@@ -1453,7 +1477,7 @@ where
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
     let mut lib_finalized = Vec::new();
-    let mut finalized_items: Vec<PublishedTx> = Vec::new();
+    let mut finalized_items: Vec<FinalizedTx> = Vec::new();
     if lib != s.lib() {
         let new_lib_slot = event.lib_slot;
         let from: u64 = (*lib_slot).into();
@@ -1564,16 +1588,14 @@ struct FetchedBatch {
     /// Tx hashes of txs that match our channel (any op). Used internally to
     /// clean up our pending set.
     our_tx_hashes: Vec<TxHash>,
-    /// User-facing finalized items, in chain-execution order across blocks
-    /// (tx order within block, op order within tx). Inscriptions, deposits,
-    /// and `ChannelConfig` synthetic entries are interleaved as they
-    /// appeared on chain.
-    items: Vec<PublishedTx>,
+    /// User-facing finalized txs, one entry per channel-relevant Mantle tx,
+    /// in block then tx order across the range. Each entry carries its ops
+    /// in on-chain execution order.
+    items: Vec<FinalizedTx>,
 }
 
 /// Fetch blocks in a slot range, process them into state, and return our
-/// finalized tx hashes plus the user-facing items (inscriptions + deposits in
-/// chain-execution order).
+/// finalized tx hashes plus the user-facing items grouped per Mantle tx.
 async fn fetch_and_process_blocks<Node>(
     state: &mut TxState,
     from_slot: u64,
@@ -1604,9 +1626,6 @@ where
 
                 let inscriptions = extract_inscriptions(&block.transactions, channel_id);
 
-                // Build the user-facing items for this block before
-                // process_block / pending cleanup, so that our atomic-withdraw
-                // bundles can still be looked up from pending.
                 let deposit_amounts = fetch_block_deposit_amounts(
                     node,
                     block.header.id,
@@ -1614,13 +1633,8 @@ where
                     channel_id,
                 )
                 .await;
-                let bundle_withdraws = bundle_withdraws_for(state, &our_txs);
-                let block_items = extract_finalized_items(
-                    &block.transactions,
-                    channel_id,
-                    &deposit_amounts,
-                    bundle_withdraws,
-                );
+                let block_items =
+                    extract_finalized_items(&block.transactions, channel_id, &deposit_amounts);
 
                 result.our_tx_hashes.extend(our_txs.iter().copied());
                 result.items.extend(block_items);
@@ -1641,26 +1655,6 @@ where
     }
 
     result
-}
-
-/// Build `(tx_hash → withdraws)` map for the subset of `our_tx_hashes` that
-/// have atomic-withdraw bundle info in `state.pending`. Other entries (plain
-/// inscriptions, or txs not in our pending) are absent — they will surface as
-/// [`PublishedTx::Inscription`].
-fn bundle_withdraws_for(
-    state: &TxState,
-    our_tx_hashes: &[TxHash],
-) -> HashMap<TxHash, Vec<WithdrawInfo>> {
-    let mut map = HashMap::new();
-    for tx_hash in our_tx_hashes {
-        if let Some(withdraws) = state
-            .pending_inscription(tx_hash)
-            .and_then(|p| p.withdraws.clone())
-        {
-            map.insert(*tx_hash, withdraws);
-        }
-    }
-    map
 }
 
 /// Fetch the deposit-amount lookup for a single block, gated on whether the
@@ -1690,36 +1684,31 @@ where
     }
 }
 
-/// Walks `transactions` in tx/op order and emits a single ordered
-/// [`PublishedTx`] stream covering inscriptions (with atomic-withdraw bundle
-/// detection for our own pending), `ChannelConfig` synthetic entries, and
-/// deposits (with amount lookup from `deposit_amounts`).
+/// Walks `transactions` and groups channel-relevant ops per Mantle tx,
+/// preserving on-chain execution order both across and within txs.
 ///
-/// Order is natural chain-execution order: within a Mantle tx that contains
-/// both a deposit and an inscription, the deposit is emitted first — matching
-/// the on-chain op execution order and letting consumers (e.g. LEZ's bridge)
-/// validate references from inscriptions back to deposits in the same tx.
+/// Each returned [`FinalizedTx`] corresponds to one Mantle tx that touched
+/// our channel. Its `ops` are in op order: a tx with `Deposit + Inscribe`
+/// emits `[Deposit, Inscribe]`. Atomicity is structural — every op inside
+/// the same [`FinalizedTx`] succeeded together on chain.
 ///
-/// Inscriptions are emitted in tx order. The channel protocol guarantees a
-/// linear parent-child chain per channel within a block, so tx order already
-/// equals parent-chain order — do NOT add a topological sort here, it would
-/// mask any real protocol violation rather than fix it.
+/// The channel protocol guarantees a linear parent-child chain per channel
+/// within a block, so tx order already equals parent-chain order — do NOT
+/// add a topological sort here, it would mask any real protocol violation
+/// rather than fix it.
 ///
-/// `bundle_withdraws` is consumed: entries are removed when an inscription's
-/// `tx_hash` matches, producing a [`PublishedTx::AtomicWithdraw`]; otherwise
-/// the inscription surfaces as a plain [`PublishedTx::Inscription`]. Deposits
-/// without a matching event entry are skipped with a warning.
+/// Deposits without a matching event entry are skipped with a warning.
 fn extract_finalized_items(
     transactions: &[SignedMantleTx],
     channel_id: ChannelId,
     deposit_amounts: &HashMap<(TxHash, Hash), Value>,
-    mut bundle_withdraws: HashMap<TxHash, Vec<WithdrawInfo>>,
-) -> Vec<PublishedTx> {
-    let mut items: Vec<PublishedTx> = Vec::new();
+) -> Vec<FinalizedTx> {
+    let mut items: Vec<FinalizedTx> = Vec::new();
     let mut last_in_block: Option<MsgId> = None;
 
     for tx in transactions {
         let tx_hash = tx.mantle_tx.hash();
+        let mut ops: Vec<FinalizedOp> = Vec::new();
         for op in tx.mantle_tx.ops() {
             match op {
                 Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
@@ -1730,15 +1719,7 @@ fn extract_finalized_items(
                         payload: inscribe.inscription.clone(),
                     };
                     last_in_block = Some(info.this_msg);
-                    let item = match bundle_withdraws.remove(&tx_hash) {
-                        Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
-                            tx_hash,
-                            inscription: info,
-                            withdraws,
-                        }),
-                        None => PublishedTx::Inscription(info),
-                    };
-                    items.push(item);
+                    ops.push(FinalizedOp::Inscription(info));
                 }
                 Op::ChannelConfig(config) if config.channel == channel_id => {
                     // Synthetic entry — keeps `channel_tip` in sync when the
@@ -1752,12 +1733,12 @@ fn extract_finalized_items(
                         payload: Inscription::default(),
                     };
                     last_in_block = Some(info.this_msg);
-                    items.push(PublishedTx::Inscription(info));
+                    ops.push(FinalizedOp::Inscription(info));
                 }
                 Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
                     let op_id = deposit.op_id();
                     if let Some(&amount) = deposit_amounts.get(&(tx_hash, op_id)) {
-                        items.push(PublishedTx::Deposit(DepositInfo {
+                        ops.push(FinalizedOp::Deposit(DepositInfo {
                             tx_hash,
                             op_id,
                             channel_id,
@@ -1773,8 +1754,17 @@ fn extract_finalized_items(
                         );
                     }
                 }
+                Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+                    ops.push(FinalizedOp::Withdraw(WithdrawInfo {
+                        tx_hash,
+                        op: withdraw.clone(),
+                    }));
+                }
                 _ => {}
             }
+        }
+        if !ops.is_empty() {
+            items.push(FinalizedTx { tx_hash, ops });
         }
     }
 
@@ -2223,10 +2213,11 @@ mod tests {
         channel_id: ChannelId,
         amounts: &HashMap<(TxHash, Hash), u64>,
     ) -> Vec<DepositInfo> {
-        extract_finalized_items(transactions, channel_id, amounts, HashMap::new())
+        extract_finalized_items(transactions, channel_id, amounts)
             .into_iter()
-            .filter_map(|item| match item {
-                PublishedTx::Deposit(d) => Some(d),
+            .flat_map(|t| t.ops.into_iter())
+            .filter_map(|op| match op {
+                FinalizedOp::Deposit(d) => Some(d),
                 _ => None,
             })
             .collect()
@@ -2334,16 +2325,57 @@ mod tests {
         let mut amounts = HashMap::new();
         amounts.insert((tx_hash, dep_op_id), 500u64);
 
-        let items = extract_finalized_items(
-            std::slice::from_ref(&tx),
-            channel_id,
-            &amounts,
-            HashMap::new(),
-        );
+        let items = extract_finalized_items(std::slice::from_ref(&tx), channel_id, &amounts);
 
-        assert_eq!(items.len(), 2);
-        assert!(matches!(items[0], PublishedTx::Deposit(_)));
-        assert!(matches!(items[1], PublishedTx::Inscription(_)));
+        assert_eq!(items.len(), 1, "one FinalizedTx for the single Mantle tx");
+        assert_eq!(items[0].tx_hash, tx_hash);
+        assert_eq!(items[0].ops.len(), 2);
+        assert!(matches!(items[0].ops[0], FinalizedOp::Deposit(_)));
+        assert!(matches!(items[0].ops[1], FinalizedOp::Inscription(_)));
+    }
+
+    #[test]
+    fn extract_finalized_items_surfaces_standalone_withdraw() {
+        // A ChannelWithdraw not bundled with an inscription (e.g. from
+        // another sequencer or future multi-sig) should still surface as
+        // a FinalizedOp::Withdraw — the sequencer stream is the complete
+        // finalized view, not a "what we tracked locally" view.
+        let channel_id = ChannelId::from([0; 32]);
+        let other_channel = ChannelId::from([9; 32]);
+        let outputs = Outputs::new(vec![Note::new(
+            42,
+            ZkKey::from(BigUint::from(0u64)).to_public_key(),
+        )]);
+        let withdraw_for_us = ChannelWithdrawOp {
+            channel_id,
+            outputs: outputs.clone(),
+            withdraw_nonce: 7,
+        };
+        let withdraw_other = ChannelWithdrawOp {
+            channel_id: other_channel,
+            outputs,
+            withdraw_nonce: 0,
+        };
+
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelWithdraw(withdraw_for_us),
+            Op::ChannelWithdraw(withdraw_other),
+        ]);
+        let tx_hash = tx.mantle_tx.hash();
+
+        let items = extract_finalized_items(std::slice::from_ref(&tx), channel_id, &HashMap::new());
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].tx_hash, tx_hash);
+        assert_eq!(items[0].ops.len(), 1, "only our channel's withdraw");
+        match &items[0].ops[0] {
+            FinalizedOp::Withdraw(w) => {
+                assert_eq!(w.tx_hash, tx_hash);
+                assert_eq!(w.op.channel_id, channel_id);
+                assert_eq!(w.op.withdraw_nonce, 7);
+            }
+            other => panic!("expected Withdraw, got {other:?}"),
+        }
     }
 
     #[derive(Clone)]
@@ -2578,6 +2610,196 @@ mod tests {
             _channel_id: ChannelId,
         ) -> Result<lb_core::mantle::channel::ChannelState, lb_common_http_client::Error> {
             unimplemented!()
+        }
+    }
+
+    /// Mock node that serves a single genesis-slot block with a channel
+    /// inscription, used to verify the cold-start backfill picks up slot 0.
+    #[derive(Clone)]
+    struct ColdStartMockNode {
+        genesis_block: ApiBlock,
+        live_block: ApiBlock,
+    }
+
+    #[async_trait]
+    impl adapter::Node for ColdStartMockNode {
+        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
+            Ok(ChainServiceInfo {
+                cryptarchia_info: CryptarchiaInfo {
+                    lib: self.genesis_block.header.id,
+                    lib_slot: Slot::genesis(),
+                    tip: self.genesis_block.header.id,
+                    slot: Slot::genesis(),
+                    height: 0,
+                },
+                mode: ChainServiceMode::Started(State::Online),
+            })
+        }
+
+        async fn block_stream(
+            &self,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            let block = self.live_block.clone();
+            let genesis_id = self.genesis_block.header.id;
+            Ok(Box::pin(
+                futures::stream::once(async move {
+                    ProcessedBlockEvent {
+                        block,
+                        tip: HeaderId::from([2; 32]),
+                        tip_slot: 1.into(),
+                        lib: genesis_id,
+                        lib_slot: Slot::genesis(),
+                    }
+                })
+                .chain(futures::stream::pending()),
+            ))
+        }
+
+        async fn blocks_range_stream(
+            &self,
+            _params: BlocksStreamQuery,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::pending()))
+        }
+
+        async fn block(
+            &self,
+            _id: HeaderId,
+        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
+            Ok(None)
+        }
+
+        async fn block_events(
+            &self,
+            _id: HeaderId,
+        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
+            Ok(None)
+        }
+
+        async fn immutable_blocks(
+            &self,
+            slot_from: Slot,
+            slot_to: Slot,
+        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+            // Cold-start backfill range is [0, 0] when lib_slot is genesis,
+            // so we only return the genesis block for that exact range.
+            if slot_from == Slot::genesis() && slot_to == Slot::genesis() {
+                Ok(vec![self.genesis_block.clone()])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        async fn zone_messages_in_block(
+            &self,
+            _id: HeaderId,
+            _channel_id: ChannelId,
+        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        async fn zone_messages_in_blocks(
+            &self,
+            _slot_from: Slot,
+            _slot_to: Slot,
+            _channel_id: ChannelId,
+        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            Ok(Box::pin(futures::stream::empty()))
+        }
+
+        async fn post_transaction(
+            &self,
+            _tx: SignedMantleTx,
+        ) -> Result<(), lb_common_http_client::Error> {
+            Ok(())
+        }
+
+        async fn channel_state(
+            &self,
+            _channel_id: ChannelId,
+        ) -> Result<lb_core::mantle::channel::ChannelState, lb_common_http_client::Error> {
+            unimplemented!()
+        }
+    }
+
+    /// Cold start with a channel inscription at slot 0 (genesis): the
+    /// sequencer must include that slot in its initial backfill and emit it
+    /// in `Event::TxsFinalized`. Regression guard for the off-by-one fix
+    /// where `backfill_from = lib_slot + 1` silently skipped genesis.
+    #[tokio::test]
+    async fn cold_start_backfills_genesis_slot() {
+        let channel_id = ChannelId::from([7; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        // A signed tx with a single ChannelInscribe on our channel at
+        // genesis (parent_msg = root).
+        let inscribe = InscriptionOp {
+            channel_id,
+            parent: MsgId::root(),
+            inscription: Inscription::default(),
+            signer: sequencer_key.public_key(),
+        };
+        let expected_msg_id = inscribe.id();
+        let genesis_tx = unverified_tx_with_ops(vec![Op::ChannelInscribe(inscribe)]);
+        let genesis_tx_hash = genesis_tx.mantle_tx.hash();
+
+        let genesis_block = ApiBlock {
+            header: ApiHeader {
+                id: HeaderId::from([1; 32]),
+                parent_block: HeaderId::from([0; 32]),
+                slot: Slot::genesis(),
+                block_root: ContentId::from([0; 32]),
+                proof_of_leadership: Groth16LeaderProof::genesis(),
+            },
+            transactions: vec![genesis_tx],
+        };
+        // Empty block at slot 1 so the block stream advances and the
+        // sequencer signals `Ready`, giving the test a clean exit signal.
+        let live_block = ApiBlock {
+            header: ApiHeader {
+                id: HeaderId::from([2; 32]),
+                parent_block: HeaderId::from([1; 32]),
+                slot: 1.into(),
+                block_root: ContentId::from([0; 32]),
+                proof_of_leadership: Groth16LeaderProof::genesis(),
+            },
+            transactions: Vec::new(),
+        };
+
+        let node = ColdStartMockNode {
+            genesis_block,
+            live_block,
+        };
+        let (mut sequencer, _handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+
+        let mut finalized_items: Vec<FinalizedTx> = Vec::new();
+        loop {
+            match sequencer.next_event().await {
+                Some(Event::Ready) => break,
+                Some(Event::TxsFinalized { items }) => finalized_items.extend(items),
+                Some(_) | None => {}
+            }
+        }
+
+        assert_eq!(
+            finalized_items.len(),
+            1,
+            "expected exactly one finalized tx from genesis backfill"
+        );
+        let t = &finalized_items[0];
+        assert_eq!(t.tx_hash, genesis_tx_hash);
+        assert_eq!(t.ops.len(), 1);
+        match &t.ops[0] {
+            FinalizedOp::Inscription(info) => {
+                assert_eq!(info.tx_hash, genesis_tx_hash);
+                assert_eq!(info.parent_msg, MsgId::root());
+                assert_eq!(info.this_msg, expected_msg_id);
+            }
+            other => panic!("expected Inscription, got {other:?}"),
         }
     }
 }

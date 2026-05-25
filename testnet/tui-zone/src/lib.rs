@@ -11,7 +11,7 @@ use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
     sequencer::{Event, OrphanedTx, SequencerHandle, ZoneSequencer},
-    state::InscriptionInfo,
+    state::{FinalizedOp, InscriptionInfo},
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
@@ -111,11 +111,15 @@ async fn handle_event(
             handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
         Event::TxsFinalized { items } => {
-            // TUI only cares about inscriptions for rendering; ignore Deposit
-            // entries which have no inscription payload.
+            // TUI only cares about inscriptions for rendering; deposit /
+            // withdraw ops have no inscription payload.
             let inscriptions: Vec<InscriptionInfo> = items
                 .iter()
-                .filter_map(|t| t.inscription().cloned())
+                .flat_map(|t| t.ops.iter())
+                .filter_map(|op| match op {
+                    FinalizedOp::Inscription(i) => Some(i.clone()),
+                    FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+                })
                 .collect();
             state.on_finalized(&inscriptions);
             ui::render_state(state);
