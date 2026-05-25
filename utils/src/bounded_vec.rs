@@ -110,7 +110,7 @@ impl<T, const MIN: usize, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MI
 
 impl<T, const MIN: usize, const MAX: usize> From<T> for BoundedVec<T, MIN, MAX> {
     fn from(value: T) -> Self {
-        const { assert!(MIN >= 1, "Min size cannot be zero.") }
+        const { assert!(MAX >= 1, "Max size cannot be zero.") }
         Self([value].into())
     }
 }
