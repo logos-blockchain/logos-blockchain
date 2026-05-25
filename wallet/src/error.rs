@@ -1,7 +1,12 @@
 use lb_core::{
     header::HeaderId,
-    mantle::{gas::GasOverflow, tx_builder::TxBuilderError},
+    mantle::{
+        gas::GasOverflow,
+        ledger::{InputsError, OutputsError},
+        tx_builder::TxBuilderError,
+    },
 };
+use lb_utils::bounded_vec::BoundedError;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -14,6 +19,12 @@ pub enum WalletError {
     GasOverflow(#[from] GasOverflow),
     #[error("Transaction builder error: {0}")]
     TxBuilder(String),
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
+    #[error(transparent)]
+    InputsError(#[from] InputsError),
+    #[error(transparent)]
+    OutputsError(#[from] OutputsError),
 }
 
 impl From<TxBuilderError> for WalletError {

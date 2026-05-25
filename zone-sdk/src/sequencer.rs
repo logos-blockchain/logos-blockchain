@@ -1972,7 +1972,7 @@ mod tests {
         let (sk, utxo) = utxo_with_sk();
         let deposit_op = DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![utxo.id()].try_into().unwrap()),
+            inputs: Inputs::new([utxo.id()]),
             metadata: "to Alice".into(),
         };
 
@@ -2043,14 +2043,10 @@ mod tests {
         // withdraws field populated, so on orphan we emit
         // OrphanedTx::AtomicWithdraw (not Inscription).
         let channel_id = ChannelId::from([1u8; 32]);
-        let outputs = Outputs::new(
-            vec![Note::new(
-                5,
-                ZkKey::from(BigUint::from(0u64)).to_public_key(),
-            )]
-            .try_into()
-            .unwrap(),
-        );
+        let outputs = Outputs::new([Note::new(
+            5,
+            ZkKey::from(BigUint::from(0u64)).to_public_key(),
+        )]);
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
             outputs,

@@ -52,9 +52,9 @@ pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
 type NomOps<'a> = NomBoundedVec<'a, Op, { Ops::MIN }, { Ops::MAX }, 1>;
 const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
 const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
-pub type LedgerInputs = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
-pub type TransferInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
-pub type TransferOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
+pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
+pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
+pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -249,29 +249,29 @@ fn decode_note(input: &[u8]) -> IResult<&[u8], Note> {
 fn decode_inputs(input: &[u8]) -> IResult<&[u8], Inputs> {
     // Inputs = InputCount *NoteId
     let (input, input_count) = decode_byte(input)?;
-    if input_count as usize > TransferInputs::MAX {
+    if input_count as usize > BoundedInputs::MAX {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail)));
     }
 
     let (input, note_ids) =
         count(map(decode_field_element, NoteId), input_count as usize).parse(input)?;
-    let note_ids = TransferInputs::try_from(note_ids)
+    let inputs = Inputs::try_new(note_ids)
         .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::LengthValue)))?;
-    Ok((input, Inputs::new(note_ids)))
+    Ok((input, inputs))
 }
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
     // Outputs = OutputCount *Note
     let (input, output_count) = decode_byte(input)?;
-    if output_count as usize > TransferOutputs::MAX {
+    if output_count as usize > BoundedOutputs::MAX {
         return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail)));
     }
 
     let (input, notes) = count(decode_note, output_count as usize).parse(input)?;
-    let notes = TransferOutputs::try_from(notes)
+    let outputs = Outputs::try_new(notes)
         .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::LengthValue)))?;
 
-    Ok((input, Outputs::new(notes)))
+    Ok((input, outputs))
 }
 
 pub(crate) fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
@@ -670,7 +670,7 @@ fn encode_note(note: &Note) -> Vec<u8> {
     bytes
 }
 
-fn encode_inputs(inputs: &TransferInputs) -> Vec<u8> {
+fn encode_inputs(inputs: &BoundedInputs) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_byte(inputs.len() as u8));
     for input in inputs {
@@ -679,7 +679,7 @@ fn encode_inputs(inputs: &TransferInputs) -> Vec<u8> {
     bytes
 }
 
-fn encode_outputs(outputs: &TransferOutputs) -> Vec<u8> {
+fn encode_outputs(outputs: &BoundedOutputs) -> Vec<u8> {
     let mut bytes = Vec::new();
     bytes.extend(encode_byte(outputs.len() as u8));
     for output in outputs {
@@ -1090,10 +1090,7 @@ mod tests {
         let pk = ZkPublicKey::from(BigUint::from(42u64));
         let note = Note::new(1000, pk);
         let note_id = NoteId(BigUint::from(123u64).into());
-        let transfer_op = TransferOp::new(
-            Inputs::new(vec![note_id].try_into().unwrap()),
-            Outputs::new(vec![note].try_into().unwrap()),
-        );
+        let transfer_op = TransferOp::new(Inputs::new([note_id]), Outputs::new([note]));
 
         let original_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
 
@@ -1418,8 +1415,8 @@ mod tests {
         let note_id3 = NoteId(BigUint::from(333u64).into());
 
         let transfer_op = TransferOp::new(
-            Inputs::new(vec![note_id1, note_id2, note_id3].try_into().unwrap()),
-            Outputs::new(vec![note1, note2].try_into().unwrap()),
+            Inputs::new([note_id1, note_id2, note_id3]),
+            Outputs::new([note1, note2]),
         );
 
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
@@ -1466,16 +1463,8 @@ mod tests {
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
         let transfer_op = TransferOp {
-            inputs: Inputs::new(
-                vec![NoteId(BigUint::from(777u64).into())]
-                    .try_into()
-                    .unwrap(),
-            ),
-            outputs: Outputs::new(
-                vec![Note::new(5000, locked_note_sk.to_public_key())]
-                    .try_into()
-                    .unwrap(),
-            ),
+            inputs: Inputs::new([NoteId(BigUint::from(777u64).into())]),
+            outputs: Outputs::new([Note::new(5000, locked_note_sk.to_public_key())]),
         };
 
         let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
@@ -1620,7 +1609,7 @@ mod tests {
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelWithdraw(
             ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
-                outputs: Outputs::new(vec![note1, note2].try_into().unwrap()),
+                outputs: Outputs::new([note1, note2]),
                 withdraw_nonce: 0,
             },
         )]));
@@ -2004,7 +1993,7 @@ mod tests {
     fn test_encode_decode_max_inputs() {
         let note_id = NoteId(BigUint::from(111u64).into());
         let inputs = [note_id; u8::MAX as usize];
-        let inputs = TransferInputs::try_from(inputs.to_vec()).unwrap();
+        let inputs = BoundedInputs::from(inputs);
 
         // Encode should succeed
         let encoded = encode_inputs(&inputs);
@@ -2028,7 +2017,7 @@ mod tests {
     fn test_encode_decode_max_outputs() {
         let note = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)));
         let outputs = [note; u8::MAX as usize];
-        let outputs = TransferOutputs::try_from(outputs.to_vec()).unwrap();
+        let outputs = BoundedOutputs::from(outputs);
 
         // Encode should succeed
         let encoded = encode_outputs(&outputs);

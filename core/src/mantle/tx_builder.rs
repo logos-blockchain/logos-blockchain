@@ -8,7 +8,7 @@ use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
-        encoding::LedgerInputs,
+        encoding::BoundedUtxos,
         gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
@@ -29,23 +29,32 @@ pub enum TxBuilderError {
     GasOverflow(#[from] GasOverflow),
 }
 
-fn too_many_from_bounded(err: &BoundedError, kind: &'static str) -> TxBuilderError {
-    let (actual, max) = match err {
-        BoundedError::TooLong { actual, max } => (*actual, *max),
-        BoundedError::EmptyInput => (0, 0),
-    };
+#[derive(Debug, Clone, Copy)]
+enum TooManyTag {
+    Ops,
+    Inputs,
+    Outputs,
+}
 
-    match kind {
-        "inputs" => TxBuilderError::TooManyInputs { actual, max },
-        "outputs" => TxBuilderError::TooManyOutputs { actual, max },
-        _ => TxBuilderError::TooManyOps { actual, max },
+impl From<(BoundedError, TooManyTag)> for TxBuilderError {
+    fn from((err, tag): (BoundedError, TooManyTag)) -> Self {
+        let (actual, max) = match err {
+            BoundedError::TooLong { actual, max } => (actual, max),
+            BoundedError::EmptyInput => (0, 0),
+        };
+
+        match tag {
+            TooManyTag::Ops => Self::TooManyOps { actual, max },
+            TooManyTag::Inputs => Self::TooManyInputs { actual, max },
+            TooManyTag::Outputs => Self::TooManyOutputs { actual, max },
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {
     mantle_tx: MantleTx,
-    ledger_inputs: LedgerInputs,
+    ledger_inputs: BoundedUtxos,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
     channel_multi_sig_proofs: HashMap<usize, ChannelMultiSigProof>,
@@ -58,7 +67,7 @@ impl MantleTxBuilder {
     pub fn new(context: MantleTxContext) -> Self {
         Self {
             mantle_tx: MantleTx([].into()),
-            ledger_inputs: LedgerInputs::default(),
+            ledger_inputs: BoundedUtxos::default(),
             pending_transfer: TransferOp::new(Inputs::empty(), Outputs::empty()),
             channel_multi_sig_proofs: HashMap::new(),
             context,
@@ -81,7 +90,7 @@ impl MantleTxBuilder {
             self.mantle_tx
                 .0
                 .try_push(op)
-                .map_err(|err| too_many_from_bounded(&err, "ops"))?;
+                .map_err(|err| TxBuilderError::from((err, TooManyTag::Ops)))?;
         }
         Ok(self)
     }
@@ -111,10 +120,10 @@ impl MantleTxBuilder {
                 .inputs
                 .as_mut()
                 .try_push(utxo.id())
-                .map_err(|err| too_many_from_bounded(&err, "inputs"))?;
+                .map_err(|err| TxBuilderError::from((err, TooManyTag::Inputs)))?;
             self.ledger_inputs
                 .try_push(utxo)
-                .map_err(|err| too_many_from_bounded(&err, "inputs"))?;
+                .map_err(|err| TxBuilderError::from((err, TooManyTag::Inputs)))?;
         }
         Ok(self)
     }
@@ -132,7 +141,7 @@ impl MantleTxBuilder {
                 .outputs
                 .as_mut()
                 .try_push(note)
-                .map_err(|err| too_many_from_bounded(&err, "outputs"))?;
+                .map_err(|err| TxBuilderError::from((err, TooManyTag::Outputs)))?;
         }
         Ok(self)
     }
@@ -247,7 +256,7 @@ impl MantleTxBuilder {
         self.mantle_tx
             .0
             .try_push(Op::Transfer(self.pending_transfer))
-            .map_err(|err| too_many_from_bounded(&err, "ops"))?;
+            .map_err(|err| TxBuilderError::from((err, TooManyTag::Ops)))?;
         Ok(self.mantle_tx)
     }
 }
@@ -300,7 +309,7 @@ mod tests {
         // Build an operation
         let op = DepositOp {
             channel_id: [0; 32].into(),
-            inputs: Inputs::new(vec![NoteId(Fr::ZERO)].try_into().unwrap()),
+            inputs: Inputs::new([NoteId(Fr::ZERO)]),
             metadata: b"Mint 1 to Alice in Zone".to_vec(),
         };
 
@@ -327,7 +336,7 @@ mod tests {
         };
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
-            outputs: Outputs::new(vec![withdraw_note].try_into().unwrap()),
+            outputs: Outputs::new([withdraw_note]),
             withdraw_nonce: 0,
         };
 
@@ -432,13 +441,13 @@ mod tests {
             .unwrap()
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
-                inputs: Inputs::new(vec![NoteId(Fr::ZERO)].try_into().unwrap()),
+                inputs: Inputs::new([NoteId(Fr::ZERO)]),
                 metadata: b"Mint 10 to Alice in Zone".to_vec(),
             }))
             .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: Outputs::new(vec![withdraw_note].try_into().unwrap()),
+                outputs: Outputs::new([withdraw_note]),
                 withdraw_nonce: 0,
             }))
             .unwrap()
@@ -486,7 +495,7 @@ mod tests {
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id: [0; 32].into(),
-                inputs: Inputs::new(vec![deposit_input].try_into().unwrap()),
+                inputs: Inputs::new([deposit_input]),
                 metadata: vec![],
             }))
             .unwrap()

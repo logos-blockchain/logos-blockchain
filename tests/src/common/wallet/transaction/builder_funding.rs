@@ -267,15 +267,8 @@ fn with_transfer_input_chunks(
     let mut builder = tx_builder.clone();
     for chunk in funding_utxos[..split_index].chunks(super::signing::ZKSIGN_MAX_INPUTS) {
         builder = builder.push_op(Op::Transfer(TransferOp::new(
-            Inputs::new(
-                chunk
-                    .iter()
-                    .map(Utxo::id)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap(),
-            ),
-            Outputs::new(vec![].try_into().unwrap()),
+            Inputs::try_new(chunk.iter().map(Utxo::id).collect::<Vec<_>>())?,
+            Outputs::empty(),
         )))?;
     }
 

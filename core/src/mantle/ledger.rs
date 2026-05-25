@@ -5,6 +5,7 @@ use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
+use lb_utils::bounded_vec::BoundedError;
 use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -14,7 +15,7 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::Events,
     mantle::{
-        encoding::{TransferInputs, TransferOutputs},
+        encoding::{BoundedInputs, BoundedOutputs},
         ops::OpId,
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -47,6 +48,8 @@ pub enum InputsError {
     DoubleSpend,
     #[error("Sum of input values overflows")]
     InputsOverflow,
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -55,6 +58,8 @@ pub enum OutputsError {
     ZeroValueNote,
     #[error("Sum of output values overflows")]
     OutputsOverflow,
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -66,17 +71,23 @@ pub enum LedgerError {
 }
 
 #[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Outputs(TransferOutputs);
+pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
+    pub fn try_new(
+        notes: impl TryInto<BoundedOutputs, Error = BoundedError>,
+    ) -> Result<Self, OutputsError> {
+        notes.try_into().map(Self).map_err(OutputsError::from)
+    }
+
     #[must_use]
-    pub const fn new(notes: TransferOutputs) -> Self {
-        Self(notes)
+    pub fn new(notes: impl Into<BoundedOutputs>) -> Self {
+        Self(notes.into())
     }
 
     #[must_use]
     pub fn empty() -> Self {
-        Self(TransferOutputs::default())
+        Self(BoundedOutputs::default())
     }
 
     pub fn utxos<O: OpId>(&self, op: &O) -> impl Iterator<Item = Utxo> {
@@ -137,21 +148,21 @@ impl Outputs {
     }
 }
 
-impl AsRef<TransferOutputs> for Outputs {
-    fn as_ref(&self) -> &TransferOutputs {
+impl AsRef<BoundedOutputs> for Outputs {
+    fn as_ref(&self) -> &BoundedOutputs {
         &self.0
     }
 }
 
-impl AsMut<TransferOutputs> for Outputs {
-    fn as_mut(&mut self) -> &mut TransferOutputs {
+impl AsMut<BoundedOutputs> for Outputs {
+    fn as_mut(&mut self) -> &mut BoundedOutputs {
         &mut self.0
     }
 }
 
 impl<'output> IntoIterator for &'output Outputs {
-    type Item = <&'output TransferOutputs as IntoIterator>::Item;
-    type IntoIter = <&'output TransferOutputs as IntoIterator>::IntoIter;
+    type Item = <&'output BoundedOutputs as IntoIterator>::Item;
+    type IntoIter = <&'output BoundedOutputs as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         (&self.0).into_iter()
@@ -159,17 +170,23 @@ impl<'output> IntoIterator for &'output Outputs {
 }
 
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
-pub struct Inputs(TransferInputs);
+pub struct Inputs(BoundedInputs);
 
 impl Inputs {
     #[must_use]
-    pub const fn new(note_ids: TransferInputs) -> Self {
-        Self(note_ids)
+    pub fn new(note_ids: impl Into<BoundedInputs>) -> Self {
+        Self(note_ids.into())
+    }
+
+    pub fn try_new(
+        note_ids: impl TryInto<BoundedInputs, Error = BoundedError>,
+    ) -> Result<Self, InputsError> {
+        note_ids.try_into().map(Self).map_err(InputsError::from)
     }
 
     #[must_use]
     pub fn empty() -> Self {
-        Self(TransferInputs::default())
+        Self(BoundedInputs::default())
     }
 
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
@@ -241,20 +258,20 @@ impl Inputs {
     }
 }
 
-impl AsRef<TransferInputs> for Inputs {
-    fn as_ref(&self) -> &TransferInputs {
+impl AsRef<BoundedInputs> for Inputs {
+    fn as_ref(&self) -> &BoundedInputs {
         &self.0
     }
 }
 
-impl AsMut<TransferInputs> for Inputs {
-    fn as_mut(&mut self) -> &mut TransferInputs {
+impl AsMut<BoundedInputs> for Inputs {
+    fn as_mut(&mut self) -> &mut BoundedInputs {
         &mut self.0
     }
 }
 impl<'input> IntoIterator for &'input Inputs {
-    type Item = <&'input TransferInputs as IntoIterator>::Item;
-    type IntoIter = <&'input TransferInputs as IntoIterator>::IntoIter;
+    type Item = <&'input BoundedInputs as IntoIterator>::Item;
+    type IntoIter = <&'input BoundedInputs as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
         (&self.0).into_iter()

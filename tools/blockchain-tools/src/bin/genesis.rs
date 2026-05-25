@@ -354,7 +354,7 @@ fn build_genesis_block(
     let mut builder = GenesisBlockBuilder::new().add_note(first_note);
     for note in notes_iter {
         builder = builder
-            .add_note(note)
+            .try_add_note(note)
             .context("failed to append note to genesis transfer")?;
     }
 

@@ -19,7 +19,7 @@ use lb_config::consensus::{ProviderInfo, create_genesis_block_with_declarations}
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
-        ledger::{Inputs, Outputs},
+        ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
                 ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
@@ -42,7 +42,7 @@ use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
     internal::DeploymentPlan,
 };
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::{bounded_vec::BoundedError, math::NonNegativeRatio};
 use lb_zone_sdk::{
     ZoneMessage,
     adapter::NodeHttpClient as ZoneNodeHttpClient,
@@ -113,6 +113,10 @@ pub enum ZoneTestError {
     SubmitWithdraw { message: String },
     #[error("timed out waiting for zone withdraw to appear in the indexer")]
     WithdrawTimeout,
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
+    #[error(transparent)]
+    OutputsError(#[from] OutputsError),
 }
 
 /// Prepared deployment resources for the single-node zone test cluster.
@@ -996,7 +1000,7 @@ pub fn build_zone_deposit(
     Ok(ZoneDeposit {
         deposit: DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![note.id()].try_into().unwrap()),
+            inputs: Inputs::new([note.id()]),
             metadata,
         },
         reserved_inputs: vec![note],
@@ -1124,7 +1128,7 @@ fn build_atomic_deposit_op(
 
     Ok(DepositOp {
         channel_id,
-        inputs: Inputs::new(vec![deposit_note_id].try_into().unwrap()),
+        inputs: Inputs::new([deposit_note_id]),
         metadata,
     })
 }
@@ -1140,11 +1144,7 @@ pub async fn submit_zone_withdraw(
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
     let withdraw = ChannelWithdrawOp {
         channel_id,
-        outputs: Outputs::new(
-            vec![Note::new(amount, funding_public_key)]
-                .try_into()
-                .unwrap(),
-        ),
+        outputs: Outputs::new([Note::new(amount, funding_public_key)]),
         withdraw_nonce: 0,
     };
 
@@ -1234,17 +1234,17 @@ pub async fn publish_atomic_zone_withdraw(
     }
     let withdraw_args: Vec<WithdrawArg> = outputs_per_arg
         .iter()
-        .map(|amounts| WithdrawArg {
-            outputs: Outputs::new(
-                amounts
-                    .iter()
-                    .map(|amount| Note::new(*amount, funding_public_key))
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .unwrap(),
-            ),
+        .map(|amounts| {
+            Ok::<WithdrawArg, ZoneTestError>(WithdrawArg {
+                outputs: Outputs::try_new(
+                    amounts
+                        .iter()
+                        .map(|amount| Note::new(*amount, funding_public_key))
+                        .collect::<Vec<_>>(),
+                )?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     sequencer
         .publish_atomic_withdraw(

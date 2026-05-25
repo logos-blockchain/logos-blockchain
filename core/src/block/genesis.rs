@@ -8,7 +8,7 @@ use crate::{
     header::Header,
     mantle::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
-        encoding::{Ops, TransferOutputs},
+        encoding::{BoundedOutputs, Ops},
         genesis_tx::{self, GenesisTx},
         ledger::{Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
@@ -48,7 +48,7 @@ const fn map_notes_bounded_error(error: &BoundedError) -> Error {
     }
 }
 
-fn collect_non_empty_notes<I, N>(notes: I) -> Result<TransferOutputs>
+fn collect_non_empty_notes<I, N>(notes: I) -> Result<BoundedOutputs>
 where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
@@ -57,17 +57,17 @@ where
     if notes.is_empty() {
         return Err(Error::EmptyNotes);
     }
-    TransferOutputs::try_from(notes).map_err(|error| map_notes_bounded_error(&error))
+    BoundedOutputs::try_from(notes).map_err(|error| map_notes_bounded_error(&error))
 }
 
-fn push_note(mut notes: TransferOutputs, note: Note) -> Result<TransferOutputs> {
+fn push_note(mut notes: BoundedOutputs, note: Note) -> Result<BoundedOutputs> {
     notes
         .try_push(note)
         .map_err(|error| map_notes_bounded_error(&error))?;
     Ok(notes)
 }
 
-fn extend_non_empty_notes<I, N>(mut existing: TransferOutputs, notes: I) -> Result<TransferOutputs>
+fn extend_non_empty_notes<I, N>(mut existing: BoundedOutputs, notes: I) -> Result<BoundedOutputs>
 where
     I: IntoIterator<Item = N>,
     N: Into<Note>,
@@ -129,7 +129,7 @@ pub struct WithGenesisTx {
 
 /// Typestate marker: builder has genesis transfer output notes only.
 pub struct WithNotes {
-    notes: TransferOutputs,
+    notes: BoundedOutputs,
 }
 
 /// Typestate marker: builder has a genesis inscription only.
@@ -144,13 +144,13 @@ pub struct WithDeclarations {
 
 /// Typestate marker: builder has genesis notes and an inscription.
 pub struct WithNotesAndInscription {
-    notes: TransferOutputs,
+    notes: BoundedOutputs,
     inscription: InscriptionOp,
 }
 
 /// Typestate marker: builder has genesis notes and SDP declarations.
 pub struct WithNotesAndDeclarations {
-    notes: TransferOutputs,
+    notes: BoundedOutputs,
     sdp_declarations: Vec<SDPDeclareOp>,
 }
 
@@ -168,7 +168,7 @@ pub struct WithInscriptionAndDeclarations {
 /// [`GenesisTx`] — notes, an inscription, and at least one SDP declaration.
 /// This is the only state that exposes [`GenesisBlockBuilder::build`].
 pub struct WithAll {
-    notes: TransferOutputs,
+    notes: BoundedOutputs,
     inscription: InscriptionOp,
     sdp_declarations: Vec<SDPDeclareOp>,
 }
@@ -249,18 +249,14 @@ impl GenesisBlockBuilder<Empty> {
     pub fn add_note(self, note: Note) -> GenesisBlockBuilder<WithNotes> {
         GenesisBlockBuilder {
             state: WithNotes {
-                notes: TransferOutputs::new_unchecked(vec![note]),
+                notes: [note].into(),
             },
         }
     }
 
-    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// Try add multiple genesis transfer output notes at once, transitioning to
     /// [`WithNotes`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `notes` is empty.
-    pub fn add_notes(
+    pub fn try_add_notes(
         self,
         notes: impl IntoIterator<Item = impl Into<Note>>,
     ) -> Result<GenesisBlockBuilder<WithNotes>> {
@@ -269,6 +265,17 @@ impl GenesisBlockBuilder<Empty> {
         Ok(GenesisBlockBuilder {
             state: WithNotes { notes },
         })
+    }
+
+    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// [`WithNotes`].
+    #[must_use]
+    pub fn add_notes<const N: usize>(self, notes: [Note; N]) -> GenesisBlockBuilder<WithNotes> {
+        GenesisBlockBuilder {
+            state: WithNotes {
+                notes: notes.into(),
+            },
+        }
     }
 
     /// Set the genesis inscription, transitioning to [`WithInscription`].
@@ -325,7 +332,7 @@ impl GenesisBlockBuilder<Empty> {
 
 impl GenesisBlockBuilder<WithNotes> {
     /// Append another genesis transfer output note.
-    pub fn add_note(self, note: Note) -> Result<Self> {
+    pub fn try_add_note(self, note: Note) -> Result<Self> {
         let Self {
             state: WithNotes { mut notes },
         } = self;
@@ -335,12 +342,8 @@ impl GenesisBlockBuilder<WithNotes> {
         })
     }
 
-    /// Append multiple genesis transfer output notes at once.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `notes` is empty.
-    pub fn add_notes(
+    /// Try append multiple genesis transfer output notes at once.
+    pub fn try_add_notes(
         self,
         notes_to_add: impl IntoIterator<Item = impl Into<Note>>,
     ) -> Result<Self> {
@@ -427,19 +430,15 @@ impl GenesisBlockBuilder<WithInscription> {
         } = self;
         GenesisBlockBuilder {
             state: WithNotesAndInscription {
-                notes: TransferOutputs::new_unchecked(vec![note]),
+                notes: [note].into(),
                 inscription,
             },
         }
     }
 
-    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// Try add multiple genesis transfer output notes at once, transitioning to
     /// [`WithNotesAndInscription`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `notes` is empty.
-    pub fn add_notes(
+    pub fn try_add_notes(
         self,
         notes: impl IntoIterator<Item = impl Into<Note>>,
     ) -> Result<GenesisBlockBuilder<WithNotesAndInscription>> {
@@ -452,6 +451,24 @@ impl GenesisBlockBuilder<WithInscription> {
                 inscription,
             },
         })
+    }
+
+    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// [`WithNotesAndInscription`].
+    #[must_use]
+    pub fn add_notes<const N: usize>(
+        self,
+        notes: [Note; N],
+    ) -> GenesisBlockBuilder<WithNotesAndInscription> {
+        let Self {
+            state: WithInscription { inscription },
+        } = self;
+        GenesisBlockBuilder {
+            state: WithNotesAndInscription {
+                notes: notes.into(),
+                inscription,
+            },
+        }
     }
 
     /// Replace the current inscription.
@@ -521,19 +538,15 @@ impl GenesisBlockBuilder<WithDeclarations> {
         } = self;
         GenesisBlockBuilder {
             state: WithNotesAndDeclarations {
-                notes: TransferOutputs::new_unchecked(vec![note]),
+                notes: [note].into(),
                 sdp_declarations,
             },
         }
     }
 
-    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// Try add multiple genesis transfer output notes at once, transitioning to
     /// [`WithNotesAndDeclarations`].
-    ///
-    /// # Panics
-    ///
-    /// Panics if `notes` is empty.
-    pub fn add_notes(
+    pub fn try_add_notes(
         self,
         notes: impl IntoIterator<Item = impl Into<Note>>,
     ) -> Result<GenesisBlockBuilder<WithNotesAndDeclarations>> {
@@ -546,6 +559,24 @@ impl GenesisBlockBuilder<WithDeclarations> {
                 sdp_declarations,
             },
         })
+    }
+
+    /// Add multiple genesis transfer output notes at once, transitioning to
+    /// [`WithNotesAndDeclarations`].
+    #[must_use]
+    pub fn add_notes<const N: usize>(
+        self,
+        notes: [Note; N],
+    ) -> GenesisBlockBuilder<WithNotesAndDeclarations> {
+        let Self {
+            state: WithDeclarations { sdp_declarations },
+        } = self;
+        GenesisBlockBuilder {
+            state: WithNotesAndDeclarations {
+                notes: notes.into(),
+                sdp_declarations,
+            },
+        }
     }
 
     /// Set the genesis inscription, transitioning to
@@ -852,7 +883,7 @@ impl GenesisBlockBuilder<WithInscriptionAndDeclarations> {
         } = self;
         GenesisBlockBuilder {
             state: WithAll {
-                notes: TransferOutputs::new_unchecked(vec![note]),
+                notes: [note].into(),
                 inscription,
                 sdp_declarations,
             },
@@ -1216,7 +1247,7 @@ mod tests {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
                 Inputs::empty(),
-                Outputs::new(TransferOutputs::try_from(vec![make_note(1_000)]).unwrap()),
+                Outputs::new([make_note(1_000)]),
             )),
             Op::ChannelInscribe(valid_inscription()),
         ];
@@ -1350,11 +1381,7 @@ mod tests {
     #[test]
     fn multiple_notes_are_preserved() {
         let block = GenesisBlockBuilder::new()
-            .add_note(make_note(100))
-            .add_note(make_note(200))
-            .unwrap()
-            .add_note(make_note(300))
-            .unwrap()
+            .add_notes([make_note(100), make_note(200), make_note(300)])
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(0))
             .build()
@@ -1451,7 +1478,6 @@ mod tests {
     fn add_notes_batch_preserved() {
         let block = GenesisBlockBuilder::new()
             .add_notes([make_note(10), make_note(20), make_note(30)])
-            .unwrap()
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(0))
             .build()
@@ -1477,9 +1503,7 @@ mod tests {
     #[test]
     fn add_notes_and_add_declarations_interleaved_with_batch() {
         let block = GenesisBlockBuilder::new()
-            .add_note(make_note(1))
-            .add_notes([make_note(2), make_note(3)])
-            .unwrap()
+            .add_notes([make_note(1), make_note(2), make_note(3)])
             .set_inscription(valid_inscription())
             .add_declaration(make_sdp_decl(0))
             .add_declarations([make_sdp_decl(1), make_sdp_decl(2)])
@@ -1492,18 +1516,18 @@ mod tests {
     }
 
     #[test]
-    fn add_notes_errors_on_empty_from_empty() {
+    fn try_add_notes_errors_on_empty_from_empty() {
         let err = GenesisBlockBuilder::new()
-            .add_notes(std::iter::empty::<Note>())
+            .try_add_notes(std::iter::empty::<Note>())
             .unwrap_err();
         assert!(matches!(err, Error::EmptyNotes));
     }
 
     #[test]
-    fn add_notes_errors_on_empty_from_with_notes() {
+    fn try_add_notes_errors_on_empty_from_with_notes() {
         let err = GenesisBlockBuilder::new()
             .add_note(make_note(1))
-            .add_notes(std::iter::empty::<Note>())
+            .try_add_notes(std::iter::empty::<Note>())
             .unwrap_err();
         assert!(matches!(err, Error::EmptyNotes));
     }

@@ -116,16 +116,12 @@ mod test {
         let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
         let transfer = TransferOp {
-            inputs: Inputs::new(vec![NoteId(BigUint::from(0u8).into())].try_into().unwrap()),
-            outputs: Outputs::new(
-                vec![
-                    Note::new(100, pk0),
-                    Note::new(200, pk1),
-                    Note::new(300, pk2),
-                ]
-                .try_into()
-                .unwrap(),
-            ),
+            inputs: Inputs::new([NoteId(BigUint::from(0u8).into())]),
+            outputs: Outputs::new([
+                Note::new(100, pk0),
+                Note::new(200, pk1),
+                Note::new(300, pk2),
+            ]),
         };
         assert_eq!(
             transfer.outputs.utxo_by_index(0, &transfer),
