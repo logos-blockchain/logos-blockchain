@@ -1782,7 +1782,7 @@ mod tests {
             channel: ChannelId::from([0x22; 32]),
             // Using `new_unchecked` to bypass the constructor check since we're testing decode
             // directly.
-            keys: Keys::empty(),
+            keys: Keys::new_unchecked([].into()),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
