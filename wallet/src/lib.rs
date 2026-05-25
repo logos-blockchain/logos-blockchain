@@ -740,7 +740,7 @@ mod tests {
             voucher_cm: v2_cm,
             spent_notes: vec![alice_100_nmo_utxo.id()],
             transfers: vec![TransferOp {
-                inputs: alice_100_nmo_utxo.id().into(),
+                inputs: [alice_100_nmo_utxo.id()].into(),
                 outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
             }],
             // Unknown locked note that will be ignored

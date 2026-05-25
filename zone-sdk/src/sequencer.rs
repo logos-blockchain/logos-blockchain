@@ -2222,7 +2222,7 @@ mod tests {
         let (sk, utxo) = utxo_with_sk();
         let deposit_op = DepositOp {
             channel_id,
-            inputs: utxo.id().into(),
+            inputs: [utxo.id()].into(),
             metadata: b"to Alice".into(),
         };
 
