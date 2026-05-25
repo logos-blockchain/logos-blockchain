@@ -242,7 +242,7 @@ mod tests {
                 OpId as _,
                 channel::{
                     Ed25519PublicKey as PublicKey,
-                    deposit::{DepositExecutionContext, DepositOp},
+                    deposit::{DepositExecutionContext, DepositOp, Metadata},
                     withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
                 },
             },
@@ -384,7 +384,7 @@ mod tests {
         let deposit_op = DepositOp {
             channel_id,
             inputs: [utxo.id()].into(),
-            metadata: [].into(),
+            metadata: Metadata::empty(),
         };
 
         let utxo_tree = utxo_tree(vec![utxo]);

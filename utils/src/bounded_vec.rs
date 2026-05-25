@@ -33,6 +33,12 @@ impl<T, const MIN: usize, const MAX: usize> BoundedVec<T, MIN, MAX> {
     pub const MIN: usize = MIN;
     pub const MAX: usize = MAX;
 
+    #[must_use]
+    pub const fn empty() -> Self {
+        const { assert!(MIN == 0, "Cannot construct empty BoundedVec when MIN > 0") }
+        Self(Vec::new())
+    }
+
     /// Construct without checking the cap.
     ///
     /// Reserved for callers that have already validated the length. Prefer

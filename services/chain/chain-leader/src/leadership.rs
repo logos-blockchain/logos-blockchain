@@ -367,7 +367,7 @@ mod pol_tests {
 
     use lb_core::{
         mantle::{
-            ledger::{Note, Outputs},
+            ledger::{Inputs, Note, Outputs},
             ops::{leader_claim::VoucherCm, transfer::TransferOp},
         },
         proofs::leader_proof::{LeaderProof as _, check_winning},
@@ -403,7 +403,7 @@ mod pol_tests {
         let pk = sk.to_public_key();
 
         // Create a UTXO
-        let transfer = TransferOp::new([].into(), Outputs::new(vec![Note::new(1000u64, pk)]));
+        let transfer = TransferOp::new(Inputs::empty(), Outputs::new(vec![Note::new(1000u64, pk)]));
         let utxo = transfer.outputs.utxo_by_index(0, &transfer).unwrap();
 
         // Create aged/latest UTXO trees

@@ -580,7 +580,7 @@ mod tests {
             Note,
             channel::Channels,
             gas::MainnetGasConstants as Gas,
-            ledger::Outputs,
+            ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
             tx::{GasPrices, MantleTxContext, MantleTxGasContext},
         },
@@ -705,7 +705,7 @@ mod tests {
         // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
         // - voucher v1 is ours -> should be tracked
         let transfer1 = TransferOp {
-            inputs: [].into(),
+            inputs: Inputs::empty(),
             outputs: Outputs::new(vec![Note::new(100, alice), Note::new(4, alice)]),
         };
         // immediately lock the 2nd note from `transfer1`

@@ -740,8 +740,11 @@ mod tests {
             ops::{
                 OpId as _,
                 channel::{
-                    ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                    inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                    ChannelId, MsgId,
+                    config::ChannelConfigOp,
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
                 },
                 transfer::TransferOp,
             },
@@ -1174,7 +1177,7 @@ mod tests {
         let deposit = DepositOp {
             channel_id,
             inputs: [utxo.id()].into(),
-            metadata: [].into(),
+            metadata: Metadata::empty(),
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state

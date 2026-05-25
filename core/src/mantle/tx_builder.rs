@@ -6,8 +6,9 @@ use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
+        encoding::Ops,
         gas::{GasCost, GasOverflow},
-        ledger::Outputs,
+        ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         tx::{GasPrices, MantleTxContext},
     },
@@ -29,9 +30,9 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new(context: MantleTxContext) -> Self {
         Self {
-            mantle_tx: MantleTx([].into()),
+            mantle_tx: MantleTx(Ops::empty()),
             ledger_inputs: vec![],
-            pending_transfer: TransferOp::new([].into(), Outputs::new(vec![])),
+            pending_transfer: TransferOp::new(Inputs::empty(), Outputs::new(vec![])),
             channel_multi_sig_proofs: HashMap::new(),
             context,
         }
@@ -220,7 +221,11 @@ mod tests {
         mantle::{
             gas::MainnetGasConstants,
             ops::{
-                channel::{ChannelId, deposit::DepositOp, inscribe::InscriptionOp},
+                channel::{
+                    ChannelId,
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                },
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
             },
@@ -429,7 +434,7 @@ mod tests {
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id: [0; 32].into(),
                 inputs: deposit_input.into(),
-                metadata: [].into(),
+                metadata: Metadata::empty(),
             }))
             .push_op(Op::SDPDeclare(SDPDeclareOp {
                 service_type: ServiceType::BlendNetwork,
