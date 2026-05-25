@@ -29,7 +29,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     adapter,
-    adapter::{BoxStream, build_deposit_amounts, has_channel_deposit},
+    adapter::{BoxStream, build_deposit_amounts},
     state::{
         AtomicWithdrawInfo, DepositInfo, FinalizedOp, FinalizedTx, InscriptionInfo, PublishedTx,
         TxState, WithdrawInfo,
@@ -737,7 +737,7 @@ where
             return None;
         };
 
-        let result = handle_block_event(
+        let result = match handle_block_event(
             &block_event,
             &mut self.state,
             &mut self.current_tip,
@@ -745,7 +745,16 @@ where
             self.channel_id,
             &self.node,
         )
-        .await;
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                error!("Block event processing failed; dropping stream so reconnect retries: {e}");
+                self.blocks_stream = None;
+                let _ = self.ready_tx.send(false);
+                return None;
+            }
+        };
 
         let became_ready = self.maybe_signal_ready();
         let block_event = self.apply_block_result(result);
@@ -800,14 +809,28 @@ where
         }
 
         let batch_end = (from_u64 + BACKFILL_BATCH_SIZE).min(to_u64);
-        let batch = fetch_and_process_blocks(
+        let batch = match fetch_and_process_blocks(
             self.state.as_mut().unwrap(),
             from_u64,
             batch_end,
             self.channel_id,
             &self.node,
         )
-        .await;
+        .await
+        {
+            Ok(b) => b,
+            Err(e) => {
+                error!(
+                    from = from_u64,
+                    to = batch_end,
+                    "Backfill batch failed; will retry same range after delay: {e}"
+                );
+                tokio::time::sleep(self.config.reconnect_delay).await;
+                // Leave `backfill_from` untouched so the next tick retries
+                // the same range. Active but no event this turn.
+                return Some(None);
+            }
+        };
 
         self.backfill_from = Some(Slot::from(batch_end + 1));
 
@@ -1444,6 +1467,11 @@ struct BlockEventResult {
 
 /// Process a block event. Returns finalized tx hashes and optional channel
 /// update.
+///
+/// Returns [`Err`] if the LIB-range backfill (blocks or deposit events) fails
+/// for this event. On error, `state`, `current_tip`, and `lib_slot` are left
+/// untouched so the caller can drop the block stream and have the reconnect
+/// path retry this same event.
 async fn handle_block_event<Node>(
     event: &ProcessedBlockEvent,
     state: &mut Option<TxState>,
@@ -1451,7 +1479,7 @@ async fn handle_block_event<Node>(
     lib_slot: &mut Slot,
     channel_id: ChannelId,
     node: &Node,
-) -> BlockEventResult
+) -> Result<BlockEventResult, Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -1466,16 +1494,19 @@ where
     }
 
     let Some(s) = state.as_mut() else {
-        return BlockEventResult {
+        return Ok(BlockEventResult {
             finalized_items: Vec::new(),
             channel_update: None,
-        };
+        });
     };
 
     let old_tip = *current_tip;
 
     // Backfill if needed (self-healing on every event)
-    // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind)
+    // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind).
+    //    Done BEFORE we advance `*lib_slot` and BEFORE we mutate state for the live
+    //    event — so on a fetch failure the caller can retry the same event next
+    //    time around.
     let mut lib_finalized = Vec::new();
     let mut finalized_items: Vec<FinalizedTx> = Vec::new();
     if lib != s.lib() {
@@ -1483,7 +1514,7 @@ where
         let from: u64 = (*lib_slot).into();
         let to: u64 = new_lib_slot.into();
         if from < to {
-            let batch = fetch_and_process_blocks(s, from + 1, to, channel_id, node).await;
+            let batch = fetch_and_process_blocks(s, from + 1, to, channel_id, node).await?;
             lib_finalized = batch.our_tx_hashes;
             finalized_items = batch.items;
         }
@@ -1541,10 +1572,10 @@ where
         _ => None, // tip unchanged
     };
 
-    BlockEventResult {
+    Ok(BlockEventResult {
         finalized_items,
         channel_update,
-    }
+    })
 }
 
 fn handle_inflight(event: InFlight, resubmit_active: &mut bool) {
@@ -1596,13 +1627,21 @@ struct FetchedBatch {
 
 /// Fetch blocks in a slot range, process them into state, and return our
 /// finalized tx hashes plus the user-facing items grouped per Mantle tx.
+///
+/// State is mutated only after the per-block fetch (blocks + events) has
+/// fully succeeded. On any failure the function returns [`Err`] without
+/// having advanced `state` for the failing block (earlier blocks in the
+/// range are kept — they were independent successful units of work). The
+/// caller is expected to abandon the current attempt and retry the range
+/// later; the partial advance ensures progress on transient errors that
+/// resolve mid-range.
 async fn fetch_and_process_blocks<Node>(
     state: &mut TxState,
     from_slot: u64,
     to_slot: u64,
     channel_id: ChannelId,
     node: &Node,
-) -> FetchedBatch
+) -> Result<FetchedBatch, Error>
 where
     Node: adapter::Node + Sync,
 {
@@ -1611,77 +1650,123 @@ where
         items: Vec::new(),
     };
 
-    match node
+    let blocks = node
         .immutable_blocks(Slot::from(from_slot), Slot::from(to_slot))
         .await
-    {
-        Ok(blocks) => {
-            for block in blocks {
-                let our_txs: Vec<TxHash> = block
-                    .transactions
-                    .iter()
-                    .filter(|tx| matches_channel(tx, channel_id))
-                    .map(|tx| tx.mantle_tx.hash())
-                    .collect();
+        .map_err(|e| {
+            error!(?from_slot, ?to_slot, ?e, "Failed to fetch immutable blocks");
+            Error::Network(format!(
+                "failed to fetch blocks (slots {from_slot}..{to_slot}): {e}"
+            ))
+        })?;
 
-                let inscriptions = extract_inscriptions(&block.transactions, channel_id);
+    for block in blocks {
+        let our_txs: Vec<TxHash> = block
+            .transactions
+            .iter()
+            .filter(|tx| matches_channel(tx, channel_id))
+            .map(|tx| tx.mantle_tx.hash())
+            .collect();
 
-                let deposit_amounts = fetch_block_deposit_amounts(
-                    node,
-                    block.header.id,
-                    &block.transactions,
-                    channel_id,
-                )
-                .await;
-                let block_items =
-                    extract_finalized_items(&block.transactions, channel_id, &deposit_amounts);
+        let inscriptions = extract_inscriptions(&block.transactions, channel_id);
 
-                result.our_tx_hashes.extend(our_txs.iter().copied());
-                result.items.extend(block_items);
+        // Fetch + validate deposit events for this block BEFORE mutating
+        // state — on error we leave state untouched so the caller can retry.
+        let deposit_amounts =
+            fetch_block_deposit_amounts(node, block.header.id, &block.transactions, channel_id)
+                .await?;
+        let block_items =
+            extract_finalized_items(&block.transactions, channel_id, &deposit_amounts);
 
-                let current_lib = state.lib();
-                state.process_block(
-                    block.header.id,
-                    block.header.parent_block,
-                    current_lib,
-                    our_txs,
-                    inscriptions,
-                );
-            }
-        }
-        Err(e) => {
-            warn!("Failed to fetch blocks (slots {from_slot}..{to_slot}): {e}");
-        }
+        result.our_tx_hashes.extend(our_txs.iter().copied());
+        result.items.extend(block_items);
+
+        let current_lib = state.lib();
+        state.process_block(
+            block.header.id,
+            block.header.parent_block,
+            current_lib,
+            our_txs,
+            inscriptions,
+        );
     }
 
-    result
+    Ok(result)
 }
 
 /// Fetch the deposit-amount lookup for a single block, gated on whether the
 /// block has any deposit op for our channel.
+///
+/// Per node semantics, a block and its events are atomically visible — so a
+/// block containing a deposit op must yield an event for that op. The
+/// returned `HashMap` is therefore the *complete* `(tx_hash, op_id) → amount`
+/// lookup for every deposit op of our channel in this block.
+///
+/// On any failure (HTTP error, `Ok(None)`, or events missing an entry for
+/// some deposit op) we log at error level and return [`Error::Network`]. The
+/// caller's contract is "either retry, or abandon this block" — never
+/// silently emit a partial result, because that drops real deposits.
 async fn fetch_block_deposit_amounts<Node>(
     node: &Node,
     block_id: HeaderId,
     transactions: &[SignedMantleTx],
     channel_id: ChannelId,
-) -> HashMap<(TxHash, Hash), Value>
+) -> Result<HashMap<(TxHash, Hash), Value>, Error>
 where
     Node: adapter::Node + Sync,
 {
-    if !has_channel_deposit(transactions, channel_id) {
-        return HashMap::new();
+    let expected: Vec<(TxHash, Hash)> = transactions
+        .iter()
+        .flat_map(|tx| {
+            let tx_hash = tx.mantle_tx.hash();
+            tx.mantle_tx.ops().iter().filter_map(move |op| match op {
+                Op::ChannelDeposit(d) if d.channel_id == channel_id => Some((tx_hash, d.op_id())),
+                _ => None,
+            })
+        })
+        .collect();
+
+    if expected.is_empty() {
+        return Ok(HashMap::new());
     }
-    match node.block_events(block_id).await {
-        Ok(Some(events)) => build_deposit_amounts(&events),
+
+    let events = match node.block_events(block_id).await {
+        Ok(Some(events)) => events,
         Ok(None) => {
-            warn!("No events found for block {block_id}; skipping deposit emission");
-            HashMap::new()
+            error!(
+                ?block_id,
+                "Events endpoint returned no body for a block with a channel deposit; \
+                 events should be atomically visible with the block"
+            );
+            return Err(Error::Network(format!(
+                "no events for block {block_id} containing channel deposits"
+            )));
         }
         Err(err) => {
-            warn!("Failed to fetch events for block {block_id}: {err}");
-            HashMap::new()
+            error!(?block_id, ?err, "Failed to fetch events for block");
+            return Err(Error::Network(format!(
+                "failed to fetch events for block {block_id}: {err}"
+            )));
+        }
+    };
+
+    let amounts = build_deposit_amounts(&events);
+    for key in &expected {
+        if !amounts.contains_key(key) {
+            error!(
+                ?block_id,
+                tx_hash = ?key.0,
+                op_id = ?key.1,
+                "Block events missing an entry for a known channel deposit op; \
+                 expected atomic block/events visibility per node semantics"
+            );
+            return Err(Error::Network(format!(
+                "block {block_id} events missing deposit entry for tx {:?} op {:?}",
+                key.0, key.1
+            )));
         }
     }
+    Ok(amounts)
 }
 
 /// Walks `transactions` and groups channel-relevant ops per Mantle tx,
@@ -1737,22 +1822,22 @@ fn extract_finalized_items(
                 }
                 Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {
                     let op_id = deposit.op_id();
-                    if let Some(&amount) = deposit_amounts.get(&(tx_hash, op_id)) {
-                        ops.push(FinalizedOp::Deposit(DepositInfo {
-                            tx_hash,
-                            op_id,
-                            channel_id,
-                            inputs: deposit.inputs.clone(),
-                            amount,
-                            metadata: deposit.metadata.clone(),
-                        }));
-                    } else {
-                        warn!(
-                            ?tx_hash,
-                            ?op_id,
-                            "Deposit op has no matching event in block; skipping"
-                        );
-                    }
+                    // `fetch_block_deposit_amounts` validates that every
+                    // channel-deposit op in the block has a matching event
+                    // entry before returning, so the lookup is infallible
+                    // here. A miss would be a caller-side bug.
+                    let &amount = deposit_amounts.get(&(tx_hash, op_id)).expect(
+                        "deposit_amounts must contain every channel deposit op - \
+                         fetch_block_deposit_amounts invariant",
+                    );
+                    ops.push(FinalizedOp::Deposit(DepositInfo {
+                        tx_hash,
+                        op_id,
+                        channel_id,
+                        inputs: deposit.inputs.clone(),
+                        amount,
+                        metadata: deposit.metadata.clone(),
+                    }));
                 }
                 Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
                     ops.push(FinalizedOp::Withdraw(WithdrawInfo {
@@ -2257,17 +2342,22 @@ mod tests {
     }
 
     #[test]
-    fn extract_deposits_skips_when_no_matching_event() {
-        // A deposit op is present but the events lookup is empty (e.g. block
-        // events not yet indexed, or chain-side gap). The deposit must be
-        // skipped rather than emitted with a wrong/default amount.
+    #[should_panic(expected = "fetch_block_deposit_amounts invariant")]
+    fn extract_finalized_items_panics_if_deposit_amounts_incomplete() {
+        // The walker contract: `deposit_amounts` must contain an entry for
+        // every channel-deposit op in the input transactions. This is
+        // enforced upstream by `fetch_block_deposit_amounts`, which validates
+        // completeness and errors out before the walker is ever called with a
+        // gap. A panic here surfaces the bug immediately if a future caller
+        // violates that invariant — silent skip would drop a real deposit.
         let channel_id = ChannelId::from([0; 32]);
         let op = deposit_op(channel_id, 1, b"to Alice");
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op)]);
-
-        let deposits =
-            extract_deposits_for_test(std::slice::from_ref(&tx), channel_id, &HashMap::new());
-        assert!(deposits.is_empty());
+        drop(extract_finalized_items(
+            std::slice::from_ref(&tx),
+            channel_id,
+            &HashMap::new(),
+        ));
     }
 
     #[test]
