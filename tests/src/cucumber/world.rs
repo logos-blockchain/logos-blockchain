@@ -147,6 +147,8 @@ pub type ZoneDiscardedPayloads = Arc<tokio::sync::Mutex<HashSet<Inscription>>>;
 pub struct ZoneSequencerIdentity {
     signing_key: Ed25519Key,
     channel_id: ChannelId,
+    node_name: Option<String>,
+    default_wallet_name: Option<String>,
 }
 
 pub struct ZoneSequencerRuntime {
@@ -169,7 +171,6 @@ pub struct ZoneSequencerStartup {
 #[derive(Default)]
 pub struct ZoneState {
     node_name: Option<String>,
-    funding_public_key: Option<ZkPublicKey>,
     indexer: Option<ZoneIndexer<ZoneNodeHttpClient>>,
     sequencers: HashMap<String, ZoneSequencerIdentity>,
     runtimes: HashMap<String, ZoneSequencerRuntime>,
@@ -187,13 +188,6 @@ pub struct ZoneState {
 }
 
 impl ZoneState {
-    pub fn initialize_cluster(&mut self, node_name: String, funding_public_key: ZkPublicKey) {
-        self.reset_zone_state();
-
-        self.node_name = Some(node_name);
-        self.funding_public_key = Some(funding_public_key);
-    }
-
     pub fn clear(&mut self) {
         self.reset_zone_state();
     }
@@ -206,12 +200,24 @@ impl ZoneState {
 
     pub fn register_sequencer(&mut self, alias: String, signing_key: Ed25519Key) -> ChannelId {
         let channel_id = self.channel_for_new_sequencer(&signing_key);
+        let existing_resources = self
+            .sequencers
+            .get(&alias)
+            .map(|sequencer| {
+                (
+                    sequencer.node_name.clone(),
+                    sequencer.default_wallet_name.clone(),
+                )
+            })
+            .unwrap_or_default();
 
         self.sequencers.insert(
             alias.clone(),
             ZoneSequencerIdentity {
                 signing_key,
                 channel_id,
+                node_name: existing_resources.0,
+                default_wallet_name: existing_resources.1,
             },
         );
 
@@ -270,10 +276,57 @@ impl ZoneState {
         self.sequencer_channel_id(&alias)
     }
 
-    pub fn funding_public_key(&self) -> Result<ZkPublicKey, StepError> {
-        self.funding_public_key.ok_or(StepError::LogicalError {
-            message: "Zone funding public key is not initialized".to_owned(),
-        })
+    #[must_use]
+    pub fn has_sequencer(&self, alias: &str) -> bool {
+        self.sequencers.contains_key(alias)
+    }
+
+    pub fn attach_sequencer_resources(
+        &mut self,
+        alias: &str,
+        node_name: String,
+        wallet_name: String,
+    ) -> Result<(), StepError> {
+        if self.node_name.is_none() {
+            self.node_name = Some(node_name.clone());
+        }
+
+        let sequencer = self
+            .sequencers
+            .get_mut(alias)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not registered"),
+            })?;
+
+        sequencer.node_name = Some(node_name);
+        sequencer.default_wallet_name = Some(wallet_name);
+
+        Ok(())
+    }
+
+    pub fn sequencer_node_name(&self, alias: &str) -> Result<&str, StepError> {
+        let sequencer = self
+            .sequencers
+            .get(alias)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not registered"),
+            })?;
+
+        sequencer
+            .node_name
+            .as_deref()
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not attached to a node"),
+            })
+    }
+
+    pub fn sequencer_default_wallet_name(&self, alias: &str) -> Result<&str, StepError> {
+        self.sequencers
+            .get(alias)
+            .and_then(|sequencer| sequencer.default_wallet_name.as_deref())
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' does not have a default wallet"),
+            })
     }
 
     pub fn remember_zone_message(
@@ -645,7 +698,6 @@ impl ZoneState {
         self.abort_all_runtimes();
 
         self.node_name = None;
-        self.funding_public_key = None;
         self.indexer = None;
         self.default_sequencer_alias = None;
         self.sorted_total_payloads = None;
@@ -1614,6 +1666,21 @@ impl CucumberWorld {
 
     pub fn zone_node_url(&self) -> Result<Url, StepError> {
         Ok(self.zone_node_http_client()?.base_url().clone())
+    }
+
+    pub fn zone_node_http_client_for_sequencer(
+        &self,
+        sequencer_alias: &str,
+    ) -> Result<NodeHttpClient, StepError> {
+        let node_name = self.zone.sequencer_node_name(sequencer_alias)?;
+        self.resolve_node_http_client(node_name)
+    }
+
+    pub fn zone_node_url_for_sequencer(&self, sequencer_alias: &str) -> Result<Url, StepError> {
+        Ok(self
+            .zone_node_http_client_for_sequencer(sequencer_alias)?
+            .base_url()
+            .clone())
     }
 
     /// Helper to resolve a node http client to the actual started node name.

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, num::NonZero, sync::Arc, time::Duration};
 
 use cucumber::gherkin::Step;
 use futures::future::join_all;
@@ -7,8 +7,8 @@ use lb_core::mantle::{
     TxHash, Utxo,
     ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
-use lb_testing_framework::{LbcManualCluster, NodeHttpClient};
+use lb_key_management_system_service::keys::Ed25519Key;
+use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
     indexer::ZoneIndexer,
@@ -19,21 +19,19 @@ use tokio::{
     task::JoinHandle,
     time::{error::Elapsed, timeout},
 };
-use tracing::info;
 
 use super::{
     errors::{log_step_error, zone_step_error},
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
-        AtomicZoneDepositRequest, DiscardedPayloads, PublishDeadline, StartedZoneNode,
-        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included,
-        keygen, prepare_zone_cluster, publish_atomic_zone_withdraw, publish_message_with_retry,
-        sequencer_config, sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
+        AtomicZoneDepositRequest, DiscardedPayloads, PublishDeadline, ZoneAccountBalances,
+        ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included, keygen,
+        publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
+        sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
         start_republish_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
-        start_zone_node, submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
-        wait_for_zone_network_ready,
+        submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
     },
-    tables::{ConcurrentZoneMessageRow, group_zone_messages_by_sequencer},
+    tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
 use crate::{
     common::{
@@ -42,9 +40,18 @@ use crate::{
     },
     cucumber::{
         error::{StepError, StepResult},
-        steps::TARGET,
-        wallet::sync::sync_wallet_state_from_feed,
-        world::{CucumberWorld, NodeInfo},
+        steps::{
+            TARGET,
+            manual_nodes::{
+                config_override::set_deployment_config_override,
+                utils::{
+                    NodesToStartUnordered, WalletStartInfo, start_node,
+                    start_nodes_order_respecting_dependencies,
+                },
+            },
+        },
+        wallet::sync::sync_available_utxos_for_wallet,
+        world::{CucumberWorld, WalletInfo},
     },
 };
 
@@ -53,7 +60,7 @@ const ZONE_CHANNEL_DEPOSIT_THRESHOLD: u16 = 1;
 const SEQUENCER_READY_TIMEOUT: Duration = Duration::from_mins(2);
 const SEQUENCER_READY_POLL_TIMEOUT: Duration = Duration::from_secs(10);
 const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30);
-const ZONE_FUNDING_WALLET_NAME: &str = "zone-funding";
+const ZONE_SECURITY_PARAM: u32 = 5;
 
 pub(super) enum DriveMode {
     Passive {
@@ -99,12 +106,6 @@ struct StartedSequencerRuntime {
     discarded_payloads: Option<DiscardedPayloads>,
 }
 
-pub(super) fn register_zone_sequencers(world: &mut CucumberWorld, aliases: Vec<String>) {
-    for alias in aliases {
-        world.zone.register_sequencer(alias, keygen());
-    }
-}
-
 pub(super) fn register_zone_sequencers_with_shared_key(
     world: &mut CucumberWorld,
     source_alias: &str,
@@ -119,61 +120,97 @@ pub(super) fn register_zone_sequencers_with_shared_key(
     Ok(())
 }
 
-pub(super) async fn start_zone_cluster(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    let zone_cluster = prepare_zone_cluster(world.scenario_base_dir.clone())
-        .map_err(|error| zone_step_error(step, &error))?;
+pub(super) async fn start_nodes_with_zone_resources(
+    world: &mut CucumberWorld,
+    step: &Step,
+    rows: Vec<ZoneNodeResourcesRow>,
+) -> StepResult {
+    apply_zone_timing_defaults(world, &step.value)?;
 
-    let funding_public_key = zone_cluster.funding_public_key;
-    let genesis_block_utxos = zone_cluster.genesis_block_utxos;
-    let cluster = zone_cluster.cluster;
+    let nodes = collect_zone_nodes_to_start(&rows);
+    let nodes = start_nodes_order_respecting_dependencies(nodes).inspect_err(|error| {
+        tracing::warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+    })?;
 
-    let started_zone_node = start_zone_node(&cluster, &world.scenario_base_dir)
-        .await
-        .map_err(|error| zone_step_error(step, &error))?;
+    for (node_name, wallet_start_info, mut initial_peers) in nodes {
+        initial_peers.sort();
+        initial_peers.dedup();
 
-    wait_for_zone_network_ready(&cluster)
-        .await
-        .map_err(|error| zone_step_error(step, &error))?;
+        start_node(
+            world,
+            &step.value,
+            &node_name,
+            &wallet_start_info,
+            &initial_peers,
+            false,
+        )
+        .await?;
+    }
 
-    let client = started_zone_node.started_node.client.clone();
-
-    remember_zone_cluster(
-        world,
-        cluster,
-        started_zone_node,
-        funding_public_key,
-        genesis_block_utxos,
-    );
-
-    info!(target: TARGET, node_url = %client.base_url(), "Started zone cluster");
-
-    Ok(())
+    register_zone_resources(world, rows)
 }
 
-fn remember_zone_cluster(
-    world: &mut CucumberWorld,
-    cluster: LbcManualCluster,
-    started_zone_node: StartedZoneNode,
-    funding_public_key: ZkPublicKey,
-    genesis_block_utxos: Vec<Utxo>,
-) {
-    let node_name = "NODE_1".to_owned();
-
-    world.genesis_block_utxos = genesis_block_utxos;
-    world.local_cluster = Some(cluster);
-    world.nodes_info.insert(
-        node_name.clone(),
-        NodeInfo {
-            name: node_name.clone(),
-            started_node: started_zone_node.started_node,
-            run_config: None,
-            chain_info: HashMap::default(),
-            wallet_info: HashMap::default(),
-            runtime_dir: started_zone_node.runtime_dir,
-            immediate_start: false,
-        },
+fn apply_zone_timing_defaults(world: &mut CucumberWorld, step: &str) -> StepResult {
+    world.set_cryptarchia_security_param(
+        NonZero::new(ZONE_SECURITY_PARAM).expect("zone security parameter is non-zero"),
     );
-    world.zone.initialize_cluster(node_name, funding_public_key);
+    world.set_prolonged_bootstrap_period(Duration::ZERO);
+
+    set_deployment_config_override(world, step, "time.slot_duration", "seconds(1)")?;
+    set_deployment_config_override(
+        world,
+        step,
+        "cryptarchia.slot_activation_coeff.numerator",
+        "1",
+    )?;
+    set_deployment_config_override(
+        world,
+        step,
+        "cryptarchia.slot_activation_coeff.denominator",
+        "2",
+    )
+}
+
+fn collect_zone_nodes_to_start(rows: &[ZoneNodeResourcesRow]) -> NodesToStartUnordered {
+    let mut nodes = HashMap::new();
+
+    for row in rows {
+        let entry = nodes
+            .entry(row.node_name.clone())
+            .or_insert_with(|| (Vec::new(), Vec::new()));
+
+        entry.0.push(WalletStartInfo {
+            wallet_name: row.wallet_name.clone(),
+            account_index: row.account_index,
+        });
+
+        if let Some(peer) = &row.connected_to {
+            entry.1.push(peer.clone());
+        }
+    }
+
+    nodes
+}
+
+fn register_zone_resources(
+    world: &mut CucumberWorld,
+    rows: Vec<ZoneNodeResourcesRow>,
+) -> StepResult {
+    for row in rows {
+        for alias in row.sequencers {
+            if !world.zone.has_sequencer(&alias) {
+                world.zone.register_sequencer(alias.clone(), keygen());
+            }
+
+            world.zone.attach_sequencer_resources(
+                &alias,
+                row.node_name.clone(),
+                row.wallet_name.clone(),
+            )?;
+        }
+    }
+
+    Ok(())
 }
 
 pub(super) async fn submit_zone_channel_config(
@@ -206,14 +243,6 @@ pub(super) async fn submit_zone_channel_config(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut checkpoint_rx = world
-        .zone
-        .checkpoint_receiver(sequencer_alias)
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("Zone sequencer '{sequencer_alias}' has no checkpoint watch"),
-        })?;
-    checkpoint_rx.mark_unchanged();
-
     let (result, finalized) = handle
         .channel_config(
             Keys::new_unchecked(authorized_keys),
@@ -229,9 +258,13 @@ pub(super) async fn submit_zone_channel_config(
 
     drop(finalized);
 
-    // Wait until the SDK has published a checkpoint that contains our newly
-    // submitted tx — the watch is updated by the drive loop on its next
-    // iteration after the actor's reply, so a naive read here races.
+    let mut checkpoint_rx = world
+        .zone
+        .checkpoint_receiver(sequencer_alias)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone sequencer '{sequencer_alias}' has no checkpoint watch"),
+        })?;
+    checkpoint_rx.mark_unchanged();
     let checkpoint = timeout(
         Duration::from_secs(30),
         wait_for_checkpoint_with_tx(&mut checkpoint_rx, result.inscription_id),
@@ -245,6 +278,9 @@ pub(super) async fn submit_zone_channel_config(
     })?
     .map_err(|message| StepError::LogicalError { message })?;
 
+    world
+        .zone
+        .set_latest_checkpoint_for(sequencer_alias, checkpoint.clone());
     world
         .zone
         .remember_checkpoint(format!("{transaction_alias}_CHECKPOINT"), checkpoint);
@@ -299,45 +335,39 @@ async fn wait_for_checkpoint_with_tx(
 ) -> Result<SequencerCheckpoint, String> {
     loop {
         let snapshot = rx.borrow_and_update().clone();
-        if let Some(cp) = snapshot
-            && cp.pending_txs.iter().any(|(hash, _)| *hash == tx_hash)
+        if let Some(checkpoint) = snapshot
+            && checkpoint
+                .pending_txs
+                .iter()
+                .any(|(hash, _)| *hash == tx_hash)
         {
-            return Ok(cp);
+            return Ok(checkpoint);
         }
+
         rx.changed()
             .await
-            .map_err(|err| format!("checkpoint watch closed: {err}"))?;
+            .map_err(|error| format!("checkpoint watch closed: {error}"))?;
     }
 }
 
-async fn sync_zone_funding_wallet_utxos(
-    world: &mut CucumberWorld,
-    step: &Step,
-) -> Result<Vec<Utxo>, StepError> {
-    let node_name = world.zone.node_name()?.to_owned();
-    let funding_public_key = world.zone.funding_public_key()?;
+fn resolve_zone_wallet(
+    world: &CucumberWorld,
+    sequencer_alias: &str,
+) -> Result<WalletInfo, StepError> {
+    let wallet_name = world.zone.sequencer_default_wallet_name(sequencer_alias)?;
 
-    Ok(sync_wallet_state_from_feed(
-        world,
-        ZONE_FUNDING_WALLET_NAME,
-        &node_name,
-        funding_public_key,
-    )
-    .await
-    .inspect_err(|e| {
-        tracing::warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-    })?
-    .into_available_utxos())
+    world.resolve_wallet(wallet_name)
 }
 
 fn record_zone_wallet_submission(
     world: &CucumberWorld,
+    wallet_name: &str,
     tx_hash: TxHash,
     reserved_inputs: Vec<Utxo>,
 ) -> StepResult {
     world.with_wallets_mut(|wallets| {
         wallets.record_wallet_reservation(
-            ZONE_FUNDING_WALLET_NAME.to_owned(),
+            wallet_name.to_owned(),
             tx_hash,
             WalletReservedInputs::new(reserved_inputs, Vec::new()),
             0,
@@ -353,9 +383,13 @@ pub(super) async fn submit_zone_deposit_transaction(
     amount: u64,
     metadata: Metadata,
 ) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url())?;
-    let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
-    let available_utxos = sync_zone_funding_wallet_utxos(world, step).await?;
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&channel_alias))?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, &channel_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let available_utxos = log_step_error(
+        step,
+        sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+    )?;
     let ZoneDeposit {
         deposit,
         reserved_inputs,
@@ -367,14 +401,14 @@ pub(super) async fn submit_zone_deposit_transaction(
     )
     .map_err(|error| zone_step_error(step, &error))?;
 
-    let response = submit_zone_deposit(&node_url, &deposit, funding_public_key)
+    let response = submit_zone_deposit(&node_url, &deposit, public_key)
         .await
         .map_err(|error| zone_step_error(step, &error))?;
 
     world
         .zone
         .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
-    record_zone_wallet_submission(world, response, reserved_inputs)?;
+    record_zone_wallet_submission(world, &wallet.wallet_name, response, reserved_inputs)?;
     world.remember_submitted_transaction(transaction_alias, response);
 
     Ok(())
@@ -389,9 +423,13 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     amount: u64,
     metadata: Metadata,
 ) -> StepResult {
-    let node_url = log_step_error(step, world.zone_node_url())?;
-    let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
-    let available_utxos = sync_zone_funding_wallet_utxos(world, step).await?;
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
+    let available_utxos = log_step_error(
+        step,
+        sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+    )?;
     let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Mint {amount} to Alice"));
 
@@ -400,7 +438,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
         sequencer,
         AtomicZoneDepositRequest {
             channel_id: world.zone.sequencer_channel_id(sequencer_alias)?,
-            funding_public_key,
+            funding_public_key: public_key,
             available_utxos,
             amount,
             metadata,
@@ -422,6 +460,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     );
     record_zone_wallet_submission(
         world,
+        &wallet.wallet_name,
         submission.publish.inscription_id,
         submission.reserved_inputs,
     )?;
@@ -438,14 +477,15 @@ pub(super) async fn submit_zone_withdraw_transaction(
     message_alias: String,
     amount: u64,
 ) -> StepResult {
-    let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
     let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Burn {amount}"));
 
     let submission = submit_zone_withdraw(
         sequencer,
         world.zone.sequencer_channel_id(sequencer_alias)?,
-        funding_public_key,
+        public_key,
         amount,
         inscription_data.clone(),
     )
@@ -484,7 +524,8 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
     message_alias: String,
     withdraw_rows: Vec<(String, Vec<u64>)>,
 ) -> StepResult {
-    let funding_public_key = log_step_error(step, world.zone.funding_public_key())?;
+    let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
+    let public_key = log_step_error(step, wallet.public_key())?;
     let total: u64 = withdraw_rows
         .iter()
         .flat_map(|(_, outputs)| outputs.iter())
@@ -503,7 +544,7 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
         publish_atomic_zone_withdraw(
             &sequencer,
             sequencer_events,
-            funding_public_key,
+            public_key,
             outputs_per_arg,
             inscription_data.clone(),
             PublishDeadline::from_now(Duration::from_mins(3)),
@@ -547,7 +588,7 @@ pub(super) fn initialize_zone_indexer(
     sequencer_alias: impl AsRef<str>,
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref();
-    let node_url = log_step_error(step, world.zone_node_url())?;
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(sequencer_alias))?;
     let indexer = ZoneIndexer::new(
         world.zone.sequencer_channel_id(sequencer_alias)?,
         ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url),
@@ -565,7 +606,10 @@ pub(super) async fn publish_zone_messages(
     rows: Vec<(String, Inscription)>,
 ) -> StepResult {
     let sequencer_alias = sequencer_alias.as_ref().to_owned();
-    let node = log_step_error(step, world.zone_node_http_client())?;
+    let node = log_step_error(
+        step,
+        world.zone_node_http_client_for_sequencer(&sequencer_alias),
+    )?;
 
     let published = {
         let sequencer =
@@ -706,8 +750,11 @@ async fn start_named_sequencer_with_config(
     let sequencer_alias = sequencer_alias.as_ref().to_owned();
     let signing_key =
         log_step_error(step, world.zone.sequencer_signing_key(&sequencer_alias))?.clone();
-    let node_client = log_step_error(step, world.zone_node_http_client())?;
-    let node_url = log_step_error(step, world.zone_node_url())?;
+    let node_client = log_step_error(
+        step,
+        world.zone_node_http_client_for_sequencer(&sequencer_alias),
+    )?;
+    let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&sequencer_alias))?;
     let (sequencer, handle) = ZoneSequencer::init_with_config(
         world.zone.sequencer_channel_id(&sequencer_alias)?,
         signing_key,
@@ -847,14 +894,4 @@ fn start_sequencer_runtime(
             discarded_payloads: None,
         },
     }
-}
-
-pub(super) fn ensure_zone_sequencer_exists(world: &mut CucumberWorld, sequencer_alias: &str) {
-    if world.zone.sequencer_signing_key(sequencer_alias).is_ok() {
-        return;
-    }
-
-    world
-        .zone
-        .register_sequencer(sequencer_alias.to_owned(), keygen());
 }

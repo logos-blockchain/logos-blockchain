@@ -3,12 +3,14 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_sequencer_publish_and_indexer_read
   Scenario: Publish messages and read them from the zone indexer
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-      | SEQ_B |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias | data           |
@@ -32,11 +34,14 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_sequencer_checkpoint_resume
   Scenario: Resume zone sequencer from checkpoint
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias | data      |
@@ -61,11 +66,14 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_sequencer_stale_checkpoint_resume
   Scenario: Resume zone sequencer from stale checkpoint
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias | data  |
@@ -98,14 +106,17 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_sequential_multi_sequencer
   Scenario: Sequential multi-sequencer publishing keeps channel order
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
     And the following zone sequencers share the signing key of "SEQ_A":
       | alias |
       | SEQ_B |
-    When the zone node is at height 1 in 120 seconds
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias | data |
@@ -155,15 +166,18 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_concurrent_multi_sequencer
   Scenario: Concurrent multi-sequencer publishing converges without duplicates
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers          |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B, SEQ_C |
     And the following zone sequencers share the signing key of "SEQ_A":
       | alias |
       | SEQ_B |
       | SEQ_C |
-    When the zone node is at height 1 in 120 seconds
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     When I stop zone sequencer "SEQ_A"
     And each listed zone sequencer publishes 20 generated zone messages concurrently with republish policy:
@@ -177,12 +191,14 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_sorted_conflict_resolution
   Scenario: Sorted conflict policy preserves per-sequencer order and converges without duplicates
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-      | SEQ_B |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" submits zone config transaction:
       | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
@@ -206,12 +222,14 @@ Feature: Zone SDK
 
   @zone_ci
   Scenario: Round-robin waits for turn and submits pending messages
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-      | SEQ_B |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencers:
       | alias | indexer | pending_submit_depth | passive_republish_orphans |
       | SEQ_A | true    | 2                    | false                     |
@@ -256,12 +274,14 @@ Feature: Zone SDK
 
   @zone_ci
   Scenario: Round-robin submits all pending messages with no active depth limit
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-      | SEQ_B |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencers:
       | alias | indexer | pending_submit_depth | passive_republish_orphans |
       | SEQ_A | true    | unlimited            | false                     |
@@ -305,12 +325,14 @@ Feature: Zone SDK
 
   @zone_ci
   Scenario: Round-robin publishes immediately when it is our turn
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-      | SEQ_B |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" submits zone config transaction:
       | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
@@ -329,13 +351,14 @@ Feature: Zone SDK
 
   @zone_ci
   Scenario: Round-robin with multiple sequencers dynamically added
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-      | SEQ_B |
-      | SEQ_C |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers          |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B, SEQ_C |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencers:
       | alias | indexer | pending_submit_depth | passive_republish_orphans |
       | SEQ_A | true    | default              | true                      |
@@ -381,18 +404,19 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_balance_conditioned_republish
   Scenario: Balance-aware republish policy drops unaffordable zone updates
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-      | SEQ_B |
-      | SEQ_C |
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers          |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B, SEQ_C |
     And the following zone account balances exist:
       | account | balance |
       | alice   | 10      |
       | bob     | 10      |
       | charlie | 10      |
-    When the zone node is at height 1 in 120 seconds
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" submits zone config transaction:
       | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
@@ -416,13 +440,14 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_concurrent_identical_payloads
   Scenario: Concurrent identical payloads converge to one inscription per publish
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-      | SEQ_B |
-      | SEQ_C |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers          |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B, SEQ_C |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" submits zone config transaction:
       | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
@@ -440,11 +465,15 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_subscribe_to_finalized_deposit
   Scenario: Finalized deposits are returned by the zone indexer
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
+    When node "NODE_1" is at height 2 in 300 seconds
+    And I do a coin split for "WALLET_1A" of 3 UTXOs valued at 1 LGO tokens each
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias | data                |
@@ -459,11 +488,14 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_atomic_deposit_inscription
   Scenario: Atomic deposit and inscription are finalized together
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
+    When node "NODE_1" is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias | data                |
@@ -482,11 +514,15 @@ Feature: Zone SDK
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_subscribe_to_finalized_withdraw
   Scenario: Finalized withdraws are returned by the zone indexer and sequencer
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
-    When the zone node is at height 1 in 120 seconds
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
+    When node "NODE_1" is at height 2 in 300 seconds
+    And I do a coin split for "WALLET_1A" of 3 UTXOs valued at 3 LGO tokens each
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias | data                |
@@ -510,14 +546,18 @@ Feature: Zone SDK
 
   @zone_ci
   Scenario: Atomic withdraw bundle finalizes alongside multi-sequencer publishing
-    Given I have a zone cluster
-    And the following zone sequencers exist:
-      | alias |
-      | SEQ_A |
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
     And the following zone sequencers share the signing key of "SEQ_A":
       | alias |
       | SEQ_B |
-    When the zone node is at height 1 in 120 seconds
+    When node "NODE_1" is at height 2 in 300 seconds
+    And I do a coin split for "WALLET_1A" of 3 UTXOs valued at 5 LGO tokens each
     And I start zone sequencer "SEQ_A" with indexer
     And sequencer "SEQ_A" publishes the following zone messages:
       | alias    | data                |
