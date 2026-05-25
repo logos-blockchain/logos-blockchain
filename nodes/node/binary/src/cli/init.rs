@@ -407,6 +407,11 @@ mod tests {
             ibd,
             log_filter: None,
             kms_file: None,
+            net_node_key: None,
+            blend_signing_key_id: None,
+            blend_secret_key_id: None,
+            cryptarchia_funding_pk: None,
+            sdp_funding_pk: None,
         };
         let network_key = lb_libp2p::ed25519::SecretKey::generate();
         let keys = generate_keys();
@@ -474,6 +479,11 @@ mod tests {
                 "warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error".to_owned(),
             ),
             kms_file: None,
+            net_node_key: None,
+            blend_signing_key_id: None,
+            blend_secret_key_id: None,
+            cryptarchia_funding_pk: None,
+            sdp_funding_pk: None,
         };
 
         let tracing_config = build_tracing_config(&args).unwrap();

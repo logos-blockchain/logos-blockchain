@@ -9,13 +9,14 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use lb_key_management_system_service::{backend::preload::KeyId, keys::ZkPublicKey};
 use lb_libp2p::Multiaddr;
 
 use crate::config::{
     ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
-    LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, StateArgs, UserConfig,
-    deserialize_config_at_path, update_api, update_blend, update_cryptarchia, update_network,
-    update_state, update_tracing,
+    LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, SdpArgs, StateArgs, UserConfig,
+    deserialize_config_at_path, parse_hex_public_key, update_api, update_blend, update_cryptarchia,
+    update_network, update_sdp, update_state, update_tracing,
 };
 
 fn long_version() -> String {
@@ -72,6 +73,9 @@ pub struct CliArgs {
     /// Overrides cryptarchia config.
     #[clap(flatten)]
     cryptarchia: CryptarchiaArgs,
+    /// Overrides sdp config.
+    #[clap(flatten)]
+    sdp: SdpArgs,
     /// Overrides http config.
     #[clap(flatten)]
     api: ApiArgs,
@@ -103,7 +107,7 @@ impl CliArgs {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Initialize a new user config with generated keys
-    Init(InitArgs),
+    Init(Box<InitArgs>),
     /// Publish text inscriptions as zone blocks
     Inscribe(lb_tui_zone::InscribeArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
@@ -128,9 +132,36 @@ pub struct InitArgs {
     #[clap(long = "net-port", default_value = "3000")]
     pub net_port: u16,
 
+    /// Network swarm key.
+    #[clap(long = "net-node-key", env = "NET_NODE_KEY")]
+    pub net_node_key: Option<String>,
+
     /// Blend listen port
     #[clap(long = "blend-port", default_value = "3400")]
     pub blend_port: u16,
+
+    /// Blend signing key.
+    #[clap(long = "blend-signing-key-id", env = "BLEND_SIGNING_KEY_ID")]
+    blend_signing_key_id: Option<KeyId>,
+
+    /// Blend secret key.
+    #[clap(long = "blend-secret-key-id", env = "BLEND_SECRET_KEY_ID")]
+    blend_secret_key_id: Option<KeyId>,
+
+    /// Cryptarchia funding public key.
+    #[clap(
+        long = "cryptarchia-funding-pk",
+        env = "CRYPTARCHIA_FUNDING_PK",
+        value_parser = parse_hex_public_key
+    )]
+    cryptarchia_funding_pk: Option<ZkPublicKey>,
+
+    #[clap(
+        long = "sdp-funding-pk",
+        env = "SDP_FUNDING_PK",
+        value_parser = parse_hex_public_key
+    )]
+    sdp_funding_pk: Option<ZkPublicKey>,
 
     /// HTTP API listen address
     #[clap(long = "http-addr", default_value = "127.0.0.1:8080")]
@@ -196,6 +227,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
         network: network_args,
         blend: blend_args,
         cryptarchia: cryptarchia_args,
+        sdp: sdp_args,
         deployment: deployment_args,
         state: state_args,
         ..
@@ -204,6 +236,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_network(&mut user_config.network, network_args)?;
     update_blend(&mut user_config.blend, blend_args);
     update_cryptarchia(&mut user_config.cryptarchia, cryptarchia_args);
+    update_sdp(&mut user_config.sdp, sdp_args);
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
 

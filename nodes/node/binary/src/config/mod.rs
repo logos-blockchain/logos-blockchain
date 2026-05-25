@@ -258,6 +258,16 @@ pub struct CryptarchiaArgs {
     funding_pk: Option<ZkPublicKey>,
 }
 
+#[derive(Parser, Debug, Clone, Copy)]
+pub struct SdpArgs {
+    #[clap(
+        long = "sdp-funding-pk",
+        env = "SDP_FUNDING_PK",
+        value_parser = parse_hex_public_key
+    )]
+    funding_pk: Option<ZkPublicKey>,
+}
+
 #[derive(Parser, Debug, Clone)]
 pub struct ApiArgs {
     #[clap(long = "http-host", env = "HTTP_HOST")]
@@ -523,6 +533,14 @@ pub const fn update_cryptarchia(
     }
 }
 
+pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
+    let SdpArgs { funding_pk } = sdp_args;
+
+    if let Some(pk) = funding_pk {
+        sdp.set_funding_pk(pk);
+    }
+}
+
 pub fn update_api(api: &mut ApiConfig, args: ApiArgs) {
     let ApiArgs { addr, cors_origins } = args;
 
@@ -660,7 +678,7 @@ impl From<RunConfig> for UserConfig {
     }
 }
 
-fn parse_hex_public_key(key: &str) -> Result<ZkPublicKey, String> {
+pub fn parse_hex_public_key(key: &str) -> Result<ZkPublicKey, String> {
     let bytes = hex::decode(key).map_err(|e| format!("Failed to parse hex string: {e}"))?;
 
     let fr =
