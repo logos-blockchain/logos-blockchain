@@ -292,7 +292,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            encoding::{Ops, TransferInputs, TransferOutputs},
+            encoding::{Ops, TransferOutputs},
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::channel::{Ed25519PublicKey, inscribe::Inscription},
         },
@@ -344,7 +344,7 @@ mod tests {
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
     fn create_tx(mut ops: Vec<Op>, mut ops_proofs: Vec<OpProof>) -> SignedMantleTx {
         let transfer_op = TransferOp::new(
-            Inputs::new(TransferInputs::default()),
+            Inputs::empty(),
             Outputs::new(TransferOutputs::try_from(vec![create_test_note(1000)]).unwrap()),
         );
         let mut new_ops = vec![Op::Transfer(transfer_op)];

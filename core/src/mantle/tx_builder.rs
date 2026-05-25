@@ -8,7 +8,7 @@ use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
-        encoding::TransferOutputs,
+        encoding::LedgerInputs,
         gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
@@ -45,7 +45,7 @@ fn too_many_from_bounded(err: &BoundedError, kind: &'static str) -> TxBuilderErr
 #[derive(Debug, Clone)]
 pub struct MantleTxBuilder {
     mantle_tx: MantleTx,
-    ledger_inputs: Vec<Utxo>,
+    ledger_inputs: LedgerInputs,
     pending_transfer: TransferOp,
     // Maps a Proof to its Op by the Op Index
     channel_multi_sig_proofs: HashMap<usize, ChannelMultiSigProof>,
@@ -58,11 +58,8 @@ impl MantleTxBuilder {
     pub fn new(context: MantleTxContext) -> Self {
         Self {
             mantle_tx: MantleTx([].into()),
-            ledger_inputs: vec![],
-            pending_transfer: TransferOp::new(
-                Inputs::empty(),
-                Outputs::new(TransferOutputs::default()),
-            ),
+            ledger_inputs: LedgerInputs::default(),
+            pending_transfer: TransferOp::new(Inputs::empty(), Outputs::empty()),
             channel_multi_sig_proofs: HashMap::new(),
             context,
         }
@@ -109,12 +106,15 @@ impl MantleTxBuilder {
         utxos: impl IntoIterator<Item = Utxo>,
     ) -> Result<Self, TxBuilderError> {
         for utxo in utxos {
+            debug_assert_eq!(self.pending_transfer.inputs.len(), self.ledger_inputs.len());
             self.pending_transfer
                 .inputs
                 .as_mut()
                 .try_push(utxo.id())
                 .map_err(|err| too_many_from_bounded(&err, "inputs"))?;
-            self.ledger_inputs.push(utxo);
+            self.ledger_inputs
+                .try_push(utxo)
+                .map_err(|err| too_many_from_bounded(&err, "inputs"))?;
         }
         Ok(self)
     }

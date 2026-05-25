@@ -8,7 +8,7 @@ use crate::{
     header::Header,
     mantle::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
-        encoding::{Ops, TransferInputs, TransferOutputs},
+        encoding::{Ops, TransferOutputs},
         genesis_tx::{self, GenesisTx},
         ledger::{Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
@@ -1100,7 +1100,7 @@ impl GenesisBlockBuilder<WithAll> {
         } = self;
         // Order is important to keep here
         let ops: Vec<Op> = std::iter::once(Op::Transfer(TransferOp::new(
-            Inputs::new(TransferInputs::default()),
+            Inputs::empty(),
             Outputs::new(notes),
         )))
         .chain(std::iter::once(Op::ChannelInscribe(inscription)))
@@ -1215,7 +1215,7 @@ mod tests {
     fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
-                Inputs::new(TransferInputs::default()),
+                Inputs::empty(),
                 Outputs::new(TransferOutputs::try_from(vec![make_note(1_000)]).unwrap()),
             )),
             Op::ChannelInscribe(valid_inscription()),

@@ -74,6 +74,11 @@ impl Outputs {
         Self(notes)
     }
 
+    #[must_use]
+    pub fn empty() -> Self {
+        Self(TransferOutputs::default())
+    }
+
     pub fn utxos<O: OpId>(&self, op: &O) -> impl Iterator<Item = Utxo> {
         self.0.iter().enumerate().map(move |(index, note)| Utxo {
             op_id: op.op_id(),

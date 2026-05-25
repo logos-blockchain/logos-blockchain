@@ -661,6 +661,7 @@ pub mod tests {
             AuthenticatedMantleTx, MantleTx, Note, Op,
             OpProof::ZkSig,
             SignedMantleTx, Transaction as _,
+            encoding::{TransferInputs, TransferOutputs},
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::leader_claim::VoucherCm,
@@ -1268,8 +1269,8 @@ pub mod tests {
             .collect::<Vec<_>>();
         let inputs = inputs.iter().map(|(_, utxo)| utxo.id()).collect::<Vec<_>>();
         let transfer_op = TransferOp::new(
-            Inputs::new(inputs.try_into().unwrap()),
-            Outputs::new(outputs.try_into().unwrap()),
+            Inputs::new(TransferInputs::try_from(inputs).expect("Invalid inputs size")),
+            Outputs::new(TransferOutputs::try_from(outputs).expect("Invalid outputs size")),
         );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op.clone())].into());
         let transfer_sig = ZkKey::multi_sign(&sks, &mantle_tx.hash().to_fr()).unwrap();

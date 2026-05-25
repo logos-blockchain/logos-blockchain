@@ -734,7 +734,7 @@ mod tests {
         events::{Event, EventPayload},
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _,
-            encoding::Ops,
+            encoding::{Ops, TransferInputs, TransferOutputs},
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{
@@ -762,8 +762,8 @@ mod tests {
 
     fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
         let transfer_op = TransferOp::new(
-            Inputs::new(inputs.try_into().unwrap()),
-            Outputs::new(outputs.try_into().unwrap()),
+            Inputs::new(TransferInputs::try_from(inputs).expect("Invalid inputs size")),
+            Outputs::new(TransferOutputs::try_from(outputs).expect("Invalid outputs size")),
         );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
         SignedMantleTx {
