@@ -164,7 +164,9 @@ pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationS
 
 #[cfg(test)]
 mod test {
-    use std::{path::PathBuf, sync::LazyLock};
+    use std::{ffi::CString, path::PathBuf, sync::LazyLock};
+
+    use tempfile::TempDir;
 
     use crate::api::lifecycle::{start_lb_node, stop_node};
 
@@ -175,11 +177,6 @@ mod test {
             .parent()
             .expect("Failed to get the parent directory of crate.")
             .to_path_buf()
-    });
-    static CRATE_DIR: LazyLock<PathBuf> = LazyLock::new(|| {
-        let dir = REPOSITORY_ROOT.join("c-bindings");
-        assert!(dir.exists());
-        dir
     });
     static NODE_DIR: LazyLock<PathBuf> = LazyLock::new(|| REPOSITORY_ROOT.join("nodes/node"));
     static STANDALONE_NODE_CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
@@ -193,56 +190,57 @@ mod test {
         file
     });
 
-    struct NodeStateGuard {
-        location: PathBuf,
-        existed_before: bool,
+    struct TestConfigPaths {
+        _temp_dir: TempDir,
+        node_config: CString,
+        deployment_config: CString,
     }
 
-    impl NodeStateGuard {
+    impl TestConfigPaths {
         #[must_use]
-        pub fn new(location: PathBuf) -> Self {
-            let exists = location.exists();
+        fn new() -> Self {
+            let temp_dir = TempDir::new().expect("Failed to create temp dir for lifecycle test");
+            let log_dir = temp_dir.path().join("state/logs");
+            std::fs::create_dir_all(&log_dir).expect("Failed to create isolated log dir");
+
+            let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
+            let deployment_config_path = temp_dir.path().join("standalone-deployment-config.yaml");
+
+            let node_config = std::fs::read_to_string(STANDALONE_NODE_CONFIG_PATH.as_path())
+                .expect("Failed to read standalone node config")
+                .replace("./state/logs", &log_dir.to_string_lossy());
+            let node_config = format!(
+                "{node_config}\napi:\n  backend:\n    listen_address: 127.0.0.1:0\n  testing:\n    listen_address: 127.0.0.1:0\n"
+            );
+            std::fs::write(&node_config_path, node_config)
+                .expect("Failed to write isolated node config");
+            std::fs::copy(
+                STANDALONE_DEPLOYMENT_CONFIG_PATH.as_path(),
+                &deployment_config_path,
+            )
+            .expect("Failed to copy standalone deployment config");
+
+            let node_config = CString::new(node_config_path.to_string_lossy().as_bytes())
+                .expect("Node config path should not contain NUL");
+            let deployment_config =
+                CString::new(deployment_config_path.to_string_lossy().as_bytes())
+                    .expect("Deployment config path should not contain NUL");
+
             Self {
-                location,
-                existed_before: exists,
+                _temp_dir: temp_dir,
+                node_config,
+                deployment_config,
             }
-        }
-
-        #[must_use]
-        pub fn from_current_crate() -> Self {
-            let current_dir = CRATE_DIR.clone();
-            let state_dir = current_dir.join("state");
-            Self::new(state_dir)
-        }
-
-        fn cleanup(&self) {
-            if !self.existed_before {
-                drop(std::fs::remove_dir_all(&self.location));
-            }
-        }
-    }
-
-    impl Drop for NodeStateGuard {
-        fn drop(&mut self) {
-            self.cleanup();
         }
     }
 
     #[test]
     fn test_basic_lifecycle() {
-        let _guard = NodeStateGuard::from_current_crate();
+        let test_paths = TestConfigPaths::new();
 
         let start_status = start_lb_node(
-            STANDALONE_NODE_CONFIG_PATH
-                .to_str()
-                .unwrap()
-                .as_ptr()
-                .cast::<i8>(),
-            STANDALONE_DEPLOYMENT_CONFIG_PATH
-                .to_str()
-                .unwrap()
-                .as_ptr()
-                .cast::<i8>(),
+            test_paths.node_config.as_ptr(),
+            test_paths.deployment_config.as_ptr(),
         );
 
         assert!(

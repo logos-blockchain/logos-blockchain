@@ -30,5 +30,8 @@ tokio                 = { workspace = true }
 tokio-stream          = { workspace = true }
 tracing               = { workspace = true }
 
+[dev-dependencies]
+tokio = { features = ["macros", "rt", "test-util", "time"], workspace = true }
+
 [features]
 ntp = ["dep:sntpc", "dep:thiserror", "tokio/net"]

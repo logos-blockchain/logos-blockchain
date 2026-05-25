@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded_vec::BoundedVec;
+use lb_utils::bounded_vec::UpperBoundedVec;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 
@@ -16,12 +16,13 @@ use crate::{
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
         nom::{NomBoundedVec, NomDecode, NomEncode},
+        ops::channel::config::Keys,
     },
 };
 
 pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
-pub type Inscription = BoundedVec<u8, MAX_BYTES>;
-type NomInscription<'a> = NomBoundedVec<'a, u8, MAX_BYTES, 4>;
+pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
+type NomInscription<'a> = NomBoundedVec<'a, u8, { Inscription::MIN }, { Inscription::MAX }, 4>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InscriptionOp {
@@ -147,7 +148,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
             .get(&self.channel_id)
             .cloned()
             .unwrap_or_else(|| ChannelState {
-                accredited_keys: vec![self.signer].into(),
+                accredited_keys: Keys::from(self.signer).into(),
                 configuration_threshold: 1,
                 tip_message: MsgId::root(),
                 tip_slot: ctx.block_slot,

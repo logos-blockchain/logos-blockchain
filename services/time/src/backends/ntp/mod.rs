@@ -116,10 +116,9 @@ pub struct NtpStream {
     /// `SlotTick` interval stream. This stream is replaced when an internal
     /// clock update happens.
     slot_timer: EpochSlotTickStream,
-    /// `last_emitted` is used to detect if the new computed slot after an NTP
-    /// update goes backwards, which can happen if the NTP server time is
-    /// not monotonic. In that case we clamp the new slot to the last
-    /// emitted one and log a warning.
+    /// `last_emitted` preserves externally visible monotonicity across NTP
+    /// corrections, including backward corrections that must pause emission
+    /// until corrected time catches up.
     last_emitted_slot: Slot,
 }
 impl Stream for NtpStream {
@@ -134,9 +133,17 @@ impl Stream for NtpStream {
 }
 
 impl NtpStream {
+    /// Rebase the internal slot timer to the most recent NTP-derived slot.
+    ///
+    /// Policy:
+    /// - Backward NTP corrections never move `last_emitted_slot` backwards. We
+    ///   replace the synthetic timer and pause emission until corrected time
+    ///   reaches a slot strictly greater than the last emitted one.
+    /// - Forward NTP corrections replace the synthetic timer immediately. This
+    ///   can skip intermediate slot numbers if NTP jumps ahead.
     #[expect(
         clippy::cognitive_complexity,
-        reason = "Keep NTP update flow local in this PR"
+        reason = "TODO: address this in a dedicated refactor"
     )]
     fn handle_ntp_update(self: Pin<&mut Self>, cx: &mut Context<'_>) {
         let this = self.get_mut();
@@ -175,40 +182,47 @@ impl NtpStream {
         };
 
         let current_slot = Slot::from_offset_and_config(date, this.slot_config);
-        if current_slot < this.last_emitted_slot {
-            tracing::warn!(
-                target: LOG_TARGET,
-                "NTP resync moved backwards: computed_slot={current_slot:?}, \
-                last_emitted_slot={:?}; clamping",
-                this.last_emitted_slot
-            );
-            return;
-        }
-        tracing::trace!(
-            target: LOG_TARGET,
-            "Applying NTP clock update for slot {current_slot:?} with roundtrip {}us",
-            roundtrip.as_micros()
-        );
-
         let epoch_config = this.epoch_config;
         let base_period_length = this.base_period_length;
-        (_, this.slot_timer) = slot_timer(
+        let (_, new_slot_timer) = slot_timer(
             this.slot_config,
             date,
             current_slot,
             epoch_config,
             base_period_length,
         );
+
+        if current_slot < this.last_emitted_slot {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "NTP resync moved backwards: computed_slot={current_slot:?}, \
+                last_emitted_slot={:?}; pausing until NTP catches up",
+                this.last_emitted_slot
+            );
+            this.slot_timer = new_slot_timer;
+            return;
+        }
+
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Applying NTP clock update for slot {current_slot:?} with roundtrip {}us",
+            roundtrip.as_micros()
+        );
+
+        this.slot_timer = new_slot_timer;
         this.last_emitted_slot = current_slot;
     }
 
-    // Polls the slot_timer and clamps slot to never go backwards.
+    // Emit only strictly increasing slots. After a backward NTP correction this
+    // keeps the rebased timer paused until corrected time catches up; after a
+    // forward correction it allows the rebased stream to resume from the new
+    // NTP-derived timeline, potentially skipping slots.
     fn poll_slot_timer(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<SlotTick>> {
         let this = self.as_mut().get_mut();
         match this.slot_timer.as_mut().poll_next_unpin(cx) {
             Poll::Ready(Some(tick)) => {
                 // Clamp slot to never go backwards
-                if tick.slot < this.last_emitted_slot {
+                if tick.slot <= this.last_emitted_slot {
                     return Poll::Pending;
                 }
                 this.last_emitted_slot = tick.slot;
@@ -282,6 +296,31 @@ mod tests {
         }
     }
 
+    enum MockNtpResultStep {
+        Yield(NtpTestData),
+        Pending,
+    }
+
+    struct MockNtpResultStepStream {
+        steps: Vec<MockNtpResultStep>,
+        idx: usize,
+    }
+    impl Stream for MockNtpResultStepStream {
+        type Item = NtpResult;
+        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            if self.idx >= self.steps.len() {
+                return Poll::Ready(None);
+            }
+            let poll = match self.steps.get(self.idx) {
+                Some(MockNtpResultStep::Yield(data)) => Poll::Ready(Some(mock_ntp_result(*data))),
+                Some(MockNtpResultStep::Pending) => Poll::Pending,
+                None => Poll::Ready(None),
+            };
+            self.idx += 1;
+            poll
+        }
+    }
+
     // Mock slot_timer that always yields a SlotTick with the current slot
     struct MockSlotTimer {
         slot: Slot,
@@ -293,6 +332,26 @@ mod tests {
                 epoch: 0.into(),
                 slot: self.slot,
             }))
+        }
+    }
+
+    struct MockSlotTimerSequence {
+        slots: Vec<Slot>,
+        idx: usize,
+    }
+    impl Stream for MockSlotTimerSequence {
+        type Item = SlotTick;
+        fn poll_next(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            if self.idx < self.slots.len() {
+                let slot = self.slots[self.idx];
+                self.idx += 1;
+                Poll::Ready(Some(SlotTick {
+                    epoch: 0.into(),
+                    slot,
+                }))
+            } else {
+                Poll::Pending
+            }
         }
     }
 
@@ -500,6 +559,216 @@ mod tests {
     async fn test_forward_and_backward_jumps_ntp() {
         let (ntp_data, initial_slot) = ntp_data_set_forward_and_backward_jumps();
         check_monotonic_slots(ntp_data, initial_slot);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_backward_ntp_update_rebases_ahead_slot_stream() {
+        let (slot_config, epoch_config, base_period_length) = test_configs();
+        let mut stream = NtpStream {
+            interval: Box::pin(MockNtpResultStream {
+                data: vec![NtpTestData {
+                    sec: 7,
+                    sec_fraction: 0,
+                    offset: 0,
+                    roundtrip: 0,
+                    stratum: 1,
+                    leap: 0,
+                }],
+                idx: 0,
+            }),
+            slot_config,
+            epoch_config,
+            base_period_length,
+            slot_timer: Box::pin(MockSlotTimerSequence {
+                slots: vec![Slot::new(11)],
+                idx: 0,
+            }),
+            last_emitted_slot: Slot::new(10),
+        };
+
+        // Step 1: consume a backward NTP correction to slot 7.
+        // Expected: the old synthetic `11` is discarded and nothing is emitted yet.
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 2: corrected time has only reached synthetic slot 8.
+        // Expected: still paused because 8 <= last_emitted_slot (10).
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 3: corrected time has reached slot 9.
+        // Expected: still paused because 9 <= 10.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 4: corrected time has reached slot 10.
+        // Expected: still paused because duplicates are suppressed (`<=
+        // last_emitted_slot`).
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 5: corrected time reaches slot 11.
+        // Expected: emission resumes at the first slot strictly greater than 10.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(
+            futures::poll!(stream.next()),
+            Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(11)
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_forward_ntp_update_skips_to_rebased_slot_stream() {
+        let (slot_config, epoch_config, base_period_length) = test_configs();
+        let mut stream = NtpStream {
+            interval: Box::pin(MockNtpResultStream {
+                data: vec![NtpTestData {
+                    sec: 20,
+                    sec_fraction: 0,
+                    offset: 0,
+                    roundtrip: 0,
+                    stratum: 1,
+                    leap: 0,
+                }],
+                idx: 0,
+            }),
+            slot_config,
+            epoch_config,
+            base_period_length,
+            slot_timer: Box::pin(MockSlotTimerSequence {
+                slots: vec![Slot::new(11)],
+                idx: 0,
+            }),
+            last_emitted_slot: Slot::new(10),
+        };
+
+        // Step 1: consume a forward NTP correction to slot 20.
+        // Expected: the stale synthetic `11` is discarded and nothing is emitted
+        // immediately.
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 2: one slot later, the rebased timer reaches slot 21.
+        // Expected: emission resumes on the rebased timeline, skipping 11..20.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(
+            futures::poll!(stream.next()),
+            Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(21)
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_on_time_forward_on_time_backward_ntp_sequence() {
+        let (slot_config, epoch_config, base_period_length) = test_configs();
+        let mut stream = NtpStream {
+            interval: Box::pin(MockNtpResultStepStream {
+                steps: vec![
+                    MockNtpResultStep::Yield(NtpTestData {
+                        sec: 10,
+                        sec_fraction: 0,
+                        offset: 0,
+                        roundtrip: 0,
+                        stratum: 1,
+                        leap: 0,
+                    }),
+                    MockNtpResultStep::Yield(NtpTestData {
+                        sec: 20,
+                        sec_fraction: 0,
+                        offset: 0,
+                        roundtrip: 0,
+                        stratum: 1,
+                        leap: 0,
+                    }),
+                    MockNtpResultStep::Pending,
+                    MockNtpResultStep::Yield(NtpTestData {
+                        sec: 21,
+                        sec_fraction: 0,
+                        offset: 0,
+                        roundtrip: 0,
+                        stratum: 1,
+                        leap: 0,
+                    }),
+                    MockNtpResultStep::Pending,
+                    MockNtpResultStep::Yield(NtpTestData {
+                        sec: 19,
+                        sec_fraction: 0,
+                        offset: 0,
+                        roundtrip: 0,
+                        stratum: 1,
+                        leap: 0,
+                    }),
+                    MockNtpResultStep::Pending,
+                    MockNtpResultStep::Pending,
+                    MockNtpResultStep::Pending,
+                    MockNtpResultStep::Pending,
+                ],
+                idx: 0,
+            }),
+            slot_config,
+            epoch_config,
+            base_period_length,
+            slot_timer: Box::pin(MockSlotTimerSequence {
+                slots: vec![Slot::new(11)],
+                idx: 0,
+            }),
+            last_emitted_slot: Slot::new(10),
+        };
+
+        // Step 1: consume an on-time NTP update for slot 10.
+        // Expected: the timer is rebased to the same slot and still emits nothing
+        // immediately.
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 2: consume a forward NTP update to slot 20.
+        // Expected: the old synthetic `11` is discarded and nothing is emitted
+        // immediately.
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 3: no NTP update on this poll; one second of simulated time passes.
+        // Expected: the rebased forward timer now emits slot 21.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(
+            futures::poll!(stream.next()),
+            Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(21)
+        ));
+
+        // Step 4: consume another on-time NTP update for slot 21.
+        // Expected: the stream is rebased to 21 and does not duplicate slot 21
+        // immediately.
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 5: no NTP update on this poll; one second of simulated time passes.
+        // Expected: the rebased on-time timer emits slot 22.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(
+            futures::poll!(stream.next()),
+            Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(22)
+        ));
+
+        // Step 6: consume a backward NTP update to slot 19.
+        // Expected: no regression is emitted; the stream pauses at last_emitted_slot =
+        // 22.
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 7: corrected time reaches slot 20.
+        // Expected: still paused because 20 <= 22.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 8: corrected time reaches slot 21.
+        // Expected: still paused because 21 <= 22.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 9: corrected time reaches slot 22.
+        // Expected: still paused because duplicates are suppressed.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(futures::poll!(stream.next()), Poll::Pending));
+
+        // Step 10: corrected time reaches slot 23.
+        // Expected: emission resumes at the first slot strictly greater than 22.
+        tokio::time::advance(Duration::from_secs(1)).await;
+        assert!(matches!(
+            futures::poll!(stream.next()),
+            Poll::Ready(Some(SlotTick { slot, .. })) if slot == Slot::new(23)
+        ));
     }
 
     #[tokio::test]

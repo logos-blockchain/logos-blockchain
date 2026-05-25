@@ -13,8 +13,8 @@ use lb_core::{
         ops::{
             Op, OpId as _, OpProof,
             channel::{
-                ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId,
-                config::ChannelConfigOp,
+                ChannelId, ChannelKeyIndex, MsgId,
+                config::{ChannelConfigOp, Keys},
                 inscribe::{Inscription, InscriptionOp},
                 withdraw::ChannelWithdrawOp,
             },
@@ -239,7 +239,7 @@ enum ActorRequest {
         reply: tokio::sync::oneshot::Sender<Result<PublishResult, Error>>,
     },
     ChannelConfig {
-        keys: Vec<Ed25519PublicKey>,
+        keys: Keys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -413,7 +413,7 @@ where
     /// resolves when the transaction is finalized.
     pub async fn channel_config(
         &self,
-        keys: Vec<Ed25519PublicKey>,
+        keys: Keys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
@@ -2028,7 +2028,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
                     tx_hash,
                     parent_msg,
                     this_msg: config.id(),
-                    payload: Inscription::default(),
+                    payload: [].into(),
                 };
                 last_in_block = Some(info.this_msg);
                 items.push(info);
@@ -2103,7 +2103,7 @@ fn create_inscribe_tx(
 fn create_channel_config_tx(
     channel_id: ChannelId,
     signing_keys: &[&Ed25519Key],
-    keys: Vec<Ed25519PublicKey>,
+    keys: Keys,
     posting_timeframe: SlotTimeframe,
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,

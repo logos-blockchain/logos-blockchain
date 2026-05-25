@@ -1,15 +1,12 @@
 pub mod blend;
 pub mod locked_notes;
 
-use core::{
-    iter::{Chain, Once, once},
-    slice,
-    str::FromStr,
-};
-use std::{hash::Hash, vec};
+use core::str::FromStr;
+use std::hash::Hash;
 
 use blake2::{Blake2b, Digest as _};
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_utils::bounded_vec::LowerBoundedVec;
 use multiaddr::{Multiaddr, Protocol};
 use nom::{IResult, Parser as _, bytes::complete::take};
 use serde::{Deserialize, Serialize};
@@ -48,65 +45,9 @@ impl ServiceParameters {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(into = "Vec<Locator>", try_from = "Vec<Locator>")]
-pub struct Locators(Locator, Vec<Locator>);
-
-impl Locators {
-    #[must_use]
-    pub const fn first(&self) -> &Locator {
-        &self.0
-    }
-
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        1 + self.1.len()
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &Locator> {
-        self.into_iter()
-    }
-}
-
-impl From<Locator> for Locators {
-    fn from(locator: Locator) -> Self {
-        Self(locator, vec![])
-    }
-}
-
-impl From<Locators> for Vec<Locator> {
-    fn from(locators: Locators) -> Self {
-        once(locators.0).chain(locators.1).collect()
-    }
-}
-
-impl TryFrom<Vec<Locator>> for Locators {
-    type Error = String;
-
-    fn try_from(mut value: Vec<Locator>) -> Result<Self, Self::Error> {
-        if value.is_empty() {
-            return Err("At least one locator is required".to_owned());
-        }
-
-        let rest = value.split_off(1);
-
-        Ok(Self(value.pop().unwrap(), rest))
-    }
-}
-
-impl<'a> IntoIterator for &'a Locators {
-    type Item = &'a Locator;
-    type IntoIter = Chain<Once<&'a Locator>, slice::Iter<'a, Locator>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        once(&self.0).chain(self.1.iter())
-    }
-}
+// TODO: Check spec for max limit once we migrate the SDP Declare op to use the
+// `NomEncode` and `NomDecode` traits.
+pub type Locators = LowerBoundedVec<Locator, 1>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
@@ -438,7 +379,7 @@ mod tests {
             serde_json::from_str::<Locators>(&serialized)
                 .unwrap_err()
                 .to_string(),
-            "At least one locator is required"
+            "Input cannot be empty."
         );
     }
 }
