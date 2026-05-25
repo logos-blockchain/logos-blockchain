@@ -1815,7 +1815,7 @@ fn extract_finalized_items(
                         tx_hash,
                         parent_msg,
                         this_msg: config.id(),
-                        payload: Inscription::default(),
+                        payload: Inscription::new_unchecked(Vec::new()),
                     };
                     last_in_block = Some(info.this_msg);
                     ops.push(FinalizedOp::Inscription(info));
@@ -2404,7 +2404,7 @@ mod tests {
         let inscribe = InscriptionOp {
             channel_id,
             parent: MsgId::root(),
-            inscription: Inscription::default(),
+            inscription: Inscription::new_unchecked(Vec::new()),
             signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
         };
 
@@ -2830,7 +2830,7 @@ mod tests {
         let inscribe = InscriptionOp {
             channel_id,
             parent: MsgId::root(),
-            inscription: Inscription::default(),
+            inscription: Inscription::new_unchecked(Vec::new()),
             signer: sequencer_key.public_key(),
         };
         let expected_msg_id = inscribe.id();
