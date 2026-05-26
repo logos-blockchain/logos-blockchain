@@ -10,100 +10,100 @@ use tokio::time::{Sleep, sleep};
 
 use crate::stream::{FirstReadyStreamError, UninitializedFirstReadyStream};
 
-/// A staging type that initializes a [`SessionEventStream`] by consuming
-/// the first [`Session`] from the underlying stream, expected to be yielded
+/// A staging type that initializes a [`EpochEventStream`] by consuming
+/// the first [`Epoch`] from the underlying stream, expected to be yielded
 /// within a short timeout.
-pub struct UninitializedSessionEventStream<Stream> {
+pub struct UninitializedEpochEventStream<Stream> {
     stream: UninitializedFirstReadyStream<Stream>,
     transition_period: Duration,
 }
 
-impl<Stream> UninitializedSessionEventStream<Stream> {
+impl<Stream> UninitializedEpochEventStream<Stream> {
     #[must_use]
-    pub const fn new(session_stream: Stream, transition_period: Duration) -> Self {
+    pub const fn new(epoch_stream: Stream, transition_period: Duration) -> Self {
         Self {
-            stream: UninitializedFirstReadyStream::new(session_stream),
+            stream: UninitializedFirstReadyStream::new(epoch_stream),
             transition_period,
         }
     }
 }
 
-impl<Stream, Session> UninitializedSessionEventStream<Stream>
+impl<Stream, Epoch> UninitializedEpochEventStream<Stream>
 where
-    Stream: futures::Stream<Item = Session> + Unpin,
+    Stream: futures::Stream<Item = Epoch> + Unpin,
 {
-    /// Initializes a [`SessionEventStream`] by consuming the first [`Session`]
+    /// Initializes a [`EpochEventStream`] by consuming the first [`Epoch`]
     /// from the underlying stream.
     ///
-    /// It returns the first [`Session`] and the initialized
-    /// [`SessionEventStream`], awaiting the first session for as long as
+    /// It returns the first [`Epoch`] and the initialized
+    /// [`EpochEventStream`], awaiting the first epoch for as long as
     /// necessary.
     /// It returns an error only if the underlying stream closes before yielding
-    /// a session.
+    /// an epoch.
     pub async fn await_first_ready(
         self,
-    ) -> Result<(Session, SessionEventStream<Stream>), FirstReadyStreamError> {
-        let (first_session, remaining_stream) = self.stream.first().await?;
+    ) -> Result<(Epoch, EpochEventStream<Stream>), FirstReadyStreamError> {
+        let (first_epoch, remaining_stream) = self.stream.first().await?;
         Ok((
-            first_session,
-            SessionEventStream::new(remaining_stream, self.transition_period),
+            first_epoch,
+            EpochEventStream::new(remaining_stream, self.transition_period),
         ))
     }
 }
 
 #[derive(Clone, Debug)]
-pub enum SessionEvent<Session> {
-    NewSession(Session),
+pub enum EpochEvent<Epoch> {
+    NewEpoch(Epoch),
     TransitionPeriodExpired,
 }
 
-/// A stream that alternates between yielding [`SessionEvent::NewSession`]
-/// and [`SessionEvent::TransitionPeriodExpired`].
+/// A stream that alternates between yielding [`EpochEvent::NewEpoch`]
+/// and [`EpochEvent::TransitionPeriodExpired`].
 ///
-/// It wraps a stream of [`Session`]s and yields a [`SessionEvent::NewSession`]
-/// as soon as a new [`Session`] is available from the inner stream.
-/// Then, it yields a [`SessionEvent::TransitionPeriodExpired`] after
+/// It wraps a stream of [`Epoch`]s and yields a [`EpochEvent::NewEpoch`]
+/// as soon as a new [`Epoch`] is available from the inner stream.
+/// Then, it yields a [`EpochEvent::TransitionPeriodExpired`] after
 /// the transition period has elapsed.
 ///
 /// # Stream Timeline
 /// ```text
 /// event stream  : O--E-------O--E--------------O--E-------
-/// session stream: |----S1----|--------S2-------|----S3----
+/// epoch stream  : |----E1----|--------E2-------|----E3----
 ///
-/// (O: NewSession, E: TransitionPeriodExpired, S*: Sessions)
+/// (O: NewEpoch, E: TransitionPeriodExpired, E*: Epochs)
 /// ```
-pub struct SessionEventStream<Stream> {
-    session_stream: Stream,
+pub struct EpochEventStream<Stream> {
+    epoch_stream: Stream,
     transition_period: Duration,
     transition_period_timer: Option<Pin<Box<Sleep>>>,
 }
 
-impl<Stream> SessionEventStream<Stream> {
+impl<Stream> EpochEventStream<Stream> {
     #[must_use]
-    const fn new(session_stream: Stream, transition_period: Duration) -> Self {
+    const fn new(epoch_stream: Stream, transition_period: Duration) -> Self {
         Self {
-            session_stream,
+            epoch_stream,
             transition_period,
             transition_period_timer: None,
         }
     }
 }
 
-impl<Stream, Session> futures::Stream for SessionEventStream<Stream>
+impl<Stream, Epoch> futures::Stream for EpochEventStream<Stream>
 where
-    Stream: futures::Stream<Item = Session> + Unpin,
+    Stream: futures::Stream<Item = Epoch> + Unpin,
 {
-    type Item = SessionEvent<Session>;
+    type Item = EpochEvent<Epoch>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        // Check if a new session is available.
-        match self.session_stream.poll_next_unpin(cx) {
-            Poll::Ready(Some(session)) => {
-                // Start the transition period timer, and yield the new session.
+        // Check if a new epoch is available.
+        match self.epoch_stream.poll_next_unpin(cx) {
+            Poll::Ready(Some(epoch)) => {
+                // Start the transition period timer, and yield the new epoch.
                 // If the previous transition period timer has not been expired yet,
                 // it will be overwritten.
                 self.transition_period_timer = Some(Box::pin(sleep(self.transition_period)));
-                return Poll::Ready(Some(SessionEvent::NewSession(session)));
+                return Poll::Ready(Some(EpochEvent::NewEpoch(epoch)));
             }
             Poll::Ready(None) => return Poll::Ready(None),
             Poll::Pending => {}
@@ -114,7 +114,7 @@ where
             && timer.as_mut().poll(cx).is_ready()
         {
             self.transition_period_timer = None;
-            return Poll::Ready(Some(SessionEvent::TransitionPeriodExpired));
+            return Poll::Ready(Some(EpochEvent::TransitionPeriodExpired));
         }
 
         Poll::Pending
@@ -131,21 +131,18 @@ mod tests {
 
     #[tokio::test]
     async fn yield_two_events_alternately() {
-        let session_duration = Duration::from_secs(1);
+        let epoch_duration = Duration::from_secs(1);
         let transition_period = Duration::from_millis(200);
         let time_tolerance = Duration::from_millis(100);
 
-        let mut stream = SessionEventStream::new(
-            Box::pin(IntervalStream::new(interval(session_duration))),
+        let mut stream = EpochEventStream::new(
+            Box::pin(IntervalStream::new(interval(epoch_duration))),
             transition_period,
         );
 
-        // NewSession should be emitted immediately.
+        // NewEpoch should be emitted immediately.
         let start_time = Instant::now();
-        assert!(matches!(
-            stream.next().await,
-            Some(SessionEvent::NewSession(_))
-        ));
+        assert!(matches!(stream.next().await, Some(EpochEvent::NewEpoch(_))));
         let elapsed = start_time.elapsed();
         let tolerance = Duration::from_millis(50);
         assert!(elapsed <= tolerance, "elapsed:{elapsed:?}");
@@ -154,7 +151,7 @@ mod tests {
         let start_time = Instant::now();
         assert!(matches!(
             stream.next().await,
-            Some(SessionEvent::TransitionPeriodExpired)
+            Some(EpochEvent::TransitionPeriodExpired)
         ));
         let elapsed = start_time.elapsed();
         assert!(
@@ -162,25 +159,22 @@ mod tests {
             "elapsed:{elapsed:?}, expected:{transition_period:?}",
         );
 
-        // NewSession should be emitted after session_duration - transition_period.
+        // NewEpoch should be emitted after epoch_duration - transition_period.
         let start_time = Instant::now();
-        assert!(matches!(
-            stream.next().await,
-            Some(SessionEvent::NewSession(_))
-        ));
+        assert!(matches!(stream.next().await, Some(EpochEvent::NewEpoch(_))));
         let elapsed = start_time.elapsed();
         assert!(
-            elapsed.abs_diff(session_duration.checked_sub(transition_period).unwrap())
+            elapsed.abs_diff(epoch_duration.checked_sub(transition_period).unwrap())
                 <= time_tolerance,
             "elapsed:{elapsed:?}, expected:{:?}",
-            session_duration.checked_sub(transition_period).unwrap()
+            epoch_duration.checked_sub(transition_period).unwrap()
         );
 
         // TransitionEnd should be emitted after transition_period.
         let start_time = Instant::now();
         assert!(matches!(
             stream.next().await,
-            Some(SessionEvent::TransitionPeriodExpired)
+            Some(EpochEvent::TransitionPeriodExpired)
         ));
         let elapsed = start_time.elapsed();
         assert!(
@@ -190,35 +184,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn transition_period_shorter_than_session() {
-        let session_duration = Duration::from_millis(500);
+    async fn transition_period_shorter_than_epoch() {
+        let epoch_duration = Duration::from_millis(500);
         let transition_period = Duration::from_millis(600);
         let time_tolerance = Duration::from_millis(50);
 
-        let mut stream = SessionEventStream::new(
-            Box::pin(IntervalStream::new(interval(session_duration))),
+        let mut stream = EpochEventStream::new(
+            Box::pin(IntervalStream::new(interval(epoch_duration))),
             transition_period,
         );
 
-        // NewSession should be emitted immediately.
+        // NewEpoch should be emitted immediately.
         let start_time = Instant::now();
-        assert!(matches!(
-            stream.next().await,
-            Some(SessionEvent::NewSession(_))
-        ));
+        assert!(matches!(stream.next().await, Some(EpochEvent::NewEpoch(_))));
         let elapsed = start_time.elapsed();
         assert!(elapsed <= time_tolerance, "elapsed:{elapsed:?}");
 
-        // NewSession should be emitted again after session_duration.
+        // NewEpoch should be emitted again after epoch_duration.
         let start_time = Instant::now();
-        assert!(matches!(
-            stream.next().await,
-            Some(SessionEvent::NewSession(_))
-        ));
+        assert!(matches!(stream.next().await, Some(EpochEvent::NewEpoch(_))));
         let elapsed = start_time.elapsed();
         assert!(
-            elapsed.abs_diff(session_duration) <= time_tolerance,
-            "elapsed:{elapsed:?}, expected:{session_duration:?}",
+            elapsed.abs_diff(epoch_duration) <= time_tolerance,
+            "elapsed:{elapsed:?}, expected:{epoch_duration:?}",
         );
     }
 

@@ -1,15 +1,11 @@
-use core::pin::Pin;
+use core::{marker::PhantomData, pin::Pin};
 
 use async_trait::async_trait;
 use futures::stream::{self, Stream, StreamExt as _};
 use lb_blend_message::crypto::{
     key_ext::Ed25519SecretKeyExt as _, proofs::PoQVerificationInputsMinusSigningKey,
 };
-use lb_blend_proofs::{
-    quota::inputs::prove::{PublicInputs, public::LeaderInputs},
-    selection::VerifiedProofOfSelection,
-};
-use lb_cryptarchia_engine::Epoch;
+use lb_blend_proofs::{quota::inputs::prove::PublicInputs, selection::VerifiedProofOfSelection};
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
@@ -29,28 +25,18 @@ const LOG_TARGET: &str = blend::scheduling::proofs::CORE;
 /// Proof generator for core `PoQ` variants.
 #[async_trait]
 pub trait CoreProofsGenerator<PoQGenerator>: Sized {
-    /// Instantiate a new generator for the duration of a session.
+    /// Instantiate a new generator for the duration of an epoch.
     fn new(settings: ProofsGeneratorSettings, proof_of_quota_generator: PoQGenerator) -> Self;
-    /// Notify the proof generator that a new epoch has started mid-session.
-    /// This will trigger proof re-generation due to the change in the set of
-    /// public inputs.
-    fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs);
     /// Request a new core proof from the prover. It returns `None` if the
-    /// maximum core quota has already been reached for this session.
+    /// maximum core quota has already been reached for this epoch.
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof>;
 }
 
 pub struct RealCoreProofsGenerator<PoQGenerator> {
     remaining_quota: u64,
     pub(super) settings: ProofsGeneratorSettings,
-    pub(super) proof_of_quota_generator: PoQGenerator,
     proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
-}
-
-impl<PoQGenerator> RealCoreProofsGenerator<PoQGenerator> {
-    pub(super) const fn current_epoch(&self) -> Epoch {
-        self.settings.epoch
-    }
+    _phantom: PhantomData<PoQGenerator>,
 }
 
 #[async_trait]
@@ -62,33 +48,14 @@ where
         Self {
             proofs_stream: Box::pin(create_proof_stream(
                 settings.public_inputs,
-                proof_of_quota_generator.clone(),
+                proof_of_quota_generator,
                 0,
                 buffer_size(settings.encapsulation_layers.get() as usize),
             )),
-            proof_of_quota_generator,
             remaining_quota: settings.public_inputs.core.quota,
             settings,
+            _phantom: PhantomData,
         }
-    }
-
-    fn rotate_epoch(&mut self, new_epoch_public: LeaderInputs) {
-        tracing::info!(target: LOG_TARGET, "Rotating epoch...");
-
-        // On epoch rotation, we maintain the remaining session quota for core proofs
-        // and we only update the PoL part of the public inputs, before regenerating all
-        // proofs.
-        self.settings.public_inputs.leader = new_epoch_public;
-        let next_key_index = self
-            .settings
-            .public_inputs
-            .core
-            .quota
-            .checked_sub(self.remaining_quota)
-            .expect("Remaining quota should never be larger than total quota.");
-
-        // Compute new proofs with the updated settings.
-        self.generate_new_proofs_stream(next_key_index);
     }
 
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
@@ -97,27 +64,6 @@ where
         let proof = self.proofs_stream.next().await?;
         tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size), start.elapsed().as_millis());
         Some(proof)
-    }
-}
-
-impl<PoQGenerator> RealCoreProofsGenerator<PoQGenerator>
-where
-    PoQGenerator: CoreProofOfQuotaGenerator + Clone + Send + Sync + 'static,
-{
-    // This will kill the previous running task, if any, since we swap the receiver
-    // channel, hence the old task will fail to send new proofs and will abort on
-    // its own.
-    fn generate_new_proofs_stream(&mut self, starting_key_index: u64) {
-        if self.remaining_quota == 0 {
-            return;
-        }
-
-        self.proofs_stream = Box::pin(create_proof_stream(
-            self.settings.public_inputs,
-            self.proof_of_quota_generator.clone(),
-            starting_key_index,
-            buffer_size(self.settings.encapsulation_layers.get() as usize),
-        ));
     }
 }
 
@@ -156,7 +102,6 @@ where
                             signing_key: ephemeral_signing_key.public_key().into_inner(),
                             core: public_inputs.core,
                             leader: public_inputs.leader,
-                            session: public_inputs.session,
                         },
                         key_index,
                     ).await.expect("Core PoQ generation should not fail.");

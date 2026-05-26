@@ -13,47 +13,30 @@ use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519Public
 
 use crate::message_blend::CoreProofOfQuotaGenerator;
 
-pub const fn poq_public_inputs_from_session_public_inputs_and_signing_key(
-    (
-        PoQVerificationInputsMinusSigningKey {
-            core,
-            leader,
-            session,
-        },
-        signing_key,
-    ): (PoQVerificationInputsMinusSigningKey, Ed25519PublicKey),
+pub const fn poq_public_inputs_from_epoch_public_inputs_and_signing_key(
+    (PoQVerificationInputsMinusSigningKey { core, leader }, signing_key): (
+        PoQVerificationInputsMinusSigningKey,
+        Ed25519PublicKey,
+    ),
 ) -> PoQPublicInputs {
     PoQPublicInputs {
         signing_key: signing_key.into_inner(),
         core,
         leader,
-        session,
     }
 }
 
 pub fn valid_proof_of_quota_inputs(
     core_quota: u64,
 ) -> (PoQVerificationInputsMinusSigningKey, ProofOfCoreQuotaInputs) {
-    let (
-        PoQPublicInputs {
-            core,
-            leader,
-            session,
-            ..
-        },
-        private_inputs,
-    ) = valid_proof_of_core_quota_inputs(
+    let (PoQPublicInputs { core, leader, .. }, private_inputs) = valid_proof_of_core_quota_inputs(
         Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
             .unwrap()
             .into_inner(),
         core_quota,
     );
     (
-        PoQVerificationInputsMinusSigningKey {
-            core,
-            leader,
-            session,
-        },
+        PoQVerificationInputsMinusSigningKey { core, leader },
         private_inputs,
     )
 }
@@ -64,26 +47,15 @@ pub fn valid_proof_of_leader_inputs(
     PoQVerificationInputsMinusSigningKey,
     ProofOfLeadershipQuotaInputs,
 ) {
-    let (
-        PoQPublicInputs {
-            core,
-            leader,
-            session,
-            ..
-        },
-        private_inputs,
-    ) = valid_proof_of_leadership_quota_inputs(
-        Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
-            .unwrap()
-            .into_inner(),
-        leader_quota,
-    );
+    let (PoQPublicInputs { core, leader, .. }, private_inputs) =
+        valid_proof_of_leadership_quota_inputs(
+            Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE])
+                .unwrap()
+                .into_inner(),
+            leader_quota,
+        );
     (
-        PoQVerificationInputsMinusSigningKey {
-            core,
-            leader,
-            session,
-        },
+        PoQVerificationInputsMinusSigningKey { core, leader },
         private_inputs,
     )
 }
