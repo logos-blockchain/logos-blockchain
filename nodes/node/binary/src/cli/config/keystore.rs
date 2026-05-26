@@ -12,25 +12,25 @@ use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+const WARNING: &str = "Do not share your secret keys";
+
 #[derive(Serialize, Deserialize, Hash, Eq, PartialEq, Clone, Copy, Debug)]
 pub enum KeyTitle {
-    NetworkSwarm,
     BlendSigning,
     BlendZk,
     LeaderFunding,
+    NetworkSwarm,
     SdpFunding,
-    BlendFunding,
     VaucherMaster,
 }
 
 impl KeyTitle {
-    pub const ALL: [Self; 7] = [
-        Self::NetworkSwarm,
+    pub const ALL: [Self; 6] = [
         Self::BlendSigning,
         Self::BlendZk,
         Self::LeaderFunding,
+        Self::NetworkSwarm,
         Self::SdpFunding,
-        Self::BlendFunding,
         Self::VaucherMaster,
     ];
 }
@@ -49,17 +49,23 @@ pub enum KeystoreError {
 
 #[derive(Serialize, Deserialize)]
 pub struct Keystore {
-    keys: HashMap<KeyTitle, Key>,
+    // Convenience mapping for users to inspect when serialized.
+    public_keys: HashMap<KeyTitle, KeyId>,
+    secret_keys: HashMap<KeyTitle, Key>,
+
+    #[serde(rename = "WARNING")]
+    warning: String,
 }
 
 impl Keystore {
     pub fn set(&mut self, title: KeyTitle, key: Key) {
-        self.keys.insert(title, key);
+        self.public_keys.insert(title, key_id(&key));
+        self.secret_keys.insert(title, key);
     }
 
     #[must_use]
     pub fn get(&self, title: KeyTitle) -> Option<(KeyId, &Key)> {
-        let key = self.keys.get(&title)?;
+        let key = self.secret_keys.get(&title)?;
         Some((key_id(key), key))
     }
 
@@ -93,7 +99,6 @@ impl Keystore {
             KeyTitle::BlendZk
             | KeyTitle::LeaderFunding
             | KeyTitle::SdpFunding
-            | KeyTitle::BlendFunding
             | KeyTitle::VaucherMaster => Key::Zk(generate_zk_key_from_random_bytes()),
         }
     }
@@ -102,7 +107,9 @@ impl Keystore {
 impl Default for Keystore {
     fn default() -> Self {
         let mut keystore = Self {
-            keys: HashMap::new(),
+            public_keys: HashMap::new(),
+            secret_keys: HashMap::new(),
+            warning: WARNING.to_string(),
         };
 
         for title in KeyTitle::ALL {

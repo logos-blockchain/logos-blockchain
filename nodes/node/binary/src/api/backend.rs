@@ -199,7 +199,7 @@ where
         }
 
         let app = Router::new()
-            .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+            .merge(SwaggerUi::new("/swagger-ui").url("../api-docs/openapi.json", ApiDoc::openapi()))
             .route(
                 paths::MANTLE_METRICS,
                 routing::get(mantle_metrics::<MempoolStorageAdapter, RuntimeServiceId>),

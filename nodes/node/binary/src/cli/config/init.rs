@@ -1,5 +1,8 @@
+use std::path::Path;
+
 use color_eyre::eyre::Result;
 use libp2p::{Multiaddr, PeerId};
+use thiserror::Error;
 
 use crate::{
     NetworkArgs, UserConfig,
@@ -20,15 +23,43 @@ use crate::{
     },
 };
 
+#[derive(Error, Debug)]
+enum InitError {
+    #[error("User configuration file exists. Use `update` command.")]
+    UserFileExists,
+
+    #[error("Keystore file exists. Use `update` command.")]
+    KeystoreFileExists,
+}
+
 pub fn run(args: InitArgs) -> Result<()> {
-    let output_path = args.output.clone();
-    let keystore = build_keystore();
+    let user_config_path = args.output.clone();
+    let keystore_path = user_config_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("keystore.yaml");
+
+    if user_config_path.exists() {
+        return Err(InitError::UserFileExists.into());
+    }
+
+    if keystore_path.exists() {
+        return Err(InitError::KeystoreFileExists.into());
+    }
+
+    let keystore = Keystore::default();
     let user_config = build_user_config(&keystore, args);
+
+    let user_config_yaml = serde_yaml::to_string(&user_config)?;
+    std::fs::write(&user_config_path, &user_config_yaml)?;
+
+    let keystore_yaml = serde_yaml::to_string(&keystore)?;
+    std::fs::write(&keystore_path, &keystore_yaml)?;
 
     Ok(())
 }
 
-fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
+pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
     let InitArgs {
         log: log_args,
         network: network_args,
@@ -170,7 +201,6 @@ fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
         KeyTitle::BlendZk,
         KeyTitle::LeaderFunding,
         KeyTitle::SdpFunding,
-        KeyTitle::BlendFunding,
         KeyTitle::VaucherMaster,
     ];
 
@@ -190,20 +220,4 @@ fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
         .collect();
 
     wallet_config
-}
-
-fn build_keystore() -> Keystore {
-    let mut keystore = Keystore::default();
-
-    // By default keystore generates the a unique key for every key title.
-    // To simplify the `init` command behaviour we use the same key for sdp and blend funding.
-    // Leader is still using a unique funding key.
-    let funding_key = keystore
-        .get(KeyTitle::BlendFunding)
-        .map(|(_, key)| key.clone())
-        .expect("Blend funding key set by default");
-
-    keystore.set(KeyTitle::SdpFunding, funding_key);
-
-    keystore
 }

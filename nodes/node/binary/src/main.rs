@@ -22,7 +22,10 @@ async fn main() -> Result<()> {
                 return logos_blockchain_node::cli::config::init::run(*init_args);
             }
             Command::Update(update_args) => {
-                todo!()
+                return logos_blockchain_node::cli::config::update::run(*update_args);
+            }
+            Command::Migrate(migrate_args) => {
+                return logos_blockchain_node::cli::config::migrate::run(*migrate_args);
             }
             Command::Inscribe(inscribe_args) => {
                 lb_tui_zone::run(inscribe_args).await;

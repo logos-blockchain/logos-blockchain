@@ -103,8 +103,10 @@ impl CliArgs {
 pub enum Command {
     /// Initialize a new user config with generated keys
     Init(Box<InitArgs>),
-    /// Initialize a new user config with generated keys
+    /// Update existing user config with keys from keystore
     Update(Box<UpdateArgs>),
+    /// Migrates a new user config with generated keys
+    Migrate(Box<MigrateArgs>),
     /// Publish text inscriptions as zone blocks
     Inscribe(lb_tui_zone::InscribeArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
@@ -115,7 +117,7 @@ pub enum Command {
 
 #[derive(Parser, Debug)]
 pub struct InitArgs {
-    /// Output file path for the generated config
+    /// Output file path for the generated config.
     #[clap(long = "output", short = 'o', default_value = "user_config.yaml")]
     pub output: PathBuf,
 
@@ -143,10 +145,90 @@ pub struct InitArgs {
 
 #[derive(Parser, Debug)]
 pub struct UpdateArgs {
-    /// Path for the keystore file
-    /// Defaults to 'keystore.yaml' in the same directory as --output.
+    /// Output file path for the generated config.
+    #[clap(long = "user-config", short = 'o', default_value = "user_config.yaml")]
+    pub user_config: PathBuf,
+
+    /// Path for the keystore file.
     #[clap(long = "keystore")]
-    pub keystore: Option<PathBuf>,
+    pub keystore: PathBuf,
+
+    /// Auto approve interactive promps.
+    #[arg(
+        short,
+        long,
+        default_value_t = false,
+        help = "Auto approve interactive promps"
+    )]
+    pub yes: bool,
+
+    #[clap(flatten)]
+    log: LogArgs,
+
+    #[clap(flatten)]
+    network: NetworkArgs,
+
+    #[clap(flatten)]
+    blend: BlendArgs,
+
+    #[clap(flatten)]
+    cryptarchia: CryptarchiaArgs,
+
+    #[clap(flatten)]
+    sdp: SdpArgs,
+
+    #[clap(flatten)]
+    api: ApiArgs,
+
+    #[clap(flatten)]
+    state: StateArgs,
+}
+
+#[derive(Parser, Debug)]
+pub struct MigrateArgs {
+    /// Output file path for the generated config.
+    #[clap(long = "output", short = 'o', default_value = "user_config.yaml")]
+    pub output: PathBuf,
+
+    /// Path for the keystore file.
+    #[clap(long = "keystore")]
+    pub keystore: PathBuf,
+
+    #[clap(flatten)]
+    log: LogArgs,
+
+    #[clap(flatten)]
+    network: NetworkArgs,
+
+    #[clap(flatten)]
+    blend: BlendArgs,
+
+    #[clap(flatten)]
+    cryptarchia: CryptarchiaArgs,
+
+    #[clap(flatten)]
+    sdp: SdpArgs,
+
+    #[clap(flatten)]
+    api: ApiArgs,
+
+    #[clap(flatten)]
+    state: StateArgs,
+}
+
+impl From<MigrateArgs> for InitArgs {
+    fn from(migrate: MigrateArgs) -> Self {
+        InitArgs {
+            output: migrate.output,
+            log: migrate.log,
+            network: migrate.network,
+            blend: migrate.blend,
+            cryptarchia: migrate.cryptarchia,
+            sdp: migrate.sdp,
+            api: migrate.api,
+            state: migrate.state,
+        }
+    }
 }
 
 impl Default for InitArgs {
