@@ -2178,7 +2178,10 @@ mod tests {
     };
     use lb_core::{
         header::ContentId,
-        mantle::{Note, Utxo, ops::channel::deposit::DepositOp},
+        mantle::{
+            Note, Utxo,
+            ops::channel::deposit::{DepositOp, Metadata},
+        },
         proofs::leader_proof::Groth16LeaderProof,
     };
     use lb_http_api_common::queries::BlocksStreamQuery;
@@ -2281,13 +2284,13 @@ mod tests {
         )
     }
 
-    fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: &[u8]) -> DepositOp {
+    fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
         use lb_core::mantle::NoteId;
         use lb_groth16::Fr;
         DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![NoteId::from(Fr::from(input_seed))]),
-            metadata: metadata.to_vec(),
+            inputs: [NoteId::from(Fr::from(input_seed))].into(),
+            metadata,
         }
     }
 
@@ -2313,8 +2316,8 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let other_channel = ChannelId::from([1; 32]);
 
-        let deposit_for_us = deposit_op(channel_id, 1, b"to Alice");
-        let deposit_other_channel = deposit_op(other_channel, 2, b"to Bob");
+        let deposit_for_us = deposit_op(channel_id, 1, b"to Alice".into());
+        let deposit_other_channel = deposit_op(other_channel, 2, b"to Bob".into());
         let our_op_id = deposit_for_us.op_id();
 
         let tx = unverified_tx_with_ops(vec![
@@ -2337,7 +2340,7 @@ mod tests {
         assert_eq!(d.tx_hash, tx_hash);
         assert_eq!(d.op_id, our_op_id);
         assert_eq!(d.amount, 1234);
-        assert_eq!(d.metadata, b"to Alice");
+        assert_eq!(d.metadata, b"to Alice".into());
         assert_eq!(d.inputs, deposit_for_us.inputs);
     }
 
@@ -2351,7 +2354,7 @@ mod tests {
         // gap. A panic here surfaces the bug immediately if a future caller
         // violates that invariant — silent skip would drop a real deposit.
         let channel_id = ChannelId::from([0; 32]);
-        let op = deposit_op(channel_id, 1, b"to Alice");
+        let op = deposit_op(channel_id, 1, b"to Alice".into());
         let tx = unverified_tx_with_ops(vec![Op::ChannelDeposit(op)]);
         drop(extract_finalized_items(
             std::slice::from_ref(&tx),
@@ -2363,9 +2366,9 @@ mod tests {
     #[test]
     fn extract_deposits_preserves_tx_and_op_order() {
         let channel_id = ChannelId::from([0; 32]);
-        let d1 = deposit_op(channel_id, 1, b"first");
-        let d2 = deposit_op(channel_id, 2, b"second");
-        let d3 = deposit_op(channel_id, 3, b"third");
+        let d1 = deposit_op(channel_id, 1, b"first".into());
+        let d2 = deposit_op(channel_id, 2, b"second".into());
+        let d3 = deposit_op(channel_id, 3, b"third".into());
         let id1 = d1.op_id();
         let id2 = d2.op_id();
         let id3 = d3.op_id();
@@ -2399,7 +2402,7 @@ mod tests {
         // (e.g. LEZ) can validate references from the inscription back to
         // the just-finalized deposit.
         let channel_id = ChannelId::from([0; 32]);
-        let dep = deposit_op(channel_id, 1, b"deposit-meta");
+        let dep = deposit_op(channel_id, 1, b"deposit-meta".into());
         let dep_op_id = dep.op_id();
         let inscribe = InscriptionOp {
             channel_id,

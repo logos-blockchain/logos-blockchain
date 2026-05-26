@@ -36,19 +36,21 @@ mod tests {
     use super::*;
     use crate::mantle::{
         MantleTx, Note, Op,
-        encoding::Ops,
         ledger::{Inputs, Outputs},
         ops::transfer::TransferOp,
     };
 
     fn create_random_tx(seed: u32) -> MantleTx {
-        MantleTx(Ops::new_unchecked(vec![Op::Transfer(TransferOp::new(
-            Inputs::new(vec![]),
-            Outputs::new(vec![Note {
-                value: seed.into(),
-                pk: ZkPublicKey::zero(),
-            }]),
-        ))]))
+        MantleTx(
+            [Op::Transfer(TransferOp::new(
+                Inputs::empty(),
+                Outputs::new(vec![Note {
+                    value: seed.into(),
+                    pk: ZkPublicKey::zero(),
+                }]),
+            ))]
+            .into(),
+        )
     }
 
     #[test]

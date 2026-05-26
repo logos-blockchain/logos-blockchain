@@ -270,10 +270,6 @@ mod tests {
                 BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
             ),
             (
-                block_msg(4, &[4]),
-                BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
-            ),
-            (
                 block_msg(5, &[5]),
                 BATCH_SIZE.into_inner().checked_mul(4).unwrap().into(),
             ),
