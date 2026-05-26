@@ -320,20 +320,17 @@ pub fn start_republish_policy(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            match sequencer.next_event().await {
-                Some(Event::ChannelUpdate { orphaned, .. }) => {
-                    for entry in orphaned {
-                        let OrphanedTx::Inscription(inscription) = entry else {
-                            // Republish-by-payload helper doesn't handle bundles.
-                            continue;
-                        };
+            if let Some(Event::ChannelUpdate { orphaned, .. }) = sequencer.next_event().await {
+                for entry in orphaned {
+                    let OrphanedTx::Inscription(inscription) = entry else {
+                        // Republish-by-payload helper doesn't handle bundles.
+                        continue;
+                    };
 
-                        if let Err(error) = handle.publish_message(inscription.payload).await {
-                            warn!(%error, "Failed to re-publish orphaned zone payload");
-                        }
+                    if let Err(error) = handle.publish_message(inscription.payload).await {
+                        warn!(%error, "Failed to re-publish orphaned zone payload");
                     }
                 }
-                _ => {}
             }
         }
     })

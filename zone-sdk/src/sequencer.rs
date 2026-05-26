@@ -891,6 +891,10 @@ where
 
     /// Handle a single item from the blocks stream. `None` means the stream
     /// disconnected; any other value is processed as a block event.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_stream_item(
         &mut self,
         maybe_event: Option<ProcessedBlockEvent>,
@@ -3133,6 +3137,7 @@ mod tests {
     struct ColdStartMockNode {
         genesis_block: ApiBlock,
         live_block: ApiBlock,
+        channel_state: Option<ChannelState>,
     }
 
     #[async_trait]
@@ -3235,8 +3240,8 @@ mod tests {
         async fn channel_state(
             &self,
             _channel_id: ChannelId,
-        ) -> Result<lb_core::mantle::channel::ChannelState, lb_common_http_client::Error> {
-            unimplemented!()
+        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
+            Ok(self.channel_state.clone())
         }
     }
 
@@ -3284,9 +3289,24 @@ mod tests {
             transactions: Vec::new(),
         };
 
+        let channel_state = Some(ChannelState {
+            accredited_keys: Keys::from(Ed25519Key::from_bytes(&[0; 32]).public_key()).into(),
+            configuration_threshold: 1,
+            tip_message: MsgId::root(),
+            tip_slot: Slot::default(),
+            tip_sequencer: 0,
+            tip_sequencer_starting_slot: Slot::default(),
+            posting_timeframe: 0u32.into(),
+            posting_timeout: 0u32.into(),
+            balance: 0,
+            withdrawal_nonce: 0,
+            withdraw_threshold: 1,
+        });
+
         let node = ColdStartMockNode {
             genesis_block,
             live_block,
+            channel_state,
         };
         let (mut sequencer, _handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
 
