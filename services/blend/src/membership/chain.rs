@@ -7,31 +7,44 @@
 //! chain's per-epoch view and cannot drift — replacing the pushed
 //! `ActiveProviders` broadcast.
 
-use core::{hash::Hash, num::NonZeroU64, pin::Pin};
+use core::{hash::Hash, pin::Pin};
 use std::fmt::{Debug, Display};
 
 use futures::{Stream, StreamExt as _};
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    Epoch,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
+use lb_groth16::Fr;
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
-use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend};
+use lb_time_service::{SlotTick, TimeService, TimeServiceMessage, backends::TimeBackend};
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot;
 
 use crate::{
-    epoch_info::{EpochEvent, EpochHandler},
+    LOG_TARGET,
     membership::{MembershipInfo, node_id, service::membership_info_from_epoch_state},
 };
+
+#[derive(Clone, Debug)]
+pub struct BlendEpochState<NodeId> {
+    pub epoch: Epoch,
+    pub nonce: Fr,
+    pub lottery_0: Fr,
+    pub lottery_1: Fr,
+    pub membership_info: MembershipInfo<NodeId>,
+}
 
 /// A chain-derived membership stream.
 ///
 /// Unlike [`MembershipStream`](super::MembershipStream) this is not `Sync`,
 /// since producing each item awaits a chain query; consumers only require
 /// `Send + Unpin`.
-pub type ChainMembershipStream<NodeId> =
-    Pin<Box<dyn Stream<Item = MembershipInfo<NodeId>> + Send + 'static>>;
+pub type BlendEpochStateStream<NodeId> =
+    Pin<Box<dyn Stream<Item = BlendEpochState<NodeId>> + Send + 'static>>;
 
 /// Subscribe to a chain-derived stream of
-/// [`MembershipInfo`](super::MembershipInfo).
+/// [`BlendEpochState`](super::BlendEpochState).
 ///
 /// On every slot tick the chain is queried for the current epoch's
 /// `EpochState`; on each new epoch the membership frozen into its SDP snapshot
@@ -41,8 +54,7 @@ pub async fn subscribe<ChainService, NodeId, TimeRuntimeBackend, RuntimeServiceI
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     signing_public_key: Ed25519PublicKey,
     zk_public_key: Option<ZkPublicKey>,
-    epoch_transition_period_in_slots: NonZeroU64,
-) -> ChainMembershipStream<NodeId>
+) -> BlendEpochStateStream<NodeId>
 where
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     NodeId: node_id::TryFrom + Clone + Hash + Eq + Send + Sync + 'static,
@@ -63,7 +75,6 @@ where
             .await
             .expect("Relay with chain service should be available."),
     );
-    let epoch_handler = EpochHandler::new(chain_service, epoch_transition_period_in_slots);
 
     let slot_ticks = {
         let time_relay = overwatch_handle
@@ -80,27 +91,46 @@ where
             .expect("Should not fail to receive slot stream from time service.")
     };
 
-    Box::pin(futures::stream::unfold(
-        (slot_ticks, epoch_handler, signing_public_key, zk_public_key),
-        async move |(mut slot_ticks, mut epoch_handler, signing_public_key, zk_public_key)| {
-            loop {
-                let tick = slot_ticks.next().await?;
-                if let Some(
-                    EpochEvent::NewEpoch((epoch_state, _))
-                    | EpochEvent::NewEpochAndOldEpochTransitionExpired((epoch_state, _)),
-                ) = epoch_handler.tick(tick).await
-                {
-                    let info = membership_info_from_epoch_state::<NodeId>(
-                        &epoch_state,
-                        &signing_public_key,
-                        zk_public_key,
-                    );
-                    return Some((
-                        info,
-                        (slot_ticks, epoch_handler, signing_public_key, zk_public_key),
-                    ));
+    Box::pin(
+        slot_ticks
+            .scan(None, move |last_epoch, SlotTick { epoch, slot }| {
+                let is_new_epoch = Some(epoch) != *last_epoch;
+                if is_new_epoch {
+                    *last_epoch = Some(epoch);
                 }
-            }
-        },
-    ))
+                let chain_service = chain_service.clone();
+                let signing_public_key = signing_public_key;
+                let zk_public_key = zk_public_key;
+                async move {
+                    if !is_new_epoch {
+                        return Some(None);
+                    }
+                    match chain_service.get_epoch_state(slot).await {
+                        Ok(Ok(epoch_state)) => {
+                            let membership_info = membership_info_from_epoch_state::<NodeId>(
+                                &epoch_state,
+                                &signing_public_key,
+                                zk_public_key,
+                            );
+                            Some(Some(BlendEpochState {
+                                epoch,
+                                nonce: epoch_state.nonce,
+                                lottery_0: epoch_state.lottery_0,
+                                lottery_1: epoch_state.lottery_1,
+                                membership_info,
+                            }))
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!(target: LOG_TARGET, "Chain service returned error for epoch state at slot {slot:?}: {e:?}");
+                            Some(None)
+                        }
+                        Err(e) => {
+                            tracing::warn!(target: LOG_TARGET, "Failed to query epoch state at slot {slot:?}: {e:?}");
+                            Some(None)
+                        }
+                    }
+                }
+            })
+            .filter_map(async move |maybe| { maybe }),
+    )
 }

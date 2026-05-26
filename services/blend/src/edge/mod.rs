@@ -18,11 +18,7 @@ use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
     scheduling::{
-        // TODO: Remove all mentions of sessions.
-        epoch::{
-            EpochEvent as SessionEvent,
-            UninitializedEpochEventStream as UninitializedSessionEventStream,
-        },
+        epoch::{EpochEvent, UninitializedEpochEventStream},
         message_blend::provers::leader::LeaderProofsGenerator,
     },
 };
@@ -54,11 +50,9 @@ use crate::{
         handlers::{Error, MessageHandler},
         settings::RunningBlendConfig,
     },
-    epoch_info::{
-        ChainApi, EpochEvent, EpochHandler, PolEpochInfo, PolInfoProvider as PolInfoProviderTrait,
-    },
+    epoch_info::{ChainApi, EpochHandler, PolEpochInfo, PolInfoProvider as PolInfoProviderTrait},
     kms::PreloadKmsService,
-    membership::{self, MembershipInfo, node_id},
+    membership::{self, MembershipInfo, chain::BlendEpochState, node_id},
     message::{NetworkInfo, NetworkMessage, ServiceMessage},
 };
 
@@ -217,15 +211,20 @@ where
                 .expect("non-ephemeral signing key should decode into a valid node id");
 
         // Initialize membership stream for session and core-related public PoQ inputs.
-        let session_stream =
+        let membership_stream =
             membership::chain::subscribe::<ChainService, NodeId, TimeBackend, RuntimeServiceId>(
                 &overwatch_handle,
                 non_ephemeral_signing_key.public_key(),
                 // No ZK stuff needs to be computed by edge nodes, so no ZK key is specified here.
                 None,
-                settings.time.epoch_transition_period_in_slots,
             )
-            .await;
+            .await
+            // TODO: Consume all info from this stream and remove slot-based stream in this service.
+            .map(
+                |BlendEpochState {
+                     membership_info, ..
+                 }| membership_info,
+            );
 
         // Initialize clock stream for detecting epoch transitions.
         let clock_stream = async {
@@ -276,8 +275,8 @@ where
         .await;
 
         run::<Backend, _, ProofsGenerator, _, PolInfoProvider, _>(
-            UninitializedSessionEventStream::new(
-                session_stream,
+            UninitializedEpochEventStream::new(
+                membership_stream,
                 settings.time.session_transition_period(),
             ),
             clock_stream,
@@ -333,7 +332,7 @@ where
     reason = "TODO: address this in a dedicated refactor"
 )]
 async fn run<Backend, NodeId, ProofsGenerator, ChainService, PolInfoProvider, RuntimeServiceId>(
-    session_stream: UninitializedSessionEventStream<
+    membership_stream: UninitializedEpochEventStream<
         impl Stream<Item = MembershipInfo<NodeId>> + Unpin,
     >,
     mut clock_stream: impl Stream<Item = SlotTick> + Unpin,
@@ -351,14 +350,13 @@ where
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Unpin>,
     RuntimeServiceId: Clone + Send + Sync,
 {
-    let (mut current_membership_info, mut remaining_session_stream) = session_stream
+    let (mut current_membership_info, mut remaining_membership_stream) = membership_stream
         .await_first_ready()
         .await
         .expect("The current session info must be available.");
 
     info!(
         target: LOG_TARGET,
-        session = current_membership_info.session_number,
         members = current_membership_info.membership.size(),
         local_node_index = current_membership_info.membership.local_index(),
         has_zk = current_membership_info.zk.is_some(),
@@ -381,7 +379,7 @@ where
 
     loop {
         tokio::select! {
-            Some(SessionEvent::NewEpoch(new_session_info)) = remaining_session_stream.next() => {
+            Some(EpochEvent::NewEpoch(new_session_info)) = remaining_membership_stream.next() => {
                 match handle_new_session(&new_session_info, settings.clone(), &mut current_pol_info_and_message_handler, overwatch_handle.clone()) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
@@ -538,8 +536,8 @@ async fn handle_clock_event<Backend, NodeId, ProofsGenerator, ChainService, Runt
     // Shut down the message handler if a new epoch is detected for which we
     // have not yet received secret `PoL` info.
     match epoch_event {
-        EpochEvent::NewEpoch((_, new_epoch))
-        | EpochEvent::NewEpochAndOldEpochTransitionExpired((_, new_epoch))
+        crate::epoch_info::EpochEvent::NewEpoch((_, new_epoch))
+        | crate::epoch_info::EpochEvent::NewEpochAndOldEpochTransitionExpired((_, new_epoch))
             if new_epoch > current_epoch =>
         {
             debug!(target: LOG_TARGET, "New epoch detected: {epoch_event:?}, shutting down message handler until new secret PoL info is available.");

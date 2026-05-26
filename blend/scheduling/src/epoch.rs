@@ -11,26 +11,26 @@ use tokio::time::{Sleep, sleep};
 use crate::stream::{FirstReadyStreamError, UninitializedFirstReadyStream};
 
 /// A staging type that initializes a [`EpochEventStream`] by consuming
-/// the first [`Epoch`] from the underlying stream, expected to be yielded
+/// the first [`Event`] from the underlying stream, expected to be yielded
 /// within a short timeout.
-pub struct UninitializedEpochEventStream<Stream> {
-    stream: UninitializedFirstReadyStream<Stream>,
+pub struct UninitializedEpochEventStream<EventStream> {
+    stream: UninitializedFirstReadyStream<EventStream>,
     transition_period: Duration,
 }
 
-impl<Stream> UninitializedEpochEventStream<Stream> {
+impl<EventStream> UninitializedEpochEventStream<EventStream> {
     #[must_use]
-    pub const fn new(epoch_stream: Stream, transition_period: Duration) -> Self {
+    pub const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
         Self {
-            stream: UninitializedFirstReadyStream::new(epoch_stream),
+            stream: UninitializedFirstReadyStream::new(event_stream),
             transition_period,
         }
     }
 }
 
-impl<Stream, Epoch> UninitializedEpochEventStream<Stream>
+impl<EventStream> UninitializedEpochEventStream<EventStream>
 where
-    Stream: futures::Stream<Item = Epoch> + Unpin,
+    EventStream: futures::Stream + Unpin,
 {
     /// Initializes a [`EpochEventStream`] by consuming the first [`Epoch`]
     /// from the underlying stream.
@@ -42,7 +42,7 @@ where
     /// an epoch.
     pub async fn await_first_ready(
         self,
-    ) -> Result<(Epoch, EpochEventStream<Stream>), FirstReadyStreamError> {
+    ) -> Result<(EventStream::Item, EpochEventStream<EventStream>), FirstReadyStreamError> {
         let (first_epoch, remaining_stream) = self.stream.first().await?;
         Ok((
             first_epoch,
@@ -52,8 +52,8 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub enum EpochEvent<Epoch> {
-    NewEpoch(Epoch),
+pub enum EpochEvent<Event> {
+    NewEpoch(Event),
     TransitionPeriodExpired,
 }
 
@@ -72,32 +72,32 @@ pub enum EpochEvent<Epoch> {
 ///
 /// (O: NewEpoch, E: TransitionPeriodExpired, E*: Epochs)
 /// ```
-pub struct EpochEventStream<Stream> {
-    epoch_stream: Stream,
+pub struct EpochEventStream<EventStream> {
+    event_stream: EventStream,
     transition_period: Duration,
     transition_period_timer: Option<Pin<Box<Sleep>>>,
 }
 
-impl<Stream> EpochEventStream<Stream> {
+impl<EventStream> EpochEventStream<EventStream> {
     #[must_use]
-    const fn new(epoch_stream: Stream, transition_period: Duration) -> Self {
+    const fn new(event_stream: EventStream, transition_period: Duration) -> Self {
         Self {
-            epoch_stream,
+            event_stream,
             transition_period,
             transition_period_timer: None,
         }
     }
 }
 
-impl<Stream, Epoch> futures::Stream for EpochEventStream<Stream>
+impl<EventStream> futures::Stream for EpochEventStream<EventStream>
 where
-    Stream: futures::Stream<Item = Epoch> + Unpin,
+    EventStream: futures::Stream + Unpin,
 {
-    type Item = EpochEvent<Epoch>;
+    type Item = EpochEvent<EventStream::Item>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Check if a new epoch is available.
-        match self.epoch_stream.poll_next_unpin(cx) {
+        match self.event_stream.poll_next_unpin(cx) {
             Poll::Ready(Some(epoch)) => {
                 // Start the transition period timer, and yield the new epoch.
                 // If the previous transition period timer has not been expired yet,

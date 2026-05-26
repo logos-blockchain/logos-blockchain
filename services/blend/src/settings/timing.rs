@@ -2,8 +2,6 @@ use core::{num::NonZeroU64, time::Duration};
 
 use serde::{Deserialize, Serialize};
 
-use crate::epoch_info::EpochHandler;
-
 #[serde_with::serde_as]
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TimingSettings {
@@ -24,11 +22,6 @@ pub struct TimingSettings {
 
 impl TimingSettings {
     #[must_use]
-    pub const fn session_duration(&self) -> Duration {
-        Duration::from_secs(self.rounds_per_session.get() * self.round_duration.as_secs())
-    }
-
-    #[must_use]
     pub fn intervals_per_session(&self) -> NonZeroU64 {
         NonZeroU64::try_from(self.rounds_per_session.get() / self.rounds_per_interval.get()).expect("Obtained `0` when calculating the number of intervals per session, which is not allowed.")
     }
@@ -38,12 +31,5 @@ impl TimingSettings {
         Duration::from_secs(
             self.rounds_per_session_transition_period.get() * self.round_duration.as_secs(),
         )
-    }
-
-    pub const fn epoch_handler<ChainService, RuntimeServiceId>(
-        &self,
-        chain_service: ChainService,
-    ) -> EpochHandler<ChainService, RuntimeServiceId> {
-        EpochHandler::new(chain_service, self.epoch_transition_period_in_slots)
     }
 }

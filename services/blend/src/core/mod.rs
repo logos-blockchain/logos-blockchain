@@ -106,7 +106,7 @@ use crate::{
         ChainApi, EpochEvent, EpochHandler, PolEpochInfo, PolInfoProvider as PolInfoProviderTrait,
     },
     kms::PreloadKmsService,
-    membership::{self, MembershipInfo, ZkInfo},
+    membership::{self, MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::{NetworkMessage, ProcessedMessage, ServiceMessage},
     session::{CoreSessionInfo, CoreSessionPublicInfo, MaybeEmptyCoreSessionInfo},
 };
@@ -357,9 +357,14 @@ where
                 overwatch_handle,
                 non_ephemeral_signing_key.public_key(),
                 Some(zk_public_key),
-                blend_config.time.epoch_transition_period_in_slots,
             )
-            .await;
+            .await
+            // TODO: Consume all info from this stream and remove slot-based stream in this service.
+            .map(
+                |BlendEpochState {
+                     membership_info, ..
+                 }| membership_info,
+            );
 
         let sdp_relay = overwatch_handle
             .relay::<SdpService>()
@@ -397,7 +402,7 @@ where
             activity_threshold_sensitivity: blend_config.activity_threshold_sensitivity,
         };
         let (
-            mut remaining_session_stream,
+            mut remaining_membership_stream,
             mut remaining_clock_stream,
             current_public_info,
             current_epoch,
@@ -456,7 +461,7 @@ where
             &mut blend_messages,
             &mut remaining_clock_stream,
             secret_pol_info_stream,
-            &mut remaining_session_stream,
+            &mut remaining_membership_stream,
             &running_blend_config,
             &mut backend,
             &network_adapter,
@@ -480,7 +485,7 @@ where
             // past session.
             blend_messages.map(|(message, _)| message),
             remaining_clock_stream,
-            remaining_session_stream,
+            remaining_membership_stream,
             &running_blend_config,
             backend,
             network_adapter,

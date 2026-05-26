@@ -82,7 +82,7 @@ where
     MembershipInfo {
         membership,
         zk: zk_info,
-        // TODO: change `session_number` to `epoch`
+        // TODO: remove session info completely
         session_number: epoch_state.epoch().into_inner().into(),
     }
 }

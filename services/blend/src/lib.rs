@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
-use lb_blend::scheduling::epoch::UninitializedEpochEventStream as UninitializedSessionEventStream;
+use lb_blend::scheduling::epoch::UninitializedEpochEventStream;
 use lb_chain_service::api::CryptarchiaServiceData;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use lb_log_targets::blend;
@@ -37,6 +37,7 @@ use crate::{
     kms::PreloadKmsService,
     membership::{
         MembershipInfo,
+        chain::BlendEpochState,
         node_id::{self, TryFrom as _},
     },
     settings::Settings,
@@ -195,18 +196,24 @@ where
             // We don't need to generate secret zk info in the proxy service, so we ignore the
             // secret key at this level.
             None,
-            settings.common.time.epoch_transition_period_in_slots,
         )
-        .await;
+        .await
+        // We take only the membership info from the epoch stream since the proxy service does not
+        // need anything else.
+        .map(
+            |BlendEpochState {
+                 membership_info, ..
+             }| membership_info,
+        );
 
-        let (MembershipInfo { membership, .. }, mut remaining_session_stream) =
-            UninitializedSessionEventStream::new(
+        let (MembershipInfo { membership, .. }, mut remaining_membership_stream) =
+            UninitializedEpochEventStream::new(
                 membership_stream,
                 settings.common.time.session_transition_period(),
             )
             .await_first_ready()
             .await
-            .expect("The current session must be ready");
+            .expect("The current epoch state must be ready");
 
         info!(
             target: LOG_TARGET,
@@ -230,11 +237,11 @@ where
 
         loop {
             tokio::select! {
-                Some(session_event) = remaining_session_stream.next() => {
-                    debug!(target: LOG_TARGET, ?session_event, "received session event");
+                Some(epoch_event) = remaining_membership_stream.next() => {
+                    debug!(target: LOG_TARGET, ?epoch_event, "received epoch event");
                     instance = instance
-                        .handle_session_event(
-                            session_event,
+                        .handle_epoch_event(
+                            epoch_event,
                             overwatch_handle,
                             minimal_network_size,
                             local_node_id.clone(),

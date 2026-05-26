@@ -14,6 +14,7 @@ pub struct MembershipInfo<NodeId> {
     pub membership: Membership<NodeId>,
     // `None` if membership is empty.
     pub zk: Option<ZkInfo>,
+    // TODO: Remove session info
     pub session_number: u64,
 }
 
