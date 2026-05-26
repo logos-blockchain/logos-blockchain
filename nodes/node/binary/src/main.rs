@@ -19,7 +19,10 @@ async fn main() -> Result<()> {
     if let Some(command) = cli_args.command {
         match command {
             Command::Init(init_args) => {
-                return logos_blockchain_node::cli::init::run(&init_args);
+                return logos_blockchain_node::cli::config::init::run(&init_args);
+            }
+            Command::Update(update_args) => {
+                todo!()
             }
             Command::Inscribe(inscribe_args) => {
                 lb_tui_zone::run(inscribe_args).await;

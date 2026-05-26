@@ -255,7 +255,7 @@ pub struct CryptarchiaArgs {
         env = "CRYPTARCHIA_FUNDING_PK",
         value_parser = parse_hex_public_key
     )]
-    funding_pk: Option<ZkPublicKey>,
+    cryptarchia_funding_pk: Option<ZkPublicKey>,
 }
 
 #[derive(Parser, Debug, Clone, Copy)]
@@ -265,7 +265,7 @@ pub struct SdpArgs {
         env = "SDP_FUNDING_PK",
         value_parser = parse_hex_public_key
     )]
-    funding_pk: Option<ZkPublicKey>,
+    sdp_funding_pk: Option<ZkPublicKey>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -526,7 +526,9 @@ pub const fn update_cryptarchia(
     cryptarchia: &mut CryptarchiaConfig,
     cryptarchia_args: CryptarchiaArgs,
 ) {
-    let CryptarchiaArgs { funding_pk } = cryptarchia_args;
+    let CryptarchiaArgs {
+        cryptarchia_funding_pk: funding_pk,
+    } = cryptarchia_args;
 
     if let Some(pk) = funding_pk {
         cryptarchia.set_funding_pk(pk);
@@ -534,7 +536,9 @@ pub const fn update_cryptarchia(
 }
 
 pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
-    let SdpArgs { funding_pk } = sdp_args;
+    let SdpArgs {
+        sdp_funding_pk: funding_pk,
+    } = sdp_args;
 
     if let Some(pk) = funding_pk {
         sdp.set_funding_pk(pk);

@@ -94,7 +94,7 @@ impl From<GenerateConfigArgs> for InitArgs {
 #[must_use]
 pub fn generate_config_sync(args: InitArgs) -> OperationStatus {
     let runtime = Runtime::new().expect("Failed to create Tokio runtime.");
-    let run_result = runtime.block_on(async move { lb_node::cli::init::run(&args) });
+    let run_result = runtime.block_on(async move { lb_node::cli::config::init::run(&args) });
     match run_result {
         Ok(()) => OperationStatus::Ok,
         Err(error) => {

@@ -1,5 +1,5 @@
+pub mod config;
 pub mod get_peer_id;
-pub mod init;
 pub mod participate;
 
 use std::{
@@ -108,6 +108,8 @@ impl CliArgs {
 pub enum Command {
     /// Initialize a new user config with generated keys
     Init(Box<InitArgs>),
+    /// Initialize a new user config with generated keys
+    Update(Box<UpdateArgs>),
     /// Publish text inscriptions as zone blocks
     Inscribe(lb_tui_zone::InscribeArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
@@ -189,6 +191,14 @@ pub struct InitArgs {
     /// Defaults to 'kms.yaml' in the same directory as --output.
     #[clap(long = "kms-file")]
     pub kms_file: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct UpdateArgs {
+    /// Path for the keystore file
+    /// Defaults to 'keystore.yaml' in the same directory as --output.
+    #[clap(long = "keystore")]
+    pub keystore: Option<PathBuf>,
 }
 
 impl Default for InitArgs {
