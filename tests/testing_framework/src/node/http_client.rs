@@ -6,12 +6,19 @@ use common_http_client::{
 use futures::Stream;
 use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_chain_service::ChainServiceInfo;
-use lb_core::{header::HeaderId, mantle::SignedMantleTx, sdp::Declaration};
+use lb_core::{
+    header::HeaderId,
+    mantle::{SignedMantleTx, TxHash},
+    sdp::Declaration,
+};
 use lb_http_api_common::{
     bodies::wallet::transfer_funds::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
-    paths::{BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO},
+    paths::{
+        BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO,
+        TEST_MEMPOOL_VIEW,
+    },
     queries::BlocksStreamQuery,
 };
 use lb_libp2p::{Multiaddr, PeerId};
@@ -146,6 +153,18 @@ impl NodeHttpClient {
         }
 
         self.get_sdp_declarations_at(self.base_url.clone()).await
+    }
+
+    pub async fn test_mempool_view(&self) -> Result<Vec<TxHash>, Error> {
+        let testing_url = self
+            .testing_url
+            .clone()
+            .ok_or_else(|| Error::Client("testing api unavailable".to_owned()))?;
+        let request_url = Self::join_path(&testing_url, TEST_MEMPOOL_VIEW)?;
+
+        self.http_client
+            .get::<(), Vec<TxHash>>(request_url, None)
+            .await
     }
 
     pub async fn dial_peer(&self, addr: Multiaddr) -> Result<PeerId, Error> {

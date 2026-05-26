@@ -634,6 +634,9 @@ pub struct CucumberWorld {
     pub wallets: TrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
+    /// Manual: Exact signed transactions prepared for mempool lifecycle
+    /// scenarios.
+    pub prepared_mempool_transactions: HashMap<String, SignedMantleTx>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -779,6 +782,10 @@ impl Debug for CucumberWorld {
             .field("wallet_accounts", &self.wallet_accounts.len())
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("submitted_transactions", &self.submitted_transactions.len())
+            .field(
+                "prepared_mempool_transactions",
+                &self.prepared_mempool_transactions.len(),
+            )
             .field(
                 "wallet_utxos_by_block",
                 &wallet_diagnostics.utxo_snapshot_count,
@@ -1344,6 +1351,28 @@ impl CucumberWorld {
             .copied()
             .ok_or(StepError::LogicalError {
                 message: format!("Transaction alias '{alias}' not found in world state"),
+            })
+    }
+
+    pub fn remember_prepared_mempool_transaction(
+        &mut self,
+        alias: String,
+        signed_tx: SignedMantleTx,
+    ) {
+        self.prepared_mempool_transactions.insert(alias, signed_tx);
+    }
+
+    pub fn resolve_prepared_mempool_transaction(
+        &self,
+        alias: &str,
+    ) -> Result<SignedMantleTx, StepError> {
+        self.prepared_mempool_transactions
+            .get(alias)
+            .cloned()
+            .ok_or(StepError::LogicalError {
+                message: format!(
+                    "Prepared mempool transaction alias '{alias}' not found in world state"
+                ),
             })
     }
 
