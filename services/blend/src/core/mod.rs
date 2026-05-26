@@ -35,8 +35,14 @@ use lb_blend::{
     },
     scheduling::{
         SessionMessageScheduler,
+        // TODO: Remove all mentions of sessions.
+        epoch::{
+            EpochEvent as SessionEvent,
+            UninitializedEpochEventStream as UninitializedSessionEventStream,
+        },
         message_blend::{
-            crypto::SessionCryptographicProcessorSettings,
+            // TODO: Remove all mentions of sessions.
+            crypto::EpochCryptographicProcessorSettings as SessionCryptographicProcessorSettings,
             provers::core_and_leader::CoreAndLeaderProofsGenerator,
         },
         message_scheduler::{
@@ -44,7 +50,6 @@ use lb_blend::{
             round_info::{RoundInfo, RoundReleaseType},
             session_info::SessionInfo as SchedulerSessionInfo,
         },
-        session::{SessionEvent, UninitializedSessionEventStream},
         stream::UninitializedFirstReadyStream,
     },
 };
@@ -917,8 +922,10 @@ where
             }
             Some((Some(processed_messages_to_release), previous_session_number)) = async {
                 match (&mut old_session_message_scheduler, &old_session_crypto_processor) {
-                    (Some(old_scheduler), Some(old_crypto_processor)) => {
-                        Some((old_scheduler.next().await, old_crypto_processor.session()))
+                    (Some(_old_scheduler), Some(_old_crypto_processor)) => {
+                        // TODO: Re-enable once sessions are completely gone
+                        // Some((old_scheduler.next().await, old_crypto_processor.session()))
+                        None
                     },
                     _ => None
                 }
@@ -926,7 +933,7 @@ where
                 handle_release_round_for_old_session(processed_messages_to_release, rng, backend, network_adapter, previous_session_number).await;
             }
             Some(clock_tick) = remaining_clock_stream.next() => {
-                (public_info, epoch) = handle_clock_event(clock_tick, blend_config, epoch_handler, &mut crypto_processor, public_info, epoch).await;
+                (public_info, epoch) = handle_clock_event(clock_tick, blend_config, epoch_handler, &crypto_processor, public_info, epoch).await;
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
                 if let Some(new_leader_inputs) = handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor, epoch) {
@@ -984,13 +991,14 @@ async fn retire<
     RuntimeServiceId,
 >(
     mut blend_messages: impl Stream<Item = EncapsulatedMessageWithVerifiedSignature>
-    + Send
     + Unpin
+    + Send
     + 'static,
     mut remaining_clock_stream: impl Stream<Item = SlotTick> + Send + Sync + Unpin + 'static,
     mut remaining_session_stream: impl Stream<
         Item = SessionEvent<MaybeEmptyCoreSessionInfo<NodeId, CorePoQGenerator>>,
-    > + Unpin,
+    > + Send
+    + Unpin,
     blend_config: &RunningBlendConfig<Backend::Settings>,
     mut backend: Backend,
     network_adapter: NetAdapter,
@@ -1002,7 +1010,7 @@ async fn retire<
     >,
     mut rng: Rng,
     mut blending_token_collector: OldSessionBlendingTokenCollector,
-    mut crypto_processor: CoreCryptographicProcessor<
+    crypto_processor: CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -1011,9 +1019,9 @@ async fn retire<
     mut public_info: PublicInfo<NodeId>,
     mut epoch: Epoch,
 ) where
-    NodeId: Clone + Eq + Hash + Send + 'static,
+    NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
-    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Sync,
+    Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
     NetAdapter: NetworkAdapter<
             RuntimeServiceId,
             BroadcastSettings: Serialize
@@ -1025,11 +1033,13 @@ async fn retire<
                                    + Send
                                    + Sync
                                    + Unpin,
-        > + Sync,
-    ChainService: ChainApi<RuntimeServiceId> + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Sync,
-    ProofsVerifier: ProofsVerifierTrait,
-    RuntimeServiceId: Sync,
+        > + Send
+        + Sync,
+    ChainService: ChainApi<RuntimeServiceId> + Send + Sync,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send + Sync,
+    CorePoQGenerator: Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    RuntimeServiceId: Send + Sync,
 {
     loop {
         tokio::select! {
@@ -1037,10 +1047,12 @@ async fn retire<
                 handle_incoming_blend_message_from_old_session(incoming_message, &mut message_scheduler, &crypto_processor, &mut blending_token_collector);
             }
             Some(processed_messages_to_release) = message_scheduler.next() => {
-                handle_release_round_for_old_session(processed_messages_to_release, &mut rng, &backend, &network_adapter, crypto_processor.session()).await;
+                // TODO: Update once sessions are gone.
+                // handle_release_round_for_old_session(processed_messages_to_release, &mut rng, &backend, &network_adapter, crypto_processor.session()).await;
+                handle_release_round_for_old_session(processed_messages_to_release, &mut rng, &backend, &network_adapter, 0).await;
             }
             Some(clock_tick) = remaining_clock_stream.next() => {
-                (public_info, epoch) = handle_clock_event(clock_tick, blend_config, &mut epoch_handler, &mut crypto_processor, public_info, epoch).await;
+                (public_info, epoch) = handle_clock_event(clock_tick, blend_config, &mut epoch_handler, &crypto_processor, public_info, epoch).await;
             }
             Some(SessionEvent::TransitionPeriodExpired) = remaining_session_stream.next() => {
                 handle_session_transition_expired(&mut backend, blending_token_collector, &sdp_relay).await;
@@ -1112,7 +1124,7 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
 {
     match event {
-        SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::NonEmpty(CoreSessionInfo {
+        SessionEvent::NewEpoch(MaybeEmptyCoreSessionInfo::NonEmpty(CoreSessionInfo {
             core_poq_generator,
             public:
                 CoreSessionPublicInfo {
@@ -1219,7 +1231,7 @@ where
                 .expect("service state should be created successfully"),
             }
         }
-        SessionEvent::NewSession(MaybeEmptyCoreSessionInfo::Empty { session }) => {
+        SessionEvent::NewEpoch(MaybeEmptyCoreSessionInfo::Empty { session }) => {
             tracing::info!(target: LOG_TARGET, "New session event received, but no session info is available due to empty membership set.");
             let (_, _, _, _, current_session_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
@@ -1481,7 +1493,9 @@ where
     BackendSettings: Clone,
     ProofsVerifier: ProofsVerifierTrait,
 {
-    if session == cryptographic_processor.session() {
+    // TODO: Update once sessions are gone.
+    // if session == cryptographic_processor.session() {
+    if session == 0 {
         let Some(output) = try_validate_and_decapsulate(
             validated_encapsulated_message,
             cryptographic_processor,
@@ -1496,7 +1510,9 @@ where
             cryptographic_processor,
         )
     } else if let Some(old_cryptographic_processor) = old_session_cryptographic_processor
-        && session == old_cryptographic_processor.session()
+        // TODO: Update once sessions are gone.
+        // && session == old_cryptographic_processor.session()
+        && session == 0
     {
         let Some(output) = try_validate_and_decapsulate(
             validated_encapsulated_message,
@@ -1829,7 +1845,9 @@ where
         usize::from(should_generate_cover_message),
     );
     let mut state_updater = current_recovery_checkpoint.start_updating();
-    let current_session = cryptographic_processor.session();
+    // TODO: Update once sessions are gone.
+    // let current_session = cryptographic_processor.session();
+    let current_session = 0;
 
     let data_messages_relay_futures = data_messages.into_iter()
         // While we iterate and map the messages to the sending futures, we update the recovery state to remove each message.
@@ -2066,7 +2084,7 @@ async fn handle_clock_event<
     slot_tick: SlotTick,
     settings: &RunningBlendConfig<BackendSettings>,
     epoch_handler: &mut EpochHandler<ChainService, RuntimeServiceId>,
-    cryptographic_processor: &mut CoreCryptographicProcessor<
+    _cryptographic_processor: &CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
         ProofsGenerator,
@@ -2076,11 +2094,13 @@ async fn handle_clock_event<
     current_epoch: Epoch,
 ) -> (PublicInfo<NodeId>, Epoch)
 where
+    NodeId: Send + Sync,
     BackendSettings: Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator>,
-    ProofsVerifier: ProofsVerifierTrait,
-    ChainService: ChainApi<RuntimeServiceId> + Sync,
-    RuntimeServiceId: Sync,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send + Sync,
+    CorePoQGenerator: Send + Sync,
+    ProofsVerifier: ProofsVerifierTrait + Send + Sync,
+    ChainService: ChainApi<RuntimeServiceId> + Send + Sync,
+    RuntimeServiceId: Send + Sync,
 {
     let Some(epoch_event) = epoch_handler.tick(slot_tick).await else {
         return (current_public_info, current_epoch);
@@ -2107,15 +2127,15 @@ where
                 ..current_public_info
             };
 
-            // Only rotate if the PoL info handler hasn't already advanced
-            // the crypto processor and backend verifier to this epoch.
-            cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+            // // Only rotate if the PoL info handler hasn't already advanced
+            // // the crypto processor and backend verifier to this epoch.
+            // cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
 
             (new_public_info, new_epoch)
         }
         EpochEvent::OldEpochTransitionPeriodExpired => {
             tracing::debug!(target: LOG_TARGET, "Old epoch transition period expired.");
-            cryptographic_processor.complete_epoch_transition();
+            // cryptographic_processor.complete_epoch_transition();
 
             (current_public_info, current_epoch)
         }
@@ -2137,11 +2157,11 @@ where
                 ..current_public_info
             };
 
-            // Complete the previous epoch's transition first, then rotate to
-            // the new epoch (only if the PoL info handler hasn't already
-            // advanced the crypto processor and backend verifier to this epoch).
-            cryptographic_processor.complete_epoch_transition();
-            cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
+            // // Complete the previous epoch's transition first, then rotate to
+            // // the new epoch (only if the PoL info handler hasn't already
+            // // advanced the crypto processor and backend verifier to this epoch).
+            // cryptographic_processor.complete_epoch_transition();
+            // cryptographic_processor.rotate_epoch(new_leader_inputs, new_epoch);
 
             (new_public_inputs, new_epoch)
         }
@@ -2202,9 +2222,9 @@ where
         return None;
     }
 
-    // If the secret info is for a new epoch not yet seen via the clock
-    // handler, update the core proof generator and proof verifier first.
-    cryptographic_processor.rotate_epoch(new_leader_inputs, new_pol_info.epoch);
+    // // If the secret info is for a new epoch not yet seen via the clock
+    // // handler, update the core proof generator and proof verifier first.
+    // cryptographic_processor.rotate_epoch(new_leader_inputs, new_pol_info.epoch);
 
     Some(new_leader_inputs)
 }

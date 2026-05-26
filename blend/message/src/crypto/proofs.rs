@@ -135,24 +135,10 @@ impl ProofsVerifier for RealProofsVerifier {
 
 #[cfg(test)]
 mod tests {
-    use lb_blend_proofs::quota::inputs::prove::public::LeaderInputs;
-    use lb_core::crypto::ZkHash;
-    use lb_groth16::{Field as _, Fr};
-
     use crate::{
         crypto::proofs::{PoQVerificationInputsMinusSigningKey, RealProofsVerifier},
         encap::ProofsVerifier as _,
     };
-
-    fn epoch_1_leader() -> LeaderInputs {
-        LeaderInputs {
-            pol_ledger_aged: ZkHash::ONE,
-            pol_epoch_nonce: ZkHash::ONE,
-            message_quota: 2,
-            lottery_0: Fr::ONE,
-            lottery_1: Fr::ONE,
-        }
-    }
 
     #[test]
     fn new_verifier_has_no_previous_epoch() {

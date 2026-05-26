@@ -1,7 +1,7 @@
 use core::convert::Infallible;
 
 use lb_blend_proofs::{
-    quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
+    quota::{ProofOfQuota, VerifiedProofOfQuota},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};

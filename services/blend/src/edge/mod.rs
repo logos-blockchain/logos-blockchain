@@ -18,8 +18,12 @@ use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
     scheduling::{
+        // TODO: Remove all mentions of sessions.
+        epoch::{
+            EpochEvent as SessionEvent,
+            UninitializedEpochEventStream as UninitializedSessionEventStream,
+        },
         message_blend::provers::leader::LeaderProofsGenerator,
-        session::{SessionEvent, UninitializedSessionEventStream},
     },
 };
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
@@ -393,7 +397,7 @@ where
 
     loop {
         tokio::select! {
-            Some(SessionEvent::NewSession(new_session_info)) = remaining_session_stream.next() => {
+            Some(SessionEvent::NewEpoch(new_session_info)) = remaining_session_stream.next() => {
                 match handle_new_session(&new_session_info, settings.clone(), &mut current_pol_info_and_message_handler, overwatch_handle.clone()) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
@@ -488,7 +492,6 @@ where
     };
 
     let new_public_inputs = PoQVerificationInputsMinusSigningKey {
-        session: new_membership_info.session_number,
         core: CoreInputs {
             quota: settings.cover.session_core_quota(
                 settings.num_blend_layers,
@@ -604,7 +607,6 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
             ),
             zk_root,
         },
-        session: current_membership_info.session_number,
     };
     let new_handler = MessageHandler::try_new_with_edge_condition_check(
         settings,

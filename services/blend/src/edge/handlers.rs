@@ -6,7 +6,7 @@ use lb_blend::{
     scheduling::{
         membership::Membership,
         message_blend::{
-            crypto::leader::send::SessionCryptographicProcessor,
+            crypto::leader::send::EpochCryptographicProcessor as SessionCryptographicProcessor,
             provers::leader::LeaderProofsGenerator,
         },
     },

@@ -8,7 +8,7 @@ use std::{
 use async_trait::async_trait;
 use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
-use lb_blend::scheduling::session::UninitializedSessionEventStream;
+use lb_blend::scheduling::epoch::UninitializedEpochEventStream as UninitializedSessionEventStream;
 use lb_chain_service::api::CryptarchiaServiceData;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
 use lb_log_targets::blend;

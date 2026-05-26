@@ -27,7 +27,7 @@ use lb_blend::{
     scheduling::{
         membership::Membership,
         message_blend::{
-            crypto::SessionCryptographicProcessorSettings,
+            crypto::EpochCryptographicProcessorSettings as SessionCryptographicProcessorSettings,
             provers::{
                 BlendLayerProof, ProofsGeneratorSettings,
                 core_and_leader::CoreAndLeaderProofsGenerator,
@@ -37,8 +37,8 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_core::{crypto::ZkHash, sdp::SessionNumber};
-use lb_groth16::{Field as _, Fr};
+use lb_core::crypto::ZkHash;
+use lb_groth16::{Field as _, Fr, fr_to_bytes};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_poq::CorePathAndSelectors;
@@ -321,7 +321,6 @@ pub fn new_crypto_processor<CorePoQGenerator>(
         minimum_network_size,
         settings,
         PoQVerificationInputsMinusSigningKey {
-            session: public_info.session.session_number,
             core: public_info.session.core_public_inputs,
             leader: public_info.epoch,
         },
@@ -379,7 +378,7 @@ pub fn reward_session_info(public_info: &PublicInfo<NodeId>) -> reward::SessionI
     .expect("session info must be created successfully")
 }
 
-pub struct MockCoreAndLeaderProofsGenerator(SessionNumber);
+pub struct MockCoreAndLeaderProofsGenerator(ZkHash);
 
 #[async_trait]
 impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
@@ -389,41 +388,36 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         settings: ProofsGeneratorSettings,
         _core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self {
-        Self(settings.public_inputs.session)
+        Self(settings.public_inputs.leader.pol_epoch_nonce)
     }
 
-    fn rotate_epoch(&mut self, _: LeaderInputs, _: Epoch) {}
     fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, _: LeaderInputs, _: Epoch) {}
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(session_based_dummy_proofs(self.0))
+        Some(epoch_based_dummy_proofs(self.0))
     }
 
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof> {
-        Some(session_based_dummy_proofs(self.0))
+        Some(epoch_based_dummy_proofs(self.0))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct MockProofsVerifier(SessionNumber);
+pub struct MockProofsVerifier(ZkHash);
 
 impl ProofsVerifier for MockProofsVerifier {
     type Error = ();
 
     fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
-        Self(public_inputs.session)
+        Self(public_inputs.leader.pol_epoch_nonce)
     }
-
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
 
     fn verify_proof_of_quota(
         &self,
         proof: ProofOfQuota,
         _signing_key: &Ed25519PublicKey,
     ) -> Result<VerifiedProofOfQuota, Self::Error> {
-        let expected_proof = session_based_dummy_proofs(self.0).proof_of_quota;
+        let expected_proof = epoch_based_dummy_proofs(self.0).proof_of_quota;
         if proof == expected_proof {
             Ok(expected_proof)
         } else {
@@ -436,7 +430,7 @@ impl ProofsVerifier for MockProofsVerifier {
         proof: ProofOfSelection,
         _inputs: &VerifyInputs,
     ) -> Result<VerifiedProofOfSelection, Self::Error> {
-        let expected_proof = session_based_dummy_proofs(self.0).proof_of_selection;
+        let expected_proof = epoch_based_dummy_proofs(self.0).proof_of_selection;
         if proof == expected_proof {
             Ok(expected_proof)
         } else {
@@ -445,26 +439,20 @@ impl ProofsVerifier for MockProofsVerifier {
     }
 }
 
-fn session_based_dummy_proofs(session: SessionNumber) -> BlendLayerProof {
-    let session_bytes = session.to_le_bytes();
+fn epoch_based_dummy_proofs(epoch: ZkHash) -> BlendLayerProof {
+    let epoch_bytes = fr_to_bytes(&epoch);
     BlendLayerProof {
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked({
             let mut bytes = [0u8; _];
-            bytes[..session_bytes.len()].copy_from_slice(&session_bytes);
+            bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
             bytes
         }),
         proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked({
             let mut bytes = [0u8; _];
-            bytes[..session_bytes.len()].copy_from_slice(&session_bytes);
+            bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
             bytes
         }),
         ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
-    }
-}
-
-impl MockProofsVerifier {
-    pub fn session_number(&self) -> SessionNumber {
-        self.0
     }
 }
 

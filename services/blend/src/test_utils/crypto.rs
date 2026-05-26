@@ -33,8 +33,6 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self
     }
 
-    fn rotate_epoch(&mut self, _new_epoch_public: LeaderInputs, _new_epoch: Epoch) {}
-
     fn set_epoch_private(
         &mut self,
         _new_epoch_private: ProofOfLeadershipQuotaInputs,
@@ -61,10 +59,6 @@ impl ProofsVerifier for MockProofsVerifier {
     fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
         Self
     }
-
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
 
     fn verify_proof_of_quota(
         &self,
@@ -109,10 +103,6 @@ impl ProofsVerifier for StaticFetchVerifier {
     fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
         Self
     }
-
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
 
     fn verify_proof_of_quota(
         &self,

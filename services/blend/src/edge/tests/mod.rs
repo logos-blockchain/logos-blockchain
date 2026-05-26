@@ -145,7 +145,6 @@ fn poq_verification_inputs() -> PoQVerificationInputsMinusSigningKey {
             quota: 1,
             zk_root: Fr::ZERO,
         },
-        session: 1,
     }
 }
 

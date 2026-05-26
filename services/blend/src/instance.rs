@@ -3,7 +3,8 @@ use std::{
     hash::Hash,
 };
 
-use lb_blend::scheduling::{membership::Membership, session::SessionEvent};
+// TODO: Remove mentions of sessions.
+use lb_blend::scheduling::{epoch::EpochEvent as SessionEvent, membership::Membership};
 use lb_network_service::NetworkService;
 use overwatch::{
     overwatch::OverwatchHandle,
@@ -148,7 +149,7 @@ where
         local_node_id: CoreService::NodeId,
     ) -> Result<Self, modes::Error> {
         match event {
-            SessionEvent::NewSession(MembershipInfo { membership, .. }) => {
+            SessionEvent::NewEpoch(MembershipInfo { membership, .. }) => {
                 self.transition(
                     Mode::choose(&membership, minimal_network_size),
                     overwatch_handle,
@@ -627,7 +628,7 @@ mod tests {
             let instance = instance
                 .handle_session_event(
                     // With an empty membership smaller than the minimal size.
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
+                    SessionEvent::NewEpoch(MembershipInfo::from_membership_and_session_number(
                         membership(&[], local_node),
                         1,
                     )),
@@ -654,7 +655,7 @@ mod tests {
             // Broadcast -> Edge
             let instance = instance
                 .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
+                    SessionEvent::NewEpoch(MembershipInfo::from_membership_and_session_number(
                         membership(&[1], local_node),
                         1,
                     )),
@@ -669,7 +670,7 @@ mod tests {
             // Edge -> Edge (stay)
             let instance = instance
                 .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
+                    SessionEvent::NewEpoch(MembershipInfo::from_membership_and_session_number(
                         membership(&[1], local_node),
                         1,
                     )),
@@ -684,7 +685,7 @@ mod tests {
             // Edge -> Core
             let instance = instance
                 .handle_session_event(
-                    SessionEvent::NewSession(MembershipInfo::from_membership_and_session_number(
+                    SessionEvent::NewEpoch(MembershipInfo::from_membership_and_session_number(
                         membership(&[1], 1),
                         1,
                     )),

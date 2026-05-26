@@ -5,16 +5,16 @@ use async_trait::async_trait;
 use futures::{StreamExt as _, future::ready, stream::once};
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    proofs::quota::inputs::prove::{private::ProofOfLeadershipQuotaInputs, public::LeaderInputs},
+    proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::{
+        // TODO: Remove all mentions of sessions.
+        epoch::UninitializedEpochEventStream as UninitializedSessionEventStream,
         membership::Membership,
         message_blend::provers::{
             BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator,
         },
-        session::UninitializedSessionEventStream,
     },
 };
-use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_time_service::SlotTick;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
@@ -46,14 +46,6 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         _private_inputs: ProofOfLeadershipQuotaInputs,
     ) -> Self {
         Self
-    }
-
-    fn rotate_epoch(
-        &mut self,
-        _new_epoch_public: LeaderInputs,
-        _new_private_inputs: ProofOfLeadershipQuotaInputs,
-        _new_epoch: Epoch,
-    ) {
     }
 
     async fn get_next_proof(&mut self) -> BlendLayerProof {

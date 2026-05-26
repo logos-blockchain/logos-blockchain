@@ -9,7 +9,8 @@ use lb_blend::{
         },
     },
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
-    scheduling::{membership::Membership, session::SessionEvent},
+    // TODO: Remove all mentions of sessions.
+    scheduling::{epoch::EpochEvent as SessionEvent, membership::Membership},
 };
 use overwatch::overwatch::handle::OverwatchHandle;
 
@@ -88,18 +89,14 @@ impl<NodeId> From<PublicInfo<NodeId>> for PoQVerificationInputsMinusSigningKey {
     fn from(
         PublicInfo {
             epoch,
-            session:
-                SessionInfo {
-                    core_public_inputs,
-                    session_number: session,
-                    ..
-                },
+            session: SessionInfo {
+                core_public_inputs, ..
+            },
         }: PublicInfo<NodeId>,
     ) -> Self {
         Self {
             core: core_public_inputs,
             leader: epoch,
-            session,
         }
     }
 }

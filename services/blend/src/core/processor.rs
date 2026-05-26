@@ -23,8 +23,9 @@ use lb_blend::{
         membership::Membership,
         message_blend::{
             crypto::{
-                SessionCryptographicProcessorSettings,
-                core_and_leader::send_and_receive::SessionCryptographicProcessor,
+                // TODO: Remove all mentions of sessions.
+                EpochCryptographicProcessorSettings as SessionCryptographicProcessorSettings,
+                core_and_leader::send_and_receive::EpochCryptographicProcessor as SessionCryptographicProcessor,
             },
             provers::core_and_leader::CoreAndLeaderProofsGenerator,
         },
@@ -267,7 +268,8 @@ mod tests {
             },
             selection::{self, VerifiedProofOfSelection},
         },
-        scheduling::message_blend::crypto::SessionCryptographicProcessorSettings,
+        // TODO: Remove all mentions of sessions.
+        scheduling::message_blend::crypto::EpochCryptographicProcessorSettings as SessionCryptographicProcessorSettings,
     };
     use lb_chain_service::Epoch;
     use lb_core::crypto::ZkHash;
@@ -286,7 +288,6 @@ mod tests {
         use lb_groth16::Field as _;
 
         PoQVerificationInputsMinusSigningKey {
-            session: 1,
             core: CoreInputs {
                 quota: 1,
                 zk_root: ZkHash::ZERO,
