@@ -38,7 +38,6 @@ tracing                       = { workspace = true }
 lb-blend-message = { features = ["unsafe-test-functions"], workspace = true }
 lb-blend-proofs  = { features = ["unsafe-test-functions"], workspace = true }
 lb-groth16       = { workspace = true }
-libp2p           = { workspace = true }
 test-log         = { features = ["trace"], workspace = true }
 
 [features]
