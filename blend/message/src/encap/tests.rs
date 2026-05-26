@@ -33,10 +33,6 @@ impl ProofsVerifier for NeverFailingProofsVerifier {
         Self
     }
 
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
-
     fn verify_proof_of_quota(
         &self,
         proof: ProofOfQuota,
@@ -65,10 +61,6 @@ impl ProofsVerifier for AlwaysFailingProofOfQuotaVerifier {
         Self
     }
 
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
-
     fn verify_proof_of_quota(
         &self,
         _proof: ProofOfQuota,
@@ -96,10 +88,6 @@ impl ProofsVerifier for AlwaysFailingProofOfSelectionVerifier {
     fn new(_public_inputs: PoQVerificationInputsMinusSigningKey) -> Self {
         Self
     }
-
-    fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-    fn complete_epoch_transition(&mut self) {}
 
     fn verify_proof_of_quota(
         &self,
