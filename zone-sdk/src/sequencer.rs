@@ -2286,7 +2286,7 @@ mod tests {
         use lb_groth16::Fr;
         DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![NoteId::from(Fr::from(input_seed))]),
+            inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
             metadata: metadata.to_vec(),
         }
     }
@@ -2432,7 +2432,7 @@ mod tests {
         // finalized view, not a "what we tracked locally" view.
         let channel_id = ChannelId::from([0; 32]);
         let other_channel = ChannelId::from([9; 32]);
-        let outputs = Outputs::new(vec![Note::new(
+        let outputs = Outputs::new([Note::new(
             42,
             ZkKey::from(BigUint::from(0u64)).to_public_key(),
         )]);
