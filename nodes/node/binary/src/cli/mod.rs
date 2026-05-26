@@ -2,21 +2,16 @@ pub mod config;
 pub mod get_peer_id;
 pub mod participate;
 
-use std::{
-    net::SocketAddr,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
-use lb_key_management_system_service::{backend::preload::KeyId, keys::ZkPublicKey};
-use lb_libp2p::Multiaddr;
 
 use crate::config::{
     ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
     LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, SdpArgs, StateArgs, UserConfig,
-    deserialize_config_at_path, parse_hex_public_key, update_api, update_blend, update_cryptarchia,
-    update_network, update_sdp, update_state, update_tracing,
+    deserialize_config_at_path, update_api, update_blend, update_cryptarchia, update_network,
+    update_sdp, update_state, update_tracing,
 };
 
 fn long_version() -> String {
@@ -120,77 +115,30 @@ pub enum Command {
 
 #[derive(Parser, Debug)]
 pub struct InitArgs {
-    /// Trusted peers to bootstrap from (multiaddr format).
-    /// If `--ibd` is set, peers whose multiaddrs include a `PeerId`
-    /// are also used as IBD peers.
-    #[clap(long = "initial-peers", short = 'p', num_args = 1.., value_delimiter = ',')]
-    pub initial_peers: Vec<Multiaddr>,
-
     /// Output file path for the generated config
     #[clap(long = "output", short = 'o', default_value = "user_config.yaml")]
     pub output: PathBuf,
 
-    /// Network listen port
-    #[clap(long = "net-port", default_value = "3000")]
-    pub net_port: u16,
+    #[clap(flatten)]
+    log: LogArgs,
 
-    /// Network swarm key.
-    #[clap(long = "net-node-key", env = "NET_NODE_KEY")]
-    pub net_node_key: Option<String>,
+    #[clap(flatten)]
+    network: NetworkArgs,
 
-    /// Blend listen port
-    #[clap(long = "blend-port", default_value = "3400")]
-    pub blend_port: u16,
+    #[clap(flatten)]
+    blend: BlendArgs,
 
-    /// Blend signing key.
-    #[clap(long = "blend-signing-key-id", env = "BLEND_SIGNING_KEY_ID")]
-    blend_signing_key_id: Option<KeyId>,
+    #[clap(flatten)]
+    cryptarchia: CryptarchiaArgs,
 
-    /// Blend secret key.
-    #[clap(long = "blend-secret-key-id", env = "BLEND_SECRET_KEY_ID")]
-    blend_secret_key_id: Option<KeyId>,
+    #[clap(flatten)]
+    sdp: SdpArgs,
 
-    /// Cryptarchia funding public key.
-    #[clap(
-        long = "cryptarchia-funding-pk",
-        env = "CRYPTARCHIA_FUNDING_PK",
-        value_parser = parse_hex_public_key
-    )]
-    cryptarchia_funding_pk: Option<ZkPublicKey>,
+    #[clap(flatten)]
+    api: ApiArgs,
 
-    #[clap(
-        long = "sdp-funding-pk",
-        env = "SDP_FUNDING_PK",
-        value_parser = parse_hex_public_key
-    )]
-    sdp_funding_pk: Option<ZkPublicKey>,
-
-    /// HTTP API listen address
-    #[clap(long = "http-addr", default_value = "127.0.0.1:8080")]
-    pub http_addr: SocketAddr,
-
-    /// External address for nodes with a known public IP (disables NAT
-    /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
-    #[clap(long = "external-address")]
-    pub external_address: Option<Multiaddr>,
-
-    #[clap(long = "state-path")]
-    pub state_path: Option<PathBuf>,
-
-    /// Enable Initial Block Download (IBD) using peers
-    /// passed via `--initial-peers`/`-p`.
-    #[clap(long = "ibd", default_value_t = false)]
-    pub ibd: bool,
-
-    /// Log filter directives to write into the generated config, e.g.
-    /// `warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error`.
-    #[clap(long = "log-filter")]
-    pub log_filter: Option<String>,
-
-    /// Path for the generated KMS keys YAML file.
-    /// Defaults to 'kms.yaml' in the same directory as --output.
-    #[clap(long = "kms-file")]
-    pub kms_file: Option<PathBuf>,
+    #[clap(flatten)]
+    state: StateArgs,
 }
 
 #[derive(Parser, Debug)]

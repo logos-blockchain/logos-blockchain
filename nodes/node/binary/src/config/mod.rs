@@ -1,5 +1,6 @@
 use core::{convert::Infallible, str::FromStr};
 use std::{
+    collections::HashSet,
     io::Read,
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
@@ -22,10 +23,6 @@ use lb_tracing::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::tracing::serde::{
-    filter::{EnvConfig, Layer},
-    logger::{FileConfig, GelfConfig},
-};
 pub use crate::config::{
     api::serde::Config as ApiConfig,
     blend::serde::Config as BlendConfig,
@@ -39,6 +36,13 @@ pub use crate::config::{
     time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig,
     wallet::serde::Config as WalletConfig,
+};
+use crate::config::{
+    network::serde::nat,
+    tracing::serde::{
+        filter::{EnvConfig, Layer},
+        logger::{FileConfig, GelfConfig},
+    },
 };
 
 pub mod api;
@@ -232,7 +236,18 @@ pub struct NetworkArgs {
     #[clap(long = "net-node-key", env = "NET_NODE_KEY")]
     node_key: Option<String>,
 
-    #[clap(long = "net-initial-peers", env = "NET_INITIAL_PEERS", num_args = 1.., value_delimiter = ',')]
+    /// External address for nodes with a known public IP (disables NAT
+    /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
+    #[clap(long = "external-address")]
+    pub external_address: Option<Multiaddr>,
+
+    #[clap(
+        long = "net-initial-peers",
+        short = 'p',
+        env = "NET_INITIAL_PEERS",
+        num_args = 1..,
+        value_delimiter = ','
+    )]
     pub initial_peers: Option<Vec<Multiaddr>>,
 }
 
@@ -256,6 +271,10 @@ pub struct CryptarchiaArgs {
         value_parser = parse_hex_public_key
     )]
     cryptarchia_funding_pk: Option<ZkPublicKey>,
+
+    /// Overwrite IBD peer list with an empty list.
+    #[clap(long = "disable-ibd-peers", default_value_t = false)]
+    pub disable_ibd_peers: bool,
 }
 
 #[derive(Parser, Debug, Clone, Copy)]
@@ -477,6 +496,7 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
         host,
         port,
         node_key,
+        external_address,
         initial_peers,
     } = network_args;
 
@@ -493,6 +513,10 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
     if let Some(node_key) = node_key {
         let mut key_bytes = hex::decode(node_key)?;
         network.backend.swarm.node_key = SecretKey::try_from_bytes(key_bytes.as_mut_slice())?;
+    }
+
+    if let Some(external_address) = external_address {
+        network.backend.swarm.nat = nat::Config::Static { external_address };
     }
 
     if let Some(peers) = initial_peers {
@@ -522,16 +546,18 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
     }
 }
 
-pub const fn update_cryptarchia(
-    cryptarchia: &mut CryptarchiaConfig,
-    cryptarchia_args: CryptarchiaArgs,
-) {
+pub fn update_cryptarchia(cryptarchia: &mut CryptarchiaConfig, cryptarchia_args: CryptarchiaArgs) {
     let CryptarchiaArgs {
         cryptarchia_funding_pk: funding_pk,
+        disable_ibd_peers,
     } = cryptarchia_args;
 
     if let Some(pk) = funding_pk {
         cryptarchia.set_funding_pk(pk);
+    }
+
+    if disable_ibd_peers {
+        cryptarchia.network.bootstrap.ibd.peers = HashSet::new();
     }
 }
 
