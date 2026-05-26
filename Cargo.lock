@@ -4176,7 +4176,6 @@ dependencies = [
  "libp2p-stream",
  "libp2p-swarm-test",
  "logos-blockchain-blend",
- "logos-blockchain-chain-broadcast-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
