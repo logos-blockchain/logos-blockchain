@@ -27,8 +27,10 @@ use super::{
         PublishDeadline, balance_update_payload, collect_indexed_messages,
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
         parse_balance_payload, publish_message_with_retry, wait_for_channel_view, wait_for_deposit,
-        wait_for_exact_indexed_payload_count, wait_for_lib_advance, wait_for_published_payload,
-        wait_for_published_payloads, wait_for_transactions_finalized, wait_for_withdraw,
+        wait_for_exact_indexed_payload_count, wait_for_finalized_deposit_via_sequencer,
+        wait_for_finalized_withdraw_via_sequencer, wait_for_lib_advance,
+        wait_for_published_payload, wait_for_published_payloads, wait_for_transactions_finalized,
+        wait_for_withdraw,
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
@@ -1199,15 +1201,20 @@ async fn step_zone_indexer_returns_finalized_deposit(
     deposit_alias: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    let deposit = world
+    let (deposit, amount) = world
         .zone
         .resolve_submitted_deposit(&deposit_alias)?
         .clone();
     let indexer = log_step_error(step, world.zone.indexer())?;
 
-    wait_for_deposit(indexer, &deposit, Duration::from_secs(timeout_seconds))
-        .await
-        .map_err(|error| zone_step_error(step, &error))
+    wait_for_deposit(
+        indexer,
+        &deposit,
+        amount,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(expr = "the zone indexer returns finalized withdraw {string} in {int} seconds")]
@@ -1230,6 +1237,53 @@ async fn step_zone_indexer_returns_finalized_withdraw(
     wait_for_withdraw(indexer, &withdraw, Duration::from_secs(timeout_seconds))
         .await
         .map_err(|error| zone_step_error(step, &error))
+}
+
+#[cucumber::then(expr = "sequencer {string} finalizes deposit {string} in {int} seconds")]
+async fn step_zone_sequencer_finalizes_deposit(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    deposit_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let (deposit, amount) = world
+        .zone
+        .resolve_submitted_deposit(&deposit_alias)?
+        .clone();
+    let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+
+    wait_for_finalized_deposit_via_sequencer(
+        events,
+        &deposit,
+        amount,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
+}
+
+#[cucumber::then(expr = "sequencer {string} finalizes withdraw {string} in {int} seconds")]
+async fn step_zone_sequencer_finalizes_withdraw(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    withdraw_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let withdraw = world
+        .zone
+        .resolve_submitted_withdraw(&withdraw_alias)?
+        .clone();
+    let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+
+    wait_for_finalized_withdraw_via_sequencer(
+        events,
+        &withdraw,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
 }
 
 #[cucumber::then(

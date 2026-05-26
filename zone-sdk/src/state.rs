@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
+    crypto::Hash,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Transaction as _,
-        ops::channel::{MsgId, inscribe::Inscription, withdraw::ChannelWithdrawOp},
+        SignedMantleTx, Transaction as _, Value,
+        ledger::Inputs,
+        ops::channel::{ChannelId, MsgId, inscribe::Inscription, withdraw::ChannelWithdrawOp},
         tx::TxHash,
     },
 };
@@ -26,6 +28,11 @@ pub struct InscriptionInfo {
 /// A channel withdraw observed on chain or bundled in a pending atomic tx.
 #[derive(Debug, Clone)]
 pub struct WithdrawInfo {
+    /// Transaction hash that contained this withdraw op. For bundled
+    /// withdraws inside [`AtomicWithdrawInfo`] this equals the bundle's
+    /// `tx_hash`; for standalone withdraws surfaced via
+    /// [`FinalizedOp::Withdraw`] this is the source tx.
+    pub tx_hash: TxHash,
     /// The withdraw op (`channel_id`, outputs, `withdraw_nonce`).
     pub op: ChannelWithdrawOp,
 }
@@ -42,8 +49,29 @@ pub struct AtomicWithdrawInfo {
     pub withdraws: Vec<WithdrawInfo>,
 }
 
-/// A tx tracked by the SDK — either a plain inscription or an atomic
-/// inscription+withdraw bundle. Used in event payloads for
+/// A channel deposit observed in a finalized L1 block. Sequencers do not
+/// publish deposits — these are pure observations enriched with the deposit
+/// `amount` from the chain events API.
+#[derive(Debug, Clone)]
+pub struct DepositInfo {
+    /// The transaction hash containing this deposit op.
+    pub tx_hash: TxHash,
+    /// The `op_id` of the deposit op (stable identity within the tx).
+    pub op_id: Hash,
+    /// Target channel.
+    pub channel_id: ChannelId,
+    /// Notes consumed by the deposit (spent-once at the UTXO layer).
+    pub inputs: Inputs,
+    /// Total value deposited, sourced from the block's events.
+    pub amount: Value,
+    /// Opaque metadata associated with this deposit.
+    pub metadata: Vec<u8>,
+}
+
+/// A tx surfaced by the SDK in event payloads.
+///
+/// Either our own publish (inscription / atomic withdraw bundle), or an
+/// observed deposit from a finalized L1 block. Used for
 /// adopted/published/finalized observations.
 #[derive(Debug, Clone)]
 pub enum PublishedTx {
@@ -52,6 +80,10 @@ pub enum PublishedTx {
     /// A bundled inscription+withdraw(s) published via
     /// `publish_atomic_withdraw`.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// An observed channel deposit (finalized on L1). Sequencers never
+    /// publish deposits — these are surfaced for consumers (e.g. bridge
+    /// implementations) that need to react to finalized deposits.
+    Deposit(DepositInfo),
 }
 
 impl PublishedTx {
@@ -61,18 +93,49 @@ impl PublishedTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
+            Self::Deposit(d) => d.tx_hash,
         }
     }
 
-    /// The inscription info for this entry. Atomic-withdraw bundles always
-    /// carry exactly one inscription.
+    /// The inscription info for this entry. Returns `None` for
+    /// [`PublishedTx::Deposit`] which has no inscription.
     #[must_use]
-    pub const fn inscription(&self) -> &InscriptionInfo {
+    pub const fn inscription(&self) -> Option<&InscriptionInfo> {
         match self {
-            Self::Inscription(i) => i,
-            Self::AtomicWithdraw(a) => &a.inscription,
+            Self::Inscription(i) => Some(i),
+            Self::AtomicWithdraw(a) => Some(&a.inscription),
+            Self::Deposit(_) => None,
         }
     }
+}
+
+/// A finalized Mantle tx that touched our channel.
+///
+/// Carries the channel-relevant ops in on-chain execution order. Atomicity
+/// is structural: every [`FinalizedOp`] inside the same [`FinalizedTx`]
+/// succeeded or failed together on chain.
+#[derive(Debug, Clone)]
+pub struct FinalizedTx {
+    /// Transaction hash of the Mantle tx.
+    pub tx_hash: TxHash,
+    /// Channel-relevant ops in on-chain execution order. A tx with a
+    /// deposit and an inscription emits both, deposit-first.
+    pub ops: Vec<FinalizedOp>,
+}
+
+/// A single channel-relevant op observed in a finalized block. Surfaced as a
+/// member of [`FinalizedTx::ops`].
+#[derive(Debug, Clone)]
+pub enum FinalizedOp {
+    /// Any inscription on the channel — ours or another sequencer's.
+    Inscription(InscriptionInfo),
+    /// A finalized L1 deposit on the channel, with `amount` populated from
+    /// the chain events API.
+    Deposit(DepositInfo),
+    /// A withdraw op on the channel — standalone or part of an atomic
+    /// inscription+withdraw bundle (the bundling is implicit via the parent
+    /// [`FinalizedTx::tx_hash`]).
+    Withdraw(WithdrawInfo),
 }
 
 /// Result of channel update detection — the linear block-level delta
