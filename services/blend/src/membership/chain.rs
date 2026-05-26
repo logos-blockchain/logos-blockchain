@@ -91,6 +91,7 @@ where
             .expect("Should not fail to receive slot stream from time service.")
     };
 
+    // TODO: Refactor into a function or own type that replaces `EpochHandler`.
     Box::pin(
         slot_ticks
             .scan(None, move |last_epoch, SlotTick { epoch, slot }| {
