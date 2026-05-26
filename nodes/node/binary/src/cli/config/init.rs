@@ -34,10 +34,12 @@ enum InitError {
 
 pub fn run(args: InitArgs) -> Result<()> {
     let user_config_path = args.output.clone();
-    let keystore_path = user_config_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join("keystore.yaml");
+    let keystore_path = args.keystore.clone().unwrap_or_else(|| {
+        user_config_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("keystore.yaml")
+    });
 
     if user_config_path.exists() {
         return Err(InitError::UserFileExists.into());
@@ -59,6 +61,7 @@ pub fn run(args: InitArgs) -> Result<()> {
     Ok(())
 }
 
+#[must_use]
 pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
     let InitArgs {
         log: log_args,

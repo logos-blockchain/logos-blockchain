@@ -109,7 +109,7 @@ impl Default for Keystore {
         let mut keystore = Self {
             public_keys: HashMap::new(),
             secret_keys: HashMap::new(),
-            warning: WARNING.to_string(),
+            warning: WARNING.to_owned(),
         };
 
         for title in KeyTitle::ALL {

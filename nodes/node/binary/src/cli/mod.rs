@@ -2,10 +2,14 @@ pub mod config;
 pub mod get_peer_id;
 pub mod participate;
 
-use std::path::{Path, PathBuf};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::{Path, PathBuf},
+};
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use libp2p::Multiaddr;
 
 use crate::config::{
     ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
@@ -121,26 +125,116 @@ pub struct InitArgs {
     #[clap(long = "output", short = 'o', default_value = "user_config.yaml")]
     pub output: PathBuf,
 
-    #[clap(flatten)]
-    log: LogArgs,
+    /// Path for the generated keystore file.
+    /// Defaults to 'keystore.yaml' in the same directory as --output.
+    #[clap(long = "keystore", short = 'k')]
+    pub keystore: Option<PathBuf>,
 
     #[clap(flatten)]
-    network: NetworkArgs,
+    pub log: LogArgs,
 
     #[clap(flatten)]
-    blend: BlendArgs,
+    pub network: NetworkArgs,
 
     #[clap(flatten)]
-    cryptarchia: CryptarchiaArgs,
+    pub blend: BlendArgs,
 
     #[clap(flatten)]
-    sdp: SdpArgs,
+    pub cryptarchia: CryptarchiaArgs,
 
     #[clap(flatten)]
-    api: ApiArgs,
+    pub sdp: SdpArgs,
 
     #[clap(flatten)]
-    state: StateArgs,
+    pub api: ApiArgs,
+
+    #[clap(flatten)]
+    pub state: StateArgs,
+}
+
+/// Set of arguments for use in c-bindings crate.
+pub struct EmbeddedInitArgs {
+    /// Trusted peers to bootstrap from (multiaddr format).
+    /// If `--ibd` is set, peers whose multiaddrs include a `PeerId`
+    /// are also used as IBD peers.
+    pub initial_peers: Vec<Multiaddr>,
+
+    /// Output file path for the generated config
+    pub output: PathBuf,
+
+    /// Network listen port
+    pub net_port: u16,
+
+    /// Blend listen port
+    pub blend_port: u16,
+
+    /// HTTP API listen address
+    pub http_addr: SocketAddr,
+
+    /// External address for nodes with a known public IP (disables NAT
+    /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
+    pub external_address: Option<Multiaddr>,
+
+    pub state_path: Option<PathBuf>,
+
+    /// Enable Initial Block Download (IBD) using peers
+    /// passed via `--initial-peers`/`-p`.
+    pub ibd: bool,
+
+    /// Log filter directives to write into the generated config, e.g.
+    /// `warn,logos_blockchain=debug,libp2p_gossipsub::behaviour=error`.
+    pub log_filter: Option<String>,
+
+    /// Path for the generated KMS keys YAML file.
+    /// Defaults to 'kms.yaml' in the same directory as --output.
+    pub kms_file: Option<PathBuf>,
+}
+
+impl From<&EmbeddedInitArgs> for InitArgs {
+    fn from(args: &EmbeddedInitArgs) -> Self {
+        let mut init_args = Self {
+            output: args.output.clone(),
+            keystore: args.kms_file.clone(),
+            ..Default::default()
+        };
+
+        init_args.log.filter.clone_from(&args.log_filter);
+        init_args.network.port = Some(args.net_port);
+        init_args
+            .network
+            .external_address
+            .clone_from(&args.external_address);
+        init_args.network.initial_peers = Some(args.initial_peers.clone());
+
+        init_args.blend.blend_addr = Some(
+            format!("/ip4/0.0.0.0/tcp/{}", args.blend_port)
+                .parse()
+                .expect("Valid multiaddr structure"),
+        );
+
+        init_args.cryptarchia.disable_ibd_peers = !args.ibd;
+        init_args.api.addr = Some(args.http_addr);
+        init_args.state.path.clone_from(&args.state_path);
+
+        init_args
+    }
+}
+
+impl Default for EmbeddedInitArgs {
+    fn default() -> Self {
+        Self {
+            initial_peers: Vec::new(),
+            output: PathBuf::from("user_config.yaml"),
+            net_port: 3000,
+            blend_port: 3400,
+            http_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3000),
+            external_address: None,
+            state_path: None,
+            ibd: false,
+            log_filter: None,
+            kms_file: None,
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -218,8 +312,9 @@ pub struct MigrateArgs {
 
 impl From<MigrateArgs> for InitArgs {
     fn from(migrate: MigrateArgs) -> Self {
-        InitArgs {
+        Self {
             output: migrate.output,
+            keystore: Some(migrate.keystore),
             log: migrate.log,
             network: migrate.network,
             blend: migrate.blend,
@@ -248,7 +343,7 @@ pub struct ParticipateArgs {
     /// Node's public IPv4 address, required when the blend listening address
     /// is 0.0.0.0
     #[arg(long)]
-    pub external_address: Option<std::net::Ipv4Addr>,
+    pub external_address: Option<Ipv4Addr>,
 }
 
 #[derive(Parser, Debug)]

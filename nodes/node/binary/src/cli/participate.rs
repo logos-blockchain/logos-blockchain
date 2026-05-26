@@ -14,7 +14,7 @@ use crate::{
 
 #[derive(Serialize)]
 struct ParticipationData {
-    stakeholder_identity: ZkPublicKey,
+    stakeholder_identities: Vec<ZkPublicKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
     blend: Option<BlendParticipationData>,
 }
@@ -30,8 +30,9 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
     let user_config = deserialize_config_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
 
     let (_, stakeholder_identity) = user_config.blend_zk_key().map_err(|e| eyre!("{e}"))?;
+    let (_, blend_zk) = user_config.blend_zk_key().map_err(|e| eyre!("{e}"))?;
     let data = ParticipationData {
-        stakeholder_identity,
+        stakeholder_identities: vec![blend_zk],
         blend: build_blend_data(&user_config, args.external_address)?,
     };
 
