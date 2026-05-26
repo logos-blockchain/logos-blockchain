@@ -34,7 +34,8 @@ use super::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
         generated_zone_message_batches, generated_zone_message_sequencers,
         group_zone_messages_by_sequencer, single_column_table, zone_account_balances,
-        zone_atomic_withdraw_rows, zone_balance_rows, zone_message_rows,
+        zone_atomic_withdraw_rows, zone_balance_rows, zone_config_row, zone_message_rows,
+        zone_sequencer_start_rows, zone_sequencing_state_row,
     },
 };
 use crate::{
@@ -48,7 +49,7 @@ use crate::{
 pub(super) const DEFAULT_ZONE_SEQUENCER: &str = "SEQ_A";
 
 fn parse_submit_depth(step: &Step, value: &str) -> Result<usize, StepError> {
-    if value == "None" {
+    if matches!(value.to_lowercase().as_str(), "unlimited" | "none") {
         return Ok(usize::MAX);
     }
 
@@ -137,43 +138,6 @@ async fn step_start_zone_sequencer_with_indexer(
     start_sequencer_with_indexer(world, step, &sequencer_alias).await
 }
 
-#[when(expr = "I start zone sequencer {string} with pending submit depth {string}")]
-async fn step_start_zone_sequencer_with_submit_depth(
-    world: &mut CucumberWorld,
-    step: &Step,
-    sequencer_alias: String,
-    submit_depth: String,
-) -> StepResult {
-    start_named_sequencer_with_pending_submit_depth(
-        world,
-        step,
-        sequencer_alias,
-        None,
-        DriveMode::Passive,
-        parse_submit_depth(step, &submit_depth)?,
-    )
-    .await
-}
-
-#[when(expr = "I start zone sequencer {string} with pending submit depth {string} with indexer")]
-async fn step_start_zone_sequencer_with_submit_depth_and_indexer(
-    world: &mut CucumberWorld,
-    step: &Step,
-    sequencer_alias: String,
-    submit_depth: String,
-) -> StepResult {
-    start_named_sequencer_with_pending_submit_depth(
-        world,
-        step,
-        &sequencer_alias,
-        None,
-        DriveMode::Passive,
-        parse_submit_depth(step, &submit_depth)?,
-    )
-    .await?;
-    initialize_zone_indexer(world, step, &sequencer_alias)
-}
-
 async fn start_sequencer_with_indexer(
     world: &mut CucumberWorld,
     step: &Step,
@@ -181,6 +145,32 @@ async fn start_sequencer_with_indexer(
 ) -> StepResult {
     start_named_sequencer(world, step, sequencer_alias, None, DriveMode::Passive).await?;
     initialize_zone_indexer(world, step, sequencer_alias)
+}
+
+#[when("I start zone sequencers:")]
+async fn step_start_zone_sequencers(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    for row in zone_sequencer_start_rows(step)? {
+        let alias = row.alias;
+        if let Some(submit_depth) = row.pending_submit_depth {
+            start_named_sequencer_with_pending_submit_depth(
+                world,
+                step,
+                &alias,
+                None,
+                DriveMode::Passive,
+                parse_submit_depth(step, &submit_depth)?,
+            )
+            .await?;
+        } else {
+            start_named_sequencer(world, step, &alias, None, DriveMode::Passive).await?;
+        }
+
+        if row.indexer {
+            initialize_zone_indexer(world, step, &alias)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[when(expr = "I stop zone sequencer {string}")]
@@ -475,6 +465,26 @@ async fn step_submit_zone_channel_config_transaction_with_posting_window(
         authorized_aliases,
         posting_timeframe,
         posting_timeout,
+    )
+    .await
+}
+
+#[when(expr = "sequencer {string} submits zone config transaction:")]
+async fn step_submit_zone_channel_config_transaction_from_table(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+) -> StepResult {
+    let row = zone_config_row(step)?;
+
+    submit_zone_channel_config(
+        world,
+        step,
+        &sequencer_alias,
+        row.config_name,
+        row.authorized_sequencers,
+        row.posting_timeframe,
+        row.posting_timeout,
     )
     .await
 }
@@ -854,6 +864,30 @@ async fn step_sequencer_reaches_sequencing_state_our_turn(
         true,
         pending_publish_txs,
         timeout_seconds,
+    )
+    .await
+}
+
+#[cucumber::then(expr = "sequencer {string} reaches sequencing state:")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_sequencer_reaches_sequencing_state_from_table(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+) -> StepResult {
+    let row = zone_sequencing_state_row(step)?;
+
+    wait_for_sequencing_state(
+        world,
+        step,
+        &sequencer_alias,
+        row.own_key_index,
+        row.is_our_turn,
+        row.pending_transactions,
+        row.timeout_seconds,
     )
     .await
 }

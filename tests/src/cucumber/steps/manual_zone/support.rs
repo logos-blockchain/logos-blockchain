@@ -369,11 +369,11 @@ pub fn start_balance_aware_policy(
                         orphaned_inscriptions,
                     )
                     .await;
-                    publish_planned_balance_updates(&handle, &view_rx, &mut balances, &mut planned)
-                        .await;
                 }
                 _ => {}
             }
+
+            publish_planned_balance_updates(&handle, &view_rx, &mut balances, &mut planned).await;
         }
     })
 }
@@ -391,7 +391,9 @@ pub fn start_sorted_conflict_policy(
         loop {
             match sequencer.next_event().await {
                 Some(Event::Published { tx, .. }) => {
-                    sorted_state.record_seen_payload(tx.inscription().payload.clone());
+                    sorted_state
+                        .record_published_payload(tx.inscription().payload.clone())
+                        .await;
                 }
                 Some(Event::ChannelUpdate { orphaned, adopted }) => {
                     sorted_state.record_adoptions(&adopted).await;
@@ -551,6 +553,11 @@ impl SortedConflictState {
             self.discarded.lock().await.remove(&payload.payload);
             self.record_seen_payload(payload.payload.clone());
         }
+    }
+
+    async fn record_published_payload(&mut self, payload: Inscription) {
+        self.discarded.lock().await.remove(&payload);
+        self.record_seen_payload(payload);
     }
 
     fn record_seen_payload(&mut self, payload: Inscription) {

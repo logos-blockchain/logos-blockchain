@@ -226,7 +226,12 @@ const fn slots_from_duration(elapsed: Duration, slot_duration: Duration) -> u64 
     if divisor == 0 {
         return 0;
     }
-    (elapsed.as_nanos() / divisor) as u64
+    let slots = elapsed.as_nanos() / divisor;
+    if slots > u64::MAX as u128 {
+        u64::MAX
+    } else {
+        slots as u64
+    }
 }
 
 fn duration_mul(duration: Duration, n: u64) -> Duration {
@@ -993,7 +998,7 @@ where
             current_slot,
             own_key_index: self.own_key_index,
             authorized_key_index,
-            is_our_turn: self.can_publish_now(),
+            is_our_turn: self.can_publish_inscription_now(),
             tip_message,
             pending_publish_txs,
             queued_messages: pending_publish_txs,
@@ -1015,13 +1020,16 @@ where
             .map(|idx| idx as u16)
     }
 
-    fn can_publish_now(&self) -> bool {
+    fn can_publish_inscription_now(&self) -> bool {
         let Some(slot_clock) = &self.slot_clock else {
             return false;
         };
         let current_slot = slot_clock.current_slot();
 
         let Some(channel) = &self.channel_state else {
+            // A missing channel is the normal pre-genesis-inscription state.
+            // Network/query failures are surfaced before this point, so this
+            // still only publishes when the absence is known.
             return true;
         };
 
@@ -1051,17 +1059,12 @@ where
         turn_end_slot.saturating_sub(slot_to_u64(current_slot)) >= min_remaining
     }
 
-    /// Enqueue pending signed txs for posting while the round-robin gate is
-    /// open. First-time publish posts are bounded by
-    /// `max_pending_publish_depth`; already-posted pending txs may still be
-    /// reposted for mempool recovery.
+    /// Enqueue pending signed txs for posting. Channel inscriptions are posted
+    /// only while the round-robin gate is open. First-time publish posts are
+    /// bounded by `max_pending_publish_depth`; already-posted pending txs
+    /// may still be reposted for mempool recovery.
     fn enqueue_pending_submit(&mut self) {
         if self.resubmit_active || !self.in_flight.is_empty() {
-            return;
-        }
-
-        if !self.can_publish_now() {
-            self.publish_channel_view();
             return;
         }
 
@@ -1075,20 +1078,29 @@ where
             return;
         };
 
+        let can_publish_inscription = self.can_publish_inscription_now();
         let pending = state.pending_txs(tip);
         let mut submit = Vec::new();
         let mut active_publish_count = state.posted_pending_publish_count();
         let max_depth = self.config.max_pending_publish_depth.max(1);
 
         for (id, signed_tx) in pending {
-            let pending_publish = state.pending_inscription(&id);
-            let is_publish = pending_publish.is_some();
-            let is_first_post = pending_publish.is_some_and(|pending| !pending.posted);
-            if is_publish && is_first_post && active_publish_count >= max_depth {
+            let pending_inscription_publish = state.pending_inscription(&id);
+            let is_inscription_publish = pending_inscription_publish.is_some();
+            if is_inscription_publish && !can_publish_inscription {
+                continue;
+            }
+
+            let is_first_inscription_post =
+                pending_inscription_publish.is_some_and(|pending| !pending.posted);
+            if is_inscription_publish
+                && is_first_inscription_post
+                && active_publish_count >= max_depth
+            {
                 break;
             }
 
-            if is_publish && is_first_post {
+            if is_inscription_publish && is_first_inscription_post {
                 active_publish_count = active_publish_count.saturating_add(1);
             }
             submit.push((id, signed_tx));
@@ -2418,6 +2430,7 @@ mod tests {
     #[derive(Clone)]
     struct MockNode {
         posted_transactions_sender: mpsc::Sender<SignedMantleTx>,
+        channel_state: Option<ChannelState>,
     }
 
     impl MockNode {
@@ -2426,6 +2439,20 @@ mod tests {
             (
                 Self {
                     posted_transactions_sender: tx,
+                    channel_state: Some(ChannelState {
+                        accredited_keys: Keys::from(Ed25519Key::from_bytes(&[0; 32]).public_key())
+                            .into(),
+                        configuration_threshold: 1,
+                        tip_message: MsgId::root(),
+                        tip_slot: Slot::default(),
+                        tip_sequencer: 0,
+                        tip_sequencer_starting_slot: Slot::default(),
+                        posting_timeframe: 0u32.into(),
+                        posting_timeout: 0u32.into(),
+                        balance: 0,
+                        withdrawal_nonce: 0,
+                        withdraw_threshold: 1,
+                    }),
                 },
                 rx,
             )
@@ -2562,7 +2589,7 @@ mod tests {
             &self,
             _channel_id: ChannelId,
         ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
-            Ok(None)
+            Ok(self.channel_state.clone())
         }
 
         async fn block_stream(

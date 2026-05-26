@@ -79,8 +79,12 @@ pub(super) async fn wait_until_sorted_conflict_settles(
             return Err(ZoneTestError::IndexerTimeout);
         }
 
-        let expected_count = total.saturating_sub(discarded.lock().await.len());
-        if expected_count > 0 && on_chain.len() >= expected_count {
+        let discarded_snapshot = discarded.lock().await.clone();
+        let expected_count = total.saturating_sub(discarded_snapshot.len());
+        let has_discarded_on_chain = on_chain
+            .iter()
+            .any(|payload| discarded_snapshot.contains(payload));
+        if expected_count > 0 && on_chain.len() >= expected_count && !has_discarded_on_chain {
             return Ok(on_chain);
         }
 
