@@ -60,7 +60,6 @@ pub enum Error {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RealProofsVerifier {
     current_inputs: PoQVerificationInputsMinusSigningKey,
-    previous_epoch_inputs: Option<LeaderInputs>,
 }
 
 impl ProofsVerifier for RealProofsVerifier {
@@ -70,7 +69,6 @@ impl ProofsVerifier for RealProofsVerifier {
         tracing::trace!("Generating new proof verifier with public inputs: {public_inputs:?}");
         Self {
             current_inputs: public_inputs,
-            previous_epoch_inputs: None,
         }
     }
 
@@ -94,27 +92,7 @@ impl ProofsVerifier for RealProofsVerifier {
                 leader,
                 signing_key: *signing_key.as_inner(),
             })
-            .or_else(|_| {
-                let Some(previous_epoch_inputs) = self.previous_epoch_inputs else {
-                    tracing::debug!("Input proof invalid and no previous epoch to try with");
-                    return Err(Error::ProofOfQuota(quota::Error::InvalidProof));
-                };
-                tracing::trace!(
-                    "Verifying same proof of quota with previous epoch leader inputs: {previous_epoch_inputs:?}."
-                );
-                proof
-                    .verify(&PublicInputs {
-                        core,
-                        leader: previous_epoch_inputs,
-                        signing_key: *signing_key.as_inner(),
-                    })
-                    .map_err(Error::ProofOfQuota)
-                    .inspect_err(|_| {
-                        tracing::debug!(
-                            "Input proof invalid with both current and previous epoch public inputs"
-                        );
-                    })
-            });
+            .map_err(Error::ProofOfQuota);
 
         tracing::trace!(
             "Proof verification time: {} ms.",
@@ -130,23 +108,5 @@ impl ProofsVerifier for RealProofsVerifier {
         inputs: &VerifyInputs,
     ) -> Result<VerifiedProofOfSelection, Self::Error> {
         proof.verify(inputs).map_err(Error::ProofOfSelection)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        crypto::proofs::{PoQVerificationInputsMinusSigningKey, RealProofsVerifier},
-        encap::ProofsVerifier as _,
-    };
-
-    #[test]
-    fn new_verifier_has_no_previous_epoch() {
-        let verifier = RealProofsVerifier::new(PoQVerificationInputsMinusSigningKey::default());
-        assert!(verifier.previous_epoch_inputs.is_none());
-        assert_eq!(
-            verifier.current_inputs.leader,
-            PoQVerificationInputsMinusSigningKey::default().leader
-        );
     }
 }
