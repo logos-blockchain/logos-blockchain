@@ -3,15 +3,11 @@ pub mod node_id;
 pub mod service;
 
 use core::fmt::{self, Debug, Formatter};
-use std::pin::Pin;
 
-use futures::Stream;
 use lb_blend::scheduling::membership::Membership;
 use lb_core::crypto::ZkHash;
 use lb_groth16::fr_to_bytes;
-use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_poq::CorePathAndSelectors;
-use overwatch::services::{ServiceData, relay::OutboundRelay};
 
 #[derive(Clone, Debug)]
 pub struct MembershipInfo<NodeId> {
@@ -59,27 +55,4 @@ impl Debug for ZkInfo {
             .field("core_and_path_selectors", &"<redacted>")
             .finish()
     }
-}
-
-pub type MembershipStream<NodeId> =
-    Pin<Box<dyn Stream<Item = MembershipInfo<NodeId>> + Send + Sync + 'static>>;
-
-pub type ServiceMessage<MembershipAdapter> =
-    <<MembershipAdapter as Adapter>::Service as ServiceData>::Message;
-
-/// An adapter for the membership service.
-#[async_trait::async_trait]
-pub trait Adapter {
-    type Service: ServiceData;
-    type NodeId;
-    type Error: std::error::Error;
-
-    fn new(
-        relay: OutboundRelay<ServiceMessage<Self>>,
-        signing_public_key: Ed25519PublicKey,
-        zk_public_key: Option<ZkPublicKey>,
-    ) -> Self;
-
-    /// Subscribe to membership updates.
-    async fn subscribe(&self) -> Result<MembershipStream<Self::NodeId>, Self::Error>;
 }

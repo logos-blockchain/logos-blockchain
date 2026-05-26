@@ -6,8 +6,6 @@ pub trait ServiceComponents {
     /// Settings for broadcasting messages that have passed through the blend
     /// network.
     type BroadcastSettings;
-    /// Adapter for membership service.
-    type MembershipAdapter;
     type ProofsGenerator;
     type BackendSettings;
     /// Chain service, used by the proxy to derive membership from the chain.
@@ -20,7 +18,6 @@ impl<
     Backend,
     NodeId,
     BroadcastSettings,
-    MembershipAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -31,7 +28,6 @@ impl<
         Backend,
         NodeId,
         BroadcastSettings,
-        MembershipAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -44,7 +40,6 @@ where
 {
     type BackendSettings = Backend::Settings;
     type BroadcastSettings = BroadcastSettings;
-    type MembershipAdapter = MembershipAdapter;
     type ProofsGenerator = ProofsGenerator;
     type ChainService = ChainService;
     type TimeBackend = TimeBackend;

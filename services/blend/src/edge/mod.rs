@@ -45,7 +45,6 @@ use overwatch::{
     },
 };
 use serde::{Serialize, de::DeserializeOwned};
-pub(crate) use service_components::ServiceComponents;
 use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info};
@@ -77,7 +76,6 @@ pub struct BlendService<
     Backend,
     NodeId,
     BroadcastSettings,
-    MembershipAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -88,20 +86,13 @@ pub struct BlendService<
     NodeId: Clone,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(
-        MembershipAdapter,
-        ProofsGenerator,
-        TimeBackend,
-        ChainService,
-        PolInfoProvider,
-    )>,
+    _phantom: PhantomData<(ProofsGenerator, TimeBackend, ChainService, PolInfoProvider)>,
 }
 
 impl<
     Backend,
     NodeId,
     BroadcastSettings,
-    MembershipAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -112,7 +103,6 @@ impl<
         Backend,
         NodeId,
         BroadcastSettings,
-        MembershipAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -135,7 +125,6 @@ impl<
     Backend,
     NodeId,
     BroadcastSettings,
-    MembershipAdapter,
     ProofsGenerator,
     TimeBackend,
     ChainService,
@@ -146,7 +135,6 @@ impl<
         Backend,
         NodeId,
         BroadcastSettings,
-        MembershipAdapter,
         ProofsGenerator,
         TimeBackend,
         ChainService,
@@ -157,14 +145,11 @@ where
     Backend: BlendBackend<NodeId, RuntimeServiceId> + Send + Sync,
     NodeId: Clone + Debug + Eq + Hash + Send + Sync + node_id::TryFrom + 'static,
     BroadcastSettings: Serialize + DeserializeOwned + Send,
-    MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
-    membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
     ProofsGenerator: LeaderProofsGenerator + Send,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
-    RuntimeServiceId: AsServiceId<<MembershipAdapter as membership::Adapter>::Service>
-        + AsServiceId<Self>
+    RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>
@@ -205,7 +190,6 @@ where
             &overwatch_handle,
             Some(Duration::from_mins(1)),
             TimeService<_, _>,
-            <MembershipAdapter as membership::Adapter>::Service,
             PreloadKmsService<_>
         )
         .await?;

@@ -116,13 +116,9 @@ where
             TimeBackend: lb_time_service::backends::TimeBackend + Send,
         > + Send
         + 'static,
-    EdgeService::MembershipAdapter:
-        membership::Adapter<NodeId = CoreService::NodeId, Error: Send + Sync + 'static> + Send,
-    membership::ServiceMessage<EdgeService::MembershipAdapter>: Send + Sync + 'static,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<CoreService>
         + AsServiceId<EdgeService>
-        + AsServiceId<MembershipService<EdgeService>>
         + AsServiceId<<EdgeService as EdgeServiceComponents>::ChainService>
         + AsServiceId<
             TimeService<<EdgeService as EdgeServiceComponents>::TimeBackend, RuntimeServiceId>,
@@ -169,7 +165,6 @@ where
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            MembershipService<EdgeService>,
             PreloadKmsService<_>
         )
         .await?;
@@ -260,8 +255,3 @@ type BroadcastSettings<CoreService, RuntimeServiceId> =
     <<CoreService as ServiceData>::Message as MessageComponents<
         <CoreService as CoreServiceComponents<RuntimeServiceId>>::NodeId,
     >>::BroadcastSettings;
-
-type MembershipAdapter<EdgeService> = <EdgeService as edge::ServiceComponents>::MembershipAdapter;
-
-type MembershipService<EdgeService> =
-    <MembershipAdapter<EdgeService> as membership::Adapter>::Service;

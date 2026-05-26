@@ -138,7 +138,6 @@ pub struct BlendService<
     Backend,
     NodeId,
     Network,
-    MembershipAdapter,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -154,7 +153,6 @@ pub struct BlendService<
     last_saved_state: Option<ServiceState<Backend::Settings, Network::BroadcastSettings>>,
     _phantom: PhantomData<(
         Backend,
-        MembershipAdapter,
         SdpService,
         ProofsGenerator,
         TimeBackend,
@@ -167,7 +165,6 @@ impl<
     Backend,
     NodeId,
     Network,
-    MembershipAdapter,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -180,7 +177,6 @@ impl<
         Backend,
         NodeId,
         Network,
-        MembershipAdapter,
         SdpService,
         ProofsGenerator,
         ProofsVerifier,
@@ -209,7 +205,6 @@ impl<
     Backend,
     NodeId,
     Network,
-    MembershipAdapter,
     SdpService,
     ProofsGenerator,
     ProofsVerifier,
@@ -222,7 +217,6 @@ impl<
         Backend,
         NodeId,
         Network,
-        MembershipAdapter,
         SdpService,
         ProofsGenerator,
         ProofsVerifier,
@@ -235,8 +229,6 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
-    MembershipAdapter: membership::Adapter<NodeId = NodeId, Error: Send + Sync + 'static> + Send,
-    membership::ServiceMessage<MembershipAdapter>: Send + Sync + 'static,
     ProofsGenerator: CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>
         + Send
         + Sync,
@@ -246,7 +238,6 @@ where
     ChainService: CryptarchiaServiceData<Tx: Send + Sync>,
     PolInfoProvider: PolInfoProviderTrait<RuntimeServiceId, Stream: Send + Unpin + 'static> + Send,
     RuntimeServiceId: AsServiceId<NetworkService<Network::Backend, RuntimeServiceId>>
-        + AsServiceId<<MembershipAdapter as membership::Adapter>::Service>
         + AsServiceId<SdpService>
         + AsServiceId<TimeService<TimeBackend, RuntimeServiceId>>
         + AsServiceId<ChainService>
@@ -299,7 +290,6 @@ where
             Some(Duration::from_mins(1)),
             NetworkService<_, _>,
             TimeService<_, _>,
-            <MembershipAdapter as membership::Adapter>::Service,
             SdpService,
             PreloadKmsService<_>
         )
