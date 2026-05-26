@@ -129,7 +129,7 @@ pub fn timing_settings() -> TimingSettings {
         round_duration: Duration::from_secs(1),
         rounds_per_observation_window: 5.try_into().unwrap(),
         rounds_per_session_transition_period: 2.try_into().unwrap(),
-        epoch_transition_period_in_slots: 1.try_into().unwrap(),
+        epoch_transition_period: Duration::from_secs(1),
     }
 }
 

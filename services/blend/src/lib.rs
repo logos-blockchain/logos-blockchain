@@ -209,7 +209,7 @@ where
         let (MembershipInfo { membership, .. }, mut remaining_membership_stream) =
             UninitializedEpochEventStream::new(
                 membership_stream,
-                settings.common.time.session_transition_period(),
+                settings.common.time.epoch_transition_period,
             )
             .await_first_ready()
             .await

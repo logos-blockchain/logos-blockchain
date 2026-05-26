@@ -313,7 +313,14 @@ where
             );
             EpochHandler::new(
                 chain_service,
-                blend_config.time.epoch_transition_period_in_slots,
+                // TODO: This will go one we get rid of the `EpochHandler` completely as we rely on
+                // the slot tick directly.
+                blend_config
+                    .time
+                    .epoch_transition_period
+                    .as_secs()
+                    .try_into()
+                    .expect("Epoch transition period should be at least 1 second."),
             )
         }
         .await;

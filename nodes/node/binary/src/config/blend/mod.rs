@@ -1,3 +1,4 @@
+use core::time::Duration;
 use std::path::Path;
 
 use lb_blend_service::{
@@ -38,6 +39,7 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
+    #[expect(clippy::too_many_lines, reason = "Conversion function.")]
     #[must_use]
     pub fn into_blend_services_settings(
         self,
@@ -65,9 +67,14 @@ impl ServiceConfig {
                 minimum_network_size: self.deployment.common.minimum_network_size.into(),
                 recovery_path_prefix,
                 time: TimingSettings {
-                    epoch_transition_period_in_slots: self
-                        .deployment
-                        .slots_per_epoch_transition_period(slots_per_block, &slot_duration),
+                    epoch_transition_period: Duration::from_secs(
+                        self.deployment
+                            // TODO: No need to divide by `slot_duration` to then multiply by the
+                            // same right after.
+                            .slots_per_epoch_transition_period(slots_per_block, &slot_duration)
+                            .get()
+                            * slot_duration.as_secs(),
+                    ),
                     round_duration: self.deployment.round_duration(&slot_duration),
                     rounds_per_interval: self
                         .deployment

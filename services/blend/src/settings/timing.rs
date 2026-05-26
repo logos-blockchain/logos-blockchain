@@ -17,7 +17,7 @@ pub struct TimingSettings {
     pub rounds_per_observation_window: NonZeroU64,
     /// Session transition period in rounds.
     pub rounds_per_session_transition_period: NonZeroU64,
-    pub epoch_transition_period_in_slots: NonZeroU64,
+    pub epoch_transition_period: Duration,
 }
 
 impl TimingSettings {

@@ -795,7 +795,12 @@ async fn complete_old_session_after_main_loop_done() {
     // same epoch state.
     let mut epoch_handler = EpochHandler::new(
         TestChainService,
-        settings.time.epoch_transition_period_in_slots,
+        settings
+            .time
+            .epoch_transition_period
+            .as_secs()
+            .try_into()
+            .unwrap(),
     );
 
     // Prepare dummy Overwatch resources.
@@ -973,7 +978,12 @@ async fn stop_on_empty_session() {
     // same epoch state.
     let mut epoch_handler = EpochHandler::new(
         TestChainService,
-        settings.time.epoch_transition_period_in_slots,
+        settings
+            .time
+            .epoch_transition_period
+            .as_secs()
+            .try_into()
+            .unwrap(),
     );
 
     // Prepare dummy Overwatch resources.
@@ -1141,7 +1151,12 @@ async fn stop_on_non_empty_session_without_local_core_path() {
     // same epoch state.
     let mut epoch_handler = EpochHandler::new(
         TestChainService,
-        settings.time.epoch_transition_period_in_slots,
+        settings
+            .time
+            .epoch_transition_period
+            .as_secs()
+            .try_into()
+            .unwrap(),
     );
 
     // Prepare dummy Overwatch resources.
@@ -1619,7 +1634,12 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     let mut epoch_handler = EpochHandler::new(
         TestChainService,
-        settings.time.epoch_transition_period_in_slots,
+        settings
+            .time
+            .epoch_transition_period
+            .as_secs()
+            .try_into()
+            .unwrap(),
     );
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources();
@@ -1703,7 +1723,12 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     let mut epoch_handler2 = EpochHandler::new(
         TestChainService,
-        settings.time.epoch_transition_period_in_slots,
+        settings
+            .time
+            .epoch_transition_period
+            .as_secs()
+            .try_into()
+            .unwrap(),
     );
     let (overwatch_handle2, _overwatch_cmd_receiver2, state_updater2, _state_receiver2) =
         dummy_overwatch_resources();

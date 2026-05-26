@@ -116,7 +116,7 @@ pub fn settings(
             round_duration: Duration::from_secs(1),
             rounds_per_observation_window: NonZeroU64::new(1).unwrap(),
             rounds_per_session_transition_period: NonZeroU64::new(1).unwrap(),
-            epoch_transition_period_in_slots: NonZeroU64::new(1).unwrap(),
+            epoch_transition_period: Duration::from_secs(1),
         },
         non_ephemeral_signing_key: key(local_id).0,
         num_blend_layers: NonZeroU64::new(1).unwrap(),
