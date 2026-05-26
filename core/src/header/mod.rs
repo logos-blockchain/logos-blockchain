@@ -11,9 +11,9 @@ pub const BEDROCK_VERSION: u8 = 1;
 use crate::{
     codec::SerializeOp as _,
     crypto::Hasher,
-    mantle::{Transaction as _, TxHash, genesis_tx::GenesisTx},
+    mantle::genesis_tx::GenesisTx,
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
-    utils::{display_hex_bytes_newtype, serde_bytes_newtype},
+    utils::{display_hex_bytes_newtype, merkle, serde_bytes_newtype},
 };
 
 #[derive(Clone, Eq, PartialEq, Copy, Hash, PartialOrd, Ord)]
@@ -138,10 +138,10 @@ impl Header {
 
     #[must_use]
     pub fn genesis(tx: &GenesisTx) -> Self {
-        let tx_hash: TxHash = tx.hash();
+        let block_root = merkle::calculate_block_root(&[tx]);
         Self::new(
             HeaderId([0; 32]),
-            ContentId(tx_hash.into()),
+            ContentId(block_root),
             Slot::from(0u64),
             Groth16LeaderProof::genesis(),
         )
