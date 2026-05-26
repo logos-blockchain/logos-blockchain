@@ -819,10 +819,6 @@ mod tests {
             Self
         }
 
-        fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-        fn complete_epoch_transition(&mut self) {}
-
         fn verify_proof_of_quota(
             &self,
             proof: ProofOfQuota,
@@ -852,10 +848,6 @@ mod tests {
             Self
         }
 
-        fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-        fn complete_epoch_transition(&mut self) {}
-
         fn verify_proof_of_quota(
             &self,
             _proof: ProofOfQuota,
@@ -883,10 +875,6 @@ mod tests {
             // Fail only if pol_epoch_nonce is ZERO
             Self(public_inputs.leader.pol_epoch_nonce == ZkHash::ZERO)
         }
-
-        fn start_epoch_transition(&mut self, _new_pol_inputs: LeaderInputs) {}
-
-        fn complete_epoch_transition(&mut self) {}
 
         fn verify_proof_of_quota(
             &self,

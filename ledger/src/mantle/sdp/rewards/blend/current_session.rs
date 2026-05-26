@@ -4,11 +4,7 @@ use lb_blend_message::{
     encap::ProofsVerifier as ProofsVerifierTrait, reward::SessionRandomness,
 };
 use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
-use lb_core::{
-    crypto::ZkHash,
-    mantle::Value,
-    sdp::{ProviderId, SessionNumber},
-};
+use lb_core::{crypto::ZkHash, mantle::Value, sdp::ProviderId};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::HashTrieMapSync;
@@ -117,12 +113,8 @@ impl CurrentSessionTracker {
             providers.size() as u64,
         ).expect("evaluation parameters shouldn't overflow. panicking since we can't process the new session");
 
-        let proof_verifiers = Self::create_proof_verifiers(
-            self.leader_inputs.values().copied(),
-            last_active_session_state.session_n,
-            zk_root,
-            core_quota,
-        );
+        let proof_verifiers =
+            Self::create_proof_verifiers(self.leader_inputs.values().copied(), zk_root, core_quota);
 
         CurrentSessionTrackerOutput::WithTargetSession {
             target_session_state: TargetSessionState::new(
@@ -173,14 +165,12 @@ impl CurrentSessionTracker {
 
     fn create_proof_verifiers<ProofsVerifier: ProofsVerifierTrait>(
         leader_inputs: impl Iterator<Item = LeaderInputs>,
-        session: SessionNumber,
         zk_root: ZkHash,
         core_quota: u64,
     ) -> Vec<ProofsVerifier> {
         leader_inputs
             .map(|leader| {
                 ProofsVerifier::new(PoQVerificationInputsMinusSigningKey {
-                    session,
                     core: CoreInputs {
                         zk_root,
                         quota: core_quota,
