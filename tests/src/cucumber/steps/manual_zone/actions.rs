@@ -293,7 +293,7 @@ pub(super) async fn submit_zone_deposit_transaction(
 
     world
         .zone
-        .remember_submitted_deposit(transaction_alias.clone(), deposit);
+        .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
     record_zone_wallet_submission(world, response, reserved_inputs);
     world.remember_submitted_transaction(transaction_alias, response);
 
@@ -332,7 +332,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
 
     world
         .zone
-        .remember_submitted_deposit(transaction_alias.clone(), submission.deposit);
+        .remember_submitted_deposit(transaction_alias.clone(), submission.deposit, amount);
     remember_published_zone_message(
         world,
         sequencer_alias,

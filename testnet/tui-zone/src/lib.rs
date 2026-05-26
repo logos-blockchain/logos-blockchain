@@ -11,7 +11,7 @@ use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
     sequencer::{Event, OrphanedTx, SequencerHandle, ZoneSequencer},
-    state::InscriptionInfo,
+    state::{FinalizedOp, InscriptionInfo},
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
@@ -110,23 +110,31 @@ async fn handle_event(
         Event::ChannelUpdate { orphaned, adopted } => {
             handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
-        Event::TxsFinalized { txs, .. } => {
-            let inscriptions: Vec<InscriptionInfo> =
-                txs.iter().map(|t| t.inscription().clone()).collect();
+        Event::TxsFinalized { items } => {
+            // TUI only cares about inscriptions for rendering; deposit /
+            // withdraw ops have no inscription payload.
+            let inscriptions: Vec<InscriptionInfo> = items
+                .iter()
+                .flat_map(|t| t.ops.iter())
+                .filter_map(|op| match op {
+                    FinalizedOp::Inscription(i) => Some(i.clone()),
+                    FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+                })
+                .collect();
             state.on_finalized(&inscriptions);
             ui::render_state(state);
             ui::prompt();
         }
         Event::Published { tx, checkpoint } => {
-            let info = tx.inscription();
-            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
-            state.on_published(info);
+            // `publish_*` APIs only emit inscription / atomic-withdraw — never
+            // a deposit — so `inscription()` is `Some` here in practice.
+            if let Some(info) = tx.inscription() {
+                debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
+                state.on_published(info);
+            }
             state.save_checkpoint(checkpoint);
             ui::render_state(state);
             ui::prompt();
-        }
-        Event::FinalizedInscriptions { inscriptions } => {
-            state.on_finalized(&inscriptions);
         }
     }
 }

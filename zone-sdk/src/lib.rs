@@ -6,6 +6,7 @@ pub mod state;
 pub use lb_common_http_client::{CommonHttpClient, Slot};
 pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
 use lb_core::mantle::{
+    Value,
     ledger::{Inputs, Outputs},
     ops::channel::MsgId,
 };
@@ -33,8 +34,11 @@ pub struct ZoneBlock {
 /// A deposit from a zone channel, included/finalized in Bedrock
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Deposit {
-    /// Amount of the deposit
+    /// Notes consumed by the deposit. Acts as the natural unique key (notes
+    /// are spent-once at the UTXO layer).
     pub inputs: Inputs,
+    /// Total value deposited, sourced from the block's events.
+    pub amount: Value,
     /// Opaque metadata associated with this deposit
     pub metadata: Vec<u8>,
 }

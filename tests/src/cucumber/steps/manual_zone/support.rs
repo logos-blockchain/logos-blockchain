@@ -51,7 +51,7 @@ use lb_zone_sdk::{
         Event, InscriptionId, OrphanedTx, PublishResult, SequencerConfig, SequencerHandle,
         WithdrawArg, ZoneSequencer,
     },
-    state::{InscriptionInfo, PublishedTx},
+    state::{FinalizedOp, InscriptionInfo, PublishedTx},
 };
 use rand::{Rng as _, thread_rng};
 use reqwest::Url;
@@ -113,6 +113,8 @@ pub enum ZoneTestError {
     SubmitWithdraw { message: String },
     #[error("timed out waiting for zone withdraw to appear in the indexer")]
     WithdrawTimeout,
+    #[error("zone sequencer event stream stopped before observing the expected event")]
+    SequencerStopped,
     #[error(transparent)]
     BoundedError(#[from] BoundedError),
     #[error(transparent)]
@@ -314,16 +316,17 @@ pub fn start_republish_policy(
         loop {
             match sequencer.next_event().await {
                 Some(Event::Published { tx, .. }) => {
-                    local_pending.insert(tx.inscription().this_msg);
-                }
-                Some(Event::TxsFinalized { txs, .. }) => {
-                    for tx in txs {
-                        local_pending.remove(&tx.inscription().this_msg);
+                    if let Some(info) = tx.inscription() {
+                        local_pending.insert(info.this_msg);
                     }
                 }
-                Some(Event::FinalizedInscriptions { inscriptions }) => {
-                    for inscription in inscriptions {
-                        local_pending.remove(&inscription.this_msg);
+                Some(Event::TxsFinalized { items }) => {
+                    for tx in items {
+                        for op in tx.ops {
+                            if let FinalizedOp::Inscription(info) = op {
+                                local_pending.remove(&info.this_msg);
+                            }
+                        }
                     }
                 }
                 Some(Event::ChannelUpdate { orphaned, .. }) => {
@@ -360,7 +363,9 @@ pub fn start_balance_aware_policy(
         loop {
             match sequencer.next_event().await {
                 Some(Event::Published { tx, .. }) => {
-                    balances.record_applied_payload(&tx.inscription().payload);
+                    if let Some(info) = tx.inscription() {
+                        balances.record_applied_payload(&info.payload);
+                    }
                 }
                 Some(Event::ChannelUpdate { orphaned, adopted }) => {
                     let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
@@ -398,7 +403,9 @@ pub fn start_sorted_conflict_policy(
         loop {
             match sequencer.next_event().await {
                 Some(Event::Published { tx, .. }) => {
-                    sorted_state.record_seen_payload(tx.inscription().payload.clone().into_inner());
+                    if let Some(info) = tx.inscription() {
+                        sorted_state.record_seen_payload(info.payload.clone().into_inner());
+                    }
                 }
                 Some(Event::ChannelUpdate { orphaned, adopted }) => {
                     sorted_state.record_adoptions(&adopted).await;
@@ -639,7 +646,8 @@ async fn wait_for_published_event(
     timeout(deadline.remaining()?, async {
         while let Some(event) = sequencer_events.recv().await {
             if let Event::Published { tx, checkpoint } = event
-                && tx.inscription().payload.as_slice() == data
+                && let Some(info) = tx.inscription()
+                && info.payload.as_slice() == data
             {
                 return Ok(PublishResult {
                     inscription_id: tx.tx_hash(),
@@ -711,14 +719,12 @@ pub async fn collect_indexed_messages_exactly_once(
                 let mut saw_message = false;
 
                 while let Some((message, slot)) = stream.next().await {
-                    let ZoneMessage::Block(block) = message else {
-                        continue;
-                    };
-
                     saw_message = true;
-                    cursor = Some((block.id, slot));
+                    cursor = Some(slot);
 
-                    if expected.contains(&block.data) {
+                    if let ZoneMessage::Block(block) = message
+                        && expected.contains(&block.data)
+                    {
                         ordered.push(block.data);
                     }
                 }
@@ -797,13 +803,11 @@ async fn count_indexed_payload(
         let mut saw_message = false;
 
         while let Some((message, slot)) = stream.next().await {
-            let ZoneMessage::Block(block) = message else {
-                continue;
-            };
-
             saw_message = true;
-            cursor = Some((block.id, slot));
-            if block.data == expected_payload {
+            cursor = Some(slot);
+            if let ZoneMessage::Block(block) = message
+                && block.data == expected_payload
+            {
                 count += 1;
             }
         }
@@ -814,10 +818,12 @@ async fn count_indexed_payload(
     }
 }
 
-/// Waits until the zone indexer observes the expected channel deposit.
+/// Waits until the zone indexer observes the expected channel deposit,
+/// including its amount.
 pub async fn wait_for_deposit(
     indexer: &ZoneIndexer<ZoneNodeHttpClient>,
     expected: &DepositOp,
+    expected_amount: Value,
     duration: Duration,
 ) -> Result<(), ZoneTestError> {
     poll_zone_indexer_until(
@@ -827,6 +833,7 @@ pub async fn wait_for_deposit(
         |message| match message {
             ZoneMessage::Deposit(deposit)
                 if deposit.inputs == expected.inputs
+                    && deposit.amount == expected_amount
                     && deposit.metadata() == expected.metadata.as_slice() =>
             {
                 Some(())
@@ -857,9 +864,7 @@ async fn poll_zone_indexer_until<T>(
             futures::pin_mut!(stream);
 
             while let Some((message, slot)) = stream.next().await {
-                if let ZoneMessage::Block(block) = &message {
-                    cursor = Some((block.id, slot));
-                }
+                cursor = Some(slot);
 
                 if let Some(result) = predicate(&message) {
                     return Ok(result);
@@ -889,6 +894,65 @@ pub async fn wait_for_withdraw(
         },
     )
     .await
+}
+
+/// Waits until the sequencer's [`Event::TxsFinalized`] stream surfaces the
+/// expected deposit (matched by `inputs`, `amount`, and `metadata`). Drains
+/// the events channel as it goes — call this after any earlier event
+/// consumers in the scenario have moved past the relevant publish events.
+pub async fn wait_for_finalized_deposit_via_sequencer(
+    events: &mut tokio::sync::mpsc::Receiver<Event>,
+    expected: &DepositOp,
+    expected_amount: Value,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    poll_sequencer_finalized_until(events, duration, ZoneTestError::IndexerTimeout, |op| {
+        matches!(op, FinalizedOp::Deposit(d)
+            if d.inputs == expected.inputs
+                && d.amount == expected_amount
+                && d.metadata == expected.metadata)
+    })
+    .await
+}
+
+/// Waits until the sequencer's [`Event::TxsFinalized`] stream surfaces the
+/// expected withdraw (matched by `outputs`). Drains the events channel as
+/// it goes.
+pub async fn wait_for_finalized_withdraw_via_sequencer(
+    events: &mut tokio::sync::mpsc::Receiver<Event>,
+    expected: &ChannelWithdrawOp,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    poll_sequencer_finalized_until(
+        events,
+        duration,
+        ZoneTestError::WithdrawTimeout,
+        |op| matches!(op, FinalizedOp::Withdraw(w) if w.op.outputs == expected.outputs),
+    )
+    .await
+}
+
+async fn poll_sequencer_finalized_until(
+    events: &mut tokio::sync::mpsc::Receiver<Event>,
+    duration: Duration,
+    timeout_error: ZoneTestError,
+    mut predicate: impl FnMut(&FinalizedOp) -> bool,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        while let Some(event) = events.recv().await {
+            let Event::TxsFinalized { items } = event else {
+                continue;
+            };
+            for tx in items {
+                if tx.ops.iter().any(&mut predicate) {
+                    return Ok(());
+                }
+            }
+        }
+        Err(ZoneTestError::SequencerStopped)
+    })
+    .await
+    .map_err(|_| timeout_error)?
 }
 
 /// Waits until node mempool/chain observation confirms the submitted zone
@@ -1261,7 +1325,10 @@ pub async fn publish_atomic_zone_withdraw(
             let Event::Published { tx, checkpoint } = event else {
                 continue;
             };
-            if tx.inscription().payload.as_slice() != inscription_data {
+            let Some(info) = tx.inscription() else {
+                continue;
+            };
+            if info.payload.as_slice() != inscription_data {
                 continue;
             }
             let PublishedTx::AtomicWithdraw(info) = *tx else {

@@ -12,7 +12,7 @@ use derivative::Derivative;
 use lb_core::{
     codec::DeserializeOp as _,
     mantle::{
-        SignedMantleTx, TxHash, Utxo,
+        SignedMantleTx, TxHash, Utxo, Value,
         ops::channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
     },
 };
@@ -156,7 +156,7 @@ pub struct ZoneState {
     runtimes: HashMap<String, ZoneSequencerRuntime>,
     default_sequencer_alias: Option<String>,
     published_messages: HashMap<String, ZonePublishedMessage>,
-    submitted_deposits: HashMap<String, DepositOp>,
+    submitted_deposits: HashMap<String, (DepositOp, Value)>,
     submitted_withdraws: HashMap<String, ChannelWithdrawOp>,
     account_balances: HashMap<String, i64>,
     published_order: Vec<String>,
@@ -278,14 +278,14 @@ impl ZoneState {
         }
     }
 
-    pub fn remember_submitted_deposit(&mut self, alias: String, deposit: DepositOp) {
-        self.submitted_deposits.insert(alias, deposit);
+    pub fn remember_submitted_deposit(&mut self, alias: String, deposit: DepositOp, amount: Value) {
+        self.submitted_deposits.insert(alias, (deposit, amount));
     }
 
     pub fn resolve_submitted_deposit(
         &self,
         alias: impl AsRef<str>,
-    ) -> Result<&DepositOp, StepError> {
+    ) -> Result<&(DepositOp, Value), StepError> {
         let alias = alias.as_ref();
 
         self.submitted_deposits

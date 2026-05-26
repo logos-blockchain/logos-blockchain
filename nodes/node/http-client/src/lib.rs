@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
+pub use lb_core::events::{Event, EventPayload, Events};
 use lb_core::{
     block::MAX_BLOCK_SIZE,
     header::{ContentId, HeaderId},
@@ -18,8 +19,8 @@ use lb_http_api_common::{
         transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO,
-        CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
+        BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL,
+        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -213,6 +214,38 @@ impl CommonHttpClient {
 
         match status {
             StatusCode::OK => serde_json::from_str::<ApiBlock>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
+    }
+
+    /// Get the events emitted by execution of a block by its id.
+    pub async fn get_block_events(
+        &self,
+        base_url: Url,
+        id: HeaderId,
+    ) -> Result<Option<Events>, Error> {
+        let path = BLOCK_EVENTS
+            .trim_start_matches('/')
+            .replace(":id", &id.to_string());
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<Events>(&body)
                 .map(Some)
                 .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
             StatusCode::NOT_FOUND => Ok(None),

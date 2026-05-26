@@ -309,7 +309,7 @@ Feature: Zone SDK
 
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_subscribe_to_finalized_withdraw
-  Scenario: Finalized withdraws are returned by the zone indexer
+  Scenario: Finalized withdraws are returned by the zone indexer and sequencer
     Given I have a zone cluster
     And the following zone sequencers exist:
       | alias |
@@ -324,10 +324,12 @@ Feature: Zone SDK
     Then zone transaction "DEPOSIT_1" is included in 120 seconds
     And zone transaction "DEPOSIT_1" is finalized in 120 seconds
     And the zone indexer returns finalized deposit "DEPOSIT_1" in 120 seconds
+    And sequencer "SEQ_A" finalizes deposit "DEPOSIT_1" in 120 seconds
     When sequencer "SEQ_A" submits zone withdraw transaction "WITHDRAW_1" with inscription "MSG_2" of 2
     Then zone transaction "WITHDRAW_1" is included in 120 seconds
     And zone transaction "WITHDRAW_1" is finalized in 120 seconds
     And the zone indexer returns finalized withdraw "WITHDRAW_1" in 120 seconds
+    And sequencer "SEQ_A" finalizes withdraw "WITHDRAW_1" in 120 seconds
     And the zone indexer returns messages in this order:
       | alias |
       | MSG_1 |
