@@ -24,12 +24,17 @@ thiserror          = { workspace = true }
 tracing            = { workspace = true }
 
 [dev-dependencies]
+divan        = { workspace = true }
 lb-poseidon2 = { workspace = true }
 num-bigint   = { workspace = true }
 rand         = { workspace = true }
 
 [build-dependencies]
 lb-circuits-utils = { workspace = true }
+
+[[bench]]
+harness = false
+name    = "prove"
 
 [lints]
 workspace = true

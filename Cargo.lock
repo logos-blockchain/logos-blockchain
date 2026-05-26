@@ -4944,6 +4944,7 @@ dependencies = [
 name = "logos-blockchain-poc"
 version = "0.1.2"
 dependencies = [
+ "divan",
  "logos-blockchain-circuits-poc-sys",
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-types",
@@ -4961,6 +4962,7 @@ name = "logos-blockchain-pol"
 version = "0.1.2"
 dependencies = [
  "astro-float",
+ "divan",
  "logos-blockchain-circuits-pol-sys",
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-types",
@@ -4979,6 +4981,7 @@ dependencies = [
 name = "logos-blockchain-poq"
 version = "0.1.2"
 dependencies = [
+ "divan",
  "logos-blockchain-circuits-poq-sys",
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-types",
@@ -5369,6 +5372,7 @@ dependencies = [
 name = "logos-blockchain-zksign"
 version = "0.1.2"
 dependencies = [
+ "divan",
  "logos-blockchain-circuits-prover",
  "logos-blockchain-circuits-signature-sys",
  "logos-blockchain-circuits-types",
