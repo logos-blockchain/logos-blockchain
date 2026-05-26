@@ -171,9 +171,7 @@ impl<Tx> Block<Tx> {
     where
         Tx: Transaction<Hash = TxHash>,
     {
-        let tx_hashes: Vec<TxHash> = transactions.iter().map(Transaction::hash).collect();
-
-        let root_hash = merkle::calculate_merkle_root(&tx_hashes, None);
+        let root_hash = merkle::calculate_block_root(transactions);
         ContentId::from(root_hash)
     }
 
