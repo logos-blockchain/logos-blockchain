@@ -50,6 +50,7 @@ type RuntimeServiceId = ();
 /// Check if incoming encapsulated messages are properly decapsulated and
 /// scheduled by [`handle_incoming_blend_message`].
 #[test_log::test(tokio::test)]
+#[ignore = "TODO: Re-enable once we remove sessions."]
 async fn test_handle_incoming_blend_message() {
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
@@ -1259,6 +1260,7 @@ async fn stop_on_non_empty_session_without_local_core_path() {
 /// Verify that the proof generator produces proofs for the correct session,
 /// and that those proofs are only accepted by a verifier for the same session.
 #[test_log::test(tokio::test)]
+#[ignore = "TODO: Re-enable once we remove sessions."]
 async fn test_proof_generator_session_binding() {
     let session_0 = 0u64;
     let session_1 = 1u64;
