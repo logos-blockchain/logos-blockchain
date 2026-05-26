@@ -1,11 +1,7 @@
-use crate::crypto::{Digest as _, Hasher};
-
-#[must_use]
-pub fn leaf(data: &[u8]) -> [u8; 32] {
-    let mut hasher = Hasher::new();
-    hasher.update(data);
-    hasher.finalize().into()
-}
+use crate::{
+    crypto::{Digest as _, Hash, Hasher},
+    mantle::{Transaction, TxHash},
+};
 
 pub fn node(left: impl AsRef<[u8]>, right: impl AsRef<[u8]>) -> [u8; 32] {
     let mut hasher = Hasher::new();
@@ -14,137 +10,75 @@ pub fn node(left: impl AsRef<[u8]>, right: impl AsRef<[u8]>) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Calculates a 32-byte Merkle root for the given elements, with deterministic
-/// padding.
-///
-/// Padding rules:
-/// - Target size = `max(elements.len()`, `pad_to.unwrap_or(elements.len())`, 1)
-/// - Then rounded up to the next power of two
-/// - Missing leaves are filled using the default value of `T`
-/// - Special case: single leaf (`target_size` = 1) returns leaf hash directly
-///
-/// Examples:
-/// - 0 elements: 1 leaf → `leaf(default_element)`
-/// - 1 element: 1 leaf → leaf(element)
-/// - 2 elements: 2 leaves → node(leaf1, leaf2)
-/// - 3 elements: 4 leaves (padded) → full binary tree structure
-///
-/// Parameters:
-/// - `elements`: Items included in the tree; each converts to a 32-byte leaf.
-/// - `pad_to`: Optional minimum leaf count before rounding up to a power of
-///   two.
-///
-/// Returns:
-/// - The Merkle root as a 32-byte array.
-///
-/// Notes:
-/// - Using a fixed `pad_to` keeps the tree height consistent across varying
-///   input sizes.
-/// - Powers of two that are already satisfied don't trigger padding.
-pub fn calculate_merkle_root<T>(elements: &[T], pad_to: Option<usize>) -> [u8; 32]
-where
-    T: Into<[u8; 32]> + Default + Clone,
-{
-    let mut leaves: Vec<[u8; 32]> = elements
-        .iter()
-        .cloned()
-        .map(|element| leaf(&element.into()))
-        .collect();
+// Calculates a 32-byte Merkle root of transactions
+pub fn calculate_block_root<T: Transaction<Hash = TxHash>>(transactions: &[T]) -> Hash {
+    let mut leaves: Vec<_> = transactions.iter().map(Transaction::hash).collect();
 
-    let target_size = pad_to
-        .map_or(leaves.len(), |padding| leaves.len().max(padding))
-        .max(1)
-        .next_power_of_two();
+    let target_size = leaves.len().max(1).next_power_of_two();
 
-    let zero_leaf = leaf(&T::default().into());
+    let zero_leaf: <T as Transaction>::Hash = [0u8; 32].into();
     leaves.resize(target_size, zero_leaf);
 
     while leaves.len() > 1 {
         leaves = leaves
             .chunks(2)
-            .map(|pair| node(pair[0], pair[1]))
+            .map(|pair| node(pair[0].0, pair[1].0).into())
             .collect();
     }
 
-    leaves[0]
+    leaves[0].into()
 }
 
 #[cfg(test)]
 mod tests {
+    use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
-    use crate::mantle::TxHash;
+    use crate::mantle::{
+        MantleTx, Note, Op,
+        encoding::Ops,
+        ledger::{Inputs, Outputs},
+        ops::transfer::TransferOp,
+    };
+
+    fn create_random_tx(seed: u32) -> MantleTx {
+        MantleTx(Ops::new_unchecked(vec![Op::Transfer(TransferOp::new(
+            Inputs::new(vec![]),
+            Outputs::new(vec![Note {
+                value: seed.into(),
+                pk: ZkPublicKey::zero(),
+            }]),
+        ))]))
+    }
 
     #[test]
     fn test_root_two_elements() {
-        let elements = vec![TxHash::from([1u8; 32]), TxHash::from([2u8; 32])];
-        let result = calculate_merkle_root(&elements, Some(2));
-
-        let bytes1: [u8; 32] = elements[0].into();
-        let bytes2: [u8; 32] = elements[1].into();
-        let leaf1 = leaf(&bytes1);
-        let leaf2 = leaf(&bytes2);
-        let expected = node(leaf1, leaf2);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_root_with_padding() {
-        let elements = vec![TxHash::from([1u8; 32]), TxHash::from([2u8; 32])];
-        let result = calculate_merkle_root(&elements, Some(4));
-
-        let bytes1: [u8; 32] = elements[0].into();
-        let bytes2: [u8; 32] = elements[1].into();
-        let zero_hash = TxHash::default();
-        let zero_bytes: [u8; 32] = zero_hash.into();
-
-        let leaf1 = leaf(&bytes1);
-        let leaf2 = leaf(&bytes2);
-        let leaf3 = leaf(&zero_bytes); // padding
-        let leaf4 = leaf(&zero_bytes); // padding
-
-        let branch1 = node(leaf1, leaf2);
-        let branch2 = node(leaf3, leaf4);
-        let expected = node(branch1, branch2);
-
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_root_without_padding() {
-        let elements = vec![TxHash::from([1u8; 32]), TxHash::from([2u8; 32])];
-        let result = calculate_merkle_root(&elements, None);
-
-        let bytes1: [u8; 32] = elements[0].into();
-        let bytes2: [u8; 32] = elements[1].into();
-        let leaf1 = leaf(&bytes1);
-        let leaf2 = leaf(&bytes2);
-        let expected = node(leaf1, leaf2);
+        let txs = vec![create_random_tx(0), create_random_tx(1)];
+        let result = calculate_block_root(&txs);
+        let leaf1 = txs[0].hash();
+        let leaf2 = txs[1].hash();
+        let expected = node(leaf1.0, leaf2.0);
 
         assert_eq!(result, expected);
     }
 
     #[test]
     fn test_root_single_element() {
-        let elements = vec![TxHash::from([42u8; 32])];
-        let result = calculate_merkle_root(&elements, None);
+        let txs = vec![create_random_tx(42)];
+        let result = calculate_block_root(&txs);
 
-        let bytes: [u8; 32] = elements[0].into();
-        let expected = leaf(&bytes);
+        let expected = txs[0].hash();
 
-        assert_eq!(result, expected);
+        assert_eq!(result, Hash::from(expected));
     }
 
     #[test]
     fn test_root_empty_elements() {
-        let elements: Vec<TxHash> = vec![];
-        let result = calculate_merkle_root(&elements, None);
+        let txs: Vec<MantleTx> = vec![];
+        let result = calculate_block_root(&txs);
 
-        let zero_hash = TxHash::default();
-        let zero_bytes: [u8; 32] = zero_hash.into();
-        let expected = leaf(&zero_bytes);
+        let expected = [0u8; 32];
 
-        assert_eq!(result, expected);
+        assert_eq!(result, Hash::from(expected));
     }
 }
