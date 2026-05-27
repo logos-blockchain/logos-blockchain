@@ -18,13 +18,13 @@ async fn main() -> Result<()> {
 
     if let Some(command) = cli_args.command {
         match command {
-            Command::Init(init_args) => {
+            Command::InitConfig(init_args) => {
                 return logos_blockchain_node::cli::config::init::run(*init_args);
             }
-            Command::Update(update_args) => {
+            Command::UpdateConfig(update_args) => {
                 return logos_blockchain_node::cli::config::update::run(*update_args);
             }
-            Command::Migrate(migrate_args) => {
+            Command::MigrateConfig(migrate_args) => {
                 return logos_blockchain_node::cli::config::migrate::run(*migrate_args);
             }
             Command::Inscribe(inscribe_args) => {

@@ -29,7 +29,7 @@ pub struct BackendConfig {
 impl Default for BackendConfig {
     fn default() -> Self {
         Self {
-            listening_address: "/ip4/0.0.0.0/udp/10000/quic-v1".parse().unwrap(),
+            listening_address: "/ip4/0.0.0.0/udp/3400/quic-v1".parse().unwrap(),
             core_peering_degree: 2..=3,
             edge_node_connection_timeout: Duration::from_secs(1),
             max_edge_node_incoming_connections: 300,

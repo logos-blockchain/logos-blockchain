@@ -106,11 +106,11 @@ impl CliArgs {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Initialize a new user config with generated keys
-    Init(Box<InitArgs>),
+    InitConfig(Box<InitArgs>),
     /// Update existing user config with keys from keystore
-    Update(Box<UpdateArgs>),
+    UpdateConfig(Box<UpdateArgs>),
     /// Migrates a new user config with generated keys
-    Migrate(Box<MigrateArgs>),
+    MigrateConfig(Box<MigrateArgs>),
     /// Publish text inscriptions as zone blocks
     Inscribe(lb_tui_zone::InscribeArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
