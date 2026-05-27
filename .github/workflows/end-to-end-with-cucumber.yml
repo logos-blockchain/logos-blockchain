@@ -82,6 +82,8 @@ jobs:
         uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
         with:
           tool: cargo-nextest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Ensure a local NTP server is running for deterministic time sync in e2e and cucumber tests
       - name: Verify Local NTP Server
