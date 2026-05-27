@@ -1,5 +1,6 @@
 pub mod config;
 pub mod get_peer_id;
+pub mod keys;
 pub mod participate;
 
 use std::{
@@ -272,6 +273,24 @@ pub struct UpdateArgs {
 
     #[clap(flatten)]
     state: StateArgs,
+}
+
+// Custom default implementation to require keystore path initialized from clap.
+impl Default for UpdateArgs {
+    fn default() -> Self {
+        Self {
+            user_config: "user_config.yaml".into(),
+            keystore: "keystore.yaml".into(),
+            yes: false,
+            log: Default::default(),
+            network: Default::default(),
+            blend: Default::default(),
+            cryptarchia: Default::default(),
+            sdp: Default::default(),
+            api: Default::default(),
+            state: Default::default(),
+        }
+    }
 }
 
 #[derive(Parser, Debug)]

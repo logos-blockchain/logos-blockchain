@@ -34,9 +34,9 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
     let keystore_yaml = std::fs::read_to_string(&args.keystore)?;
     let keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
 
-    let (_, stake_key) = keystore.get_zk(KeyTitle::Stake)?;
-    let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LeaderFunding)?;
-    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SdpFunding)?;
+    let (_, stake_key) = keystore.get_zk(KeyTitle::STAKE)?;
+    let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
+    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SDP_FUNDING)?;
 
     let mut stakeholder_identities = vec![
         stake_key.to_public_key(),
@@ -80,7 +80,7 @@ fn build_blend_data(
     let locator_addr = resolve_locator_addr(listen_addr, nat_config, external_address)?;
     let locator = Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?;
 
-    let (_, blend_key) = keystore.get_zk(KeyTitle::BlendZk)?;
+    let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
     Ok(Some(BlendParticipationData {
         provider_id,
         zk_id: blend_key.to_public_key(),

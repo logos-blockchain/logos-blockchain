@@ -175,7 +175,7 @@ impl From<LogFileAppenderType> for OsStr {
     }
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct LogArgs {
     /// Address for the Gelf backend
     #[clap(
@@ -224,7 +224,7 @@ pub struct LogArgs {
     pub max_files: Option<usize>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct NetworkArgs {
     #[clap(long = "net-host", env = "NET_HOST")]
     pub host: Option<IpAddr>,
@@ -251,7 +251,7 @@ pub struct NetworkArgs {
     pub initial_peers: Option<Vec<Multiaddr>>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct BlendArgs {
     #[clap(long = "blend-addr", env = "BLEND_ADDR")]
     pub blend_addr: Option<Multiaddr>,
@@ -263,7 +263,7 @@ pub struct BlendArgs {
     pub blend_secret_key_id: Option<KeyId>,
 }
 
-#[derive(Parser, Debug, Clone, Copy)]
+#[derive(Parser, Debug, Default, Clone, Copy)]
 pub struct CryptarchiaArgs {
     #[clap(
         long = "cryptarchia-funding-pk",
@@ -277,7 +277,7 @@ pub struct CryptarchiaArgs {
     pub disable_ibd_peers: bool,
 }
 
-#[derive(Parser, Debug, Clone, Copy)]
+#[derive(Parser, Debug, Default, Clone, Copy)]
 pub struct SdpArgs {
     #[clap(
         long = "sdp-funding-pk",
@@ -287,7 +287,7 @@ pub struct SdpArgs {
     pub sdp_funding_pk: Option<ZkPublicKey>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct ApiArgs {
     #[clap(long = "http-host", env = "HTTP_HOST")]
     pub addr: Option<SocketAddr>,
@@ -296,7 +296,7 @@ pub struct ApiArgs {
     pub cors_origins: Option<Vec<String>>,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Default, Clone)]
 pub struct StateArgs {
     #[clap(long = "state-path", env = "STATE_PATH")]
     pub path: Option<PathBuf>,

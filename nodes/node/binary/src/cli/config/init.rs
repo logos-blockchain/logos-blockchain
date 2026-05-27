@@ -117,7 +117,7 @@ pub fn build_user_config(keystore: &Keystore, args: InitArgs) -> UserConfig {
 
 fn build_network_config(keystore: &Keystore, network_args: NetworkArgs) -> NetworkConfig {
     let unsecured_key = keystore
-        .get_ed25519(KeyTitle::NetworkSwarm)
+        .get_ed25519(KeyTitle::NETWORK_SWARM)
         .map(|(_, key)| key)
         .expect("Network key set by default");
     let mut network_secret_key_bytes: [u8; 32] = *unsecured_key.as_bytes();
@@ -134,10 +134,10 @@ fn build_network_config(keystore: &Keystore, network_args: NetworkArgs) -> Netwo
 
 fn build_blend_config(keystore: &Keystore, blend_args: BlendArgs) -> BlendConfig {
     let (blend_signing_key_id, _) = keystore
-        .get(KeyTitle::BlendSigning)
+        .get(KeyTitle::BLEND_SIGNING)
         .expect("Blend signing key set by default");
     let (blend_zk_key_id, _) = keystore
-        .get(KeyTitle::BlendZk)
+        .get(KeyTitle::BLEND_ZK)
         .expect("Blend zk key set by default");
     let mut blend_config = BlendConfig::with_required_values(BlendConfigRequiredValues {
         non_ephemeral_signing_key_id: blend_signing_key_id,
@@ -154,7 +154,7 @@ fn build_cryptarchia_config(
     cryptarchia_args: CryptarchiaArgs,
 ) -> CryptarchiaConfig {
     let (_, cryptarchia_funding_key) = keystore
-        .get_zk(KeyTitle::LeaderFunding)
+        .get_zk(KeyTitle::LEADER_FUNDING)
         .expect("Cryptarchia funding key set by default");
     let mut cryptarchia_config =
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
@@ -176,7 +176,7 @@ fn build_cryptarchia_config(
 
 fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> SdpConfig {
     let (_, sdp_funding_key) = keystore
-        .get_zk(KeyTitle::SdpFunding)
+        .get_zk(KeyTitle::SDP_FUNDING)
         .expect("Sdp funding key set by default");
     let mut sdp_config = SdpConfig::with_required_values(SdpConfigRequiredValues {
         funding_pk: sdp_funding_key.to_public_key(),
@@ -188,39 +188,25 @@ fn build_sdp_config(keystore: &Keystore, sdp_args: SdpArgs) -> SdpConfig {
 
 fn build_kms_config(keystore: &Keystore) -> KmsConfig {
     let mut kms_config = KmsConfig::default();
-    kms_config.backend.keys = KeyTitle::ALL
-        .into_iter()
-        .map(|title| {
-            let (id, key) = keystore.get(title).expect("Key is set by default");
-            (id, key.clone())
-        })
+    kms_config.backend.keys = keystore
+        .get_all()
+        .map(|(id, key)| (id, key.clone()))
         .collect();
 
     kms_config
 }
 
 fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
-    let wallet_keys = [
-        KeyTitle::BlendZk,
-        KeyTitle::LeaderFunding,
-        KeyTitle::SdpFunding,
-        KeyTitle::VaucherMaster,
-        KeyTitle::Stake,
-    ];
-
     let (voucher_master_key_id, _) = keystore
-        .get(KeyTitle::VaucherMaster)
+        .get(KeyTitle::VAUCHER_MASTER)
         .expect("Vaucher master key set by default");
 
     let mut wallet_config = WalletConfig::with_required_values(WalletConfigRequiredValues {
         voucher_master_key_id,
     });
-    wallet_config.known_keys = wallet_keys
-        .into_iter()
-        .map(|title| {
-            let (id, key) = keystore.get_zk(title).expect("Key is set by default");
-            (id, key.to_public_key())
-        })
+    wallet_config.known_keys = keystore
+        .get_all_zk()
+        .map(|(id, key)| (id, key.to_public_key()))
         .collect();
 
     wallet_config
