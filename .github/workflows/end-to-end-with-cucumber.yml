@@ -83,7 +83,7 @@ jobs:
         with:
           tool: cargo-nextest
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Ensure a local NTP server is running for deterministic time sync in e2e and cucumber tests
       - name: Verify Local NTP Server
