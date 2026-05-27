@@ -130,8 +130,7 @@ mod tests {
         mantle::{
             NoteId, SignedMantleTx,
             ledger::Inputs,
-            ops::channel::{MsgId, deposit::Metadata},
-            ops::channel::{MsgId, inscribe::Inscription},
+            ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
         },
     };
     use lb_groth16::Fr;
