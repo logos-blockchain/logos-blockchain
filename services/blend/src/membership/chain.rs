@@ -91,20 +91,26 @@ where
 
     // TODO: Refactor into a function or own type that replaces `EpochHandler`.
     Box::pin(unfold(
-        (slot_ticks, None::<Epoch>, chain_service),
-        move |(mut slot_ticks, mut last_epoch, chain_service)| async move {
+        (
+            slot_ticks,
+            None::<Epoch>,
+            chain_service,
+            signing_public_key,
+            zk_public_key,
+        ),
+        async move |(mut ticks, mut last_epoch, chain_api, signing_pk, zk_pk)| {
             loop {
-                let SlotTick { epoch, slot } = slot_ticks.next().await?;
+                let SlotTick { epoch, slot } = ticks.next().await?;
                 if Some(epoch) == last_epoch {
                     continue;
                 }
-                match chain_service.get_epoch_state(slot).await {
+                match chain_api.get_epoch_state(slot).await {
                     Ok(Ok(epoch_state)) => {
                         last_epoch = Some(epoch);
                         let membership_info = membership_info_from_epoch_state::<NodeId>(
                             &epoch_state,
-                            &signing_public_key,
-                            zk_public_key,
+                            &signing_pk,
+                            zk_pk,
                         );
                         let item = BlendEpochState {
                             epoch,
@@ -114,7 +120,7 @@ where
                             lottery_1: epoch_state.lottery_1,
                             membership_info,
                         };
-                        return Some((item, (slot_ticks, last_epoch, chain_service)));
+                        return Some((item, (ticks, last_epoch, chain_api, signing_pk, zk_pk)));
                     }
                     Ok(Err(e)) => {
                         tracing::warn!(target: LOG_TARGET, "Chain service returned error for epoch state at slot {slot:?}: {e:?}; will retry on next slot of epoch {epoch:?}");

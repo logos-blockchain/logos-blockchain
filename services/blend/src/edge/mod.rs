@@ -46,7 +46,7 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 use settings::StartingBlendConfig;
 use tokio::sync::oneshot;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 use crate::{
     edge::{
@@ -280,16 +280,16 @@ pub(crate) enum PendingEpochInfoType<NodeId> {
 ///
 /// The event loop handles three types of events:
 /// - **New public epoch info** (chain-derived membership + leader inputs):
-///   buffered until the matching secret `PoL` info arrives, at which point
-///   the message handler is created for that epoch. A new public info while an
-///   older one is still buffered (no winning slot in the previous epoch)
-///   simply replaces the buffered entry.
+///   buffered until the matching secret `PoL` info arrives, at which point the
+///   message handler is created for that epoch. A new public info while an
+///   older one is still buffered (no winning slot in the previous epoch) simply
+///   replaces the buffered entry.
 /// - **Incoming messages to blend**: forwarded to the current message handler;
-///   dropped with a warning if no handler is active (secret `PoL` info for
-///   the current epoch has not yet arrived).
+///   dropped with a warning if no handler is active (secret `PoL` info for the
+///   current epoch has not yet arrived).
 /// - **New secret `PoL` info**: buffered until the matching public epoch info
-///   arrives, at which point the handler is created. A stale buffered public
-///   is discarded; a stale buffered private is a bug and panics.
+///   arrives, at which point the handler is created. A stale buffered public is
+///   discarded; a stale buffered private is a bug and panics.
 ///
 /// Returns an [`Error`] if a new membership does not satisfy the edge node
 /// condition.
@@ -501,14 +501,14 @@ where
 /// Processes new secret `PoL` info.
 ///
 /// Three outcomes depending on the buffered state:
-/// - Nothing buffered → buffer the secret info until the matching public
-///   epoch info arrives.
+/// - Nothing buffered → buffer the secret info until the matching public epoch
+///   info arrives.
 /// - A public for the same epoch is buffered → create the message handler.
-/// - A stale public is buffered (older epoch) → discard it and buffer the
-///   new secret info instead; if the incoming secret is itself stale (older
-///   than the buffered public), it is ignored.
-/// - A private is already buffered → panic; this violates the invariant
-///   that secret info does not outlive its epoch.
+/// - A stale public is buffered (older epoch) → discard it and buffer the new
+///   secret info instead; if the incoming secret is itself stale (older than
+///   the buffered public), it is ignored.
+/// - A private is already buffered → panic; this violates the invariant that
+///   secret info does not outlive its epoch.
 fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     PolEpochInfo {
         epoch: new_epoch,

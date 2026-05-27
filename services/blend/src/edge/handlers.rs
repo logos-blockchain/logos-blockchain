@@ -49,7 +49,7 @@ where
     /// It returns [`Error`] if the membership does not satisfy the following
     /// edge node condition:
     /// 1. The membership size is at least `settings.minimum_network_size`.
-    /// 2. The local node is not a core node (i.e. not in the membership).
+    /// 2. The local node is not a core node.
     pub fn try_new_with_edge_condition_check(
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
