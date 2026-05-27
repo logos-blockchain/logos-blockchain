@@ -141,16 +141,6 @@ impl<NodeId> Membership<NodeId> {
     pub fn is_empty(&self) -> bool {
         self.core_nodes.is_empty()
     }
-
-    #[cfg(any(test, feature = "unsafe-test-functions"))]
-    #[must_use]
-    pub fn empty() -> Self {
-        Self {
-            core_nodes: HashMap::new(),
-            node_indices: Vec::new(),
-            local_node_index: None,
-        }
-    }
 }
 
 #[cfg(test)]

@@ -336,7 +336,7 @@ where
         .await
         .expect("Should not fail to subscribe to secret PoL info stream.");
 
-    let mut pending_epoch_info: Option<PendingEpochInfo<NodeId>> = Some(PendingEpochInfo {
+    let mut pending_epoch_info = Some(PendingEpochInfo {
         epoch: current_epoch_info.epoch,
         info_type: PendingEpochInfoType::Public(Box::new(current_epoch_info.membership_info)),
     });
@@ -379,7 +379,7 @@ where
 
 fn handle_new_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     BlendEpochState {
-        epoch,
+        epoch: new_epoch,
         membership_info,
         lottery_0,
         lottery_1,
@@ -417,12 +417,12 @@ where
     }
 
     match pending_epoch_info.take() {
-        // Previous epoch handler is running, so we stop it and buffer membership info.
+        // Previous epoch handler is running, so we stop it and buffer new membership info.
         None => {
             debug!(target: LOG_TARGET, "New epoch public info received. Stopping message handler until secret PoL info is received.");
             *current_epoch_message_handler = None;
             *pending_epoch_info = Some(PendingEpochInfo {
-                epoch,
+                epoch: new_epoch,
                 info_type: PendingEpochInfoType::Public(Box::new(membership_info.clone())),
             });
         }
@@ -434,20 +434,23 @@ where
             ..
         }) => {
             warn!(target: LOG_TARGET, "New epoch public info received without the previous epoch info being consumed.");
-            *current_epoch_message_handler = None;
+            assert!(
+                current_epoch_message_handler.is_none(),
+                "If public epoch info is buffered, the message handler should not be running."
+            );
             *pending_epoch_info = Some(PendingEpochInfo {
-                epoch,
+                epoch: new_epoch,
                 info_type: PendingEpochInfoType::Public(Box::new(membership_info.clone())),
             });
         }
         Some(PendingEpochInfo {
-            epoch: new_epoch,
+            epoch,
             info_type: PendingEpochInfoType::Private(new_private_pol_info),
         }) => {
             // Let's make sure we always clean up the pending info whenever a public or
             // private epoch event is processed.
             assert!(
-                epoch == new_epoch,
+                new_epoch == epoch,
                 "Old pending epoch info was found, and this should never happen."
             );
             debug!(target: LOG_TARGET, "New epoch public info received with a buffered secret PoL info for the same epoch {new_epoch:?}. Trying to create a new epoch-bound message handler.");
@@ -475,7 +478,7 @@ where
                 new_public_inputs,
                 *new_private_pol_info,
                 overwatch_handle,
-                epoch,
+                new_epoch,
             )?;
 
             *current_epoch_message_handler = Some(new_handler);
@@ -491,7 +494,7 @@ where
 /// private inputs from the `PoL` info.
 fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     PolEpochInfo {
-        epoch,
+        epoch: new_epoch,
         poq_private_inputs,
         poq_public_inputs,
     }: PolEpochInfo,
@@ -511,7 +514,7 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
         None => {
             trace!(target: LOG_TARGET, "New secret PoL info received, but no public epoch info is buffered. Buffering the secret PoL info until the public epoch info is received.");
             *pending_epoch_info = Some(PendingEpochInfo {
-                epoch,
+                epoch: new_epoch,
                 info_type: PendingEpochInfoType::Private(Box::new(poq_private_inputs)),
             });
         }
@@ -525,12 +528,12 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
             );
             warn!(target: LOG_TARGET, "New epoch secret info received without the previous epoch info being consumed.");
             *pending_epoch_info = Some(PendingEpochInfo {
-                epoch,
+                epoch: new_epoch,
                 info_type: PendingEpochInfoType::Private(Box::new(poq_private_inputs)),
             });
         }
         Some(PendingEpochInfo {
-            epoch: new_epoch,
+            epoch,
             info_type: PendingEpochInfoType::Public(new_membership_info),
         }) => {
             assert!(
