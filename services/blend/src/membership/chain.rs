@@ -30,6 +30,7 @@ use crate::{
 pub struct BlendEpochState<NodeId> {
     pub epoch: Epoch,
     pub nonce: Fr,
+    pub aged: Fr,
     pub lottery_0: Fr,
     pub lottery_1: Fr,
     pub membership_info: MembershipInfo<NodeId>,
@@ -116,6 +117,7 @@ where
                             Some(Some(BlendEpochState {
                                 epoch,
                                 nonce: epoch_state.nonce,
+                                aged: epoch_state.utxo_merkle_root(),
                                 lottery_0: epoch_state.lottery_0,
                                 lottery_1: epoch_state.lottery_1,
                                 membership_info,
