@@ -54,6 +54,9 @@ pub fn run(args: UpdateArgs) -> Result<()> {
 
     update_user_config(&mut user_config, &keystore, args);
 
+    let user_config_yaml = serde_yaml::to_string(&user_config)?;
+    std::fs::write(&user_config_path, &user_config_yaml)?;
+
     Ok(())
 }
 

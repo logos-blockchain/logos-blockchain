@@ -248,12 +248,7 @@ pub struct UpdateArgs {
     pub keystore: PathBuf,
 
     /// Auto approve interactive promps.
-    #[arg(
-        short,
-        long,
-        default_value_t = false,
-        help = "Auto approve interactive promps"
-    )]
+    #[arg(short, long, default_value_t = false)]
     pub yes: bool,
 
     #[clap(flatten)]
@@ -337,6 +332,9 @@ pub struct ParticipateArgs {
     /// Path to the user config YAML file
     #[arg(long, default_value = "user_config.yaml")]
     pub config: PathBuf,
+    /// Path to the keystore YAML file
+    #[arg(long, default_value = "keystore.yaml")]
+    pub keystore: PathBuf,
     /// Output directory for `participation_data.yaml`
     #[arg(long, default_value = ".")]
     pub output: PathBuf,

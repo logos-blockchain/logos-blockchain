@@ -22,16 +22,18 @@ pub enum KeyTitle {
     NetworkSwarm,
     SdpFunding,
     VaucherMaster,
+    Stake,
 }
 
 impl KeyTitle {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::BlendSigning,
         Self::BlendZk,
         Self::LeaderFunding,
         Self::NetworkSwarm,
         Self::SdpFunding,
         Self::VaucherMaster,
+        Self::Stake,
     ];
 }
 
@@ -99,7 +101,8 @@ impl Keystore {
             KeyTitle::BlendZk
             | KeyTitle::LeaderFunding
             | KeyTitle::SdpFunding
-            | KeyTitle::VaucherMaster => Key::Zk(generate_zk_key_from_random_bytes()),
+            | KeyTitle::VaucherMaster
+            | KeyTitle::Stake => Key::Zk(generate_zk_key_from_random_bytes()),
         }
     }
 }
