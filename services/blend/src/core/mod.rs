@@ -583,41 +583,37 @@ where
     let session_stream = async {
         let config = blend_config.clone();
         let zk_sk_id = config.zk.secret_key_kms_id.clone();
-        membership_stream.map(
-            move |MembershipInfo {
-                      membership,
-                      session_number,
-                      zk,
-                  }| {
-                // This can be empty in case of an empty membership set.
-                let Some(ZkInfo {
-                    root,
-                    core_and_path_selectors,
-                }) = zk
-                else {
-                    return MaybeEmptyCoreSessionInfo::Empty {
-                        session: session_number,
-                    };
+        membership_stream.map(move |MembershipInfo { membership, zk }| {
+            // This can be empty in case of an empty membership set.
+            let Some(ZkInfo {
+                root,
+                core_and_path_selectors,
+            }) = zk
+            else {
+                return MaybeEmptyCoreSessionInfo::Empty {
+                    // TODO: This will go once we remove sessions from the Blend core service.
+                    session: 0,
                 };
-                // `None` when the local node is not part of the session membership. This can
-                // happen when the node transitions from core to edge mode.
-                let core_poq_generator = core_and_path_selectors.map(|selectors| {
-                    kms_adapter.core_poq_generator(zk_sk_id.clone(), Box::new(selectors))
-                });
-                CoreSessionInfo {
-                    public: CoreSessionPublicInfo {
-                        poq_core_public_inputs: CoreInputs {
-                            quota: config.session_core_quota(membership.size()),
-                            zk_root: root,
-                        },
-                        membership,
-                        session: session_number,
+            };
+            // `None` when the local node is not part of the session membership. This can
+            // happen when the node transitions from core to edge mode.
+            let core_poq_generator = core_and_path_selectors.map(|selectors| {
+                kms_adapter.core_poq_generator(zk_sk_id.clone(), Box::new(selectors))
+            });
+            CoreSessionInfo {
+                public: CoreSessionPublicInfo {
+                    poq_core_public_inputs: CoreInputs {
+                        quota: config.session_core_quota(membership.size()),
+                        zk_root: root,
                     },
-                    core_poq_generator,
-                }
-                .into()
-            },
-        )
+                    membership,
+                    // TODO: This will go once we remove sessions from the Blend core service.
+                    session: 0,
+                },
+                core_poq_generator,
+            }
+            .into()
+        })
     }
     .await;
     let (current_membership_info, remaining_session_stream) = Box::pin(

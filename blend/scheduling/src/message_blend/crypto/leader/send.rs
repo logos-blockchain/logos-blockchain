@@ -33,6 +33,12 @@ pub struct EpochCryptographicProcessor<NodeId, ProofsGenerator> {
     epoch: Epoch,
 }
 
+impl<NodeId, ProofsGenerator> EpochCryptographicProcessor<NodeId, ProofsGenerator> {
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
+    }
+}
+
 impl<NodeId, ProofsGenerator> EpochCryptographicProcessor<NodeId, ProofsGenerator>
 where
     ProofsGenerator: LeaderProofsGenerator,

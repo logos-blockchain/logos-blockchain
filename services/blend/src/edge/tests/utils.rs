@@ -2,13 +2,12 @@ use core::{num::NonZeroU64, time::Duration};
 use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
-use futures::{StreamExt as _, future::ready, stream::once};
+use futures::StreamExt as _;
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
     proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::{
-        // TODO: Remove all mentions of sessions.
-        epoch::UninitializedEpochEventStream as UninitializedSessionEventStream,
+        epoch::UninitializedEpochEventStream,
         membership::Membership,
         message_blend::provers::{
             BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator,
@@ -16,7 +15,7 @@ use lb_blend::{
     },
 };
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
-use lb_time_service::SlotTick;
+use lb_ledger::EpochState;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
 use rand::{RngCore, rngs::OsRng};
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -27,12 +26,11 @@ use crate::{
     edge::{
         backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
     },
-    epoch_info::EpochHandler,
-    membership::MembershipInfo,
+    membership::chain::BlendEpochState,
     settings::TimingSettings,
     test_utils::{
         crypto::mock_blend_proof,
-        epoch::{OncePolStreamProvider, TestChainService},
+        epoch::{OncePolStreamProvider, default_epoch_state},
         membership::key,
     },
 };
@@ -63,19 +61,18 @@ pub async fn spawn_run(
     mpsc::Sender<Vec<u8>>,
     mpsc::Receiver<NodeId>,
 ) {
-    let (session_sender, session_receiver) = mpsc::channel(1);
+    let (epoch_sender, epoch_receiver) = mpsc::channel(1);
     let (msg_sender, msg_receiver) = mpsc::channel(1);
     let (node_id_sender, node_id_receiver) = mpsc::channel(1);
 
     if let Some(initial_membership) = initial_membership {
-        session_sender
+        epoch_sender
             .send(initial_membership)
             .await
             .expect("channel opened");
     }
 
-    let session_stream = ReceiverStream::new(session_receiver)
-        .map(|membership| MembershipInfo::from_membership_and_session_number(membership, 1));
+    let epoch_stream = ReceiverStream::new(epoch_receiver).map(default_blend_epoch_state);
 
     let settings = settings(local_node, minimal_network_size, node_id_sender);
     let join_handle = tokio::spawn(async move {
@@ -83,17 +80,11 @@ pub async fn spawn_run(
             TestBackend,
             _,
             MockLeaderProofsGenerator,
-            _,
             OncePolStreamProvider,
             _,
         >(
-            UninitializedSessionEventStream::new(session_stream, Duration::ZERO),
-            once(ready(SlotTick {
-                epoch: 1.into(),
-                slot: 1.into(),
-            })),
+            UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
             ReceiverStream::new(msg_receiver),
-            EpochHandler::new(TestChainService, 1.try_into().unwrap()),
             settings,
             &overwatch_handle(),
             || {},
@@ -101,7 +92,26 @@ pub async fn spawn_run(
         .await
     });
 
-    (join_handle, session_sender, msg_sender, node_id_receiver)
+    (join_handle, epoch_sender, msg_sender, node_id_receiver)
+}
+
+fn default_blend_epoch_state(membership: Membership<NodeId>) -> BlendEpochState<NodeId> {
+    let EpochState {
+        epoch,
+        lottery_0,
+        lottery_1,
+        nonce,
+        utxos,
+        ..
+    } = default_epoch_state();
+    BlendEpochState {
+        aged: utxos.root(),
+        epoch,
+        lottery_0,
+        lottery_1,
+        nonce,
+        membership_info: membership.into(),
+    }
 }
 
 pub fn settings(

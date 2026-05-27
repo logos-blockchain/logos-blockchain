@@ -765,14 +765,12 @@ async fn complete_old_session_after_main_loop_done() {
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
-    let initial_session = 0;
     let mut membership_info = MembershipInfo {
         membership: membership.clone(),
         zk: Some(ZkInfo {
             root: ZkHash::ZERO,
             core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
         }),
-        session_number: initial_session,
     };
     membership_sender
         .send(membership_info.clone())
@@ -893,7 +891,10 @@ async fn complete_old_session_after_main_loop_done() {
     });
 
     // Send a new session with the same membership.
-    membership_info.session_number += 1;
+
+    // TODO: This should be epochs instead
+    // membership_info.session_number += 1;
+
     membership_sender
         .send(membership_info.clone())
         .await
@@ -910,7 +911,10 @@ async fn complete_old_session_after_main_loop_done() {
 
     // Send a new session with a new membership smaller than minimal size
     membership_info.membership = new_membership(minimal_network_size.checked_sub(1).unwrap()).0;
-    membership_info.session_number += 1;
+
+    // TODO: This should be epochs instead
+    // membership_info.session_number += 1;
+
     membership_sender.send(membership_info).await.unwrap();
 
     // Since the network is smaller than the minimal size,
@@ -948,14 +952,12 @@ async fn stop_on_empty_session() {
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
-    let initial_session = 0;
     let membership_info = MembershipInfo {
         membership: membership.clone(),
         zk: Some(ZkInfo {
             root: ZkHash::ZERO,
             core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
         }),
-        session_number: initial_session,
     };
     membership_sender
         .send(membership_info.clone())
@@ -1081,7 +1083,6 @@ async fn stop_on_empty_session() {
         .send(MembershipInfo {
             membership: membership.clone(),
             zk: None,
-            session_number: initial_session + 1,
         })
         .await
         .unwrap();
@@ -1121,14 +1122,12 @@ async fn stop_on_non_empty_session_without_local_core_path() {
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
-    let initial_session = 0;
     let membership_info = MembershipInfo {
         membership: membership.clone(),
         zk: Some(ZkInfo {
             root: ZkHash::ZERO,
             core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
         }),
-        session_number: initial_session,
     };
     membership_sender
         .send(membership_info.clone())
@@ -1256,7 +1255,6 @@ async fn stop_on_non_empty_session_without_local_core_path() {
                 root: ZkHash::ZERO,
                 core_and_path_selectors: None,
             }),
-            session_number: initial_session + 1,
         })
         .await
         .unwrap();
@@ -1620,7 +1618,6 @@ async fn test_initialize_recovers_matching_saved_state() {
                 root: ZkHash::ZERO,
                 core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
             }),
-            session_number: initial_session,
         })
         .await
         .unwrap();
@@ -1709,7 +1706,6 @@ async fn test_initialize_recovers_matching_saved_state() {
                 root: ZkHash::ZERO,
                 core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
             }),
-            session_number: initial_session,
         })
         .await
         .unwrap();

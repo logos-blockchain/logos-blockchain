@@ -28,6 +28,19 @@ impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
     MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
 where
     Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    NodeId: Clone,
+    ProofsGenerator: LeaderProofsGenerator,
+{
+    #[cfg(test)]
+    pub const fn epoch(&self) -> Epoch {
+        self.cryptographic_processor.epoch()
+    }
+}
+
+impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+where
+    Backend: BlendBackend<NodeId, RuntimeServiceId>,
     NodeId: Clone + Send + 'static,
     ProofsGenerator: LeaderProofsGenerator,
 {

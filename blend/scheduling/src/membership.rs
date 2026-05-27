@@ -33,18 +33,6 @@ pub struct Node<Id> {
     pub public_key: Ed25519PublicKey,
 }
 
-impl<NodeId> Membership<NodeId> {
-    #[cfg(any(test, feature = "unsafe-test-functions"))]
-    #[must_use]
-    pub fn empty() -> Self {
-        Self {
-            core_nodes: HashMap::new(),
-            node_indices: Vec::new(),
-            local_node_index: None,
-        }
-    }
-}
-
 impl<NodeId> Membership<NodeId>
 where
     NodeId: Clone + Hash + Eq,
@@ -152,6 +140,16 @@ impl<NodeId> Membership<NodeId> {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.core_nodes.is_empty()
+    }
+
+    #[cfg(any(test, feature = "unsafe-test-functions"))]
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            core_nodes: HashMap::new(),
+            node_indices: Vec::new(),
+            local_node_index: None,
+        }
     }
 }
 

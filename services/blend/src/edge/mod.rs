@@ -64,11 +64,6 @@ const LOG_TARGET: &str = blend::service::EDGE;
 type RunningSettings<Backend, NodeId, RuntimeServiceId> =
     RunningBlendConfig<<Backend as BlendBackend<NodeId, RuntimeServiceId>>::Settings>;
 
-type EpochStateAndHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> = (
-    BlendEpochState<NodeId>,
-    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
-);
-
 pub struct BlendService<
     Backend,
     NodeId,
@@ -116,7 +111,6 @@ where
     type Message = ServiceMessage<BroadcastSettings, NodeId>;
 }
 
-#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
 #[async_trait::async_trait]
 impl<
     Backend,
@@ -272,14 +266,14 @@ where
     }
 }
 
-struct PendingEpochInfo<NodeId> {
+pub(crate) struct PendingEpochInfo<NodeId> {
     epoch: Epoch,
     info_type: PendingEpochInfoType<NodeId>,
 }
 
-enum PendingEpochInfoType<NodeId> {
-    Public(MembershipInfo<NodeId>),
-    Private(ProofOfLeadershipQuotaInputs),
+pub(crate) enum PendingEpochInfoType<NodeId> {
+    Public(Box<MembershipInfo<NodeId>>),
+    Private(Box<ProofOfLeadershipQuotaInputs>),
 }
 
 /// Run the event loop of the service.
@@ -344,7 +338,7 @@ where
 
     let mut pending_epoch_info: Option<PendingEpochInfo<NodeId>> = Some(PendingEpochInfo {
         epoch: current_epoch_info.epoch,
-        info_type: PendingEpochInfoType::Public(current_epoch_info.membership_info),
+        info_type: PendingEpochInfoType::Public(Box::new(current_epoch_info.membership_info)),
     });
     let mut current_epoch_message_handler: Option<
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
@@ -429,7 +423,7 @@ where
             *current_epoch_message_handler = None;
             *pending_epoch_info = Some(PendingEpochInfo {
                 epoch,
-                info_type: PendingEpochInfoType::Public(membership_info.clone()),
+                info_type: PendingEpochInfoType::Public(Box::new(membership_info.clone())),
             });
         }
         // New epoch private info received without using the previous one to create a new handler.
@@ -443,7 +437,7 @@ where
             *current_epoch_message_handler = None;
             *pending_epoch_info = Some(PendingEpochInfo {
                 epoch,
-                info_type: PendingEpochInfoType::Public(membership_info.clone()),
+                info_type: PendingEpochInfoType::Public(Box::new(membership_info.clone())),
             });
         }
         Some(PendingEpochInfo {
@@ -479,7 +473,7 @@ where
                 settings,
                 membership_info.membership,
                 new_public_inputs,
-                new_private_pol_info,
+                *new_private_pol_info,
                 overwatch_handle,
                 epoch,
             )?;
@@ -518,13 +512,12 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
             trace!(target: LOG_TARGET, "New secret PoL info received, but no public epoch info is buffered. Buffering the secret PoL info until the public epoch info is received.");
             *pending_epoch_info = Some(PendingEpochInfo {
                 epoch,
-                info_type: PendingEpochInfoType::Private(poq_private_inputs),
+                info_type: PendingEpochInfoType::Private(Box::new(poq_private_inputs)),
             });
-            return;
         }
         Some(PendingEpochInfo {
-            epoch: new_epoch,
             info_type: PendingEpochInfoType::Private(_),
+            ..
         }) => {
             assert!(
                 current_message_handler.is_none(),
@@ -533,11 +526,11 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
             warn!(target: LOG_TARGET, "New epoch secret info received without the previous epoch info being consumed.");
             *pending_epoch_info = Some(PendingEpochInfo {
                 epoch,
-                info_type: PendingEpochInfoType::Private(poq_private_inputs),
+                info_type: PendingEpochInfoType::Private(Box::new(poq_private_inputs)),
             });
         }
         Some(PendingEpochInfo {
-            epoch,
+            epoch: new_epoch,
             info_type: PendingEpochInfoType::Public(new_membership_info),
         }) => {
             assert!(
@@ -573,7 +566,7 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
                 new_public_inputs,
                 poq_private_inputs,
                 overwatch_handle.clone(),
-                epoch,
+                new_epoch,
             ).expect("Should not fail to re-create message handler on epoch rotation after private inputs are set.");
             *current_message_handler = Some(new_handler);
         }
