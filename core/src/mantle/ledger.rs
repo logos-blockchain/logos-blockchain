@@ -16,6 +16,7 @@ use crate::{
     events::Events,
     mantle::{
         encoding::{BoundedInputs, BoundedOutputs},
+        nom::{NomBoundedVec, NomDecode, NomEncode},
         ops::OpId,
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -169,6 +170,8 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
+type NomInputs<'a> = NomBoundedVec<'a, NoteId, { BoundedInputs::MIN }, { BoundedInputs::MAX }, 1>;
+
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Inputs(BoundedInputs);
 
@@ -187,6 +190,29 @@ impl Inputs {
     #[must_use]
     pub fn empty() -> Self {
         Self(BoundedInputs::default())
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> BoundedInputs {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn try_push(&mut self, note_id: NoteId) -> Result<(), BoundedError> {
+        self.0.try_push(note_id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &NoteId> {
+        <&Self as IntoIterator>::into_iter(self)
     }
 
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
@@ -242,25 +268,26 @@ impl Inputs {
         }
         Ok(pks)
     }
-
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &NoteId> {
-        <&Self as IntoIterator>::into_iter(self)
-    }
 }
 
 impl AsRef<BoundedInputs> for Inputs {
     fn as_ref(&self) -> &BoundedInputs {
         &self.0
+    }
+}
+
+impl AsRef<[NoteId]> for Inputs {
+    fn as_ref(&self) -> &[NoteId] {
+        &self.0
+    }
+}
+
+impl<I> From<I> for Inputs
+where
+    I: Into<BoundedInputs>,
+{
+    fn from(value: I) -> Self {
+        Self(value.into())
     }
 }
 
@@ -275,6 +302,20 @@ impl<'input> IntoIterator for &'input Inputs {
 
     fn into_iter(self) -> Self::IntoIter {
         (&self.0).into_iter()
+    }
+}
+
+impl NomEncode for Inputs {
+    fn encode(&self) -> Vec<u8> {
+        NomInputs::from(&self.0).encode()
+    }
+}
+
+impl NomDecode for Inputs {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
+        NomInputs::decode(bytes).map(|(remaining, items)| (remaining, Self(items)))
     }
 }
 
@@ -303,6 +344,20 @@ impl AsRef<Fr> for NoteId {
 impl From<Fr> for NoteId {
     fn from(n: Fr) -> Self {
         Self(n)
+    }
+}
+
+impl NomEncode for NoteId {
+    fn encode(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+}
+
+impl NomDecode for NoteId {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
+        Fr::decode(bytes).map(|(remaining, fr)| (remaining, Self(fr)))
     }
 }
 

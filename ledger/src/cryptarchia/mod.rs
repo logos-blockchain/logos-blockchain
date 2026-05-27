@@ -542,7 +542,13 @@ impl LedgerState {
     ) -> Result<Self, LedgerError<Id>> {
         let transfer_op = tx.genesis_transfer();
         if !transfer_op.inputs.is_empty() {
-            return Err(LedgerError::InputInGenesis(transfer_op.inputs.as_ref()[0]));
+            let first_input = transfer_op
+                .inputs
+                .iter()
+                .next()
+                .copied()
+                .expect("is not empty");
+            return Err(LedgerError::InputInGenesis(first_input));
         }
 
         Ok(Self::from_utxos(

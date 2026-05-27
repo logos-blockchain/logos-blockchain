@@ -22,7 +22,10 @@ use lb_core::{
         ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
-                ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+                ChannelId,
+                deposit::{DepositOp, Metadata},
+                inscribe::Inscription,
+                withdraw::ChannelWithdrawOp,
             },
             transfer::TransferOp,
         },
@@ -148,8 +151,8 @@ pub struct AtomicZoneDepositRequest {
     pub funding_public_key: ZkPublicKey,
     pub available_utxos: Vec<Utxo>,
     pub amount: Value,
-    pub metadata: Vec<u8>,
     pub inscription_data: Vec<u8>,
+    pub metadata: Metadata,
 }
 
 /// Result of a withdraw scenario where the zone sequencer signs the channel
@@ -1054,7 +1057,7 @@ pub fn build_zone_deposit(
     available_utxos: Vec<Utxo>,
     channel_id: ChannelId,
     amount: Value,
-    metadata: Vec<u8>,
+    metadata: Metadata,
 ) -> Result<ZoneDeposit, ZoneTestError> {
     let note = available_utxos
         .into_iter()
@@ -1179,7 +1182,7 @@ fn build_atomic_deposit_transfer(
 /// transfer, keeping both operations in the same transaction.
 fn build_atomic_deposit_op(
     channel_id: ChannelId,
-    metadata: Vec<u8>,
+    metadata: Metadata,
     transfer: &TransferOp,
 ) -> Result<DepositOp, ZoneTestError> {
     let deposit_note_id = transfer

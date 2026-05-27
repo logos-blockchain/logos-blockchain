@@ -740,8 +740,11 @@ mod tests {
             ops::{
                 OpId as _,
                 channel::{
-                    ChannelId, MsgId, config::ChannelConfigOp, deposit::DepositOp,
-                    inscribe::InscriptionOp, withdraw::ChannelWithdrawOp,
+                    ChannelId, MsgId,
+                    config::ChannelConfigOp,
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
                 },
                 transfer::TransferOp,
             },
@@ -1026,7 +1029,7 @@ mod tests {
         let deposit = DepositOp {
             channel_id,
             inputs: Inputs::new([utxo.id()]),
-            metadata: vec![5, 6, 7, 8],
+            metadata: [5, 6, 7, 8].into(),
         };
         let ops = vec![Op::ChannelDeposit(deposit.clone())];
         let tx = create_multi_signed_tx(ops, vec![&Key::Zk(sk)]);
@@ -1086,7 +1089,7 @@ mod tests {
         let deposit = DepositOp {
             channel_id,
             inputs: Inputs::new([utxo.id()]),
-            metadata: vec![5, 6, 7, 8],
+            metadata: [5, 6, 7, 8].into(),
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state
@@ -1177,7 +1180,7 @@ mod tests {
         let deposit = DepositOp {
             channel_id,
             inputs: Inputs::new([utxo.id()]),
-            metadata: vec![],
+            metadata: Metadata::empty(),
         };
         let deposit_ops = vec![Op::ChannelDeposit(deposit)];
         ledger_state = ledger_state

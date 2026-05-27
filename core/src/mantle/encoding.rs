@@ -19,7 +19,7 @@ use crate::{
         nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey, deposit::DepositOp},
+            channel::{ChannelId, Ed25519PublicKey},
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
@@ -81,24 +81,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
 // ==============================================================================
 // Channel Operation Decoders
 // ==============================================================================
-
-pub(crate) fn decode_channel_deposit(input: &[u8]) -> IResult<&[u8], DepositOp> {
-    // ChannelDeposit = ChannelId Amount Metadata
-    let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
-    let (input, inputs) = decode_inputs(input)?;
-    let (input, metadata_len) = decode_uint32(input)?;
-    let (input, metadata) =
-        map(take(metadata_len as usize), |bytes: &[u8]| bytes.to_vec()).parse(input)?;
-
-    Ok((
-        input,
-        DepositOp {
-            channel_id,
-            inputs,
-            metadata,
-        },
-    ))
-}
 
 pub(crate) fn decode_channel_withdraw(input: &[u8]) -> IResult<&[u8], ChannelWithdrawOp> {
     // ChannelWithdraw = ChannelId Amount
@@ -560,16 +542,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
             .into_iter()
             .chain(encode_uint16(signature.channel_key_index))
     }));
-    bytes
-}
-
-#[must_use]
-pub(crate) fn encode_channel_deposit(op: &DepositOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(op.channel_id.as_ref()));
-    bytes.extend(encode_inputs(op.inputs.as_ref()));
-    bytes.extend(encode_uint32(op.metadata.len() as u32));
-    bytes.extend(op.metadata.as_slice());
     bytes
 }
 

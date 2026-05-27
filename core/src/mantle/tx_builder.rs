@@ -271,7 +271,11 @@ mod tests {
         mantle::{
             gas::MainnetGasConstants,
             ops::{
-                channel::{ChannelId, deposit::DepositOp, inscribe::InscriptionOp},
+                channel::{
+                    ChannelId,
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                },
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
             },
@@ -310,7 +314,7 @@ mod tests {
         let op = DepositOp {
             channel_id: [0; 32].into(),
             inputs: Inputs::new([NoteId(Fr::ZERO)]),
-            metadata: b"Mint 1 to Alice in Zone".to_vec(),
+            metadata: b"Mint 1 to Alice in Zone".into(),
         };
 
         // Init a tx builder
@@ -442,7 +446,7 @@ mod tests {
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
                 inputs: Inputs::new([NoteId(Fr::ZERO)]),
-                metadata: b"Mint 10 to Alice in Zone".to_vec(),
+                metadata: b"Mint 10 to Alice in Zone".into(),
             }))
             .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
@@ -496,7 +500,7 @@ mod tests {
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id: [0; 32].into(),
                 inputs: Inputs::new([deposit_input]),
-                metadata: vec![],
+                metadata: Metadata::empty(),
             }))
             .unwrap()
             .push_op(Op::SDPDeclare(SDPDeclareOp {
