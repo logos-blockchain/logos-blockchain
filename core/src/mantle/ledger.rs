@@ -5,6 +5,7 @@ use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
+use lb_utils::bounded_vec::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -13,7 +14,10 @@ use thiserror::Error;
 use crate::{
     crypto::{Hash, ZkHasher},
     events::Events,
-    mantle::ops::OpId,
+    mantle::{
+        nom::{NomBoundedVec, NomDecode, NomEncode},
+        ops::OpId,
+    },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
 
@@ -150,18 +154,59 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
+pub type InnerInputs = UpperBoundedVec<NoteId, { u8::MAX as usize }>;
+type NomInputs<'a> = NomBoundedVec<'a, NoteId, { InnerInputs::MIN }, { InnerInputs::MAX }, 1>;
+
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
-pub struct Inputs(Vec<NoteId>);
+pub struct Inputs(InnerInputs);
+
+impl AsRef<[NoteId]> for Inputs {
+    fn as_ref(&self) -> &[NoteId] {
+        &self.0
+    }
+}
+
+impl<I> From<I> for Inputs
+where
+    I: Into<InnerInputs>,
+{
+    fn from(value: I) -> Self {
+        Self(value.into())
+    }
+}
 
 impl Inputs {
     #[must_use]
-    pub const fn new(note_ids: Vec<NoteId>) -> Self {
-        Self(note_ids)
+    pub const fn new(inputs: InnerInputs) -> Self {
+        Self(inputs)
     }
 
     #[must_use]
     pub const fn empty() -> Self {
-        Self(vec![])
+        Self(InnerInputs::new_unchecked(vec![]))
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> InnerInputs {
+        self.0
+    }
+
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn try_push(&mut self, note_id: NoteId) -> Result<(), BoundedError> {
+        self.0.try_push(note_id)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &NoteId> {
+        self.0.iter()
     }
 
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
@@ -217,39 +262,19 @@ impl Inputs {
         }
         Ok(pks)
     }
+}
 
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    pub fn iter(&self) -> slice::Iter<'_, NoteId> {
-        <&Self as IntoIterator>::into_iter(self)
+impl NomEncode for Inputs {
+    fn encode(&self) -> Vec<u8> {
+        NomInputs::from(&self.0).encode()
     }
 }
 
-impl AsRef<Vec<NoteId>> for Inputs {
-    fn as_ref(&self) -> &Vec<NoteId> {
-        &self.0
-    }
-}
+impl NomDecode for Inputs {
+    type Output = Self;
 
-impl AsMut<Vec<NoteId>> for Inputs {
-    fn as_mut(&mut self) -> &mut Vec<NoteId> {
-        &mut self.0
-    }
-}
-impl<'input> IntoIterator for &'input Inputs {
-    type Item = <slice::Iter<'input, NoteId> as IntoIterator>::Item;
-    type IntoIter = slice::Iter<'input, NoteId>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
+        NomInputs::decode(bytes).map(|(remaining, items)| (remaining, Self(items)))
     }
 }
 
@@ -278,6 +303,20 @@ impl AsRef<Fr> for NoteId {
 impl From<Fr> for NoteId {
     fn from(n: Fr) -> Self {
         Self(n)
+    }
+}
+
+impl NomEncode for NoteId {
+    fn encode(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+}
+
+impl NomDecode for NoteId {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
+        Fr::decode(bytes).map(|(remaining, fr)| (remaining, Self(fr)))
     }
 }
 

@@ -19,10 +19,13 @@ use lb_config::consensus::{ProviderInfo, create_genesis_block_with_declarations}
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
-        ledger::{Inputs, Outputs},
+        ledger::Outputs,
         ops::{
             channel::{
-                ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+                ChannelId,
+                deposit::{DepositOp, Metadata},
+                inscribe::Inscription,
+                withdraw::ChannelWithdrawOp,
             },
             transfer::TransferOp,
         },
@@ -149,8 +152,8 @@ pub struct AtomicZoneDepositRequest {
     pub funding_public_key: ZkPublicKey,
     pub available_utxos: Vec<Utxo>,
     pub amount: Value,
-    pub metadata: Vec<u8>,
     pub inscription_data: Inscription,
+    pub metadata: Metadata,
 }
 
 /// Result of a withdraw scenario where the zone sequencer signs the channel
@@ -1177,7 +1180,7 @@ pub fn build_zone_deposit(
     available_utxos: Vec<Utxo>,
     channel_id: ChannelId,
     amount: Value,
-    metadata: Vec<u8>,
+    metadata: Metadata,
 ) -> Result<ZoneDeposit, ZoneTestError> {
     let note = available_utxos
         .into_iter()
@@ -1187,7 +1190,7 @@ pub fn build_zone_deposit(
     Ok(ZoneDeposit {
         deposit: DepositOp {
             channel_id,
-            inputs: Inputs::new(vec![note.id()]),
+            inputs: note.id().into(),
             metadata,
         },
         reserved_inputs: vec![note],
@@ -1302,7 +1305,7 @@ fn build_atomic_deposit_transfer(
 /// transfer, keeping both operations in the same transaction.
 fn build_atomic_deposit_op(
     channel_id: ChannelId,
-    metadata: Vec<u8>,
+    metadata: Metadata,
     transfer: &TransferOp,
 ) -> Result<DepositOp, ZoneTestError> {
     let deposit_note_id = transfer
@@ -1315,7 +1318,7 @@ fn build_atomic_deposit_op(
 
     Ok(DepositOp {
         channel_id,
-        inputs: Inputs::new(vec![deposit_note_id]),
+        inputs: deposit_note_id.into(),
         metadata,
     })
 }

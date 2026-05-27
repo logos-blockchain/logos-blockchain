@@ -526,7 +526,10 @@ async fn step_submit_zone_deposit_transaction(
         transaction_alias,
         channel_alias,
         amount,
-        metadata,
+        metadata
+            .into_bytes()
+            .try_into()
+            .expect("Metadata too large for deposit op."),
     )
     .await
 }
@@ -550,7 +553,10 @@ async fn step_submit_atomic_zone_deposit_transaction(
         transaction_alias,
         message_alias,
         amount,
-        metadata,
+        metadata
+            .into_bytes()
+            .try_into()
+            .expect("Metadata too large for deposit op."),
     )
     .await
 }

@@ -8,6 +8,7 @@ pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
 use lb_core::mantle::{
     Value,
     ledger::{Inputs, Outputs},
+    ops::channel::{MsgId, deposit::Metadata},
     ops::channel::{MsgId, inscribe::Inscription},
 };
 
@@ -40,7 +41,7 @@ pub struct Deposit {
     /// Total value deposited, sourced from the block's events.
     pub amount: Value,
     /// Opaque metadata associated with this deposit
-    pub metadata: Vec<u8>,
+    pub metadata: Metadata,
 }
 
 /// An withdrawal from a zone channel, included/finalized in Bedrock

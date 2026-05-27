@@ -1087,7 +1087,7 @@ impl GenesisBlockBuilder<WithAll> {
         } = self;
         // Order is important to keep here
         let ops: Vec<Op> = std::iter::once(Op::Transfer(TransferOp::new(
-            Inputs::new(vec![]),
+            Inputs::empty(),
             Outputs::new(notes),
         )))
         .chain(std::iter::once(Op::ChannelInscribe(inscription)))
@@ -1202,7 +1202,7 @@ mod tests {
     fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
-                Inputs::new(vec![]),
+                Inputs::empty(),
                 Outputs::new(vec![make_note(1_000)]),
             )),
             Op::ChannelInscribe(valid_inscription()),

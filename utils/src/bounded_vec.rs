@@ -33,6 +33,12 @@ impl<T, const MIN: usize, const MAX: usize> BoundedVec<T, MIN, MAX> {
     pub const MIN: usize = MIN;
     pub const MAX: usize = MAX;
 
+    #[must_use]
+    pub const fn empty() -> Self {
+        const { assert!(MIN == 0, "Cannot construct empty BoundedVec when MIN > 0") }
+        Self(Vec::new())
+    }
+
     /// Construct without checking the cap.
     ///
     /// Reserved for callers that have already validated the length. Prefer
@@ -115,7 +121,7 @@ where
 
 impl<T, const MIN: usize, const MAX: usize> From<T> for BoundedVec<T, MIN, MAX> {
     fn from(value: T) -> Self {
-        const { assert!(MIN >= 1, "Min size cannot be zero.") }
+        const { assert!(MAX >= 1, "Max size cannot be zero.") }
         Self([value].into())
     }
 }
