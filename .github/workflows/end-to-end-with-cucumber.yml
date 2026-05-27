@@ -155,6 +155,7 @@ jobs:
           suite_tag: "@smoke_ci"
           suite_name: smoke
           artifact_subdir: Smoke
+          max_concurrent_scenarios: "2"
 
       # Feature: Cryptarchia (@cryptarchia_ci)
       - name: Run cucumber suite - cryptarchia
@@ -165,6 +166,7 @@ jobs:
           suite_tag: "@cryptarchia_ci"
           suite_name: cryptarchia
           artifact_subdir: Cryptarchia
+          max_concurrent_scenarios: "2"
 
       # Feature: Blend (@blend_ci)
       - name: Run cucumber suite - blend
@@ -175,6 +177,7 @@ jobs:
           suite_tag: "@blend_ci"
           suite_name: blend
           artifact_subdir: Blend
+          max_concurrent_scenarios: "2"
 
       # Feature: Transactions (@transactions_ci)
       - name: Run cucumber suite - transactions
@@ -186,6 +189,7 @@ jobs:
           suite_name: transactions
           artifact_subdir: Transactions
           verbose_console: "true"
+          max_concurrent_scenarios: "2"
 
       # Feature: Zone SDK (@zone_ci)
       - name: Run cucumber suite - zone
@@ -196,6 +200,7 @@ jobs:
           suite_tag: "@zone_ci"
           suite_name: zone
           artifact_subdir: Zone
+          max_concurrent_scenarios: "2"
 
       # Feature: CLI utility binary (@cli_ci)
       - name: Run cucumber suite - CLI utilities
@@ -206,6 +211,7 @@ jobs:
           suite_tag: "@cli_ci"
           suite_name: CLI
           artifact_subdir: Cli
+          max_concurrent_scenarios: "2"
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results

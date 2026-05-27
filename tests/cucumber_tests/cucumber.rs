@@ -34,13 +34,22 @@ use lb_testing_framework::{
 use logos_blockchain_tests::cucumber::{
     defaults::{
         ARTEFACTS, CUCUMBER_DEPLOYER_COMPOSE, CUCUMBER_DEPLOYER_K8S,
-        CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL, create_scenario_output_dir, get_feature_path,
-        get_retries, init_logging_defaults, init_tracing,
+        CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL, MAX_CUCUMBER_CONCURRENT_SCENARIOS,
+        create_scenario_output_dir, get_feature_path, get_retries, init_logging_defaults,
+        init_tracing,
     },
     world::{CucumberWorld, DeployerKind},
 };
 
 type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
+
+// Get the maximum number of concurrent scenarios from env var, defaults to 1
+fn get_max_concurrent_scenarios() -> usize {
+    std::env::var(MAX_CUCUMBER_CONCURRENT_SCENARIOS)
+        .ok()
+        .and_then(|val| val.parse().ok())
+        .unwrap_or(1)
+}
 
 // Increment and return the attempt count for the given scenario. Counts
 // are tracked per-scenario, and keyed by a combination of feature and
@@ -84,7 +93,7 @@ async fn main() {
         // Re-outputs Failed steps for easier navigation.
         .repeat_failed()
         // .fail_fast() // Remove comment to enable fail-fast behavior for development
-        .max_concurrent_scenarios(1)
+        .max_concurrent_scenarios(get_max_concurrent_scenarios())
         // Ensure that all the steps were covered.
         .fail_on_skipped()
         // Replaces Writer.
