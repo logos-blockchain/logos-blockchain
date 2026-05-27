@@ -31,7 +31,7 @@ async fn run_with_epoch_transition() {
     let local_node = NodeId(99);
     let mut core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (_, session_sender, msg_sender, mut node_id_receiver) = spawn_run(
+    let (_, epoch_sender, msg_sender, mut node_id_receiver) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -45,9 +45,9 @@ async fn run_with_epoch_transition() {
         core_node
     );
 
-    // Send a new session with another core node 1.
+    // Send a new epoch with another core node 1.
     core_node = NodeId(1);
-    session_sender
+    epoch_sender
         .send(membership(&[core_node], local_node))
         .await
         .expect("channel opened");
@@ -68,15 +68,15 @@ async fn run_shuts_down_if_new_membership_is_small() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (join_handle, session_sender, _, _) = spawn_run(
+    let (join_handle, epoch_sender, _, _) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
     )
     .await;
 
-    // Send a new session with an empty membership (smaller than the min size).
-    session_sender
+    // Send a new epoch with an empty membership (smaller than the min size).
+    epoch_sender
         .send(membership(&[], local_node))
         .await
         .expect("channel opened");
@@ -89,15 +89,15 @@ async fn run_fails_if_local_is_core_in_new_membership() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (join_handle, session_sender, _, _) = spawn_run(
+    let (join_handle, epoch_sender, _, _) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
     )
     .await;
 
-    // Send a new session with a membership where the local node is core.
-    session_sender
+    // Send a new epoch with a membership where the local node is core.
+    epoch_sender
         .send(membership(&[local_node], local_node))
         .await
         .expect("channel opened");

@@ -1,11 +1,10 @@
-//! Chain-derived membership.
+//! Chain-derived per-epoch state.
 //!
-//! The membership for each epoch is read from the SDP snapshot frozen into that
-//! epoch's [`EpochState`](lb_ledger::EpochState), queried from the chain on
-//! slot ticks. This puts membership on the **same slot-tick clock** as the
-//! leader inputs (the [`EpochHandler`] `PoL` path), so both halves share the
-//! chain's per-epoch view and cannot drift — replacing the pushed
-//! `ActiveProviders` broadcast.
+//! On every slot tick the chain is queried for the current epoch's
+//! [`EpochState`](lb_ledger::EpochState); on each new epoch the membership and
+//! leader inputs frozen into its SDP snapshot are yielded together as a
+//! [`BlendEpochState`]. Both halves come from the same chain query, so they
+//! cannot drift — replacing the pushed `ActiveProviders` broadcast.
 
 use core::{hash::Hash, pin::Pin};
 use std::fmt::{Debug, Display};
@@ -36,21 +35,19 @@ pub struct BlendEpochState<NodeId> {
     pub membership_info: MembershipInfo<NodeId>,
 }
 
-/// A chain-derived membership stream.
+/// A chain-derived per-epoch state stream.
 ///
-/// Unlike [`MembershipStream`](super::MembershipStream) this is not `Sync`,
-/// since producing each item awaits a chain query; consumers only require
-/// `Send + Unpin`.
+/// Not `Sync`, since producing each item awaits a chain query; consumers only
+/// require `Send + Unpin`.
 pub type BlendEpochStateStream<NodeId> =
     Pin<Box<dyn Stream<Item = BlendEpochState<NodeId>> + Send + 'static>>;
 
-/// Subscribe to a chain-derived stream of
-/// [`BlendEpochState`](super::BlendEpochState).
+/// Subscribe to a chain-derived stream of [`BlendEpochState`].
 ///
-/// On every slot tick the chain is queried for the current epoch's
-/// `EpochState`; on each new epoch the membership frozen into its SDP snapshot
-/// is yielded. The same `EpochHandler`/`get_epoch_state` mechanism is used by
-/// the leader-input path, so the two are on one clock.
+/// One item is yielded per epoch — the first slot of the epoch whose chain
+/// query succeeds. Slot ticks within an already-yielded epoch are ignored;
+/// failed chain queries do not advance the tracked epoch, so the next slot of
+/// the same epoch is retried.
 pub async fn subscribe<ChainService, NodeId, TimeRuntimeBackend, RuntimeServiceId>(
     overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     signing_public_key: Ed25519PublicKey,

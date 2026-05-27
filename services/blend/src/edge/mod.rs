@@ -236,7 +236,7 @@ where
         run::<Backend, _, ProofsGenerator, PolInfoProvider, _>(
             UninitializedEpochEventStream::new(
                 public_epoch_stream,
-                settings.time.session_transition_period(),
+                settings.time.epoch_transition_period,
             ),
             messages_to_blend_stream,
             RunningSettings::<Backend, _, _> {
@@ -279,21 +279,24 @@ pub(crate) enum PendingEpochInfoType<NodeId> {
 /// Run the event loop of the service.
 ///
 /// The event loop handles three types of events:
-/// - **Session changes**: resets the message handler with the new session but
-///   the current epoch info. If the handler was shut down (waiting for secret
-///   epoch info), it stays shut down.
-/// - **Clock ticks (epoch transitions)**: on a new epoch, shuts down the
-///   message handler until secret `PoL` info for that epoch is received. If
-///   secret info was already provided for the new epoch, the handler is kept.
-/// - **Secret `PoL` info**: always (re)creates the message handler with the new
-///   epoch's public and private inputs, preserving the current session.
+/// - **New public epoch info** (chain-derived membership + leader inputs):
+///   buffered until the matching secret `PoL` info arrives, at which point
+///   the message handler is created for that epoch. A new public info while an
+///   older one is still buffered (no winning slot in the previous epoch)
+///   simply replaces the buffered entry.
+/// - **Incoming messages to blend**: forwarded to the current message handler;
+///   dropped with a warning if no handler is active (secret `PoL` info for
+///   the current epoch has not yet arrived).
+/// - **New secret `PoL` info**: buffered until the matching public epoch info
+///   arrives, at which point the handler is created. A stale buffered public
+///   is discarded; a stale buffered private is a bug and panics.
 ///
 /// Returns an [`Error`] if a new membership does not satisfy the edge node
 /// condition.
 ///
 /// # Panics
-/// - If the initial membership is not yielded immediately from the session
-///   stream.
+/// - If the initial public epoch info is not yielded immediately from the
+///   public epoch stream.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
@@ -353,7 +356,7 @@ where
                         return Ok(());
                     }
                     Err(e) => {
-                        error!(target: LOG_TARGET, "Error when handling new session: {e:?}, edge service shutting down.");
+                        error!(target: LOG_TARGET, "Error when handling new epoch: {e:?}, edge service shutting down.");
                         return Err(e);
                     }
                     Ok(()) => {}
@@ -405,9 +408,8 @@ where
 
     // Validate the edge node condition up front so the service shuts down on
     // an invalid membership regardless of whether secret PoL info has arrived
-    // yet. Without this check, an invalid membership would silently update
-    // `current_membership_info` and surface later as a panic in
-    // `handle_new_secret_epoch_info`.
+    // yet. Without this check, an invalid membership could be buffered as a
+    // `Pending::Public` and only fail later when private info arrives.
     let membership_size = membership_info.membership.size();
     if membership_size < settings.minimum_network_size.get() as usize {
         return Err(Error::NetworkIsTooSmall(membership_size));
@@ -417,7 +419,10 @@ where
     }
 
     match pending_epoch_info.take() {
-        // Previous epoch handler is running, so we stop it and buffer new membership info.
+        // Nothing buffered: either the service just started, or the previous
+        // epoch's handler is still running. Either way, shut down any running
+        // handler (the new epoch's secret info hasn't arrived yet) and buffer
+        // the new public info.
         None => {
             debug!(target: LOG_TARGET, "New epoch public info received. Stopping message handler until secret PoL info is received.");
             *current_epoch_message_handler = None;
@@ -426,8 +431,10 @@ where
                 info_type: PendingEpochInfoType::Public(Box::new(membership_info.clone())),
             });
         }
-        // New epoch public info received without using the previous one to create a new handler.
-        // This can happen if the node has no winning slot in the old epoch.
+        // The previous epoch's public was buffered but never paired with a
+        // private (no winning slot that epoch), so the buffered public is
+        // now stale and is replaced by the new one. Normal occurrence, not
+        // an error.
         Some(PendingEpochInfo {
             info_type: PendingEpochInfoType::Public(_),
             ..
@@ -446,11 +453,15 @@ where
             epoch,
             info_type: PendingEpochInfoType::Private(new_private_pol_info),
         }) => {
-            // Let's make sure we always clean up the pending info whenever a public or
-            // private epoch event is processed.
+            // A buffered private must be for the same epoch as the incoming
+            // public: it can't be from the future (private is only produced
+            // once its epoch is active, by which time the public has already
+            // been emitted) and it can't be from the past (the previous
+            // public for that epoch would have consumed it). Either inequality
+            // is a real bug upstream.
             assert!(
                 new_epoch == epoch,
-                "Old pending epoch secret info was found, and this should never happen."
+                "Buffered secret PoL info for epoch {epoch:?} does not match incoming public epoch info for epoch {new_epoch:?}."
             );
             info!(target: LOG_TARGET, "New epoch public info received with a buffered secret PoL info for the same epoch {new_epoch:?}. Trying to create a new epoch-bound message handler.");
             let new_public_inputs = PoQVerificationInputsMinusSigningKey {
@@ -489,8 +500,15 @@ where
 
 /// Processes new secret `PoL` info.
 ///
-/// Always creates a new message handler using the new epoch's public and
-/// private inputs from the `PoL` info.
+/// Three outcomes depending on the buffered state:
+/// - Nothing buffered → buffer the secret info until the matching public
+///   epoch info arrives.
+/// - A public for the same epoch is buffered → create the message handler.
+/// - A stale public is buffered (older epoch) → discard it and buffer the
+///   new secret info instead; if the incoming secret is itself stale (older
+///   than the buffered public), it is ignored.
+/// - A private is already buffered → panic; this violates the invariant
+///   that secret info does not outlive its epoch.
 fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     PolEpochInfo {
         epoch: new_epoch,
