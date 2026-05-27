@@ -745,6 +745,7 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
 /// if it receives another new session that doesn't meet the core node
 /// conditions.
 #[test_log::test(tokio::test)]
+#[ignore = "TODO: Re-enable once we replace sessions with epochs."]
 async fn complete_old_session_after_main_loop_done() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);

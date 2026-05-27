@@ -168,6 +168,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
         "Buffered epoch info should be consumed when handler is created"
     );
 
+    handler_state = None; // Simulate handler shutdown after an epoch transition.
     buffered_epoch_info = Some(PendingEpochInfo {
         epoch: Epoch::new(3),
         info_type: PendingEpochInfoType::Public(Box::new(membership_info)),

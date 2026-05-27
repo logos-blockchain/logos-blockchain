@@ -627,7 +627,7 @@ mod tests {
             let instance = instance
                 .handle_epoch_event(
                     // With an empty membership smaller than the minimal size.
-                    EpochEvent::NewEpoch(Membership::empty().into()),
+                    EpochEvent::NewEpoch(membership(&[], local_node).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
@@ -675,7 +675,7 @@ mod tests {
             // Edge -> Core
             let instance = instance
                 .handle_epoch_event(
-                    EpochEvent::NewEpoch(membership(&[1], local_node).into()),
+                    EpochEvent::NewEpoch(membership(&[1], 1).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
