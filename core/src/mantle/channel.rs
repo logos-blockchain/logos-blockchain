@@ -237,7 +237,7 @@ mod tests {
         events::{Event, EventPayload},
         mantle::{
             Note, Utxo,
-            ledger::{Inputs, Outputs, Utxos},
+            ledger::{Outputs, Utxos},
             ops::{
                 OpId as _,
                 channel::{
@@ -383,7 +383,7 @@ mod tests {
 
         let deposit_op = DepositOp {
             channel_id,
-            inputs: Inputs::new([utxo.id()]),
+            inputs: [utxo.id()].into(),
             metadata: Metadata::empty(),
         };
 

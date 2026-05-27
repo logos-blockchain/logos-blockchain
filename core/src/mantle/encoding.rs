@@ -54,7 +54,12 @@ const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
 const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
 pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
 pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
+pub type NomInputs<'a> =
+    NomBoundedVec<'a, NoteId, { BoundedInputs::MIN }, { BoundedInputs::MAX }, 1>;
+
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
+pub type NomOutputs<'a> =
+    NomBoundedVec<'a, Note, { BoundedOutputs::MIN }, { BoundedOutputs::MAX }, 1>;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -220,40 +225,16 @@ pub(crate) fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp>
 // Transfer Decoders
 // ==============================================================================
 
-fn decode_note(input: &[u8]) -> IResult<&[u8], Note> {
-    // Note = Value ZkPublicKey
-    let (input, value) = decode_uint64(input)?;
-    let (input, pk) = decode_zk_public_key(input)?;
-
-    Ok((input, Note::new(value, pk)))
-}
-
 fn decode_inputs(input: &[u8]) -> IResult<&[u8], Inputs> {
-    // Inputs = InputCount *NoteId
-    let (input, input_count) = decode_byte(input)?;
-    if input_count as usize > BoundedInputs::MAX {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail)));
-    }
+    let (input, bounded_inputs) = NomInputs::decode(input)?;
 
-    let (input, note_ids) =
-        count(map(decode_field_element, NoteId), input_count as usize).parse(input)?;
-    let inputs = Inputs::try_new(note_ids)
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::LengthValue)))?;
-    Ok((input, inputs))
+    Ok((input, Inputs::new(bounded_inputs)))
 }
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
-    // Outputs = OutputCount *Note
-    let (input, output_count) = decode_byte(input)?;
-    if output_count as usize > BoundedOutputs::MAX {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail)));
-    }
+    let (input, bounded_outputs) = NomOutputs::decode(input)?;
 
-    let (input, notes) = count(decode_note, output_count as usize).parse(input)?;
-    let outputs = Outputs::try_new(notes)
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::LengthValue)))?;
-
-    Ok((input, outputs))
+    Ok((input, Outputs::new(bounded_outputs)))
 }
 
 pub(crate) fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
@@ -341,7 +322,7 @@ fn decode_groth16(input: &[u8]) -> IResult<&[u8], CompressedGroth16Proof> {
     .parse(input)
 }
 
-fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
+pub(crate) fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
     // ZkPublicKey = FieldElement
     map(decode_field_element, ZkPublicKey::new).parse(input)
 }

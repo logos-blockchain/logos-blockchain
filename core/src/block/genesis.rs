@@ -658,10 +658,6 @@ impl GenesisBlockBuilder<WithNotesAndInscription> {
     }
 
     /// Append multiple genesis transfer output notes at once.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `notes` is empty.
     pub fn add_notes(
         self,
         notes_to_add: impl IntoIterator<Item = impl Into<Note>>,
@@ -771,10 +767,6 @@ impl GenesisBlockBuilder<WithNotesAndDeclarations> {
     }
 
     /// Append multiple genesis transfer output notes at once.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `notes` is empty.
     pub fn add_notes(
         self,
         notes_to_add: impl IntoIterator<Item = impl Into<Note>>,
@@ -1009,10 +1001,6 @@ impl GenesisBlockBuilder<WithAll> {
     }
 
     /// Append multiple genesis transfer output notes at once.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `notes` is empty.
     pub fn add_notes(
         self,
         notes_to_add: impl IntoIterator<Item = impl Into<Note>>,

@@ -15,8 +15,8 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::Events,
     mantle::{
-        encoding::{BoundedInputs, BoundedOutputs},
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        encoding::{BoundedInputs, BoundedOutputs, NomInputs, decode_uint64, decode_zk_public_key},
+        nom::{NomDecode, NomEncode},
         ops::OpId,
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -169,8 +169,6 @@ impl<'output> IntoIterator for &'output Outputs {
         (&self.0).into_iter()
     }
 }
-
-type NomInputs<'a> = NomBoundedVec<'a, NoteId, { BoundedInputs::MIN }, { BoundedInputs::MAX }, 1>;
 
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Inputs(BoundedInputs);
@@ -376,6 +374,27 @@ impl Note {
     #[must_use]
     pub fn as_fr_components(&self) -> [Fr; 2] {
         [BigUint::from(self.value).into(), *self.pk.as_fr()]
+    }
+}
+
+impl NomEncode for Note {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(crate::mantle::encoding::encode_uint64(self.value));
+        bytes.extend(crate::mantle::encoding::encode_field_element(
+            self.pk.as_fr(),
+        ));
+        bytes
+    }
+}
+
+impl NomDecode for Note {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
+        let (bytes, value) = decode_uint64(bytes)?;
+        let (bytes, pk) = decode_zk_public_key(bytes)?;
+        Ok((bytes, Self::new(value, pk)))
     }
 }
 

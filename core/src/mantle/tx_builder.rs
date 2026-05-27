@@ -115,7 +115,7 @@ impl MantleTxBuilder {
         utxos: impl IntoIterator<Item = Utxo>,
     ) -> Result<Self, TxBuilderError> {
         for utxo in utxos {
-            debug_assert_eq!(self.pending_transfer.inputs.len(), self.ledger_inputs.len());
+            assert_eq!(self.pending_transfer.inputs.len(), self.ledger_inputs.len());
             self.pending_transfer
                 .inputs
                 .as_mut()
@@ -176,7 +176,7 @@ impl MantleTxBuilder {
                 })?;
 
                 // Now the net balance should exactly equal the gas cost.
-                debug_assert_eq!(tx_with_change.funding_delta::<G>()?, 0);
+                assert_eq!(tx_with_change.funding_delta::<G>()?, 0);
 
                 Ok(Some(tx_with_change))
             }
