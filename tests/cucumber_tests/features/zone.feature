@@ -22,9 +22,9 @@ Feature: Zone SDK
       | MSG_1 |
       | MSG_2 |
       | MSG_3 |
-    When sequencer "SEQ_A" submits zone channel config transaction "CHANNEL_CONFIG_1" authorizing:
-      | alias |
-      | SEQ_B |
+    When sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 0                 | 0               | SEQ_B                 |
     Then zone transaction "CHANNEL_CONFIG_1" is included in 180 seconds
     And zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
     And I stop all nodes
@@ -176,7 +176,7 @@ Feature: Zone SDK
 
   @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_sorted_conflict_resolution
-  Scenario: Sorted conflict policy converges to a sorted chain
+  Scenario: Sorted conflict policy preserves per-sequencer order and converges without duplicates
     Given I have a zone cluster
     And the following zone sequencers exist:
       | alias |
@@ -184,9 +184,9 @@ Feature: Zone SDK
       | SEQ_B |
     When the zone node is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
-    And sequencer "SEQ_A" submits zone channel config transaction "CHANNEL_CONFIG_1" with posting timeframe 10 and posting timeout 0 authorizing:
-      | alias |
-      | SEQ_B |
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 10                | 0               | SEQ_A, SEQ_B          |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
     When I stop zone sequencer "SEQ_A"
     And the following zone messages are published concurrently with sorted conflict policy:
@@ -201,7 +201,181 @@ Feature: Zone SDK
       | SEQ_B     | MSG_8  | ff   |
       | SEQ_B     | MSG_9  | hh   |
       | SEQ_B     | MSG_10 | jj   |
-    Then the zone indexer returns a sorted zone conflict outcome in 600 seconds
+    Then the zone indexer preserves per-sequencer order and converges without duplicates in 600 seconds
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Round-robin waits for turn and submits pending messages
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_A | true    | 2                    | false                     |
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 2                 | 0               | SEQ_A, SEQ_B          |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_B | false   | 2                    | false                     |
+    Then sequencer "SEQ_B" reaches sequencing state:
+      | own_key_index | turn_to_write | pending_transactions | time_out |
+      | 1             | NOT_OUR_TURN  | 0                    | 120      |
+    # Prepare three signed pending messages while SEQ_B is not on turn — tests bounded submit depth
+    When sequencer "SEQ_B" submits the following zone messages to queue immediately:
+      | alias  | data         |
+      | MSG_B1 | rr-queued-b1 |
+      | MSG_B2 | rr-queued-b2 |
+      | MSG_B3 | rr-queued-b3 |
+    Then sequencer "SEQ_B" reaches sequencing state:
+      | own_key_index | turn_to_write | pending_transactions | time_out |
+      | 1             | NOT_OUR_TURN  | 3                    | 120      |
+    # Save checkpoint with signed pending txs, restart, verify pending outbox restored
+    When I save current checkpoint of sequencer "SEQ_B" as "CHECKPOINT_B_PENDING"
+    And I stop zone sequencer "SEQ_B"
+    And I restart zone sequencer "SEQ_B" from checkpoint "CHECKPOINT_B_PENDING"
+    Then sequencer "SEQ_B" reaches sequencing state:
+      | own_key_index | turn_to_write | pending_transactions | time_out |
+      | 1             | NOT_OUR_TURN  | 3                    | 120      |
+    # The first turn submits only the configured active depth, so two txs are posted but remain pending until finalized
+    And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
+      | alias  |
+      | MSG_B1 |
+      | MSG_B2 |
+    Then sequencer "SEQ_B" has 3 pending publish txs in 180 seconds
+    Then sequencer "SEQ_B" has 1 pending publish txs in 180 seconds
+    And the zone indexer returns messages in any order in 360 seconds:
+      | alias  |
+      | MSG_B1 |
+      | MSG_B2 |
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Round-robin submits all pending messages with no active depth limit
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_A | true    | unlimited            | false                     |
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 2                 | 0               | SEQ_A, SEQ_B          |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_B | false   | unlimited            | false                     |
+    Then sequencer "SEQ_B" reaches sequencing state:
+      | own_key_index | turn_to_write | pending_transactions | time_out |
+      | 1             | NOT_OUR_TURN  | 0                    | 120      |
+    When sequencer "SEQ_B" submits the following zone messages to queue immediately:
+      | alias  | data           |
+      | MSG_C1 | rr-unbounded-1 |
+      | MSG_C2 | rr-unbounded-2 |
+      | MSG_C3 | rr-unbounded-3 |
+    Then sequencer "SEQ_B" reaches sequencing state:
+      | own_key_index | turn_to_write | pending_transactions | time_out |
+      | 1             | NOT_OUR_TURN  | 3                    | 120      |
+    When I save current checkpoint of sequencer "SEQ_B" as "CHECKPOINT_B_NO_LIMIT"
+    And I stop zone sequencer "SEQ_B"
+    And I restart zone sequencer "SEQ_B" from checkpoint "CHECKPOINT_B_NO_LIMIT"
+    Then sequencer "SEQ_B" reaches sequencing state:
+      | own_key_index | turn_to_write | pending_transactions | time_out |
+      | 1             | NOT_OUR_TURN  | 3                    | 120      |
+    And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
+      | alias  |
+      | MSG_C1 |
+      | MSG_C2 |
+      | MSG_C3 |
+    Then sequencer "SEQ_B" has 3 pending publish txs in 180 seconds
+    And the zone indexer returns messages in any order in 360 seconds:
+      | alias  |
+      | MSG_C1 |
+      | MSG_C2 |
+      | MSG_C3 |
+    Then sequencer "SEQ_B" has 0 pending publish txs in 180 seconds
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Round-robin publishes immediately when it is our turn
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 2                 | 0               | SEQ_A, SEQ_B          |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When I start zone sequencer "SEQ_B"
+    Then sequencer "SEQ_A" reaches sequencing state:
+      | own_key_index | turn_to_write | pending_transactions | time_out |
+      | 0             | OUR_TURN      | 0                    | 120      |
+    When I submit zone message "MSG_A1" to sequencer "SEQ_A" with data "decentralized-immediate-publish" immediately
+    Then sequencer "SEQ_A" publishes "MSG_A1" immediately while in turn in 120 seconds
+    And the zone indexer returns messages in any order in 360 seconds:
+      | alias  |
+      | MSG_A1 |
+    And I stop all nodes
+
+  @zone_ci
+  Scenario: Round-robin with multiple sequencers dynamically added
+    Given I have a zone cluster
+    And the following zone sequencers exist:
+      | alias |
+      | SEQ_A |
+      | SEQ_B |
+      | SEQ_C |
+    When the zone node is at height 1 in 120 seconds
+    And I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_A | true    | default              | true                      |
+    # Start with A-only round-robin config (single key), then prove immediate publish.
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 2                 | 0               | SEQ_A                 |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When I submit zone message "MSG_A_1" to sequencer "SEQ_A" with data "seq_a-msg1" on its turn
+    # Auth B without stopping A.
+    When sequencer "SEQ_A" submits zone config transaction:
+      | config_name | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CONFIG_B    | 2                 | 0               | SEQ_A, SEQ_B          |
+    Then zone transaction "CONFIG_B" is finalized in 180 seconds
+    When I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_B | false   | default              | true                      |
+    When I submit zone message "MSG_B_1" to sequencer "SEQ_B" with data "seq_b-msg1" on its turn
+    # Auth C without stopping A or B.
+    When sequencer "SEQ_A" submits zone config transaction:
+      | config_name | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CONFIG_C    | 2                 | 0               | SEQ_A, SEQ_B, SEQ_C   |
+    Then zone transaction "CONFIG_C" is finalized in 180 seconds
+    When I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_C | false   | default              | true                      |
+    When I submit zone message "MSG_C_1" to sequencer "SEQ_C" with data "seq_c-msg1" on its turn
+    # Now publish more messages from all sequencers and check they are all indexed without duplicates
+    When I submit zone message "MSG_A_2" to sequencer "SEQ_A" with data "seq_a-msg2" immediately
+    When I submit zone message "MSG_B_2" to sequencer "SEQ_B" with data "seq_b-msg2" immediately
+    When I submit zone message "MSG_C_2" to sequencer "SEQ_C" with data "seq_c-msg2" immediately
+    # Final check: all messages on chain, exact once.
+    Then the zone indexer returns messages in any order in 120 seconds:
+      | alias |
+      | MSG_A_1 |
+      | MSG_A_2 |
+      | MSG_B_1 |
+      | MSG_B_2 |
+      | MSG_C_1 |
+      | MSG_C_2 |
     And I stop all nodes
 
   @zone_ci
@@ -220,10 +394,9 @@ Feature: Zone SDK
       | charlie | 10      |
     When the zone node is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
-    And sequencer "SEQ_A" submits zone channel config transaction "CHANNEL_CONFIG_1" with posting timeframe 60 and posting timeout 0 authorizing:
-      | alias |
-      | SEQ_B |
-      | SEQ_C |
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 60                | 0               | SEQ_A, SEQ_B, SEQ_C   |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
     When I stop zone sequencer "SEQ_A"
     And the following zone balance updates are published concurrently with balance-aware policy:
@@ -251,10 +424,9 @@ Feature: Zone SDK
       | SEQ_C |
     When the zone node is at height 1 in 120 seconds
     And I start zone sequencer "SEQ_A" with indexer
-    And sequencer "SEQ_A" submits zone channel config transaction "CHANNEL_CONFIG_1" with posting timeframe 60 and posting timeout 0 authorizing:
-      | alias |
-      | SEQ_B |
-      | SEQ_C |
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 60                | 0               | SEQ_A, SEQ_B, SEQ_C   |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
     When I stop zone sequencer "SEQ_A"
     And each listed zone sequencer publishes 10 copies of zone message "shared-message" concurrently with republish policy:

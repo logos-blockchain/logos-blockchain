@@ -13,7 +13,9 @@ use lb_core::{
     codec::DeserializeOp as _,
     mantle::{
         SignedMantleTx, TxHash, Utxo, Value,
-        ops::channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
+        ops::channel::{
+            ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+        },
     },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
@@ -129,11 +131,11 @@ impl ManualNodeConfigOverrides {
 }
 
 pub struct ZonePublishedMessage {
-    pub payload: Vec<u8>,
+    pub payload: Inscription,
     pub inscription_id: Option<InscriptionId>,
 }
 
-pub type ZoneDiscardedPayloads = std::sync::Arc<tokio::sync::Mutex<HashSet<Vec<u8>>>>;
+pub type ZoneDiscardedPayloads = std::sync::Arc<tokio::sync::Mutex<HashSet<Inscription>>>;
 
 pub struct ZoneSequencerIdentity {
     signing_key: Ed25519Key,
@@ -144,7 +146,14 @@ pub struct ZoneSequencerRuntime {
     handle: SequencerHandle<ZoneNodeHttpClient>,
     task: JoinHandle<()>,
     events: Option<tokio::sync::mpsc::Receiver<Event>>,
+    checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
     discarded_payloads: Option<ZoneDiscardedPayloads>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ZoneSequencerStartup {
+    pub pending_submit_depth: Option<usize>,
+    pub passive_republish_orphans: bool,
 }
 
 #[derive(Default)]
@@ -160,9 +169,11 @@ pub struct ZoneState {
     submitted_withdraws: HashMap<String, ChannelWithdrawOp>,
     account_balances: HashMap<String, i64>,
     published_order: Vec<String>,
-    checkpoints: HashMap<String, SequencerCheckpoint>,
+    saved_checkpoints: HashMap<String, SequencerCheckpoint>,
     latest_checkpoints: HashMap<String, SequencerCheckpoint>,
+    sequencer_startups: HashMap<String, ZoneSequencerStartup>,
     sorted_total_payloads: Option<usize>,
+    sorted_expected_by_sequencer: Option<HashMap<String, Vec<Inscription>>>,
 }
 
 impl ZoneState {
@@ -258,7 +269,7 @@ impl ZoneState {
     pub fn remember_zone_message(
         &mut self,
         alias: String,
-        payload: Vec<u8>,
+        payload: Inscription,
         inscription_id: Option<InscriptionId>,
         sequencer_alias: Option<&str>,
         checkpoint: Option<SequencerCheckpoint>,
@@ -345,7 +356,7 @@ impl ZoneState {
     pub fn message_payloads_for_aliases(
         &self,
         aliases: &[String],
-    ) -> Result<Vec<Vec<u8>>, StepError> {
+    ) -> Result<Vec<Inscription>, StepError> {
         aliases
             .iter()
             .map(|alias| {
@@ -359,7 +370,7 @@ impl ZoneState {
             .collect()
     }
 
-    pub fn published_message_payloads(&self) -> Result<Vec<Vec<u8>>, StepError> {
+    pub fn published_message_payloads(&self) -> Result<Vec<Inscription>, StepError> {
         self.message_payloads_for_aliases(&self.published_order)
     }
 
@@ -369,7 +380,7 @@ impl ZoneState {
     }
 
     pub fn remember_checkpoint(&mut self, alias: String, checkpoint: SequencerCheckpoint) {
-        self.checkpoints.insert(alias, checkpoint);
+        self.saved_checkpoints.insert(alias, checkpoint);
     }
 
     pub fn set_latest_checkpoint_for(
@@ -381,10 +392,35 @@ impl ZoneState {
             .insert(sequencer_alias.to_owned(), checkpoint);
     }
 
+    pub fn set_sequencer_startup(
+        &mut self,
+        sequencer_alias: impl AsRef<str>,
+        startup: ZoneSequencerStartup,
+    ) {
+        self.sequencer_startups
+            .insert(sequencer_alias.as_ref().to_owned(), startup);
+    }
+
+    pub fn sequencer_startup_for(&self, sequencer_alias: impl AsRef<str>) -> ZoneSequencerStartup {
+        self.sequencer_startups
+            .get(sequencer_alias.as_ref())
+            .copied()
+            .unwrap_or_default()
+    }
+
     pub fn current_checkpoint_for(
         &self,
         sequencer_alias: &str,
     ) -> Result<SequencerCheckpoint, StepError> {
+        if let Some(Some(checkpoint)) = self
+            .runtimes
+            .get(sequencer_alias)
+            .and_then(|runtime| runtime.checkpoint_rx.as_ref())
+            .map(|rx| rx.borrow().clone())
+        {
+            return Ok(checkpoint);
+        }
+
         self.latest_checkpoints
             .get(sequencer_alias)
             .cloned()
@@ -401,7 +437,7 @@ impl ZoneState {
     ) -> Result<SequencerCheckpoint, StepError> {
         let alias = alias.as_ref();
 
-        self.checkpoints
+        self.saved_checkpoints
             .get(alias)
             .cloned()
             .ok_or(StepError::LogicalError {
@@ -415,6 +451,7 @@ impl ZoneState {
         sequencer_handle: SequencerHandle<ZoneNodeHttpClient>,
         sequencer_task: JoinHandle<()>,
         sequencer_events: Option<tokio::sync::mpsc::Receiver<Event>>,
+        checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
         discarded_payloads: Option<ZoneDiscardedPayloads>,
     ) {
         if let Some(runtime) = self.runtimes.remove(&alias) {
@@ -427,6 +464,7 @@ impl ZoneState {
                 handle: sequencer_handle,
                 task: sequencer_task,
                 events: sequencer_events,
+                checkpoint_rx,
                 discarded_payloads,
             },
         );
@@ -479,10 +517,27 @@ impl ZoneState {
         self.sorted_total_payloads = Some(total);
     }
 
+    pub fn set_sorted_expected_by_sequencer(
+        &mut self,
+        expected_by_sequencer: HashMap<String, Vec<Inscription>>,
+    ) {
+        self.sorted_expected_by_sequencer = Some(expected_by_sequencer);
+    }
+
     pub fn sorted_total_payloads(&self) -> Result<usize, StepError> {
         self.sorted_total_payloads.ok_or(StepError::LogicalError {
             message: "Zone sorted conflict expectations are not initialized".to_owned(),
         })
+    }
+
+    pub fn sorted_expected_by_sequencer(
+        &self,
+    ) -> Result<HashMap<String, Vec<Inscription>>, StepError> {
+        self.sorted_expected_by_sequencer
+            .clone()
+            .ok_or(StepError::LogicalError {
+                message: "Zone sorted conflict payload order is not initialized".to_owned(),
+            })
     }
 
     pub fn set_indexer(&mut self, indexer: ZoneIndexer<ZoneNodeHttpClient>) {
@@ -503,7 +558,7 @@ impl ZoneState {
         let published = self.published_messages.len();
         let deposits = self.submitted_deposits.len();
         let withdraws = self.submitted_withdraws.len();
-        let checkpoints = self.checkpoints.len();
+        let checkpoints = self.saved_checkpoints.len();
 
         format!(
             "node={node_name}, sequencers={sequencers}, running={running}, published={published}, deposits={deposits}, withdraws={withdraws}, checkpoints={checkpoints}"
@@ -524,6 +579,7 @@ impl ZoneState {
         self.indexer = None;
         self.default_sequencer_alias = None;
         self.sorted_total_payloads = None;
+        self.sorted_expected_by_sequencer = None;
 
         self.sequencers.clear();
         self.published_messages.clear();
@@ -531,7 +587,7 @@ impl ZoneState {
         self.submitted_withdraws.clear();
         self.account_balances.clear();
         self.published_order.clear();
-        self.checkpoints.clear();
+        self.saved_checkpoints.clear();
         self.latest_checkpoints.clear();
     }
 }

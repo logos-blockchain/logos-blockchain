@@ -180,6 +180,7 @@ pub struct PendingInscription {
     pub this_msg: MsgId,
     pub payload: Inscription,
     pub withdraws: Option<Vec<WithdrawInfo>>,
+    pub posted: bool,
 }
 
 /// Transaction state tracker.
@@ -277,6 +278,7 @@ impl TxState {
                 this_msg,
                 payload,
                 withdraws,
+                posted: false,
             },
         );
     }
@@ -432,6 +434,19 @@ impl TxState {
         self.pending.len() + self.pending_other.len()
     }
 
+    /// Number of pending channel inscription transactions.
+    #[must_use]
+    pub fn pending_publish_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Number of pending channel inscription transactions already posted by
+    /// this runtime.
+    #[must_use]
+    pub fn posted_pending_publish_count(&self) -> usize {
+        self.pending.values().filter(|p| p.posted).count()
+    }
+
     /// Whether there are pending channel inscriptions.
     #[must_use]
     pub fn has_pending_inscriptions(&self) -> bool {
@@ -566,6 +581,17 @@ impl TxState {
     #[must_use]
     pub fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
         self.pending.get(tx_hash)
+    }
+
+    /// Mark a pending inscription as posted. Returns true only for the first
+    /// successful post in this runtime.
+    pub fn mark_pending_inscription_posted(&mut self, tx_hash: &TxHash) -> bool {
+        let Some(pending) = self.pending.get_mut(tx_hash) else {
+            return false;
+        };
+        let first_post = !pending.posted;
+        pending.posted = true;
+        first_post
     }
 
     /// Whether a non-inscription pending tx is tracked under this hash.

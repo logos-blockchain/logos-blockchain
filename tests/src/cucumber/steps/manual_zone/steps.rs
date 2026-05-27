@@ -5,16 +5,18 @@ use std::{
 };
 
 use cucumber::{gherkin::Step, given, when};
+use lb_core::mantle::ops::channel::inscribe::Inscription;
 
 use super::{
     actions::{
         DriveMode, ensure_zone_sequencer_exists, initialize_zone_indexer,
-        publish_atomic_zone_withdraw_transaction, publish_balance_updates_concurrently,
-        publish_zone_messages, publish_zone_messages_concurrently, register_zone_sequencers,
-        register_zone_sequencers_with_shared_key, save_zone_checkpoint, start_named_sequencer,
-        start_zone_cluster, stop_zone_sequencer, submit_atomic_zone_deposit_transaction,
-        submit_zone_channel_config, submit_zone_deposit_transaction,
-        submit_zone_withdraw_transaction,
+        publish_atomic_zone_withdraw_transaction, publish_zone_messages,
+        publish_zone_messages_concurrently, register_zone_sequencers,
+        register_zone_sequencers_with_shared_key, remember_published_zone_message,
+        save_zone_checkpoint, start_named_sequencer,
+        start_named_sequencer_with_pending_submit_depth, start_zone_cluster, stop_zone_sequencer,
+        submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
+        submit_zone_deposit_transaction, submit_zone_withdraw_transaction,
     },
     assertions::{
         assert_sorted_outcome, scan_indexer_for_payloads, wait_for_indexer_unordered,
@@ -22,28 +24,94 @@ use super::{
     },
     errors::{log_step_error, zone_step_error},
     support::{
-        collect_indexed_messages, collect_indexed_messages_exactly_once,
-        ensure_zone_transactions_included, parse_balance_payload, wait_for_deposit,
+        PublishDeadline, balance_update_payload, collect_indexed_messages,
+        collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
+        parse_balance_payload, publish_message_with_retry, wait_for_channel_view, wait_for_deposit,
         wait_for_exact_indexed_payload_count, wait_for_finalized_deposit_via_sequencer,
         wait_for_finalized_withdraw_via_sequencer, wait_for_lib_advance,
-        wait_for_transactions_finalized, wait_for_withdraw,
+        wait_for_published_payload, wait_for_published_payloads, wait_for_transactions_finalized,
+        wait_for_withdraw,
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
         generated_zone_message_batches, generated_zone_message_sequencers,
         group_zone_messages_by_sequencer, single_column_table, zone_account_balances,
-        zone_atomic_withdraw_rows, zone_balance_rows, zone_message_rows,
+        zone_atomic_withdraw_rows, zone_balance_rows, zone_config_row, zone_message_rows,
+        zone_sequencer_start_rows, zone_sequencing_state_row,
     },
 };
 use crate::{
-    common::manual_cluster::wait_for_height,
+    common::{mantle_inscription::make_inscription, manual_cluster::wait_for_height},
     cucumber::{
         error::{StepError, StepResult},
-        world::CucumberWorld,
+        world::{CucumberWorld, ZoneSequencerStartup},
     },
 };
 
 pub(super) const DEFAULT_ZONE_SEQUENCER: &str = "SEQ_A";
+
+fn parse_submit_depth(step: &Step, value: &str) -> Result<usize, StepError> {
+    let value = value.trim();
+    if matches!(value.to_lowercase().as_str(), "unlimited" | "none") {
+        return Ok(usize::MAX);
+    }
+
+    let inner = value
+        .strip_prefix("Some(")
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or(value);
+
+    let limit = inner
+        .parse::<usize>()
+        .map_err(|error| StepError::LogicalError {
+            message: format!(
+                "Invalid pending submit depth '{value}' in step '{}': {error}",
+                step.value
+            ),
+        })?;
+
+    Ok(limit)
+}
+
+fn parse_optional_submit_depth(step: &Step, value: &str) -> Result<Option<usize>, StepError> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("default") {
+        return Ok(None);
+    }
+
+    parse_submit_depth(step, value).map(Some)
+}
+
+const fn passive_mode_for_startup(startup: ZoneSequencerStartup) -> DriveMode {
+    if startup.passive_republish_orphans {
+        DriveMode::passive_republish_orphans()
+    } else {
+        DriveMode::passive()
+    }
+}
+
+async fn start_named_sequencer_with_startup(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    checkpoint: Option<lb_zone_sdk::sequencer::SequencerCheckpoint>,
+    startup: ZoneSequencerStartup,
+) -> StepResult {
+    let mode = passive_mode_for_startup(startup);
+    if let Some(submit_depth) = startup.pending_submit_depth {
+        start_named_sequencer_with_pending_submit_depth(
+            world,
+            step,
+            sequencer_alias,
+            checkpoint,
+            mode,
+            submit_depth,
+        )
+        .await
+    } else {
+        start_named_sequencer(world, step, sequencer_alias, checkpoint, mode).await
+    }
+}
 const CONCURRENT_DUPLICATE_SETTLE_SECS: u64 = 30;
 
 #[given("I have a zone cluster")]
@@ -101,7 +169,7 @@ async fn step_start_zone_sequencer(
     step: &Step,
     sequencer_alias: String,
 ) -> StepResult {
-    start_named_sequencer(world, step, sequencer_alias, None, DriveMode::Passive).await
+    start_named_sequencer(world, step, sequencer_alias, None, DriveMode::passive()).await
 }
 
 #[when(expr = "I start zone sequencer {string} with indexer")]
@@ -118,8 +186,28 @@ async fn start_sequencer_with_indexer(
     step: &Step,
     sequencer_alias: &str,
 ) -> StepResult {
-    start_named_sequencer(world, step, sequencer_alias, None, DriveMode::Passive).await?;
+    start_named_sequencer(world, step, sequencer_alias, None, DriveMode::passive()).await?;
     initialize_zone_indexer(world, step, sequencer_alias)
+}
+
+#[when("I start zone sequencers:")]
+async fn step_start_zone_sequencers(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    for row in zone_sequencer_start_rows(step)? {
+        let alias = row.alias;
+        let startup = ZoneSequencerStartup {
+            pending_submit_depth: parse_optional_submit_depth(step, &row.pending_submit_depth)?,
+            passive_republish_orphans: row.passive_republish_orphans,
+        };
+        world.zone.set_sequencer_startup(&alias, startup);
+
+        start_named_sequencer_with_startup(world, step, &alias, None, startup).await?;
+
+        if row.indexer {
+            initialize_zone_indexer(world, step, &alias)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[when(expr = "I stop zone sequencer {string}")]
@@ -203,6 +291,122 @@ async fn step_publish_zone_messages_for_sequencer(
     publish_zone_messages(world, step, sequencer_alias, zone_message_rows(step)?).await
 }
 
+#[when(
+    expr = "I submit zone message {string} to sequencer {string} with data {string} immediately"
+)]
+async fn step_publish_single_zone_message_for_sequencer(
+    world: &mut CucumberWorld,
+    step: &Step,
+    message_alias: String,
+    sequencer_alias: String,
+    data: String,
+) -> StepResult {
+    let _ = step;
+    let payload = make_inscription(&data);
+    let handle = world.zone.sequencer_handle(&sequencer_alias)?.clone();
+
+    handle
+        .publish_message(payload.clone())
+        .await
+        .map_err(|error| StepError::LogicalError {
+            message: format!(
+                "Zone publish failed for sequencer '{sequencer_alias}' and message '{message_alias}': {error}"
+            ),
+        })?;
+
+    world
+        .zone
+        .remember_zone_message(message_alias, payload, None, None, None);
+
+    Ok(())
+}
+
+#[when(
+    expr = "sequencer {string} submits zone message {string} with data {string} to queue immediately"
+)]
+async fn step_publish_single_zone_message_to_queue_for_sequencer(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    message_alias: String,
+    data: String,
+) -> StepResult {
+    step_publish_single_zone_message_for_sequencer(
+        world,
+        step,
+        message_alias,
+        sequencer_alias,
+        data,
+    )
+    .await
+}
+
+#[when(
+    expr = "I submit zone message {string} to sequencer {string} with data {string} on its turn"
+)]
+async fn step_publish_single_zone_message_for_sequencer_on_turn(
+    world: &mut CucumberWorld,
+    step: &Step,
+    message_alias: String,
+    sequencer_alias: String,
+    data: String,
+) -> StepResult {
+    let payload = make_inscription(&data);
+    let handle = world.zone.sequencer_handle(&sequencer_alias)?.clone();
+    let mut view_rx = handle.subscribe_channel_view();
+
+    wait_for_channel_view(&mut view_rx, Duration::from_mins(3), |view| {
+        view.is_our_turn
+            && view.authorized_key_index.is_some()
+            && view.authorized_key_index == view.own_key_index
+    })
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
+
+    let published = {
+        let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+        publish_message_with_retry(
+            &handle,
+            events,
+            &payload,
+            PublishDeadline::from_now(Duration::from_mins(3)),
+        )
+        .await
+        .map_err(|error| zone_step_error(step, &error))?
+    };
+
+    remember_published_zone_message(world, &sequencer_alias, message_alias, payload, &published);
+
+    Ok(())
+}
+
+#[when(expr = "sequencer {string} submits the following zone messages to queue immediately:")]
+async fn step_publish_zone_messages_to_queue_for_sequencer(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+) -> StepResult {
+    let rows = zone_message_rows(step)?;
+    let handle = world.zone.sequencer_handle(&sequencer_alias)?.clone();
+
+    for (message_alias, payload) in rows {
+        handle
+            .publish_message(payload.clone())
+            .await
+            .map_err(|error| StepError::LogicalError {
+                message: format!(
+                    "Zone publish failed for sequencer '{sequencer_alias}' and message '{message_alias}': {error}"
+                ),
+            })?;
+
+        world
+            .zone
+            .remember_zone_message(message_alias, payload, None, None, None);
+    }
+
+    Ok(())
+}
+
 #[when(expr = "I save current checkpoint of sequencer {string} as {string}")]
 fn step_save_zone_checkpoint(
     world: &mut CucumberWorld,
@@ -221,15 +425,10 @@ async fn step_restart_zone_sequencer_from_checkpoint(
     checkpoint_alias: String,
 ) -> StepResult {
     let checkpoint = world.zone.resolve_checkpoint(checkpoint_alias)?;
+    let startup = world.zone.sequencer_startup_for(&sequencer_alias);
 
-    start_named_sequencer(
-        world,
-        step,
-        &sequencer_alias,
-        Some(checkpoint),
-        DriveMode::Passive,
-    )
-    .await
+    start_named_sequencer_with_startup(world, step, &sequencer_alias, Some(checkpoint), startup)
+        .await
 }
 
 #[when(expr = "I restart zone sequencer {string} fresh")]
@@ -238,10 +437,11 @@ async fn step_restart_zone_sequencer_fresh(
     step: &Step,
     sequencer_alias: String,
 ) -> StepResult {
-    start_named_sequencer(world, step, &sequencer_alias, None, DriveMode::Passive).await
+    let startup = world.zone.sequencer_startup_for(&sequencer_alias);
+    start_named_sequencer_with_startup(world, step, &sequencer_alias, None, startup).await
 }
 
-#[when(expr = "sequencer {string} submits zone channel config transaction {string} authorizing:")]
+#[when(expr = "sequencer {string} submits zone config transaction {string} authorizing:")]
 async fn step_submit_zone_channel_config_transaction(
     world: &mut CucumberWorld,
     step: &Step,
@@ -264,7 +464,7 @@ async fn step_submit_zone_channel_config_transaction(
 }
 
 #[when(
-    expr = "sequencer {string} submits zone channel config transaction {string} with posting timeframe {int} and posting timeout {int} authorizing:"
+    expr = "sequencer {string} submits zone config transaction {string} with posting timeframe {int} and timeout {int} authorizing:"
 )]
 async fn step_submit_zone_channel_config_transaction_with_posting_window(
     world: &mut CucumberWorld,
@@ -285,6 +485,26 @@ async fn step_submit_zone_channel_config_transaction_with_posting_window(
         authorized_aliases,
         posting_timeframe,
         posting_timeout,
+    )
+    .await
+}
+
+#[when(expr = "sequencer {string} submits zone config transaction:")]
+async fn step_submit_zone_channel_config_transaction_from_table(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+) -> StepResult {
+    let row = zone_config_row(step)?;
+
+    submit_zone_channel_config(
+        world,
+        step,
+        &sequencer_alias,
+        row.config_name,
+        row.authorized_sequencers,
+        row.posting_timeframe,
+        row.posting_timeout,
     )
     .await
 }
@@ -420,7 +640,7 @@ async fn step_publish_repeated_zone_messages_concurrently_with_republish_policy(
     let rows = build_repeated_zone_message_rows(
         generated_zone_message_sequencers(step)?,
         copies_per_sequencer,
-        payload,
+        &payload,
     );
 
     publish_zone_messages_with_republish_policy(world, step, rows).await
@@ -442,10 +662,10 @@ fn build_generated_zone_message_rows(
 fn build_repeated_zone_message_rows(
     sequencer_aliases: Vec<String>,
     copies_per_sequencer: usize,
-    payload: String,
+    payload: &str,
 ) -> Vec<ConcurrentZoneMessageRow> {
     let mut builder = GeneratedZoneMessages::default();
-    let payload = payload.into_bytes();
+    let payload = make_inscription(payload);
 
     for sequencer_alias in sequencer_aliases {
         builder.append_repeated_payloads(sequencer_alias, copies_per_sequencer, &payload);
@@ -470,22 +690,27 @@ impl GeneratedZoneMessages {
         for payload_number in 1..=count {
             self.push(
                 sequencer_alias.clone(),
-                format!("{data_prefix}{payload_number}").into_bytes(),
+                make_inscription(&format!("{data_prefix}{payload_number}")),
             );
         }
     }
 
-    fn append_repeated_payloads(&mut self, sequencer_alias: String, count: usize, payload: &[u8]) {
+    fn append_repeated_payloads(
+        &mut self,
+        sequencer_alias: String,
+        count: usize,
+        payload: &Inscription,
+    ) {
         for _ in 1..count {
-            self.push(sequencer_alias.clone(), payload.to_vec());
+            self.push(sequencer_alias.clone(), payload.clone());
         }
 
         if count > 0 {
-            self.push(sequencer_alias, payload.to_vec());
+            self.push(sequencer_alias, payload.clone());
         }
     }
 
-    fn push(&mut self, sequencer_alias: String, payload: Vec<u8>) {
+    fn push(&mut self, sequencer_alias: String, payload: Inscription) {
         self.next_message_number += 1;
 
         self.rows.push(ConcurrentZoneMessageRow {
@@ -508,7 +733,15 @@ async fn publish_zone_messages_with_republish_policy(
     let grouped = group_zone_messages_by_sequencer(&rows);
 
     for sequencer_alias in grouped.keys() {
-        start_named_sequencer(world, step, sequencer_alias, None, DriveMode::Republish).await?;
+        start_named_sequencer_with_pending_submit_depth(
+            world,
+            step,
+            sequencer_alias,
+            None,
+            DriveMode::Republish,
+            usize::MAX,
+        )
+        .await?;
     }
 
     publish_zone_messages_concurrently(world, step, rows).await
@@ -537,6 +770,20 @@ async fn step_publish_zone_messages_concurrently_with_sorted_policy(
     }
 
     world.zone.set_sorted_total_payloads(rows.len());
+    world.zone.set_sorted_expected_by_sequencer(
+        grouped
+            .iter()
+            .map(|(sequencer_alias, messages)| {
+                (
+                    sequencer_alias.clone(),
+                    messages
+                        .iter()
+                        .map(|message| message.payload.clone())
+                        .collect(),
+                )
+            })
+            .collect(),
+    );
 
     publish_zone_messages_concurrently(world, step, rows).await
 }
@@ -548,12 +795,19 @@ async fn step_publish_zone_balance_updates_with_balance_policy(
 ) -> StepResult {
     let rows = zone_balance_rows(step)?;
     let initial_balances = world.zone.zone_account_balances()?;
-    let sequencers = rows
-        .iter()
-        .map(|row| row.sequencer_alias.clone())
-        .collect::<HashSet<_>>();
+    let grouped = rows.iter().fold(
+        HashMap::<String, Vec<(String, Inscription)>>::new(),
+        |mut grouped, row| {
+            let payload = balance_update_payload(&row.message_alias, &row.account, row.delta);
+            grouped
+                .entry(row.sequencer_alias.clone())
+                .or_default()
+                .push((row.message_alias.clone(), payload));
+            grouped
+        },
+    );
 
-    for sequencer_alias in sequencers {
+    for (sequencer_alias, planned) in &grouped {
         start_named_sequencer(
             world,
             step,
@@ -561,12 +815,225 @@ async fn step_publish_zone_balance_updates_with_balance_policy(
             None,
             DriveMode::BalanceAware {
                 initial_balances: initial_balances.clone(),
+                planned_payloads: planned.iter().map(|(_, payload)| payload.clone()).collect(),
             },
         )
         .await?;
     }
 
-    publish_balance_updates_concurrently(world, step, rows).await
+    for messages in grouped.values() {
+        for (message_alias, payload) in messages {
+            world.zone.remember_zone_message(
+                message_alias.clone(),
+                payload.clone(),
+                None,
+                None,
+                None,
+            );
+        }
+    }
+
+    if world.zone.indexer().is_err() {
+        initialize_zone_indexer(world, step, DEFAULT_ZONE_SEQUENCER)?;
+    }
+
+    Ok(())
+}
+
+#[cucumber::then(
+    expr = "sequencer {string} reaches sequencing state OWN_KEY_INDEX {int} NOT_OUR_TURN with {int} pending publish txs in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_sequencer_reaches_sequencing_state_not_our_turn(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    own_key_index: usize,
+    pending_publish_txs: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    wait_for_sequencing_state(
+        world,
+        step,
+        &sequencer_alias,
+        own_key_index,
+        false,
+        pending_publish_txs,
+        timeout_seconds,
+    )
+    .await
+}
+
+#[cucumber::then(
+    expr = "sequencer {string} reaches sequencing state OWN_KEY_INDEX {int} OUR_TURN with {int} pending publish txs in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_sequencer_reaches_sequencing_state_our_turn(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    own_key_index: usize,
+    pending_publish_txs: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    wait_for_sequencing_state(
+        world,
+        step,
+        &sequencer_alias,
+        own_key_index,
+        true,
+        pending_publish_txs,
+        timeout_seconds,
+    )
+    .await
+}
+
+#[cucumber::then(expr = "sequencer {string} reaches sequencing state:")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_sequencer_reaches_sequencing_state_from_table(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+) -> StepResult {
+    let row = zone_sequencing_state_row(step)?;
+
+    wait_for_sequencing_state(
+        world,
+        step,
+        &sequencer_alias,
+        row.own_key_index,
+        row.is_our_turn,
+        row.pending_transactions,
+        row.timeout_seconds,
+    )
+    .await
+}
+
+async fn wait_for_sequencing_state(
+    world: &CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    own_key_index: usize,
+    is_our_turn: bool,
+    pending_publish_txs: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    let handle = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
+    let mut view_rx = handle.subscribe_channel_view();
+
+    wait_for_channel_view(
+        &mut view_rx,
+        Duration::from_secs(timeout_seconds),
+        move |view| {
+            view.own_key_index == Some(own_key_index as u16)
+                && view.authorized_key_index.is_some()
+                && view.is_our_turn == is_our_turn
+                && (is_our_turn || view.authorized_key_index != view.own_key_index)
+                && (!is_our_turn || view.authorized_key_index == Some(own_key_index as u16))
+                && view.pending_publish_txs == pending_publish_txs
+        },
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
+
+    Ok(())
+}
+
+#[cucumber::then(
+    expr = "sequencer {string} emits published events for queued zone messages on its turn in {int} seconds:"
+)]
+async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let aliases = single_column_table(step, "alias", "zone message aliases")?;
+    let payloads = log_step_error(step, world.zone.message_payloads_for_aliases(&aliases))?;
+    let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
+    let mut view_rx = handle.subscribe_channel_view();
+    wait_for_channel_view(&mut view_rx, Duration::from_secs(timeout_seconds), |view| {
+        view.is_our_turn
+    })
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
+
+    let published = {
+        let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+        wait_for_published_payloads(events, &payloads, Duration::from_secs(timeout_seconds))
+            .await
+            .map_err(|error| zone_step_error(step, &error))?
+    };
+
+    for ((message_alias, payload), published) in aliases.into_iter().zip(payloads).zip(published) {
+        remember_published_zone_message(
+            world,
+            &sequencer_alias,
+            message_alias,
+            payload,
+            &published,
+        );
+    }
+
+    Ok(())
+}
+
+#[cucumber::then(expr = "sequencer {string} has {int} pending publish txs in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_sequencer_has_pending_publish_txs(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    pending_publish_txs: usize,
+    timeout_seconds: u64,
+) -> StepResult {
+    let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
+    let mut view_rx = handle.subscribe_channel_view();
+
+    wait_for_channel_view(
+        &mut view_rx,
+        Duration::from_secs(timeout_seconds),
+        move |view| view.pending_publish_txs == pending_publish_txs,
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
+
+    Ok(())
+}
+
+#[cucumber::then(
+    expr = "sequencer {string} publishes {string} immediately while in turn in {int} seconds"
+)]
+async fn step_sequencer_publishes_immediately_while_in_turn(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    message_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let payload = message_payload(world, &message_alias)?;
+    let published = {
+        let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+        wait_for_published_payload(events, &payload, Duration::from_secs(timeout_seconds))
+            .await
+            .map_err(|error| zone_step_error(step, &error))?
+    };
+
+    remember_published_zone_message(world, &sequencer_alias, message_alias, payload, &published);
+
+    Ok(())
 }
 
 #[cucumber::then(expr = "all zone messages are safe in {int} seconds")]
@@ -875,18 +1342,28 @@ async fn step_zone_indexer_returns_all_messages_exactly_once_any_order(
 fn published_payload_set(
     world: &CucumberWorld,
     step: &Step,
-) -> Result<HashSet<Vec<u8>>, StepError> {
+) -> Result<HashSet<Inscription>, StepError> {
     let expected_payloads = log_step_error(step, world.zone.published_message_payloads())?;
 
     Ok(expected_payloads.into_iter().collect())
 }
 
+fn message_payload(world: &CucumberWorld, message_alias: &str) -> Result<Inscription, StepError> {
+    let payloads = world
+        .zone
+        .message_payloads_for_aliases(&[message_alias.to_owned()])?;
+
+    payloads.into_iter().next().ok_or(StepError::LogicalError {
+        message: format!("Zone message alias '{message_alias}' not found"),
+    })
+}
+
 fn ensure_indexed_payloads_match_once(
-    expected: &HashSet<Vec<u8>>,
-    seen: &HashSet<Vec<u8>>,
-    all_payloads: &[Vec<u8>],
+    expected: &HashSet<Inscription>,
+    seen: &HashSet<Inscription>,
+    all_payloads: &[Inscription],
 ) -> StepResult {
-    let unique: HashSet<&Vec<u8>> = all_payloads.iter().collect();
+    let unique: HashSet<&Inscription> = all_payloads.iter().collect();
 
     if unique.len() != all_payloads.len() {
         return Err(StepError::LogicalError {
@@ -928,7 +1405,7 @@ async fn step_zone_indexer_returns_payload_count(
     let indexer = log_step_error(step, world.zone.indexer())?;
     wait_for_exact_indexed_payload_count(
         indexer,
-        payload.as_bytes(),
+        make_inscription(&payload),
         expected_count,
         Duration::from_secs(timeout_seconds),
     )
@@ -960,18 +1437,21 @@ async fn step_zone_balance_updates_keep_accounts_non_negative(
     ensure_balances_non_negative(&balances)
 }
 
-#[cucumber::then(expr = "the zone indexer returns a sorted zone conflict outcome in {int} seconds")]
+#[cucumber::then(
+    expr = "the zone indexer preserves per-sequencer order and converges without duplicates in {int} seconds"
+)]
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-async fn step_zone_indexer_returns_sorted_zone_conflict_outcome(
+async fn step_zone_indexer_preserves_per_sequencer_order_without_duplicates(
     world: &mut CucumberWorld,
     step: &Step,
     timeout_seconds: u64,
 ) -> StepResult {
     let expected_set = published_payload_set(world, step)?;
     let total = world.zone.sorted_total_payloads()?;
+    let expected_by_sequencer = world.zone.sorted_expected_by_sequencer()?;
     let discarded = log_step_error(step, world.zone.discarded_payloads(DEFAULT_ZONE_SEQUENCER))?;
     let indexer = log_step_error(step, world.zone.indexer())?;
 
@@ -986,10 +1466,15 @@ async fn step_zone_indexer_returns_sorted_zone_conflict_outcome(
     .map_err(|error| zone_step_error(step, &error))?;
 
     let discarded_snapshot = discarded.lock().await.clone();
-    assert_sorted_outcome(&on_chain, &discarded_snapshot, total)
+    assert_sorted_outcome(
+        &on_chain,
+        &discarded_snapshot,
+        total,
+        &expected_by_sequencer,
+    )
 }
 
-fn apply_indexed_balance_updates(balances: &mut HashMap<String, i64>, payloads: &[Vec<u8>]) {
+fn apply_indexed_balance_updates(balances: &mut HashMap<String, i64>, payloads: &[Inscription]) {
     for payload in payloads {
         let Some((_, account, delta)) = parse_balance_payload(payload) else {
             continue;
