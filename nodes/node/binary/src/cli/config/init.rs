@@ -205,6 +205,7 @@ fn build_wallet_config(keystore: &Keystore) -> WalletConfig {
         KeyTitle::LeaderFunding,
         KeyTitle::SdpFunding,
         KeyTitle::VaucherMaster,
+        KeyTitle::Stake,
     ];
 
     let (voucher_master_key_id, _) = keystore

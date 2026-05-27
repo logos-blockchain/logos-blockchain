@@ -72,7 +72,7 @@ impl Ed25519Key {
 
 impl Hash for Ed25519Key {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.public_key().to_bytes().hash(state);
+        self.public_key().hash(state);
     }
 }
 

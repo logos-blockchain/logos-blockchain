@@ -123,8 +123,8 @@ fn update_blend_config(keystore: &Keystore, blend_config: &mut BlendConfig, blen
         .get(KeyTitle::BlendZk)
         .expect("Blend zk key set by default");
 
-    blend_config.set_signing_key_id(blend_signing_key_id);
-    blend_config.set_secret_key_id(blend_zk_key_id);
+    blend_config.set_non_ephemeral_signing_key_id(blend_signing_key_id);
+    blend_config.set_secret_zk_key_id(blend_zk_key_id);
 
     update_blend(blend_config, blend_args);
 }
@@ -178,6 +178,7 @@ fn update_wallet_config(keystore: &Keystore, wallet_config: &mut WalletConfig) {
         KeyTitle::LeaderFunding,
         KeyTitle::SdpFunding,
         KeyTitle::VaucherMaster,
+        KeyTitle::Stake,
     ];
 
     let (voucher_master_key_id, _) = keystore

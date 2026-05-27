@@ -153,6 +153,7 @@ pub struct InitArgs {
 }
 
 /// Set of arguments for use in c-bindings crate.
+#[derive(Debug)]
 pub struct EmbeddedInitArgs {
     /// Trusted peers to bootstrap from (multiaddr format).
     /// If `--ibd` is set, peers whose multiaddrs include a `PeerId`
@@ -190,8 +191,8 @@ pub struct EmbeddedInitArgs {
     pub kms_file: Option<PathBuf>,
 }
 
-impl From<&EmbeddedInitArgs> for InitArgs {
-    fn from(args: &EmbeddedInitArgs) -> Self {
+impl From<EmbeddedInitArgs> for InitArgs {
+    fn from(args: EmbeddedInitArgs) -> Self {
         let mut init_args = Self {
             output: args.output.clone(),
             keystore: args.kms_file.clone(),

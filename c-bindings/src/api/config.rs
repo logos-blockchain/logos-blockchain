@@ -4,7 +4,7 @@ use std::{
     str::FromStr as _,
 };
 
-use lb_node::cli::EmbeddedInitArgs;
+use lb_node::cli::{EmbeddedInitArgs, InitArgs};
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
 
@@ -93,9 +93,9 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
 
 #[must_use]
 pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
+    let init_args: InitArgs = args.into();
     let runtime = Runtime::new().expect("Failed to create Tokio runtime.");
-    let run_result =
-        runtime.block_on(async move { lb_node::cli::config::init::run((&args).into()) });
+    let run_result = runtime.block_on(async move { lb_node::cli::config::init::run(init_args) });
     match run_result {
         Ok(()) => OperationStatus::Ok,
         Err(error) => {

@@ -538,11 +538,11 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
     }
 
     if let Some(key_id) = blend_signing_key_id {
-        blend.set_signing_key_id(key_id);
+        blend.set_non_ephemeral_signing_key_id(key_id);
     }
 
     if let Some(key_id) = blend_secret_key_id {
-        blend.set_secret_key_id(key_id);
+        blend.set_secret_zk_key_id(key_id);
     }
 }
 
