@@ -788,6 +788,33 @@ pub async fn wait_for_channel_view(
     })?
 }
 
+pub async fn wait_for_turn_to_write(
+    turn_rx: &mut tokio::sync::watch::Receiver<bool>,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            if *turn_rx.borrow_and_update() {
+                return Ok(());
+            }
+
+            turn_rx
+                .changed()
+                .await
+                .map_err(|error| ZoneTestError::ChannelViewTimeout {
+                    message: format!("turn-to-write sender closed: {error}"),
+                })?;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::ChannelViewTimeout {
+        message: format!(
+            "turn-to-write notification not received within {} seconds",
+            duration.as_secs()
+        ),
+    })?
+}
+
 /// Collects indexed block payloads until all expected messages have appeared.
 ///
 /// The returned order is the order observed from the indexer, which lets

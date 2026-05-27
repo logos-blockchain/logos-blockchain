@@ -414,6 +414,7 @@ pub struct SequencerHandle<Node> {
     event_tx: broadcast::Sender<Event>,
     ready_rx: watch::Receiver<bool>,
     channel_view_rx: watch::Receiver<SequencerChannelView>,
+    turn_to_write_rx: watch::Receiver<bool>,
 }
 
 impl<Node> SequencerHandle<Node>
@@ -432,6 +433,11 @@ where
     #[must_use]
     pub fn subscribe_channel_view(&self) -> watch::Receiver<SequencerChannelView> {
         self.channel_view_rx.clone()
+    }
+
+    #[must_use]
+    pub fn subscribe_turn_to_write(&self) -> watch::Receiver<bool> {
+        self.turn_to_write_rx.clone()
     }
 
     /// Publish an inscription to the zone's channel.
@@ -706,6 +712,7 @@ pub struct ZoneSequencer<Node> {
     // Readiness signal — set to true when connected and backfill is complete
     ready_tx: watch::Sender<bool>,
     channel_view_tx: watch::Sender<SequencerChannelView>,
+    turn_to_write_tx: watch::Sender<bool>,
 }
 
 impl<Node> ZoneSequencer<Node>
@@ -779,6 +786,7 @@ where
         let (ready_tx, ready_rx) = watch::channel(false);
         let (channel_view_tx, channel_view_rx) =
             watch::channel(SequencerChannelView::new(channel_id));
+        let (turn_to_write_tx, turn_to_write_rx) = watch::channel(false);
 
         let handle = SequencerHandle {
             request_tx,
@@ -786,6 +794,7 @@ where
             event_tx: event_tx.clone(),
             ready_rx,
             channel_view_rx,
+            turn_to_write_rx,
         };
 
         let sequencer = Self {
@@ -812,6 +821,7 @@ where
             event_tx,
             ready_tx,
             channel_view_tx,
+            turn_to_write_tx,
         };
 
         (sequencer, handle)
@@ -901,6 +911,7 @@ where
             warn!(target: TARGET, "Blocks stream disconnected, will reconnect on next call");
             self.blocks_stream = None;
             let _ = self.ready_tx.send(false);
+            self.publish_turn_to_write(false);
             return None;
         };
 
@@ -919,6 +930,7 @@ where
                 error!("Block event processing failed; dropping stream so reconnect retries: {e}");
                 self.blocks_stream = None;
                 let _ = self.ready_tx.send(false);
+                self.publish_turn_to_write(false);
                 return None;
             }
         };
@@ -934,6 +946,7 @@ where
             );
             self.blocks_stream = None;
             let _ = self.ready_tx.send(false);
+            self.publish_turn_to_write(false);
             return None;
         }
 
@@ -1048,7 +1061,18 @@ where
     }
 
     fn publish_channel_view(&self) {
-        drop(self.channel_view_tx.send(self.channel_view()));
+        let view = self.channel_view();
+        let turn_to_write = self.is_ready() && view.is_our_turn;
+        drop(self.channel_view_tx.send(view));
+        self.publish_turn_to_write(turn_to_write);
+    }
+
+    fn publish_turn_to_write(&self, turn_to_write: bool) {
+        self.turn_to_write_tx.send_if_modified(|current| {
+            let changed = *current != turn_to_write;
+            *current = turn_to_write;
+            changed
+        });
     }
 
     fn own_key_index_for(&self, channel: &ChannelState) -> Option<u16> {
