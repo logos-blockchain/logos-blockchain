@@ -290,6 +290,8 @@ pub async fn wait_for_zone_network_ready(cluster: &LbcManualCluster) -> Result<(
 /// test code that needs to wait for a specific publish result.
 pub fn start_sequencer_event_loop(
     mut sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    handle: SequencerHandle<ZoneNodeHttpClient>,
+    republish_orphans: bool,
 ) -> (
     JoinHandle<()>,
     tokio::sync::mpsc::Receiver<Event>,
@@ -304,6 +306,10 @@ pub fn start_sequencer_event_loop(
             drop(checkpoint_tx.send(sequencer.checkpoint()));
 
             if let Some(event) = event {
+                if let (true, Event::ChannelUpdate { orphaned, .. }) = (republish_orphans, &event) {
+                    republish_orphaned_inscriptions(&handle, orphaned).await;
+                }
+
                 drop(tx.send(event).await);
             }
         }
@@ -321,19 +327,26 @@ pub fn start_republish_policy(
     tokio::spawn(async move {
         loop {
             if let Some(Event::ChannelUpdate { orphaned, .. }) = sequencer.next_event().await {
-                for entry in orphaned {
-                    let OrphanedTx::Inscription(inscription) = entry else {
-                        // Republish-by-payload helper doesn't handle bundles.
-                        continue;
-                    };
-
-                    if let Err(error) = handle.publish_message(inscription.payload).await {
-                        warn!(%error, "Failed to re-publish orphaned zone payload");
-                    }
-                }
+                republish_orphaned_inscriptions(&handle, &orphaned).await;
             }
         }
     })
+}
+
+async fn republish_orphaned_inscriptions(
+    handle: &SequencerHandle<ZoneNodeHttpClient>,
+    orphaned: &[OrphanedTx],
+) {
+    for entry in orphaned {
+        let OrphanedTx::Inscription(inscription) = entry else {
+            // Republish-by-payload helper doesn't handle bundles.
+            continue;
+        };
+
+        if let Err(error) = handle.publish_message(inscription.payload.clone()).await {
+            warn!(%error, "Failed to re-publish orphaned zone payload");
+        }
+    }
 }
 
 /// Drives a policy that republishes orphaned balance updates only when the
@@ -627,7 +640,6 @@ pub fn parse_balance_payload(payload: &Inscription) -> Option<(String, String, i
 pub fn sequencer_config() -> SequencerConfig {
     SequencerConfig {
         resubmit_interval: Duration::from_secs(3),
-        auto_requeue_orphaned: true,
         min_slots_remaining_in_turn: 2,
         ..SequencerConfig::default()
     }

@@ -33,7 +33,8 @@ pub(super) struct GeneratedZoneMessageBatch {
 pub(super) struct ZoneSequencerStartRow {
     pub alias: String,
     pub indexer: bool,
-    pub pending_submit_depth: Option<String>,
+    pub pending_submit_depth: String,
+    pub passive_republish_orphans: bool,
 }
 
 pub(super) struct ZoneSequencingStateRow {
@@ -134,60 +135,42 @@ pub(super) fn generated_zone_message_sequencers(step: &Step) -> Result<Vec<Strin
 pub(super) fn zone_sequencer_start_rows(
     step: &Step,
 ) -> Result<Vec<ZoneSequencerStartRow>, StepError> {
-    let table = step.table.as_ref().ok_or(StepError::MissingTable)?;
-    let Some(header) = table.rows.first() else {
-        return Err(StepError::InvalidArgument {
-            message: "Zone sequencer startup must include a header row".to_owned(),
-        });
-    };
-
-    let alias_idx = column_index(header, "alias", "Zone sequencer startup")?;
-    let indexer_idx = optional_column_index(header, "indexer");
-    let depth_idx = optional_column_index(header, "pending_submit_depth");
-
-    for column in header {
-        if !matches!(
-            column.as_str(),
-            "alias" | "indexer" | "pending_submit_depth"
-        ) {
-            return Err(StepError::InvalidArgument {
-                message: format!("Unknown zone sequencer startup column `{column}`"),
-            });
-        }
-    }
-
-    table
-        .rows
-        .iter()
-        .skip(1)
-        .map(|row| {
-            if row.len() != header.len() {
-                return Err(StepError::InvalidArgument {
-                    message: format!(
-                        "Zone sequencer startup rows must have {} columns, got {}",
-                        header.len(),
-                        row.len()
-                    ),
-                });
-            }
-
-            let alias = non_empty_cell(row, alias_idx, "alias")?.to_owned();
-            let indexer = indexer_idx
-                .map(|idx| parse_bool_cell(non_empty_cell(row, idx, "indexer")?, "indexer"))
-                .transpose()?
-                .unwrap_or(false);
-            let pending_submit_depth = depth_idx.and_then(|idx| {
-                let value = row[idx].trim();
-                (!value.is_empty()).then(|| value.to_owned())
-            });
-
-            Ok(ZoneSequencerStartRow {
+    parse_zone_table_rows(
+        step,
+        &[
+            "alias",
+            "indexer",
+            "pending_submit_depth",
+            "passive_republish_orphans",
+        ],
+        "Zone sequencer startup",
+        |row| match row {
+            [
                 alias,
                 indexer,
                 pending_submit_depth,
-            })
-        })
-        .collect()
+                passive_republish_orphans,
+            ] => Ok(ZoneSequencerStartRow {
+                alias: alias.clone(),
+                indexer: parse_bool_cell(indexer, "indexer")?,
+                pending_submit_depth: pending_submit_depth.clone(),
+                passive_republish_orphans: parse_bool_cell(
+                    passive_republish_orphans,
+                    "passive_republish_orphans",
+                )?,
+            }),
+            _ => invalid_zone_table_row(
+                "Zone sequencer startup",
+                &[
+                    "alias",
+                    "indexer",
+                    "pending_submit_depth",
+                    "passive_republish_orphans",
+                ],
+                row.len(),
+            ),
+        },
+    )
 }
 
 pub(super) fn zone_sequencing_state_row(step: &Step) -> Result<ZoneSequencingStateRow, StepError> {
@@ -402,28 +385,8 @@ fn parse_single_zone_table_row<T>(
     Ok(rows.remove(0))
 }
 
-fn column_index(header: &[String], column: &str, description: &str) -> Result<usize, StepError> {
-    optional_column_index(header, column).ok_or_else(|| StepError::InvalidArgument {
-        message: format!("{description} must include `{column}` column"),
-    })
-}
-
-fn optional_column_index(header: &[String], column: &str) -> Option<usize> {
-    header.iter().position(|value| value == column)
-}
-
-fn non_empty_cell<'a>(row: &'a [String], index: usize, column: &str) -> Result<&'a str, StepError> {
-    let value = row[index].trim();
-    if value.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: format!("Zone sequencer startup `{column}` value must not be empty"),
-        });
-    }
-    Ok(value)
-}
-
 fn parse_bool_cell(value: &str, column: &str) -> Result<bool, StepError> {
-    match value {
+    match value.to_lowercase().trim() {
         "true" => Ok(true),
         "false" => Ok(false),
         _ => Err(StepError::InvalidArgument {
@@ -433,7 +396,7 @@ fn parse_bool_cell(value: &str, column: &str) -> Result<bool, StepError> {
 }
 
 fn parse_turn_cell(value: &str) -> Result<bool, StepError> {
-    match value {
+    match value.to_uppercase().trim() {
         "OUR_TURN" => Ok(true),
         "NOT_OUR_TURN" => Ok(false),
         _ => Err(StepError::InvalidArgument {

@@ -44,13 +44,14 @@ use crate::{
     common::{mantle_inscription::make_inscription, manual_cluster::wait_for_height},
     cucumber::{
         error::{StepError, StepResult},
-        world::CucumberWorld,
+        world::{CucumberWorld, ZoneSequencerStartup},
     },
 };
 
 pub(super) const DEFAULT_ZONE_SEQUENCER: &str = "SEQ_A";
 
 fn parse_submit_depth(step: &Step, value: &str) -> Result<usize, StepError> {
+    let value = value.trim();
     if matches!(value.to_lowercase().as_str(), "unlimited" | "none") {
         return Ok(usize::MAX);
     }
@@ -70,6 +71,46 @@ fn parse_submit_depth(step: &Step, value: &str) -> Result<usize, StepError> {
         })?;
 
     Ok(limit)
+}
+
+fn parse_optional_submit_depth(step: &Step, value: &str) -> Result<Option<usize>, StepError> {
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("default") {
+        return Ok(None);
+    }
+
+    parse_submit_depth(step, value).map(Some)
+}
+
+const fn passive_mode_for_startup(startup: ZoneSequencerStartup) -> DriveMode {
+    if startup.passive_republish_orphans {
+        DriveMode::passive_republish_orphans()
+    } else {
+        DriveMode::passive()
+    }
+}
+
+async fn start_named_sequencer_with_startup(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: &str,
+    checkpoint: Option<lb_zone_sdk::sequencer::SequencerCheckpoint>,
+    startup: ZoneSequencerStartup,
+) -> StepResult {
+    let mode = passive_mode_for_startup(startup);
+    if let Some(submit_depth) = startup.pending_submit_depth {
+        start_named_sequencer_with_pending_submit_depth(
+            world,
+            step,
+            sequencer_alias,
+            checkpoint,
+            mode,
+            submit_depth,
+        )
+        .await
+    } else {
+        start_named_sequencer(world, step, sequencer_alias, checkpoint, mode).await
+    }
 }
 const CONCURRENT_DUPLICATE_SETTLE_SECS: u64 = 30;
 
@@ -128,7 +169,7 @@ async fn step_start_zone_sequencer(
     step: &Step,
     sequencer_alias: String,
 ) -> StepResult {
-    start_named_sequencer(world, step, sequencer_alias, None, DriveMode::Passive).await
+    start_named_sequencer(world, step, sequencer_alias, None, DriveMode::passive()).await
 }
 
 #[when(expr = "I start zone sequencer {string} with indexer")]
@@ -145,7 +186,7 @@ async fn start_sequencer_with_indexer(
     step: &Step,
     sequencer_alias: &str,
 ) -> StepResult {
-    start_named_sequencer(world, step, sequencer_alias, None, DriveMode::Passive).await?;
+    start_named_sequencer(world, step, sequencer_alias, None, DriveMode::passive()).await?;
     initialize_zone_indexer(world, step, sequencer_alias)
 }
 
@@ -153,19 +194,13 @@ async fn start_sequencer_with_indexer(
 async fn step_start_zone_sequencers(world: &mut CucumberWorld, step: &Step) -> StepResult {
     for row in zone_sequencer_start_rows(step)? {
         let alias = row.alias;
-        if let Some(submit_depth) = row.pending_submit_depth {
-            start_named_sequencer_with_pending_submit_depth(
-                world,
-                step,
-                &alias,
-                None,
-                DriveMode::Passive,
-                parse_submit_depth(step, &submit_depth)?,
-            )
-            .await?;
-        } else {
-            start_named_sequencer(world, step, &alias, None, DriveMode::Passive).await?;
-        }
+        let startup = ZoneSequencerStartup {
+            pending_submit_depth: parse_optional_submit_depth(step, &row.pending_submit_depth)?,
+            passive_republish_orphans: row.passive_republish_orphans,
+        };
+        world.zone.set_sequencer_startup(&alias, startup);
+
+        start_named_sequencer_with_startup(world, step, &alias, None, startup).await?;
 
         if row.indexer {
             initialize_zone_indexer(world, step, &alias)?;
@@ -390,28 +425,10 @@ async fn step_restart_zone_sequencer_from_checkpoint(
     checkpoint_alias: String,
 ) -> StepResult {
     let checkpoint = world.zone.resolve_checkpoint(checkpoint_alias)?;
+    let startup = world.zone.sequencer_startup_for(&sequencer_alias);
 
-    if let Some(max_pending_publish_depth) = world.zone.sequencer_submit_depth_for(&sequencer_alias)
-    {
-        start_named_sequencer_with_pending_submit_depth(
-            world,
-            step,
-            &sequencer_alias,
-            Some(checkpoint),
-            DriveMode::Passive,
-            max_pending_publish_depth,
-        )
+    start_named_sequencer_with_startup(world, step, &sequencer_alias, Some(checkpoint), startup)
         .await
-    } else {
-        start_named_sequencer(
-            world,
-            step,
-            &sequencer_alias,
-            Some(checkpoint),
-            DriveMode::Passive,
-        )
-        .await
-    }
 }
 
 #[when(expr = "I restart zone sequencer {string} fresh")]
@@ -420,7 +437,8 @@ async fn step_restart_zone_sequencer_fresh(
     step: &Step,
     sequencer_alias: String,
 ) -> StepResult {
-    start_named_sequencer(world, step, &sequencer_alias, None, DriveMode::Passive).await
+    let startup = world.zone.sequencer_startup_for(&sequencer_alias);
+    start_named_sequencer_with_startup(world, step, &sequencer_alias, None, startup).await
 }
 
 #[when(expr = "sequencer {string} submits zone config transaction {string} authorizing:")]

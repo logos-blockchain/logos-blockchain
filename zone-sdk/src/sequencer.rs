@@ -106,7 +106,6 @@ pub struct SequencerConfig {
     pub slot_duration: Duration,
     pub chain_start_time: Option<SystemTime>,
     pub min_slots_remaining_in_turn: u64,
-    pub auto_requeue_orphaned: bool,
     pub max_pending_publish_depth: usize,
 }
 
@@ -119,7 +118,6 @@ impl Default for SequencerConfig {
             slot_duration: Duration::from_secs(1),
             chain_start_time: None,
             min_slots_remaining_in_turn: 1,
-            auto_requeue_orphaned: false,
             max_pending_publish_depth: 10,
         }
     }
@@ -930,7 +928,13 @@ where
         }
 
         if let Err(err) = self.refresh_channel_state().await {
-            warn!(target: TARGET, "Failed to refresh channel state after block: {err}");
+            error!(
+                target: TARGET,
+                "Failed to refresh channel state after block; dropping stream so reconnect retries: {err}"
+            );
+            self.blocks_stream = None;
+            let _ = self.ready_tx.send(false);
+            return None;
         }
 
         let became_ready = self.maybe_signal_ready();
@@ -1491,26 +1495,6 @@ where
         }
     }
 
-    /// If configured to do so, rebuild orphaned inscriptions for a retry on
-    /// the next authorized turn.
-    fn rebuild_orphaned_inscriptions(&mut self, orphaned: &[InscriptionInfo]) {
-        if self.config.auto_requeue_orphaned && !orphaned.is_empty() {
-            debug!(target: TARGET,
-                "Rebuilding {} orphaned inscription(s) on the canonical tip",
-                orphaned.len()
-            );
-            for info in orphaned {
-                debug!(target: TARGET,
-                    "  rebuild orphaned: payload={:?}, tx={}, msg_id={}",
-                    String::from_utf8_lossy(&info.payload),
-                    hex::encode(info.tx_hash.0),
-                    hex::encode(info.this_msg.as_ref()),
-                );
-                self.build_pending_publish(info.payload.clone());
-            }
-        }
-    }
-
     /// Build the `ChannelUpdate` event. `orphaned` contains only our own
     /// pending whose original signed tx is permanently invalid — items the
     /// SDK has given up on (parent slot claimed by a competing inscription,
@@ -1526,12 +1510,6 @@ where
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
             _ => Vec::new(),
         };
-        let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
-            .iter()
-            .filter_map(|entry| entry.inscription().cloned())
-            .collect();
-        self.rebuild_orphaned_inscriptions(&orphaned_inscriptions);
-
         let adopted: Vec<InscriptionInfo> = match self.state.as_ref() {
             Some(s) => u
                 .adopted

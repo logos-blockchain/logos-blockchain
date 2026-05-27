@@ -213,15 +213,15 @@ Feature: Zone SDK
       | SEQ_B |
     When the zone node is at height 1 in 120 seconds
     And I start zone sequencers:
-      | alias | indexer | pending_submit_depth |
-      | SEQ_A | true    | 2                    |
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_A | true    | 2                    | false                     |
     And sequencer "SEQ_A" submits zone config transaction:
       | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
       | CHANNEL_CONFIG_1 | 2                 | 0               | SEQ_A, SEQ_B          |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
     When I start zone sequencers:
-      | alias | pending_submit_depth |
-      | SEQ_B | 2                    |
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_B | false   | 2                    | false                     |
     Then sequencer "SEQ_B" reaches sequencing state:
       | own_key_index | turn_to_write | pending_transactions | time_out |
       | 1             | NOT_OUR_TURN  | 0                    | 120      |
@@ -263,15 +263,15 @@ Feature: Zone SDK
       | SEQ_B |
     When the zone node is at height 1 in 120 seconds
     And I start zone sequencers:
-      | alias | indexer | pending_submit_depth |
-      | SEQ_A | true    | unlimited            |
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_A | true    | unlimited            | false                     |
     And sequencer "SEQ_A" submits zone config transaction:
       | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
       | CHANNEL_CONFIG_1 | 2                 | 0               | SEQ_A, SEQ_B          |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
     When I start zone sequencers:
-      | alias | pending_submit_depth |
-      | SEQ_B | unlimited            |
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_B | false   | unlimited            | false                     |
     Then sequencer "SEQ_B" reaches sequencing state:
       | own_key_index | turn_to_write | pending_transactions | time_out |
       | 1             | NOT_OUR_TURN  | 0                    | 120      |
@@ -336,7 +336,9 @@ Feature: Zone SDK
       | SEQ_B |
       | SEQ_C |
     When the zone node is at height 1 in 120 seconds
-    And I start zone sequencer "SEQ_A" with indexer
+    And I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_A | true    | default              | true                      |
     # Start with A-only round-robin config (single key), then prove immediate publish.
     And sequencer "SEQ_A" submits zone config transaction:
       | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
@@ -348,14 +350,18 @@ Feature: Zone SDK
       | config_name | posting_timeframe | posting_timeout | authorized_sequencers |
       | CONFIG_B    | 2                 | 0               | SEQ_A, SEQ_B          |
     Then zone transaction "CONFIG_B" is finalized in 180 seconds
-    When I start zone sequencer "SEQ_B"
+    When I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_B | false   | default              | true                      |
     When I submit zone message "MSG_B_1" to sequencer "SEQ_B" with data "seq_b-msg1" on its turn
     # Auth C without stopping A or B.
     When sequencer "SEQ_A" submits zone config transaction:
       | config_name | posting_timeframe | posting_timeout | authorized_sequencers |
       | CONFIG_C    | 2                 | 0               | SEQ_A, SEQ_B, SEQ_C   |
     Then zone transaction "CONFIG_C" is finalized in 180 seconds
-    When I start zone sequencer "SEQ_C"
+    When I start zone sequencers:
+      | alias | indexer | pending_submit_depth | passive_republish_orphans |
+      | SEQ_C | false   | default              | true                      |
     When I submit zone message "MSG_C_1" to sequencer "SEQ_C" with data "seq_c-msg1" on its turn
     # Now publish more messages from all sequencers and check they are all indexed without duplicates
     When I submit zone message "MSG_A_2" to sequencer "SEQ_A" with data "seq_a-msg2" immediately

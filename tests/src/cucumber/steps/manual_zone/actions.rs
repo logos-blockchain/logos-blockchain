@@ -56,7 +56,9 @@ const SEQUENCER_READY_HEIGHT_ADVANCE_TIMEOUT: Duration = Duration::from_secs(30)
 const ZONE_FUNDING_WALLET_NAME: &str = "zone-funding";
 
 pub(super) enum DriveMode {
-    Passive,
+    Passive {
+        republish_orphans: bool,
+    },
     Republish,
     Sorted {
         discarded: DiscardedPayloads,
@@ -65,6 +67,20 @@ pub(super) enum DriveMode {
         initial_balances: ZoneAccountBalances,
         planned_payloads: Vec<Inscription>,
     },
+}
+
+impl DriveMode {
+    pub(super) const fn passive() -> Self {
+        Self::Passive {
+            republish_orphans: false,
+        }
+    }
+
+    pub(super) const fn passive_republish_orphans() -> Self {
+        Self::Passive {
+            republish_orphans: true,
+        }
+    }
 }
 
 struct PublishedZoneMessage {
@@ -631,16 +647,9 @@ pub(super) async fn start_named_sequencer_with_pending_submit_depth(
     mode: DriveMode,
     max_pending_publish_depth: usize,
 ) -> StepResult {
-    let sequencer_alias = sequencer_alias.as_ref().to_owned();
-    world
-        .zone
-        .set_sequencer_submit_depth(&sequencer_alias, max_pending_publish_depth);
-    let mut config = sequencer_config_with_pending_submit_depth(max_pending_publish_depth);
-    if matches!(&mode, DriveMode::Republish) {
-        config.auto_requeue_orphaned = false;
-    }
+    let config = sequencer_config_with_pending_submit_depth(max_pending_publish_depth);
 
-    start_named_sequencer_with_config(world, step, &sequencer_alias, checkpoint, mode, config).await
+    start_named_sequencer_with_config(world, step, sequencer_alias, checkpoint, mode, config).await
 }
 
 async fn start_named_sequencer_with_config(
@@ -730,8 +739,9 @@ fn start_sequencer_runtime(
     mode: DriveMode,
 ) -> StartedSequencerRuntime {
     match mode {
-        DriveMode::Passive => {
-            let (task, events, checkpoint_rx) = start_sequencer_event_loop(sequencer);
+        DriveMode::Passive { republish_orphans } => {
+            let (task, events, checkpoint_rx) =
+                start_sequencer_event_loop(sequencer, handle, republish_orphans);
 
             StartedSequencerRuntime {
                 task,
