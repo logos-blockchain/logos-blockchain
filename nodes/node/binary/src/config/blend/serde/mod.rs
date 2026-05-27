@@ -51,7 +51,7 @@ impl Config {
         self.core.backend.listening_address = addr;
     }
 
-    pub fn set_signing_key_id(&mut self, key_id: KeyId) {
+    pub fn set_non_ephemeral_signing_key_id(&mut self, key_id: KeyId) {
         self.non_ephemeral_signing_key_id = key_id;
     }
 
