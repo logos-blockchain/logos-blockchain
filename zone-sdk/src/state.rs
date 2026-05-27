@@ -6,7 +6,9 @@ use lb_core::{
     mantle::{
         SignedMantleTx, Transaction as _, Value,
         ledger::Inputs,
-        ops::channel::{ChannelId, MsgId, inscribe::Inscription, withdraw::ChannelWithdrawOp},
+        ops::channel::{
+            ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+        },
         tx::TxHash,
     },
 };
@@ -65,7 +67,7 @@ pub struct DepositInfo {
     /// Total value deposited, sourced from the block's events.
     pub amount: Value,
     /// Opaque metadata associated with this deposit.
-    pub metadata: Vec<u8>,
+    pub metadata: Metadata,
 }
 
 /// A tx surfaced by the SDK in event payloads.
