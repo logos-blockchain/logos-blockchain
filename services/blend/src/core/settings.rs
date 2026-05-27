@@ -43,7 +43,7 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     pub fn session_core_quota(&self, membership_size: usize) -> u64 {
         self.scheduler
             .cover
-            .session_core_quota(self.num_blend_layers, &self.time, membership_size)
+            .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
     pub const fn session_leadership_quota(&self) -> u64 {
@@ -100,7 +100,7 @@ impl Default for CoverTrafficSettings {
 
 impl CoverTrafficSettings {
     #[must_use]
-    pub(crate) fn session_core_quota(
+    pub(crate) fn epoch_core_quota(
         &self,
         num_blend_layers: NonZeroU64,
         timings: &TimingSettings,

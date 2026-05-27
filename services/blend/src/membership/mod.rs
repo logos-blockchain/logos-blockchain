@@ -14,27 +14,18 @@ pub struct MembershipInfo<NodeId> {
     pub membership: Membership<NodeId>,
     // `None` if membership is empty.
     pub zk: Option<ZkInfo>,
-    // TODO: Remove session info
-    pub session_number: u64,
 }
 
-impl<NodeId> MembershipInfo<NodeId> {
-    #[cfg(test)]
-    #[must_use]
-    pub fn from_membership_and_session_number(
-        membership: Membership<NodeId>,
-        session_number: u64,
-    ) -> Self {
+#[cfg(test)]
+impl<NodeId> From<Membership<NodeId>> for MembershipInfo<NodeId> {
+    fn from(membership: Membership<NodeId>) -> Self {
         let zk = if membership.is_empty() {
             None
         } else {
             Some(ZkInfo::default())
         };
-        Self {
-            membership,
-            zk,
-            session_number,
-        }
+
+        Self { membership, zk }
     }
 }
 

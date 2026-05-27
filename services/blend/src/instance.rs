@@ -627,10 +627,7 @@ mod tests {
             let instance = instance
                 .handle_epoch_event(
                     // With an empty membership smaller than the minimal size.
-                    EpochEvent::NewEpoch(MembershipInfo::from_membership_and_session_number(
-                        membership(&[], local_node),
-                        1,
-                    )),
+                    EpochEvent::NewEpoch(Membership::empty().into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
@@ -654,10 +651,7 @@ mod tests {
             // Broadcast -> Edge
             let instance = instance
                 .handle_epoch_event(
-                    EpochEvent::NewEpoch(MembershipInfo::from_membership_and_session_number(
-                        membership(&[1], local_node),
-                        1,
-                    )),
+                    EpochEvent::NewEpoch(membership(&[1], local_node).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
@@ -669,10 +663,7 @@ mod tests {
             // Edge -> Edge (stay)
             let instance = instance
                 .handle_epoch_event(
-                    EpochEvent::NewEpoch(MembershipInfo::from_membership_and_session_number(
-                        membership(&[1], local_node),
-                        1,
-                    )),
+                    EpochEvent::NewEpoch(membership(&[1], local_node).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,
@@ -684,10 +675,7 @@ mod tests {
             // Edge -> Core
             let instance = instance
                 .handle_epoch_event(
-                    EpochEvent::NewEpoch(MembershipInfo::from_membership_and_session_number(
-                        membership(&[1], 1),
-                        1,
-                    )),
+                    EpochEvent::NewEpoch(membership(&[1], local_node).into()),
                     handle,
                     minimal_network_size,
                     LOCAL_NODE_ID,

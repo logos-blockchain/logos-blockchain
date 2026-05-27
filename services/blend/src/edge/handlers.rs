@@ -6,7 +6,7 @@ use lb_blend::{
     scheduling::{
         membership::Membership,
         message_blend::{
-            crypto::leader::send::EpochCryptographicProcessor as SessionCryptographicProcessor,
+            crypto::leader::send::EpochCryptographicProcessor,
             provers::leader::LeaderProofsGenerator,
         },
     },
@@ -19,9 +19,17 @@ use rand::SeedableRng as _;
 use crate::edge::{LOG_TARGET, RunningSettings as Settings, backends::BlendBackend};
 
 pub struct MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
-    cryptographic_processor: SessionCryptographicProcessor<NodeId, ProofsGenerator>,
+    cryptographic_processor: EpochCryptographicProcessor<NodeId, ProofsGenerator>,
     backend: Backend,
     _phantom: PhantomData<RuntimeServiceId>,
+}
+
+impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+{
+    pub const fn epoch(&self) -> Epoch {
+        self.cryptographic_processor.epoch()
+    }
 }
 
 impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
@@ -36,7 +44,7 @@ where
     /// It returns [`Error`] if the membership does not satisfy the following
     /// edge node condition:
     /// 1. The membership size is at least `settings.minimum_network_size`.
-    /// 2. The local node is not a core node.
+    /// 2. The local node is not an edge node.
     pub fn try_new_with_edge_condition_check(
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
@@ -73,7 +81,7 @@ where
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Self {
-        let cryptographic_processor = SessionCryptographicProcessor::new(
+        let cryptographic_processor = EpochCryptographicProcessor::new(
             settings.num_blend_layers,
             membership.clone(),
             public_info,

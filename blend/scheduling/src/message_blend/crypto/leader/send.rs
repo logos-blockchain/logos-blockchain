@@ -30,6 +30,13 @@ pub struct EpochCryptographicProcessor<NodeId, ProofsGenerator> {
     num_blend_layers: NonZeroU64,
     membership: Membership<NodeId>,
     proofs_generator: ProofsGenerator,
+    epoch: Epoch,
+}
+
+impl<NodeId, ProofsGenerator> EpochCryptographicProcessor<NodeId, ProofsGenerator> {
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
+    }
 }
 
 impl<NodeId, ProofsGenerator> EpochCryptographicProcessor<NodeId, ProofsGenerator>
@@ -55,6 +62,7 @@ where
             num_blend_layers,
             membership,
             proofs_generator: ProofsGenerator::new(generator_settings, private_info),
+            epoch,
         }
     }
 }
