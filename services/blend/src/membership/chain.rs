@@ -10,7 +10,7 @@
 use core::{hash::Hash, pin::Pin};
 use std::fmt::{Debug, Display};
 
-use futures::{Stream, StreamExt as _};
+use futures::{Stream, StreamExt as _, stream::unfold};
 use lb_chain_service::{
     Epoch,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -93,47 +93,40 @@ where
     };
 
     // TODO: Refactor into a function or own type that replaces `EpochHandler`.
-    Box::pin(
-        slot_ticks
-            .scan(None, move |last_epoch, SlotTick { epoch, slot }| {
-                let is_new_epoch = Some(epoch) != *last_epoch;
-                if is_new_epoch {
-                    *last_epoch = Some(epoch);
+    Box::pin(unfold(
+        (slot_ticks, None::<Epoch>, chain_service),
+        move |(mut slot_ticks, mut last_epoch, chain_service)| async move {
+            loop {
+                let SlotTick { epoch, slot } = slot_ticks.next().await?;
+                if Some(epoch) == last_epoch {
+                    continue;
                 }
-                let chain_service = chain_service.clone();
-                let signing_public_key = signing_public_key;
-                let zk_public_key = zk_public_key;
-                async move {
-                    if !is_new_epoch {
-                        return Some(None);
+                match chain_service.get_epoch_state(slot).await {
+                    Ok(Ok(epoch_state)) => {
+                        last_epoch = Some(epoch);
+                        let membership_info = membership_info_from_epoch_state::<NodeId>(
+                            &epoch_state,
+                            &signing_public_key,
+                            zk_public_key,
+                        );
+                        let item = BlendEpochState {
+                            epoch,
+                            nonce: epoch_state.nonce,
+                            aged: epoch_state.utxo_merkle_root(),
+                            lottery_0: epoch_state.lottery_0,
+                            lottery_1: epoch_state.lottery_1,
+                            membership_info,
+                        };
+                        return Some((item, (slot_ticks, last_epoch, chain_service)));
                     }
-                    match chain_service.get_epoch_state(slot).await {
-                        Ok(Ok(epoch_state)) => {
-                            let membership_info = membership_info_from_epoch_state::<NodeId>(
-                                &epoch_state,
-                                &signing_public_key,
-                                zk_public_key,
-                            );
-                            Some(Some(BlendEpochState {
-                                epoch,
-                                nonce: epoch_state.nonce,
-                                aged: epoch_state.utxo_merkle_root(),
-                                lottery_0: epoch_state.lottery_0,
-                                lottery_1: epoch_state.lottery_1,
-                                membership_info,
-                            }))
-                        }
-                        Ok(Err(e)) => {
-                            tracing::warn!(target: LOG_TARGET, "Chain service returned error for epoch state at slot {slot:?}: {e:?}");
-                            Some(None)
-                        }
-                        Err(e) => {
-                            tracing::warn!(target: LOG_TARGET, "Failed to query epoch state at slot {slot:?}: {e:?}");
-                            Some(None)
-                        }
+                    Ok(Err(e)) => {
+                        tracing::warn!(target: LOG_TARGET, "Chain service returned error for epoch state at slot {slot:?}: {e:?}; will retry on next slot of epoch {epoch:?}");
+                    }
+                    Err(e) => {
+                        tracing::warn!(target: LOG_TARGET, "Failed to query epoch state at slot {slot:?}: {e:?}; will retry on next slot of epoch {epoch:?}");
                     }
                 }
-            })
-            .filter_map(async move |maybe| { maybe }),
-    )
+            }
+        },
+    ))
 }

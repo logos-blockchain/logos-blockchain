@@ -426,14 +426,13 @@ where
                 info_type: PendingEpochInfoType::Public(Box::new(membership_info.clone())),
             });
         }
-        // New epoch private info received without using the previous one to create a new handler.
-        // This should never happen unless we hit some very edgy cases where the service is started
-        // just at the boundary between two epochs.
+        // New epoch public info received without using the previous one to create a new handler.
+        // This can happen if the node has no winning slot in the old epoch.
         Some(PendingEpochInfo {
             info_type: PendingEpochInfoType::Public(_),
             ..
         }) => {
-            warn!(target: LOG_TARGET, "New epoch public info received without the previous epoch info being consumed.");
+            debug!(target: LOG_TARGET, "New epoch public info received without the previous epoch info being consumed.");
             assert!(
                 current_epoch_message_handler.is_none(),
                 "If public epoch info is buffered, the message handler should not be running."
@@ -451,9 +450,9 @@ where
             // private epoch event is processed.
             assert!(
                 new_epoch == epoch,
-                "Old pending epoch info was found, and this should never happen."
+                "Old pending epoch secret info was found, and this should never happen."
             );
-            debug!(target: LOG_TARGET, "New epoch public info received with a buffered secret PoL info for the same epoch {new_epoch:?}. Trying to create a new epoch-bound message handler.");
+            info!(target: LOG_TARGET, "New epoch public info received with a buffered secret PoL info for the same epoch {new_epoch:?}. Trying to create a new epoch-bound message handler.");
             let new_public_inputs = PoQVerificationInputsMinusSigningKey {
                 core: CoreInputs {
                     quota: settings.cover.epoch_core_quota(
@@ -520,17 +519,11 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
         }
         Some(PendingEpochInfo {
             info_type: PendingEpochInfoType::Private(_),
-            ..
+            epoch,
         }) => {
-            assert!(
-                current_message_handler.is_none(),
-                "If private epoch info is buffered, the message handler should be stopped."
+            panic!(
+                "New secret PoL info received while there is already buffered secret PoL info for a epoch {epoch:?}. This should never happen."
             );
-            warn!(target: LOG_TARGET, "New epoch secret info received without the previous epoch info being consumed.");
-            *pending_epoch_info = Some(PendingEpochInfo {
-                epoch: new_epoch,
-                info_type: PendingEpochInfoType::Private(Box::new(poq_private_inputs)),
-            });
         }
         Some(PendingEpochInfo {
             epoch,
@@ -544,6 +537,18 @@ fn handle_new_secret_epoch_info<Backend, NodeId, ProofsGenerator, RuntimeService
             let Some(zk_root) = new_membership_info.zk.as_ref().map(|zk| zk.root) else {
                 return;
             };
+
+            if new_epoch < epoch {
+                debug!(target: LOG_TARGET, "Received old secret epoch info while new public info for {epoch:?} was present. Ignoring received secret info...");
+                return;
+            } else if new_epoch > epoch {
+                debug!(target: LOG_TARGET, "Received new secret epoch info while old public info for {epoch:?} was present. Overriding the old info...");
+                *pending_epoch_info = Some(PendingEpochInfo {
+                    epoch: new_epoch,
+                    info_type: PendingEpochInfoType::Private(Box::new(poq_private_inputs)),
+                });
+                return;
+            }
 
             let new_public_inputs = PoQVerificationInputsMinusSigningKey {
                 leader: LeaderInputs {
