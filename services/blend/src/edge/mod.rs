@@ -271,8 +271,8 @@ where
 /// - **New public epoch info** (chain-derived membership + leader inputs):
 ///   becomes the current public info; the handler is rebuilt if the latest
 ///   secret info is for the same epoch, otherwise it stays down.
-/// - **New secret `PoL` info**: becomes the current secret info; the handler
-///   is rebuilt if it matches the current public info's epoch.
+/// - **New secret `PoL` info**: becomes the current secret info; the handler is
+///   rebuilt if it matches the current public info's epoch.
 /// - **Incoming messages to blend**: forwarded to the current message handler;
 ///   dropped with a warning if no handler is active (secret `PoL` info for the
 ///   current epoch has not yet arrived).
