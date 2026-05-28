@@ -158,7 +158,7 @@ jobs:
 
       - name: Install cargo-nextest
         if: ${{ !cancelled()}}
-        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # Version 2.79.11
         with:
           tool: cargo-nextest
 
