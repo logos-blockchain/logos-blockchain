@@ -21,13 +21,16 @@ use lb_testing_framework::{
     DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
 };
-use logos_blockchain_tests::common::{
-    chain::wait_for_transactions_inclusion,
-    manual_cluster::{
-        build_local_manual_cluster, read_manual_node_logs,
-        wait_for_height as wait_for_manual_cluster_height,
+use logos_blockchain_tests::{
+    common::{
+        chain::wait_for_transactions_inclusion,
+        manual_cluster::{
+            build_local_manual_cluster, read_manual_node_logs,
+            wait_for_height as wait_for_manual_cluster_height,
+        },
+        wallet::{current_wallet_funding_source, fund_builder_from_wallet_source},
     },
-    wallet::{current_wallet_funding_source, fund_builder_from_wallet_source},
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
@@ -370,6 +373,7 @@ async fn start_sdp_manual_cluster(
                 spare_wallet.clone(),
             ]))
             .with_test_context(test_name),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     );
 
     let cluster = base.cluster;

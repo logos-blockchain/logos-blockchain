@@ -5121,6 +5121,7 @@ dependencies = [
  "serial_test",
  "strum",
  "strum_macros",
+ "tempfile",
  "testing-framework",
  "testing-framework-core",
  "testing-framework-runner-local",

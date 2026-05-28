@@ -1,11 +1,14 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use lb_libp2p::{Multiaddr, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };
-use logos_blockchain_tests::common::manual_cluster::{
-    build_local_manual_cluster, wait_for_height as wait_for_manual_cluster_height,
+use logos_blockchain_tests::{
+    common::manual_cluster::{
+        build_local_manual_cluster, wait_for_height as wait_for_manual_cluster_height,
+    },
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use serial_test::serial;
 use testing_framework_core::scenario::{PeerSelection, StartNodeOptions};
@@ -24,6 +27,7 @@ async fn node_restart_with_initial_peer_override() {
             TfTopologyConfig::with_node_numbers(3)
                 .with_test_context(Some("node_restart_with_initial_peer_override".to_owned())),
         ),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     );
 
     let cluster = base.cluster;

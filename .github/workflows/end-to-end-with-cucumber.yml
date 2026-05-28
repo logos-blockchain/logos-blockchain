@@ -139,7 +139,8 @@ jobs:
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
-          path: tests/.run_*
+          path: tests/.e2e_artefacts
+          if-no-files-found: ignore
 
       # Run cucumber integration tests with environment variables for binaries and test params
       # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):

@@ -1,5 +1,6 @@
 use std::{
     num::NonZero,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -16,8 +17,9 @@ use lb_node::{
 };
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
-use logos_blockchain_tests::common::manual_cluster::{
-    ManualNodeLayout, api_url, start_local_manual_cluster_with_layout,
+use logos_blockchain_tests::{
+    common::manual_cluster::{ManualNodeLayout, api_url, start_local_manual_cluster_with_layout},
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use testing_framework_core::scenario::DynError;
 use tokio::time::{sleep, timeout};
@@ -48,6 +50,7 @@ async fn leader_claim() {
             let slots_per_epoch = Arc::clone(&slots_per_epoch);
             move |config| Ok::<_, DynError>(test_config(config, &slots_per_epoch))
         },
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
     let slots_per_epoch = slots_per_epoch.load(Ordering::Relaxed);

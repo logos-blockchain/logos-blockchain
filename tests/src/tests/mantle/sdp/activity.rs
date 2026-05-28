@@ -1,5 +1,6 @@
 use std::{
     num::NonZero,
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -11,8 +12,11 @@ use lb_core::sdp::ServiceType;
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
-use logos_blockchain_tests::common::manual_cluster::{
-    ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,
+use logos_blockchain_tests::{
+    common::manual_cluster::{
+        ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,
+    },
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use testing_framework_core::scenario::DynError;
 use tokio::time::sleep;
@@ -43,6 +47,7 @@ async fn sdp_blend_activity() {
             let blocks_per_session = Arc::clone(&blocks_per_session);
             move |config| Ok::<_, DynError>(test_config(config, &blocks_per_session))
         },
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
     let blocks_per_session = blocks_per_session.load(Ordering::Relaxed);

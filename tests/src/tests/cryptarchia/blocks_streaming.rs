@@ -1,6 +1,7 @@
 use std::{
     collections::BTreeMap,
     num::NonZero,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -16,8 +17,11 @@ use lb_node::config::RunConfig;
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };
-use logos_blockchain_tests::common::manual_cluster::{
-    LocalManualClusterHarnessBase, ManualNodeLayout, start_local_manual_cluster_with_layout,
+use logos_blockchain_tests::{
+    common::manual_cluster::{
+        LocalManualClusterHarnessBase, ManualNodeLayout, start_local_manual_cluster_with_layout,
+    },
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use serial_test::serial;
 use testing_framework_core::scenario::{DynError, StartedNode};
@@ -62,6 +66,7 @@ async fn start_blocks_streaming_cluster(
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
         |config| Ok::<_, DynError>(blocks_streaming_config(config)),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await
 }

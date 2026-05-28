@@ -1,4 +1,4 @@
-use std::{num::NonZero, time::Duration};
+use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use lb_chain_service::{ChainServiceMode, State};
 use lb_core::{
@@ -11,8 +11,11 @@ use lb_core::{
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
 use lb_utils::math::NonNegativeRatio;
-use logos_blockchain_tests::common::manual_cluster::{
-    ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,
+use logos_blockchain_tests::{
+    common::manual_cluster::{
+        ManualNodeLayout, start_local_manual_cluster_with_layout, wait_for_nodes_height,
+    },
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use testing_framework_core::scenario::DynError;
 use time::OffsetDateTime;
@@ -34,6 +37,7 @@ async fn delayed_chain_start() {
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
         move |config| Ok(test_config(config, genesis_time)),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
 
