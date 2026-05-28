@@ -218,13 +218,10 @@ pub(super) async fn submit_zone_channel_config(
 
     drop(finalized);
 
+    let checkpoint = log_step_error(step, world.zone.current_checkpoint_for(sequencer_alias))?;
     world
         .zone
-        .set_latest_checkpoint_for(sequencer_alias, result.checkpoint.clone());
-    world.zone.remember_checkpoint(
-        format!("{transaction_alias}_CHECKPOINT"),
-        result.checkpoint.clone(),
-    );
+        .remember_checkpoint(format!("{transaction_alias}_CHECKPOINT"), checkpoint);
     world.remember_submitted_transaction(transaction_alias, result.inscription_id);
 
     Ok(())
@@ -260,12 +257,13 @@ pub(super) fn remember_published_zone_message(
     payload: Inscription,
     result: &PublishResult,
 ) {
+    let checkpoint = world.zone.current_checkpoint_for(sequencer_alias).ok();
     world.zone.remember_zone_message(
         message_alias,
         payload,
         Some(result.inscription_id),
         Some(sequencer_alias),
-        Some(result.checkpoint.clone()),
+        checkpoint,
     );
 }
 

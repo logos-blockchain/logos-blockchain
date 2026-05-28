@@ -67,8 +67,6 @@ pub struct SequencerCheckpoint {
 pub struct PublishResult {
     /// The inscription ID (transaction hash).
     pub inscription_id: InscriptionId,
-    /// Current checkpoint for persistence.
-    pub checkpoint: SequencerCheckpoint,
 }
 
 /// One withdraw to bundle atomically with an inscription.
@@ -354,19 +352,9 @@ pub enum Event {
     Published { tx: Box<PublishedTx> },
     /// The SDK's checkpoint has advanced.
     ///
-    /// Emitted after every backfill batch (during cold-start catch-up) and
-    /// after every live block, immediately following any block-derived events
-    /// for that block/batch ([`Event::TxsFinalized`],
-    /// [`Event::ChannelUpdate`]). Carries the current
-    /// [`SequencerCheckpoint`] so consumers can persist progress without
-    /// depending on channel activity or their own publishes, shrinking the
-    /// replay window on restart.
-    ///
-    /// **This is an optimization, not a correctness guarantee.** Applying
-    /// state and persisting the checkpoint cannot be made atomic by the SDK,
-    /// so consumers MUST still dedup on restart — by `tx_hash` for
-    /// inscriptions, by `(tx_hash, op_id)` for deposit ops. The checkpoint
-    /// only shrinks the expected replay window.
+    /// Emitted after every backfill batch and after every live block,
+    /// following any block-derived events for that block/batch
+    /// ([`Event::TxsFinalized`], [`Event::ChannelUpdate`]).
     Checkpoint { checkpoint: SequencerCheckpoint },
 }
 
@@ -1609,7 +1597,7 @@ where
             ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
-                let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
+                let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id);
                 drop(reply.send(Ok(result)));
                 None
             }
@@ -1633,10 +1621,8 @@ where
                     withdraw_threshold,
                 );
                 s.submit_other(signed_tx.clone());
-                let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
                 let result = PublishResult {
                     inscription_id: signed_tx.mantle_tx.hash(),
-                    checkpoint,
                 };
                 drop(reply.send(Ok((signed_tx, result))));
                 self.publish_channel_view();
@@ -1854,17 +1840,11 @@ fn submit_signed_tx(
     tx: SignedMantleTx,
     msg_id: MsgId,
     last_msg_id: &mut MsgId,
-    lib_slot: Slot,
 ) -> PublishResult {
     let id = tx.mantle_tx.hash();
     state.submit_other(tx);
     *last_msg_id = msg_id;
-
-    let checkpoint = build_checkpoint(state, *last_msg_id, lib_slot);
-    PublishResult {
-        inscription_id: id,
-        checkpoint,
-    }
+    PublishResult { inscription_id: id }
 }
 
 fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> SequencerCheckpoint {
@@ -2716,7 +2696,7 @@ mod tests {
             }
         };
         assert_eq!(result.inscription_id, signed_tx.mantle_tx.hash());
-        assert_eq!(result.checkpoint.last_msg_id, msg_id);
+        assert_eq!(sequencer.checkpoint().unwrap().last_msg_id, msg_id);
         assert_eq!(posted_txs.recv().await.unwrap(), signed_tx);
     }
 

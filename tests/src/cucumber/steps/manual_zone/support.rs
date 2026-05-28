@@ -689,24 +689,14 @@ async fn wait_for_published_event(
     deadline: PublishDeadline,
 ) -> Result<PublishResult, ZoneTestError> {
     timeout(deadline.remaining()?, async {
-        let mut latest_checkpoint: Option<SequencerCheckpoint> = None;
         while let Some(event) = sequencer_events.recv().await {
-            match event {
-                Event::Checkpoint { checkpoint } => {
-                    latest_checkpoint = Some(checkpoint);
-                }
-                Event::Published { tx }
-                    if tx
-                        .inscription()
-                        .is_some_and(|info| info.payload.as_slice() == data) =>
-                {
-                    let checkpoint = latest_checkpoint.ok_or(ZoneTestError::PublishTimeout)?;
-                    return Ok(PublishResult {
-                        inscription_id: tx.tx_hash(),
-                        checkpoint,
-                    });
-                }
-                _ => {}
+            if let Event::Published { tx } = event
+                && let Some(info) = tx.inscription()
+                && info.payload.as_slice() == data
+            {
+                return Ok(PublishResult {
+                    inscription_id: tx.tx_hash(),
+                });
             }
         }
 
@@ -735,39 +725,28 @@ pub async fn wait_for_published_payloads(
         let mut results: Vec<Option<PublishResult>> =
             std::iter::repeat_with(|| None).take(data.len()).collect();
         let mut remaining = data.len();
-        let mut latest_checkpoint: Option<SequencerCheckpoint> = None;
 
         while remaining > 0 {
             let Some(event) = sequencer_events.recv().await else {
                 return Err(ZoneTestError::PublishTimeout);
             };
-            match event {
-                Event::Checkpoint { checkpoint } => {
-                    latest_checkpoint = Some(checkpoint);
-                }
-                Event::Published { tx } => {
-                    let Some(info) = tx.inscription() else {
-                        continue;
-                    };
-                    let payload = info.payload.as_slice();
-                    let Some(index) = data.iter().enumerate().find_map(|(index, expected)| {
-                        (results[index].is_none() && payload == expected.as_slice())
-                            .then_some(index)
-                    }) else {
-                        continue;
-                    };
+            let Event::Published { tx } = event else {
+                continue;
+            };
+            let Some(info) = tx.inscription() else {
+                continue;
+            };
+            let payload = info.payload.as_slice();
+            let Some(index) = data.iter().enumerate().find_map(|(index, expected)| {
+                (results[index].is_none() && payload == expected.as_slice()).then_some(index)
+            }) else {
+                continue;
+            };
 
-                    let checkpoint = latest_checkpoint
-                        .clone()
-                        .ok_or(ZoneTestError::PublishTimeout)?;
-                    results[index] = Some(PublishResult {
-                        inscription_id: tx.tx_hash(),
-                        checkpoint,
-                    });
-                    remaining -= 1;
-                }
-                _ => {}
-            }
+            results[index] = Some(PublishResult {
+                inscription_id: tx.tx_hash(),
+            });
+            remaining -= 1;
         }
 
         Ok(results.into_iter().flatten().collect())
@@ -1460,49 +1439,35 @@ pub async fn publish_atomic_zone_withdraw(
         })?;
 
     timeout(deadline.remaining()?, async {
-        let mut latest_checkpoint: Option<SequencerCheckpoint> = None;
         while let Some(event) = sequencer_events.recv().await {
-            match event {
-                Event::Checkpoint { checkpoint } => {
-                    latest_checkpoint = Some(checkpoint);
-                }
-                Event::Published { tx } => {
-                    let Some(info) = tx.inscription() else {
-                        continue;
-                    };
-                    if info.payload != inscription_data {
-                        continue;
-                    }
-                    let PublishedTx::AtomicWithdraw(info) = *tx else {
-                        // The sequencer may surface other Published events (e.g. a
-                        // plain inscription with a coincidental payload from a
-                        // concurrent flow). Skip and keep waiting for the bundle.
-                        warn!("ignoring non-AtomicWithdraw Published event while awaiting bundle");
-                        continue;
-                    };
-                    if info.withdraws.is_empty() {
-                        return Err(ZoneTestError::SubmitWithdraw {
-                            message: "atomic withdraw bundle had no withdraw ops".to_owned(),
-                        });
-                    }
-                    let checkpoint =
-                        latest_checkpoint
-                            .clone()
-                            .ok_or_else(|| ZoneTestError::SubmitWithdraw {
-                                message: "no checkpoint observed before AtomicWithdraw published"
-                                    .to_owned(),
-                            })?;
-                    let withdraws = info.withdraws.into_iter().map(|w| w.op).collect();
-                    return Ok(ZoneAtomicWithdrawSubmission {
-                        withdraws,
-                        publish: PublishResult {
-                            inscription_id: info.tx_hash,
-                            checkpoint,
-                        },
-                    });
-                }
-                _ => {}
+            let Event::Published { tx } = event else {
+                continue;
+            };
+            let Some(info) = tx.inscription() else {
+                continue;
+            };
+            if info.payload != inscription_data {
+                continue;
             }
+            let PublishedTx::AtomicWithdraw(info) = *tx else {
+                // The sequencer may surface other Published events (e.g. a
+                // plain inscription with a coincidental payload from a
+                // concurrent flow). Skip and keep waiting for the bundle.
+                warn!("ignoring non-AtomicWithdraw Published event while awaiting bundle");
+                continue;
+            };
+            if info.withdraws.is_empty() {
+                return Err(ZoneTestError::SubmitWithdraw {
+                    message: "atomic withdraw bundle had no withdraw ops".to_owned(),
+                });
+            }
+            let withdraws = info.withdraws.into_iter().map(|w| w.op).collect();
+            return Ok(ZoneAtomicWithdrawSubmission {
+                withdraws,
+                publish: PublishResult {
+                    inscription_id: info.tx_hash,
+                },
+            });
         }
         Err(ZoneTestError::SubmitWithdraw {
             message: "sequencer event channel closed before AtomicWithdraw published".to_owned(),
