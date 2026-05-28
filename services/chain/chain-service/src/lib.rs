@@ -118,6 +118,9 @@ pub enum ConsensusMsg<Tx> {
     Info {
         reply_channel: oneshot::Sender<ChainServiceInfo>,
     },
+    SequencerTimingInfo {
+        reply_channel: oneshot::Sender<SequencerTimingInfo>,
+    },
     NewBlockSubscribe {
         sender: oneshot::Sender<broadcast::Receiver<ProcessedBlockEvent>>,
     },
@@ -189,6 +192,14 @@ pub enum ChainServiceMode {
 pub struct ChainServiceInfo {
     pub cryptarchia_info: CryptarchiaInfo,
     pub mode: ChainServiceMode,
+}
+
+#[serde_as]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct SequencerTimingInfo {
+    pub slot_duration_ms: u64,
+    pub genesis_time_unix_ms: i64,
 }
 
 #[serde_as]
@@ -506,6 +517,8 @@ impl Cryptarchia {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct CryptarchiaSettings {
     pub config: lb_ledger::Config,
+    pub slot_duration: Duration,
+    pub genesis_start_time: OffsetDateTime,
     pub starting_state: StartingState,
     pub recovery_file: PathBuf,
     pub bootstrap: BootstrapConfig,
@@ -621,6 +634,8 @@ where
 
         let CryptarchiaSettings {
             config: ledger_config,
+            slot_duration,
+            genesis_start_time,
             bootstrap: bootstrap_config,
             starting_state,
             ..
@@ -782,6 +797,25 @@ where
                                 reply_channel.send(ChainServiceInfo{cryptarchia_info, mode}).unwrap_or_else(|e| {
                                     error!("Could not send consensus info through channel: {:?}", e);
                                 });
+                            }
+                            ConsensusMsg::SequencerTimingInfo { reply_channel } => {
+                                let slot_duration_ms = u64::try_from(slot_duration.as_millis())
+                                    .unwrap_or(u64::MAX);
+                                let genesis_time_unix_ms = genesis_start_time.unix_timestamp_nanos()
+                                    / 1_000_000;
+                                let genesis_time_unix_ms = i64::try_from(genesis_time_unix_ms)
+                                    .unwrap_or(i64::MAX);
+                                reply_channel
+                                    .send(SequencerTimingInfo {
+                                        slot_duration_ms,
+                                        genesis_time_unix_ms,
+                                    })
+                                    .unwrap_or_else(|e| {
+                                        error!(
+                                            "Could not send sequencer timing info through channel: {:?}",
+                                            e
+                                        );
+                                    });
                             }
                             msg => {
                                 Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
@@ -966,6 +1000,13 @@ where
                 // context. This should never be reached since we filter it out
                 // before calling process_message.
                 panic!("Info should be handled in the run loop, not in process_message");
+            }
+            ConsensusMsg::SequencerTimingInfo { .. } => {
+                // SequencerTimingInfo is handled in the run loop where service
+                // settings are available.
+                panic!(
+                    "SequencerTimingInfo should be handled in the run loop, not in process_message"
+                );
             }
             ConsensusMsg::ApplyBlock { .. } => {
                 // ApplyBlock is handled separately in the run loop where we have async

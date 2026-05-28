@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
-pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
+pub use lb_chain_service::{
+    ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, SequencerTimingInfo, Slot, State,
+};
 pub use lb_core::events::{Event, EventPayload, Events};
 use lb_core::{
     block::MAX_BLOCK_SIZE,
@@ -20,7 +22,8 @@ use lb_http_api_common::{
     },
     paths::{
         BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL,
-        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION,
+        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, CRYPTARCHIA_SEQUENCER_TIMING, MEMPOOL_ADD_TX,
+        SDP_POST_DECLARATION,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -288,6 +291,14 @@ impl CommonHttpClient {
             .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), ChainServiceInfo>(request_url, None).await
+    }
+
+    /// Get sequencer timing values derived from deployment settings.
+    pub async fn sequencer_timing_info(&self, base_url: Url) -> Result<SequencerTimingInfo, Error> {
+        let request_url = base_url
+            .join(CRYPTARCHIA_SEQUENCER_TIMING.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), SequencerTimingInfo>(request_url, None).await
     }
 
     /// Get channel state for a specific channel id.

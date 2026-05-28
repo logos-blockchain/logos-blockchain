@@ -342,6 +342,16 @@ mod tests {
             })
         }
 
+        async fn sequencer_timing_info(
+            &self,
+        ) -> Result<lb_common_http_client::SequencerTimingInfo, lb_common_http_client::Error>
+        {
+            Ok(lb_common_http_client::SequencerTimingInfo {
+                slot_duration_ms: 1_000,
+                genesis_time_unix_ms: 0,
+            })
+        }
+
         async fn channel_state(
             &self,
             _channel_id: ChannelId,

@@ -471,6 +471,34 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::CRYPTARCHIA_SEQUENCER_TIMING,
+    responses(
+        (status = 200, description = "Query sequencer deployment timing", body = lb_chain_service::SequencerTimingInfo),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn cryptarchia_sequencer_timing<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+    match chain_api.sequencer_timing_info().await {
+        Ok(info) => (StatusCode::OK, Json(info)).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
     path = paths::CRYPTARCHIA_HEADERS,
     responses(
         (status = 200, description = "Query header ids", body = Vec<HeaderId>),

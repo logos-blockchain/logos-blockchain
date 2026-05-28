@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
-use lb_common_http_client::{ChainServiceInfo, ProcessedBlockEvent, Slot};
+use lb_common_http_client::{ChainServiceInfo, ProcessedBlockEvent, SequencerTimingInfo, Slot};
 use lb_core::{
     crypto::Hash,
     header::HeaderId,
@@ -103,8 +103,6 @@ pub struct SequencerConfig {
     pub resubmit_interval: Duration,
     pub reconnect_delay: Duration,
     pub publish_channel_capacity: usize,
-    pub slot_duration: Duration,
-    pub chain_start_time: Option<SystemTime>,
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
 }
@@ -115,8 +113,6 @@ impl Default for SequencerConfig {
             resubmit_interval: DEFAULT_RESUBMIT_INTERVAL,
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
-            slot_duration: Duration::from_secs(1),
-            chain_start_time: None,
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
         }
@@ -1338,6 +1334,14 @@ where
         if self.state.is_some() && self.slot_clock.is_some() {
             return true;
         }
+        let timing_info = match self.node.sequencer_timing_info().await {
+            Ok(info) => info,
+            Err(err) => {
+                warn!(target: TARGET, "Failed to fetch sequencer timing info: {err}");
+                tokio::time::sleep(self.config.reconnect_delay).await;
+                return false;
+            }
+        };
         match self.node.consensus_info().await {
             Ok(ChainServiceInfo {
                 cryptarchia_info, ..
@@ -1354,7 +1358,16 @@ where
                 if self.state.is_none() {
                     self.state = Some(TxState::new(cryptarchia_info.lib, MsgId::root()));
                 }
-                self.slot_clock = Some(self.build_initial_slot_clock(cryptarchia_info.slot));
+                let slot_clock =
+                    match Self::build_initial_slot_clock(cryptarchia_info.slot, &timing_info) {
+                        Ok(clock) => clock,
+                        Err(err) => {
+                            warn!(target: TARGET, "Invalid sequencer timing info from node: {err}");
+                            tokio::time::sleep(self.config.reconnect_delay).await;
+                            return false;
+                        }
+                    };
+                self.slot_clock = Some(slot_clock);
                 self.publish_channel_view();
                 true
             }
@@ -1366,16 +1379,34 @@ where
         }
     }
 
-    fn build_initial_slot_clock(&self, observed_slot: Slot) -> SlotClock {
-        self.config.chain_start_time.map_or_else(
-            || SlotClock::from_observed_slot(observed_slot, self.config.slot_duration),
-            |chain_start_time| {
-                let mut slot_clock =
-                    SlotClock::from_chain_start_time(chain_start_time, self.config.slot_duration);
-                slot_clock.observe_slot(observed_slot);
-                slot_clock
-            },
-        )
+    fn build_initial_slot_clock(
+        observed_slot: Slot,
+        timing_info: &SequencerTimingInfo,
+    ) -> Result<SlotClock, Error> {
+        let slot_duration = Duration::from_millis(timing_info.slot_duration_ms);
+        if slot_duration.is_zero() {
+            return Err(Error::Network(
+                "node reported slot_duration_ms=0 for sequencer timing".to_owned(),
+            ));
+        }
+
+        let genesis_ms = u64::try_from(timing_info.genesis_time_unix_ms).map_err(|_| {
+            Error::Network(format!(
+                "node reported negative genesis_time_unix_ms: {}",
+                timing_info.genesis_time_unix_ms
+            ))
+        })?;
+        let chain_start_time = SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_millis(genesis_ms))
+            .ok_or_else(|| {
+                Error::Network(format!(
+                    "node reported out-of-range genesis_time_unix_ms: {genesis_ms}"
+                ))
+            })?;
+
+        let mut slot_clock = SlotClock::from_chain_start_time(chain_start_time, slot_duration);
+        slot_clock.observe_slot(observed_slot);
+        Ok(slot_clock)
     }
 
     async fn open_block_stream(&mut self) -> bool {
@@ -3020,6 +3051,15 @@ mod tests {
             })
         }
 
+        async fn sequencer_timing_info(
+            &self,
+        ) -> Result<SequencerTimingInfo, lb_common_http_client::Error> {
+            Ok(SequencerTimingInfo {
+                slot_duration_ms: 1_000,
+                genesis_time_unix_ms: 0,
+            })
+        }
+
         async fn channel_state(
             &self,
             _channel_id: ChannelId,
@@ -3133,6 +3173,15 @@ mod tests {
                     height: 0,
                 },
                 mode: ChainServiceMode::Started(State::Online),
+            })
+        }
+
+        async fn sequencer_timing_info(
+            &self,
+        ) -> Result<SequencerTimingInfo, lb_common_http_client::Error> {
+            Ok(SequencerTimingInfo {
+                slot_duration_ms: 1_000,
+                genesis_time_unix_ms: 0,
             })
         }
 

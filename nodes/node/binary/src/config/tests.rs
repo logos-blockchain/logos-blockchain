@@ -96,7 +96,11 @@ fn common_recovery_folder() {
         user: user_config.cryptarchia.clone(),
         deployment: deployment_settings.cryptarchia,
     }
-    .into_cryptarchia_services_settings(blend_rewards_params, &user_config.state);
+    .into_cryptarchia_services_settings(
+        blend_rewards_params,
+        deployment_settings.time.slot_duration,
+        &user_config.state,
+    );
     assert!(
         chain_service_settings
             .recovery_file

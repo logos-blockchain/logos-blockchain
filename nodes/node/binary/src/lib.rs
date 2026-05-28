@@ -150,6 +150,7 @@ pub fn run_node_from_config(
     handle: Option<runtime::Handle>,
 ) -> Result<Overwatch<RuntimeServiceId>, DynError> {
     let blend_rewards_params = config.deployment.blend_reward_params();
+    let slot_duration = config.deployment.time.slot_duration;
 
     let (blend_config, blend_core_config, blend_edge_config) = BlendConfig {
         user: config.user.blend,
@@ -171,7 +172,7 @@ pub fn run_node_from_config(
         user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
-    .into_cryptarchia_services_settings(blend_rewards_params, &config.user.state);
+    .into_cryptarchia_services_settings(blend_rewards_params, slot_duration, &config.user.state);
 
     let mempool_service_config = MempoolConfig {
         deployment: config.deployment.mempool,

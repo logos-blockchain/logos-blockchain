@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use futures::{Stream, stream};
 use lb_common_http_client::{
     ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, EventPayload, Events,
-    ProcessedBlockEvent, Slot,
+    ProcessedBlockEvent, SequencerTimingInfo, Slot,
 };
 use lb_core::{
     crypto::Hash,
@@ -27,6 +27,8 @@ pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 #[async_trait]
 pub trait Node {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, Error>;
+
+    async fn sequencer_timing_info(&self) -> Result<SequencerTimingInfo, Error>;
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error>;
 
@@ -82,6 +84,12 @@ impl NodeHttpClient {
 impl Node for NodeHttpClient {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, Error> {
         self.client.consensus_info(self.base_url.clone()).await
+    }
+
+    async fn sequencer_timing_info(&self) -> Result<SequencerTimingInfo, Error> {
+        self.client
+            .sequencer_timing_info(self.base_url.clone())
+            .await
     }
 
     async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error> {

@@ -2,6 +2,7 @@ pub const MANTLE_METRICS: &str = "/mantle/metrics";
 pub const MANTLE_STATUS: &str = "/mantle/status";
 pub const MANTLE_SDP_DECLARATIONS: &str = "/mantle/sdp/declarations";
 pub const CRYPTARCHIA_INFO: &str = "/cryptarchia/info";
+pub const CRYPTARCHIA_SEQUENCER_TIMING: &str = "/cryptarchia/sequencer-timing";
 pub const CRYPTARCHIA_HEADERS: &str = "/cryptarchia/headers";
 pub const CRYPTARCHIA_LIB_STREAM: &str = "/cryptarchia/lib-stream";
 pub const NETWORK_INFO: &str = "/network/info";
