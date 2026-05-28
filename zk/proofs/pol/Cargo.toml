@@ -10,21 +10,29 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-astro-float          = { workspace = true }
-lb-circuits-prover   = { workspace = true }
-lb-circuits-utils    = { workspace = true }
-lb-groth16           = { workspace = true }
-lb-utils             = { workspace = true }
-lb-witness-generator = { workspace = true }
-lbp-error            = { workspace = true }
-num-bigint           = { workspace = true }
-num-traits           = { workspace = true }
-serde                = { features = ["derive", "std"], workspace = true }
-serde_json           = { workspace = true }
-tracing              = { workspace = true }
+astro-float        = { workspace = true }
+lb-circuits-prover = { workspace = true }
+lb-circuits-utils  = { workspace = true }
+lb-groth16         = { workspace = true }
+lb-utils           = { features = ["serde"], workspace = true }
+lbc-pol-sys        = { features = ["prebuilt"], workspace = true }
+lbc-types          = { workspace = true }
+lbp-error          = { workspace = true }
+num-bigint         = { workspace = true }
+num-traits         = { workspace = true }
+serde              = { features = ["derive", "std"], workspace = true }
+serde_json         = { workspace = true }
+tracing            = { workspace = true }
+
+[dev-dependencies]
+divan = { workspace = true }
 
 [build-dependencies]
 lb-circuits-utils = { workspace = true }
+
+[[bench]]
+harness = false
+name    = "prove"
 
 [lints]
 workspace = true

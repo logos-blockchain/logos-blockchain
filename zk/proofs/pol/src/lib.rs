@@ -44,7 +44,6 @@ pub use wallet_inputs::{
     AGED_NOTE_MERKLE_TREE_HEIGHT, LATEST_NOTE_MERKLE_TREE_HEIGHT, PolWalletInputs,
     PolWalletInputsData,
 };
-pub use witness::Witness;
 
 pub use crate::lottery::{LotteryConstants, P};
 use crate::{inputs::PolVerifierInputJson, proving_key::POL_PROVING_KEY_PATH};
@@ -71,7 +70,7 @@ pub type ProveError = lbp_error::Error;
 ///   witness or proving from contents.
 /// - Returns a `ProveError::Json` if there is an error during JSON
 ///   serialization or deserialization.
-pub fn prove(inputs: &PolWitnessInputs) -> Result<(PoLProof, PolVerifierInput), ProveError> {
+pub fn prove(inputs: PolWitnessInputs) -> Result<(PoLProof, PolVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
     let (proof, verifier_inputs) =
         lb_circuits_prover::prover_from_contents(POL_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
@@ -259,7 +258,7 @@ mod tests {
         let witness_inputs =
             PolWitnessInputsData::from_chain_and_wallet_data(chain_data, wallet_data);
 
-        let (proof, inputs) = prove(&witness_inputs.into()).unwrap();
+        let (proof, inputs) = prove(witness_inputs.into()).unwrap();
         assert!(verify(&proof, &inputs).unwrap());
     }
 }

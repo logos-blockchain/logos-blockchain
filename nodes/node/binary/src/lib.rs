@@ -116,10 +116,6 @@ pub type StorageService = lb_storage_service::StorageService<RocksBackend, Runti
 
 pub type SystemSigService = SystemSig<RuntimeServiceId>;
 
-#[cfg(feature = "testing")]
-type TestingApiService<RuntimeServiceId> =
-    lb_api_service::ApiService<api::testing::backend::TestAxumBackend, RuntimeServiceId>;
-
 #[derive_services]
 pub struct LogosBlockchain {
     network: NetworkService,
@@ -138,9 +134,6 @@ pub struct LogosBlockchain {
     system_sig: SystemSigService,
     key_management: KeyManagementService,
     wallet: WalletService,
-
-    #[cfg(feature = "testing")]
-    testing_http: TestingApiService<RuntimeServiceId>,
 
     tracing: TracingService,
 }
@@ -215,9 +208,6 @@ pub fn run_node_from_config(
 
     let http_config = api_config.backend_settings();
 
-    #[cfg(feature = "testing")]
-    let testing_config = api_config.testing_settings();
-
     set_hook(Box::new(log_and_exit_hook));
 
     let app = OverwatchRunner::<LogosBlockchain>::run(
@@ -240,9 +230,6 @@ pub fn run_node_from_config(
             wallet: wallet_config,
 
             tracing: tracing_config,
-
-            #[cfg(feature = "testing")]
-            testing_http: testing_config,
         },
         handle,
     )

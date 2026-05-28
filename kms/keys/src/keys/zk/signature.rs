@@ -166,7 +166,7 @@ mod tests {
         let sks: ZkSignPrivateKeysData = sks.into();
         let msg_hash = Poseidon2Bn254Hasher::digest(&[BigUint::from_bytes_le(b"foo_bar").into()]);
         let input = ZkSignWitnessInputs::from_witness_data_and_message_hash(sks, msg_hash);
-        let (proof, verifier_inputs) = prove(&input).unwrap();
+        let (proof, verifier_inputs) = prove(input).unwrap();
         assert!(verify(&proof, &verifier_inputs).unwrap());
         Signature::new(proof)
     }

@@ -44,7 +44,6 @@ pub(super) fn build_node_descriptor(
     environment.push(EnvEntry::new("CFG_HOST_IDENTIFIER", node_identifier(index)));
 
     let api_port = node.general.api_config.address.port();
-    let testing_port = node.general.api_config.testing_http_address.port();
 
     NodeDescriptor::with_loopback_ports(
         node_identifier(index),
@@ -52,7 +51,7 @@ pub(super) fn build_node_descriptor(
         vec![NODE_ENTRYPOINT.to_owned()],
         base_volumes(),
         default_extra_hosts(),
-        vec![api_port, testing_port],
+        vec![api_port],
         environment,
         platform,
     )
