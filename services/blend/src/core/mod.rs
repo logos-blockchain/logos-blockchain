@@ -531,12 +531,12 @@ where
                 });
                 CoreEpochInfo {
                     public: CoreEpochPublicInfo {
-                        epoch,
-                        membership: membership_info.membership.clone(),
                         poq_core_public_inputs: CoreInputs {
-                            zk_root: root,
                             quota: config.epoch_core_quota(membership_info.membership.size()),
+                            zk_root: root,
                         },
+                        membership: membership_info.membership.clone(),
+                        epoch,
                         poq_leadership_public_inputs: LeaderInputs {
                             pol_ledger_aged: aged,
                             pol_epoch_nonce: nonce,
@@ -565,10 +565,15 @@ where
     })
     .expect("The current epoch info must be available.");
 
+    let CoreEpochInfo {
+        public: current_epoch_public_info,
+        core_poq_generator: current_epoch_core_poq_generator,
+    } = *current_epoch_info;
+
     info!(
         target: LOG_TARGET,
         "The current membership is ready: {:?}",
-        current_epoch_info.public
+        current_epoch_public_info
     );
 
     let crypto_processor = CoreCryptographicProcessor::<
@@ -577,50 +582,49 @@ where
         ProofsGenerator,
         ProofsVerifier,
     >::try_new_with_core_condition_check(
-        current_epoch_info.public.membership.clone(),
+        current_epoch_public_info.membership.clone(),
         blend_config.minimum_network_size,
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: blend_config.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: blend_config.num_blend_layers,
         },
         PoQVerificationInputsMinusSigningKey {
-            core: current_epoch_info.public.poq_core_public_inputs,
-            leader: current_epoch_info.public.poq_leadership_public_inputs,
+            core: current_epoch_public_info.poq_core_public_inputs,
+            leader: current_epoch_public_info.poq_leadership_public_inputs,
         },
-        current_epoch_info
-            .core_poq_generator
+        current_epoch_core_poq_generator
             .expect("Core PoQ generator must be present at startup: the proxy service only launches CoreMode when the node is part of the core membership."),
-        current_epoch_info.public.epoch,
+        current_epoch_public_info.epoch,
     )
     .expect("The initial membership should satisfy the core node condition");
 
     // Initialize the current epoch state. If the epoch matches the stored one,
     // retrieves the tracked consumed core quota. Else, fallback to `0`.
     let current_recovery_checkpoint = if let Some(saved_state) = last_saved_state.take()
-        && saved_state.last_seen_epoch() == current_epoch_info.public.epoch
+        && saved_state.last_seen_epoch() == current_epoch_public_info.epoch
     {
         tracing::trace!(
             target: LOG_TARGET,
             "Found recovery state for epoch {:?}: {saved_state:?}",
-            current_epoch_info.public.epoch
+            current_epoch_public_info.epoch
         );
         saved_state
     } else {
         tracing::trace!(
             target: LOG_TARGET,
             "No recovery state found for epoch {:?}. Initializing a new one.",
-            current_epoch_info.public.epoch
+            current_epoch_public_info.epoch
         );
 
         ServiceState::with_epoch(
-            current_epoch_info.public.epoch,
+            current_epoch_public_info.epoch,
             SessionBlendingTokenCollector::new(
                 &reward::SessionInfo::new(
                     // TODO: Remove once rewards remove sessions
                     0,
-                    &current_epoch_info.public.poq_leadership_public_inputs.pol_epoch_nonce,
-                    current_epoch_info.public.membership.size() as u64,
-                    current_epoch_info.public.poq_core_public_inputs.quota,
+                    &current_epoch_public_info.poq_leadership_public_inputs.pol_epoch_nonce,
+                    current_epoch_public_info.membership.size() as u64,
+                    current_epoch_public_info.poq_core_public_inputs.quota,
                     blend_config.activity_threshold_sensitivity,
                 ).expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch")
             ),
@@ -643,9 +647,9 @@ where
     let message_scheduler = SchedulerWrapper::new_with_initial_messages(
         SchedulerEpochInfo {
             core_quota: blend_config
-                .epoch_core_quota(current_epoch_info.public.membership.size())
+                .epoch_core_quota(current_epoch_public_info.membership.size())
                 .saturating_sub(current_recovery_checkpoint.spent_quota()),
-            epoch: current_epoch_info.public.epoch,
+            epoch: current_epoch_public_info.epoch,
         },
         BlakeRng::from_entropy(),
         blend_config.scheduler_settings(),
@@ -665,8 +669,8 @@ where
         blend_config.clone(),
         overwatch_handle,
         (
-            current_epoch_info.public.membership.clone(),
-            current_epoch_info.public.epoch,
+            current_epoch_public_info.membership.clone(),
+            current_epoch_public_info.epoch,
         ),
         BlakeRng::from_entropy(),
     );
@@ -676,7 +680,7 @@ where
 
     (
         remaining_epoch_stream,
-        current_epoch_info.public,
+        current_epoch_public_info,
         crypto_processor,
         current_recovery_checkpoint,
         message_scheduler,
@@ -849,12 +853,12 @@ where
                         current_epoch_info = new_epoch_info;
                         recovery_checkpoint = new_recovery_checkpoint;
                     },
-                    HandleEpochEventOutput::TransitionCompleted { current_crypto_processor, current_scheduler, new_recovery_checkpoint, current_epoch_info: epoch_info } => {
+                    HandleEpochEventOutput::TransitionCompleted { current_crypto_processor, current_scheduler, new_recovery_checkpoint, current_epoch_info: same_epoch_info } => {
                         crypto_processor = current_crypto_processor;
                         old_epoch_crypto_processor = None;
                         message_scheduler = current_scheduler;
                         old_epoch_message_scheduler = None;
-                        current_epoch_info = epoch_info;
+                        current_epoch_info = same_epoch_info;
                         recovery_checkpoint = new_recovery_checkpoint;
                     },
                     HandleEpochEventOutput::Retiring { old_crypto_processor, old_scheduler, old_token_collector, old_epoch_info } => {
@@ -1009,11 +1013,11 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
 {
     match event {
-        EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::NonEmpty(boxed_core_epoch_info)) => {
+        EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::NonEmpty(core_epoch_info)) => {
             let CoreEpochInfo {
-                core_poq_generator,
+                core_poq_generator: new_core_poq_generator,
                 public: new_epoch_info,
-            } = *boxed_core_epoch_info;
+            } = *core_epoch_info;
             let (_, _, _, _, current_epoch_blending_token_collector, _, state_updater) =
                 current_recovery_checkpoint.into_components();
 
@@ -1039,7 +1043,7 @@ where
                 epoch: new_epoch_info.epoch,
             };
 
-            let Some(core_poq_generator) = core_poq_generator else {
+            let Some(core_poq_generator) = new_core_poq_generator else {
                 tracing::info!(target: LOG_TARGET, "Local node is not part of new membership. Retiring from core.");
                 return HandleEpochEventOutput::Retiring {
                     old_crypto_processor: current_cryptographic_processor,

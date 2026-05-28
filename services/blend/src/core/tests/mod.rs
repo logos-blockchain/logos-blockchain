@@ -34,7 +34,7 @@ use crate::{
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
-    epoch_info::{EpochHandler, PolEpochInfo},
+    epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo},
     message::NetworkMessage,
     test_utils::{
