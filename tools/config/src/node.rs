@@ -57,8 +57,6 @@ pub fn create_node_user_config(config: GeneralConfig) -> UserConfig {
 fn create_api_config(config: &GeneralConfig) -> ApiConfig {
     ApiConfig {
         backend: create_axum_backend_settings(config.api_config.address),
-        #[cfg(feature = "testing")]
-        testing: create_axum_backend_settings(config.api_config.testing_http_address),
     }
 }
 

@@ -36,7 +36,5 @@ pub mod admin {
     pub const TRACING_FILTER: &str = "/admin/tracing/filter";
 }
 
-// testing paths
-pub const UPDATE_MEMBERSHIP: &str = "/test/membership/update";
-pub const DIAL_PEER: &str = "/test/network/dial_peer";
-pub const TEST_MEMPOOL_VIEW: &str = "/test/mempool/view";
+pub const DIAL_PEER: &str = "/network/dial_peer";
+pub const MEMPOOL_VIEW: &str = "/mempool/view";

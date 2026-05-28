@@ -22,18 +22,4 @@ impl ServiceConfig {
             },
         }
     }
-
-    #[cfg(feature = "testing")]
-    #[must_use]
-    pub fn testing_settings(&self) -> ApiServiceSettings<AxumBackendSettings> {
-        ApiServiceSettings {
-            backend_settings: AxumBackendSettings {
-                address: self.user.testing.listen_address,
-                cors_origins: self.user.testing.cors_origins.clone(),
-                timeout: self.user.testing.timeout,
-                max_body_size: self.user.testing.max_body_size as usize,
-                max_concurrent_requests: self.user.testing.max_concurrent_requests as usize,
-            },
-        }
-    }
 }
