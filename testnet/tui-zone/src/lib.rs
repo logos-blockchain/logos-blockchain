@@ -145,6 +145,7 @@ async fn handle_event(
             ui::render_state(state);
             ui::prompt();
         }
+        Event::TurnNotification { .. } => {}
     }
 }
 

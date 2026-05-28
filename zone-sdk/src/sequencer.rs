@@ -348,6 +348,11 @@ pub enum Event {
         tx: Box<PublishedTx>,
         checkpoint: SequencerCheckpoint,
     },
+    /// Turn-to-write status update for this sequencer.
+    ///
+    /// Emitted on the same change boundary as the `turn_to_write` watch
+    /// channel (excluding `current_slot`-only updates).
+    TurnNotification { notification: TurnNotification },
 }
 
 enum ActorRequest {
@@ -1099,15 +1104,26 @@ where
     }
 
     fn publish_turn_to_write(&self, turn_to_write: bool) {
+        let mut emitted: Option<TurnNotification> = None;
+
         self.turn_to_write_tx.send_if_modified(|current| {
             let new = self.turn_notification(turn_to_write);
-            let changed = current.our_turn_to_write != turn_to_write
+            let changed = current.our_turn_to_write != new.our_turn_to_write
                 || current.starting_slot != new.starting_slot
                 || current.ends_at_slot != new.ends_at_slot
                 || current.turn_to_write_slots != new.turn_to_write_slots;
-            *current = new;
+
+            *current = new.clone();
+            if changed {
+                emitted = Some(new);
+            }
+
             changed
         });
+
+        if let Some(notification) = emitted {
+            drop(self.event_tx.send(Event::TurnNotification { notification }));
+        }
     }
 
     fn turn_notification(&self, our_turn_to_write: bool) -> TurnNotification {
