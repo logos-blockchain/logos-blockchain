@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-pub async fn prepare_mempool_transfer_transaction(
+pub async fn prepare_transfer_transaction(
     world: &mut CucumberWorld,
     step: &str,
     transaction_alias: String,
@@ -30,7 +30,7 @@ pub async fn prepare_mempool_transfer_transaction(
         prepare_user_wallet_transaction_submission(world, step, &sender_wallet_name, intent, None)
             .await?;
     let signed = sign_prepared_user_wallet_transaction(step, prepared, Vec::new())?;
-    let tx_hash = record_prepared_mempool_transaction(world, transaction_alias.clone(), &signed);
+    let tx_hash = record_prepared_transaction(world, transaction_alias.clone(), &signed);
 
     report_prepared_transaction(
         &transaction_alias,
@@ -42,13 +42,13 @@ pub async fn prepare_mempool_transfer_transaction(
     Ok(())
 }
 
-pub async fn submit_prepared_mempool_transaction_to_nodes(
+pub async fn submit_prepared_transaction_to_nodes(
     world: &CucumberWorld,
     step: &str,
     transaction_alias: String,
     node_names: Vec<String>,
 ) -> Result<(), StepError> {
-    let signed_tx = world.resolve_prepared_mempool_transaction(&transaction_alias)?;
+    let signed_tx = world.resolve_prepared_transaction(&transaction_alias)?;
     let tx_hash = signed_tx.hash();
 
     for node_name in node_names {
@@ -66,7 +66,7 @@ pub async fn submit_prepared_mempool_transaction_to_nodes(
     Ok(())
 }
 
-pub async fn try_submit_invalid_mempool_transaction(
+pub async fn try_submit_invalid_transaction(
     world: &mut CucumberWorld,
     step: &str,
     transaction_alias: String,
@@ -86,14 +86,14 @@ pub async fn try_submit_invalid_mempool_transaction(
         Ok(()) => {
             info!(
                 target: TARGET,
-                "Submitted invalid mempool transaction `{transaction_alias}` ({:?}) to `{node_name}`",
+                "Submitted invalid transaction `{transaction_alias}` ({:?}) to `{node_name}`",
                 tx_hash
             );
         }
         Err(error) => {
             info!(
                 target: TARGET,
-                "Invalid mempool transaction `{transaction_alias}` ({:?}) was rejected by `{node_name}`: {error}",
+                "Invalid transaction `{transaction_alias}` ({:?}) was rejected by `{node_name}`: {error}",
                 tx_hash
             );
         }
@@ -132,7 +132,7 @@ fn transfer_intent(
         .map_err(|error| wallet_transaction_error(&error))
 }
 
-fn record_prepared_mempool_transaction(
+fn record_prepared_transaction(
     world: &mut CucumberWorld,
     transaction_alias: String,
     signed: &SignedUserWalletSubmission,
@@ -141,7 +141,7 @@ fn record_prepared_mempool_transaction(
 
     record_signed_user_wallet_submission(world, signed);
     world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);
-    world.remember_prepared_mempool_transaction(transaction_alias, signed.signed_tx().clone());
+    world.remember_prepared_transaction(transaction_alias, signed.signed_tx().clone());
 
     tx_hash
 }
@@ -164,7 +164,7 @@ async fn submit_prepared_transaction_to_node(
 
     info!(
         target: TARGET,
-        "Submitted prepared mempool transaction `{transaction_alias}` ({:?}) to `{node_name}`",
+        "Submitted prepared transaction `{transaction_alias}` ({:?}) to `{node_name}`",
         tx_hash
     );
 
@@ -179,7 +179,7 @@ fn report_prepared_transaction(
 ) {
     info!(
         target: TARGET,
-        "Prepared mempool transfer transaction `{transaction_alias}` ({:?}) from `{sender_wallet_name}` to `{receiver_wallet_name}`",
+        "Prepared transfer transaction `{transaction_alias}` ({:?}) from `{sender_wallet_name}` to `{receiver_wallet_name}`",
         tx_hash
     );
 }

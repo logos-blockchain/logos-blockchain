@@ -13,8 +13,8 @@ Feature: Mempool lifecycle
       | NODE_1    | 1             | WALLET_A    |              |
       | NODE_1    | 2             | WALLET_B    |              |
     When node "NODE_1" is at height 2 in 240 seconds
-    And I prepare mempool transfer transaction "TX_VISIBLE" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B"
-    And I submit prepared mempool transaction "TX_VISIBLE" to nodes:
+    And I prepare transfer transaction "TX_VISIBLE" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B"
+    And I submit prepared transaction "TX_VISIBLE" to nodes:
       | node_name |
       | NODE_1    |
     Then transaction "TX_VISIBLE" is pending in mempool of nodes in 30 seconds:
@@ -57,8 +57,8 @@ Feature: Mempool lifecycle
       | NODE_1    | 1             | WALLET_A    |              |
       | NODE_1    | 2             | WALLET_B    |              |
     When node "NODE_1" is at height 2 in 360 seconds
-    And I prepare mempool transfer transaction "TX_PENDING_RESTART" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B"
-    And I submit prepared mempool transaction "TX_PENDING_RESTART" to nodes:
+    And I prepare transfer transaction "TX_PENDING_RESTART" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B"
+    And I submit prepared transaction "TX_PENDING_RESTART" to nodes:
       | node_name |
       | NODE_1    |
     Then transaction "TX_PENDING_RESTART" is pending in mempool of nodes in 30 seconds:
@@ -96,7 +96,7 @@ Feature: Mempool lifecycle
     And no nodes are declared as blend providers
     And I start node "NODE_1"
     When node "NODE_1" is at height 2 in 240 seconds
-    And I try to submit invalid mempool transaction "TX_INVALID" to node "NODE_1"
+    And I try to submit invalid transaction "TX_INVALID" to node "NODE_1"
     Then transaction "TX_INVALID" is not included in 30 seconds
     And transaction "TX_INVALID" is not pending in mempool of all nodes in 30 seconds
     Then I stop all nodes
@@ -122,8 +122,8 @@ Feature: Mempool lifecycle
     And I start node "NODE_B1"
     When node "NODE_A1" is at height 2 in 240 seconds
     And node "NODE_B1" is at height 2 in 240 seconds
-    And I prepare mempool transfer transaction "TX_SHARED" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B"
-    And I submit prepared mempool transaction "TX_SHARED" to nodes:
+    And I prepare transfer transaction "TX_SHARED" of 100 LGO from wallet "WALLET_A" to wallet "WALLET_B"
+    And I submit prepared transaction "TX_SHARED" to nodes:
       | node_name |
       | NODE_A1   |
       | NODE_B1   |

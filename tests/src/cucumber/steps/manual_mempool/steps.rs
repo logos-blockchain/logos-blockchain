@@ -4,8 +4,8 @@ use crate::cucumber::{
     error::{StepError, StepResult},
     steps::manual_mempool::{
         actions::{
-            prepare_mempool_transfer_transaction, submit_prepared_mempool_transaction_to_nodes,
-            try_submit_invalid_mempool_transaction,
+            prepare_transfer_transaction, submit_prepared_transaction_to_nodes,
+            try_submit_invalid_transaction,
         },
         assertions::{
             assert_transaction_not_pending_on_all_nodes, assert_transaction_pending_on_nodes,
@@ -16,9 +16,9 @@ use crate::cucumber::{
 };
 
 #[when(
-    expr = "I prepare mempool transfer transaction {string} of {int} LGO from wallet {string} to wallet {string}"
+    expr = "I prepare transfer transaction {string} of {int} LGO from wallet {string} to wallet {string}"
 )]
-async fn step_prepare_mempool_transfer_transaction(
+async fn step_prepare_transfer_transaction(
     world: &mut CucumberWorld,
     step: &Step,
     transaction_alias: String,
@@ -26,7 +26,7 @@ async fn step_prepare_mempool_transfer_transaction(
     sender_wallet_name: String,
     receiver_wallet_name: String,
 ) -> StepResult {
-    prepare_mempool_transfer_transaction(
+    prepare_transfer_transaction(
         world,
         &step.value,
         transaction_alias,
@@ -37,30 +37,29 @@ async fn step_prepare_mempool_transfer_transaction(
     .await
 }
 
-#[when(expr = "I submit prepared mempool transaction {string} to nodes:")]
+#[when(expr = "I submit prepared transaction {string} to nodes:")]
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-async fn step_submit_prepared_mempool_transaction_to_nodes(
+async fn step_submit_prepared_transaction_to_nodes(
     world: &mut CucumberWorld,
     step: &Step,
     transaction_alias: String,
 ) -> StepResult {
     let node_names = parse_node_names_table(step)?;
 
-    submit_prepared_mempool_transaction_to_nodes(world, &step.value, transaction_alias, node_names)
-        .await
+    submit_prepared_transaction_to_nodes(world, &step.value, transaction_alias, node_names).await
 }
 
-#[when(expr = "I try to submit invalid mempool transaction {string} to node {string}")]
-async fn step_try_submit_invalid_mempool_transaction(
+#[when(expr = "I try to submit invalid transaction {string} to node {string}")]
+async fn step_try_submit_invalid_transaction(
     world: &mut CucumberWorld,
     step: &Step,
     transaction_alias: String,
     node_name: String,
 ) -> StepResult {
-    try_submit_invalid_mempool_transaction(world, &step.value, transaction_alias, node_name).await
+    try_submit_invalid_transaction(world, &step.value, transaction_alias, node_name).await
 }
 
 #[then(expr = "transaction {string} is pending in mempool of nodes in {int} seconds:")]
