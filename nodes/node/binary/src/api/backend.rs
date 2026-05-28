@@ -45,8 +45,9 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use super::handlers::{
     add_tx, blend_info, block, block_events, blocks_range_stream, blocks_stream,
-    cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, immutable_blocks, libp2p_info,
-    mantle_metrics, mantle_status, transaction, wallet,
+    cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, dial_peer, get_sdp_declarations,
+    immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view, transaction,
+    wallet,
 };
 use crate::{
     BlendBroadcastSettings, BlendService, TracingService, WalletService,
@@ -225,12 +226,20 @@ where
                 routing::get(libp2p_info::<RuntimeServiceId>),
             )
             .route(
+                paths::DIAL_PEER,
+                routing::post(dial_peer::<RuntimeServiceId>),
+            )
+            .route(
                 paths::BLEND_NETWORK_INFO,
                 routing::get(blend_info::<BlendService, BlendBroadcastSettings, RuntimeServiceId>),
             )
             .route(
                 paths::MEMPOOL_ADD_TX,
                 routing::post(add_tx::<MempoolStorageAdapter, RuntimeServiceId>),
+            )
+            .route(
+                paths::MEMPOOL_VIEW,
+                routing::get(mempool_view::<MempoolStorageAdapter, RuntimeServiceId>),
             )
             .route(paths::CHANNEL, routing::get(channel::<RuntimeServiceId>))
             .route(
@@ -286,6 +295,10 @@ where
                         RuntimeServiceId,
                     >,
                 ),
+            )
+            .route(
+                paths::MANTLE_SDP_DECLARATIONS,
+                routing::get(get_sdp_declarations::<RuntimeServiceId>),
             )
             .route(
                 paths::LEADER_CLAIM,

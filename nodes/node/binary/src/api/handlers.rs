@@ -40,8 +40,8 @@ use lb_http_api_common::{
     paths,
     queries::BlocksStreamQuery,
 };
-use lb_libp2p::libp2p::bytes::Bytes;
-use lb_network_service::backends::libp2p::Libp2p as Libp2pNetworkBackend;
+use lb_libp2p::{Multiaddr, libp2p::bytes::Bytes};
+use lb_network_service::{NetworkService, backends::libp2p::Libp2p as Libp2pNetworkBackend};
 use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
 };
@@ -49,7 +49,7 @@ use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
 use lb_tx_service::{
-    TxMempoolService, backend::Mempool,
+    MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
 };
 use lb_wallet_service::api::{WalletApi, WalletServiceData};
@@ -58,6 +58,7 @@ use overwatch::{
     services::{AsServiceId, ServiceData},
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
 use tracing::debug;
 
@@ -73,6 +74,11 @@ use crate::api::{
 };
 
 const TARGET: &str = "node::binary::api";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DialPeerRequestBody {
+    pub addr: Multiaddr,
+}
 
 #[derive(Debug)]
 struct ResolvedBlocksStreamWindow {
@@ -529,14 +535,36 @@ where
         + Sync
         + Display
         + 'static
-        + AsServiceId<
-            lb_network_service::NetworkService<
-                lb_network_service::backends::libp2p::Libp2p,
-                RuntimeServiceId,
-            >,
-        >,
+        + AsServiceId<NetworkService<Libp2pNetworkBackend, RuntimeServiceId>>,
 {
     make_request_and_return_response!(libp2p::libp2p_info::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::DIAL_PEER,
+    request_body = DialPeerRequestBody,
+    responses(
+        (status = 200, description = "Dial a network peer", body = PeerId),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn dial_peer<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<DialPeerRequestBody>,
+) -> Response
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<NetworkService<Libp2pNetworkBackend, RuntimeServiceId>>,
+{
+    make_request_and_return_response!(async move {
+        let peer_id = libp2p::connect_peer::<RuntimeServiceId>(&handle, req.addr).await?;
+        Ok::<PeerId, overwatch::DynError>(peer_id)
+    })
 }
 
 #[utoipa::path(
@@ -621,6 +649,176 @@ where
         <SignedMantleTx as Transaction>::Hash,
         RuntimeServiceId,
     >(&handle, tx, Transaction::hash))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MEMPOOL_VIEW,
+    responses(
+        (status = 200, description = "Get current tip mempool transaction hashes", body = Vec<TxHash>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn mempool_view<StorageAdapter, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = SignedMantleTx,
+            Key = <SignedMantleTx as Transaction>::Hash,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<
+                    HeaderId,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    make_request_and_return_response!(
+        current_tip_mempool_view::<StorageAdapter, RuntimeServiceId>(&handle)
+    )
+}
+
+async fn current_tip_mempool_view<StorageAdapter, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+) -> Result<Vec<TxHash>, DynError>
+where
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = SignedMantleTx,
+            Key = <SignedMantleTx as Transaction>::Hash,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<
+                    HeaderId,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    let consensus = consensus::cryptarchia_info::<RuntimeServiceId>(handle).await?;
+
+    mempool_view_at::<StorageAdapter, RuntimeServiceId>(handle, consensus.cryptarchia_info.tip)
+        .await
+}
+
+async fn mempool_view_at<StorageAdapter, RuntimeServiceId>(
+    handle: &OverwatchHandle<RuntimeServiceId>,
+    ancestor_hint: HeaderId,
+) -> Result<Vec<TxHash>, DynError>
+where
+    StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+            RuntimeServiceId,
+            Item = SignedMantleTx,
+            Key = <SignedMantleTx as Transaction>::Hash,
+        > + Send
+        + Sync
+        + Clone
+        + 'static,
+    StorageAdapter::Error: Debug,
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<
+            TxMempoolService<
+                MempoolNetworkAdapter<
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    RuntimeServiceId,
+                >,
+                Mempool<
+                    HeaderId,
+                    SignedMantleTx,
+                    <SignedMantleTx as Transaction>::Hash,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+        >,
+{
+    let relay = handle
+        .relay::<TxMempoolService<
+            MempoolNetworkAdapter<
+                SignedMantleTx,
+                <SignedMantleTx as Transaction>::Hash,
+                RuntimeServiceId,
+            >,
+            Mempool<
+                HeaderId,
+                SignedMantleTx,
+                <SignedMantleTx as Transaction>::Hash,
+                StorageAdapter,
+                RuntimeServiceId,
+            >,
+            StorageAdapter,
+            RuntimeServiceId,
+        >>()
+        .await?;
+    let (sender, receiver) = oneshot::channel();
+
+    relay
+        .send(MempoolMsg::View {
+            ancestor_hint,
+            reply_channel: sender,
+        })
+        .await
+        .map_err(|(error, _)| error)?;
+
+    let txs = receiver.await?;
+
+    Ok(
+        tokio_stream::StreamExt::map(txs, |tx: SignedMantleTx| tx.hash())
+            .collect()
+            .await,
+    )
 }
 
 #[utoipa::path(
@@ -930,6 +1128,24 @@ where
             RuntimeServiceId,
         >(handle, declaration)
     )
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_DECLARATIONS,
+    responses(
+        (status = 200, description = "Get current SDP declarations", body = Vec<lb_core::sdp::Declaration>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn get_sdp_declarations<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(

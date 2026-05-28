@@ -16,8 +16,8 @@ use lb_http_api_common::{
         WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
     },
     paths::{
-        BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, NETWORK_INFO,
-        TEST_MEMPOOL_VIEW,
+        BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
+        NETWORK_INFO,
     },
     queries::BlocksStreamQuery,
 };
@@ -30,37 +30,30 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone)]
 pub struct NodeHttpClient {
     base_url: Url,
-    testing_url: Option<Url>,
     http_client: CommonHttpClient,
 }
 
 impl NodeHttpClient {
     #[must_use]
-    pub fn new(base_addr: SocketAddr, testing_addr: Option<SocketAddr>) -> Self {
+    pub fn new(base_addr: SocketAddr) -> Self {
         let base_url = Url::parse(&format!("http://{base_addr}"))
             .expect("SocketAddr should always render as a valid URL host:port");
-        let testing_url = testing_addr.map(|addr| {
-            Url::parse(&format!("http://{addr}"))
-                .expect("SocketAddr should always render as a valid URL host:port")
-        });
 
-        Self::from_urls(base_url, testing_url)
+        Self::from_url(base_url)
     }
 
     #[must_use]
-    pub fn from_urls(base_url: Url, testing_url: Option<Url>) -> Self {
-        Self::from_urls_with_basic_auth(base_url, testing_url, None)
+    pub fn from_url(base_url: Url) -> Self {
+        Self::from_url_with_basic_auth(base_url, None)
     }
 
     #[must_use]
-    pub fn from_urls_with_basic_auth(
+    pub fn from_url_with_basic_auth(
         base_url: Url,
-        testing_url: Option<Url>,
         basic_auth: Option<BasicAuthCredentials>,
     ) -> Self {
         Self {
             base_url,
-            testing_url,
             http_client: CommonHttpClient::new(basic_auth),
         }
     }
@@ -70,18 +63,7 @@ impl NodeHttpClient {
     }
 
     pub async fn network_info(&self) -> Result<Libp2pInfo, Error> {
-        match self.network_info_at(self.base_url.clone()).await {
-            Ok(info) => Ok(info),
-            Err(base_err) => {
-                if let Some(testing_url) = self.testing_url.clone() {
-                    self.network_info_at(testing_url)
-                        .await
-                        .map_err(|_| base_err)
-                } else {
-                    Err(base_err)
-                }
-            }
-        }
+        self.network_info_at(self.base_url.clone()).await
     }
 
     pub async fn block(&self, id: &HeaderId) -> Result<Option<ApiBlock>, Error> {
@@ -146,21 +128,11 @@ impl NodeHttpClient {
     }
 
     pub async fn get_sdp_declarations(&self) -> Result<Vec<Declaration>, Error> {
-        if let Some(testing_url) = self.testing_url.clone()
-            && let Ok(declarations) = self.get_sdp_declarations_at(testing_url).await
-        {
-            return Ok(declarations);
-        }
-
         self.get_sdp_declarations_at(self.base_url.clone()).await
     }
 
     pub async fn test_mempool_view(&self) -> Result<Vec<TxHash>, Error> {
-        let testing_url = self
-            .testing_url
-            .clone()
-            .ok_or_else(|| Error::Client("testing api unavailable".to_owned()))?;
-        let request_url = Self::join_path(&testing_url, TEST_MEMPOOL_VIEW)?;
+        let request_url = Self::join_path(&self.base_url, MEMPOOL_VIEW)?;
 
         self.http_client
             .get::<(), Vec<TxHash>>(request_url, None)
@@ -168,11 +140,7 @@ impl NodeHttpClient {
     }
 
     pub async fn dial_peer(&self, addr: Multiaddr) -> Result<PeerId, Error> {
-        let testing_url = self
-            .testing_url
-            .clone()
-            .ok_or_else(|| Error::Client("testing api unavailable".to_owned()))?;
-        let request_url = Self::join_path(&testing_url, DIAL_PEER)?;
+        let request_url = Self::join_path(&self.base_url, DIAL_PEER)?;
 
         self.http_client
             .post::<_, PeerId>(request_url, &DialPeerRequestBody { addr })
@@ -182,11 +150,6 @@ impl NodeHttpClient {
     #[must_use]
     pub const fn base_url(&self) -> &Url {
         &self.base_url
-    }
-
-    #[must_use]
-    pub const fn testing_url(&self) -> Option<&Url> {
-        self.testing_url.as_ref()
     }
 
     /// Fetches network info from one explicit base URL.
