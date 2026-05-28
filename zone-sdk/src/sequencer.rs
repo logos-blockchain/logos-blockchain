@@ -195,12 +195,12 @@ pub struct SequencerChannelView {
     pub current_slot: Slot,
     pub own_key_index: Option<u16>,
     pub authorized_key_index: Option<u16>,
-    pub is_our_turn: bool,
+    pub our_turn_to_write: bool,
     pub tip_message: MsgId,
     pub pending_publish_txs: usize,
     pub queued_messages: usize,
-    pub posting_timeframe: Option<u32>,
-    pub posting_timeout: Option<u32>,
+    pub turn_to_write_slots: Option<u32>,
+    pub posting_timeout_slots: Option<u32>,
     pub accredited_key_count: Option<usize>,
 }
 
@@ -212,12 +212,12 @@ impl SequencerChannelView {
             current_slot: Slot::genesis(),
             own_key_index: None,
             authorized_key_index: None,
-            is_our_turn: false,
+            our_turn_to_write: false,
             tip_message: MsgId::root(),
             pending_publish_txs: 0,
             queued_messages: 0,
-            posting_timeframe: None,
-            posting_timeout: None,
+            turn_to_write_slots: None,
+            posting_timeout_slots: None,
             accredited_key_count: None,
         }
     }
@@ -414,7 +414,7 @@ pub struct SequencerHandle<Node> {
     event_tx: broadcast::Sender<Event>,
     ready_rx: watch::Receiver<bool>,
     channel_view_rx: watch::Receiver<SequencerChannelView>,
-    turn_to_write_rx: watch::Receiver<bool>,
+    turn_to_write_rx: watch::Receiver<TurnNotification>,
 }
 
 impl<Node> SequencerHandle<Node>
@@ -436,7 +436,7 @@ where
     }
 
     #[must_use]
-    pub fn subscribe_turn_to_write(&self) -> watch::Receiver<bool> {
+    pub fn subscribe_turn_to_write(&self) -> watch::Receiver<TurnNotification> {
         self.turn_to_write_rx.clone()
     }
 
@@ -659,6 +659,31 @@ where
     }
 }
 
+/// Information about whose turn it is to post and the current posting
+/// timeframe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnNotification {
+    /// True if it's currently our turn to write.
+    pub our_turn_to_write: bool,
+    /// The current turn-to-write slot starting slot.
+    pub starting_slot: Option<u64>,
+    /// The slot at which the current turn-to-write ends, if known. This is not
+    /// guaranteed to be known, as it depends on the channel config and
+    /// current slot, which may not be available at the time of
+    /// notification.
+    pub ends_at_slot: Option<u64>,
+    /// The number of slots in the current turn-to-write timeframe, if known.
+    /// This is not guaranteed to be known, as it depends on the channel
+    /// config and current slot, which may not be available at the time of
+    /// notification.
+    pub turn_to_write_slots: Option<u32>,
+    /// The current slot at the time of notification, if known. This is not
+    /// guaranteed to be known, as it depends on the channel config and
+    /// current slot, which may not be available at the time
+    /// of notification.
+    pub current_slot: Option<u64>,
+}
+
 /// Zone sequencer.
 ///
 /// The caller drives execution by calling [`next_event`](Self::next_event) in a
@@ -712,7 +737,7 @@ pub struct ZoneSequencer<Node> {
     // Readiness signal — set to true when connected and backfill is complete
     ready_tx: watch::Sender<bool>,
     channel_view_tx: watch::Sender<SequencerChannelView>,
-    turn_to_write_tx: watch::Sender<bool>,
+    turn_to_write_tx: watch::Sender<TurnNotification>,
 }
 
 impl<Node> ZoneSequencer<Node>
@@ -786,7 +811,13 @@ where
         let (ready_tx, ready_rx) = watch::channel(false);
         let (channel_view_tx, channel_view_rx) =
             watch::channel(SequencerChannelView::new(channel_id));
-        let (turn_to_write_tx, turn_to_write_rx) = watch::channel(false);
+        let (turn_to_write_tx, turn_to_write_rx) = watch::channel(TurnNotification {
+            our_turn_to_write: false,
+            starting_slot: None,
+            ends_at_slot: None,
+            turn_to_write_slots: None,
+            current_slot: None,
+        });
 
         let handle = SequencerHandle {
             request_tx,
@@ -1050,29 +1081,69 @@ where
             current_slot,
             own_key_index: self.own_key_index,
             authorized_key_index,
-            is_our_turn: self.can_publish_inscription_now(),
+            our_turn_to_write: self.can_publish_inscription_now(),
             tip_message,
             pending_publish_txs,
             queued_messages: pending_publish_txs,
-            posting_timeframe,
-            posting_timeout,
+            turn_to_write_slots: posting_timeframe,
+            posting_timeout_slots: posting_timeout,
             accredited_key_count,
         }
     }
 
     fn publish_channel_view(&self) {
         let view = self.channel_view();
-        let turn_to_write = self.is_ready() && view.is_our_turn;
+        let turn_to_write = self.is_ready() && view.our_turn_to_write;
         drop(self.channel_view_tx.send(view));
         self.publish_turn_to_write(turn_to_write);
     }
 
     fn publish_turn_to_write(&self, turn_to_write: bool) {
         self.turn_to_write_tx.send_if_modified(|current| {
-            let changed = *current != turn_to_write;
-            *current = turn_to_write;
+            let new = self.turn_notification(turn_to_write);
+            let changed = current.our_turn_to_write != turn_to_write
+                || current.starting_slot != new.starting_slot
+                || current.ends_at_slot != new.ends_at_slot
+                || current.turn_to_write_slots != new.turn_to_write_slots;
+            *current = new;
             changed
         });
+    }
+
+    fn turn_notification(&self, our_turn_to_write: bool) -> TurnNotification {
+        let Some(slot_clock) = &self.slot_clock else {
+            return TurnNotification {
+                our_turn_to_write,
+                starting_slot: None,
+                ends_at_slot: None,
+                turn_to_write_slots: None,
+                current_slot: None,
+            };
+        };
+
+        let current_slot = slot_clock.current_slot();
+        let Some(channel) = &self.channel_state else {
+            return TurnNotification {
+                our_turn_to_write,
+                starting_slot: None,
+                ends_at_slot: None,
+                turn_to_write_slots: None,
+                current_slot: Some(slot_to_u64(current_slot)),
+            };
+        };
+
+        let (_, turn_start_slot) = channel.round_robin(current_slot);
+        let turn_to_write_slots = u32::from(channel.posting_timeframe.clone());
+        let starting_slot = slot_to_u64(turn_start_slot);
+        let ends_at_slot = starting_slot.saturating_add(u64::from(turn_to_write_slots));
+
+        TurnNotification {
+            our_turn_to_write,
+            starting_slot: Some(starting_slot),
+            ends_at_slot: Some(ends_at_slot),
+            turn_to_write_slots: Some(turn_to_write_slots),
+            current_slot: Some(slot_to_u64(current_slot)),
+        }
     }
 
     fn own_key_index_for(&self, channel: &ChannelState) -> Option<u16> {

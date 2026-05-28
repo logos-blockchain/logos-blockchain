@@ -28,7 +28,7 @@ pub fn render_state(state: &InMemoryZoneState) {
         );
         eprintln!(
             "  Status: {}",
-            if view.is_our_turn {
+            if view.our_turn_to_write {
                 "our turn"
             } else {
                 "waiting for turn"
@@ -36,12 +36,12 @@ pub fn render_state(state: &InMemoryZoneState) {
         );
         eprintln!(
             "  Posting timeframe: {}",
-            view.posting_timeframe
+            view.turn_to_write_slots
                 .map_or_else(|| "unknown".to_owned(), |slots| format!("{slots} slots"))
         );
         eprintln!(
             "  Posting timeout: {}",
-            view.posting_timeout
+            view.posting_timeout_slots
                 .map_or_else(|| "unknown".to_owned(), |slots| format!("{slots} slots"))
         );
         eprintln!("  Queued messages: {}", view.queued_messages);

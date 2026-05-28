@@ -356,7 +356,7 @@ async fn step_publish_single_zone_message_for_sequencer_on_turn(
     let mut view_rx = handle.subscribe_channel_view();
 
     wait_for_channel_view(&mut view_rx, Duration::from_mins(3), |view| {
-        view.is_our_turn
+        view.our_turn_to_write
             && view.authorized_key_index.is_some()
             && view.authorized_key_index == view.own_key_index
     })
@@ -936,7 +936,7 @@ async fn wait_for_sequencing_state(
         move |view| {
             view.own_key_index == Some(own_key_index as u16)
                 && view.authorized_key_index.is_some()
-                && view.is_our_turn == is_our_turn
+                && view.our_turn_to_write == is_our_turn
                 && (is_our_turn || view.authorized_key_index != view.own_key_index)
                 && (!is_our_turn || view.authorized_key_index == Some(own_key_index as u16))
                 && view.pending_publish_txs == pending_publish_txs
@@ -984,7 +984,7 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
     let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
     let mut view_rx = handle.subscribe_channel_view();
     wait_for_channel_view(&mut view_rx, Duration::from_secs(timeout_seconds), |view| {
-        view.is_our_turn
+        view.our_turn_to_write
     })
     .await
     .map_err(|error| zone_step_error(step, &error))?;
