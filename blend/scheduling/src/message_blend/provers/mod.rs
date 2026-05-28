@@ -34,8 +34,8 @@ pub struct ProofsGeneratorSettings {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct NewCoreSessionPublicInputs {
-    pub session: u64,
+pub struct NewCoreEpochPublicInputs {
+    pub epoch: Epoch,
     pub local_node_index: usize,
     pub membership_size: usize,
     pub inputs: CoreInputs,

@@ -481,13 +481,13 @@ impl From<BlendNetworkInfo<lb_network_service::backends::libp2p::PeerId>> for Bl
     fn from(value: BlendNetworkInfo<lb_network_service::backends::libp2p::PeerId>) -> Self {
         let core_info = value.core_info.map(|core_info| {
             let mut current_session_peers = core_info
-                .current_session_peers
+                .current_epoch_peers
                 .into_iter()
                 .map(|(peer, healthy)| (peer.to_string(), healthy))
                 .collect::<Vec<_>>();
             current_session_peers.sort_by(|left, right| left.0.cmp(&right.0));
 
-            let old_session_peers = core_info.old_session_peers.map(|peers| {
+            let old_session_peers = core_info.old_epoch_peers.map(|peers| {
                 let mut peers = peers
                     .into_iter()
                     .map(|peer| peer.to_string())

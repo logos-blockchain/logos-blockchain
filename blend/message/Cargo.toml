@@ -20,6 +20,7 @@ itertools                     = { workspace = true }
 lb-blend-crypto               = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-core                       = { workspace = true }
+lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-log-targets                = { workspace = true }

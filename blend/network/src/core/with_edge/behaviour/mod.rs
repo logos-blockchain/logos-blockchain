@@ -73,13 +73,13 @@ impl Behaviour {
     #[must_use]
     pub fn new(
         config: &Config,
-        current_session_info: Membership<PeerId>,
+        current_epoch_info: Membership<PeerId>,
         protocol_name: StreamProtocol,
     ) -> Self {
         Self {
             events: VecDeque::new(),
             waker: None,
-            current_membership: current_session_info,
+            current_membership: current_epoch_info,
             connection_timeout: config.connection_timeout,
             upgraded_edge_peers: HashSet::with_capacity(config.max_incoming_connections),
             max_incoming_connections: config.max_incoming_connections,
@@ -88,8 +88,8 @@ impl Behaviour {
         }
     }
 
-    pub(crate) fn start_new_session(&mut self, new_session_info: Membership<PeerId>) {
-        self.current_membership = new_session_info;
+    pub(crate) fn start_new_epoch(&mut self, new_epoch_info: Membership<PeerId>) {
+        self.current_membership = new_epoch_info;
         // Close all the connections without waiting for the transition period,
         // so that edge nodes can retry with the new membership.
         let peers = mem::take(&mut self.upgraded_edge_peers);
@@ -112,7 +112,7 @@ impl Behaviour {
 
     fn handle_negotiated_connection(&mut self, connection: (PeerId, ConnectionId)) {
         // We need to check if we still have available connection slots, as it
-        // is possible, especially upon session transition, that more
+        // is possible, especially upon epoch transition, that more
         // than the maximum allowed number of peers are trying to
         // connect to us. So once we stream is actually upgraded, we
         // downgrade it again if we do not have space left for it. This will

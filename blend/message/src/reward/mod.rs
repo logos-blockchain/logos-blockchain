@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 pub use activity::ActivityProof;
 use lb_core::sdp::SessionNumber;
+use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use serde::{Deserialize, Serialize};
 pub use session::SessionInfo;
@@ -51,8 +52,9 @@ impl SessionBlendingTokenCollector {
     }
 
     #[must_use]
-    pub const fn session_number(&self) -> SessionNumber {
-        self.session_number
+    pub const fn epoch_number(&self) -> Epoch {
+        // TODO: Change to epochs
+        Epoch::new(self.session_number as u32)
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
@@ -84,8 +86,8 @@ impl OldSessionBlendingTokenCollector {
         // which is <= activity threshold.
         tracing::trace!(
             LOG_TARGET,
-            "Computing activity proof for session {} with activity threshold {:?} and next session randomness {:?} for {} candidate tokens",
-            self.collector.session_number(),
+            "Computing activity proof for epoch {} with activity threshold {:?} and next session randomness {:?} for {} candidate tokens",
+            self.collector.epoch_number(),
             self.collector.token_evaluation.activity_threshold(),
             self.next_session_randomness,
             self.collector.tokens.len()
@@ -128,8 +130,8 @@ impl OldSessionBlendingTokenCollector {
     }
 
     #[must_use]
-    pub const fn session_number(&self) -> SessionNumber {
-        self.collector.session_number()
+    pub const fn epoch_number(&self) -> Epoch {
+        self.collector.epoch_number()
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]

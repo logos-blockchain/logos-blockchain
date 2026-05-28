@@ -31,12 +31,12 @@ impl<NodeId> From<Membership<NodeId>> for MembershipInfo<NodeId> {
 
 #[derive(Clone)]
 #[cfg_attr(test, derive(Default))]
-/// ZK info for a new session.
+/// ZK info for a new epoch.
 pub struct ZkInfo {
     /// The merkle root of the ZK public keys of all core nodes.
     pub root: ZkHash,
     /// The merkle path (and selectors) proving the node's ZK public key is part
-    /// of the session merkle tree. This is `None` for edge nodes.
+    /// of the epoch merkle tree. This is `None` for edge nodes.
     pub core_and_path_selectors: Option<CorePathAndSelectors>,
 }
 

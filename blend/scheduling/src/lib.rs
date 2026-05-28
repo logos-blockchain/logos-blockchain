@@ -6,7 +6,7 @@ pub use message_blend::crypto::{
     serialize_encapsulated_message_with_verified_signature,
 };
 pub mod message_scheduler;
-pub use message_scheduler::SessionMessageScheduler;
+pub use message_scheduler::EpochMessageScheduler;
 pub mod stream;
 
 mod cover_traffic;

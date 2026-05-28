@@ -33,13 +33,13 @@ where
     Edge(EdgeMode<EdgeService, RuntimeServiceId>),
     EdgeAfterCore {
         mode: EdgeMode<EdgeService, RuntimeServiceId>,
-        // Keep the previous core mode for the session transition period.
+        // Keep the previous core mode for the epoch transition period.
         prev: CoreMode<CoreService, RuntimeServiceId>,
     },
     Broadcast(BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>),
     BroadcastAfterCore {
         mode: BroadcastMode<CoreService::NetworkAdapter, CoreService::NodeId, RuntimeServiceId>,
-        // Keep the previous core mode for the session transition period.
+        // Keep the previous core mode for the epoch transition period.
         prev: CoreMode<CoreService, RuntimeServiceId>,
     },
 }

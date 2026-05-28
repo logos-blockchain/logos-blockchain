@@ -41,13 +41,13 @@ async fn detect_spammy_peer() {
     // Send two messages when only one was expected.
     dialing_swarm
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &TestEncapsulatedMessage::new(b"msg1").into_inner().into(),
         )
         .unwrap();
     dialing_swarm
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &TestEncapsulatedMessage::new(b"msg2").into_inner().into(),
         )
         .unwrap();
@@ -166,7 +166,7 @@ async fn restore_healthy_peer() {
     // Send a message to the listening swarm to revert from unhealthy to healthy.
     dialing_swarm
         .behaviour_mut()
-        .force_send_message_to_current_session_peer(
+        .force_send_message_to_current_epoch_peer(
             &TestEncapsulatedMessage::new(b"msg").into_inner(),
             *listening_swarm.local_peer_id(),
         )

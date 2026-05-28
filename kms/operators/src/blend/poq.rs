@@ -66,7 +66,7 @@ impl SecureKeyOperator for PoQOperator {
                 .await
                 .map_err(Self::Error::FailedOperatorCall)?;
         drop(self.response_channel.send(poq_result).inspect_err(|_| {
-            trace!("Error sending generated proof of quota, most likely due to a session or epoch rotation that discarded the receiver side of the channel.");
+            trace!("Error sending generated proof of quota, most likely due to an epoch rotation that discarded the receiver side of the channel.");
         }));
         Ok(())
     }

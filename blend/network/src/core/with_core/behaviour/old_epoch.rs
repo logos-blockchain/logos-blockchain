@@ -8,6 +8,7 @@ use either::Either;
 use lb_blend_message::encap::validated::{
     EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use libp2p::{
     PeerId,
@@ -29,44 +30,44 @@ use crate::core::with_core::{
 
 const LOG_TARGET: &str = blend::network::core::core::behaviour::OLD;
 
-/// Defines behaviours for processing messages from the old session
-/// until the session transition period has passed.
-pub struct OldSession {
+/// Defines behaviours for processing messages from the old epoch
+/// until the epoch transition period has passed.
+pub struct OldEpoch {
     negotiated_peers: HashMap<PeerId, ConnectionId>,
     events: VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: Option<Waker>,
     message_cache: MessageCache,
-    session_number: u64,
+    epoch: Epoch,
 }
 
-impl OldSession {
+impl OldEpoch {
     #[must_use]
     pub const fn new(
         negotiated_peers: HashMap<PeerId, ConnectionId>,
         message_cache: MessageCache,
-        session_number: u64,
+        epoch: Epoch,
     ) -> Self {
         Self {
             negotiated_peers,
             message_cache,
             events: VecDeque::new(),
             waker: None,
-            session_number,
+            epoch,
         }
     }
 
     /// Publish an encapsulated message with a validated public header to all
     /// negotiated peers.
     ///
-    /// If the specified session does not match the current session, it returns
+    /// If the specified epoch does not match the current epoch, it returns
     /// an error without sending the message.
     pub(super) fn publish_message_with_validated_header(
         &mut self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
-        intended_session: u64,
+        intended_epoch: Epoch,
     ) -> Result<(), SendError> {
-        if self.session_number != intended_session {
-            return Err(SendError::InvalidSession);
+        if self.epoch != intended_epoch {
+            return Err(SendError::InvalidEpoch);
         }
         forward_validated_message_and_update_cache(
             &(message.into()),
@@ -80,16 +81,16 @@ impl OldSession {
     /// Forward an encapsulated message with a validated signature to all
     /// negotiated peers, except the specified one.
     ///
-    /// If the specified session does not match the current session, it returns
+    /// If the specified epoch does not match the current epoch, it returns
     /// an error without sending the message.
     pub(super) fn forward_message_with_validated_signature(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedSignature,
         except: PeerId,
-        intended_session: u64,
+        intended_epoch: Epoch,
     ) -> Result<(), SendError> {
-        if self.session_number != intended_session {
-            return Err(SendError::InvalidSession);
+        if self.epoch != intended_epoch {
+            return Err(SendError::InvalidEpoch);
         }
         forward_validated_message_and_update_cache(
             message,
@@ -104,14 +105,14 @@ impl OldSession {
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub(super) fn force_send_serialized_message_to_peer_at_session(
+    pub(super) fn force_send_serialized_message_to_peer_at_epoch(
         &mut self,
         serialized_message: Vec<u8>,
         peer_id: PeerId,
-        session: u64,
+        epoch: Epoch,
     ) -> Result<(), SendError> {
-        if session != self.session_number {
-            return Err(SendError::InvalidSession);
+        if epoch != self.epoch {
+            return Err(SendError::InvalidEpoch);
         }
 
         let Some(connection_id) = self.negotiated_peers.get(&peer_id) else {
@@ -119,7 +120,7 @@ impl OldSession {
         };
         tracing::trace!(
             target: LOG_TARGET,
-            "Notifying handler with peer {peer_id:?} on old session connection {connection_id:?} to deliver already-serialized message."
+            "Notifying handler with peer {peer_id:?} on old epoch connection {connection_id:?} to deliver already-serialized message."
         );
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
@@ -133,7 +134,7 @@ impl OldSession {
     /// Handles a message received from a peer.
     ///
     /// # Returns
-    /// - [`Ok(false)`] if the connection is not part of the session.
+    /// - [`Ok(false)`] if the connection is not part of the epoch.
     /// - [`Ok(true)`] if the message was successfully processed and forwarded.
     /// - [`Err(Error)`] if the message is invalid or has already been
     ///   exchanged.
@@ -152,9 +153,9 @@ impl OldSession {
             from_peer_id,
             &mut self.events,
             self.waker.take(),
-            self.session_number,
+            self.epoch,
         ).inspect_err(|receive_error| {
-            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old session: {receive_error:?}. Closing connection with spammy peer.");
+            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with spammy peer.");
             self.events.push_back(ToSwarm::NotifyHandler {
                 peer_id: from_peer_id,
                 handler: NotifyHandler::One(from_connection_id),
@@ -166,10 +167,10 @@ impl OldSession {
         Ok(true)
     }
 
-    /// Stops the old session by returning events to close all the substreams
-    /// in the old session.
+    /// Stops the old epoch by returning events to close all the substreams
+    /// in the old epoch.
     ///
-    /// It should be called once the session transition period has passed.
+    /// It should be called once the epoch transition period has passed.
     pub fn stop(self) -> VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>> {
         let mut events = VecDeque::with_capacity(self.negotiated_peers.len());
         for (&peer_id, &connection_id) in &self.negotiated_peers {
@@ -182,7 +183,7 @@ impl OldSession {
         events
     }
 
-    /// Checks if the connection is part of the old session.
+    /// Checks if the connection is part of the old epoch.
     #[must_use]
     pub fn is_negotiated(&self, (peer_id, connection_id): &(PeerId, ConnectionId)) -> bool {
         self.negotiated_peers
@@ -190,7 +191,7 @@ impl OldSession {
             .is_some_and(|&id| id == *connection_id)
     }
 
-    /// Returns the peer IDs of all negotiated peers in the old session.
+    /// Returns the peer IDs of all negotiated peers in the old epoch.
     pub fn negotiated_peer_ids(&self) -> impl Iterator<Item = &PeerId> {
         self.negotiated_peers.keys()
     }
@@ -198,7 +199,7 @@ impl OldSession {
     /// Should be called when a connection is detected as closed.
     ///
     /// It removes the connection from the states and returns [`true`]
-    /// if the connection was part of the old session.
+    /// if the connection was part of the old epoch.
     pub fn handle_closed_connection(
         &mut self,
         (peer_id, connection_id): &(PeerId, ConnectionId),
