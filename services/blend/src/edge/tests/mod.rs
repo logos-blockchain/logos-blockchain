@@ -11,14 +11,13 @@ use tokio::time::sleep;
 
 use crate::{
     edge::{
-        PendingEpochInfo, PendingEpochInfoType,
         handlers::Error,
         tests::utils::{
             MockLeaderProofsGenerator, NodeId, TestBackend, overwatch_handle, settings, spawn_run,
         },
     },
     epoch_info::PolEpochInfo,
-    membership::{MembershipInfo, chain::BlendEpochState},
+    membership::chain::BlendEpochState,
     test_utils::membership::membership,
 };
 
@@ -129,68 +128,51 @@ fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
     }
 }
 
-/// `handle_new_secret_epoch_info` creates a new message handler with the
-/// provided epoch's public and private inputs.
+/// `handle_new_epoch_event` creates a new message handler with the provided
+/// epoch's public and private inputs, and replaces it on the next epoch.
 #[test_log::test(tokio::test)]
 async fn handle_new_secret_epoch_info_recreates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
 
-    let edge_membership = membership(&[core_node], local_node);
-    let membership_info = MembershipInfo::from(edge_membership);
-
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
 
-    // Start with no handler (e.g. after an epoch transition shut it down).
     let mut handler_state: Option<
         super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
     > = None;
-    let mut buffered_epoch_info = Some(PendingEpochInfo {
-        epoch: Epoch::new(2),
-        info_type: PendingEpochInfoType::Public(Box::new(membership_info.clone())),
-    });
 
-    // Provide secret PoL info for epoch 2.
-    let new_pol_info = test_pol_epoch_info(Epoch::new(2));
-    super::handle_new_secret_epoch_info(
-        new_pol_info,
-        settings.clone(),
-        &overwatch,
+    // Public + secret for epoch 2 -> handler is created.
+    let public_2 = test_blend_epoch_state(Epoch::new(2), membership(&[core_node], local_node));
+    let secret_2 = test_pol_epoch_info(Epoch::new(2));
+    super::handle_new_epoch_event(
+        &public_2,
+        Some(&secret_2),
         &mut handler_state,
-        &mut buffered_epoch_info,
-    );
+        settings.clone(),
+        overwatch.clone(),
+    )
+    .unwrap();
     assert!(
         handler_state.is_some(),
-        "Handler should be created after secret PoL info is provided"
+        "Handler should be created when public and secret info for the same epoch are present"
     );
     assert_eq!(handler_state.as_ref().unwrap().epoch(), Epoch::new(2));
-    assert!(
-        buffered_epoch_info.is_none(),
-        "Buffered epoch info should be consumed when handler is created"
-    );
 
-    handler_state = None; // Simulate handler shutdown after an epoch transition.
-    buffered_epoch_info = Some(PendingEpochInfo {
-        epoch: Epoch::new(3),
-        info_type: PendingEpochInfoType::Public(Box::new(membership_info)),
-    });
-    // Provide secret PoL info for epoch 3 - handler should be replaced.
-    let newer_pol_info = test_pol_epoch_info(Epoch::new(3));
-    super::handle_new_secret_epoch_info(
-        newer_pol_info,
-        settings,
-        &overwatch,
+    // Public + secret for epoch 3 -> handler is replaced.
+    let public_3 = test_blend_epoch_state(Epoch::new(3), membership(&[core_node], local_node));
+    let secret_3 = test_pol_epoch_info(Epoch::new(3));
+    super::handle_new_epoch_event(
+        &public_3,
+        Some(&secret_3),
         &mut handler_state,
-        &mut buffered_epoch_info,
-    );
+        settings,
+        overwatch,
+    )
+    .unwrap();
     assert!(handler_state.is_some());
     assert_eq!(handler_state.as_ref().unwrap().epoch(), Epoch::new(3));
-    assert!(
-        buffered_epoch_info.is_none(),
-        "Buffered epoch info should be consumed when handler is created"
-    );
 }
 
 fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> BlendEpochState<NodeId> {
@@ -206,7 +188,7 @@ fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> Blend
 
 /// Two consecutive public epoch infos with no private in between (e.g. the
 /// node had no winning slot in the first epoch). The handler must stay down
-/// and the pending buffer must hold the latest public info.
+/// as long as no secret PoL info is available.
 #[test_log::test(tokio::test)]
 async fn two_publics_without_private_in_between() {
     let local_node = NodeId(99);
@@ -219,52 +201,38 @@ async fn two_publics_without_private_in_between() {
     let mut handler_state: Option<
         super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
     > = None;
-    let mut pending_epoch_info: Option<PendingEpochInfo<NodeId>> = None;
 
-    // First public: nothing buffered, nothing running -> buffer Public(1).
-    super::handle_new_epoch_info(
-        test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
-        settings.clone(),
-        &mut pending_epoch_info,
+    // First public, no secret yet -> handler must stay down.
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
+        None,
         &mut handler_state,
+        settings.clone(),
         overwatch.clone(),
     )
     .unwrap();
-
     assert!(
         handler_state.is_none(),
         "Handler must not be created without the private info"
     );
-    let pending = pending_epoch_info
-        .as_ref()
-        .expect("Public info must be buffered");
-    assert_eq!(pending.epoch, Epoch::new(1));
-    assert!(matches!(pending.info_type, PendingEpochInfoType::Public(_)));
 
-    // Second public for a later epoch with no private in between: stale public
-    // gets overwritten by the new one, handler stays down.
-    super::handle_new_epoch_info(
-        test_blend_epoch_state(Epoch::new(2), membership(&[core_node], local_node)),
-        settings,
-        &mut pending_epoch_info,
+    // Second public for a later epoch, still no secret -> handler stays down.
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(2), membership(&[core_node], local_node)),
+        None,
         &mut handler_state,
+        settings,
         overwatch,
     )
     .unwrap();
-
     assert!(
         handler_state.is_none(),
         "Handler must remain down: no private info has been received"
     );
-    let pending = pending_epoch_info
-        .as_ref()
-        .expect("Latest public info must be buffered");
-    assert_eq!(pending.epoch, Epoch::new(2));
-    assert!(matches!(pending.info_type, PendingEpochInfoType::Public(_)));
 }
 
-/// Public arrives first, then private for the same epoch: handler is created,
-/// pending buffer is cleared.
+/// Public arrives first, then private for the same epoch: handler is created
+/// on the second call once both sides line up on the same epoch.
 #[test_log::test(tokio::test)]
 async fn public_then_private_same_epoch_creates_handler() {
     let local_node = NodeId(99);
@@ -277,27 +245,29 @@ async fn public_then_private_same_epoch_creates_handler() {
     let mut handler_state: Option<
         super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
     > = None;
-    let mut pending_epoch_info: Option<PendingEpochInfo<NodeId>> = None;
 
-    super::handle_new_epoch_info(
-        test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
-        settings.clone(),
-        &mut pending_epoch_info,
+    let public_1 = test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node));
+
+    // Public for epoch 1, no secret yet -> no handler.
+    super::handle_new_epoch_event(
+        &public_1,
+        None,
         &mut handler_state,
+        settings.clone(),
         overwatch.clone(),
     )
     .unwrap();
     assert!(handler_state.is_none());
-    assert!(pending_epoch_info.is_some());
 
-    super::handle_new_secret_epoch_info(
-        test_pol_epoch_info(Epoch::new(1)),
-        settings,
-        &overwatch,
+    // Secret for epoch 1 arrives, same public -> handler is created.
+    super::handle_new_epoch_event(
+        &public_1,
+        Some(&test_pol_epoch_info(Epoch::new(1))),
         &mut handler_state,
-        &mut pending_epoch_info,
-    );
-
+        settings,
+        overwatch,
+    )
+    .unwrap();
     assert_eq!(
         handler_state
             .as_ref()
@@ -305,14 +275,10 @@ async fn public_then_private_same_epoch_creates_handler() {
             .epoch(),
         Epoch::new(1)
     );
-    assert!(
-        pending_epoch_info.is_none(),
-        "Pending buffer must be consumed when the handler is created"
-    );
 }
 
-/// Private arrives first, then public for the same epoch: handler is created,
-/// pending buffer is cleared.
+/// Secret arrives for an epoch ahead of the current public (mismatch), then
+/// public catches up to the same epoch: handler is created on the match.
 #[test_log::test(tokio::test)]
 async fn private_then_public_same_epoch_creates_handler() {
     let local_node = NodeId(99);
@@ -325,43 +291,34 @@ async fn private_then_public_same_epoch_creates_handler() {
     let mut handler_state: Option<
         super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
     > = None;
-    let mut pending_epoch_info: Option<PendingEpochInfo<NodeId>> = None;
 
-    super::handle_new_secret_epoch_info(
-        test_pol_epoch_info(Epoch::new(1)),
+    // Secret for epoch 1 while public is still on epoch 0 -> epochs mismatch,
+    // no handler.
+    let secret_1 = test_pol_epoch_info(Epoch::new(1));
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(0), membership(&[core_node], local_node)),
+        Some(&secret_1),
+        &mut handler_state,
         settings.clone(),
-        &overwatch,
-        &mut handler_state,
-        &mut pending_epoch_info,
-    );
+        overwatch.clone(),
+    )
+    .unwrap();
     assert!(handler_state.is_none());
-    let pending = pending_epoch_info
-        .as_ref()
-        .expect("Private info must be buffered");
-    assert_eq!(pending.epoch, Epoch::new(1));
-    assert!(matches!(
-        pending.info_type,
-        PendingEpochInfoType::Private(_)
-    ));
 
-    super::handle_new_epoch_info(
-        test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
-        settings,
-        &mut pending_epoch_info,
+    // Public catches up to epoch 1 -> handler is created.
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
+        Some(&secret_1),
         &mut handler_state,
+        settings,
         overwatch,
     )
     .unwrap();
-
     assert_eq!(
         handler_state
             .as_ref()
             .expect("Handler must be created")
             .epoch(),
         Epoch::new(1)
-    );
-    assert!(
-        pending_epoch_info.is_none(),
-        "Pending buffer must be consumed when the handler is created"
     );
 }
