@@ -188,7 +188,7 @@ fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> Blend
 
 /// Two consecutive public epoch infos with no private in between (e.g. the
 /// node had no winning slot in the first epoch). The handler must stay down
-/// as long as no secret PoL info is available.
+/// as long as no secret `PoL` info is available.
 #[test_log::test(tokio::test)]
 async fn two_publics_without_private_in_between() {
     let local_node = NodeId(99);
