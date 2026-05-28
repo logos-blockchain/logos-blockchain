@@ -6,6 +6,7 @@ use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
         NoteId,
+        encoding::Ops,
         gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
@@ -29,9 +30,9 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn new(context: MantleTxContext) -> Self {
         Self {
-            mantle_tx: MantleTx([].into()),
+            mantle_tx: MantleTx(Ops::empty()),
             ledger_inputs: vec![],
-            pending_transfer: TransferOp::new(Inputs::new(vec![]), Outputs::new(vec![])),
+            pending_transfer: TransferOp::new(Inputs::empty(), Outputs::new(vec![])),
             channel_multi_sig_proofs: HashMap::new(),
             context,
         }
@@ -73,7 +74,10 @@ impl MantleTxBuilder {
     #[must_use]
     pub fn extend_ledger_inputs(mut self, utxos: impl IntoIterator<Item = Utxo>) -> Self {
         for utxo in utxos {
-            self.pending_transfer.inputs.as_mut().push(utxo.id());
+            self.pending_transfer
+                .inputs
+                .try_push(utxo.id())
+                .expect("Too many inputs in transfer op.");
             self.ledger_inputs.push(utxo);
         }
         self
@@ -217,7 +221,11 @@ mod tests {
         mantle::{
             gas::MainnetGasConstants,
             ops::{
-                channel::{ChannelId, deposit::DepositOp, inscribe::InscriptionOp},
+                channel::{
+                    ChannelId,
+                    deposit::{DepositOp, Metadata},
+                    inscribe::InscriptionOp,
+                },
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
             },
@@ -253,8 +261,8 @@ mod tests {
         // Build an operation
         let op = DepositOp {
             channel_id: [0; 32].into(),
-            inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
-            metadata: b"Mint 1 to Alice in Zone".to_vec(),
+            inputs: NoteId(Fr::ZERO).into(),
+            metadata: b"Mint 1 to Alice in Zone".into(),
         };
 
         // Init a tx builder
@@ -376,8 +384,8 @@ mod tests {
             }))
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id,
-                inputs: Inputs::new(vec![NoteId(Fr::ZERO)]),
-                metadata: b"Mint 10 to Alice in Zone".to_vec(),
+                inputs: NoteId(Fr::ZERO).into(),
+                metadata: b"Mint 10 to Alice in Zone".into(),
             }))
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
@@ -425,8 +433,8 @@ mod tests {
         let builder = MantleTxBuilder::new(context)
             .push_op(Op::ChannelDeposit(DepositOp {
                 channel_id: [0; 32].into(),
-                inputs: Inputs::new(vec![deposit_input]),
-                metadata: vec![],
+                inputs: deposit_input.into(),
+                metadata: Metadata::empty(),
             }))
             .push_op(Op::SDPDeclare(SDPDeclareOp {
                 service_type: ServiceType::BlendNetwork,

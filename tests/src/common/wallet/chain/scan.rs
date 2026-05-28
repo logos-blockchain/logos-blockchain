@@ -164,7 +164,7 @@ impl WalletChainScanner {
         let mut synced_spends = Vec::new();
 
         for transfer in tx.mantle_tx.transfers() {
-            for spent in &transfer.inputs {
+            for spent in transfer.inputs.iter() {
                 for (wallet_name, utxos_by_note) in &mut self.utxos_by_wallet {
                     if utxos_by_note.remove(spent).is_some() {
                         synced_spends.push(WalletSyncedSpend {

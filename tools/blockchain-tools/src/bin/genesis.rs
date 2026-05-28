@@ -253,8 +253,12 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
     let genesis_block = build_genesis_block(notes, inscription_op, declarations)?;
 
     let block_value = struct_to_yaml_value(&genesis_block)?;
-    let patch = wrap_as_cryptarchia_genesis_block(block_value);
-    let final_config = overwrite_yaml(config_value, patch);
+    let block_patch = wrap_as_cryptarchia_genesis_block(block_value);
+    config_value = overwrite_yaml(config_value, block_patch);
+
+    let faucet_pk_value = struct_to_yaml_value(&faucet.zk_id)?;
+    let faucet_patch = wrap_as_cryptarchia_faucet_pk(faucet_pk_value);
+    let final_config = overwrite_yaml(config_value, faucet_patch);
 
     write_yaml(&final_config, args.output.as_deref())
 }
@@ -372,6 +376,21 @@ fn build_genesis_block(
 fn wrap_as_cryptarchia_genesis_block(block_value: Value) -> Value {
     let mut inner = serde_yml::Mapping::new();
     inner.insert(Value::String("genesis_block".to_owned()), block_value);
+
+    let mut outer = serde_yml::Mapping::new();
+    outer.insert(
+        Value::String("cryptarchia".to_owned()),
+        Value::Mapping(inner),
+    );
+
+    Value::Mapping(outer)
+}
+
+/// Wrap a serialised faucet public key in the mapping that corresponds to
+/// `cryptarchia.faucet_pk` in a deployment config.
+fn wrap_as_cryptarchia_faucet_pk(faucet_pk: Value) -> Value {
+    let mut inner = serde_yml::Mapping::new();
+    inner.insert(Value::String("faucet_pk".to_owned()), faucet_pk);
 
     let mut outer = serde_yml::Mapping::new();
     outer.insert(

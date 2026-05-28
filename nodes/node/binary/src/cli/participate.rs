@@ -9,12 +9,13 @@ use serde::Serialize;
 use super::ParticipateArgs;
 use crate::{
     UserConfig,
+    cli::config::keystore::{KeyTitle, Keystore},
     config::{OnUnknownKeys, deserialize_config_at_path, network::serde::nat},
 };
 
 #[derive(Serialize)]
 struct ParticipationData {
-    stakeholder_identity: ZkPublicKey,
+    stakeholder_identities: Vec<ZkPublicKey>,
     #[serde(skip_serializing_if = "Option::is_none")]
     blend: Option<BlendParticipationData>,
 }
@@ -22,6 +23,7 @@ struct ParticipationData {
 #[derive(Serialize)]
 struct BlendParticipationData {
     provider_id: Ed25519PublicKey,
+    zk_id: ZkPublicKey,
     locators: Locators,
     service_type: ServiceType,
 }
@@ -29,10 +31,27 @@ struct BlendParticipationData {
 pub fn run(args: &ParticipateArgs) -> Result<()> {
     let user_config = deserialize_config_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
 
-    let (_, stakeholder_identity) = user_config.blend_zk_key().map_err(|e| eyre!("{e}"))?;
+    let keystore_yaml = std::fs::read_to_string(&args.keystore)?;
+    let keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
+
+    let (_, stake_key) = keystore.get_zk(KeyTitle::Stake)?;
+    let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LeaderFunding)?;
+    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SdpFunding)?;
+
+    let mut stakeholder_identities = vec![
+        stake_key.to_public_key(),
+        leader_funding_key.to_public_key(),
+        sdp_funding_key.to_public_key(),
+    ];
+
+    let blend = build_blend_data(&user_config, &keystore, args.external_address)?;
+    if let Some(blend) = &blend {
+        stakeholder_identities.push(blend.zk_id);
+    }
+
     let data = ParticipationData {
-        stakeholder_identity,
-        blend: build_blend_data(&user_config, args.external_address)?,
+        stakeholder_identities,
+        blend,
     };
 
     std::fs::create_dir_all(&args.output)?;
@@ -48,6 +67,7 @@ pub fn run(args: &ParticipateArgs) -> Result<()> {
 /// `Err` when the key is present but address resolution fails.
 fn build_blend_data(
     user_config: &UserConfig,
+    keystore: &Keystore,
     external_address: Option<Ipv4Addr>,
 ) -> Result<Option<BlendParticipationData>> {
     let provider_id = match user_config.blend_provider_id() {
@@ -60,8 +80,10 @@ fn build_blend_data(
     let locator_addr = resolve_locator_addr(listen_addr, nat_config, external_address)?;
     let locator = Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?;
 
+    let (_, blend_key) = keystore.get_zk(KeyTitle::BlendZk)?;
     Ok(Some(BlendParticipationData {
         provider_id,
+        zk_id: blend_key.to_public_key(),
         locators: Locators::from(locator),
         service_type: ServiceType::BlendNetwork,
     }))

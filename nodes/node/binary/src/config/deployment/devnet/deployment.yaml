@@ -2,7 +2,7 @@ blend:
   common:
     num_blend_layers: 1
     minimum_network_size: 2
-    protocol_name: /logos-blockchain-devnet/blend/1.0.0
+    protocol_name: /logos-blockchain-devnet-0.1.3-rc.7/blend/1.0.0
     data_replication_factor: 0
   core:
     scheduler:
@@ -15,9 +15,9 @@ blend:
     normalization_constant: 1.03
     activity_threshold_sensitivity: 1
 network:
-  kademlia_protocol_name: /logos-blockchain-devnet/kad/1.0.0
-  identify_protocol_name: /logos-blockchain-devnet/identify/1.0.0
-  chain_sync_protocol_name: /logos-blockchain-devnet/chainsync/1.0.0
+  kademlia_protocol_name: /logos-blockchain-devnet-0.1.3-rc.7/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-devnet-0.1.3-rc.7/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-devnet-0.1.3-rc.7/chainsync/1.0.0
 cryptarchia:
   epoch_config:
     epoch_stake_distribution_stabilization: 3
@@ -38,13 +38,13 @@ cryptarchia:
     min_stake:
       threshold: 1
       timestamp: 0
-  gossipsub_protocol: /logos-blockchain-devnet/cryptarchia/1.0.0
+  gossipsub_protocol: /logos-blockchain-devnet-0.1.3-rc.7/cryptarchia/1.0.0
   genesis_block:
     header:
       version: Bedrock
       parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
       slot: 0
-      block_root: b5f8787ac23674822414c70eea15d842da38f2e806ede1a73cf7b5cf0277da07
+      block_root: '70972fa33358491fc6d98f97a73d32e9402742c162521ab2d929861e7b9295f3'
       proof_of_leadership:
         proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
         entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -54,42 +54,67 @@ cryptarchia:
     transactions:
     - mantle_tx:
         ops:
-          - opcode: 0
-            payload:
-              inputs: []
-              outputs:
-              - value: 1
-                pk: d204000000000000000000000000000000000000000000000000000000000000
-              - value: 100
-                pk: '2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26'
-              - value: 1
-                pk: ed266e6e887b9b97059dc1aa1b7b2e19b934291753c6336a163fe4ebaa28e717
-          - opcode: 17
-            payload:
-              channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
-              # chain_id_len=12 (u64_le), chain_id=logos-devnet (utf-8),
-              # genesis_time=2026-01-10T07:47:56Z (u64_le), epoch_nonce=[0u8; 32]
-              inscription: '0c000000000000006c6f676f732d6465766e65742c046269000000000000000000000000000000000000000000000000000000000000000000000000'
-              parent: '0000000000000000000000000000000000000000000000000000000000000000'
-              signer: '0000000000000000000000000000000000000000000000000000000000000000'
-          - opcode: 32
-            payload:
-              service_type: BN
-              locators: [ /ip4/127.0.0.1/tcp/8000 ]
-              provider_id: '86c8519f00178e9eb1fe5f4247e4bed77d4c9f6da2fb10e8a1fdd7ba6bc79fa0'
-              zk_id: '64249c75c2cb813578b75d05b215fc95f67cea5862fff047228183f22e63460e'
-              locked_note_id: '0000000000000000000000000000000000000000000000000000000000000000'
+        - opcode: 0
+          payload:
+            inputs: []
+            outputs:
+            - value: 100000
+              pk: '7dfab2c05ee11439587776a9704a86b166d7802606c01505719fc27af1bc7b1e'
+            - value: 100000
+              pk: dbfde040040915600148de9ef99aca409b0707b012f23ced36a361d32ec59b17
+            - value: 100000
+              pk: bd6dd65543fdabb10e155c1ae982ecf6e9ed02fa58140a0e5249f52aac66cb17
+            - value: 100000
+              pk: '3bd893ccdf4f4276d9eeeb0b65ba5817082a001adc84206b9705c10fe293b001'
+            - value: 18446744073709551615
+              pk: '073d876844fe35923cc0a3e43699b96fc04a0389d383c329e215f628a1bffa09'
+        - opcode: 17
+          payload:
+            channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
+            inscription: '10000000000000006465766e65742d302e312e332d7263369169fe69000000002d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
+            parent: '0000000000000000000000000000000000000000000000000000000000000000'
+            signer: '0000000000000000000000000000000000000000000000000000000000000000'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/65.108.203.235/udp/3400/quic-v1
+            provider_id: '1b5e78fd18f5bc9e3d30c5d213b6dac905da3b7d1b0698b25d28ac168d3500f7'
+            zk_id: '7dfab2c05ee11439587776a9704a86b166d7802606c01505719fc27af1bc7b1e'
+            locked_note_id: '8c39256741577fb5b3c360470b44e91fc909e92d50be2cc4fcd0cf7bba3c8e09'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/65.108.203.235/udp/3401/quic-v1
+            provider_id: c5e20d6ac656d11228d03ef05d118c2c639823108782279e6e3590fdec8986e9
+            zk_id: dbfde040040915600148de9ef99aca409b0707b012f23ced36a361d32ec59b17
+            locked_note_id: '6ba1461108bf0a339ca22f492d4ed64c1892896dc970ca538645a6a801411126'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/65.108.203.235/udp/3402/quic-v1
+            provider_id: '29442739347e970e624102d52f80847649653e24f6a57f422db85678aa3ceefc'
+            zk_id: bd6dd65543fdabb10e155c1ae982ecf6e9ed02fa58140a0e5249f52aac66cb17
+            locked_note_id: ea53c1878cc1471a351968db066b8771cd93d27b5f3567cd1506ea8c675a901c
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/65.108.203.235/udp/3403/quic-v1
+            provider_id: f86b02bb9c24d6ecb1fcf2056572cf1a8741406698a86a78cc71d0491464ff1e
+            zk_id: '3bd893ccdf4f4276d9eeeb0b65ba5817082a001adc84206b9705c10fe293b001'
+            locked_note_id: ccf395f77889f1e2837e261c189959c96518d5a6180448c88c357bfc2d9e9805
       ops_proofs:
       - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
       - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
-      - !ZkAndEd25519Sigs
-        zk_sig:
-          pi_a: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-          pi_b: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-          pi_c: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
-  faucet_pk: faf8a7e44e9f45d35efcd9043c4a55095339e229c4115dbeb6231e2b8422f610
+      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+  faucet_pk: '073d876844fe35923cc0a3e43699b96fc04a0389d383c329e215f628a1bffa09'
 time:
   slot_duration: '1.000000000'
 mempool:
-  pubsub_topic: /logos-blockchain-devnet/mempool/1.0.0
+  pubsub_topic: /logos-blockchain-devnet-0.1.3-rc.7/mempool/1.0.0

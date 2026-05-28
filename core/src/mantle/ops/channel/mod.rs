@@ -25,6 +25,13 @@ impl Display for ChannelId {
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 
+impl Display for MsgId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let hex_string = hex::encode(self.0);
+        write!(f, "{hex_string}")
+    }
+}
+
 pub type Ed25519PublicKey = lb_key_management_system_keys::keys::Ed25519PublicKey;
 
 impl MsgId {

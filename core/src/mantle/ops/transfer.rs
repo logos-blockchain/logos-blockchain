@@ -116,7 +116,7 @@ mod test {
         let pk1 = ZkPublicKey::from(Fr::from(BigUint::from(1u8)));
         let pk2 = ZkPublicKey::from(Fr::from(BigUint::from(2u8)));
         let transfer = TransferOp {
-            inputs: Inputs::new(vec![NoteId(BigUint::from(0u8).into())]),
+            inputs: NoteId(BigUint::from(0u8).into()).into(),
             outputs: Outputs::new(vec![
                 Note::new(100, pk0),
                 Note::new(200, pk1),

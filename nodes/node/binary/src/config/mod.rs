@@ -1,5 +1,6 @@
 use core::{convert::Infallible, str::FromStr};
 use std::{
+    collections::HashSet,
     io::Read,
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::{Path, PathBuf},
@@ -10,7 +11,11 @@ use ::tracing::warn;
 use clap::{Parser, ValueEnum, builder::OsStr};
 use color_eyre::eyre::{Result, eyre};
 use lb_core::sdp::ProviderId;
-use lb_key_management_system_service::keys::{Key, ZkPublicKey};
+use lb_groth16::fr_from_bytes;
+use lb_key_management_system_service::{
+    backend::preload::KeyId,
+    keys::{Key, ZkPublicKey},
+};
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
@@ -18,10 +23,6 @@ use lb_tracing::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::config::tracing::serde::{
-    filter::{EnvConfig, Layer},
-    logger::{FileConfig, GelfConfig},
-};
 pub use crate::config::{
     api::serde::Config as ApiConfig,
     blend::serde::Config as BlendConfig,
@@ -35,6 +36,13 @@ pub use crate::config::{
     time::serde::Config as TimeConfig,
     tracing::serde::Config as TracingConfig,
     wallet::serde::Config as WalletConfig,
+};
+use crate::config::{
+    network::serde::nat,
+    tracing::serde::{
+        filter::{EnvConfig, Layer},
+        logger::{FileConfig, GelfConfig},
+    },
 };
 
 pub mod api;
@@ -175,7 +183,7 @@ pub struct LogArgs {
         env = "LOG_ADDR",
         required_if_eq("backend", LoggerLayerType::Gelf)
     )]
-    log_addr: Option<String>,
+    pub log_addr: Option<String>,
 
     /// Directory for the File backend
     #[clap(
@@ -183,7 +191,7 @@ pub struct LogArgs {
         env = "LOG_DIR",
         required_if_eq("backend", LoggerLayerType::File)
     )]
-    directory: Option<PathBuf>,
+    pub directory: Option<PathBuf>,
 
     /// Prefix for the File backend
     #[clap(
@@ -191,51 +199,92 @@ pub struct LogArgs {
         env = "LOG_PATH",
         required_if_eq("backend", LoggerLayerType::File)
     )]
-    prefix: Option<PathBuf>,
+    pub prefix: Option<PathBuf>,
 
     /// Backend type
     #[clap(long = "log-backend", env = "LOG_BACKEND", value_enum)]
-    backend: Option<LoggerLayerType>,
+    pub backend: Option<LoggerLayerType>,
 
     #[clap(long = "log-level", env = "LOG_LEVEL")]
-    level: Option<String>,
+    pub level: Option<String>,
 
     /// Per-target log filter directives, e.g.
     /// `libp2p_gossipsub=info,h2=warn`
     #[clap(long = "log-filter", env = "LOG_FILTER")]
-    filter: Option<String>,
+    pub filter: Option<String>,
 
     #[clap(long = "log-file-appender", env = "LOG_APPENDER")]
-    file_appender: Option<LogFileAppenderType>,
+    pub file_appender: Option<LogFileAppenderType>,
 
     #[clap(
         long = "log-max-files",
         env = "LOG_APPENDER_MAX_FILES",
         required_if_eq("file_appender", LogFileAppenderType::RollingMaxFiles)
     )]
-    max_files: Option<usize>,
+    pub max_files: Option<usize>,
 }
 
 #[derive(Parser, Debug, Clone)]
 pub struct NetworkArgs {
     #[clap(long = "net-host", env = "NET_HOST")]
-    host: Option<IpAddr>,
+    pub host: Option<IpAddr>,
 
     #[clap(long = "net-port", env = "NET_PORT")]
-    port: Option<usize>,
+    pub port: Option<u16>,
 
     // TODO: Use either the raw bytes or the key type directly to delegate error handling to clap
     #[clap(long = "net-node-key", env = "NET_NODE_KEY")]
-    node_key: Option<String>,
+    pub node_key: Option<String>,
 
-    #[clap(long = "net-initial-peers", env = "NET_INITIAL_PEERS", num_args = 1.., value_delimiter = ',')]
+    /// External address for nodes with a known public IP (disables NAT
+    /// traversal). Format: /ip4/<public-ip>/udp/<port>/quic-v1
+    #[clap(long = "external-address")]
+    pub external_address: Option<Multiaddr>,
+
+    #[clap(
+        long = "net-initial-peers",
+        short = 'p',
+        env = "NET_INITIAL_PEERS",
+        num_args = 1..,
+        value_delimiter = ','
+    )]
     pub initial_peers: Option<Vec<Multiaddr>>,
 }
 
 #[derive(Parser, Debug, Clone)]
 pub struct BlendArgs {
     #[clap(long = "blend-addr", env = "BLEND_ADDR")]
-    blend_addr: Option<Multiaddr>,
+    pub blend_addr: Option<Multiaddr>,
+
+    #[clap(long = "blend-signing-key-id", env = "BLEND_SIGNING_KEY_ID")]
+    pub blend_signing_key_id: Option<KeyId>,
+
+    #[clap(long = "blend-secret-key-id", env = "BLEND_SECRET_KEY_ID")]
+    pub blend_secret_key_id: Option<KeyId>,
+}
+
+#[derive(Parser, Debug, Clone, Copy)]
+pub struct CryptarchiaArgs {
+    #[clap(
+        long = "cryptarchia-funding-pk",
+        env = "CRYPTARCHIA_FUNDING_PK",
+        value_parser = parse_hex_public_key
+    )]
+    pub cryptarchia_funding_pk: Option<ZkPublicKey>,
+
+    /// Overwrite IBD peer list with an empty list.
+    #[clap(long = "disable-ibd-peers", default_value_t = false)]
+    pub disable_ibd_peers: bool,
+}
+
+#[derive(Parser, Debug, Clone, Copy)]
+pub struct SdpArgs {
+    #[clap(
+        long = "sdp-funding-pk",
+        env = "SDP_FUNDING_PK",
+        value_parser = parse_hex_public_key
+    )]
+    pub sdp_funding_pk: Option<ZkPublicKey>,
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -447,6 +496,7 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
         host,
         port,
         node_key,
+        external_address,
         initial_peers,
     } = network_args;
 
@@ -457,12 +507,16 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
     }
 
     if let Some(port) = port {
-        network.backend.swarm.port = port as u16;
+        network.backend.swarm.port = port;
     }
 
     if let Some(node_key) = node_key {
         let mut key_bytes = hex::decode(node_key)?;
         network.backend.swarm.node_key = SecretKey::try_from_bytes(key_bytes.as_mut_slice())?;
+    }
+
+    if let Some(external_address) = external_address {
+        network.backend.swarm.nat = nat::Config::Static { external_address };
     }
 
     if let Some(peers) = initial_peers {
@@ -473,10 +527,47 @@ pub fn update_network(network: &mut NetworkConfig, network_args: NetworkArgs) ->
 }
 
 pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
-    let BlendArgs { blend_addr } = blend_args;
+    let BlendArgs {
+        blend_addr,
+        blend_signing_key_id,
+        blend_secret_key_id,
+    } = blend_args;
 
     if let Some(addr) = blend_addr {
         blend.set_listening_address(addr);
+    }
+
+    if let Some(key_id) = blend_signing_key_id {
+        blend.set_non_ephemeral_signing_key_id(key_id);
+    }
+
+    if let Some(key_id) = blend_secret_key_id {
+        blend.set_secret_zk_key_id(key_id);
+    }
+}
+
+pub fn update_cryptarchia(cryptarchia: &mut CryptarchiaConfig, cryptarchia_args: CryptarchiaArgs) {
+    let CryptarchiaArgs {
+        cryptarchia_funding_pk: funding_pk,
+        disable_ibd_peers,
+    } = cryptarchia_args;
+
+    if let Some(pk) = funding_pk {
+        cryptarchia.set_funding_pk(pk);
+    }
+
+    if disable_ibd_peers {
+        cryptarchia.network.bootstrap.ibd.peers = HashSet::new();
+    }
+}
+
+pub const fn update_sdp(sdp: &mut SdpConfig, sdp_args: SdpArgs) {
+    let SdpArgs {
+        sdp_funding_pk: funding_pk,
+    } = sdp_args;
+
+    if let Some(pk) = funding_pk {
+        sdp.set_funding_pk(pk);
     }
 }
 
@@ -615,4 +706,13 @@ impl From<RunConfig> for UserConfig {
     fn from(value: RunConfig) -> Self {
         value.user
     }
+}
+
+pub fn parse_hex_public_key(key: &str) -> Result<ZkPublicKey, String> {
+    let bytes = hex::decode(key).map_err(|e| format!("Failed to parse hex string: {e}"))?;
+
+    let fr =
+        fr_from_bytes(&bytes).map_err(|e| format!("Failed to deserialize Fr from bytes: {e}"))?;
+
+    Ok(ZkPublicKey::new(fr))
 }

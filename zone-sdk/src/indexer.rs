@@ -5,6 +5,8 @@ use tracing::warn;
 
 use crate::{ZoneMessage, adapter};
 
+const TARGET: &str = "zone_sdk::indexer";
+
 /// Indexer errors.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -45,7 +47,7 @@ where
                 {
                     Ok(stream) => stream,
                     Err(e) => {
-                        warn!("Failed to fetch LIB block {header_id}: {e}");
+                        warn!(target: TARGET, "Failed to fetch LIB block {header_id}: {e}");
                         // TODO: return error to stream, and stop stream
                         return None;
                     }
@@ -100,7 +102,7 @@ where
             {
                 Ok(messages) => Some((messages, end_slot + 1)),
                 Err(e) => {
-                    warn!(
+                    warn!(target: TARGET,
                         ?current_slot, ?end_slot, err = ?e,
                         "Failed to fetch zone messages from blocks",
                     );
@@ -125,7 +127,11 @@ mod tests {
     };
     use lb_core::{
         header::HeaderId,
-        mantle::{NoteId, SignedMantleTx, ledger::Inputs, ops::channel::MsgId},
+        mantle::{
+            NoteId, SignedMantleTx,
+            ledger::Inputs,
+            ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
+        },
     };
     use lb_groth16::Fr;
     use lb_http_api_common::queries::BlocksStreamQuery;
@@ -147,7 +153,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
+                deposit_msg([NoteId::from(Fr::from(10u32))].into(), 0, [10].into()),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
@@ -167,7 +173,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
+                deposit_msg([NoteId::from(Fr::from(10u32))].into(), 0, [10].into()),
                 Slot::new(1),
             ),
             (block_msg(2, &[2]), Slot::new(2)), // after LIB
@@ -186,12 +192,12 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
+                deposit_msg([NoteId::from(Fr::from(10u32))].into(), 0, [10].into()),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), 0, &[11]),
+                deposit_msg([NoteId::from(Fr::from(11u32))].into(), 0, [11].into()),
                 Slot::new(2),
             ),
             (block_msg(3, &[3]), Slot::new(2)),
@@ -211,7 +217,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
+                deposit_msg([NoteId::from(Fr::from(10u32))].into(), 0, [10].into()),
                 Slot::new(0),
             ),
             (block_msg(2, &[2]), Slot::new(1)),
@@ -246,7 +252,7 @@ mod tests {
         let messages = vec![
             (block_msg(1, &[1]), Slot::new(0)),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(10u32))]), 0, &[10]),
+                deposit_msg([NoteId::from(Fr::from(10u32))].into(), 0, [10].into()),
                 BATCH_SIZE,
             ),
             (
@@ -258,7 +264,7 @@ mod tests {
                 BATCH_SIZE.into_inner().checked_mul(2).unwrap().into(),
             ),
             (
-                deposit_msg(Inputs::new(vec![NoteId::from(Fr::from(11u32))]), 0, &[11]),
+                deposit_msg([NoteId::from(Fr::from(11u32))].into(), 0, [11].into()),
                 BATCH_SIZE.into_inner().checked_mul(3).unwrap().into(),
             ),
             (
@@ -297,15 +303,15 @@ mod tests {
     fn block_msg(id: u8, data: &[u8]) -> ZoneMessage {
         ZoneMessage::Block(ZoneBlock {
             id: msg_id(id),
-            data: data.to_vec(),
+            data: Inscription::try_from(data).unwrap(),
         })
     }
 
-    fn deposit_msg(inputs: Inputs, amount: u64, metadata: &[u8]) -> ZoneMessage {
+    fn deposit_msg(inputs: Inputs, amount: u64, metadata: Metadata) -> ZoneMessage {
         ZoneMessage::Deposit(Deposit {
             inputs,
             amount,
-            metadata: metadata.to_vec(),
+            metadata,
         })
     }
 
@@ -334,6 +340,14 @@ mod tests {
                 },
                 mode: ChainServiceMode::Started(State::Online),
             })
+        }
+
+        async fn channel_state(
+            &self,
+            _channel_id: ChannelId,
+        ) -> Result<Option<lb_core::mantle::channel::ChannelState>, lb_common_http_client::Error>
+        {
+            Ok(None)
         }
 
         async fn block_stream(
@@ -402,13 +416,6 @@ mod tests {
             &self,
             _tx: SignedMantleTx,
         ) -> Result<(), lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
-        async fn channel_state(
-            &self,
-            _channel_id: ChannelId,
-        ) -> Result<lb_core::mantle::channel::ChannelState, lb_common_http_client::Error> {
             unimplemented!()
         }
     }

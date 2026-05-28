@@ -705,7 +705,7 @@ mod tests {
         // - alice is minted 104 NMO in two notes (100 NMO and 4 NMO)
         // - voucher v1 is ours -> should be tracked
         let transfer1 = TransferOp {
-            inputs: Inputs::new(vec![]),
+            inputs: Inputs::empty(),
             outputs: Outputs::new(vec![Note::new(100, alice), Note::new(4, alice)]),
         };
         // immediately lock the 2nd note from `transfer1`
@@ -740,7 +740,7 @@ mod tests {
             voucher_cm: v2_cm,
             spent_notes: vec![alice_100_nmo_utxo.id()],
             transfers: vec![TransferOp {
-                inputs: Inputs::new(vec![alice_100_nmo_utxo.id()]),
+                inputs: [alice_100_nmo_utxo.id()].into(),
                 outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
             }],
             // Unknown locked note that will be ignored
@@ -847,7 +847,7 @@ mod tests {
 
         if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
             // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, Inputs::new(vec![utxo2.id()]));
+            assert_eq!(transfer_op.inputs, utxo2.id().into());
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,

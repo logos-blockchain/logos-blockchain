@@ -28,6 +28,8 @@ pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
 pub trait Node {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, Error>;
 
+    async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error>;
+
     async fn block_stream(&self) -> Result<BoxStream<ProcessedBlockEvent>, Error>;
 
     async fn blocks_range_stream(
@@ -61,8 +63,6 @@ pub trait Node {
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
 
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
-
-    async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error>;
 }
 
 #[derive(Clone)]
@@ -82,6 +82,12 @@ impl NodeHttpClient {
 impl Node for NodeHttpClient {
     async fn consensus_info(&self) -> Result<ChainServiceInfo, Error> {
         self.client.consensus_info(self.base_url.clone()).await
+    }
+
+    async fn channel_state(&self, channel_id: ChannelId) -> Result<Option<ChannelState>, Error> {
+        self.client
+            .channel_state(self.base_url.clone(), channel_id)
+            .await
     }
 
     async fn block_stream(&self) -> Result<BoxStream<ProcessedBlockEvent>, Error> {
@@ -199,12 +205,6 @@ impl Node for NodeHttpClient {
             .post_transaction(self.base_url.clone(), tx)
             .await
     }
-
-    async fn channel_state(&self, channel_id: ChannelId) -> Result<ChannelState, Error> {
-        self.client
-            .get_channel_state(self.base_url.clone(), channel_id)
-            .await
-    }
 }
 
 /// Returns true if `transactions` contains any deposit op on `channel_id`.
@@ -266,7 +266,7 @@ fn op_to_zone_message(
         Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
             Some(ZoneMessage::Block(ZoneBlock {
                 id: inscribe.id(),
-                data: inscribe.inscription.clone().into(),
+                data: inscribe.inscription.clone(),
             }))
         }
         Op::ChannelDeposit(deposit) if deposit.channel_id == channel_id => {

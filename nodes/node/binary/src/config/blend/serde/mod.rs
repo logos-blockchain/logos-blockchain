@@ -46,7 +46,16 @@ impl Config {
             edge: EdgeConfig::default(),
         }
     }
+
     pub fn set_listening_address(&mut self, addr: Multiaddr) {
         self.core.backend.listening_address = addr;
+    }
+
+    pub fn set_non_ephemeral_signing_key_id(&mut self, key_id: KeyId) {
+        self.non_ephemeral_signing_key_id = key_id;
+    }
+
+    pub fn set_secret_zk_key_id(&mut self, key_id: KeyId) {
+        self.core.zk.secret_key_kms_id = key_id;
     }
 }

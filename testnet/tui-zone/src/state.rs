@@ -1,5 +1,8 @@
 use lb_core::mantle::ops::channel::MsgId;
-use lb_zone_sdk::{sequencer::SequencerCheckpoint, state::InscriptionInfo};
+use lb_zone_sdk::{
+    sequencer::{SequencerChannelView, SequencerCheckpoint},
+    state::InscriptionInfo,
+};
 
 use crate::message::Msg;
 
@@ -43,6 +46,7 @@ pub struct InMemoryZoneState {
     adopted: Vec<Msg>,
     finalized: Vec<Msg>,
     checkpoint: Option<SequencerCheckpoint>,
+    channel_view: Option<SequencerChannelView>,
 }
 
 impl ZoneState for InMemoryZoneState {
@@ -102,5 +106,15 @@ impl ZoneState for InMemoryZoneState {
 
     fn load_checkpoint(&self) -> Option<&SequencerCheckpoint> {
         self.checkpoint.as_ref()
+    }
+}
+
+impl InMemoryZoneState {
+    pub fn set_channel_view(&mut self, channel_view: SequencerChannelView) {
+        self.channel_view = Some(channel_view);
+    }
+
+    pub const fn channel_view(&self) -> Option<&SequencerChannelView> {
+        self.channel_view.as_ref()
     }
 }

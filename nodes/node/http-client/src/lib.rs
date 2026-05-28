@@ -97,6 +97,10 @@ pub struct CommonHttpClient {
 }
 
 impl CommonHttpClient {
+    fn is_channel_not_found(body: &str) -> bool {
+        body.to_ascii_lowercase().contains("channel not found")
+    }
+
     #[must_use]
     pub fn new(basic_auth: Option<BasicAuthCredentials>) -> Self {
         let initial_stream_window_size: u32 =
@@ -278,26 +282,46 @@ impl CommonHttpClient {
         self.post(request_url, declaration).await
     }
 
-    /// Get the on-chain state for a channel (`accredited_keys`,
-    /// `withdrawal_nonce`, balance, etc.). Returns the tip-of-chain view.
-    pub async fn get_channel_state(
-        &self,
-        base_url: Url,
-        channel_id: ChannelId,
-    ) -> Result<ChannelState, Error> {
-        let path = CHANNEL
-            .trim_start_matches('/')
-            .replace(":id", &channel_id.to_string());
-        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
-        self.get::<(), ChannelState>(request_url, None).await
-    }
-
     /// Get consensus info (tip, height, etc.)
     pub async fn consensus_info(&self, base_url: Url) -> Result<ChainServiceInfo, Error> {
         let request_url = base_url
             .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), ChainServiceInfo>(request_url, None).await
+    }
+
+    /// Get channel state for a specific channel id.
+    pub async fn channel_state(
+        &self,
+        base_url: Url,
+        channel_id: ChannelId,
+    ) -> Result<Option<ChannelState>, Error> {
+        let path = CHANNEL
+            .trim_start_matches('/')
+            .replace(":id", &hex::encode(channel_id.as_ref()));
+        let request_url = base_url.join(path.as_str()).map_err(Error::Url)?;
+
+        let mut request = self.client.get(request_url);
+        if let Some(basic_auth) = &self.basic_auth {
+            request = request.basic_auth(&basic_auth.username, basic_auth.password.as_deref());
+        }
+
+        let response = request.send().await.map_err(Error::Request)?;
+        let status = response.status();
+        let body = response.text().await.map_err(Error::Request)?;
+
+        match status {
+            StatusCode::OK => serde_json::from_str::<ChannelState>(&body)
+                .map(Some)
+                .map_err(|e| Error::Server(format!("Failed to parse response: {e}"))),
+            StatusCode::NOT_FOUND => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR if Self::is_channel_not_found(&body) => Ok(None),
+            StatusCode::INTERNAL_SERVER_ERROR => Err(Error::Server(body)),
+            _ if Self::is_channel_not_found(&body) => Ok(None),
+            _ => Err(Error::Server(format!(
+                "Unexpected response [{status}]: {body}",
+            ))),
+        }
     }
 
     /// Get immutable blocks in a slot range.

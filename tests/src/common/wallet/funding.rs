@@ -221,7 +221,14 @@ pub fn build_wallet_funded_transfer(
 
     let selected_inputs = selected_inputs.into_utxos();
     let transfer = TransferOp {
-        inputs: Inputs::new(selected_inputs.iter().map(Utxo::id).collect()),
+        inputs: Inputs::new(
+            selected_inputs
+                .iter()
+                .map(Utxo::id)
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("Too many inputs for transfer op."),
+        ),
         outputs: Outputs::new(transfer_outputs),
     };
 

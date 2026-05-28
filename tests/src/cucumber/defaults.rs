@@ -29,6 +29,7 @@ pub const SNAPSHOT_STATE_SUBDIRS: [&str; 2] = ["db", "recovery"];
 pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL";
 pub const CUCUMBER_DEPLOYER_COMPOSE: &str = "CUCUMBER_DEPLOYER_COMPOSE";
 pub const CUCUMBER_DEPLOYER_K8S: &str = "CUCUMBER_DEPLOYER_K8S";
+pub const MAX_CUCUMBER_CONCURRENT_SCENARIOS: &str = "MAX_CUCUMBER_CONCURRENT_SCENARIOS";
 
 /// Set an environment variable to a default value if it is not already set.
 pub fn set_default_env(key: &str, value: &str) {

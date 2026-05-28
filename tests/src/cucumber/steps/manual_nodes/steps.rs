@@ -996,6 +996,7 @@ fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
         .map(|(node_name, info)| (node_name.clone(), info.started_node.name.clone()))
         .collect();
 
+    world.zone.clear();
     stop_active_manual_cluster(world)?;
 
     if let Some(snapshot_name) = world.blockchain_snapshot_name_on_stop.as_ref() {

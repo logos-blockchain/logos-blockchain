@@ -32,4 +32,8 @@ impl Config {
             service: service::Config::default(),
         }
     }
+
+    pub const fn set_funding_pk(&mut self, pk: ZkPublicKey) {
+        self.leader.wallet.funding_pk = pk;
+    }
 }
