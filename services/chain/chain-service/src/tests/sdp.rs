@@ -34,7 +34,7 @@ fn test_yield_sdp_snapshot_from_genesis() {
             .await
             .expect("1st snapshot must be yielded almost immediately")
             .expect("stream ended unexpectedly");
-        assert_eq!(first.epoch, 0.into());
+        assert_eq!(first.epoch, 0);
         assert_eq!(first.providers.len(), 1);
 
         // 2nd snapshot must be yielded after an epoch has elapsed.
@@ -44,7 +44,7 @@ fn test_yield_sdp_snapshot_from_genesis() {
             .await
             .expect("2nd snapshot not received in time")
             .expect("stream ended unexpectedly");
-        assert_eq!(second.epoch, 1.into());
+        assert_eq!(second.epoch, 1);
         assert_eq!(second.providers, first.providers);
 
         // 3rd snapshot must be yielded after another epoch has elapsed.
@@ -54,7 +54,7 @@ fn test_yield_sdp_snapshot_from_genesis() {
             .await
             .expect("3rd snapshot not received in time")
             .expect("stream ended unexpectedly");
-        assert_eq!(third.epoch, 2.into());
+        assert_eq!(third.epoch, 2);
         assert_eq!(third.providers, first.providers);
     });
 

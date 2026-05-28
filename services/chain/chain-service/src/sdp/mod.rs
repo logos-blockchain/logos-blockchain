@@ -46,7 +46,7 @@ async fn take_sdp_snapshot<Storage>(
 where
     Storage: storage::Storage + Sync,
 {
-    if epoch == 0.into() || epoch == 1.into() {
+    if epoch == 0 || epoch == 1 {
         return Ok((genesis_declarations.clone(), Slot::genesis()));
     }
 
