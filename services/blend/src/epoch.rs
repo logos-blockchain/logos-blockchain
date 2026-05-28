@@ -9,7 +9,7 @@ use lb_chain_service::Epoch;
 // everything case-specific is an enum.
 pub enum MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator> {
     Empty { epoch: Epoch },
-    NonEmpty(CoreEpochInfo<NodeId, CorePoQGenerator>),
+    NonEmpty(Box<CoreEpochInfo<NodeId, CorePoQGenerator>>),
 }
 
 impl<NodeId, CorePoQGenerator> From<Epoch> for MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator> {
@@ -22,7 +22,7 @@ impl<NodeId, CorePoQGenerator> From<CoreEpochInfo<NodeId, CorePoQGenerator>>
     for MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>
 {
     fn from(core_epoch_info: CoreEpochInfo<NodeId, CorePoQGenerator>) -> Self {
-        Self::NonEmpty(core_epoch_info)
+        Self::NonEmpty(Box::new(core_epoch_info))
     }
 }
 

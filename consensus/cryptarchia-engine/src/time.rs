@@ -1,4 +1,7 @@
-use core::fmt::{self, Display, Formatter};
+use core::{
+    cmp::Ordering,
+    fmt::{self, Display, Formatter},
+};
 use std::{
     num::NonZero,
     ops::{Add, Sub},
@@ -55,6 +58,30 @@ impl Epoch {
 impl Display for Epoch {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "Epoch({})", self.0)
+    }
+}
+
+impl PartialEq<u32> for Epoch {
+    fn eq(&self, other: &u32) -> bool {
+        self.0 == *other
+    }
+}
+
+impl PartialEq<Epoch> for u32 {
+    fn eq(&self, other: &Epoch) -> bool {
+        *self == other.0
+    }
+}
+
+impl PartialOrd<u32> for Epoch {
+    fn partial_cmp(&self, other: &u32) -> Option<Ordering> {
+        self.0.partial_cmp(other)
+    }
+}
+
+impl PartialOrd<Epoch> for u32 {
+    fn partial_cmp(&self, other: &Epoch) -> Option<Ordering> {
+        self.partial_cmp(&other.0)
     }
 }
 

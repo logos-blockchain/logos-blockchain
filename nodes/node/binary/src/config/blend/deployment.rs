@@ -24,13 +24,13 @@ impl Settings {
         *slot_duration
     }
 
-    /// Number of rounds per epoch, calculated as the number of slots per
+    /// Number of rounds per session, calculated as the number of slots per
     /// epoch, correctly scaled to account for the slot/round ratio.
     #[must_use]
-    pub fn rounds_per_epoch(&self, slots_per_epoch: u64, slot_duration: &Duration) -> NonZeroU64 {
+    pub fn rounds_per_session(&self, slots_per_epoch: u64, slot_duration: &Duration) -> NonZeroU64 {
         ((slots_per_epoch * slot_duration.as_secs()) / self.round_duration(slot_duration).as_secs())
             .try_into()
-            .expect("There must be at least one round per epoch.")
+            .expect("There must be at least one round per session.")
     }
 
     /// Number of rounds per interval, calculated as the average number of slots
@@ -65,12 +65,12 @@ impl Settings {
         .unwrap()
     }
 
-    /// Number of rounds per epoch transition period.
+    /// Number of rounds per session transition period.
     ///
     /// The Blend spec defines this as roughly the same as
     /// [`rounds_per_interval`].
     #[must_use]
-    pub fn rounds_per_epoch_transition_period(
+    pub fn rounds_per_session_transition_period(
         &self,
         slots_per_block: u64,
         slot_duration: &Duration,
@@ -88,9 +88,10 @@ impl Settings {
         slots_per_block: u64,
         slot_duration: &Duration,
     ) -> NonZeroU64 {
-        let rounds_per_epoch_transition_period =
-            self.rounds_per_epoch_transition_period(slots_per_block, slot_duration);
-        ((self.round_duration(slot_duration).as_secs() * rounds_per_epoch_transition_period.get())
+        let rounds_per_session_transition_period =
+            self.rounds_per_session_transition_period(slots_per_block, slot_duration);
+        ((self.round_duration(slot_duration).as_secs()
+            * rounds_per_session_transition_period.get())
             / slot_duration.as_secs())
         .try_into()
         .expect("There must be at least one slot per epoch transition period.")
@@ -108,7 +109,7 @@ impl Settings {
             message_frequency_per_round: self.core.scheduler.cover.message_frequency_per_round,
             minimum_network_size: self.common.minimum_network_size.into(),
             num_blend_layers: self.common.num_blend_layers,
-            rounds_per_session: self.rounds_per_epoch(
+            rounds_per_session: self.rounds_per_session(
                 cryptarchia_deployment.slots_per_epoch(),
                 &time_deployment.slot_duration,
             ),
@@ -198,7 +199,7 @@ mod tests {
         assert_eq!(
             deployment
                 .blend
-                .rounds_per_epoch(slots_per_epoch, &slot_duration),
+                .rounds_per_session(slots_per_epoch, &slot_duration),
             EXPECTED_ROUNDS_PER_SESSION
         );
 
@@ -217,7 +218,7 @@ mod tests {
         assert_eq!(
             deployment
                 .blend
-                .rounds_per_epoch_transition_period(slots_per_block, &slot_duration),
+                .rounds_per_session_transition_period(slots_per_block, &slot_duration),
             EXPECTED_ROUNDS_PER_SESSION_TRANSITION_PERIOD
         );
 

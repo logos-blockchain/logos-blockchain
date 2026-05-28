@@ -6,7 +6,6 @@ use std::collections::HashSet;
 
 pub use activity::ActivityProof;
 use lb_core::sdp::SessionNumber;
-use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use serde::{Deserialize, Serialize};
 pub use session::SessionInfo;
@@ -39,7 +38,7 @@ impl SessionBlendingTokenCollector {
     }
 
     #[must_use]
-    pub fn rotate_epoch(
+    pub fn rotate_session(
         self,
         new_session_info: &SessionInfo,
     ) -> (Self, OldSessionBlendingTokenCollector) {
@@ -52,9 +51,8 @@ impl SessionBlendingTokenCollector {
     }
 
     #[must_use]
-    pub const fn epoch_number(&self) -> Epoch {
-        // TODO: Change to epochs
-        Epoch::new(self.session_number as u32)
+    pub const fn session_number(&self) -> SessionNumber {
+        self.session_number
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
@@ -86,8 +84,8 @@ impl OldSessionBlendingTokenCollector {
         // which is <= activity threshold.
         tracing::trace!(
             LOG_TARGET,
-            "Computing activity proof for epoch {} with activity threshold {:?} and next session randomness {:?} for {} candidate tokens",
-            self.collector.epoch_number(),
+            "Computing activity proof for session {} with activity threshold {:?} and next session randomness {:?} for {} candidate tokens",
+            self.collector.session_number(),
             self.collector.token_evaluation.activity_threshold(),
             self.next_session_randomness,
             self.collector.tokens.len()
@@ -130,8 +128,8 @@ impl OldSessionBlendingTokenCollector {
     }
 
     #[must_use]
-    pub const fn epoch_number(&self) -> Epoch {
-        self.collector.epoch_number()
+    pub const fn session_number(&self) -> SessionNumber {
+        self.collector.session_number()
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
@@ -181,7 +179,7 @@ mod tests {
         // Prepare a new session info.
         let session_info =
             SessionInfo::new(2, &ZkHash::from(2), num_core_nodes, core_quota, 1).unwrap();
-        let (_, mut tokens) = tokens.rotate_epoch(&session_info);
+        let (_, mut tokens) = tokens.rotate_session(&session_info);
 
         // Insert one more tokens.
         // Now,`total_core_quota` tokens have been collected.

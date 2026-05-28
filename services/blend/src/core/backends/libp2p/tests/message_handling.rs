@@ -61,5 +61,5 @@ async fn core_message_propagation() {
     // connected to swarm 1.
     let (swarm_3_received_message, epoch) = swarm_3_message_receiver.recv().await.unwrap();
     assert_eq!(swarm_3_received_message, message.into_inner().into());
-    assert_eq!(epoch.into_inner(), 1);
+    assert_eq!(epoch, 1);
 }

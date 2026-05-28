@@ -1009,10 +1009,11 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId>,
 {
     match event {
-        EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::NonEmpty(CoreEpochInfo {
-            core_poq_generator,
-            public: new_epoch_info,
-        })) => {
+        EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::NonEmpty(boxed_core_epoch_info)) => {
+            let CoreEpochInfo {
+                core_poq_generator,
+                public: new_epoch_info,
+            } = *boxed_core_epoch_info;
             let (_, _, _, _, current_epoch_blending_token_collector, _, state_updater) =
                 current_recovery_checkpoint.into_components();
 

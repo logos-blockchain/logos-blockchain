@@ -1,4 +1,3 @@
-use futures::Stream;
 use lb_cryptarchia_engine::Epoch;
 
 /// Information regarding an epoch that the message scheduler needs to
@@ -11,5 +10,3 @@ pub struct EpochInfo {
     /// The identifier for the current epoch.
     pub epoch: Epoch,
 }
-
-pub type EpochClock = Box<dyn Stream<Item = EpochInfo> + Unpin>;

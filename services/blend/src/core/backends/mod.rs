@@ -2,14 +2,10 @@ use std::{fmt::Debug, pin::Pin};
 
 use futures::Stream;
 use lb_blend::{
-    message::{
-        crypto::proofs::PoQVerificationInputsMinusSigningKey,
-        encap::validated::{
-            EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
-        },
+    message::encap::validated::{
+        EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
     },
-    proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
-    scheduling::{epoch::EpochEvent, membership::Membership},
+    scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
 use overwatch::overwatch::handle::OverwatchHandle;

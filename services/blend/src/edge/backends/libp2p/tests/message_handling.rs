@@ -71,9 +71,9 @@ async fn edge_message_propagation() {
         core_swarm_2_incoming_message_receiver.recv().await.unwrap();
 
     assert_eq!(swarm_1_received_message, message.clone().into());
-    assert_eq!(swarm_1_message_epoch, 1.into());
+    assert_eq!(swarm_1_message_epoch, 1);
     assert_eq!(swarm_2_received_message, message.clone().into());
-    assert_eq!(swarm_2_message_epoch, 1.into());
+    assert_eq!(swarm_2_message_epoch, 1);
 }
 
 #[test(tokio::test)]
