@@ -344,10 +344,23 @@ pub enum Event {
     /// inscription is the lineage key for correlating later
     /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.items`
     /// entries back to the originating publish call.
-    Published {
-        tx: Box<PublishedTx>,
-        checkpoint: SequencerCheckpoint,
-    },
+    Published { tx: Box<PublishedTx> },
+    /// The SDK's checkpoint has advanced.
+    ///
+    /// Emitted after every backfill batch (during cold-start catch-up) and
+    /// after every live block, immediately following any block-derived events
+    /// for that block/batch ([`Event::TxsFinalized`],
+    /// [`Event::ChannelUpdate`]). Carries the current
+    /// [`SequencerCheckpoint`] so consumers can persist progress without
+    /// depending on channel activity or their own publishes, shrinking the
+    /// replay window on restart.
+    ///
+    /// **This is an optimization, not a correctness guarantee.** Applying
+    /// state and persisting the checkpoint cannot be made atomic by the SDK,
+    /// so consumers MUST still dedup on restart — by `tx_hash` for
+    /// inscriptions, by `(tx_hash, op_id)` for deposit ops. The checkpoint
+    /// only shrinks the expected replay window.
+    Checkpoint { checkpoint: SequencerCheckpoint },
 }
 
 enum ActorRequest {
@@ -942,6 +955,12 @@ where
 
         self.enqueue_pending_submit();
 
+        if let Some(state) = self.state.as_ref() {
+            events.push_back(Event::Checkpoint {
+                checkpoint: build_checkpoint(state, self.last_msg_id, self.lib_slot),
+            });
+        }
+
         if became_ready {
             // Preserve the existing public event contract: when readiness transitions,
             // Ready is emitted first. Any block-derived events and any Published event
@@ -1211,12 +1230,8 @@ where
             }),
             None => PublishedTx::Inscription(info),
         };
-        let checkpoint = build_checkpoint(state, self.last_msg_id, self.lib_slot);
 
-        Some(Event::Published {
-            tx: Box::new(tx),
-            checkpoint,
-        })
+        Some(Event::Published { tx: Box::new(tx) })
     }
 
     /// Process one batch of incremental backfill if active.
@@ -1293,12 +1308,21 @@ where
             }
         }
 
+        self.lib_slot = Slot::from(batch_end);
+
+        let checkpoint_event = self.state.as_ref().map(|s| Event::Checkpoint {
+            checkpoint: build_checkpoint(s, self.last_msg_id, self.lib_slot),
+        });
+
         if batch.items.is_empty() {
-            return Some(None);
+            return checkpoint_event.map(Some);
         }
 
         let event = Event::TxsFinalized { items: batch.items };
         drop(self.event_tx.send(event.clone()));
+        if let Some(cp) = checkpoint_event {
+            self.buffered_events.push_back(cp);
+        }
         Some(Some(event))
     }
 
@@ -1423,7 +1447,6 @@ where
                     debug!(target: TARGET, "Starting incremental backfill from slot {start} to {to}");
                     self.backfill_from = Some(Slot::from(start));
                     self.backfill_to = Some(network_lib_slot);
-                    self.lib_slot = network_lib_slot;
                     return false;
                 }
                 true

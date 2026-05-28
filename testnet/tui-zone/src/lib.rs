@@ -134,16 +134,18 @@ async fn handle_event(
             ui::render_state(state);
             ui::prompt();
         }
-        Event::Published { tx, checkpoint } => {
+        Event::Published { tx } => {
             // `publish_*` APIs only emit inscription / atomic-withdraw — never
             // a deposit — so `inscription()` is `Some` here in practice.
             if let Some(info) = tx.inscription() {
                 debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
                 state.on_published(info);
             }
-            state.save_checkpoint(checkpoint);
             ui::render_state(state);
             ui::prompt();
+        }
+        Event::Checkpoint { checkpoint } => {
+            state.save_checkpoint(checkpoint);
         }
     }
 }
