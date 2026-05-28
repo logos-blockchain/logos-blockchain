@@ -10,7 +10,7 @@ use axum::{
 };
 use http::StatusCode;
 use lb_api_service::Backend;
-use lb_http_api_common::paths::{DIAL_PEER, MANTLE_SDP_DECLARATIONS};
+use lb_http_api_common::paths::{DIAL_PEER, MANTLE_SDP_DECLARATIONS, TEST_MEMPOOL_VIEW};
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as NetworkBackend};
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 use tokio::net::TcpListener;
@@ -26,7 +26,7 @@ use tracing::Level as TracingLevel;
 use crate::{
     api::{
         backend::AxumBackendSettings,
-        testing::handlers::{dial_peer, get_sdp_declarations},
+        testing::handlers::{dial_peer, get_sdp_declarations, test_mempool_view},
     },
     generic_services::{self, SdpService},
 };
@@ -85,6 +85,10 @@ where
             .route(
                 MANTLE_SDP_DECLARATIONS,
                 get(get_sdp_declarations::<RuntimeServiceId>),
+            )
+            .route(
+                TEST_MEMPOOL_VIEW,
+                get(test_mempool_view::<RuntimeServiceId>),
             )
             .route(DIAL_PEER, post(dial_peer::<RuntimeServiceId>))
             .with_state(handle)

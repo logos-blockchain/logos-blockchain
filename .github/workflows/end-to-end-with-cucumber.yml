@@ -191,6 +191,17 @@ jobs:
           verbose_console: "true"
           max_concurrent_scenarios: "2"
 
+      # Feature: Mempool (@mempool_ci)
+      - name: Run cucumber suite - mempool
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@mempool_ci"
+          suite_name: mempool
+          artifact_subdir: Mempool lifecycle
+          verbose_console: "true"
+
       # Feature: Zone SDK (@zone_ci)
       - name: Run cucumber suite - zone
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}

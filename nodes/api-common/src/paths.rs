@@ -39,3 +39,4 @@ pub mod admin {
 // testing paths
 pub const UPDATE_MEMBERSHIP: &str = "/test/membership/update";
 pub const DIAL_PEER: &str = "/test/network/dial_peer";
+pub const TEST_MEMPOOL_VIEW: &str = "/test/mempool/view";
