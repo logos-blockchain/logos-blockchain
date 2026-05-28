@@ -32,10 +32,7 @@ use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
     core::{
-        backends::{
-            PublicInfo,
-            libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
-        },
+        backends::libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
         settings::StartingBlendConfig as BlendConfig,
     },
     test_utils::PROTOCOL_NAME,

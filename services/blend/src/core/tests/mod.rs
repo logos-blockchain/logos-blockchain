@@ -22,14 +22,13 @@ use crate::{
     core::{
         HandleEpochEventOutput,
         backends::BlendBackend,
-        handle_clock_event, handle_epoch_event, handle_epoch_transition_expired,
-        handle_incoming_blend_message, handle_new_secret_epoch_info, initialize, post_initialize,
-        retire, run_event_loop,
+        handle_epoch_event, handle_epoch_transition_expired, handle_incoming_blend_message,
+        initialize, post_initialize, retire, run_event_loop,
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
-            TestNetworkAdapter, dummy_overwatch_resources, new_crypto_processor, new_membership,
-            new_public_info, new_stream, reward_session_info, scheduler_session_info,
+            TestNetworkAdapter, dummy_overwatch_resources, new_crypto_processor, new_epoch_info,
+            new_membership, new_stream, reward_session_info, scheduler_session_info,
             scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
         },
     },
@@ -54,7 +53,7 @@ async fn test_handle_incoming_blend_message() {
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
     // Prepare a encapsulated message.
-    let mut session = 0;
+    let mut epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let (settings, _recovery_file) = settings(
@@ -63,9 +62,9 @@ async fn test_handle_incoming_blend_message() {
         (),
         0,
     );
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -91,7 +90,7 @@ async fn test_handle_incoming_blend_message() {
         scheduler_settings,
     );
     let recovery_checkpoint = ServiceState::with_epoch(
-        session,
+        epoch,
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info)),
         None,
         state_updater,
@@ -116,10 +115,10 @@ async fn test_handle_incoming_blend_message() {
 
     // Creates a new processor/scheduler/token_collector with the new session
     // number.
-    session += 1;
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    epoch += 1;
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut new_processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -137,7 +136,7 @@ async fn test_handle_incoming_blend_message() {
     // but succeeds with the old one. Also, it should be scheduled in the old
     // scheduler.
     let recovery_checkpoint = ServiceState::with_epoch(
-        session,
+        epoch,
         new_token_collector,
         Some(old_token_collector),
         state_updater,
@@ -214,13 +213,13 @@ async fn test_handle_incoming_blend_message() {
 
     // Check that a message built with a future session cannot be
     // decapsulated by either processor, and thus not scheduled.
-    session += 1;
+    epoch += 1;
     let mut future_processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
-        &new_public_info(session, membership, &settings),
+        &new_epoch_info(epoch, membership, &settings),
         (),
     );
     let msg = future_processor
@@ -274,10 +273,10 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     );
 
     // Create session 0 processor and build a message with session 0 proofs.
-    let session_0 = 0;
-    let public_info_0 = new_public_info(session_0, membership.clone(), &settings);
+    let epoch_0 = 0.into();
+    let public_info_0 = new_epoch_info(epoch_0, membership.clone(), &settings);
     let mut processor_0 = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -298,10 +297,10 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
 
     // Create session 1 processor - its MockProofsVerifier expects session 1
     // proofs.
-    let session_1 = 1;
-    let public_info_1 = new_public_info(session_1, membership, &settings);
+    let epoch_1 = 1.into();
+    let public_info_1 = new_epoch_info(epoch_1, membership, &settings);
     let processor_1 = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -316,7 +315,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
         scheduler_settings,
     );
     let recovery_checkpoint = ServiceState::with_epoch(
-        session_1,
+        epoch_1,
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
         None,
         state_updater,
@@ -327,7 +326,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     // Signature is valid (built correctly) but PoQ will fail because the
     // MockProofsVerifier for session 1 expects session 1 proofs.
     drop(handle_incoming_blend_message(
-        (msg.into(), session_1),
+        (msg.into(), epoch_1),
         &mut scheduler,
         None,
         &processor_1,
@@ -362,7 +361,7 @@ async fn test_handle_session_transition_expired() {
     settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
 
     // Create backend.
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(session, membership.clone(), &settings);
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
@@ -374,7 +373,7 @@ async fn test_handle_session_transition_expired() {
     // Create token collector and collect a token.
     let mut token_collector =
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info))
-            .rotate_epoch(&reward_session_info(&new_public_info(
+            .rotate_epoch(&reward_session_info(&new_epoch_info(
                 session + 1,
                 membership.clone(),
                 &settings,
@@ -437,7 +436,7 @@ async fn test_handle_session_event() {
         (),
         0,
     );
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(session, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -507,7 +506,7 @@ async fn test_handle_session_event() {
         old_scheduler.release_delayer().unreleased_messages().len(),
         0
     );
-    assert_eq!(new_public_info.core.epoch, session + 1);
+    assert_eq!(new_epoch_info.core.epoch, session + 1);
     assert!(
         new_recovery_checkpoint
             .clone()
@@ -522,7 +521,7 @@ async fn test_handle_session_event() {
         &settings,
         new_crypto_processor,
         new_scheduler,
-        new_public_info,
+        new_epoch_info,
         new_recovery_checkpoint,
         &mut backend,
         &sdp_relay,
@@ -608,7 +607,7 @@ async fn test_handle_session_event_empty_session_retires() {
         (),
         0,
     );
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(session, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -673,7 +672,7 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
         (),
         0,
     );
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(session, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -1277,8 +1276,8 @@ async fn test_proof_generator_session_binding() {
     );
 
     // Create proof generators for session 0 and session 1.
-    let public_info_0 = new_public_info(session_0, membership.clone(), &settings);
-    let public_info_1 = new_public_info(session_1, membership.clone(), &settings);
+    let public_info_0 = new_epoch_info(session_0, membership.clone(), &settings);
+    let public_info_1 = new_epoch_info(session_1, membership.clone(), &settings);
 
     let mut generator_0 = new_crypto_processor(
         SessionCryptographicProcessorSettings {
@@ -1422,7 +1421,7 @@ async fn test_handle_clock_event_new_epoch() {
         0,
     );
     let session = 0;
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(session, membership.clone(), &settings);
     let processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -1517,7 +1516,7 @@ async fn test_handle_new_secret_epoch_info() {
         0,
     );
     let session = 0;
-    let public_info = new_public_info(session, membership, &settings);
+    let public_info = new_epoch_info(session, membership, &settings);
     let mut processor = new_crypto_processor(
         SessionCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -1633,7 +1632,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     let (sdp_relay_1, _sdp_relay_receiver) = sdp_relay();
 
     // Build a pre-populated saved state with matching session and some spent quota.
-    let public_info = new_public_info(initial_session, membership.clone(), &settings);
+    let public_info = new_epoch_info(initial_session, membership.clone(), &settings);
     let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
     let saved_state = ServiceState::with_epoch(
         initial_session,
@@ -1721,7 +1720,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     let (sdp_relay2, _sdp_relay_receiver2) = sdp_relay();
 
     // Build a saved state for a *different* session (session 99) with spent quota.
-    let stale_public_info = new_public_info(99, membership.clone(), &settings);
+    let stale_public_info = new_epoch_info(99, membership.clone(), &settings);
     let stale_token_collector =
         SessionBlendingTokenCollector::new(&reward_session_info(&stale_public_info));
     let stale_state =

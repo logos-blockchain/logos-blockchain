@@ -398,7 +398,6 @@ where
             old_epoch_crypto_processor,
             old_epoch_message_scheduler,
             old_epoch_blending_token_collector,
-            old_epoch_public_info,
         ) = run_event_loop(
             inbound_relay,
             &mut blend_messages,
@@ -425,7 +424,6 @@ where
             // past session.
             blend_messages.map(|(message, _)| message),
             remaining_epoch_stream,
-            &running_blend_config,
             backend,
             network_adapter,
             sdp_relay,
@@ -433,7 +431,6 @@ where
             rng,
             old_epoch_blending_token_collector,
             old_epoch_crypto_processor,
-            old_epoch_public_info,
         )
         .await;
 
@@ -535,7 +532,7 @@ where
                             quota: config.epoch_core_quota(membership_info.membership.size()),
                             zk_root: root,
                         },
-                        membership: membership_info.membership.clone(),
+                        membership: membership_info.membership,
                         epoch,
                         poq_leadership_public_inputs: LeaderInputs {
                             pol_ledger_aged: aged,
@@ -767,7 +764,6 @@ async fn run_event_loop<
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     OldEpochMessageScheduler<Rng, ProcessedMessage<NetAdapter::BroadcastSettings>>,
     OldSessionBlendingTokenCollector,
-    CoreEpochPublicInfo<NodeId>,
 )
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
@@ -835,12 +831,11 @@ where
             } => {
                 handle_release_round_for_old_epoch(processed_messages_to_release, rng, backend, network_adapter, previous_epoch).await;
             }
-            Some(pol_info) = secret_pol_info_stream.next() => {
-                current_secret_pol_info = Some(pol_info.clone());
-                if crypto_processor.epoch() == pol_info.epoch {
-                    // TODO: Finish tomorrow
-                    // crypto_processor.set_epoch_private(pol_info)
+            Some(pol_secret_info) = secret_pol_info_stream.next() => {
+                if current_epoch_info.epoch == pol_secret_info.epoch {
+                    crypto_processor.set_epoch_private(pol_secret_info.poq_private_inputs.clone(), current_epoch_info.poq_leadership_public_inputs, pol_secret_info.epoch);
                 }
+                current_secret_pol_info = Some(pol_secret_info);
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
                 match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, current_secret_pol_info.as_ref()).await {
@@ -866,7 +861,6 @@ where
                             old_crypto_processor,
                             old_scheduler,
                             old_token_collector,
-                            old_epoch_info,
                         );
                     },
                 }
@@ -896,7 +890,6 @@ async fn retire<
         Item = EpochEvent<MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>>,
     > + Send
     + Unpin,
-    blend_config: &RunningBlendConfig<Backend::Settings>,
     mut backend: Backend,
     network_adapter: NetAdapter,
     sdp_relay: OutboundRelay<SdpMessage>,
@@ -912,7 +905,6 @@ async fn retire<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    mut epoch_public_info: CoreEpochPublicInfo<NodeId>,
 ) where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
     Rng: rand::Rng + Clone + Send + Unpin,
@@ -1031,7 +1023,7 @@ where
             )
             .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
             let (new_epoch_blending_token_collector, old_epoch_blending_token_collector) =
-                current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
+                current_epoch_blending_token_collector.rotate_session(&new_reward_epoch_info);
 
             backend
                 .rotate_epoch((new_epoch_info.membership.clone(), new_epoch_info.epoch))
@@ -1071,9 +1063,11 @@ where
                 new_epoch_info.epoch,
             ) {
                 Ok(mut new_processor) => {
-                    if let Some(current_secret_info) = current_secret_info {
+                    if let Some(current_secret_info) = current_secret_info
+                        && current_secret_info.epoch == new_epoch_info.epoch
+                    {
                         new_processor.set_epoch_private(
-                            current_secret_info.poq_private_inputs,
+                            current_secret_info.poq_private_inputs.clone(),
                             new_epoch_info.poq_leadership_public_inputs,
                             new_epoch_info.epoch,
                         );
@@ -1126,7 +1120,7 @@ where
             )
             .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
             let (_, old_epoch_blending_token_collector) =
-                current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
+                current_epoch_blending_token_collector.rotate_session(&new_reward_epoch_info);
             HandleEpochEventOutput::Retiring {
                 old_crypto_processor: current_cryptographic_processor,
                 old_scheduler: current_scheduler.consume(),

@@ -1,19 +1,10 @@
-use core::{
-    fmt::{self, Debug, Formatter},
-    marker::PhantomData,
-    num::NonZeroU64,
-    ops::Deref,
-};
+use core::fmt::{self, Debug, Formatter};
 
 use async_trait::async_trait;
 use futures::Stream;
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::proofs::leader_proof::LeaderPublic;
-use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_ledger::EpochState;
-use lb_log_targets::blend;
-use lb_time_service::SlotTick;
+use lb_cryptarchia_engine::Epoch;
 use overwatch::overwatch::OverwatchHandle;
 
 /// Secret `PoL` info associated to an epoch, as returned by the `PoL` info

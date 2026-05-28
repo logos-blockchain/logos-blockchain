@@ -56,7 +56,7 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use crate::{
     core::{
-        backends::{BlendBackend, CoreEpochInfo, PublicInfo},
+        backends::{BackendEpochInfo, BlendBackend},
         kms::KmsPoQAdapter,
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
@@ -67,6 +67,8 @@ use crate::{
         state::RecoveryServiceState,
         tests::RuntimeServiceId,
     },
+    epoch::CoreEpochPublicInfo,
+    membership::chain::BlendEpochState,
     message::NetworkInfo,
     settings::TimingSettings,
     test_utils,
@@ -169,7 +171,7 @@ where
     fn new(
         _service_config: BlendConfig<Self::Settings>,
         _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-        _current_public_info: PublicInfo<NodeId>,
+        _current_epoch_info: BackendEpochInfo<NodeId>,
         _rng: Rng,
     ) -> Self {
         let (event_sender, _) = broadcast::channel(CHANNEL_SIZE);
@@ -180,10 +182,10 @@ where
     async fn publish(
         &self,
         _msg: EncapsulatedMessageWithVerifiedPublicHeader,
-        _intended_session: u64,
+        _intended_epoch: Epoch,
     ) {
     }
-    async fn rotate_epoch(&mut self, _new_session_info: CoreEpochInfo<NodeId>) {}
+    async fn rotate_epoch(&mut self, _new_epoch_info: BackendEpochInfo<NodeId>) {}
 
     async fn complete_epoch_transition(&mut self) {
         // Notify tests that the backend completed the session transition.
@@ -194,7 +196,7 @@ where
 
     fn listen_to_incoming_messages(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)> + Send>> {
         unimplemented!()
     }
 
@@ -304,7 +306,7 @@ pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, RuntimeServ
 
 pub fn new_crypto_processor<CorePoQGenerator>(
     settings: SessionCryptographicProcessorSettings,
-    public_info: &PublicInfo<NodeId>,
+    epoch_info: &CoreEpochPublicInfo<NodeId>,
     core_poq_generator: CorePoQGenerator,
 ) -> CoreCryptographicProcessor<
     NodeId,
@@ -312,17 +314,17 @@ pub fn new_crypto_processor<CorePoQGenerator>(
     MockCoreAndLeaderProofsGenerator,
     MockProofsVerifier,
 > {
-    let minimum_network_size = u64::try_from(public_info.core.membership.size())
+    let minimum_network_size = u64::try_from(epoch_info.core.membership.size())
         .expect("membership size must fit into u64")
         .try_into()
         .expect("minimum_network_size must be non-zero");
     CoreCryptographicProcessor::try_new_with_core_condition_check(
-        public_info.core.membership.clone(),
+        epoch_info.core.membership.clone(),
         minimum_network_size,
         settings,
         PoQVerificationInputsMinusSigningKey {
-            core: public_info.core.core_public_inputs,
-            leader: public_info.leader,
+            core: epoch_info.core.core_public_inputs,
+            leader: epoch_info.leader,
         },
         core_poq_generator,
         Epoch::new(0),
@@ -330,22 +332,20 @@ pub fn new_crypto_processor<CorePoQGenerator>(
     .expect("crypto processor must be created successfully")
 }
 
-pub fn new_public_info<BackendSettings>(
-    session: u64,
+pub fn new_epoch_info<BackendSettings>(
+    epoch: Epoch,
     membership: Membership<NodeId>,
     settings: &BlendConfig<BackendSettings>,
-) -> PublicInfo<NodeId> {
+) -> CoreEpochPublicInfo<NodeId> {
     let core_quota = settings.epoch_core_quota(membership.size());
-    PublicInfo {
-        core: CoreEpochInfo {
-            epoch: session,
-            membership,
-            core_public_inputs: CoreInputs {
-                zk_root: ZkHash::ZERO,
-                quota: core_quota,
-            },
+    CoreEpochPublicInfo {
+        epoch,
+        membership,
+        poq_core_public_inputs: CoreInputs {
+            zk_root: ZkHash::ZERO,
+            quota: core_quota,
         },
-        leader: LeaderInputs {
+        poq_leadership_public_inputs: LeaderInputs {
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
             message_quota: settings.epoch_leadership_quota(),
@@ -355,14 +355,14 @@ pub fn new_public_info<BackendSettings>(
     }
 }
 
-pub fn scheduler_session_info(public_info: &PublicInfo<NodeId>) -> SchedulerSessionInfo {
+pub fn scheduler_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> SchedulerSessionInfo {
     SchedulerSessionInfo {
         core_quota: public_info.core.core_public_inputs.quota,
-        epoch: u128::from(public_info.core.epoch).into(),
+        epoch: public_info.core.epoch,
     }
 }
 
-pub fn reward_session_info(public_info: &PublicInfo<NodeId>) -> reward::SessionInfo {
+pub fn reward_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward::SessionInfo {
     reward::SessionInfo::new(
         public_info.core.epoch,
         &public_info.leader.pol_epoch_nonce,
