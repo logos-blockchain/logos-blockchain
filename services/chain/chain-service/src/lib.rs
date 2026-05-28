@@ -1045,12 +1045,12 @@ where
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
+        let mut candidate = cryptarchia.clone();
         let (pruned_blocks, reorged_blocks, events) =
-            cryptarchia.try_apply_block(&block, current_slot)?;
-        let new_lib = cryptarchia.lib();
+            candidate.try_apply_block(&block, current_slot)?;
+        let new_lib = candidate.lib();
 
         let tx_count = block.transactions().count();
-        metrics::emit_block_transactions_metric(tx_count);
 
         relays
             .storage_adapter()
@@ -1062,10 +1062,13 @@ where
             &pruned_blocks,
             Some(prev_lib),
             new_lib,
-            cryptarchia.consensus.lib_branch().slot(),
+            candidate.consensus.lib_branch().slot(),
             relays.storage_adapter(),
         )
         .await?;
+
+        *cryptarchia = candidate;
+        metrics::emit_block_transactions_metric(tx_count);
 
         let processed_block_event = {
             let tip = cryptarchia.tip_branch();
