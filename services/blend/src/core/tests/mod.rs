@@ -5,10 +5,8 @@ use lb_blend::{
     message::reward::{ActivityProof, BlendingToken, SessionBlendingTokenCollector},
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::{
-        SessionMessageScheduler,
-        //TODO: Remove all mentions of sessions.
-        epoch::EpochEvent as SessionEvent,
-        message_blend::crypto::EpochCryptographicProcessorSettings as SessionCryptographicProcessorSettings,
+        EpochMessageScheduler, epoch::EpochEvent,
+        message_blend::crypto::EpochCryptographicProcessorSettings,
     },
 };
 use lb_chain_service::Epoch;
@@ -22,10 +20,10 @@ use rand::SeedableRng as _;
 
 use crate::{
     core::{
-        HandleSessionEventOutput,
+        HandleEpochEventOutput,
         backends::BlendBackend,
-        handle_clock_event, handle_incoming_blend_message, handle_new_secret_epoch_info,
-        handle_session_event, handle_session_transition_expired, initialize, post_initialize,
+        handle_clock_event, handle_epoch_event, handle_epoch_transition_expired,
+        handle_incoming_blend_message, handle_new_secret_epoch_info, initialize, post_initialize,
         retire, run_event_loop,
         state::ServiceState,
         tests::utils::{
@@ -35,10 +33,10 @@ use crate::{
             scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
         },
     },
+    epoch::{CoreEpochInfo, CoreEpochPublicInfo},
     epoch_info::{EpochHandler, PolEpochInfo},
     membership::{MembershipInfo, ZkInfo},
     message::NetworkMessage,
-    session::{CoreSessionInfo, CoreSessionPublicInfo},
     test_utils::{
         crypto::MockCoreAndLeaderProofsGenerator,
         epoch::{OncePolStreamProvider, TestChainService},
@@ -87,12 +85,12 @@ async fn test_handle_incoming_blend_message() {
 
     // Check that the message is successfully decapsulated and scheduled.
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
-    let mut scheduler = SessionMessageScheduler::new(
+    let mut scheduler = EpochMessageScheduler::new(
         scheduler_session_info(&public_info),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
+    let recovery_checkpoint = ServiceState::with_epoch(
         session,
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info)),
         None,
@@ -110,7 +108,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(scheduler.release_delayer().unreleased_messages().len(), 1);
     assert_eq!(
         recovery_checkpoint
-            .current_session_token_collector()
+            .current_epoch_token_collector()
             .tokens()
             .len(),
         1
@@ -129,16 +127,16 @@ async fn test_handle_incoming_blend_message() {
         (),
     );
     let (mut new_scheduler, mut scheduler) =
-        scheduler.rotate_session(scheduler_session_info(&public_info), scheduler_settings);
+        scheduler.rotate_epoch(scheduler_session_info(&public_info), scheduler_settings);
     let (_, _, _, _, current_token_collector, _, state_updater) =
         recovery_checkpoint.into_components();
     let (new_token_collector, old_token_collector) =
-        current_token_collector.rotate_session(&reward_session_info(&public_info));
+        current_token_collector.rotate_epoch(&reward_session_info(&public_info));
 
     // Check that decapsulating the same message fails with the new processor
     // but succeeds with the old one. Also, it should be scheduled in the old
     // scheduler.
-    let recovery_checkpoint = ServiceState::with_session(
+    let recovery_checkpoint = ServiceState::with_epoch(
         session,
         new_token_collector,
         Some(old_token_collector),
@@ -160,7 +158,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(scheduler.release_delayer().unreleased_messages().len(), 2);
     assert_eq!(
         recovery_checkpoint
-            .current_session_token_collector()
+            .current_epoch_token_collector()
             .tokens()
             .len(),
         0
@@ -170,7 +168,7 @@ async fn test_handle_incoming_blend_message() {
         recovery_checkpoint
             .clone()
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .unwrap()
             .tokens()
             .len(),
@@ -198,7 +196,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(scheduler.release_delayer().unreleased_messages().len(), 2);
     assert_eq!(
         recovery_checkpoint
-            .current_session_token_collector()
+            .current_epoch_token_collector()
             .tokens()
             .len(),
         1
@@ -207,7 +205,7 @@ async fn test_handle_incoming_blend_message() {
         recovery_checkpoint
             .clone()
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .unwrap()
             .tokens()
             .len(),
@@ -245,7 +243,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(scheduler.release_delayer().unreleased_messages().len(), 2);
     assert_eq!(
         recovery_checkpoint
-            .current_session_token_collector()
+            .current_epoch_token_collector()
             .tokens()
             .len(),
         1
@@ -253,7 +251,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(
         recovery_checkpoint
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .unwrap()
             .tokens()
             .len(),
@@ -312,12 +310,12 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     );
 
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
-    let mut scheduler = SessionMessageScheduler::new(
+    let mut scheduler = EpochMessageScheduler::new(
         scheduler_session_info(&public_info_1),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
+    let recovery_checkpoint = ServiceState::with_epoch(
         session_1,
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
         None,
@@ -361,7 +359,7 @@ async fn test_handle_session_transition_expired() {
     );
     // Set a long rounds_per_session to make the core quota large enough,
     // since we want the activity threshold to be sufficiently high.
-    settings.time.rounds_per_session = 648_000.try_into().unwrap();
+    settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
 
     // Create backend.
     let public_info = new_public_info(session, membership.clone(), &settings);
@@ -376,7 +374,7 @@ async fn test_handle_session_transition_expired() {
     // Create token collector and collect a token.
     let mut token_collector =
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info))
-            .rotate_session(&reward_session_info(&new_public_info(
+            .rotate_epoch(&reward_session_info(&new_public_info(
                 session + 1,
                 membership.clone(),
                 &settings,
@@ -393,7 +391,7 @@ async fn test_handle_session_transition_expired() {
     let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
 
     // Call `handle_session_transition_expired`.
-    handle_session_transition_expired::<_, NodeId, BlakeRng, _>(
+    handle_epoch_transition_expired::<_, NodeId, BlakeRng, _>(
         &mut backend,
         token_collector,
         &sdp_relay,
@@ -448,7 +446,7 @@ async fn test_handle_session_event() {
         &public_info,
         (),
     );
-    let scheduler = SessionMessageScheduler::new(
+    let scheduler = EpochMessageScheduler::new(
         scheduler_session_info(&public_info),
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
@@ -464,13 +462,13 @@ async fn test_handle_session_event() {
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
     // Handle a NewSession event, expecting Transitioning output.
-    let output = handle_session_event(
+    let output = handle_epoch_event(
         SessionEvent::NewEpoch(
-            CoreSessionInfo {
-                public: CoreSessionPublicInfo {
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
                     membership: membership.clone(),
-                    session: session + 1,
-                    poq_core_public_inputs: public_info.session.core_public_inputs,
+                    epoch: session + 1,
+                    poq_core_public_inputs: public_info.core.core_public_inputs,
                 },
                 core_poq_generator: Some(()),
             }
@@ -480,18 +478,18 @@ async fn test_handle_session_event() {
         crypto_processor,
         scheduler,
         public_info,
-        ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(session, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
         None,
     )
     .await;
-    let HandleSessionEventOutput::Transitioning {
+    let HandleEpochEventOutput::Transitioning {
         new_crypto_processor,
         new_scheduler,
         old_scheduler,
-        new_public_info,
+        new_epoch_info,
         new_recovery_checkpoint,
         ..
     } = output
@@ -509,17 +507,17 @@ async fn test_handle_session_event() {
         old_scheduler.release_delayer().unreleased_messages().len(),
         0
     );
-    assert_eq!(new_public_info.session.session_number, session + 1);
+    assert_eq!(new_public_info.core.epoch, session + 1);
     assert!(
         new_recovery_checkpoint
             .clone()
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .is_some()
     );
 
     // Handle a TransitionExpired event, expecting TransitionCompleted output.
-    let output = handle_session_event(
+    let output = handle_epoch_event(
         SessionEvent::TransitionPeriodExpired,
         &settings,
         new_crypto_processor,
@@ -532,10 +530,10 @@ async fn test_handle_session_event() {
         None,
     )
     .await;
-    let HandleSessionEventOutput::TransitionCompleted {
+    let HandleEpochEventOutput::TransitionCompleted {
         current_crypto_processor,
         current_scheduler,
-        current_public_info,
+        current_epoch_info,
         new_recovery_checkpoint,
     } = output
     else {
@@ -546,12 +544,12 @@ async fn test_handle_session_event() {
     //     current_crypto_processor.verifier().epoch_nonce(),
     //     session + 1
     // );
-    assert_eq!(current_public_info.session.session_number, session + 1);
+    assert_eq!(current_public_info.core.epoch, session + 1);
     assert!(
         new_recovery_checkpoint
             .clone()
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .is_none()
     );
     wait_for_blend_backend_event(
@@ -562,13 +560,13 @@ async fn test_handle_session_event() {
 
     // Handle a NewSession event with a new too small membership,
     // expecting Retiring output.
-    let output = handle_session_event(
+    let output = handle_epoch_event(
         SessionEvent::NewEpoch(
-            CoreSessionInfo {
-                public: CoreSessionPublicInfo {
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
                     membership: new_membership(minimal_network_size - 1).0,
-                    session: session + 2,
-                    poq_core_public_inputs: current_public_info.session.core_public_inputs,
+                    epoch: session + 2,
+                    poq_core_public_inputs: current_public_info.core.core_public_inputs,
                 },
                 core_poq_generator: Some(()),
             }
@@ -585,15 +583,12 @@ async fn test_handle_session_event() {
         None,
     )
     .await;
-    let HandleSessionEventOutput::Retiring {
-        old_public_info, ..
-    } = output
-    else {
+    let HandleEpochEventOutput::Retiring { old_epoch_info, .. } = output else {
         panic!("expected Retiring output");
     };
     // TODO: Re-enable once we remove sessions.
     // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session + 1);
-    assert_eq!(old_public_info.session.session_number, session + 1);
+    assert_eq!(old_public_info.core.epoch, session + 1);
 }
 
 /// Handle a `NewSession(Empty)` event (empty membership), expecting `Retiring`
@@ -622,7 +617,7 @@ async fn test_handle_session_event_empty_session_retires() {
         &public_info,
         (),
     );
-    let scheduler = SessionMessageScheduler::new(
+    let scheduler = EpochMessageScheduler::new(
         scheduler_session_info(&public_info),
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
@@ -638,30 +633,27 @@ async fn test_handle_session_event_empty_session_retires() {
 
     // Handle a NewSession(Empty) event - empty membership triggers Retiring.
     let empty_session: u64 = session + 1;
-    let output = handle_session_event(
+    let output = handle_epoch_event(
         SessionEvent::NewEpoch(empty_session.into()),
         &settings,
         crypto_processor,
         scheduler,
         public_info.clone(),
-        ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(session, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
         None,
     )
     .await;
-    let HandleSessionEventOutput::Retiring {
-        old_public_info, ..
-    } = output
-    else {
+    let HandleEpochEventOutput::Retiring { old_epoch_info, .. } = output else {
         panic!("expected Retiring output for Empty session");
     };
     // The old processor/info should be from the session we were on before
     // the empty session arrived.
     // TODO: Re-enable once we remove sessions.
     // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session);
-    assert_eq!(old_public_info.session.session_number, session);
+    assert_eq!(old_public_info.core.epoch, session);
 }
 
 /// Handle a `NewSession(NonEmpty)` event where membership exists but the local
@@ -690,7 +682,7 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
         &public_info,
         (),
     );
-    let scheduler = SessionMessageScheduler::new(
+    let scheduler = EpochMessageScheduler::new(
         scheduler_session_info(&public_info),
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
@@ -704,13 +696,13 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
-    let output = handle_session_event(
+    let output = handle_epoch_event(
         SessionEvent::NewEpoch(
-            CoreSessionInfo {
-                public: CoreSessionPublicInfo {
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
                     membership,
-                    session: session + 1,
-                    poq_core_public_inputs: public_info.session.core_public_inputs,
+                    epoch: session + 1,
+                    poq_core_public_inputs: public_info.core.core_public_inputs,
                 },
                 core_poq_generator: None,
             }
@@ -720,7 +712,7 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
         crypto_processor,
         scheduler,
         public_info.clone(),
-        ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(session, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
         Epoch::new(0),
@@ -728,16 +720,13 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
     )
     .await;
 
-    let HandleSessionEventOutput::Retiring {
-        old_public_info, ..
-    } = output
-    else {
+    let HandleEpochEventOutput::Retiring { old_epoch_info, .. } = output else {
         panic!("expected Retiring output for NonEmpty session without local core path");
     };
 
     // TODO: Re-enable once we remove sessions.
     // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session);
-    assert_eq!(old_public_info.session.session_number, session);
+    assert_eq!(old_public_info.core.epoch, session);
 }
 
 /// Check if the service keeps running after it receives a new session where
@@ -1331,12 +1320,12 @@ async fn test_proof_generator_session_binding() {
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
-    let mut scheduler_0 = SessionMessageScheduler::new(
+    let mut scheduler_0 = EpochMessageScheduler::new(
         scheduler_session_info(&public_info_0),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
+    let recovery_checkpoint = ServiceState::with_epoch(
         session_0,
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
         None,
@@ -1361,12 +1350,12 @@ async fn test_proof_generator_session_binding() {
     // (wrong PoQ proofs for session 0).
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
-    let mut scheduler_0_only = SessionMessageScheduler::new(
+    let mut scheduler_0_only = EpochMessageScheduler::new(
         scheduler_session_info(&public_info_0),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
+    let recovery_checkpoint = ServiceState::with_epoch(
         session_0,
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
         None,
@@ -1393,12 +1382,12 @@ async fn test_proof_generator_session_binding() {
     // Session 1 message should be decapsulable by session 1 processor.
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
-    let mut scheduler_1 = SessionMessageScheduler::new(
+    let mut scheduler_1 = EpochMessageScheduler::new(
         scheduler_session_info(&public_info_1),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
+    let recovery_checkpoint = ServiceState::with_epoch(
         session_1,
         SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
         None,
@@ -1470,7 +1459,7 @@ async fn test_handle_clock_event_new_epoch() {
     // Public info should be updated with new leader inputs derived from chain
     // state.
     assert_ne!(
-        updated_info.epoch, public_info.epoch,
+        updated_info.leader, public_info.leader,
         "Leader inputs should be updated from chain epoch state"
     );
 
@@ -1488,7 +1477,7 @@ async fn test_handle_clock_event_new_epoch() {
     )
     .await;
     assert_eq!(unchanged_epoch, Epoch::new(1));
-    assert_eq!(unchanged_info.epoch, updated_info.epoch);
+    assert_eq!(unchanged_info.leader, updated_info.leader);
 
     // Tick in a new epoch should advance again.
     let (final_info, final_epoch) = handle_clock_event(
@@ -1511,7 +1500,7 @@ async fn test_handle_clock_event_new_epoch() {
     // Since epoch_transition_period is 1 slot and slot 2 was the last in epoch 1,
     // this triggers NewEpochAndOldEpochTransitionExpired which both completes the
     // old transition and rotates to epoch 2.
-    assert_eq!(final_info.session.session_number, session);
+    assert_eq!(final_info.core.epoch, session);
 }
 
 /// Verify that `handle_new_secret_epoch_info` returns updated leader inputs
@@ -1646,7 +1635,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     // Build a pre-populated saved state with matching session and some spent quota.
     let public_info = new_public_info(initial_session, membership.clone(), &settings);
     let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
-    let saved_state = ServiceState::with_session(
+    let saved_state = ServiceState::with_epoch(
         initial_session,
         token_collector,
         None,
@@ -1694,7 +1683,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         5,
         "Matching session: spent_quota should be restored from saved state"
     );
-    assert_eq!(recovered_checkpoint.last_seen_session(), initial_session);
+    assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_session);
 
     // Mismatched session: fresh state should be created
 
@@ -1736,8 +1725,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     let stale_token_collector =
         SessionBlendingTokenCollector::new(&reward_session_info(&stale_public_info));
     let stale_state =
-        ServiceState::with_session(99, stale_token_collector, None, state_updater2.clone())
-            .unwrap();
+        ServiceState::with_epoch(99, stale_token_collector, None, state_updater2.clone()).unwrap();
     let mut updater = stale_state.start_updating();
     updater.consume_core_quota(42);
     let stale_state = updater.commit_changes();
@@ -1780,7 +1768,7 @@ async fn test_initialize_recovers_matching_saved_state() {
         "Mismatched session: spent_quota should be 0 for fresh state"
     );
     assert_eq!(
-        recovered_checkpoint2.last_seen_session(),
+        recovered_checkpoint2.last_seen_epoch(),
         initial_session,
         "Mismatched session: should track the current session, not the stale one"
     );

@@ -8,6 +8,7 @@ use futures::{
 use lb_blend::message::encap::validated::{
     EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
 };
+use lb_chain_service::Epoch;
 use lb_log_targets::blend;
 use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
@@ -18,7 +19,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use crate::{
     core::{
         backends::{
-            BlendBackend, PublicInfo, SessionInfo,
+            BackendEpochInfo, BlendBackend,
             libp2p::{
                 swarm::{BlendSwarm, BlendSwarmMessage, SwarmParams},
                 tokio_provider::ObservationWindowTokioIntervalProvider,
@@ -46,7 +47,7 @@ pub(crate) use self::tests::utils as core_swarm_test_utils;
 pub struct Libp2pBlendBackend {
     swarm_task_abort_handle: AbortHandle,
     swarm_message_sender: mpsc::Sender<BlendSwarmMessage>,
-    incoming_message_sender: broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, u64)>,
+    incoming_message_sender: broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
 }
 
 const CHANNEL_SIZE: usize = 64;
@@ -61,7 +62,7 @@ where
     fn new(
         config: BlendConfig<Self::Settings>,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
-        current_public_info: PublicInfo<PeerId>,
+        current_epoch_info: BackendEpochInfo<PeerId>,
         rng: Rng,
     ) -> Self {
         let (swarm_message_sender, swarm_message_receiver) = mpsc::channel(CHANNEL_SIZE);
@@ -70,7 +71,7 @@ where
 
         let swarm = BlendSwarm::<_, ObservationWindowTokioIntervalProvider>::new(SwarmParams {
             config: &config,
-            current_public_info,
+            current_epoch_info,
             incoming_message_sender: incoming_message_sender.clone(),
             minimum_network_size,
             rng,
@@ -96,13 +97,13 @@ where
     async fn publish(
         &self,
         msg: EncapsulatedMessageWithVerifiedPublicHeader,
-        intended_session: u64,
+        intended_epoch: Epoch,
     ) {
         if let Err(e) = self
             .swarm_message_sender
             .send(BlendSwarmMessage::Publish {
                 message: Box::new(msg),
-                session: intended_session,
+                epoch: intended_epoch,
             })
             .await
         {
@@ -110,29 +111,29 @@ where
         }
     }
 
-    async fn rotate_session(&mut self, new_session_info: SessionInfo<PeerId>) {
+    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<PeerId>) {
         if let Err(e) = self
             .swarm_message_sender
-            .send(BlendSwarmMessage::StartNewSession(new_session_info))
+            .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
             .await
         {
-            tracing::error!(target: LOG_TARGET, "Failed to send new public session info to BlendSwarm: {e}");
+            tracing::error!(target: LOG_TARGET, "Failed to send new public epoch info to BlendSwarm: {e}");
         }
     }
 
-    async fn complete_session_transition(&mut self) {
+    async fn complete_epoch_transition(&mut self) {
         if let Err(e) = self
             .swarm_message_sender
-            .send(BlendSwarmMessage::CompleteSessionTransition)
+            .send(BlendSwarmMessage::CompleteEpochTransition)
             .await
         {
-            tracing::error!(target: LOG_TARGET, "Failed to send session transition termination command to BlendSwarm: {e}");
+            tracing::error!(target: LOG_TARGET, "Failed to send epoch transition termination command to BlendSwarm: {e}");
         }
     }
 
     fn listen_to_incoming_messages(
         &mut self,
-    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, u64)> + Send>> {
+    ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)> + Send>> {
         Box::pin(
             BroadcastStream::new(self.incoming_message_sender.subscribe())
                 .filter_map(async |event| event.ok()),

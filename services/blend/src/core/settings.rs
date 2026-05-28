@@ -40,13 +40,13 @@ pub struct RunningBlendConfig<BackendSettings> {
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
-    pub fn session_core_quota(&self, membership_size: usize) -> u64 {
+    pub fn epoch_core_quota(&self, membership_size: usize) -> u64 {
         self.scheduler
             .cover
             .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
-    pub const fn session_leadership_quota(&self) -> u64 {
+    pub const fn epoch_leadership_quota(&self) -> u64 {
         let num_blend_layers = self.num_blend_layers.get();
         let additional_encapsulations = num_blend_layers
             .checked_mul(self.data_replication_factor)
@@ -59,7 +59,7 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
     pub(super) fn scheduler_settings(&self) -> lb_blend::scheduling::message_scheduler::Settings {
         lb_blend::scheduling::message_scheduler::Settings {
             additional_safety_intervals: self.scheduler.cover.intervals_for_safety_buffer,
-            expected_intervals_per_session: self.time.intervals_per_session(),
+            expected_intervals_per_epoch: self.time.intervals_per_epoch(),
             maximum_release_delay_in_rounds: self.scheduler.delayer.maximum_release_delay_in_rounds,
             round_duration: self.time.round_duration,
             rounds_per_interval: self.time.rounds_per_interval,
@@ -107,7 +107,7 @@ impl CoverTrafficSettings {
         membership_size: usize,
     ) -> u64 {
         core_quota(
-            timings.rounds_per_session,
+            timings.rounds_per_epoch,
             self.message_frequency_per_round,
             num_blend_layers,
             membership_size,

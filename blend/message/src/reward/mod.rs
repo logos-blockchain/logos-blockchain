@@ -39,7 +39,7 @@ impl SessionBlendingTokenCollector {
     }
 
     #[must_use]
-    pub fn rotate_session(
+    pub fn rotate_epoch(
         self,
         new_session_info: &SessionInfo,
     ) -> (Self, OldSessionBlendingTokenCollector) {
@@ -181,7 +181,7 @@ mod tests {
         // Prepare a new session info.
         let session_info =
             SessionInfo::new(2, &ZkHash::from(2), num_core_nodes, core_quota, 1).unwrap();
-        let (_, mut tokens) = tokens.rotate_session(&session_info);
+        let (_, mut tokens) = tokens.rotate_epoch(&session_info);
 
         // Insert one more tokens.
         // Now,`total_core_quota` tokens have been collected.

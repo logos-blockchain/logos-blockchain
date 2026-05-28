@@ -15,6 +15,7 @@ use lb_blend::{
     },
     scheduling::membership::{Membership, Node},
 };
+use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
 use lb_libp2p::{Protocol, SwarmEvent};
 use lb_utils::blake_rng::BlakeRng;
@@ -46,7 +47,7 @@ pub struct TestSwarm {
     pub swarm: InnerSwarm,
     pub swarm_message_sender: mpsc::Sender<BlendSwarmMessage>,
     pub incoming_message_receiver:
-        broadcast::Receiver<(EncapsulatedMessageWithVerifiedSignature, u64)>,
+        broadcast::Receiver<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
 }
 
 /// Generates `count` nodes with randomly generated identities and empty
@@ -188,7 +189,7 @@ impl BlendBehaviourBuilder {
                     expected_message_range: observation_window_values.1,
                     interval: observation_window_values.0,
                 },
-                (self.membership, 1),
+                (self.membership, 1.into()),
                 self.peer_id,
                 PROTOCOL_NAME,
             ),

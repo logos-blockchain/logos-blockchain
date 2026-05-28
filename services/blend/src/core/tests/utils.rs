@@ -33,7 +33,7 @@ use lb_blend::{
                 core_and_leader::CoreAndLeaderProofsGenerator,
             },
         },
-        message_scheduler::{self, session_info::SessionInfo as SchedulerSessionInfo},
+        message_scheduler::{self, epoch_info::EpochInfo as SchedulerSessionInfo},
     },
 };
 use lb_chain_service::Epoch;
@@ -56,7 +56,7 @@ use tokio_stream::wrappers::{BroadcastStream, ReceiverStream};
 
 use crate::{
     core::{
-        backends::{BlendBackend, PublicInfo, SessionInfo},
+        backends::{BlendBackend, CoreEpochInfo, PublicInfo},
         kms::KmsPoQAdapter,
         network::NetworkAdapter,
         processor::CoreCryptographicProcessor,
@@ -124,11 +124,11 @@ pub fn settings<BackendSettings>(
 
 pub fn timing_settings() -> TimingSettings {
     TimingSettings {
-        rounds_per_session: 10.try_into().unwrap(),
+        rounds_per_epoch: 10.try_into().unwrap(),
         rounds_per_interval: 10.try_into().unwrap(),
         round_duration: Duration::from_secs(1),
         rounds_per_observation_window: 5.try_into().unwrap(),
-        rounds_per_session_transition_period: 2.try_into().unwrap(),
+        rounds_per_epoch_transition_period: 2.try_into().unwrap(),
         epoch_transition_period: Duration::from_secs(1),
     }
 }
@@ -139,7 +139,7 @@ pub fn scheduler_settings(
 ) -> message_scheduler::Settings {
     message_scheduler::Settings {
         additional_safety_intervals: 0,
-        expected_intervals_per_session: NonZeroU64::try_from(1).unwrap(),
+        expected_intervals_per_epoch: NonZeroU64::try_from(1).unwrap(),
         maximum_release_delay_in_rounds: NonZeroU64::try_from(1).unwrap(),
         round_duration: timing_settings.round_duration,
         rounds_per_interval: timing_settings.rounds_per_interval,
@@ -183,9 +183,9 @@ where
         _intended_session: u64,
     ) {
     }
-    async fn rotate_session(&mut self, _new_session_info: SessionInfo<NodeId>) {}
+    async fn rotate_epoch(&mut self, _new_session_info: CoreEpochInfo<NodeId>) {}
 
-    async fn complete_session_transition(&mut self) {
+    async fn complete_epoch_transition(&mut self) {
         // Notify tests that the backend completed the session transition.
         self.event_sender
             .send(TestBlendBackendEvent::SessionTransitionCompleted)
@@ -312,17 +312,17 @@ pub fn new_crypto_processor<CorePoQGenerator>(
     MockCoreAndLeaderProofsGenerator,
     MockProofsVerifier,
 > {
-    let minimum_network_size = u64::try_from(public_info.session.membership.size())
+    let minimum_network_size = u64::try_from(public_info.core.membership.size())
         .expect("membership size must fit into u64")
         .try_into()
         .expect("minimum_network_size must be non-zero");
     CoreCryptographicProcessor::try_new_with_core_condition_check(
-        public_info.session.membership.clone(),
+        public_info.core.membership.clone(),
         minimum_network_size,
         settings,
         PoQVerificationInputsMinusSigningKey {
-            core: public_info.session.core_public_inputs,
-            leader: public_info.epoch,
+            core: public_info.core.core_public_inputs,
+            leader: public_info.leader,
         },
         core_poq_generator,
         Epoch::new(0),
@@ -335,20 +335,20 @@ pub fn new_public_info<BackendSettings>(
     membership: Membership<NodeId>,
     settings: &BlendConfig<BackendSettings>,
 ) -> PublicInfo<NodeId> {
-    let core_quota = settings.session_core_quota(membership.size());
+    let core_quota = settings.epoch_core_quota(membership.size());
     PublicInfo {
-        session: SessionInfo {
-            session_number: session,
+        core: CoreEpochInfo {
+            epoch: session,
             membership,
             core_public_inputs: CoreInputs {
                 zk_root: ZkHash::ZERO,
                 quota: core_quota,
             },
         },
-        epoch: LeaderInputs {
+        leader: LeaderInputs {
             pol_ledger_aged: ZkHash::ZERO,
             pol_epoch_nonce: ZkHash::ZERO,
-            message_quota: settings.session_leadership_quota(),
+            message_quota: settings.epoch_leadership_quota(),
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
         },
@@ -357,22 +357,22 @@ pub fn new_public_info<BackendSettings>(
 
 pub fn scheduler_session_info(public_info: &PublicInfo<NodeId>) -> SchedulerSessionInfo {
     SchedulerSessionInfo {
-        core_quota: public_info.session.core_public_inputs.quota,
-        session_number: u128::from(public_info.session.session_number).into(),
+        core_quota: public_info.core.core_public_inputs.quota,
+        epoch: u128::from(public_info.core.epoch).into(),
     }
 }
 
 pub fn reward_session_info(public_info: &PublicInfo<NodeId>) -> reward::SessionInfo {
     reward::SessionInfo::new(
-        public_info.session.session_number,
-        &public_info.epoch.pol_epoch_nonce,
+        public_info.core.epoch,
+        &public_info.leader.pol_epoch_nonce,
         public_info
-            .session
+            .core
             .membership
             .size()
             .try_into()
             .expect("num_core_nodes must fit into u64"),
-        public_info.session.core_public_inputs.quota,
+        public_info.core.core_public_inputs.quota,
         1,
     )
     .expect("session info must be created successfully")

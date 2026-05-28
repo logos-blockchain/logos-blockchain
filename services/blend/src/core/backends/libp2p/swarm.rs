@@ -26,6 +26,7 @@ use lb_blend::{
     },
     scheduling::membership::Membership,
 };
+use lb_chain_service::Epoch;
 use lb_libp2p::{DialOpts, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
 use rand::RngCore;
@@ -34,7 +35,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use crate::{
     core::{
         backends::{
-            PublicInfo, SessionInfo,
+            BackendEpochInfo,
             libp2p::{
                 LOG_TARGET, Libp2pBlendBackendSettings,
                 behaviour::{BlendBehaviour, BlendBehaviourEvent},
@@ -50,10 +51,10 @@ use crate::{
 pub enum BlendSwarmMessage {
     Publish {
         message: Box<EncapsulatedMessageWithVerifiedPublicHeader>,
-        session: u64,
+        epoch: Epoch,
     },
-    StartNewSession(SessionInfo<PeerId>),
-    CompleteSessionTransition,
+    StartNewEpoch(BackendEpochInfo<PeerId>),
+    CompleteEpochTransition,
     GetNetworkInfo {
         reply: oneshot::Sender<Option<NetworkInfo<PeerId>>>,
     },
@@ -70,11 +71,11 @@ pub struct DialAttempt {
     failed_peers: HashSet<PeerId>,
 }
 
-/// [`DialAttempt`] with session information, i.e., whether the attempt was made
-/// at this session or the previous one.
-pub enum SessionDialAttempt {
-    OngoingSession(Option<DialAttempt>),
-    PreviousSession,
+/// [`DialAttempt`] with epoch information, i.e., whether the attempt was made
+/// at this epoch or the previous one.
+pub enum EpochDialAttempt {
+    OngoingEpoch(Option<DialAttempt>),
+    PreviousEpoch,
 }
 
 #[cfg(test)]
@@ -97,8 +98,8 @@ where
 {
     swarm: Swarm<BlendBehaviour<ObservationWindowProvider>>,
     swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
-    incoming_message_sender: broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, u64)>,
-    public_info: PublicInfo<PeerId>,
+    incoming_message_sender: broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
+    current_epoch_info: BackendEpochInfo<PeerId>,
     rng: Rng,
     max_dial_attempts_per_connection: NonZeroU64,
     ongoing_dials: HashMap<PeerId, DialAttempt>,
@@ -108,10 +109,11 @@ where
 
 pub struct SwarmParams<'config, Rng> {
     pub config: &'config BlendConfig<Libp2pBlendBackendSettings>,
-    pub current_public_info: PublicInfo<PeerId>,
+    pub current_epoch_info: BackendEpochInfo<PeerId>,
     pub rng: Rng,
     pub swarm_message_receiver: mpsc::Receiver<BlendSwarmMessage>,
-    pub incoming_message_sender: broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, u64)>,
+    pub incoming_message_sender:
+        broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, Epoch)>,
     pub minimum_network_size: NonZeroUsize,
 }
 
@@ -127,7 +129,7 @@ where
     pub(super) fn new(
         SwarmParams {
             config,
-            current_public_info,
+            current_epoch_info,
             rng,
             swarm_message_receiver: swarm_messages_receiver,
             incoming_message_sender,
@@ -140,15 +142,7 @@ where
             .with_quic()
             .with_dns()
             .expect("DNS transport should be supported")
-            .with_behaviour(|_| {
-                BlendBehaviour::new(
-                    config,
-                    (
-                        current_public_info.session.membership.clone(),
-                        current_public_info.session.session_number,
-                    ),
-                )
-            })
+            .with_behaviour(|_| BlendBehaviour::new(config, current_epoch_info.clone()))
             .expect("Blend Behaviour should be built")
             .with_swarm_config(|cfg| {
                 // The idle timeout starts ticking once there are no active streams on a
@@ -166,7 +160,7 @@ where
             swarm,
             swarm_messages_receiver,
             incoming_message_sender,
-            public_info: current_public_info,
+            current_epoch_info,
             rng,
             max_dial_attempts_per_connection: config.backend.max_dial_attempts_per_peer,
             ongoing_dials: HashMap::with_capacity(
@@ -189,7 +183,7 @@ where
         IntervalStreamProvider<IntervalStream: Unpin + Send, IntervalItem = RangeInclusive<u64>>,
 {
     /// Dial random peers from the membership list,
-    /// excluding the peers with a negotiated connection in the ongoing session,
+    /// excluding the peers with a negotiated connection in the ongoing epoch,
     /// the peers that we are already trying to dial, the blocked peers, and
     /// any extra peers specified in `except`.
     fn dial_random_peers_except(&mut self, amount: usize, mut except: HashSet<PeerId>) {
@@ -197,7 +191,7 @@ where
 
         // We need to clone else we would not be able to call `self.dial` inside which
         // requires access to `&mut self`.
-        let current_membership = self.public_info.session.membership.clone();
+        let current_membership = self.current_epoch_info.0.clone();
         // Membership contains local node, so we need to exclude that from the count.
         if except.len() == current_membership.size() - 1 {
             tracing::debug!(target: LOG_TARGET, "All eligible peers have been tried. Clearing failed peers memory and retrying from scratch.");
@@ -227,7 +221,7 @@ where
     fn check_and_dial_new_peers_except(&mut self, except: HashSet<PeerId>) {
         tracing::trace!(target: LOG_TARGET, ?except, "Checking if we need to dial new peers");
 
-        let membership_size = self.public_info.session.membership.size();
+        let membership_size = self.current_epoch_info.0.size();
         if membership_size < self.minimum_network_size.get() {
             tracing::warn!(target: LOG_TARGET, "Not dialing any peers because set of core nodes is smaller than the minimum network size. {membership_size} < {}", self.minimum_network_size.get());
             return;
@@ -253,17 +247,17 @@ where
 
     fn collect_network_info(&self) -> NetworkInfo<PeerId> {
         let core_behaviour = self.swarm.behaviour().blend.with_core();
-        let current_session_peers = core_behaviour
+        let current_epoch_peers = core_behaviour
             .negotiated_peers()
             .iter()
             .map(|(peer_id, peer_state)| (*peer_id, peer_state.negotiated_state().is_healthy()))
             .collect();
-        let old_session_peers = core_behaviour
-            .old_session_peer_ids()
+        let old_epoch_peers = core_behaviour
+            .old_epoch_peer_ids()
             .map(|peers| peers.copied().collect());
         let core_info = CoreInfo {
-            current_session_peers,
-            old_session_peers,
+            current_epoch_peers,
+            old_epoch_peers,
         };
         NetworkInfo {
             node_id: *self.swarm.local_peer_id(),
@@ -278,11 +272,11 @@ where
 
     fn handle_blend_core_behaviour_event(&mut self, blend_event: CoreToCoreEvent) {
         match blend_event {
-            lb_blend::network::core::with_core::behaviour::Event::Message { message, sender, session } => {
+            lb_blend::network::core::with_core::behaviour::Event::Message { message, sender, epoch } => {
                 // Forward message received from node to all other core nodes.
-                self.forward_received_core_message(&message, sender, session);
+                self.forward_received_core_message(&message, sender, epoch);
                 // Bubble up to service for decapsulation and delaying.
-                self.report_message_to_service(*message, session, metrics::InboundMessageType::Core);
+                self.report_message_to_service(*message, epoch, metrics::InboundMessageType::Core);
             }
             lb_blend::network::core::with_core::behaviour::Event::UnhealthyPeer(peer_id) => {
                 self.handle_unhealthy_peer(peer_id);
@@ -299,8 +293,8 @@ where
             lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeFailed { peer, reason } => {
                 match reason {
                     ConnectionUpgradeFailureReason::ConnectionFailure => {
-                        // If we ran out of dial attempts, we try to connect to another random peer that we are not yet connected to, if the dial attempt was performed in the current session.
-                        let SessionDialAttempt::OngoingSession(Some(dial_attempt)) = self.schedule_retry(peer) else {
+                        // If we ran out of dial attempts, we try to connect to another random peer that we are not yet connected to, if the dial attempt was performed in the current epoch.
+                        let EpochDialAttempt::OngoingEpoch(Some(dial_attempt)) = self.schedule_retry(peer) else {
                             return;
                         };
                         let failed_peers = {
@@ -371,10 +365,10 @@ where
                 };
 
                 match self.schedule_retry(peer_id) {
-                    SessionDialAttempt::PreviousSession => {
-                        tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials. No retry will be performed.");
+                    EpochDialAttempt::PreviousEpoch => {
+                        tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new epoch has cleared the map of pending dials. No retry will be performed.");
                     }
-                    SessionDialAttempt::OngoingSession(Some(dial_attempt)) => {
+                    EpochDialAttempt::OngoingEpoch(Some(dial_attempt)) => {
                         let failed_peers = {
                             let mut failed_peers = dial_attempt.failed_peers;
                             failed_peers.insert(peer_id);
@@ -383,7 +377,7 @@ where
                         self.check_and_dial_new_peers_except(failed_peers);
                     }
                     // Retry in progress.
-                    SessionDialAttempt::OngoingSession(None) => {}
+                    EpochDialAttempt::OngoingEpoch(None) => {}
                 }
             }
             _ => {
@@ -394,21 +388,21 @@ where
 
     fn handle_swarm_message(&mut self, msg: BlendSwarmMessage) {
         match msg {
-            BlendSwarmMessage::Publish { message, session } => {
-                self.handle_publish_swarm_message(*message, session);
+            BlendSwarmMessage::Publish { message, epoch } => {
+                self.handle_publish_swarm_message(*message, epoch);
             }
-            BlendSwarmMessage::StartNewSession(new_session_info) => {
-                self.public_info.session = new_session_info;
-                self.swarm.behaviour_mut().blend.start_new_session((
-                    self.public_info.session.membership.clone(),
-                    self.public_info.session.session_number,
-                ));
+            BlendSwarmMessage::StartNewEpoch(new_epoch_info) => {
+                self.current_epoch_info = new_epoch_info;
+                self.swarm
+                    .behaviour_mut()
+                    .blend
+                    .start_new_epoch(self.current_epoch_info.clone());
                 self.ongoing_dials.clear();
                 self.pending_retries.clear();
                 self.check_and_dial_new_peers_except(HashSet::new());
             }
-            BlendSwarmMessage::CompleteSessionTransition => {
-                self.swarm.behaviour_mut().blend.finish_session_transition();
+            BlendSwarmMessage::CompleteEpochTransition => {
+                self.swarm.behaviour_mut().blend.finish_epoch_transition();
             }
             BlendSwarmMessage::GetNetworkInfo { reply } => {
                 let info = self.collect_network_info();
@@ -494,7 +488,7 @@ where
             DialOpts::peer_id(peer_id)
                 .addresses(vec![address])
                 // We use `Always` since we want to be able to dial a peer even if we already have
-                // an established connection with it that belongs to the previous session.
+                // an established connection with it that belongs to the previous epoch.
                 .condition(PeerCondition::Always)
                 .build(),
         ) {
@@ -534,23 +528,23 @@ where
     ///
     /// It returns:
     ///
-    /// * `SessionDialAttempt::PreviousSession` if the peer is not being tracked
-    ///   in the map of ongoing dials, which means that a new session has been
+    /// * `EpochDialAttempt::PreviousEpoch` if the peer is not being tracked in
+    ///   the map of ongoing dials, which means that a new epoch has been
     ///   started and the dial attempts have been reset;
-    /// * `SessionDialAttempt::OngoingSession(None)` if a retry has been
-    ///   scheduled with exponential backoff;
-    /// * `SessionDialAttempt::OngoingSession(Some)` if the maximum attempts
-    ///   have been reached and the peer has been removed from the map of
-    ///   ongoing dials.
-    fn schedule_retry(&mut self, peer_id: PeerId) -> SessionDialAttempt {
+    /// * `EpochDialAttempt::OngoingEpoch(None)` if a retry has been scheduled
+    ///   with exponential backoff;
+    /// * `EpochDialAttempt::OngoingEpoch(Some)` if the maximum attempts have
+    ///   been reached and the peer has been removed from the map of ongoing
+    ///   dials.
+    fn schedule_retry(&mut self, peer_id: PeerId) -> EpochDialAttempt {
         let Some(dial_attempt) = self.ongoing_dials.remove(&peer_id) else {
-            tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new session has cleared the map of pending dials.");
-            return SessionDialAttempt::PreviousSession;
+            tracing::debug!(target: LOG_TARGET, "Received a dial error for peer {peer_id:?} that is not being tracked. This means that a new epoch has cleared the map of pending dials.");
+            return EpochDialAttempt::PreviousEpoch;
         };
         let new_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
         if new_attempt_number > self.max_dial_attempts_per_connection {
             tracing::debug!(target: LOG_TARGET, "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.", self.max_dial_attempts_per_connection);
-            return SessionDialAttempt::OngoingSession(Some(dial_attempt));
+            return EpochDialAttempt::OngoingEpoch(Some(dial_attempt));
         }
         let delay = Duration::from_secs(1 << (new_attempt_number.get() - 1));
         tracing::debug!(
@@ -568,7 +562,7 @@ where
                 },
             )
         }));
-        SessionDialAttempt::OngoingSession(None)
+        EpochDialAttempt::OngoingEpoch(None)
     }
 
     /// Called when a pending retry fires. Re-checks peering degree before
@@ -608,7 +602,7 @@ where
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .publish_message_with_validated_signature_to_current_session(msg)
+            .publish_message_with_validated_signature_to_current_epoch(msg)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();
@@ -621,14 +615,14 @@ where
         &mut self,
         msg: &EncapsulatedMessageWithVerifiedSignature,
         except: PeerId,
-        session: u64,
+        epoch: Epoch,
     ) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .forward_message_with_validated_signature(msg, except, session)
+            .forward_message_with_validated_signature(msg, except, epoch)
         {
             // If we have a single connection, then we will always hit the `NoPeers` error.
             // In this case it's ok not to log such error, since this function is only
@@ -646,14 +640,14 @@ where
     fn report_message_to_service(
         &self,
         msg: EncapsulatedMessageWithVerifiedSignature,
-        session: u64,
+        epoch: Epoch,
         message_type: metrics::InboundMessageType,
     ) {
         tracing::trace!(
-            "Received message from a peer: {msg:?} from session {session:?} of type {message_type:?}."
+            "Received message from a peer: {msg:?} from epoch {epoch:?} of type {message_type:?}."
         );
 
-        if self.incoming_message_sender.send((msg, session)).is_err() {
+        if self.incoming_message_sender.send((msg, epoch)).is_err() {
             tracing::trace!(target: LOG_TARGET, "Failed to send incoming message to channel. No active listeners yet.");
             metrics::inbound_message_err(message_type);
         } else {
@@ -693,7 +687,7 @@ where
                 // Bubble up to service for decapsulation and delaying.
                 self.report_message_to_service(
                     msg,
-                    self.public_info.session.session_number,
+                    self.current_epoch_info.1,
                     metrics::InboundMessageType::Edge,
                 );
             }
@@ -703,14 +697,14 @@ where
     fn handle_publish_swarm_message(
         &mut self,
         msg: EncapsulatedMessageWithVerifiedPublicHeader,
-        intended_session: u64,
+        intended_epoch: Epoch,
     ) {
         if let Err(e) = self
             .swarm
             .behaviour_mut()
             .blend
             .with_core_mut()
-            .publish_message_with_validated_header(msg, intended_session)
+            .publish_message_with_validated_header(msg, intended_epoch)
         {
             tracing::error!(target: LOG_TARGET, "Failed to publish message to blend network: {e:?}");
             metrics::outbound_publish_err();
@@ -732,8 +726,11 @@ where
         identity: &libp2p::identity::Keypair,
         behaviour_constructor: BehaviourConstructor,
         swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
-        incoming_message_sender: broadcast::Sender<(EncapsulatedMessageWithVerifiedSignature, u64)>,
-        current_public_info: PublicInfo<PeerId>,
+        incoming_message_sender: broadcast::Sender<(
+            EncapsulatedMessageWithVerifiedSignature,
+            Epoch,
+        )>,
+        current_epoch_info: BackendEpochInfo<PeerId>,
         rng: Rng,
         max_dial_attempts_per_connection: NonZeroU64,
         minimum_network_size: NonZeroUsize,
@@ -744,10 +741,10 @@ where
     {
         use crate::test_utils::memory_test_swarm;
 
-        let membership = current_public_info.session.membership.clone();
+        let membership = current_epoch_info.0.clone();
         Self {
             incoming_message_sender,
-            public_info: current_public_info,
+            current_epoch_info,
             max_dial_attempts_per_connection,
             ongoing_dials: HashMap::new(),
             pending_retries: FuturesUnordered::new(),
