@@ -269,20 +269,20 @@ mod tests {
     fn test_epoch_transition() {
         let state = LeaderState::new();
         let state = state.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
-        assert_eq!(state.epoch, 1.into());
+        assert_eq!(state.epoch, 1);
         assert_eq!(state.vouchers_snapshot.count, 0);
         let state = state.try_apply_header(2.into(), Fr::ONE.into()).unwrap();
-        assert_eq!(state.epoch, 2.into());
+        assert_eq!(state.epoch, 2);
         assert_eq!(state.vouchers_snapshot.count, 1);
         let state = state
             .try_apply_header(2.into(), Fr::from(2u64).into())
             .unwrap();
-        assert_eq!(state.epoch, 2.into());
+        assert_eq!(state.epoch, 2);
         assert_eq!(state.vouchers_snapshot.count, 1);
         let state = state
             .try_apply_header(3.into(), Fr::from(3u64).into())
             .unwrap();
-        assert_eq!(state.epoch, 3.into());
+        assert_eq!(state.epoch, 3);
         assert_eq!(state.vouchers_snapshot.count, 3);
         let err = state
             .clone()
@@ -298,7 +298,7 @@ mod tests {
         let state = state
             .try_apply_header(4.into(), Fr::from(5u64).into())
             .unwrap();
-        assert_eq!(state.epoch, 4.into());
+        assert_eq!(state.epoch, 4);
         assert_eq!(state.vouchers_snapshot.count, 4);
     }
 

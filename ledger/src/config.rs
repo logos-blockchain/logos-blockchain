@@ -208,9 +208,9 @@ mod tests {
             },
             faucet_pk: None,
         };
-        assert_eq!(config.epoch(1.into()), 0.into());
-        assert_eq!(config.epoch(100.into()), 1.into());
-        assert_eq!(config.epoch(101.into()), 1.into());
-        assert_eq!(config.epoch(200.into()), 2.into());
+        assert_eq!(config.epoch(1.into()), 0);
+        assert_eq!(config.epoch(100.into()), 1);
+        assert_eq!(config.epoch(101.into()), 1);
+        assert_eq!(config.epoch(200.into()), 2);
     }
 }

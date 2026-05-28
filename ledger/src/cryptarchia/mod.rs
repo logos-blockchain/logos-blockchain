@@ -1041,10 +1041,7 @@ pub mod tests {
         );
 
         let h_1 = update_ledger(&mut ledger, genesis, 10, utxos[0]).unwrap();
-        assert_eq!(
-            ledger.states[&h_1].cryptarchia_ledger.epoch_state.epoch,
-            0.into()
-        );
+        assert_eq!(ledger.states[&h_1].cryptarchia_ledger.epoch_state.epoch, 0);
 
         let h_2 = update_ledger(&mut ledger, h_1, 60, utxos[1]).unwrap();
 
@@ -1203,10 +1200,7 @@ pub mod tests {
         // 159]
         let h5 = update_ledger(&mut ledger, h4, 100, utxo).unwrap();
         let ts1 = inference.total_stake_inference::<PRECISION>(ts_genesis, 3);
-        assert_eq!(
-            ledger.states[&h5].cryptarchia_ledger.epoch_state.epoch,
-            1.into()
-        );
+        assert_eq!(ledger.states[&h5].cryptarchia_ledger.epoch_state.epoch, 1);
         assert_eq!(
             ledger.states[&h5]
                 .cryptarchia_ledger
@@ -1229,10 +1223,7 @@ pub mod tests {
         // Epoch 1 -> 2 transition --------------------
         let h7 = update_ledger(&mut ledger, h6, 200, utxo).unwrap();
         let ts2 = inference.total_stake_inference::<PRECISION>(ts1, 2);
-        assert_eq!(
-            ledger.states[&h7].cryptarchia_ledger.epoch_state.epoch,
-            2.into()
-        );
+        assert_eq!(ledger.states[&h7].cryptarchia_ledger.epoch_state.epoch, 2);
         assert_eq!(
             ledger.states[&h7]
                 .cryptarchia_ledger
@@ -1617,8 +1608,8 @@ pub mod tests {
 
         // Genesis state is at epoch 0, with epoch_state for epoch 0 and
         // next_epoch_state for epoch 1
-        assert_eq!(ledger_state.epoch_state.epoch, 0.into());
-        assert_eq!(ledger_state.next_epoch_state.epoch, 1.into());
+        assert_eq!(ledger_state.epoch_state.epoch, 0);
+        assert_eq!(ledger_state.next_epoch_state.epoch, 1);
         let initial_total_stake = ledger_state.epoch_state.total_stake;
 
         // Query for epoch 0 (current epoch) - should return epoch_state
@@ -1626,7 +1617,7 @@ pub mod tests {
         let epoch_0_state = ledger_state
             .epoch_state_for_slot::<HeaderId>(epoch_0_slot, &SdpLedger::new(0.into()), &config)
             .expect("Should return epoch state for current epoch");
-        assert_eq!(epoch_0_state.epoch, 0.into());
+        assert_eq!(epoch_0_state.epoch, 0);
         assert_eq!(epoch_0_state.total_stake, initial_total_stake);
 
         // Query for epoch 1
@@ -1635,7 +1626,7 @@ pub mod tests {
         let epoch_1_state = ledger_state
             .epoch_state_for_slot::<HeaderId>(epoch_1_slot, &SdpLedger::new(0.into()), &config)
             .expect("Should return epoch state for next epoch");
-        assert_eq!(epoch_1_state.epoch, 1.into());
+        assert_eq!(epoch_1_state.epoch, 1);
         // With 0 density and LEARNING_RATE=1, total stake drops to minimum (1)
         assert_eq!(
             epoch_1_state.total_stake, 1,
@@ -1647,7 +1638,7 @@ pub mod tests {
         let epoch_2_state = ledger_state
             .epoch_state_for_slot::<HeaderId>(epoch_2_slot, &SdpLedger::new(0.into()), &config)
             .expect("Should synthesize epoch state for skipped epoch");
-        assert_eq!(epoch_2_state.epoch, 2.into());
+        assert_eq!(epoch_2_state.epoch, 2);
         assert_eq!(
             epoch_2_state.total_stake, 1,
             "Total stake should remain at minimum"
@@ -1668,7 +1659,7 @@ pub mod tests {
 
         // First, apply a header from epoch 0 to increase block density
         let slot = Slot::from(1);
-        assert_eq!(config.epoch(slot), 0.into());
+        assert_eq!(config.epoch(slot), 0);
         let proof = generate_proof(&genesis_state, &utxo, slot);
         let ledger_state_1 = genesis_state
             .try_apply_header::<DummyProof, HeaderId>(
@@ -1681,7 +1672,7 @@ pub mod tests {
 
         // Now, apply a header from the 2nd slot of epoch 2
         let slot = Slot::from(config.epoch_length() * 2 + 1);
-        assert_eq!(config.epoch(slot), 2.into());
+        assert_eq!(config.epoch(slot), 2);
 
         // First, synthesize epoch state for epoch 2
         let synthesized_ledger_state = ledger_state_1
@@ -1707,7 +1698,7 @@ pub mod tests {
             .unwrap();
         assert_eq!(ledger_state_2.slot, slot);
         assert_ne!(ledger_state_2.nonce, ledger_state_1.nonce); // advanced
-        assert_eq!(ledger_state_2.epoch_state.epoch, 2.into());
+        assert_eq!(ledger_state_2.epoch_state.epoch, 2);
     }
 
     fn stake_inference_from_config(config: &Config) -> StakeInference {

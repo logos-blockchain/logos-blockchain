@@ -9,11 +9,11 @@ use libp2p::{Multiaddr, PeerId};
 use test_log::test;
 use tokio::{select, time, time::sleep};
 
-use crate::core::backends::libp2p::{
+use crate::{core::backends::libp2p::{
     core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
     swarm::BlendSwarmMessage,
     tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm},
-};
+}, epoch::CoreEpochInfo};
 
 #[test(tokio::test)]
 async fn core_redial_same_peer() {

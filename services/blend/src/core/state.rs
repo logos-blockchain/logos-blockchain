@@ -154,7 +154,9 @@ mod service {
             >,
         ) -> Result<Self, error::EpochMismatch> {
             // Check if `current_epoch_token_collector` has the correct epoch number.
-            let provided_current_epoch = current_epoch_token_collector.epoch_number();
+            // TODO: Change with epochs
+            // let provided_current_epoch = current_epoch_token_collector.session_number();
+            let provided_current_epoch = 0.into();
             if provided_current_epoch != last_seen_epoch {
                 return Err(error::EpochMismatch {
                     last_seen: last_seen_epoch,
@@ -163,13 +165,15 @@ mod service {
             }
 
             // Check if `old_epoch_token_collector` has the correct epoch number.
-            if let Some(old_epoch_token_collector) = &old_epoch_token_collector {
-                let provided_current_epoch = Epoch::new(
-                    old_epoch_token_collector
-                        .epoch_number()
-                        .into_inner()
-                        .saturating_add(1),
-                );
+            if let Some(_old_epoch_token_collector) = &old_epoch_token_collector {
+                // TODO: Change with epochs
+                // let provided_current_epoch = Epoch::new(
+                //     old_epoch_token_collector
+                //         .epoch_number()
+                //         .into_inner()
+                //         .saturating_add(1),
+                // );
+                let provided_current_epoch = 0.into();
                 if provided_current_epoch != last_seen_epoch {
                     return Err(error::EpochMismatch {
                         last_seen: last_seen_epoch,
