@@ -75,7 +75,7 @@ impl Groth16LeaderProof {
 
     fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
         let (proof, verif_inputs) =
-            lb_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
+            lb_pol::prove(private.input.into()).map_err(Error::PoLProofFailed)?;
         Ok((proof, verif_inputs.entropy_contribution.into_inner()))
     }
 

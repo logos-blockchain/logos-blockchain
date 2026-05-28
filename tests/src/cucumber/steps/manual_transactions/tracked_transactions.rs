@@ -179,7 +179,7 @@ async fn transaction_is_in_chain(
     .is_some()
 }
 
-fn create_invalid_transaction() -> SignedMantleTx {
+pub fn create_invalid_transaction() -> SignedMantleTx {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new(vec![output_note]));
 

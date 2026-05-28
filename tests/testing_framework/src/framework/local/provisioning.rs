@@ -191,11 +191,7 @@ impl LocalDeployerEnv for LbcEnv {
     }
 
     fn node_client(endpoints: &NodeEndpoints) -> Result<Self::NodeClient, DynError> {
-        let testing_api = endpoints
-            .port(&NodeEndpointPort::TestingApi)
-            .map(|port| (endpoints.api.ip(), port).into());
-
-        Ok(NodeHttpClient::new(endpoints.api, testing_api))
+        Ok(NodeHttpClient::new(endpoints.api))
     }
 
     fn readiness_endpoint_path() -> &'static str {
@@ -229,10 +225,6 @@ fn ensure_recovery_paths(base_dir: &Path) -> io::Result<()> {
 }
 
 fn add_endpoint_ports(endpoints: &mut NodeEndpoints, config: &RunConfig) {
-    endpoints.insert_port(
-        NodeEndpointPort::TestingApi,
-        config.user.api.testing.listen_address.port(),
-    );
     endpoints.insert_port(
         NodeEndpointPort::Network,
         config.user.network.backend.swarm.port,
@@ -518,11 +510,6 @@ fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
         api: api::serde::Config {
             backend: api::serde::AxumBackendSettings {
                 listen_address: config.api_config.address,
-                max_concurrent_requests: 1000,
-                ..Default::default()
-            },
-            testing: api::serde::AxumBackendSettings {
-                listen_address: config.api_config.testing_http_address,
                 max_concurrent_requests: 1000,
                 ..Default::default()
             },

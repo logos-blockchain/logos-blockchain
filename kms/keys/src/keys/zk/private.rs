@@ -54,7 +54,7 @@ impl SecretKey {
         let sk_inputs = try_from_secret_keys(keys)?;
         let inputs = ZkSignWitnessInputs::from_witness_data_and_message_hash(sk_inputs, *data);
 
-        let (signature, _) = lb_zksign::prove(&inputs).expect("Signature should succeed");
+        let (signature, _) = lb_zksign::prove(inputs).expect("Signature should succeed");
         Ok(Signature::new(signature))
     }
 
