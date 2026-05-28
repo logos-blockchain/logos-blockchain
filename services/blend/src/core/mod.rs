@@ -836,12 +836,11 @@ where
                 handle_release_round_for_old_epoch(processed_messages_to_release, rng, backend, network_adapter, previous_epoch).await;
             }
             Some(pol_info) = secret_pol_info_stream.next() => {
-                // if let Some(new_leader_inputs) = handle_new_secret_epoch_info(blend_config, &pol_info, &mut crypto_processor, epoch) {
-                //     epoch = pol_info.epoch;
-                //     public_info.leader = new_leader_inputs;
-                // }
-                // current_secret_pol_info = Some(pol_info.poq_private_inputs);
-                todo!();
+                current_secret_pol_info = Some(pol_info.clone());
+                if crypto_processor.epoch() == pol_info.epoch {
+                    // TODO: Finish tomorrow
+                    // crypto_processor.set_epoch_private(pol_info)
+                }
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
                 match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, current_secret_pol_info.as_ref()).await {
@@ -1072,14 +1071,13 @@ where
                 new_epoch_info.epoch,
             ) {
                 Ok(mut new_processor) => {
-                    // TODO: Change following logic in edge service
-                    // if let Some(current_secret_info) = current_secret_info {
-                    //     new_processor.set_epoch_private(
-                    //         current_secret_info.clone(),
-                    //         current_public_info.epoch,
-                    //         current_epoch,
-                    //     );
-                    // }
+                    if let Some(current_secret_info) = current_secret_info {
+                        new_processor.set_epoch_private(
+                            current_secret_info.poq_private_inputs,
+                            new_epoch_info.poq_leadership_public_inputs,
+                            new_epoch_info.epoch,
+                        );
+                    }
                     new_processor
                 }
                 Err(e @ (Error::LocalIsNotCoreNode | Error::NetworkIsTooSmall(_))) => {
