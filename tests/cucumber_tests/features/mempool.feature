@@ -47,6 +47,7 @@ Feature: Mempool lifecycle
       | account_index | token_count | token_amount |
       | 1             | 2           | 1000         |
       | 2             | 0           | 0            |
+    # Keep block production slow enough that the tx stays pending across restart.
     And I have deployment config override "time.slot_duration" as "seconds(60)"
     And I have deployment config override "cryptarchia.slot_activation_coeff.numerator" as "9"
     And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
@@ -65,6 +66,7 @@ Feature: Mempool lifecycle
       | node_name |
       | NODE_1    |
     When I restart node "NODE_1"
+    # TF only keeps the tx hash here; the node must recover the pending mempool entry.
     Then transaction "TX_PENDING_RESTART" is pending in mempool of nodes in 30 seconds:
       | node_name |
       | NODE_1    |
@@ -87,6 +89,7 @@ Feature: Mempool lifecycle
     Then transaction "TX_RESTART" is included on node "NODE_1" in 240 seconds
     When I restart node "NODE_1"
     And node "NODE_1" is at height 3 in 240 seconds
+    # Included txs must not be recovered back into the pending mempool after restart.
     Then transaction "TX_RESTART" is not pending in mempool of all nodes in 30 seconds
     Then I stop all nodes
 
