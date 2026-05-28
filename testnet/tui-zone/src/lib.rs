@@ -15,7 +15,7 @@ use lb_zone_sdk::{
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::{
     message::AppMessage,
@@ -90,12 +90,23 @@ pub async fn run(args: InscribeArgs) {
                     error!("Message is too large to fit in an inscription");
                     continue;
                 };
-                if let Err(e) = handle.publish_message(inscription).await {
-                    error!("failed to publish: {e}");
-                    break;
+                match handle.publish_message(inscription).await {
+                    Ok(()) => {
+                        eprintln!("  \x1b[90mpending...\x1b[0m");
+                        ui::prompt();
+                    }
+                    Err(lb_zone_sdk::sequencer::Error::Unavailable { reason }) => {
+                        warn!("publish rejected: {reason}");
+                        eprintln!(
+                            "  \x1b[33msequencer reconnecting, try again in a moment\x1b[0m"
+                        );
+                        ui::prompt();
+                    }
+                    Err(e) => {
+                        error!("failed to publish: {e}");
+                        break;
+                    }
                 }
-                eprintln!("  \x1b[90mpending...\x1b[0m");
-                ui::prompt();
             }
 
             _ = tokio::signal::ctrl_c() => {
@@ -115,7 +126,8 @@ async fn handle_event(
     ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     match event {
-        Event::Ready => handle_ready(state, ready_tx),
+        Event::Readiness { ready: true } => handle_ready(state, ready_tx),
+        Event::Readiness { ready: false } => handle_not_ready(state),
         Event::ChannelUpdate { orphaned, adopted } => {
             handle_channel_update(state, handle, &adopted, &orphaned).await;
         }
@@ -196,6 +208,13 @@ fn handle_ready(
     println!("Type a message and press Enter to publish.");
     println!("Press Ctrl-D or type an empty line to exit.");
     println!();
+    ui::render_state(state);
+    ui::prompt();
+}
+
+fn handle_not_ready(state: &InMemoryZoneState) {
+    warn!("Sequencer disconnected - publishes will fail until reconnected");
+    println!("Sequencer disconnected. Reconnecting...");
     ui::render_state(state);
     ui::prompt();
 }

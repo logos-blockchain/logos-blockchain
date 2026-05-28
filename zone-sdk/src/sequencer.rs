@@ -266,7 +266,8 @@ pub enum Event {
     /// Emitted in both regimes with identical semantics — consumers write a
     /// single apply loop:
     /// - during cold-start catch-up, multiple `TxsFinalized` events stream in
-    ///   (one per backfill batch) before [`Event::Ready`]
+    ///   (one per backfill batch) before [`Event::Readiness`] with `ready:
+    ///   true`
     /// - during live operation, one `TxsFinalized` is emitted whenever LIB
     ///   advances and brings new finalized channel txs
     ///
@@ -333,8 +334,14 @@ pub enum Event {
         /// against the internal outbox. See `Event::Published` for our own).
         adopted: Vec<InscriptionInfo>,
     },
-    /// Sequencer is connected, backfill complete, ready to accept publishes.
-    Ready,
+    /// Sequencer readiness changed.
+    ///
+    /// `ready: true` is emitted on the up edge — connected, backfill complete,
+    /// ready to accept publishes. `ready: false` is emitted on the down edge —
+    /// disconnect or transient processing failure dropped the stream; the SDK
+    /// is reconnecting. Consumers driving the event loop wait for the next
+    /// `Readiness { ready: true }` to resume submitting publishes.
+    Readiness { ready: bool },
     /// A tx (plain inscription or atomic-withdraw bundle) was created and
     /// submitted to the network.
     ///
@@ -450,9 +457,13 @@ where
     /// Publish an inscription to the zone's channel.
     ///
     /// Fire-and-forget: the inscription is queued for processing by the
-    /// sequencer's event loop. The result (inscription ID + checkpoint) is
-    /// delivered via [`Event::Published`] once the tx is created and posted
-    /// to the network.
+    /// sequencer's event loop. The result (inscription ID) is delivered via
+    /// [`Event::Published`] once the tx is created and posted to the network.
+    ///
+    /// Returns [`Error::Unavailable`] if the sequencer is not ready (cold
+    /// start before the first live block, or mid-reconnect after a stream
+    /// drop). Consumers driving the event loop can wait for the next
+    /// [`Event::Readiness`] with `ready: true` and retry.
     pub async fn publish_message(&self, data: Inscription) -> Result<(), Error> {
         if !*self.ready_rx.borrow() {
             return Err(Error::Unavailable {
@@ -644,6 +655,11 @@ where
     /// [`Event::Published`] (`PublishedTx::AtomicWithdraw` variant). Safe to
     /// call from the drive task itself (e.g. an orphan re-publish handler)
     /// because it does not await an actor reply.
+    ///
+    /// Returns [`Error::Unavailable`] if the sequencer is not ready (cold
+    /// start before the first live block, or mid-reconnect after a stream
+    /// drop). Consumers driving the event loop can wait for the next
+    /// [`Event::Readiness`] with `ready: true` and retry.
     pub async fn publish_atomic_withdraw(
         &self,
         inscribe: Inscription,
@@ -747,8 +763,8 @@ where
 
     /// Create a new sequencer with custom configuration.
     ///
-    /// Returns immediately. The sequencer emits [`Event::Ready`] once it has
-    /// connected and completed backfill.
+    /// Returns immediately. The sequencer emits [`Event::Readiness`] with
+    /// `ready: true` once it has connected and completed backfill.
     ///
     /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
     /// and a handle (for submitting requests from other tasks).
@@ -913,8 +929,7 @@ where
         let Some(block_event) = maybe_event else {
             warn!(target: TARGET, "Blocks stream disconnected, will reconnect on next call");
             self.blocks_stream = None;
-            let _ = self.ready_tx.send(false);
-            return None;
+            return self.signal_not_ready();
         };
 
         let result = match handle_block_event(
@@ -931,8 +946,7 @@ where
             Err(e) => {
                 error!("Block event processing failed; dropping stream so reconnect retries: {e}");
                 self.blocks_stream = None;
-                let _ = self.ready_tx.send(false);
-                return None;
+                return self.signal_not_ready();
             }
         };
 
@@ -946,8 +960,7 @@ where
                 "Failed to refresh channel state after block; dropping stream so reconnect retries: {err}"
             );
             self.blocks_stream = None;
-            let _ = self.ready_tx.send(false);
-            return None;
+            return self.signal_not_ready();
         }
 
         let became_ready = self.maybe_signal_ready();
@@ -967,7 +980,7 @@ where
             // produced by queue draining are buffered and emitted on subsequent
             // next_event() calls.
             self.buffered_events.extend(events);
-            return Some(self.emit_now(Event::Ready));
+            return Some(self.emit_now(Event::Readiness { ready: true }));
         }
 
         let event = events.pop_front()?;
@@ -999,6 +1012,24 @@ where
             );
             false
         }
+    }
+
+    /// Flip readiness to `false` and, if that was an actual transition (was
+    /// previously `true`), surface [`Event::Readiness`] so the consumer's
+    /// drive loop learns about the disconnect on the event stream. Returns
+    /// `None` when readiness was already `false` (no spurious event).
+    fn signal_not_ready(&self) -> Option<Event> {
+        let mut transitioned = false;
+        self.ready_tx.send_if_modified(|current| {
+            if *current {
+                *current = false;
+                transitioned = true;
+                true
+            } else {
+                false
+            }
+        });
+        transitioned.then(|| self.emit_now(Event::Readiness { ready: false }))
     }
 
     async fn refresh_channel_state(&mut self) -> Result<(), Error> {
@@ -2630,7 +2661,10 @@ mod tests {
 
         // Drive sequencer until ready
         loop {
-            if matches!(sequencer.next_event().await, Some(Event::Ready)) {
+            if matches!(
+                sequencer.next_event().await,
+                Some(Event::Readiness { ready: true })
+            ) {
                 break;
             }
         }
@@ -3317,7 +3351,7 @@ mod tests {
         let mut finalized_items: Vec<FinalizedTx> = Vec::new();
         loop {
             match sequencer.next_event().await {
-                Some(Event::Ready) => break,
+                Some(Event::Readiness { ready: true }) => break,
                 Some(Event::TxsFinalized { items }) => finalized_items.extend(items),
                 Some(_) | None => {}
             }
