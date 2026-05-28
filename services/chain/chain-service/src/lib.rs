@@ -801,9 +801,11 @@ where
                             ConsensusMsg::SequencerTimingInfo { reply_channel } => {
                                 let slot_duration_ms = u64::try_from(slot_duration.as_millis())
                                     .unwrap_or(u64::MAX);
-                                let genesis_time_unix_ms = genesis_start_time.unix_timestamp_nanos()
-                                    / 1_000_000;
-                                let genesis_time_unix_ms = i64::try_from(genesis_time_unix_ms)
+                                let genesis_time_unix_ms = i64::try_from(
+                                        genesis_start_time
+                                            .unix_timestamp_nanos()
+                                            .div_euclid(1_000_000)
+                                    )
                                     .unwrap_or(i64::MAX);
                                 reply_channel
                                     .send(SequencerTimingInfo {

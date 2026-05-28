@@ -3366,4 +3366,60 @@ mod tests {
             other => panic!("expected Inscription, got {other:?}"),
         }
     }
+    #[test]
+    fn build_initial_slot_clock_rejects_zero_slot_duration() {
+        let timing_info = SequencerTimingInfo {
+            slot_duration_ms: 0,
+            genesis_time_unix_ms: 0,
+        };
+        let observed_slot = Slot::default();
+        let result =
+            ZoneSequencer::<MockNode>::build_initial_slot_clock(observed_slot, &timing_info);
+        assert!(matches!(result, Err(Error::Network(_))));
+        if let Err(Error::Network(msg)) = result {
+            assert!(msg.contains("slot_duration_ms=0"));
+        }
+    }
+    #[test]
+    fn build_initial_slot_clock_rejects_negative_genesis_time() {
+        let timing_info = SequencerTimingInfo {
+            slot_duration_ms: 1_000,
+            genesis_time_unix_ms: -500,
+        };
+        let observed_slot = Slot::default();
+        let result =
+            ZoneSequencer::<MockNode>::build_initial_slot_clock(observed_slot, &timing_info);
+        assert!(matches!(result, Err(Error::Network(_))));
+        if let Err(Error::Network(msg)) = result {
+            assert!(msg.contains("negative genesis_time_unix_ms"));
+        }
+    }
+    #[test]
+    fn build_initial_slot_clock_accepts_valid_zero_genesis_time() {
+        let timing_info = SequencerTimingInfo {
+            slot_duration_ms: 1_000,
+            genesis_time_unix_ms: 0,
+        };
+        let observed_slot = Slot::default();
+        let result =
+            ZoneSequencer::<MockNode>::build_initial_slot_clock(observed_slot, &timing_info);
+        assert!(
+            result.is_ok(),
+            "valid timing with zero genesis should construct SlotClock"
+        );
+    }
+    #[test]
+    fn build_initial_slot_clock_accepts_large_genesis_time() {
+        let timing_info = SequencerTimingInfo {
+            slot_duration_ms: 2_000,
+            genesis_time_unix_ms: 1_779_820_800_000i64,
+        };
+        let observed_slot = Slot::from(42u64);
+        let result =
+            ZoneSequencer::<MockNode>::build_initial_slot_clock(observed_slot, &timing_info);
+        assert!(
+            result.is_ok(),
+            "realistic genesis time should construct SlotClock"
+        );
+    }
 }
