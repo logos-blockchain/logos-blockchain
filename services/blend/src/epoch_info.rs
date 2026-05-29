@@ -3,7 +3,6 @@ use core::fmt::{self, Debug, Formatter};
 use async_trait::async_trait;
 use futures::Stream;
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
-use lb_core::proofs::leader_proof::LeaderPublic;
 use lb_cryptarchia_engine::Epoch;
 use overwatch::overwatch::OverwatchHandle;
 
@@ -12,7 +11,6 @@ use overwatch::overwatch::OverwatchHandle;
 #[derive(Clone)]
 pub struct PolEpochInfo {
     pub epoch: Epoch,
-    pub poq_public_inputs: LeaderPublic,
     /// The `PoL` secret inputs that are found to be winning at least one slot
     /// in the current epoch.
     pub poq_private_inputs: ProofOfLeadershipQuotaInputs,
@@ -22,7 +20,6 @@ impl Debug for PolEpochInfo {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PolEpochInfo")
             .field("epoch", &self.epoch)
-            .field("poq_public_inputs", &self.poq_public_inputs)
             .field("poq_private_inputs", &"<redacted>")
             .finish()
     }

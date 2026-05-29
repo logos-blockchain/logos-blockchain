@@ -441,10 +441,6 @@ where
 /// Initialize the components for the [`BlendService`].
 #[expect(clippy::too_many_lines, reason = "Need to initialize many components")]
 #[expect(
-    clippy::too_many_arguments,
-    reason = "Need to initialize many components."
-)]
-#[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
 )]
@@ -713,10 +709,6 @@ where
 //
 // Returns the old session components when the node is no longer a core node.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "TODO: address this at some point"
-)]
 async fn run_event_loop<
     NodeId,
     Backend,
@@ -794,7 +786,7 @@ where
     let mut old_epoch_message_scheduler: Option<
         OldEpochMessageScheduler<Rng, ProcessedMessage<NetAdapter::BroadcastSettings>>,
     > = None;
-    let mut current_secret_pol_info: Option<PolEpochInfo> = None;
+    let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
 
     loop {
         tokio::select! {
@@ -835,10 +827,11 @@ where
                 if current_epoch_info.epoch == pol_secret_info.epoch {
                     crypto_processor.set_epoch_private(pol_secret_info.poq_private_inputs.clone(), current_epoch_info.poq_leadership_public_inputs, pol_secret_info.epoch);
                 }
-                current_secret_pol_info = Some(pol_secret_info);
+                latest_secret_pol_info = Some(pol_secret_info);
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
-                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, current_secret_pol_info.as_ref()).await {
+                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, latest_secret_pol_info.as_ref()).await {
+                    // Current epoch info updated to new one
                     HandleEpochEventOutput::Transitioning { new_crypto_processor, old_crypto_processor, new_scheduler, old_scheduler, new_epoch_info, new_recovery_checkpoint } => {
                         crypto_processor = new_crypto_processor;
                         old_epoch_crypto_processor = Some(old_crypto_processor);
@@ -847,6 +840,7 @@ where
                         current_epoch_info = new_epoch_info;
                         recovery_checkpoint = new_recovery_checkpoint;
                     },
+                    // Current epoch info unchanged
                     HandleEpochEventOutput::TransitionCompleted { current_crypto_processor, current_scheduler, new_recovery_checkpoint, current_epoch_info: same_epoch_info } => {
                         crypto_processor = current_crypto_processor;
                         old_epoch_crypto_processor = None;
@@ -855,7 +849,8 @@ where
                         current_epoch_info = same_epoch_info;
                         recovery_checkpoint = new_recovery_checkpoint;
                     },
-                    HandleEpochEventOutput::Retiring { old_crypto_processor, old_scheduler, old_token_collector, old_epoch_info } => {
+                    // Current epoch info consumed, not usable anymore
+                    HandleEpochEventOutput::Retiring { old_crypto_processor, old_scheduler, old_token_collector } => {
                         tracing::info!(target: LOG_TARGET, "Exiting from the main event loop");
                         return (
                             old_crypto_processor,
@@ -1042,7 +1037,6 @@ where
                         .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
                         .1,
                     old_token_collector: old_epoch_blending_token_collector,
-                    old_epoch_info: current_epoch_info,
                 };
             };
 
@@ -1082,7 +1076,6 @@ where
                             .rotate_epoch(new_scheduler_epoch_info, settings.scheduler_settings())
                             .1,
                         old_token_collector: old_epoch_blending_token_collector,
-                        old_epoch_info: current_epoch_info,
                     };
                 }
             };
@@ -1125,7 +1118,6 @@ where
                 old_crypto_processor: current_cryptographic_processor,
                 old_scheduler: current_scheduler.consume(),
                 old_token_collector: old_epoch_blending_token_collector,
-                old_epoch_info: current_epoch_info,
             }
         }
         EpochEvent::TransitionPeriodExpired => {
@@ -1210,7 +1202,6 @@ enum HandleEpochEventOutput<
             CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
         old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
         old_token_collector: OldSessionBlendingTokenCollector,
-        old_epoch_info: CoreEpochPublicInfo<NodeId>,
     },
 }
 
