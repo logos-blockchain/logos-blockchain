@@ -142,6 +142,10 @@ mod service {
     {
         // Creates a new instance with the provided fields, and saves it using
         // `state_updater`.
+        #[expect(
+            clippy::unnecessary_wraps,
+            reason = "TODO: This function will fail once the token collector will check for epoch mismatches."
+        )]
         pub(super) fn new(
             last_seen_epoch: Epoch,
             spent_core_quota: u64,
