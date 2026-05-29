@@ -7,7 +7,7 @@ use std::{str::FromStr, vec::IntoIter};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Debug, Error, Eq, PartialEq)]
+#[derive(Debug, Error, Eq, PartialEq, Clone)]
 pub enum BoundedError {
     #[error("Input cannot be empty.")]
     EmptyInput,
@@ -88,6 +88,18 @@ impl<T, const MIN: usize, const MAX: usize> BoundedVec<T, MIN, MAX> {
         }
         self.0.push(item);
         Ok(())
+    }
+}
+
+impl<T, const MIN: usize, const MAX: usize> Default for BoundedVec<T, MIN, MAX> {
+    fn default() -> Self {
+        const {
+            assert!(
+                MIN == 0,
+                "Default is only valid for BoundedVec with MIN == 0"
+            );
+        }
+        Self(Vec::new())
     }
 }
 

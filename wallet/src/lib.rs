@@ -183,7 +183,7 @@ impl WalletState {
         for i in 0..utxos.len() {
             let funded_tx_builder = tx_builder
                 .clone()
-                .extend_ledger_inputs(utxos[..=i].iter().copied());
+                .extend_ledger_inputs(utxos[..=i].iter().copied())?;
 
             let funding_delta = funded_tx_builder.funding_delta::<G>()?;
 
@@ -706,7 +706,7 @@ mod tests {
         // - voucher v1 is ours -> should be tracked
         let transfer1 = TransferOp {
             inputs: Inputs::empty(),
-            outputs: Outputs::new(vec![Note::new(100, alice), Note::new(4, alice)]),
+            outputs: Outputs::new([Note::new(100, alice), Note::new(4, alice)]),
         };
         // immediately lock the 2nd note from `transfer1`
         let locked_note = transfer1.outputs.utxo_by_index(1, &transfer1).unwrap().id();
@@ -740,8 +740,8 @@ mod tests {
             voucher_cm: v2_cm,
             spent_notes: vec![alice_100_nmo_utxo.id()],
             transfers: vec![TransferOp {
-                inputs: [alice_100_nmo_utxo.id()].into(),
-                outputs: Outputs::new(vec![Note::new(20, bob), Note::new(80, alice)]),
+                inputs: Inputs::new([alice_100_nmo_utxo.id()]),
+                outputs: Outputs::new([Note::new(20, bob), Note::new(80, alice)]),
             }],
             // Unknown locked note that will be ignored
             locked_notes: HashSet::from([NoteId::from(Fr::ONE)]),
@@ -843,15 +843,15 @@ mod tests {
         assert_eq!(794, funded_tx_builder.net_balance());
         assert_eq!(0, funded_tx_builder.funding_delta::<Gas>().unwrap());
 
-        let funded_tx = funded_tx_builder.build();
+        let funded_tx = funded_tx_builder.build().unwrap();
 
         if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
             // ensure alices utxo was used to pay the fee
-            assert_eq!(transfer_op.inputs, utxo2.id().into());
+            assert_eq!(transfer_op.inputs, Inputs::new([utxo2.id()]));
             // ensure change was returned to alice
             assert_eq!(
                 transfer_op.outputs,
-                Outputs::new(vec![Note {
+                Outputs::new([Note {
                     value: 4206,
                     pk: alice,
                 }])
@@ -895,7 +895,7 @@ mod tests {
             signer: signing_key.public_key(),
         });
 
-        tx_builder = tx_builder.push_op(inscription);
+        tx_builder = tx_builder.push_op(inscription).unwrap();
 
         // Fund the transaction
         let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice]);
@@ -993,6 +993,7 @@ mod tests {
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
+                .unwrap()
                 .gas_cost::<Gas>()
                 .unwrap()
                 .into_inner()
@@ -1011,13 +1012,14 @@ mod tests {
         let funded_tx_wo_change = wallet_state
             .fund_tx::<Gas>(&tx_builder, alice, [alice])
             .unwrap()
-            .build(); // successfully funded the tx
+            .build()
+            .unwrap(); // successfully funded the tx
 
         // verify that no change output was used.
         if let Op::Transfer(transfer_op) =
             &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
         {
-            assert_eq!(transfer_op.outputs, Outputs::new(vec![]));
+            assert_eq!(transfer_op.outputs, Outputs::empty());
         } else {
             panic!("last op must be a transfer")
         }
@@ -1028,7 +1030,9 @@ mod tests {
             tx_builder
                 .clone()
                 .add_ledger_input(Utxo::new(tx_hash(0), 0, Note::new(0, pk(0))))
+                .unwrap()
                 .with_dummy_change_note()
+                .unwrap()
                 .gas_cost::<Gas>()
                 .unwrap()
                 .into_inner()
@@ -1066,13 +1070,14 @@ mod tests {
         let funded_tx_wo_change = wallet_state
             .fund_tx::<Gas>(&tx_builder, alice, [alice])
             .unwrap()
-            .build(); // successfully funded the tx
+            .build()
+            .unwrap(); // successfully funded the tx
 
         // verify that indeed a change output was used.
         if let Op::Transfer(transfer_op) =
             &funded_tx_wo_change.ops()[funded_tx_wo_change.ops().len() - 1]
         {
-            assert_eq!(transfer_op.outputs, Outputs::new(vec![Note::new(1, alice)]));
+            assert_eq!(transfer_op.outputs, Outputs::new([Note::new(1, alice)]));
         } else {
             panic!("the last operation must be a transfer")
         }

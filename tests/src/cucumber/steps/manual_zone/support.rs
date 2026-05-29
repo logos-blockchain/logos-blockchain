@@ -19,7 +19,7 @@ use lb_config::consensus::{ProviderInfo, create_genesis_block_with_declarations}
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
-        ledger::Outputs,
+        ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
                 ChannelId,
@@ -45,14 +45,14 @@ use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
     internal::DeploymentPlan,
 };
-use lb_utils::math::NonNegativeRatio;
+use lb_utils::{bounded_vec::BoundedError, math::NonNegativeRatio};
 use lb_zone_sdk::{
     ZoneMessage,
     adapter::NodeHttpClient as ZoneNodeHttpClient,
     indexer::ZoneIndexer,
     sequencer::{
         Event, InscriptionId, OrphanedTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
-        SequencerConfig, SequencerHandle, WithdrawArg, ZoneSequencer,
+        SequencerConfig, SequencerHandle, TurnNotification, WithdrawArg, ZoneSequencer,
     },
     state::{FinalizedOp, InscriptionInfo, PublishedTx},
 };
@@ -123,6 +123,10 @@ pub enum ZoneTestError {
     WithdrawTimeout,
     #[error("zone sequencer event stream stopped before observing the expected event")]
     SequencerStopped,
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
+    #[error(transparent)]
+    OutputsError(#[from] OutputsError),
 }
 
 /// Prepared deployment resources for the single-node zone test cluster.
@@ -537,7 +541,7 @@ async fn publish_planned_balance_updates(
     balances: &mut BalanceAwareState,
     planned: &mut VecDeque<Inscription>,
 ) {
-    if !view_rx.borrow().is_our_turn {
+    if !view_rx.borrow().our_turn_to_write {
         return;
     }
 
@@ -780,6 +784,33 @@ pub async fn wait_for_channel_view(
     .map_err(|_| ZoneTestError::ChannelViewTimeout {
         message: format!(
             "condition not reached within {} seconds",
+            duration.as_secs()
+        ),
+    })?
+}
+
+pub async fn wait_for_turn_to_write(
+    turn_rx: &mut tokio::sync::watch::Receiver<TurnNotification>,
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    timeout(duration, async {
+        loop {
+            if turn_rx.borrow_and_update().our_turn_to_write {
+                return Ok(());
+            }
+
+            turn_rx
+                .changed()
+                .await
+                .map_err(|error| ZoneTestError::ChannelViewTimeout {
+                    message: format!("turn-to-write sender closed: {error}"),
+                })?;
+        }
+    })
+    .await
+    .map_err(|_| ZoneTestError::ChannelViewTimeout {
+        message: format!(
+            "turn-to-write notification not received within {} seconds",
             duration.as_secs()
         ),
     })?
@@ -1187,7 +1218,7 @@ pub fn build_zone_deposit(
     Ok(ZoneDeposit {
         deposit: DepositOp {
             channel_id,
-            inputs: note.id().into(),
+            inputs: Inputs::new([note.id()]),
             metadata,
         },
         reserved_inputs: vec![note],
@@ -1315,7 +1346,7 @@ fn build_atomic_deposit_op(
 
     Ok(DepositOp {
         channel_id,
-        inputs: deposit_note_id.into(),
+        inputs: Inputs::new([deposit_note_id]),
         metadata,
     })
 }
@@ -1331,7 +1362,7 @@ pub async fn submit_zone_withdraw(
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
     let withdraw = ChannelWithdrawOp {
         channel_id,
-        outputs: Outputs::new(vec![Note::new(amount, funding_public_key)]),
+        outputs: Outputs::new([Note::new(amount, funding_public_key)]),
         withdraw_nonce: 0,
     };
 
@@ -1421,15 +1452,17 @@ pub async fn publish_atomic_zone_withdraw(
     }
     let withdraw_args: Vec<WithdrawArg> = outputs_per_arg
         .iter()
-        .map(|amounts| WithdrawArg {
-            outputs: Outputs::new(
-                amounts
-                    .iter()
-                    .map(|amount| Note::new(*amount, funding_public_key))
-                    .collect(),
-            ),
+        .map(|amounts| {
+            Ok::<WithdrawArg, ZoneTestError>(WithdrawArg {
+                outputs: Outputs::try_new(
+                    amounts
+                        .iter()
+                        .map(|amount| Note::new(*amount, funding_public_key))
+                        .collect::<Vec<_>>(),
+                )?,
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     sequencer
         .publish_atomic_withdraw(inscription_data.clone(), withdraw_args)
@@ -1545,11 +1578,13 @@ fn add_exact_deposit_notes_to_funding_key(
         .genesis_transfer()
         .clone();
 
-    transfer_op.outputs.as_mut().extend(
-        values
-            .into_iter()
-            .map(|value| Note::new(value, funding_public_key)),
-    );
+    for value in values {
+        transfer_op
+            .outputs
+            .as_mut()
+            .try_push(Note::new(value, funding_public_key))
+            .expect("zone helper note set should stay within transfer output bounds");
+    }
 
     let providers = deployment
         .nodes()

@@ -127,7 +127,9 @@ pub fn create_genesis_block(utxos: &[Utxo], test_context: Option<&str>) -> Genes
     let genesis_builder = if let Some(note) = outputs.next() {
         let mut genesis_builder = GenesisBlockBuilder::new().add_note(note);
         for note in outputs {
-            genesis_builder = genesis_builder.add_note(note);
+            genesis_builder = genesis_builder
+                .try_add_note(note)
+                .expect("note count must fit in genesis transfer outputs");
         }
         genesis_builder
     } else {

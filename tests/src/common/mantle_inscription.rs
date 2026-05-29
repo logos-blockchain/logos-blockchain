@@ -34,12 +34,14 @@ pub fn build_inscription_tx_builder(
         leader_reward_amount: 0,
     };
 
-    MantleTxBuilder::new(tx_context).push_op(Op::ChannelInscribe(InscriptionOp {
-        channel_id,
-        inscription,
-        parent: parent.unwrap_or_else(MsgId::root),
-        signer: signing_key.public_key(),
-    }))
+    MantleTxBuilder::new(tx_context)
+        .push_op(Op::ChannelInscribe(InscriptionOp {
+            channel_id,
+            inscription,
+            parent: parent.unwrap_or_else(MsgId::root),
+            signer: signing_key.public_key(),
+        }))
+        .expect("inscription test builder should fit op bounds")
 }
 
 #[must_use]

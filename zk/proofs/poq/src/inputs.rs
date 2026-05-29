@@ -56,6 +56,17 @@ impl PoQWitnessInputs {
     }
 }
 
+impl TryFrom<PoQWitnessInputs> for lbc_poq_sys::PoqWitnessInput<'_> {
+    type Error = lbp_error::Error;
+
+    fn try_from(value: PoQWitnessInputs) -> Result<Self, Self::Error> {
+        let inputs_json: PoQInputsJson = value.into();
+        let inputs_str: String = serde_json::to_string(&inputs_json)?;
+        let witness_input = lbc_poq_sys::PoqWitnessInput::new(inputs_str)?;
+        Ok(witness_input)
+    }
+}
+
 #[derive(Serialize)]
 pub struct PoQInputsJson {
     #[serde(flatten)]

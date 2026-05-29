@@ -36,7 +36,7 @@ impl Groth16LeaderClaimProof {
 
     fn generate_proof(private: LeaderClaimPrivate) -> Result<(lb_poc::PoCProof, Fr), Error> {
         let (proof, verif_inputs) =
-            lb_poc::prove(&private.input.into()).map_err(Error::PoCProofFailed)?;
+            lb_poc::prove(private.input.into()).map_err(Error::PoCProofFailed)?;
         Ok((proof, verif_inputs.voucher_nullifier.into_inner()))
     }
 

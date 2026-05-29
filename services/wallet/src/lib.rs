@@ -27,7 +27,7 @@ use lb_core::{
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
         },
         tx::MantleTxContext,
-        tx_builder::MantleTxBuilder,
+        tx_builder::{MantleTxBuilder, TxBuilderError},
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},
 };
@@ -98,6 +98,9 @@ pub enum WalletServiceError {
 
     #[error("Input note {0:?} is missing in ledger")]
     MissingInputNote(NoteId),
+
+    #[error(transparent)]
+    TxBuilder(#[from] TxBuilderError),
 
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
@@ -752,7 +755,7 @@ where
     ) -> Result<SignedMantleTx, WalletServiceError> {
         // Extract input public keys before building the transaction
         let mut channel_multi_sig_proofs = tx_builder.channel_multi_sig_proofs().clone();
-        let mantle_tx = tx_builder.clone().build();
+        let mantle_tx = tx_builder.clone().build()?;
         let tx_hash = mantle_tx.hash();
 
         let mut ops_proofs = Vec::new();

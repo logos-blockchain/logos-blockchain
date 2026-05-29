@@ -7,6 +7,7 @@ use lb_core::{
     mantle::{
         GenesisTx as _, NoteId, Transaction as _,
         gas::GasCost,
+        ledger::Inputs,
         ops::channel::{ChannelId, deposit::DepositOp},
     },
 };
@@ -96,7 +97,7 @@ async fn channel_deposit() {
     assert_eq!(selected_deposit_amount, deposit_amount);
     let deposit_op = DepositOp {
         channel_id,
-        inputs: note_id.into(),
+        inputs: Inputs::new([note_id]),
         metadata: format!("Mint {deposit_amount} to Alice in Zone")
             .into_bytes()
             .try_into()

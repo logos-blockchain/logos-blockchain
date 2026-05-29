@@ -475,7 +475,9 @@ async fn fund_sdp_transaction(
         gas_context: empty_context,
         leader_reward_amount: 0,
     };
-    let tx_builder = MantleTxBuilder::new(tx_context).push_op(extra_op);
+    let tx_builder = MantleTxBuilder::new(tx_context)
+        .push_op(extra_op)
+        .expect("mixed-op helper should fit op bounds");
 
     let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder)
         .expect("funding mixed-op transaction should succeed");
@@ -486,5 +488,10 @@ async fn fund_sdp_transaction(
         .map(|_| funding_wallet.secret_key.clone())
         .collect::<Vec<_>>();
 
-    (funded_builder.build(), signing_keys)
+    (
+        funded_builder
+            .build()
+            .expect("funded mixed-op builder should build"),
+        signing_keys,
+    )
 }

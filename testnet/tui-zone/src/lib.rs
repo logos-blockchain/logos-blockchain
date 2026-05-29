@@ -159,6 +159,7 @@ async fn handle_event(
         Event::Checkpoint { checkpoint } => {
             state.save_checkpoint(checkpoint);
         }
+        Event::TurnNotification { .. } => {}
     }
 }
 

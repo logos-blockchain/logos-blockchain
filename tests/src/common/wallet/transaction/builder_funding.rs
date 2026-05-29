@@ -105,7 +105,7 @@ fn fund_sponsored_wallet_transaction(
         sender_change_pk,
         output_total,
         sender_inputs.total(),
-    );
+    )?;
 
     fund_builder_from_plan(
         &builder_with_sender_outputs,
@@ -122,12 +122,14 @@ fn add_sender_change_output(
     change_pk: ZkPublicKey,
     output_total: u64,
     input_total: u64,
-) -> MantleTxBuilder {
+) -> Result<MantleTxBuilder, WalletError> {
     let change = input_total - output_total;
     if change > 0 {
-        tx_builder.add_ledger_output(Note::new(change, change_pk))
-    } else {
         tx_builder
+            .add_ledger_output(Note::new(change, change_pk))
+            .map_err(Into::into)
+    } else {
+        Ok(tx_builder)
     }
 }
 
@@ -169,7 +171,7 @@ fn evaluate_standard_funding_inputs(
 ) -> Result<WalletFundingOutcome<MantleTxBuilder>, WalletError> {
     let funded_builder = tx_builder
         .clone()
-        .extend_ledger_inputs(selected_inputs.iter().copied());
+        .extend_ledger_inputs(selected_inputs.iter().copied())?;
 
     match funded_builder
         .funding_delta::<MainnetGasConstants>()?
@@ -203,7 +205,7 @@ fn build_chunked_funded_tx(
         .sum::<u128>();
     let output_sum = pending_transfer_output_sum(tx_builder);
 
-    let chunked_builder = with_transfer_input_chunks(tx_builder, funding_utxos);
+    let chunked_builder = with_transfer_input_chunks(tx_builder, funding_utxos)?;
     let funding_delta = funding_delta_for_chunked_builder(&chunked_builder, input_sum, output_sum)?;
 
     match funding_delta.cmp(&0) {
@@ -228,7 +230,7 @@ fn add_chunked_change_output(
 ) -> Result<Option<MantleTxBuilder>, WalletError> {
     let builder_with_dummy_change = chunked_builder
         .clone()
-        .add_ledger_output(Note::new(0, change_pk));
+        .add_ledger_output(Note::new(0, change_pk))?;
     let delta_with_change =
         funding_delta_for_chunked_builder(&builder_with_dummy_change, input_sum, output_sum)?;
 
@@ -237,7 +239,7 @@ fn add_chunked_change_output(
     }
 
     let change = u64::try_from(delta_with_change).expect("Positive delta must fit in u64");
-    let tx_with_change = chunked_builder.add_ledger_output(Note::new(change, change_pk));
+    let tx_with_change = chunked_builder.add_ledger_output(Note::new(change, change_pk))?;
 
     assert_eq!(
         funding_delta_for_chunked_builder(
@@ -255,7 +257,7 @@ fn add_chunked_change_output(
 fn with_transfer_input_chunks(
     tx_builder: &MantleTxBuilder,
     funding_utxos: &[Utxo],
-) -> MantleTxBuilder {
+) -> Result<MantleTxBuilder, WalletError> {
     let final_chunk_len = match funding_utxos.len() % super::signing::ZKSIGN_MAX_INPUTS {
         0 => super::signing::ZKSIGN_MAX_INPUTS,
         remainder => remainder,
@@ -265,29 +267,27 @@ fn with_transfer_input_chunks(
     let mut builder = tx_builder.clone();
     for chunk in funding_utxos[..split_index].chunks(super::signing::ZKSIGN_MAX_INPUTS) {
         builder = builder.push_op(Op::Transfer(TransferOp::new(
-            Inputs::new(
-                chunk
-                    .iter()
-                    .map(Utxo::id)
-                    .collect::<Vec<_>>()
-                    .try_into()
-                    .expect("Too many inputs for transfer op."),
-            ),
-            Outputs::new(vec![]),
-        )));
+            Inputs::try_new(chunk.iter().map(Utxo::id).collect::<Vec<_>>())?,
+            Outputs::empty(),
+        )))?;
     }
 
-    builder.extend_ledger_inputs(funding_utxos[split_index..].iter().copied())
+    builder
+        .extend_ledger_inputs(funding_utxos[split_index..].iter().copied())
+        .map_err(Into::into)
 }
 
 fn pending_transfer_output_sum(tx_builder: &MantleTxBuilder) -> u128 {
-    match tx_builder.clone().build().0.iter().last() {
-        Some(Op::Transfer(transfer)) => transfer
-            .outputs
-            .iter()
-            .map(|note| u128::from(note.value))
-            .sum(),
-        _ => 0,
+    match tx_builder.clone().build() {
+        Ok(tx) => match tx.0.iter().last() {
+            Some(Op::Transfer(transfer)) => transfer
+                .outputs
+                .iter()
+                .map(|note| u128::from(note.value))
+                .sum(),
+            _ => 0,
+        },
+        Err(_) => 0,
     }
 }
 
@@ -349,7 +349,7 @@ mod tests {
             0
         );
 
-        let funded_tx = funded_builder.build();
+        let funded_tx = funded_builder.build().expect("funded builder should build");
         let Some(Op::Transfer(transfer)) = funded_tx.ops().last() else {
             panic!("wallet funding should leave a transfer op at the end");
         };

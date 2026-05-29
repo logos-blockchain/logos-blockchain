@@ -283,7 +283,6 @@ impl DiagnosticSources {
 struct NodeDiagnostic {
     label: String,
     base_url: String,
-    testing_url: Option<String>,
     consensus: Result<ConsensusSnapshot, String>,
     network: Result<NetworkSnapshot, String>,
     blend: Result<Option<BlendSnapshot>, String>,
@@ -302,7 +301,6 @@ impl NodeDiagnostic {
         Self {
             label: format!("node-{index}"),
             base_url: client.base_url().to_string(),
-            testing_url: client.testing_url().map(ToString::to_string),
             consensus: consensus
                 .map(ConsensusSnapshot::from)
                 .map_err(|error| error.to_string()),
@@ -319,13 +317,8 @@ impl NodeDiagnostic {
     }
 
     fn render(&self, peer_labels: &BTreeMap<String, String>) -> String {
-        let testing_url = self
-            .testing_url
-            .clone()
-            .unwrap_or_else(|| "none".to_owned());
-
         format!(
-            "  {label} base_url={base_url} testing_url={testing_url}\n    consensus: {consensus}\n    network: {network}\n    blend: {blend}\n    mempool: {mempool}",
+            "  {label} base_url={base_url}\n    consensus: {consensus}\n    network: {network}\n    blend: {blend}\n    mempool: {mempool}",
             label = self.label,
             base_url = self.base_url,
             consensus = self.format_consensus(),
