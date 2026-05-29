@@ -105,6 +105,8 @@ pub enum Error {
     HeaderIdNotFound(HeaderId),
     #[error("Parent header ID not found for child={0}")]
     ParentIdNotFound(HeaderId),
+    #[error("Service session not found: {0:?}")]
+    ServiceSessionNotFound(ServiceType),
 }
 
 #[derive(Derivative)]
