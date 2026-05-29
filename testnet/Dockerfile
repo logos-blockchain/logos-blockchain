@@ -7,7 +7,7 @@ ARG VERSION=v0.4.2
 # ===========================
 # BUILD IMAGE
 # ===========================
-FROM rust:1.95.0-slim-bookworm AS builder
+FROM rust:1.96.0-slim-bookworm AS builder
 
 ARG VERSION
 
