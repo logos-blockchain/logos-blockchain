@@ -4168,6 +4168,7 @@ dependencies = [
  "fork_stream",
  "futures",
  "hex",
+ "libp2p",
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-core",

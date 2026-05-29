@@ -101,7 +101,7 @@ impl SwarmBuilder {
     pub fn new(identity: Keypair, membership: &[Node<PeerId>]) -> Self {
         let public_info = (
             build_membership(membership, Some(identity.public().into())),
-            0.into(),
+            1.into(),
         );
         Self {
             identity,

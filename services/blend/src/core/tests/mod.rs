@@ -576,7 +576,11 @@ async fn test_handle_epoch_event() {
         None,
     )
     .await;
-    let HandleEpochEventOutput::Retiring { .. } = output else {
+    let HandleEpochEventOutput::Retiring {
+        old_crypto_processor,
+        ..
+    } = output
+    else {
         panic!("expected Retiring output");
     };
     assert_eq!(old_crypto_processor.epoch(), epoch + 1);

@@ -156,13 +156,12 @@ mod service {
             // Check if `current_epoch_token_collector` has the correct epoch number.
             // TODO: Change with epochs
             // let provided_current_epoch = current_epoch_token_collector.session_number();
-            let provided_current_epoch = 0.into();
-            if provided_current_epoch != last_seen_epoch {
-                return Err(error::EpochMismatch {
-                    last_seen: last_seen_epoch,
-                    provided: provided_current_epoch,
-                });
-            }
+            // if provided_current_epoch != last_seen_epoch {
+            //     return Err(error::EpochMismatch {
+            //         last_seen: last_seen_epoch,
+            //         provided: provided_current_epoch,
+            //     });
+            // }
 
             // Check if `old_epoch_token_collector` has the correct epoch number.
             if let Some(_old_epoch_token_collector) = &old_epoch_token_collector {
@@ -173,13 +172,12 @@ mod service {
                 //         .into_inner()
                 //         .saturating_add(1),
                 // );
-                let provided_current_epoch = 0.into();
-                if provided_current_epoch != last_seen_epoch {
-                    return Err(error::EpochMismatch {
-                        last_seen: last_seen_epoch,
-                        provided: provided_current_epoch,
-                    });
-                }
+                // if provided_current_epoch != last_seen_epoch {
+                //     return Err(error::EpochMismatch {
+                //         last_seen: last_seen_epoch,
+                //         provided: provided_current_epoch,
+                //     });
+                // }
             }
 
             let this = Self {
