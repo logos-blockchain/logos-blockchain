@@ -1,11 +1,12 @@
 use futures::{Stream, StreamExt as _};
 use lb_common_http_client::Slot;
 use lb_core::mantle::ops::channel::ChannelId;
+use lb_log_targets::zone_sdk;
 use tracing::warn;
 
 use crate::{ZoneMessage, adapter};
 
-const TARGET: &str = "zone_sdk::indexer";
+const TARGET: &str = zone_sdk::INDEXER;
 
 /// Indexer errors.
 #[derive(Debug, thiserror::Error)]

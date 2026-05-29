@@ -27,6 +27,7 @@ use lb_http_api_common::{
     settings::default_max_body_size,
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_log_targets::http_client;
 use log::warn;
 use reqwest::{Client, ClientBuilder, RequestBuilder, StatusCode, Url};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -34,6 +35,8 @@ use tokio_util::{
     codec::{FramedRead, LinesCodec},
     io::StreamReader,
 };
+
+const LOG_TARGET: &str = http_client::ROOT;
 
 /// Client-side header representation matching the server's
 /// `ApiHeaderSerializer`.
@@ -485,13 +488,16 @@ impl CommonHttpClient {
                     Ok(event) => Some(event),
                     Err(err) => {
                         let preview: String = line.chars().take(LOG_LINE_PREVIEW_CHARS).collect();
-                        warn!("blocks stream JSON decode failed: {err}; line_preview={preview:?}");
+                        warn!(
+                            target: LOG_TARGET,
+                            "blocks stream JSON decode failed: {err}; line_preview={preview:?}"
+                        );
                         None
                     }
                 }
             }
             Err(err) => {
-                warn!("blocks stream line decode failed: {err}");
+                warn!(target: LOG_TARGET, "blocks stream line decode failed: {err}");
                 None
             }
         })

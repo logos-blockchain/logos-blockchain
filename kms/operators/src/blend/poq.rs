@@ -12,8 +12,11 @@ use lb_key_management_system_keys::keys::{
     ZkKey,
     secured_key::{SecureKeyOperator, SecuredKey},
 };
+use lb_log_targets::kms;
 use tokio::{sync::oneshot, task::spawn_blocking};
 use tracing::trace;
+
+const LOG_TARGET: &str = kms::operators::BLEND_POQ;
 
 pub struct PoQOperator {
     core_path_and_selectors: CorePathAndSelectors,
@@ -66,7 +69,7 @@ impl SecureKeyOperator for PoQOperator {
                 .await
                 .map_err(Self::Error::FailedOperatorCall)?;
         drop(self.response_channel.send(poq_result).inspect_err(|_| {
-            trace!("Error sending generated proof of quota, most likely due to a session or epoch rotation that discarded the receiver side of the channel.");
+            trace!(target: LOG_TARGET, "Error sending generated proof of quota, most likely due to a session or epoch rotation that discarded the receiver side of the channel.");
         }));
         Ok(())
     }

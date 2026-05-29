@@ -27,6 +27,7 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use lb_log_targets::zone_sdk;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{debug, error, info, warn};
 
@@ -39,7 +40,7 @@ use crate::{
     },
 };
 
-const TARGET: &str = "zone_sdk::sequencer";
+const TARGET: &str = zone_sdk::SEQUENCER;
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -916,7 +917,10 @@ where
         {
             Ok(r) => r,
             Err(e) => {
-                error!("Block event processing failed; dropping stream so reconnect retries: {e}");
+                error!(
+                    target: TARGET,
+                    "Block event processing failed; dropping stream so reconnect retries: {e}"
+                );
                 self.blocks_stream = None;
                 let _ = self.ready_tx.send(false);
                 return None;
@@ -1251,6 +1255,7 @@ where
             Ok(b) => b,
             Err(e) => {
                 error!(
+                    target: TARGET,
                     from = from_u64,
                     to = batch_end,
                     "Backfill batch failed; will retry same range after delay: {e}"
@@ -1597,7 +1602,7 @@ where
             {
                 Ok(event) => event,
                 Err(e) => {
-                    warn!("publish_atomic_withdraw failed: {e}");
+                    warn!(target: TARGET, "publish_atomic_withdraw failed: {e}");
                     None
                 }
             },
@@ -1786,7 +1791,7 @@ fn reject_not_ready(request: ActorRequest) {
     };
     match request {
         ActorRequest::PublishMessage { .. } | ActorRequest::PublishAtomicWithdraw { .. } => {
-            warn!("Publish dropped: sequencer not yet ready");
+            warn!(target: TARGET, "Publish dropped: sequencer not yet ready");
         }
         ActorRequest::ChannelConfig { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::PrepareTx { reply, .. } => drop(reply.send(Err(err()))),
@@ -1887,6 +1892,7 @@ fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: Chann
     }
     if multi_inscribe {
         error!(
+            target: TARGET,
             tx_hash = %hex::encode(tx.mantle_tx.hash().0),
             "restore_pending_tx: tx has multiple ChannelInscribe ops for our channel; \
              tracking as opaque (no bundle lineage)"
@@ -2048,7 +2054,7 @@ fn orphan_from_shed(entry: PublishedTx) -> Option<OrphanedTx> {
         PublishedTx::Inscription(i) => Some(OrphanedTx::Inscription(i)),
         PublishedTx::AtomicWithdraw(a) => Some(OrphanedTx::AtomicWithdraw(a)),
         PublishedTx::Deposit(_) => {
-            debug!("  orphaned: unexpected Deposit entry in pending; skipping");
+            debug!(target: TARGET, "  orphaned: unexpected Deposit entry in pending; skipping");
             None
         }
     }
@@ -2094,7 +2100,7 @@ where
         .immutable_blocks(Slot::from(from_slot), Slot::from(to_slot))
         .await
         .map_err(|e| {
-            error!(?from_slot, ?to_slot, ?e, "Failed to fetch immutable blocks");
+            error!(target: TARGET, ?from_slot, ?to_slot, ?e, "Failed to fetch immutable blocks");
             Error::Network(format!(
                 "failed to fetch blocks (slots {from_slot}..{to_slot}): {e}"
             ))
@@ -2174,6 +2180,7 @@ where
         Ok(Some(events)) => events,
         Ok(None) => {
             error!(
+                target: TARGET,
                 ?block_id,
                 "Events endpoint returned no body for a block with a channel deposit; \
                  events should be atomically visible with the block"
@@ -2183,7 +2190,7 @@ where
             )));
         }
         Err(err) => {
-            error!(?block_id, ?err, "Failed to fetch events for block");
+            error!(target: TARGET, ?block_id, ?err, "Failed to fetch events for block");
             return Err(Error::Network(format!(
                 "failed to fetch events for block {block_id}: {err}"
             )));
@@ -2194,6 +2201,7 @@ where
     for key in &expected {
         if !amounts.contains_key(key) {
             error!(
+                target: TARGET,
                 ?block_id,
                 tx_hash = ?key.0,
                 op_id = ?key.1,
@@ -2309,13 +2317,13 @@ async fn backfill_canonical<Node>(
 ) where
     Node: adapter::Node + Sync,
 {
-    debug!("Backfilling canonical chain from {:?}", missing_parent);
+    debug!(target: TARGET, "Backfilling canonical chain from {:?}", missing_parent);
     let blocks = walk_back_to_known(state, missing_parent, node).await;
     let lib = state.lib();
     for block in &blocks {
         apply_backfilled_block(state, block, channel_id, lib);
     }
-    debug!("Canonical backfill complete");
+    debug!(target: TARGET, "Canonical backfill complete");
 }
 
 /// Walk backwards from `from` until a block the state already knows about (or
@@ -2340,11 +2348,12 @@ where
                 current = parent;
             }
             Ok(None) => {
-                warn!("Block {:?} not found during canonical backfill", current);
+                warn!(target: TARGET, "Block {:?} not found during canonical backfill", current);
                 break;
             }
             Err(e) => {
                 warn!(
+                    target: TARGET,
                     "Failed to fetch block {:?} during canonical backfill: {e}",
                     current
                 );

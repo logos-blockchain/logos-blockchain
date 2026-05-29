@@ -41,6 +41,7 @@ use lb_http_api_common::{
     queries::BlocksStreamQuery,
 };
 use lb_libp2p::{Multiaddr, libp2p::bytes::Bytes};
+use lb_log_targets::node;
 use lb_network_service::{NetworkService, backends::libp2p::Libp2p as Libp2pNetworkBackend};
 use lb_sdp_service::{
     mempool::SdpMempoolAdapter, state::SdpStateStorage, wallet::SdpWalletAdapter,
@@ -73,7 +74,7 @@ use crate::api::{
     },
 };
 
-const TARGET: &str = "node::binary::api";
+const TARGET: &str = node::api::ROOT;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DialPeerRequestBody {

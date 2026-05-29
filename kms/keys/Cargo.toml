@@ -20,6 +20,7 @@ generic-array                   = { workspace = true }
 hex                             = { workspace = true }
 lb-groth16                      = { workspace = true }
 lb-key-management-system-macros = { workspace = true }
+lb-log-targets                  = { workspace = true }
 lb-poseidon2                    = { workspace = true }
 lb-utils                        = { features = ["rng"], workspace = true }
 lb-zksign                       = { workspace = true }

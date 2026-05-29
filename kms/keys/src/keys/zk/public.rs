@@ -1,10 +1,13 @@
 use lb_groth16::{Field as _, Fr, Groth16Input};
+use lb_log_targets::kms;
 use lb_zksign::{ZkSignError, ZkSignVerifierInputs};
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use tracing::error;
 
 use crate::keys::zk::{private::SecretKey, signature::Signature};
+
+const LOG_TARGET: &str = kms::keys::ZK;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord)]
 #[serde(transparent)]
@@ -36,13 +39,13 @@ impl PublicKey {
         let inputs = match try_from_pks((*data).into(), pks) {
             Ok(inputs) => inputs,
             Err(e) => {
-                error!("Error building verifier inputs: {e:?}");
+                error!(target: LOG_TARGET, "Error building verifier inputs: {e:?}");
                 return false;
             }
         };
 
         lb_zksign::verify(signature.as_proof(), &inputs).unwrap_or_else(|e| {
-            error!("Error verifying signature: {e:?}");
+            error!(target: LOG_TARGET, "Error verifying signature: {e:?}");
             false
         })
     }

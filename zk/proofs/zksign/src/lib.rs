@@ -9,6 +9,7 @@ use std::error::Error;
 
 pub use inputs::ZkSignWitnessInputs;
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
+use lb_log_targets::proofs;
 pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
 use tracing::error;
@@ -19,6 +20,8 @@ use crate::{
 };
 
 pub type ZkSignProof = CompressedGroth16Proof;
+
+const LOG_TARGET: &str = proofs::ZKSIGN;
 
 #[derive(Debug, PartialEq, Eq, thiserror::Error, Clone)]
 pub enum ZkSignError {
@@ -71,7 +74,7 @@ pub fn prove(
         .map_err(lbp_error::Error::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
-            error!("Fatal CompressedGroth16Proof::try_from: {e}");
+            error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
             // We panic here because this should never happen, and if it does, it's a
             // critical error that we want to be immediately visible during
             // development and testing.

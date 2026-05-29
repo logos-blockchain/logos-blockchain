@@ -10,8 +10,11 @@ pub mod balance {
         mantle::{NoteId, Value},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
     use tracing::error;
+
+    const LOG_TARGET: &str = api::http::wallet::BALANCE;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletBalanceResponseBody {
@@ -24,7 +27,10 @@ pub mod balance {
     impl IntoResponse for WalletBalanceResponseBody {
         fn into_response(self) -> Response {
             let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!("WalletBalanceResponseBody serialization error: {e}");
+                error!(
+                    target: LOG_TARGET,
+                    "WalletBalanceResponseBody serialization error: {e}"
+                );
                 // We panic here because this should never happen, and if it does, it's a
                 // critical error that we want to be immediately visible during
                 // development and testing.
@@ -46,8 +52,11 @@ pub mod transfer_funds {
         mantle::{SignedMantleTx, Transaction as _, Value},
     };
     use lb_key_management_system_keys::keys::ZkPublicKey;
+    use lb_log_targets::api;
     use serde::{Deserialize, Serialize};
     use tracing::error;
+
+    const LOG_TARGET: &str = api::http::wallet::TRANSFER_FUNDS;
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsRequestBody {
@@ -74,7 +83,10 @@ pub mod transfer_funds {
     impl IntoResponse for WalletTransferFundsResponseBody {
         fn into_response(self) -> Response {
             let json = serde_json::to_string(&self).unwrap_or_else(|e| {
-                error!("WalletTransferFundsResponseBody serialization failed: {e}");
+                error!(
+                    target: LOG_TARGET,
+                    "WalletTransferFundsResponseBody serialization failed: {e}"
+                );
                 // We panic here because this should never happen, and if it does, it's a
                 // critical error that we want to be immediately visible during
                 // development and testing.

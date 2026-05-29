@@ -27,11 +27,14 @@ use lb_core::{
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
+use lb_log_targets::wallet;
 use lb_mmr::{MerkleMountainRange, MerklePath};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
 pub use crate::voucher::Vouchers;
+
+const LOG_TARGET: &str = wallet::CORE;
 
 /// A lightweight block information necessary for wallet
 pub struct WalletBlock {
@@ -386,6 +389,7 @@ where
         let wallet_state = WalletState::from_ledger(&known_keys, ledger);
 
         info!(
+            target: LOG_TARGET,
             ?lib,
             n_known_keys = known_keys.len(),
             n_known_vouchers = known_vouchers.count(),
@@ -414,6 +418,7 @@ where
         let known_keys = known_keys.into_iter().collect::<HashMap<_, _>>();
 
         info!(
+            target: LOG_TARGET,
             ?lib,
             n_known_keys = known_keys.len(),
             n_known_vouchers = known_vouchers.count(),
@@ -541,6 +546,7 @@ where
 
         if removed_count > 0 {
             tracing::trace!(
+                target: LOG_TARGET,
                 removed_states = removed_count,
                 remaining_states = self.wallet_states.len(),
                 "Pruned wallet states for pruned blocks"
@@ -554,7 +560,7 @@ where
     ) {
         for voucher_nullifier in immutable_transactions {
             if let Some(id) = self.known_vouchers.remove_by_nullifier(&voucher_nullifier) {
-                tracing::trace!("Pruned voucher {:?} from wallet", id);
+                tracing::trace!(target: LOG_TARGET, "Pruned voucher {:?} from wallet", id);
             }
         }
     }

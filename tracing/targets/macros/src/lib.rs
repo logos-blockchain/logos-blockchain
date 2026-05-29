@@ -80,6 +80,23 @@ pub fn log_targets(input: TokenStream) -> TokenStream {
         .into()
 }
 
+/// Export log target modules and collect all declared targets from them.
+///
+/// This keeps crate-root module exports and target registration in one place:
+///
+/// ```ignore
+/// log_target_modules! {
+///     blend,
+///     libp2p,
+///     network_service,
+/// }
+/// ```
+#[proc_macro]
+pub fn log_target_modules(input: TokenStream) -> TokenStream {
+    let input = syn::parse_macro_input!(input as TargetModules);
+    expand_target_modules(input).into()
+}
+
 /// A parsed list of target declarations passed to `log_targets!`.
 struct TargetList {
     /// Top-level namespace root from `root = <ident>;`.
@@ -135,6 +152,21 @@ struct ChildModule {
 struct TargetLeaf {
     /// Rust identifier used for the generated constant.
     ident: Ident,
+}
+
+/// A parsed list of target modules passed to `log_target_modules!`.
+struct TargetModules {
+    /// Crate-root modules that expose `all_targets()`.
+    modules: Punctuated<Ident, Token![,]>,
+}
+
+impl Parse for TargetModules {
+    /// Parse the full macro input as a comma-separated list of module names.
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        Ok(Self {
+            modules: Punctuated::parse_terminated(input)?,
+        })
+    }
 }
 
 impl Parse for TargetList {
@@ -294,6 +326,25 @@ impl ModuleNode {
             });
             let last = self.children.len() - 1;
             Ok(&mut self.children[last].node)
+        }
+    }
+}
+
+fn expand_target_modules(input: TargetModules) -> TokenStream2 {
+    let modules = input.modules.into_iter().collect::<Vec<_>>();
+
+    quote! {
+        #(
+            pub mod #modules;
+        )*
+
+        #[must_use]
+        pub fn all_targets() -> std::collections::HashSet<&'static str> {
+            std::iter::once(ROOT)
+                #(
+                    .chain(#modules::all_targets())
+                )*
+                .collect()
         }
     }
 }
