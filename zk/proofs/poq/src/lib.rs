@@ -113,7 +113,6 @@ mod tests {
 
     #[test]
     #[expect(clippy::too_many_lines, reason = "Test function.")]
-    #[ignore = "TODO: Re-enable once we migrate to new PoQ circuit."]
     fn test_core_node_full_flow() {
         let blend_data = PoQBlendInputsData {
             core_sk: BigUint::from_str(
@@ -264,7 +263,6 @@ mod tests {
 
     #[expect(clippy::too_many_lines, reason = "For the sake of the test let it be")]
     #[test]
-    #[ignore = "TODO: Re-enable once we migrate to new PoQ circuit."]
     fn test_leader_full_flow() {
         let (lottery_0, lottery_1) =
             LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))

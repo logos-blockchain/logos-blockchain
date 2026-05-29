@@ -14,7 +14,7 @@ lb-circuits-prover = { workspace = true }
 lb-groth16         = { workspace = true }
 lb-log-targets     = { workspace = true }
 lb-pol             = { workspace = true }
-lbc-poq-sys        = { features = ["prebuilt"], workspace = true }
+lbc-poq-sys        = { workspace = true }
 lbc-types          = { workspace = true }
 lbp-error          = { workspace = true }
 num-bigint         = { workspace = true }
