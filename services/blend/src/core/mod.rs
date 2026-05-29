@@ -416,12 +416,12 @@ where
         .await;
 
         // The main event loop has ended because the node is no longer a core node
-        // in the new session.
-        // Before terminating the service, complete the old session during a single
-        // session transition period.
+        // in the new epoch.
+        // Before terminating the service, complete the old epoch during a single
+        // epoch transition period.
         retire(
-            // We don't need session numbers anymore since we know we are dealing with a single,
-            // past session.
+            // We don't need epoch numbers anymore since we know we are dealing with a single,
+            // past epoch.
             blend_messages.map(|(message, _)| message),
             remaining_epoch_stream,
             backend,
@@ -701,13 +701,14 @@ where
 }
 
 // Run the main event loop that persists while the node is a core node.
-// This can span across multiple sessions.
+// This can span across multiple epochs.
 //
-// The tracked `epoch` is updated by both clock events and secret PoL info
-// events (whichever arrives first), and guards against duplicate epoch
-// rotations in the cryptographic processor.
+// Epoch rotations are driven by the public epoch stream (membership and public
+// `PoQ` inputs) through `handle_epoch_event`. The secret `PoL` info stream is
+// independent: it only enables leadership-proof generation for the current
+// epoch once its info arrives, without driving rotations on its own.
 //
-// Returns the old session components when the node is no longer a core node.
+// Returns the old epoch components when the node is no longer a core node.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
 async fn run_event_loop<
     NodeId,
@@ -825,7 +826,7 @@ where
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
                 if current_epoch_info.epoch == pol_secret_info.epoch {
-                    crypto_processor.set_epoch_private(pol_secret_info.poq_private_inputs.clone(), current_epoch_info.poq_leadership_public_inputs, pol_secret_info.epoch);
+                    crypto_processor.set_epoch_private(pol_secret_info.poq_private_inputs.clone(), pol_secret_info.epoch);
                 }
                 latest_secret_pol_info = Some(pol_secret_info);
             }
@@ -864,7 +865,7 @@ where
     }
 }
 
-/// Processes the old session during the session transition period
+/// Processes the old epoch during the epoch transition period
 /// before retiring the core service.
 #[expect(clippy::too_many_arguments, reason = "categorize args")]
 async fn retire<
@@ -941,18 +942,17 @@ async fn retire<
     }
 }
 
-/// Handles a [`SessionEvent`].
+/// Handles an [`EpochEvent`].
 ///
-/// It consumes the previous cryptographic processor and creates a new one
-/// on a new session with its new membership. It also creates new public inputs
-/// for `PoQ` verification in this new session. It ignores the transition period
-/// expiration event and returns the previous cryptographic processor as is.
-#[expect(clippy::too_many_arguments, reason = "necessary for session handling")]
-#[expect(clippy::too_many_lines, reason = "necessary for session handling")]
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "necessary for session handling"
-)]
+/// On a new epoch it consumes the previous cryptographic processor and creates
+/// a new one for the new epoch with its new membership and public `PoQ`
+/// verification inputs. If secret `PoL` info for the new epoch is already
+/// available, leadership-proof generation is enabled on the new processor right
+/// away. It ignores the transition period expiration event and returns the
+/// previous cryptographic processor as is.
+#[expect(clippy::too_many_arguments, reason = "necessary for epoch handling")]
+#[expect(clippy::too_many_lines, reason = "necessary for epoch handling")]
+#[expect(clippy::cognitive_complexity, reason = "necessary for epoch handling")]
 async fn handle_epoch_event<
     NodeId,
     ProofsGenerator,
@@ -1062,7 +1062,6 @@ where
                     {
                         new_processor.set_epoch_private(
                             current_secret_info.poq_private_inputs.clone(),
-                            new_epoch_info.poq_leadership_public_inputs,
                             new_epoch_info.epoch,
                         );
                     }
@@ -1137,7 +1136,7 @@ where
     }
 }
 
-/// Handles [`SessionEvent::TransitionPeriodExpired`].
+/// Handles [`EpochEvent::TransitionPeriodExpired`].
 async fn handle_epoch_transition_expired<Backend, NodeId, Rng, RuntimeServiceId>(
     backend: &mut Backend,
     blending_token_collector: OldSessionBlendingTokenCollector,
@@ -1156,10 +1155,10 @@ async fn compute_and_submit_activity_proof(
 ) {
     if let Some(activity_proof) = blending_token_collector.compute_activity_proof() {
         if let Err(e) = submit_activity_proof(activity_proof, sdp_relay).await {
-            error!(target: LOG_TARGET, "Failed to submit activity proof for the old session: {e:?}");
+            error!(target: LOG_TARGET, "Failed to submit activity proof for the old epoch: {e:?}");
         }
     } else {
-        debug!(target: LOG_TARGET, "No activity proof generated for the old session");
+        debug!(target: LOG_TARGET, "No activity proof generated for the old epoch");
     }
 }
 
@@ -1322,8 +1321,8 @@ where
 /// Processes an incoming Blend message (with verified signature) received
 /// from a core or edge peer.
 ///
-/// Decapsulation is attempted with the current or old session's cryptographic
-/// processor depending on the session the message is coming from.
+/// Decapsulation is attempted with the current or old epoch's cryptographic
+/// processor depending on the epoch the message is coming from.
 fn handle_incoming_blend_message<
     NodeId,
     Rng,
@@ -1414,16 +1413,16 @@ where
     ProofsVerifier: ProofsVerifierTrait,
 {
     let Ok(validated_message) = processor.validate_message_poq(message) else {
-        tracing::debug!(target: LOG_TARGET, "Received message for session {epoch} failed PoQ validation. Ignoring...");
+        tracing::debug!(target: LOG_TARGET, "Received message for epoch {epoch} failed PoQ validation. Ignoring...");
         return None;
     };
     match processor.decapsulate_message_recursive(validated_message) {
         Ok(output) => Some(output),
         Err(e) => {
             if matches!(e, MessageError::PrivateHeaderDeserializationFailed) {
-                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message for session {epoch} due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
+                tracing::trace!(target: LOG_TARGET, "Failed to decapsulate received message for epoch {epoch} due to deserialization error. This can happen when the message was intended for another node or when the message is malformed. Ignoring...");
             } else {
-                tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message for session {epoch}: {e:?}.");
+                tracing::debug!(target: LOG_TARGET, "Failed to decapsulate received message for epoch {epoch}: {e:?}.");
             }
             None
         }
@@ -1476,7 +1475,7 @@ fn handle_incoming_blend_message_from_old_epoch<
     }
 }
 
-/// Schedules a decapsulated incoming message from the current session,
+/// Schedules a decapsulated incoming message from the current epoch,
 /// and collects the blending tokens obtained from the decapsulation.
 ///
 /// It updates the recovery checkpoint by storing the scheduled message
@@ -1527,7 +1526,7 @@ where
     state_updater.commit_changes()
 }
 
-/// Schedules a decapsulated incoming message from the old session,
+/// Schedules a decapsulated incoming message from the old epoch,
 /// and collects the blending tokens obtained from the decapsulation.
 ///
 /// It updates the recovery checkpoint by storing the collected tokens.
@@ -1926,7 +1925,7 @@ async fn submit_activity_proof(
     proof: ActivityProof,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) -> Result<(), RelayError> {
-    debug!(target: LOG_TARGET, "Submitting activity proof for the old session");
+    debug!(target: LOG_TARGET, "Submitting activity proof for the old epoch");
     sdp_relay
         .send(SdpMessage::PostActivity {
             metadata: ActivityMetadata::Blend(Box::new((&proof).into())),

@@ -8,9 +8,7 @@ use lb_blend_message::{
 use lb_blend_proofs::{
     quota::{
         self, ProofOfQuota, VerifiedProofOfQuota,
-        inputs::prove::{
-            PublicInputs, private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
-        },
+        inputs::prove::{PublicInputs, private::ProofOfLeadershipQuotaInputs},
     },
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };

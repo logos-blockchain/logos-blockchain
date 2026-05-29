@@ -28,7 +28,7 @@ use lb_blend::{
     scheduling::{
         membership::Membership,
         message_blend::{
-            crypto::EpochCryptographicProcessorSettings as SessionCryptographicProcessorSettings,
+            crypto::EpochCryptographicProcessorSettings,
             provers::{
                 BlendLayerProof, ProofsGeneratorSettings,
                 core_and_leader::CoreAndLeaderProofsGenerator,
@@ -199,9 +199,9 @@ where
     }
 
     async fn complete_epoch_transition(&mut self) {
-        // Notify tests that the backend completed the session transition.
+        // Notify tests that the backend completed the epoch transition.
         self.event_sender
-            .send(TestBlendBackendEvent::SessionTransitionCompleted)
+            .send(TestBlendBackendEvent::EpochTransitionCompleted)
             .unwrap();
     }
 
@@ -225,7 +225,7 @@ impl TestBlendBackend {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestBlendBackendEvent {
-    SessionTransitionCompleted,
+    EpochTransitionCompleted,
     /// Emitted when the backend is rotated to a new epoch.
     EpochRotated {
         epoch: Epoch,
@@ -321,7 +321,7 @@ pub fn dummy_overwatch_resources<BackendSettings, BroadcastSettings, RuntimeServ
 }
 
 pub fn new_crypto_processor<CorePoQGenerator>(
-    settings: SessionCryptographicProcessorSettings,
+    settings: EpochCryptographicProcessorSettings,
     epoch_info: &CoreEpochPublicInfo<NodeId>,
     core_poq_generator: CorePoQGenerator,
 ) -> CoreCryptographicProcessor<
@@ -384,7 +384,7 @@ pub fn dummy_pol_private_inputs() -> ProofOfLeadershipQuotaInputs {
     }
 }
 
-pub fn scheduler_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> SchedulerEpochInfo {
+pub fn scheduler_epoch_info(public_info: &CoreEpochPublicInfo<NodeId>) -> SchedulerEpochInfo {
     SchedulerEpochInfo {
         core_quota: public_info.poq_core_public_inputs.quota,
         epoch: public_info.epoch,
