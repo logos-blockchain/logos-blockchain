@@ -1,4 +1,3 @@
-use core::time::Duration;
 use std::path::Path;
 
 use lb_blend_service::{
@@ -39,7 +38,6 @@ pub struct ServiceConfig {
 }
 
 impl ServiceConfig {
-    #[expect(clippy::too_many_lines, reason = "Conversion function.")]
     #[must_use]
     pub fn into_blend_services_settings(
         self,
@@ -99,12 +97,6 @@ impl ServiceConfig {
                 },
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
-                        intervals_for_safety_buffer: self
-                            .deployment
-                            .core
-                            .scheduler
-                            .cover
-                            .intervals_for_safety_buffer,
                         message_frequency_per_round: self
                             .deployment
                             .core

@@ -37,7 +37,6 @@ const DATA_REPLICATION_FACTOR: u64 = 0;
 
 const MINIMUM_MESSAGES_COEFFICIENT: u64 = 1;
 const BLEND_NORMALIZATION_CONSTANT: f64 = 1.03;
-const COVER_SAFETY_BUFFER_INTERVALS: u64 = 100;
 const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
@@ -93,7 +92,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .expect("Normalization constant cannot be negative."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
-                        intervals_for_safety_buffer: COVER_SAFETY_BUFFER_INTERVALS,
                         message_frequency_per_round: NonNegativeF64::try_from(
                             COVER_MESSAGE_FREQUENCY_PER_ROUND,
                         )

@@ -8,7 +8,6 @@ blend:
     scheduler:
       cover:
         message_frequency_per_round: 1.0
-        intervals_for_safety_buffer: 100
       delayer:
         maximum_release_delay_in_rounds: 1
     minimum_messages_coefficient: 1

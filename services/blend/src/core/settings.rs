@@ -56,7 +56,9 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             .expect("Overflow when computing leadership quota.")
     }
 
-    pub(super) fn scheduler_settings(&self) -> lb_blend::scheduling::message_scheduler::Settings {
+    pub(super) const fn scheduler_settings(
+        &self,
+    ) -> lb_blend::scheduling::message_scheduler::Settings {
         lb_blend::scheduling::message_scheduler::Settings {
             maximum_release_delay_in_rounds: self.scheduler.delayer.maximum_release_delay_in_rounds,
             round_duration: self.time.round_duration,

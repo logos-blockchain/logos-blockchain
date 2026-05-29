@@ -56,7 +56,11 @@ impl Settings {
     /// The Blend spec defines this as roughly the same time it takes to propose
     /// a new block.
     #[must_use]
-    pub fn epoch_transition(&self, slots_per_block: u64, slot_duration: &Duration) -> Duration {
+    pub const fn epoch_transition(
+        &self,
+        slots_per_block: u64,
+        slot_duration: &Duration,
+    ) -> Duration {
         Duration::from_secs(slot_duration.as_secs() * slots_per_block)
     }
 
