@@ -34,6 +34,23 @@ where
     _mempool_adapter: std::marker::PhantomData<(MempoolNetAdapter, RuntimeServiceId)>,
 }
 
+impl<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId> Clone
+    for CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
+where
+    BlendService: ServiceData,
+    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash>,
+    MempoolNetAdapter: MempoolNetworkAdapter<RuntimeServiceId>,
+{
+    fn clone(&self) -> Self {
+        Self {
+            blend_relay: self.blend_relay.clone(),
+            mempool_adapter: self.mempool_adapter.clone(),
+            time_relay: self.time_relay.clone(),
+            _mempool_adapter: std::marker::PhantomData,
+        }
+    }
+}
+
 impl<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
     CryptarchiaConsensusRelays<BlendService, Mempool, MempoolNetAdapter, RuntimeServiceId>
 where

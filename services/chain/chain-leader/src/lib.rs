@@ -51,7 +51,7 @@ pub use crate::wallet::LeaderWalletConfig;
 use crate::{
     blend::BlendAdapter,
     kms::PreloadKmsService,
-    leadership::{PotentialWinningPoLSlotNotifier, build_proof_for},
+    leadership::{PotentialWinningPoLSlotNotifier, claim_leadership, generate_leader_proof},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
@@ -444,14 +444,27 @@ where
                         // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
                         winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, &kms_api).await;
 
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
-                            // TODO: spawn as a separate task?
+                        let Some((private_inputs, signing_key, voucher_cm)) = claim_leadership(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await else {
+                            continue;
+                        };
+
+                        let relays = relays.clone();
+                        let ledger_config = ledger_config.clone();
+                        let chain_network_api = chain_network_api.clone();
+                        let blend_adapter = blend_adapter.clone();
+                        let tx_selector = tx_selector.clone();
+
+                        tokio::spawn(async move {
+                            let Some(proof) = generate_leader_proof(private_inputs, voucher_cm).await else {
+                                return;
+                            };
+
                             match Self::propose_block(
                                 parent,
                                 slot,
                                 proof,
                                 &signing_key,
-                                tx_selector.clone(),
+                                tx_selector,
                                 &relays,
                                 tip_state,
                                 &ledger_config,
@@ -466,7 +479,7 @@ where
                                     error!(target: LOG_TARGET, "{e}");
                                 }
                             }
-                        }
+                        });
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {

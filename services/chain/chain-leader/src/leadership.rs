@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use lb_core::{
-    mantle::Utxo,
+    mantle::{Utxo, ops::leader_claim::VoucherCm},
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
@@ -20,16 +20,15 @@ use tokio::{
 
 use crate::{WinningPolInfo, kms::KmsAdapter};
 
-/// Return a leadership proof and signing key if the current slot is a
-/// winning one, and notifies consumers of winning slot info.
+/// Claim leadership for the given slot if we win the lottery.
 ///
-/// If the slot is not a winning one, it returns `None` and no consumer is
-/// notified.
+/// Returns the private inputs, signing key, and voucher commitment needed
+/// for proof generation, or `None` if we didn't win.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
 )]
-pub async fn build_proof_for<Wallet, RuntimeServiceId>(
+pub async fn claim_leadership<Wallet, RuntimeServiceId>(
     utxos: &[UtxoWithKeyId],
     latest_tree: &UtxoTree,
     epoch_state: &EpochState,
@@ -37,7 +36,7 @@ pub async fn build_proof_for<Wallet, RuntimeServiceId>(
     winning_pol_info_notifier: &PotentialWinningPoLSlotNotifier<'_>,
     wallet: &WalletApi<Wallet, RuntimeServiceId>,
     kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-) -> Option<(Groth16LeaderProof, Ed25519Key)>
+) -> Option<(LeaderPrivate, Ed25519Key, VoucherCm)>
 where
     Wallet: lb_wallet_service::api::WalletServiceData,
     RuntimeServiceId: Debug + Display + Sync + AsServiceId<Wallet>,
@@ -90,19 +89,7 @@ where
                 slot,
             );
 
-            let res = tokio::task::spawn_blocking(move || {
-                Groth16LeaderProof::prove(private_inputs, voucher_cm)
-            })
-            .await;
-            match res {
-                Ok(Ok(proof)) => return Some((proof, leader_signing_key)),
-                Ok(Err(e)) => {
-                    tracing::error!("Failed to build proof: {:?}", e);
-                }
-                Err(e) => {
-                    tracing::error!("Failed to wait thread to build proof: {:?}", e);
-                }
-            }
+            return Some((private_inputs, leader_signing_key, voucher_cm));
         } else {
             tracing::trace!(
                 "Not a leader for slot {:?}, {:?}/{:?}",
@@ -114,6 +101,27 @@ where
     }
 
     None
+}
+
+pub async fn generate_leader_proof(
+    private_inputs: LeaderPrivate,
+    voucher_cm: VoucherCm,
+) -> Option<Groth16LeaderProof> {
+    let res = tokio::task::spawn_blocking(move || {
+        Groth16LeaderProof::prove(private_inputs, voucher_cm)
+    })
+    .await;
+    match res {
+        Ok(Ok(proof)) => Some(proof),
+        Ok(Err(e)) => {
+            tracing::error!("Failed to build proof: {:?}", e);
+            None
+        }
+        Err(e) => {
+            tracing::error!("Failed to wait thread to build proof: {:?}", e);
+            None
+        }
+    }
 }
 
 pub fn operator_for_private_inputs_arguments_for_winning_utxo_and_slot(
@@ -431,8 +439,8 @@ mod pol_tests {
         // Create dummy wallet service
         let wallet = DummyWallet::spawn();
 
-        // Find a winning slot by calling `build_proof_for` until it succeeds
-        let (proof, winning_slot) = find_winning_slot_and_build_proof(
+        // Find a winning slot by calling `claim_leadership` + `generate_leader_proof`
+        let (proof, winning_slot) = find_winning_slot_and_generate_proof(
             (0..1000).map(Slot::from),
             UtxoWithKeyId { utxo, key_id },
             &epoch_state,
@@ -460,8 +468,8 @@ mod pol_tests {
         );
     }
 
-    /// Find a winning slot by calling `build_proof_for` until it succeeds
-    async fn find_winning_slot_and_build_proof(
+    /// Find a winning slot and generate proof for it
+    async fn find_winning_slot_and_generate_proof(
         slots: impl Iterator<Item = Slot>,
         utxo: UtxoWithKeyId,
         epoch_state: &EpochState,
@@ -471,7 +479,7 @@ mod pol_tests {
         kms: &(impl KmsAdapter<TestRuntimeServiceId, KeyId = KeyId> + Sync),
     ) -> Option<(Groth16LeaderProof, Slot)> {
         for slot in slots {
-            if let Some((proof, _signing_key)) = build_proof_for(
+            if let Some((private_inputs, _signing_key, voucher_cm)) = claim_leadership(
                 slice::from_ref(&utxo),
                 latest_tree,
                 epoch_state,
@@ -482,7 +490,9 @@ mod pol_tests {
             )
             .await
             {
-                return Some((proof, slot));
+                if let Some(proof) = generate_leader_proof(private_inputs, voucher_cm).await {
+                    return Some((proof, slot));
+                }
             }
         }
         None

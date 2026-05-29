@@ -17,6 +17,20 @@ where
     _phantom: PhantomData<BlendService>,
 }
 
+impl<BlendService> Clone for BlendAdapter<BlendService>
+where
+    BlendService: ServiceData + lb_blend_service::ServiceComponents,
+    BlendService::BroadcastSettings: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            relay: self.relay.clone(),
+            broadcast_settings: self.broadcast_settings.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
 impl<BlendService> BlendAdapter<BlendService>
 where
     BlendService: ServiceData + lb_blend_service::ServiceComponents,
