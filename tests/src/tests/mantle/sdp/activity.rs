@@ -26,7 +26,7 @@ const NODE_COUNT: usize = 2;
 /// 1. Spawn two validators with blend declarations in the genesis transaction.
 /// 2. Wait long enough that declarations would be removed if no activity
 ///    message was submitted during `inactivity_period + retention_period`
-///    sessions.
+///    epochs.
 /// 3. Verify that both declarations are still present, proving that the nodes
 ///    automatically submitted valid activity messages that the ledger accepted.
 #[tokio::test]

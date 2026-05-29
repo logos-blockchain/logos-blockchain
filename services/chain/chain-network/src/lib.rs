@@ -76,8 +76,6 @@ pub enum Error {
     Mempool(String),
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
-    #[error("Service session not found: {0:?}")]
-    ServiceSessionNotFound(ServiceType),
 }
 
 #[derive(Debug)]
