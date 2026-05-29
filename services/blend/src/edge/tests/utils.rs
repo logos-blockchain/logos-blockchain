@@ -99,10 +99,8 @@ pub fn settings(
     BlendConfig {
         time: TimingSettings {
             rounds_per_epoch: NonZeroU64::new(1).unwrap(),
-            rounds_per_interval: NonZeroU64::new(1).unwrap(),
             round_duration: Duration::from_secs(1),
             rounds_per_observation_window: NonZeroU64::new(1).unwrap(),
-            rounds_per_epoch_transition_period: NonZeroU64::new(1).unwrap(),
             epoch_transition_period: Duration::from_secs(1),
         },
         non_ephemeral_signing_key: key(local_id).0,

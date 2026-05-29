@@ -76,9 +76,7 @@ where
 
         let cover_traffic = EpochCoverTraffic::new(
             crate::cover_traffic::Settings {
-                additional_safety_intervals: settings.additional_safety_intervals,
-                expected_intervals_per_epoch: settings.expected_intervals_per_epoch,
-                rounds_per_interval: settings.rounds_per_interval,
+                rounds_per_epoch: settings.rounds_per_epoch,
                 message_count: epoch_info
                     .core_quota
                     .div_ceil(settings.num_blend_layers.into()),
@@ -240,11 +238,9 @@ where
 
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
-    pub additional_safety_intervals: u64,
-    pub expected_intervals_per_epoch: NonZeroU64,
     pub maximum_release_delay_in_rounds: NonZeroU64,
     pub round_duration: Duration,
-    pub rounds_per_interval: NonZeroU64,
+    pub rounds_per_epoch: NonZeroU64,
     pub num_blend_layers: NonZeroU64,
 }
 
@@ -252,11 +248,9 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            additional_safety_intervals: 0,
-            expected_intervals_per_epoch: NonZeroU64::try_from(1).unwrap(),
             maximum_release_delay_in_rounds: NonZeroU64::try_from(1).unwrap(),
             round_duration: Duration::from_secs(1),
-            rounds_per_interval: NonZeroU64::try_from(1).unwrap(),
+            rounds_per_epoch: NonZeroU64::try_from(1).unwrap(),
             num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         }
     }

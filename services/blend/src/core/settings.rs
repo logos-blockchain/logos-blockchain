@@ -58,11 +58,9 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
 
     pub(super) fn scheduler_settings(&self) -> lb_blend::scheduling::message_scheduler::Settings {
         lb_blend::scheduling::message_scheduler::Settings {
-            additional_safety_intervals: self.scheduler.cover.intervals_for_safety_buffer,
-            expected_intervals_per_epoch: self.time.intervals_per_epoch(),
             maximum_release_delay_in_rounds: self.scheduler.delayer.maximum_release_delay_in_rounds,
             round_duration: self.time.round_duration,
-            rounds_per_interval: self.time.rounds_per_interval,
+            rounds_per_epoch: self.time.rounds_per_epoch,
             num_blend_layers: self.num_blend_layers,
         }
     }
@@ -84,15 +82,12 @@ pub struct SchedulerSettings {
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
     pub message_frequency_per_round: NonNegativeF64,
-    // `max`: safety buffer length, expressed in intervals
-    pub intervals_for_safety_buffer: u64,
 }
 
 #[cfg(test)]
 impl Default for CoverTrafficSettings {
     fn default() -> Self {
         Self {
-            intervals_for_safety_buffer: 1,
             message_frequency_per_round: 1.try_into().unwrap(),
         }
     }

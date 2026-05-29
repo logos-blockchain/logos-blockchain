@@ -40,32 +40,23 @@ where
     /// Initialize the scheduler with the required details.
     pub fn new(
         Settings {
-            additional_safety_intervals,
-            expected_intervals_per_epoch,
-            rounds_per_interval,
+            rounds_per_epoch,
             message_count,
         }: Settings,
         rng: Rng,
         round_clock: RoundClock,
     ) -> Self {
-        let total_intervals = expected_intervals_per_epoch
-            .get()
-            .checked_add(additional_safety_intervals)
-            .expect("Overflow when calculating total intervals per epoch.");
-        let total_rounds = total_intervals
-            .checked_mul(rounds_per_interval.get())
-            .expect("Overflow when calculating total rounds per epoch.");
-        trace!(target: LOG_TARGET, "Creating new cover message scheduler with {total_rounds} total rounds.");
+        trace!(target: LOG_TARGET, "Creating new cover message scheduler with {rounds_per_epoch} total rounds.");
 
         assert!(
-            message_count <= total_rounds,
+            message_count <= rounds_per_epoch.get(),
             "The number of messages to emit must be at most the total number of rounds."
         );
 
         Self {
             round_clock,
             remaining_messages: message_count,
-            remaining_rounds: u128::from(total_rounds).into(),
+            remaining_rounds: NonZeroU128::from(rounds_per_epoch).get().into(),
             unprocessed_data_messages: 0,
             rng,
         }
@@ -197,13 +188,8 @@ where
 /// The settings to initialize the cover message scheduler.
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
-    /// The number of intervals to use as the safety buffer in case of longer
-    /// epochs, as per the spec.
-    pub additional_safety_intervals: u64,
-    /// The number of expected intervals per epoch.
-    pub expected_intervals_per_epoch: NonZeroU64,
-    /// The number of rounds per interval.
-    pub rounds_per_interval: NonZeroU64,
+    /// The number of rounds per epoch.
+    pub rounds_per_epoch: NonZeroU64,
     /// The maximum number of messages to generate in this epoch, before
     /// accounting for any generated data messages.
     pub message_count: u64,

@@ -67,26 +67,14 @@ impl ServiceConfig {
                 minimum_network_size: self.deployment.common.minimum_network_size.into(),
                 recovery_path_prefix,
                 time: TimingSettings {
-                    epoch_transition_period: Duration::from_secs(
-                        self.deployment
-                            // TODO: No need to divide by `slot_duration` to then multiply by the
-                            // same right after.
-                            .slots_per_epoch_transition_period(slots_per_block, &slot_duration)
-                            .get()
-                            * slot_duration.as_secs(),
-                    ),
-                    round_duration: self.deployment.round_duration(&slot_duration),
-                    rounds_per_interval: self
+                    epoch_transition_period: self
                         .deployment
-                        .rounds_per_interval(slots_per_block, &slot_duration),
+                        .epoch_transition(slots_per_block, &slot_duration),
+                    round_duration: self.deployment.round_duration(&slot_duration),
                     rounds_per_observation_window: self.deployment.rounds_per_observation_window(),
-                    // TODO: Change to epochs.
                     rounds_per_epoch: self
                         .deployment
-                        .rounds_per_session(slots_per_epoch, &slot_duration),
-                    rounds_per_epoch_transition_period: self
-                        .deployment
-                        .rounds_per_session_transition_period(slots_per_block, &slot_duration),
+                        .rounds_per_epoch(slots_per_epoch, &slot_duration),
                 },
                 data_replication_factor: self.deployment.common.data_replication_factor,
             },
