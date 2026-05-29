@@ -5,9 +5,7 @@ use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
-use lb_blend_proofs::quota::inputs::prove::{
-    private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
-};
+use lb_blend_proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
@@ -91,14 +89,10 @@ where
     pub fn set_epoch_private(
         &mut self,
         new_epoch_private: ProofOfLeadershipQuotaInputs,
-        new_epoch_public_info: LeaderInputs,
-        new_epoch: Epoch,
+        target_epoch: Epoch,
     ) {
-        self.proofs_generator.set_epoch_private(
-            new_epoch_private,
-            new_epoch_public_info,
-            new_epoch,
-        );
+        self.proofs_generator
+            .set_epoch_private(new_epoch_private, target_epoch);
     }
 }
 
@@ -268,7 +262,7 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.set_epoch_private(new_private_inputs.clone(), leader_inputs, Epoch::new(1));
+        processor.set_epoch_private(new_private_inputs.clone(), Epoch::new(1));
 
         assert!(processor.proofs_generator.0 == Some(new_private_inputs));
     }

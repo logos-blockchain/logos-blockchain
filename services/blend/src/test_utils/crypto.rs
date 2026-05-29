@@ -9,7 +9,7 @@ use lb_blend::{
     proofs::{
         quota::{
             ProofOfQuota, VerifiedProofOfQuota,
-            inputs::prove::{private::ProofOfLeadershipQuotaInputs, public::LeaderInputs},
+            inputs::prove::private::ProofOfLeadershipQuotaInputs,
         },
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     },
@@ -36,8 +36,7 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
     fn set_epoch_private(
         &mut self,
         _new_epoch_private: ProofOfLeadershipQuotaInputs,
-        _new_epoch_public: LeaderInputs,
-        _new_epoch: Epoch,
+        _target_epoch: Epoch,
     ) {
     }
 

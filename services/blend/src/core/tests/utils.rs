@@ -441,8 +441,8 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self(settings.public_inputs.leader.pol_epoch_nonce)
     }
 
-    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, _: LeaderInputs, epoch: Epoch) {
-        SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(epoch));
+    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, target_epoch: Epoch) {
+        SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {

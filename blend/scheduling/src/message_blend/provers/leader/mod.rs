@@ -12,6 +12,7 @@ use lb_blend_proofs::{
     },
     selection::VerifiedProofOfSelection,
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 use lb_log_targets::blend;
@@ -43,6 +44,13 @@ pub trait LeaderProofsGenerator: Sized {
 pub struct RealLeaderProofsGenerator {
     pub(super) settings: ProofsGeneratorSettings,
     proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
+}
+
+impl RealLeaderProofsGenerator {
+    #[must_use]
+    pub const fn epoch(&self) -> Epoch {
+        self.settings.epoch
+    }
 }
 
 #[async_trait]

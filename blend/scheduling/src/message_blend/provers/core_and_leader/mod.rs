@@ -1,8 +1,6 @@
 use async_trait::async_trait;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
-use lb_blend_proofs::quota::inputs::prove::{
-    private::ProofOfLeadershipQuotaInputs, public::LeaderInputs,
-};
+use lb_blend_proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 
@@ -40,8 +38,7 @@ pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator>: Sized {
     fn set_epoch_private(
         &mut self,
         new_epoch_private: ProofOfLeadershipQuotaInputs,
-        new_epoch_public: LeaderInputs,
-        new_epoch: Epoch,
+        reference_epoch: Epoch,
     );
     /// Request a new core proof from the prover. It returns `None` if the
     /// maximum core quota has already been reached for this epoch.
@@ -90,9 +87,20 @@ where
     fn set_epoch_private(
         &mut self,
         new_epoch_private: ProofOfLeadershipQuotaInputs,
-        new_epoch_public: LeaderInputs,
-        new_epoch: Epoch,
+        reference_epoch: Epoch,
     ) {
+        // TODO: Change trait API to avoid runtime panics.
+        let (current_generator_epoch, current_leader_inputs) = {
+            let current_epoch_leader_generator = self.leader_proofs_generator.as_ref().expect("set_epoch_private should only be called once per epoch, and only after the core generator has been instantiated.");
+            (
+                current_epoch_leader_generator.settings.epoch,
+                current_epoch_leader_generator.settings.public_inputs.leader,
+            )
+        };
+        assert!(
+            current_generator_epoch == reference_epoch,
+            "set_epoch_private should be called with a reference epoch matching the current core proofs generator's epoch."
+        );
         let current_epoch_local_node_index = self.core_proofs_generator.settings.local_node_index;
         let current_epoch_membership_size = self.core_proofs_generator.settings.membership_size;
         let current_epoch_core_public_inputs =
@@ -100,12 +108,12 @@ where
 
         self.leader_proofs_generator = Some(RealLeaderProofsGenerator::new(
             ProofsGeneratorSettings {
-                epoch: new_epoch,
+                epoch: reference_epoch,
                 local_node_index: current_epoch_local_node_index,
                 membership_size: current_epoch_membership_size,
                 public_inputs: PoQVerificationInputsMinusSigningKey {
                     core: current_epoch_core_public_inputs,
-                    leader: new_epoch_public,
+                    leader: current_leader_inputs,
                 },
                 encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
             },

@@ -59,8 +59,7 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
     fn set_epoch_private(
         &mut self,
         new_epoch_private: ProofOfLeadershipQuotaInputs,
-        _new_epoch_public: LeaderInputs,
-        _new_epoch: Epoch,
+        _target_epoch: Epoch,
     ) {
         self.0 = Some(new_epoch_private);
     }

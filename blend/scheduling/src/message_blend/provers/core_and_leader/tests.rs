@@ -74,11 +74,7 @@ async fn proof_generation() {
         encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
-    core_and_leader_proofs_generator.set_epoch_private(
-        leadership_private_inputs,
-        leadership_public_inputs.leader,
-        Epoch::new(1),
-    );
+    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(1));
 
     for _ in 0..leadership_quota {
         let proof = core_and_leader_proofs_generator
@@ -127,11 +123,7 @@ async fn epoch_private_info() {
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
     );
 
-    core_and_leader_proofs_generator.set_epoch_private(
-        leadership_private_inputs,
-        leadership_public_inputs.leader,
-        Epoch::new(1),
-    );
+    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(1));
 
     // Leadership proof should be generated and verified correctly.
     let proof = core_and_leader_proofs_generator
