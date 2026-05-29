@@ -12,7 +12,6 @@ version     = { workspace = true }
 [dependencies]
 astro-float        = { workspace = true }
 lb-circuits-prover = { workspace = true }
-lb-circuits-utils  = { workspace = true }
 lb-groth16         = { workspace = true }
 lb-log-targets     = { workspace = true }
 lb-utils           = { features = ["serde"], workspace = true }
@@ -27,9 +26,6 @@ tracing            = { workspace = true }
 
 [dev-dependencies]
 divan = { workspace = true }
-
-[build-dependencies]
-lb-circuits-utils = { workspace = true }
 
 [[bench]]
 harness = false

@@ -69,12 +69,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      # Set up custom circuits required for tests
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       # Set environment variables for circuits path - expand $HOME first since GitHub Actions env: blocks don't expand
       # shell variables
       - name: Set circuits path environment variable (new)

@@ -11,7 +11,6 @@ version     = { workspace = true }
 
 [dependencies]
 lb-circuits-prover = { workspace = true }
-lb-circuits-utils  = { workspace = true }
 lb-groth16         = { workspace = true }
 lb-log-targets     = { workspace = true }
 lb-poseidon2       = { workspace = true }
@@ -29,9 +28,6 @@ divan        = { workspace = true }
 lb-poseidon2 = { workspace = true }
 num-bigint   = { workspace = true }
 rand         = { workspace = true }
-
-[build-dependencies]
-lb-circuits-utils = { workspace = true }
 
 [[bench]]
 harness = false

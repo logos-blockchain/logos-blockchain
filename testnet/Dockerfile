@@ -2,14 +2,13 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG VERSION=v0.4.2
+# Cache directory used by the circuits. Not meant to be overridden.
+ARG LB_CACHE=/root/.cache/logos/blockchain
 
 # ===========================
 # BUILD IMAGE
 # ===========================
 FROM rust:1.95.0-slim-bookworm AS builder
-
-ARG VERSION
 
 WORKDIR /logos-blockchain
 COPY . .
@@ -29,8 +28,6 @@ RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run bu
 
 # Build Rust Binaries & Circuits
 WORKDIR /logos-blockchain
-ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
-RUN scripts/setup-logos-blockchain-circuits.sh "$VERSION" "$LOGOS_BLOCKCHAIN_CIRCUITS"
 RUN cargo build --locked --release
 
 # ===========================
@@ -38,7 +35,7 @@ RUN cargo build --locked --release
 # ===========================
 FROM debian:bookworm-slim
 
-ARG VERSION
+ARG LB_CACHE
 
 LABEL maintainer="augustinas@status.im" \
     source="https://github.com/logos-blockchain/logos-blockchain" \
@@ -49,9 +46,10 @@ RUN apt-get update && apt-get install -yq \
     python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy Circuits
-COPY --from=builder /opt/circuits /opt/circuits
-ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
+# Copies the entire cache dir.
+# We only need the circuits, but this is currently much simpler than just copying the circuits subdir.
+# This might be addressed later, after the circuits directories structure is standardised.
+COPY --from=builder $LB_CACHE $LB_CACHE
 
 # Copy Binaries
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/bin/
