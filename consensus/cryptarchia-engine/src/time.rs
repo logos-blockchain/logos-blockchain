@@ -1,6 +1,7 @@
 use core::{
     cmp::Ordering,
     fmt::{self, Display, Formatter},
+    ops::AddAssign,
 };
 use std::{
     num::NonZero,
@@ -199,6 +200,12 @@ impl Add<u32> for Epoch {
 
     fn add(self, rhs: u32) -> Self::Output {
         Self(self.0 + rhs)
+    }
+}
+
+impl AddAssign<u32> for Epoch {
+    fn add_assign(&mut self, rhs: u32) {
+        self.0 += rhs;
     }
 }
 

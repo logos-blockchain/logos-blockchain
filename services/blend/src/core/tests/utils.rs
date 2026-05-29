@@ -33,7 +33,7 @@ use lb_blend::{
                 core_and_leader::CoreAndLeaderProofsGenerator,
             },
         },
-        message_scheduler::{self, epoch_info::EpochInfo as SchedulerSessionInfo},
+        message_scheduler::{self, epoch_info::EpochInfo as SchedulerEpochInfo},
     },
 };
 use lb_chain_service::Epoch;
@@ -314,17 +314,17 @@ pub fn new_crypto_processor<CorePoQGenerator>(
     MockCoreAndLeaderProofsGenerator,
     MockProofsVerifier,
 > {
-    let minimum_network_size = u64::try_from(epoch_info.core.membership.size())
+    let minimum_network_size = u64::try_from(epoch_info.membership.size())
         .expect("membership size must fit into u64")
         .try_into()
         .expect("minimum_network_size must be non-zero");
     CoreCryptographicProcessor::try_new_with_core_condition_check(
-        epoch_info.core.membership.clone(),
+        epoch_info.membership.clone(),
         minimum_network_size,
         settings,
         PoQVerificationInputsMinusSigningKey {
-            core: epoch_info.core.core_public_inputs,
-            leader: epoch_info.leader,
+            core: epoch_info.poq_core_public_inputs,
+            leader: epoch_info.poq_leadership_public_inputs,
         },
         core_poq_generator,
         Epoch::new(0),
@@ -355,24 +355,25 @@ pub fn new_epoch_info<BackendSettings>(
     }
 }
 
-pub fn scheduler_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> SchedulerSessionInfo {
-    SchedulerSessionInfo {
-        core_quota: public_info.core.core_public_inputs.quota,
-        epoch: public_info.core.epoch,
+pub fn scheduler_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> SchedulerEpochInfo {
+    SchedulerEpochInfo {
+        core_quota: public_info.poq_core_public_inputs.quota,
+        epoch: public_info.epoch,
     }
 }
 
 pub fn reward_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward::SessionInfo {
     reward::SessionInfo::new(
-        public_info.core.epoch,
-        &public_info.leader.pol_epoch_nonce,
+        // TODO: Change when rewards implement epochs
+        // public_info.epoch,
+        0,
+        &public_info.poq_leadership_public_inputs.pol_epoch_nonce,
         public_info
-            .core
             .membership
             .size()
             .try_into()
             .expect("num_core_nodes must fit into u64"),
-        public_info.core.core_public_inputs.quota,
+        public_info.poq_core_public_inputs.quota,
         1,
     )
     .expect("session info must be created successfully")

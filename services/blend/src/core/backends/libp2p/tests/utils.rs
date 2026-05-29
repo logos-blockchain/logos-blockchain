@@ -32,7 +32,10 @@ use tokio_stream::wrappers::IntervalStream;
 
 use crate::{
     core::{
-        backends::libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
+        backends::{
+            BackendEpochInfo,
+            libp2p::{BlendSwarm, behaviour::BlendBehaviour, swarm::BlendSwarmMessage},
+        },
         settings::StartingBlendConfig as BlendConfig,
     },
     test_utils::PROTOCOL_NAME,
@@ -90,7 +93,7 @@ pub fn build_membership(
 
 pub struct SwarmBuilder {
     identity: Keypair,
-    public_info: PublicInfo<PeerId>,
+    public_info: BackendEpochInfo<PeerId>,
     max_dial_attempts: Option<NonZeroU64>,
 }
 
