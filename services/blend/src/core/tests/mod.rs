@@ -55,7 +55,6 @@ fn test_blend_epoch_state(
 /// Check if incoming encapsulated messages are properly decapsulated and
 /// scheduled by [`handle_incoming_blend_message`].
 #[test_log::test(tokio::test)]
-#[ignore = "TODO: Re-enable once we remove sessions."]
 async fn test_handle_incoming_blend_message() {
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
@@ -492,14 +491,13 @@ async fn test_handle_epoch_event() {
         old_scheduler,
         new_epoch_info,
         new_recovery_checkpoint,
-        ..
+        old_crypto_processor,
     } = output
     else {
         panic!("expected Transitioning output");
     };
-    // TODO: Re-enable once we remove sessions.
-    // assert_eq!(new_crypto_processor.verifier().epoch_nonce(), session + 1);
-    // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session);
+    assert_eq!(new_crypto_processor.epoch(), epoch + 1);
+    assert_eq!(old_crypto_processor.epoch(), epoch);
     assert_eq!(
         new_scheduler.release_delayer().unreleased_messages().len(),
         0
@@ -539,11 +537,7 @@ async fn test_handle_epoch_event() {
     else {
         panic!("expected TransitionCompleted output");
     };
-    // TODO: Re-enable once we remove sessions.
-    // assert_eq!(
-    //     current_crypto_processor.verifier().epoch_nonce(),
-    //     session + 1
-    // );
+    assert_eq!(current_crypto_processor.epoch(), epoch + 1);
     assert_eq!(current_epoch_info.epoch, epoch + 1);
     assert!(
         new_recovery_checkpoint
@@ -585,8 +579,7 @@ async fn test_handle_epoch_event() {
     let HandleEpochEventOutput::Retiring { .. } = output else {
         panic!("expected Retiring output");
     };
-    // TODO: Re-enable once we remove sessions.
-    // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session + 1);
+    assert_eq!(old_crypto_processor.epoch(), epoch + 1);
 }
 
 /// Handle a `NewSession(Empty)` event (empty membership), expecting `Retiring`
@@ -643,13 +636,16 @@ async fn test_handle_session_event_empty_session_retires() {
         None,
     )
     .await;
-    let HandleEpochEventOutput::Retiring { .. } = output else {
+    let HandleEpochEventOutput::Retiring {
+        old_crypto_processor,
+        ..
+    } = output
+    else {
         panic!("expected Retiring output for Empty session");
     };
     // The old processor/info should be from the session we were on before
     // the empty session arrived.
-    // TODO: Re-enable once we remove sessions.
-    // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session);
+    assert_eq!(old_crypto_processor.epoch(), epoch);
 }
 
 /// Handle a `NewSession(NonEmpty)` event where membership exists but the local
@@ -714,12 +710,15 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
     )
     .await;
 
-    let HandleEpochEventOutput::Retiring { .. } = output else {
+    let HandleEpochEventOutput::Retiring {
+        old_crypto_processor,
+        ..
+    } = output
+    else {
         panic!("expected Retiring output for NonEmpty session without local core path");
     };
 
-    // TODO: Re-enable once we remove sessions.
-    // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session);
+    assert_eq!(old_crypto_processor.epoch(), epoch);
 }
 
 /// Check if the service keeps running after it receives a new session where
@@ -727,7 +726,6 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
 /// if it receives another new session that doesn't meet the core node
 /// conditions.
 #[test_log::test(tokio::test)]
-#[ignore = "TODO: Re-enable once we replace sessions with epochs."]
 async fn complete_old_epoch_after_main_loop_done() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
@@ -1145,7 +1143,6 @@ async fn stop_on_non_empty_session_without_local_core_path() {
 /// Verify that the proof generator produces proofs for the correct session,
 /// and that those proofs are only accepted by a verifier for the same session.
 #[test_log::test(tokio::test)]
-#[ignore = "TODO: Re-enable once we remove sessions."]
 async fn test_proof_generator_session_binding() {
     let session_0 = 0.into();
     let session_1 = 1.into();
