@@ -38,7 +38,7 @@ use lb_blend::{
 };
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
-use lb_groth16::{Field as _, Fr, fr_to_bytes};
+use lb_groth16::{Field as _, Fr, fr_from_bytes_unchecked, fr_to_bytes};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, UnsecuredEd25519Key};
 use lb_network_service::{NetworkService, backends::NetworkBackend};
 use lb_poq::CorePathAndSelectors;
@@ -326,7 +326,7 @@ pub fn new_crypto_processor<CorePoQGenerator>(
             leader: epoch_info.poq_leadership_public_inputs,
         },
         core_poq_generator,
-        Epoch::new(0),
+        epoch_info.epoch,
     )
     .expect("crypto processor must be created successfully")
 }
@@ -346,7 +346,7 @@ pub fn new_epoch_info<BackendSettings>(
         },
         poq_leadership_public_inputs: LeaderInputs {
             pol_ledger_aged: ZkHash::ZERO,
-            pol_epoch_nonce: ZkHash::ZERO,
+            pol_epoch_nonce: fr_from_bytes_unchecked(&epoch.into_inner().to_le_bytes()),
             message_quota: settings.epoch_leadership_quota(),
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
