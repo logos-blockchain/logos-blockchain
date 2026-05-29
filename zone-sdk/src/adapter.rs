@@ -1,9 +1,9 @@
 use std::{collections::HashMap, pin::Pin};
 
 use async_trait::async_trait;
-use futures::{Stream, stream};
+use futures::{Stream, StreamExt as _, stream};
 use lb_common_http_client::{
-    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, EventPayload, Events,
+     BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, EventPayload, Events,
     ProcessedBlockEvent, Slot,
 };
 use lb_core::{
@@ -15,7 +15,7 @@ use lb_core::{
         ops::{OpId as _, channel::ChannelId},
     },
 };
-use lb_http_api_common::queries::BlocksStreamQuery;
+use lb_http_api_common::queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery};
 use reqwest::Url;
 use tracing::warn;
 
@@ -39,15 +39,7 @@ pub trait Node {
 
     async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, Error>;
 
-    async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, Error>;
-
     async fn block_events(&self, id: HeaderId) -> Result<Option<Events>, Error>;
-
-    async fn immutable_blocks(
-        &self,
-        slot_from: Slot,
-        slot_to: Slot,
-    ) -> Result<Vec<ApiBlock>, Error>;
 
     async fn zone_messages_in_block(
         &self,
@@ -111,27 +103,9 @@ impl Node for NodeHttpClient {
         Ok(Box::pin(stream))
     }
 
-    async fn block(&self, id: HeaderId) -> Result<Option<ApiBlock>, Error> {
-        self.client.get_block_by_id(self.base_url.clone(), id).await
-    }
-
     async fn block_events(&self, id: HeaderId) -> Result<Option<Events>, Error> {
         self.client
             .get_block_events(self.base_url.clone(), id)
-            .await
-    }
-
-    async fn immutable_blocks(
-        &self,
-        slot_from: Slot,
-        slot_to: Slot,
-    ) -> Result<Vec<ApiBlock>, Error> {
-        self.client
-            .get_immutable_blocks(
-                self.base_url.clone(),
-                slot_from.into_inner(),
-                slot_to.into_inner(),
-            )
             .await
     }
 
@@ -169,22 +143,25 @@ impl Node for NodeHttpClient {
         slot_to: Slot,
         channel_id: ChannelId,
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error> {
-        let blocks = self
-            .client
-            .get_immutable_blocks(
-                self.base_url.clone(),
-                slot_from.into_inner(),
-                slot_to.into_inner(),
-            )
+        let blocks_stream = self
+            .blocks_range_stream(BlocksStreamQuery {
+                slot_from: Some(slot_from.into_inner()),
+                slot_to: Some(slot_to.into_inner()),
+                order: Some(BlockSortOrder::Ascending),
+                blocks_limit: None,
+                server_batch_size: None,
+                block_filter: Some(BlockFilter::ImmutableOnly),
+            })
             .await?;
+        let processed_block: Vec<ProcessedBlockEvent> = blocks_stream.collect().await;
 
         let mut all_messages = Vec::new();
-        for block in blocks {
-            let slot = block.header.slot;
-            let deposit_amounts = if has_channel_deposit(&block.transactions, channel_id) {
+        for item in processed_block {
+            let slot = item.block.header.slot;
+            let deposit_amounts = if has_channel_deposit(&item.block.transactions, channel_id) {
                 let events = self
                     .client
-                    .get_block_events(self.base_url.clone(), block.header.id)
+                    .get_block_events(self.base_url.clone(), item.block.header.id)
                     .await?
                     .unwrap_or_default();
                 build_deposit_amounts(&events)
@@ -192,7 +169,7 @@ impl Node for NodeHttpClient {
                 HashMap::new()
             };
 
-            for message in block_to_messages(block.transactions, channel_id, &deposit_amounts) {
+            for message in block_to_messages(item.block.transactions, channel_id, &deposit_amounts) {
                 all_messages.push((message, slot));
             }
         }

@@ -26,6 +26,7 @@ use lb_core::{
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
+use lb_http_api_common::queries::{BlockFilter, BlockSortOrder, BlocksStreamQuery};
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{debug, error, info, warn};
@@ -2086,7 +2087,15 @@ where
 
     // 2. Backfill canonical chain if parent is missing
     if !s.has_block(&parent_id) && parent_id != s.lib() {
-        backfill_canonical(s, parent_id, channel_id, node).await;
+        backfill_canonical(
+            s,
+            *lib_slot + 1,
+            event.block.header.slot,
+            block_id,
+            channel_id,
+            node,
+        )
+        .await;
     }
 
     // Extract tx hashes and inscription info for our channel
@@ -2201,45 +2210,57 @@ where
         items: Vec::new(),
     };
 
-    let blocks = node
-        .immutable_blocks(Slot::from(from_slot), Slot::from(to_slot))
-        .await
-        .map_err(|e| {
-            error!(?from_slot, ?to_slot, ?e, "Failed to fetch immutable blocks");
-            Error::Network(format!(
-                "failed to fetch blocks (slots {from_slot}..{to_slot}): {e}"
-            ))
-        })?;
+    let blocks_range_stream_result = node
+        .blocks_range_stream(BlocksStreamQuery {
+            slot_from: Some(from_slot),
+            slot_to: Some(to_slot),
+            order: Some(BlockSortOrder::Ascending),
+            blocks_limit: None,
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::ImmutableOnly),
+        })
+        .await;
 
-    for block in blocks {
-        let our_txs: Vec<TxHash> = block
-            .transactions
-            .iter()
-            .filter(|tx| matches_channel(tx, channel_id))
-            .map(|tx| tx.mantle_tx.hash())
-            .collect();
+    match blocks_range_stream_result {
+        Ok(mut blocks) => {
+            while let Some(block) = blocks.next().await.map(|event| event.block) {
+                let our_txs: Vec<TxHash> = block
+                    .transactions
+                    .iter()
+                    .filter(|tx| matches_channel(tx, channel_id))
+                    .map(|tx| tx.mantle_tx.hash())
+                    .collect();
 
-        let inscriptions = extract_inscriptions(&block.transactions, channel_id);
+                let inscriptions = extract_inscriptions(&block.transactions, channel_id);
 
-        // Fetch + validate deposit events for this block BEFORE mutating
-        // state — on error we leave state untouched so the caller can retry.
-        let deposit_amounts =
-            fetch_block_deposit_amounts(node, block.header.id, &block.transactions, channel_id)
+                // Fetch + validate deposit events for this block BEFORE mutating
+                // state — on error we leave state untouched so the caller can retry.
+                let deposit_amounts = fetch_block_deposit_amounts(
+                    node,
+                    block.header.id,
+                    &block.transactions,
+                    channel_id,
+                )
                 .await?;
-        let block_items =
-            extract_finalized_items(&block.transactions, channel_id, &deposit_amounts);
+                let block_items =
+                    extract_finalized_items(&block.transactions, channel_id, &deposit_amounts);
 
-        result.our_tx_hashes.extend(our_txs.iter().copied());
-        result.items.extend(block_items);
+                result.our_tx_hashes.extend(our_txs.iter().copied());
+                result.items.extend(block_items);
 
-        let current_lib = state.lib();
-        state.process_block(
-            block.header.id,
-            block.header.parent_block,
-            current_lib,
-            our_txs,
-            inscriptions,
-        );
+                let current_lib = state.lib();
+                state.process_block(
+                    block.header.id,
+                    block.header.parent_block,
+                    current_lib,
+                    our_txs,
+                    inscriptions,
+                );
+            }
+        }
+        Err(e) => {
+            warn!("Failed to fetch blocks (slots {from_slot}..{to_slot}): {e}");
+        }
     }
 
     Ok(result)
@@ -2412,60 +2433,56 @@ fn extract_finalized_items(
 /// Uses `state.lib()` during replay to avoid premature finalization.
 /// The caller is responsible for triggering finalization after backfill
 /// completes.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 async fn backfill_canonical<Node>(
     state: &mut TxState,
-    missing_parent: HeaderId,
+    from_slot: Slot,
+    to_slot: Slot,
+    skip_block_id: HeaderId,
     channel_id: ChannelId,
     node: &Node,
 ) where
     Node: adapter::Node + Sync,
 {
-    debug!("Backfilling canonical chain from {:?}", missing_parent);
-    let blocks = walk_back_to_known(state, missing_parent, node).await;
-    let lib = state.lib();
-    for block in &blocks {
-        apply_backfilled_block(state, block, channel_id, lib);
+    if from_slot > to_slot {
+        return;
+    }
+
+    debug!(
+        "Backfilling canonical chain from slot {:?} to {:?}",
+        from_slot, to_slot
+    );
+    let blocks_range_stream_result = node
+        .blocks_range_stream(BlocksStreamQuery {
+            slot_from: Some(from_slot.into()),
+            slot_to: Some(to_slot.into()),
+            order: Some(BlockSortOrder::Ascending),
+            blocks_limit: None,
+            server_batch_size: None,
+            block_filter: Some(BlockFilter::MutableAndImmutable),
+        })
+        .await;
+    let mut blocks_stream = match blocks_range_stream_result {
+        Ok(stream) => stream,
+        Err(e) => {
+            warn!(
+                "Failed to fetch canonical backfill range (slots {:?}..{:?}). Error: {e}",
+                from_slot, to_slot
+            );
+            return;
+        }
+    };
+
+    while let Some(block) = blocks_stream.next().await.map(|event| event.block) {
+        if block.header.id == skip_block_id || state.has_block(&block.header.id) {
+            continue;
+        }
+        apply_backfilled_block(state, &block, channel_id, state.lib());
     }
     debug!("Canonical backfill complete");
-}
-
-/// Walk backwards from `from` until a block the state already knows about (or
-/// LIB) is reached. Returns blocks in forward order (oldest first).
-async fn walk_back_to_known<Node>(
-    state: &TxState,
-    from: HeaderId,
-    node: &Node,
-) -> Vec<lb_common_http_client::ApiBlock>
-where
-    Node: adapter::Node + Sync,
-{
-    let mut blocks = Vec::new();
-    let mut current = from;
-    let lib = state.lib();
-
-    while !state.has_block(&current) && current != lib {
-        match node.block(current).await {
-            Ok(Some(block)) => {
-                let parent = block.header.parent_block;
-                blocks.push(block);
-                current = parent;
-            }
-            Ok(None) => {
-                warn!("Block {:?} not found during canonical backfill", current);
-                break;
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to fetch block {:?} during canonical backfill: {e}",
-                    current
-                );
-                break;
-            }
-        }
-    }
-
-    blocks.reverse();
-    blocks
 }
 
 fn apply_backfilled_block(
@@ -2686,7 +2703,6 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_http_api_common::queries::BlocksStreamQuery;
     use lb_key_management_system_service::keys::ZkKey;
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -3175,26 +3191,11 @@ mod tests {
             Ok(Box::pin(futures::stream::pending()))
         }
 
-        async fn block(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            unimplemented!()
-        }
-
         async fn block_events(
             &self,
             _id: HeaderId,
         ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
             Ok(None)
-        }
-
-        async fn immutable_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            Ok(Vec::new())
         }
 
         async fn zone_messages_in_block(
@@ -3277,32 +3278,11 @@ mod tests {
             Ok(Box::pin(futures::stream::pending()))
         }
 
-        async fn block(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
         async fn block_events(
             &self,
             _id: HeaderId,
         ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
             Ok(None)
-        }
-
-        async fn immutable_blocks(
-            &self,
-            slot_from: Slot,
-            slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            // Cold-start backfill range is [0, 0] when lib_slot is genesis,
-            // so we only return the genesis block for that exact range.
-            if slot_from == Slot::genesis() && slot_to == Slot::genesis() {
-                Ok(vec![self.genesis_block.clone()])
-            } else {
-                Ok(Vec::new())
-            }
         }
 
         async fn zone_messages_in_block(

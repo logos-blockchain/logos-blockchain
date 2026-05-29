@@ -93,7 +93,7 @@ where
                     .checked_sub(1)
                     .expect("slot shouldn't overflow"),
             ))
-            .min(lib_slot);
+                .min(lib_slot);
 
             match self
                 .node
@@ -111,7 +111,7 @@ where
                 }
             }
         })
-        .flatten();
+            .flatten();
 
         Ok(stream)
     }
@@ -122,8 +122,7 @@ mod tests {
 
     use async_trait::async_trait;
     use lb_common_http_client::{
-        ApiBlock, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo,
-        ProcessedBlockEvent, State,
+        BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, ProcessedBlockEvent, State,
     };
     use lb_core::{
         header::HeaderId,
@@ -367,26 +366,11 @@ mod tests {
             Ok(Box::pin(futures::stream::empty()))
         }
 
-        async fn block(
-            &self,
-            _id: HeaderId,
-        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
-            Ok(None)
-        }
-
         async fn block_events(
             &self,
             _id: HeaderId,
         ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
             Ok(None)
-        }
-
-        async fn immutable_blocks(
-            &self,
-            _slot_from: Slot,
-            _slot_to: Slot,
-        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
-            Ok(Vec::new())
         }
 
         async fn zone_messages_in_block(
