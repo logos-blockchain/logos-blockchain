@@ -4393,7 +4393,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-build"
 version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=d91b083031a095f9ec8a9dc53322bbbb1bb66718#d91b083031a095f9ec8a9dc53322bbbb1bb66718"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
 dependencies = [
  "dirs",
  "fd-lock",
@@ -4405,7 +4405,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-common"
 version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=d91b083031a095f9ec8a9dc53322bbbb1bb66718#d91b083031a095f9ec8a9dc53322bbbb1bb66718"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
@@ -4413,7 +4413,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-poc-sys"
 version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=d91b083031a095f9ec8a9dc53322bbbb1bb66718#d91b083031a095f9ec8a9dc53322bbbb1bb66718"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4423,7 +4423,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
 version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=d91b083031a095f9ec8a9dc53322bbbb1bb66718#d91b083031a095f9ec8a9dc53322bbbb1bb66718"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4433,7 +4433,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
 version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=d91b083031a095f9ec8a9dc53322bbbb1bb66718#d91b083031a095f9ec8a9dc53322bbbb1bb66718"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4451,7 +4451,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-rapidsnark-sys"
 version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=d91b083031a095f9ec8a9dc53322bbbb1bb66718#d91b083031a095f9ec8a9dc53322bbbb1bb66718"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
 dependencies = [
  "logos-blockchain-circuits-build",
 ]
@@ -4459,7 +4459,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-signature-sys"
 version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=d91b083031a095f9ec8a9dc53322bbbb1bb66718#d91b083031a095f9ec8a9dc53322bbbb1bb66718"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4469,7 +4469,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-types"
 version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=d91b083031a095f9ec8a9dc53322bbbb1bb66718#d91b083031a095f9ec8a9dc53322bbbb1bb66718"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
 dependencies = [
  "bytes",
  "libc",
