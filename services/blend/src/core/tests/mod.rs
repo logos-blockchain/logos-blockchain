@@ -9,6 +9,7 @@ use lb_blend::{
         message_blend::crypto::EpochCryptographicProcessorSettings,
     },
 };
+use lb_chain_service::Epoch;
 use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::Field as _;
 use lb_key_management_system_service::keys::Ed25519Key;
@@ -25,12 +26,15 @@ use crate::{
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
-            TestNetworkAdapter, dummy_overwatch_resources, new_crypto_processor, new_epoch_info,
-            new_membership, new_stream, reward_session_info, scheduler_session_info,
-            scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
+            TestNetworkAdapter, dummy_overwatch_resources, dummy_pol_private_inputs,
+            new_crypto_processor, new_epoch_info, new_membership, new_stream,
+            recorded_set_epoch_private_calls, reset_set_epoch_private_calls, reward_session_info,
+            scheduler_session_info, scheduler_settings, sdp_relay, settings, timing_settings,
+            wait_for_blend_backend_event,
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
+    epoch_info::PolEpochInfo,
     membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::NetworkMessage,
     test_utils::{crypto::MockCoreAndLeaderProofsGenerator, epoch::OncePolStreamProvider},
@@ -584,6 +588,198 @@ async fn test_handle_epoch_event() {
         panic!("expected Retiring output");
     };
     assert_eq!(old_crypto_processor.epoch(), epoch + 1);
+}
+
+/// On an epoch change where the membership actually changes (and the local node
+/// remains part of the core), the service must transition: build a new
+/// cryptographic generator bound to the new epoch, retain the old one for the
+/// old epoch, and propagate the *new* membership to the backend via
+/// `rotate_epoch`.
+#[test_log::test(tokio::test)]
+async fn test_handle_epoch_event_membership_change_rewires_backend_and_generators() {
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    let epoch = 0.into();
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+    let crypto_processor = new_crypto_processor(
+        EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+    let scheduler = EpochMessageScheduler::new(
+        scheduler_session_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings(&settings.time, settings.num_blend_layers),
+    );
+    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+        settings.clone(),
+        overwatch_handle.clone(),
+        (public_info.membership.clone(), public_info.epoch),
+        BlakeRng::from_entropy(),
+    );
+    let mut backend_event_receiver = backend.subscribe_to_events();
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    // The new epoch has a *different* (larger) membership; `new_membership`
+    // always includes the local node, so the node stays part of the core.
+    let new_epoch = epoch + 1;
+    let new_membership = new_membership(minimal_network_size + 1).0;
+    assert_ne!(
+        new_membership.size(),
+        membership.size(),
+        "the test must exercise an actual membership change"
+    );
+    let new_public_info = new_epoch_info(new_epoch, new_membership.clone(), &settings);
+
+    let output = handle_epoch_event(
+        EpochEvent::NewEpoch(
+            CoreEpochInfo {
+                public: new_public_info.clone(),
+                core_poq_generator: Some(()),
+            }
+            .into(),
+        ),
+        &settings,
+        crypto_processor,
+        scheduler,
+        public_info,
+        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+        &mut backend,
+        &sdp_relay,
+        None,
+    )
+    .await;
+
+    let HandleEpochEventOutput::Transitioning {
+        new_crypto_processor,
+        old_crypto_processor,
+        new_epoch_info: returned_epoch_info,
+        ..
+    } = output
+    else {
+        panic!("expected Transitioning output");
+    };
+
+    // A fresh generator is built for the new epoch, and the previous one is
+    // retained for the old epoch.
+    assert_eq!(new_crypto_processor.epoch(), new_epoch);
+    assert_eq!(old_crypto_processor.epoch(), epoch);
+    // The returned public info carries the new membership.
+    assert_eq!(returned_epoch_info.epoch, new_epoch);
+    assert_eq!(returned_epoch_info.membership.size(), new_membership.size());
+
+    // The backend was rotated to the new epoch, carrying the *new* membership.
+    wait_for_blend_backend_event(
+        &mut backend_event_receiver,
+        TestBlendBackendEvent::EpochRotated {
+            epoch: new_epoch,
+            membership_size: new_membership.size(),
+        },
+    )
+    .await;
+}
+
+/// On an epoch change, if secret `PoL` info for the *new* epoch is already
+/// available (`current_secret_info`), it must be applied to the *new*
+/// cryptographic generator via `set_epoch_private`. If the available secret
+/// info is for a different epoch, it must not be applied. This is the
+/// public-stream side of the public/secret out-of-order coordination.
+#[test_log::test(tokio::test)]
+async fn test_handle_epoch_event_applies_matching_secret_to_new_generator() {
+    async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> {
+        let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+            dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        let epoch = 0.into();
+        let minimal_network_size = 2;
+        let (membership, local_private_key) = new_membership(minimal_network_size);
+        let (settings, _recovery_file) = settings(
+            local_private_key.clone(),
+            u64::from(minimal_network_size).try_into().unwrap(),
+            (),
+            0,
+        );
+        let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+        let crypto_processor = new_crypto_processor(
+            EpochCryptographicProcessorSettings {
+                non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+                num_blend_layers: settings.num_blend_layers,
+            },
+            &public_info,
+            (),
+        );
+        let scheduler = EpochMessageScheduler::new(
+            scheduler_session_info(&public_info),
+            BlakeRng::from_entropy(),
+            scheduler_settings(&settings.time, settings.num_blend_layers),
+        );
+        let token_collector =
+            SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+        let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+            settings.clone(),
+            overwatch_handle.clone(),
+            (public_info.membership.clone(), public_info.epoch),
+            BlakeRng::from_entropy(),
+        );
+        let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+        let secret_info = PolEpochInfo {
+            epoch: secret_epoch,
+            poq_private_inputs: dummy_pol_private_inputs(),
+        };
+
+        // Isolate the `set_epoch_private` calls made by `handle_epoch_event`.
+        reset_set_epoch_private_calls();
+        let _output = handle_epoch_event(
+            EpochEvent::NewEpoch(
+                CoreEpochInfo {
+                    public: CoreEpochPublicInfo {
+                        epoch: epoch + 1,
+                        ..public_info.clone()
+                    },
+                    core_poq_generator: Some(()),
+                }
+                .into(),
+            ),
+            &settings,
+            crypto_processor,
+            scheduler,
+            public_info,
+            ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+            &mut backend,
+            &sdp_relay,
+            Some(&secret_info),
+        )
+        .await;
+        recorded_set_epoch_private_calls()
+    }
+
+    // Secret for the new epoch (1) is applied to the new generator.
+    assert_eq!(
+        transition_to_new_epoch_with_secret(1.into()).await,
+        vec![Epoch::new(1)],
+        "secret matching the new epoch must be applied to the new generator"
+    );
+
+    // Secret for a non-matching epoch (5) must not be applied.
+    assert!(
+        transition_to_new_epoch_with_secret(5.into())
+            .await
+            .is_empty(),
+        "secret for a non-matching epoch must not be applied to the new generator"
+    );
 }
 
 /// Handle a `NewSession(Empty)` event (empty membership), expecting `Retiring`

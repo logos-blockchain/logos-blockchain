@@ -1,3 +1,4 @@
+use core::cell::RefCell;
 use std::{num::NonZeroU64, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -184,7 +185,18 @@ where
         _intended_epoch: Epoch,
     ) {
     }
-    async fn rotate_epoch(&mut self, _new_epoch_info: BackendEpochInfo<NodeId>) {}
+    async fn rotate_epoch(&mut self, new_epoch_info: BackendEpochInfo<NodeId>) {
+        // Notify tests that the backend rotated to a new epoch, carrying the new
+        // epoch and membership size so tests can assert the new membership was
+        // propagated to the backend.
+        let (membership, epoch) = new_epoch_info;
+        // Ignore send errors: not all tests subscribe to backend events, and
+        // `rotate_epoch` is also called right before a retirement (no subscriber).
+        let _ = self.event_sender.send(TestBlendBackendEvent::EpochRotated {
+            epoch,
+            membership_size: membership.size(),
+        });
+    }
 
     async fn complete_epoch_transition(&mut self) {
         // Notify tests that the backend completed the session transition.
@@ -214,6 +226,11 @@ impl TestBlendBackend {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TestBlendBackendEvent {
     SessionTransitionCompleted,
+    /// Emitted when the backend is rotated to a new epoch.
+    EpochRotated {
+        epoch: Epoch,
+        membership_size: usize,
+    },
 }
 
 /// Waits for the given event to be received on the provided channel.
@@ -354,6 +371,19 @@ pub fn new_epoch_info<BackendSettings>(
     }
 }
 
+/// Dummy secret `PoL` leadership inputs, for tests that exercise the
+/// secret/public epoch-info coordination without needing valid proofs.
+pub fn dummy_pol_private_inputs() -> ProofOfLeadershipQuotaInputs {
+    ProofOfLeadershipQuotaInputs {
+        slot: 1,
+        note_value: 1,
+        transaction_hash: ZkHash::ZERO,
+        output_number: 1,
+        aged_path_and_selectors: [(ZkHash::ZERO, false); _],
+        secret_key: ZkHash::ZERO,
+    }
+}
+
 pub fn scheduler_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> SchedulerEpochInfo {
     SchedulerEpochInfo {
         core_quota: public_info.poq_core_public_inputs.quota,
@@ -378,6 +408,26 @@ pub fn reward_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward:
     .expect("session info must be created successfully")
 }
 
+thread_local! {
+    /// Records the epochs for which [`MockCoreAndLeaderProofsGenerator::set_epoch_private`]
+    /// was called, so tests can assert that the secret `PoL` info was applied to
+    /// the expected generator. Reliable because `#[tokio::test]` uses a
+    /// single-threaded runtime, so the value is test-isolated.
+    static SET_EPOCH_PRIVATE_CALLS: RefCell<Vec<Epoch>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Clears the record of `set_epoch_private` calls. Call before the code under
+/// test to isolate the calls of interest.
+pub fn reset_set_epoch_private_calls() {
+    SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().clear());
+}
+
+/// Returns the epochs for which `set_epoch_private` has been called since the
+/// last reset, in call order.
+pub fn recorded_set_epoch_private_calls() -> Vec<Epoch> {
+    SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow().clone())
+}
+
 pub struct MockCoreAndLeaderProofsGenerator(ZkHash);
 
 #[async_trait]
@@ -391,7 +441,9 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self(settings.public_inputs.leader.pol_epoch_nonce)
     }
 
-    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, _: LeaderInputs, _: Epoch) {}
+    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, _: LeaderInputs, epoch: Epoch) {
+        SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(epoch));
+    }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {
         Some(epoch_based_dummy_proofs(self.0))
