@@ -8,7 +8,7 @@ use std::time::Duration;
 use hex::ToHex as _;
 use lb_core::{
     codec::SerializeOp as _,
-    mantle::{OpProof, TxHash, Utxo},
+    mantle::{OpProof, SignedMantleTx, TxHash, Utxo},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -41,9 +41,24 @@ pub struct PreparedUserWalletSubmission {
     submission: PreparedWalletTransaction,
 }
 
+pub(crate) struct SignedUserWalletSubmission {
+    wallet: WalletInfo,
+    submission: SignedWalletTransaction,
+}
+
 impl PreparedUserWalletSubmission {
     pub(crate) const fn tx_hash(&self) -> TxHash {
         self.submission.tx_hash()
+    }
+}
+
+impl SignedUserWalletSubmission {
+    pub(crate) const fn tx_hash(&self) -> TxHash {
+        self.submission.tx_hash()
+    }
+
+    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx {
+        self.submission.signed_tx()
     }
 }
 
@@ -184,6 +199,36 @@ pub async fn submit_prepared_user_wallet_transaction(
 
     record_wallet_submission(world, &wallet, &signed_submission);
     Ok(tx_hash)
+}
+
+pub(crate) fn sign_prepared_user_wallet_transaction(
+    step: &str,
+    prepared: PreparedUserWalletSubmission,
+    extra_op_proofs: Vec<OpProof>,
+) -> Result<SignedUserWalletSubmission, StepError> {
+    let PreparedUserWalletSubmission { wallet, submission } = prepared;
+    let signed_submission = submission
+        .sign_with_leading_proofs(extra_op_proofs)
+        .map_err(wallet_transaction_error)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step);
+        })?;
+
+    Ok(SignedUserWalletSubmission {
+        wallet,
+        submission: signed_submission,
+    })
+}
+
+pub(crate) fn record_signed_user_wallet_submission(
+    world: &mut CucumberWorld,
+    signed_submission: &SignedUserWalletSubmission,
+) {
+    record_wallet_submission(
+        world,
+        &signed_submission.wallet,
+        &signed_submission.submission,
+    );
 }
 
 pub(crate) async fn prepare_user_wallet_transaction_submission(

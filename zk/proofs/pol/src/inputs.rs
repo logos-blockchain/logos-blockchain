@@ -25,6 +25,17 @@ impl PolWitnessInputs {
     }
 }
 
+impl TryFrom<PolWitnessInputs> for lbc_pol_sys::PolWitnessInput<'_> {
+    type Error = lbp_error::Error;
+
+    fn try_from(value: PolWitnessInputs) -> Result<Self, Self::Error> {
+        let inputs_json: PolInputsJson = value.into();
+        let inputs_str: String = serde_json::to_string(&inputs_json)?;
+        let witness_input = lbc_pol_sys::PolWitnessInput::new(inputs_str)?;
+        Ok(witness_input)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PolWitnessInputsData {
     pub wallet: PolWalletInputsData,

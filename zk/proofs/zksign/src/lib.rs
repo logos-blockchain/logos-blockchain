@@ -54,9 +54,9 @@ pub enum ProveError {
 /// - Returns a `ProveError::Json` if there is an error during JSON
 ///   serialization or deserialization.
 pub fn prove(
-    inputs: &ZkSignWitnessInputs,
+    inputs: ZkSignWitnessInputs,
 ) -> Result<(ZkSignProof, ZkSignVerifierInputs), ProveError> {
-    let witness = witness::generate_witness(inputs).map_err(lbp_error::Error::from)?;
+    let witness = witness::generate_witness(inputs)?;
     let (proof, verifier_inputs) = lb_circuits_prover::prover_from_contents(
         ZKSIGN_PROVING_KEY_PATH.as_path(),
         witness.as_ref(),
@@ -142,7 +142,7 @@ mod tests {
         let sks: ZkSignPrivateKeysData = sks.into();
         let msg_hash = Poseidon2Bn254Hasher::digest(&[BigUint::from_bytes_le(b"foo_bar").into()]);
         let input = ZkSignWitnessInputs::from_witness_data_and_message_hash(sks, msg_hash);
-        let (proof, verifier_inputs) = prove(&input).unwrap();
+        let (proof, verifier_inputs) = prove(input).unwrap();
         assert!(verify(&proof, &verifier_inputs).unwrap());
     }
 }

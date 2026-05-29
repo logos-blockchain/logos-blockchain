@@ -2,6 +2,7 @@ use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
 use num_bigint::BigUint;
 use serde::Serialize;
 
+// TODO: These consts should live in a common crate shared among circuits.
 pub const AGED_NOTE_MERKLE_TREE_HEIGHT: usize = 32;
 pub type AgedNotePath = [Fr; AGED_NOTE_MERKLE_TREE_HEIGHT];
 pub type AgedSelectorPath = [bool; AGED_NOTE_MERKLE_TREE_HEIGHT];

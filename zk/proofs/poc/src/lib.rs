@@ -41,7 +41,6 @@ pub use inputs::{PoCWitnessInputs, PoCWitnessInputsData};
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
 use tracing::error;
 pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData};
-pub use witness::Witness;
 
 pub use crate::{
     inputs::{PoCVerifierInput, PoCVerifierInputJson},
@@ -70,7 +69,7 @@ pub type ProveError = lbp_error::Error;
 ///   witness or proving from contents.
 /// - Returns a `ProveError::Json` if there is an error during JSON
 ///   serialization or deserialization.
-pub fn prove(inputs: &PoCWitnessInputs) -> Result<(PoCProof, PoCVerifierInput), ProveError> {
+pub fn prove(inputs: PoCWitnessInputs) -> Result<(PoCProof, PoCVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
     let (proof, verifier_inputs) =
         lb_circuits_prover::prover_from_contents(POC_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
@@ -287,7 +286,7 @@ mod tests {
         };
         let witness_inputs = PoCWitnessInputs::from_chain_and_wallet_data(chain_data, wallet_data);
 
-        let (proof, inputs) = prove(&witness_inputs).unwrap();
+        let (proof, inputs) = prove(witness_inputs).unwrap();
         assert!(verify(&proof, &inputs).unwrap());
     }
 }
