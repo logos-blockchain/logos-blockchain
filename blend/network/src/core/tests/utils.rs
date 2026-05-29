@@ -11,7 +11,6 @@ use lb_blend_message::{
 };
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_blend_scheduling::message_blend::provers::BlendLayerProof;
-use lb_core::sdp::SessionNumber;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, ed25519, upgrade::Version};

@@ -9,20 +9,6 @@ use overwatch::overwatch::OverwatchHandle;
 
 use crate::epoch_info::{PolEpochInfo, PolInfoProvider};
 
-pub fn default_epoch_state() -> EpochState {
-    use lb_ledger::UtxoTree;
-
-    EpochState {
-        epoch: 1.into(),
-        nonce: ZkHash::ZERO,
-        total_stake: 1_000,
-        utxos: UtxoTree::new(),
-        lottery_0: Fr::ZERO,
-        lottery_1: Fr::ZERO,
-        sdp: lb_ledger::mantle::sdp::SdpLedger::new(1.into()),
-    }
-}
-
 pub struct OncePolStreamProvider;
 
 #[async_trait]

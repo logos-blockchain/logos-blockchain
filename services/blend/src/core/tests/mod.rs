@@ -13,7 +13,6 @@ use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::Field as _;
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::CORE_MERKLE_TREE_HEIGHT;
-use lb_time_service::SlotTick;
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 
@@ -32,16 +31,26 @@ use crate::{
         },
     },
     epoch::{CoreEpochInfo, CoreEpochPublicInfo},
-    epoch_info::PolEpochInfo,
-    membership::{MembershipInfo, ZkInfo},
+    membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::NetworkMessage,
-    test_utils::{
-        crypto::MockCoreAndLeaderProofsGenerator,
-        epoch::{OncePolStreamProvider, TestChainService},
-    },
+    test_utils::{crypto::MockCoreAndLeaderProofsGenerator, epoch::OncePolStreamProvider},
 };
 
 type RuntimeServiceId = ();
+
+fn test_blend_epoch_state(
+    epoch: u32,
+    membership_info: MembershipInfo<NodeId>,
+) -> BlendEpochState<NodeId> {
+    BlendEpochState {
+        epoch: epoch.into(),
+        nonce: ZkHash::ZERO,
+        aged: ZkHash::ZERO,
+        lottery_0: ZkHash::ZERO,
+        lottery_1: ZkHash::ZERO,
+        membership_info,
+    }
+}
 
 /// Check if incoming encapsulated messages are properly decapsulated and
 /// scheduled by [`handle_incoming_blend_message`].
@@ -129,7 +138,7 @@ async fn test_handle_incoming_blend_message() {
     let (_, _, _, _, current_token_collector, _, state_updater) =
         recovery_checkpoint.into_components();
     let (new_token_collector, old_token_collector) =
-        current_token_collector.rotate_epoch(&reward_session_info(&public_info));
+        current_token_collector.rotate_session(&reward_session_info(&public_info));
 
     // Check that decapsulating the same message fails with the new processor
     // but succeeds with the old one. Also, it should be scheduled in the old
@@ -418,8 +427,6 @@ async fn test_handle_epoch_transition_expired() {
 
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event() {
-    use lb_chain_service::Epoch;
-
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
@@ -463,7 +470,7 @@ async fn test_handle_epoch_event() {
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
                     epoch: epoch + 1,
-                    ..public_info
+                    ..public_info.clone()
                 },
                 core_poq_generator: Some(()),
             }
@@ -537,7 +544,7 @@ async fn test_handle_epoch_event() {
     //     current_crypto_processor.verifier().epoch_nonce(),
     //     session + 1
     // );
-    assert_eq!(new_epoch_info.epoch, epoch + 1);
+    assert_eq!(current_epoch_info.epoch, epoch + 1);
     assert!(
         new_recovery_checkpoint
             .clone()
@@ -559,8 +566,7 @@ async fn test_handle_epoch_event() {
                 public: CoreEpochPublicInfo {
                     membership: new_membership(minimal_network_size - 1).0,
                     epoch: epoch + 2,
-                    poq_core_public_inputs: new_epoch_info.poq_core_public_inputs,
-                    poq_leadership_public_inputs: new_epoch_info.poq_leadership_public_inputs,
+                    ..current_epoch_info.clone()
                 },
                 core_poq_generator: Some(()),
             }
@@ -569,7 +575,7 @@ async fn test_handle_epoch_event() {
         &settings,
         current_crypto_processor,
         current_scheduler,
-        new_epoch_info,
+        current_epoch_info,
         new_recovery_checkpoint,
         &mut backend,
         &sdp_relay,
@@ -581,7 +587,6 @@ async fn test_handle_epoch_event() {
     };
     // TODO: Re-enable once we remove sessions.
     // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session + 1);
-    assert_eq!(new_epoch_info.core.epoch, epoch + 1);
 }
 
 /// Handle a `NewSession(Empty)` event (empty membership), expecting `Retiring`
@@ -645,7 +650,6 @@ async fn test_handle_session_event_empty_session_retires() {
     // the empty session arrived.
     // TODO: Re-enable once we remove sessions.
     // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session);
-    assert_eq!(new_epoch_info.core.epoch, epoch);
 }
 
 /// Handle a `NewSession(NonEmpty)` event where membership exists but the local
@@ -693,7 +697,7 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
                     epoch: epoch + 1,
-                    ..public_info
+                    ..public_info.clone()
                 },
                 core_poq_generator: None,
             }
@@ -716,7 +720,6 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
 
     // TODO: Re-enable once we remove sessions.
     // assert_eq!(old_crypto_processor.verifier().epoch_nonce(), session);
-    assert_eq!(new_epoch_info.epoch, epoch);
 }
 
 /// Check if the service keeps running after it receives a new session where
@@ -741,7 +744,6 @@ async fn complete_old_epoch_after_main_loop_done() {
     let (inbound_relay, _inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
-    let (clock_stream, clock_sender) = new_stream();
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
@@ -753,21 +755,11 @@ async fn complete_old_epoch_after_main_loop_done() {
         }),
     };
     membership_sender
-        .send(membership_info.clone())
+        .send(test_blend_epoch_state(0, membership_info.clone()))
         .await
         .unwrap();
 
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
-
-    // Send the initial slot tick that the service will expect to receive
-    // immediately.
-    clock_sender
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 0.into(),
-        })
-        .await
-        .unwrap();
 
     // Prepare dummy Overwatch resources.
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
@@ -845,11 +837,8 @@ async fn complete_old_epoch_after_main_loop_done() {
 
     // Send a new session with the same membership.
 
-    // TODO: This should be epochs instead
-    // membership_info.session_number += 1;
-
     membership_sender
-        .send(membership_info.clone())
+        .send(test_blend_epoch_state(1, membership_info.clone()))
         .await
         .unwrap();
 
@@ -865,10 +854,10 @@ async fn complete_old_epoch_after_main_loop_done() {
     // Send a new session with a new membership smaller than minimal size
     membership_info.membership = new_membership(minimal_network_size.checked_sub(1).unwrap()).0;
 
-    // TODO: This should be epochs instead
-    // membership_info.session_number += 1;
-
-    membership_sender.send(membership_info).await.unwrap();
+    membership_sender
+        .send(test_blend_epoch_state(2, membership_info))
+        .await
+        .unwrap();
 
     // Since the network is smaller than the minimal size,
     // the service must stop after a session transition period.
@@ -901,7 +890,6 @@ async fn stop_on_empty_session() {
     let (inbound_relay, _inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
-    let (clock_stream, clock_sender) = new_stream();
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
@@ -913,21 +901,11 @@ async fn stop_on_empty_session() {
         }),
     };
     membership_sender
-        .send(membership_info.clone())
+        .send(test_blend_epoch_state(0, membership_info.clone()))
         .await
         .unwrap();
 
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
-
-    // Send the initial slot tick that the service will expect to receive
-    // immediately.
-    clock_sender
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 0.into(),
-        })
-        .await
-        .unwrap();
 
     // Prepare dummy Overwatch resources.
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
@@ -1006,10 +984,13 @@ async fn stop_on_empty_session() {
     // Send a new session with empty providers (zk: None).
     // This simulates a session where no providers are available.
     membership_sender
-        .send(MembershipInfo {
-            membership: membership.clone(),
-            zk: None,
-        })
+        .send(test_blend_epoch_state(
+            1,
+            MembershipInfo {
+                membership: membership.clone(),
+                zk: None,
+            },
+        ))
         .await
         .unwrap();
 
@@ -1044,7 +1025,6 @@ async fn stop_on_non_empty_session_without_local_core_path() {
     let (inbound_relay, _inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
-    let (clock_stream, clock_sender) = new_stream();
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
@@ -1056,21 +1036,11 @@ async fn stop_on_non_empty_session_without_local_core_path() {
         }),
     };
     membership_sender
-        .send(membership_info.clone())
+        .send(test_blend_epoch_state(0, membership_info.clone()))
         .await
         .unwrap();
 
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
-
-    // Send the initial slot tick that the service will expect to receive
-    // immediately.
-    clock_sender
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 0.into(),
-        })
-        .await
-        .unwrap();
 
     // Prepare dummy Overwatch resources.
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
@@ -1148,13 +1118,16 @@ async fn stop_on_non_empty_session_without_local_core_path() {
 
     // Send a new non-empty session without local core path.
     membership_sender
-        .send(MembershipInfo {
-            membership,
-            zk: Some(ZkInfo {
-                root: ZkHash::ZERO,
-                core_and_path_selectors: None,
-            }),
-        })
+        .send(test_blend_epoch_state(
+            1,
+            MembershipInfo {
+                membership,
+                zk: Some(ZkInfo {
+                    root: ZkHash::ZERO,
+                    core_and_path_selectors: None,
+                }),
+            },
+        ))
         .await
         .unwrap();
 
@@ -1337,22 +1310,17 @@ async fn test_initialize_recovers_matching_saved_state() {
     // Matching session: saved state should be restored
 
     let (membership_stream, membership_sender) = new_stream();
-    let (clock_stream, clock_sender) = new_stream();
     membership_sender
-        .send(MembershipInfo {
-            membership: membership.clone(),
-            zk: Some(ZkInfo {
-                root: ZkHash::ZERO,
-                core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
-            }),
-        })
-        .await
-        .unwrap();
-    clock_sender
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 0.into(),
-        })
+        .send(test_blend_epoch_state(
+            0,
+            MembershipInfo {
+                membership: membership.clone(),
+                zk: Some(ZkInfo {
+                    root: ZkHash::ZERO,
+                    core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+                }),
+            },
+        ))
         .await
         .unwrap();
 
@@ -1411,22 +1379,17 @@ async fn test_initialize_recovers_matching_saved_state() {
     // Mismatched session: fresh state should be created
 
     let (membership_stream2, membership_sender2) = new_stream();
-    let (clock_stream2, clock_sender2) = new_stream();
     membership_sender2
-        .send(MembershipInfo {
-            membership: membership.clone(),
-            zk: Some(ZkInfo {
-                root: ZkHash::ZERO,
-                core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
-            }),
-        })
-        .await
-        .unwrap();
-    clock_sender2
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 1.into(),
-        })
+        .send(test_blend_epoch_state(
+            0,
+            MembershipInfo {
+                membership: membership.clone(),
+                zk: Some(ZkInfo {
+                    root: ZkHash::ZERO,
+                    core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+                }),
+            },
+        ))
         .await
         .unwrap();
 

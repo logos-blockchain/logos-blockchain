@@ -68,7 +68,6 @@ use crate::{
         tests::RuntimeServiceId,
     },
     epoch::CoreEpochPublicInfo,
-    membership::chain::BlendEpochState,
     message::NetworkInfo,
     settings::TimingSettings,
     test_utils,

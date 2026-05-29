@@ -2,18 +2,16 @@ use core::time::Duration;
 use std::collections::HashSet;
 
 use lb_blend::scheduling::membership::Membership;
-use lb_core::crypto::ZkHash;
-use lb_groth16::Field as _;
 use lb_libp2p::{Protocol, SwarmEvent};
 use libp2p::{Multiaddr, PeerId};
 use test_log::test;
 use tokio::{select, time, time::sleep};
 
-use crate::{core::backends::libp2p::{
+use crate::core::backends::libp2p::{
     core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
     swarm::BlendSwarmMessage,
     tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm},
-}, epoch::CoreEpochInfo};
+};
 
 #[test(tokio::test)]
 async fn core_redial_same_peer() {
@@ -313,14 +311,7 @@ async fn core_epoch_rotation_clears_pending_retries() {
     assert_eq!(dialing_swarm.pending_retries_count(), 1);
 
     // Trigger a new epoch via the swarm message channel.
-    let new_epoch_info = CoreEpochInfo {
-        membership: Membership::new_without_local(&[]),
-        epoch: 2.into(),
-        core_public_inputs: lb_blend::proofs::quota::inputs::prove::public::CoreInputs {
-            quota: 1,
-            zk_root: ZkHash::ZERO,
-        },
-    };
+    let new_epoch_info = (Membership::new_without_local(&[]), 2.into());
     swarm_message_sender
         .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
         .await

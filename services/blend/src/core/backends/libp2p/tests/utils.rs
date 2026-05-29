@@ -99,7 +99,10 @@ pub struct SwarmBuilder {
 
 impl SwarmBuilder {
     pub fn new(identity: Keypair, membership: &[Node<PeerId>]) -> Self {
-        let public_info = build_membership(membership, Some(identity.public().into())).into();
+        let public_info = (
+            build_membership(membership, Some(identity.public().into())),
+            0.into(),
+        );
         Self {
             identity,
             public_info,
