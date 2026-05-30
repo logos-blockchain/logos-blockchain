@@ -1769,6 +1769,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dirs"
+version = "6.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3e8aa94d75141228480295a7d0e7feb620b1a5ad9f12bc40be62411e38cce4e"
+dependencies = [
+ "dirs-sys",
+]
+
+[[package]]
+name = "dirs-sys"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e01a3366d27ee9890022452ee61b2b63a67e6f13f58900b651ff5665f0bb1fab"
+dependencies = [
+ "libc",
+ "option-ext",
+ "redox_users",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "dispatch2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2022,6 +2043,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
+name = "fd-lock"
+version = "4.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
+dependencies = [
+ "cfg-if",
+ "rustix 1.1.4",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2036,6 +2068,16 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
 
 [[package]]
 name = "find-msvc-tools"
@@ -3898,6 +3940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "libredox"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f02ab6bace2054fb888a3c16f990117b579d14a3088e472d63c6011fa185c9d3"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "librocksdb-sys"
 version = "0.17.3+10.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4341,21 +4392,28 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-build"
-version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
+version = "0.5.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+dependencies = [
+ "dirs",
+ "fd-lock",
+ "flate2",
+ "tar",
+ "ureq",
+]
 
 [[package]]
 name = "logos-blockchain-circuits-common"
-version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
+version = "0.5.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-poc-sys"
-version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
+version = "0.5.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4364,8 +4422,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
-version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
+version = "0.5.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4374,8 +4432,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
-version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
+version = "0.5.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4392,16 +4450,16 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-rapidsnark-sys"
-version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
+version = "0.5.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
 dependencies = [
  "logos-blockchain-circuits-build",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-signature-sys"
-version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
+version = "0.5.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4410,8 +4468,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-types"
-version = "0.5.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619#e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619"
+version = "0.5.1"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
 dependencies = [
  "bytes",
  "libc",
@@ -6157,6 +6215,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "option-ext"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
+
+[[package]]
 name = "ordered-float"
 version = "2.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7054,6 +7118,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
  "bitflags 2.11.1",
+]
+
+[[package]]
+name = "redox_users"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4e608c6638b9c18977b00b475ac1f28d14e84b27d8d42f70e0bf1e3dec127ac"
+dependencies = [
+ "getrandom 0.2.17",
+ "libredox",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -8134,6 +8209,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9082,6 +9168,35 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "ureq"
+version = "3.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dea7109cdcd5864d4eeb1b58a1648dc9bf520360d7af16ec26d0a9354bafcfc0"
+dependencies = [
+ "base64 0.22.1",
+ "flate2",
+ "log",
+ "percent-encoding",
+ "rustls",
+ "rustls-pki-types",
+ "ureq-proto",
+ "utf8-zero",
+ "webpki-roots",
+]
+
+[[package]]
+name = "ureq-proto"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e994ba84b0bd1b1b0cf92878b7ef898a5c1760108fe7b6010327e274917a808c"
+dependencies = [
+ "base64 0.22.1",
+ "http 1.4.1",
+ "httparse",
+ "log",
+]
+
+[[package]]
 name = "url"
 version = "2.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9099,6 +9214,12 @@ name = "urlencoding"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
+
+[[package]]
+name = "utf8-zero"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
 
 [[package]]
 name = "utf8_iter"
@@ -9987,6 +10108,16 @@ dependencies = [
  "rusticata-macros",
  "thiserror 2.0.18",
  "time",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix 1.1.4",
 ]
 
 [[package]]

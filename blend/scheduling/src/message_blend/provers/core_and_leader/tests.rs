@@ -13,7 +13,6 @@ use crate::message_blend::provers::{
 };
 
 #[test(tokio::test)]
-#[ignore = "TODO: Re-enable once we update to the new PoQ circuits."]
 async fn proof_generation() {
     let core_quota = 10;
     let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
@@ -104,7 +103,6 @@ async fn proof_generation() {
 }
 
 #[test(tokio::test)]
-#[ignore = "TODO: Re-enable once we update to the new PoQ circuits."]
 async fn epoch_private_info() {
     let core_quota = 10;
     let leadership_quota = 15;
