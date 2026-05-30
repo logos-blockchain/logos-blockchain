@@ -4393,7 +4393,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-build"
 version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
 dependencies = [
  "dirs",
  "fd-lock",
@@ -4405,7 +4405,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-common"
 version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
@@ -4413,7 +4413,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-poc-sys"
 version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4423,7 +4423,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
 version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4433,7 +4433,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
 version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4451,7 +4451,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-rapidsnark-sys"
 version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
 dependencies = [
  "logos-blockchain-circuits-build",
 ]
@@ -4459,7 +4459,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-signature-sys"
 version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4469,7 +4469,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-circuits-types"
 version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?rev=72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3#72a98e84eb8e90b8622a0ab1564eedd1d0ffc4b3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
 dependencies = [
  "bytes",
  "libc",

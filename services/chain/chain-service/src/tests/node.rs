@@ -182,7 +182,12 @@ pub fn genesis_block(
     declaration_count: usize,
 ) -> GenesisBlock {
     let genesis_block = GenesisBlockBuilder::new()
-        .add_notes((1..=note_count).map(|i| Note::new(i as u64 * 10, zk_key.to_public_key())))
+        .add_notes(
+            (1..=note_count)
+                .map(|i| Note::new(i as u64 * 10, zk_key.to_public_key()))
+                .try_into()
+                .unwrap(),
+        )
         .set_inscription(InscriptionOp {
             channel_id: ChannelId::from([0; 32]),
             inscription: CryptarchiaParameter {
