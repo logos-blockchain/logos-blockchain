@@ -73,7 +73,7 @@ async fn proof_generation() {
         encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
-    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(1));
+    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(0));
 
     for _ in 0..leadership_quota {
         let proof = core_and_leader_proofs_generator
@@ -114,14 +114,24 @@ async fn epoch_private_info() {
         ProofsGeneratorSettings {
             local_node_index: None,
             membership_size: 1,
-            public_inputs: leadership_public_inputs,
+            public_inputs: core_public_inputs,
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
     );
 
-    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(1));
+    // Switch to leadership inputs before wiring leader private epoch info, because
+    // we use fixtures that yield different public inputs.
+    core_and_leader_proofs_generator.override_settings(ProofsGeneratorSettings {
+        local_node_index: None,
+        membership_size: 1,
+        public_inputs: leadership_public_inputs,
+        encapsulation_layers: 1.try_into().unwrap(),
+        epoch: Epoch::new(0),
+    });
+
+    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(0));
 
     // Leadership proof should be generated and verified correctly.
     let proof = core_and_leader_proofs_generator
