@@ -12,10 +12,9 @@ use crate::tests::node::{
 ///   added.
 #[test]
 fn test_yield_sdp_snapshot_from_genesis() {
-    let (settings, _tempdir) = node_config(genesis_block(
+    let (settings, _tempdir) = node_config(genesis_block::<3>(
         &ZkKey::zero(),
         &Ed25519Key::from_bytes(&[0; _]),
-        3,
         1,
     ));
 

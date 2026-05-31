@@ -1,3 +1,4 @@
+use core::array::from_fn;
 use std::{collections::HashMap, pin::Pin, str::FromStr as _, sync::Arc, time::Duration};
 
 use futures::Stream;
@@ -175,19 +176,15 @@ pub fn node_config(genesis_block: GenesisBlock) -> (NodeServiceSettings, TempDir
     )
 }
 
-pub fn genesis_block(
+pub fn genesis_block<const NOTE_COUNT: usize>(
     zk_key: &ZkKey,
     ed_key: &Ed25519Key,
-    note_count: usize,
     declaration_count: usize,
 ) -> GenesisBlock {
     let genesis_block = GenesisBlockBuilder::new()
-        .add_notes(
-            (1..=note_count)
-                .map(|i| Note::new(i as u64 * 10, zk_key.to_public_key()))
-                .try_into()
-                .unwrap(),
-        )
+        .add_notes::<NOTE_COUNT>(from_fn(|i| {
+            Note::new((i as u64 + 1) * 10, zk_key.to_public_key())
+        }))
         .set_inscription(InscriptionOp {
             channel_id: ChannelId::from([0; 32]),
             inscription: CryptarchiaParameter {
