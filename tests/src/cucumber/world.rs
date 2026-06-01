@@ -147,6 +147,9 @@ pub struct ZoneSequencerRuntime {
     task: JoinHandle<()>,
     events: Option<tokio::sync::mpsc::Receiver<Event>>,
     checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
+    ready_rx: tokio::sync::watch::Receiver<bool>,
+    channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
+    turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
     discarded_payloads: Option<ZoneDiscardedPayloads>,
 }
 
@@ -456,6 +459,11 @@ impl ZoneState {
             })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test-world runtime bundles many sequencer-owned receivers + state; \
+                  introducing a wrapper type would just move the same fields around"
+    )]
     pub fn set_sequencer_runtime(
         &mut self,
         alias: String,
@@ -463,6 +471,9 @@ impl ZoneState {
         sequencer_task: JoinHandle<()>,
         sequencer_events: Option<tokio::sync::mpsc::Receiver<Event>>,
         checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
+        ready_rx: tokio::sync::watch::Receiver<bool>,
+        channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
+        turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
         discarded_payloads: Option<ZoneDiscardedPayloads>,
     ) {
         if let Some(runtime) = self.runtimes.remove(&alias) {
@@ -476,9 +487,50 @@ impl ZoneState {
                 task: sequencer_task,
                 events: sequencer_events,
                 checkpoint_rx,
+                ready_rx,
+                channel_view_rx,
+                turn_to_write_rx,
                 discarded_payloads,
             },
         );
+    }
+
+    pub fn sequencer_ready_rx(
+        &self,
+        alias: &str,
+    ) -> Result<tokio::sync::watch::Receiver<bool>, StepError> {
+        self.runtimes
+            .get(alias)
+            .map(|runtime| runtime.ready_rx.clone())
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not running"),
+            })
+    }
+
+    pub fn sequencer_channel_view_rx(
+        &self,
+        alias: &str,
+    ) -> Result<tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>, StepError>
+    {
+        self.runtimes
+            .get(alias)
+            .map(|runtime| runtime.channel_view_rx.clone())
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not running"),
+            })
+    }
+
+    pub fn sequencer_turn_to_write_rx(
+        &self,
+        alias: &str,
+    ) -> Result<tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>, StepError>
+    {
+        self.runtimes
+            .get(alias)
+            .map(|runtime| runtime.turn_to_write_rx.clone())
+            .ok_or(StepError::LogicalError {
+                message: format!("Zone sequencer '{alias}' is not running"),
+            })
     }
 
     pub fn stop_sequencer(&mut self, alias: &str) -> Result<(), StepError> {

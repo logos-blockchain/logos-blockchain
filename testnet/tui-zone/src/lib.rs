@@ -5,6 +5,7 @@ mod ui;
 use std::{fs, path::Path};
 
 use clap::Parser;
+use futures::StreamExt as _;
 use lb_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_zone_sdk::{
@@ -53,7 +54,8 @@ pub async fn run(args: InscribeArgs) {
 
     let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
     let (mut sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
-    let mut channel_view_rx = handle.subscribe_channel_view();
+    let mut channel_view_rx = sequencer.subscribe_channel_view();
+    let mut events = sequencer.events();
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let mut stdin_rx = spawn_stdin_reader(ready_rx);
@@ -63,7 +65,7 @@ pub async fn run(args: InscribeArgs) {
 
     loop {
         tokio::select! {
-            event = sequencer.next_event() => {
+            event = events.next() => {
                 if let Some(event) = event {
                     handle_event(event, &mut state, &handle, &mut ready_tx).await;
                 }

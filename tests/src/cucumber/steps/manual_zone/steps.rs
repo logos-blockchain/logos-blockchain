@@ -353,7 +353,7 @@ async fn step_publish_single_zone_message_for_sequencer_on_turn(
 ) -> StepResult {
     let payload = make_inscription(&data);
     let handle = world.zone.sequencer_handle(&sequencer_alias)?.clone();
-    let mut view_rx = handle.subscribe_channel_view();
+    let mut view_rx = world.zone.sequencer_channel_view_rx(&sequencer_alias)?;
 
     wait_for_channel_view(&mut view_rx, Duration::from_mins(3), |view| {
         view.our_turn_to_write
@@ -927,8 +927,8 @@ async fn wait_for_sequencing_state(
     pending_publish_txs: usize,
     timeout_seconds: u64,
 ) -> StepResult {
-    let handle = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
-    let mut view_rx = handle.subscribe_channel_view();
+    let _handle = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
+    let mut view_rx = log_step_error(step, world.zone.sequencer_channel_view_rx(sequencer_alias))?;
 
     wait_for_channel_view(
         &mut view_rx,
@@ -961,8 +961,10 @@ async fn step_sequencer_notified_turn_to_write(
     sequencer_alias: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
-    let mut turn_rx = handle.subscribe_turn_to_write();
+    let mut turn_rx = log_step_error(
+        step,
+        world.zone.sequencer_turn_to_write_rx(&sequencer_alias),
+    )?;
     wait_for_turn_to_write(&mut turn_rx, Duration::from_secs(timeout_seconds))
         .await
         .map_err(|error| zone_step_error(step, &error))?;
@@ -981,8 +983,7 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
 ) -> StepResult {
     let aliases = single_column_table(step, "alias", "zone message aliases")?;
     let payloads = log_step_error(step, world.zone.message_payloads_for_aliases(&aliases))?;
-    let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
-    let mut view_rx = handle.subscribe_channel_view();
+    let mut view_rx = log_step_error(step, world.zone.sequencer_channel_view_rx(&sequencer_alias))?;
     wait_for_channel_view(&mut view_rx, Duration::from_secs(timeout_seconds), |view| {
         view.our_turn_to_write
     })
@@ -1021,8 +1022,7 @@ async fn step_sequencer_has_pending_publish_txs(
     pending_publish_txs: usize,
     timeout_seconds: u64,
 ) -> StepResult {
-    let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
-    let mut view_rx = handle.subscribe_channel_view();
+    let mut view_rx = log_step_error(step, world.zone.sequencer_channel_view_rx(&sequencer_alias))?;
 
     wait_for_channel_view(
         &mut view_rx,

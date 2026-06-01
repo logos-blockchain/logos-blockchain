@@ -93,6 +93,9 @@ struct StartedSequencerRuntime {
     task: JoinHandle<()>,
     events: Option<Receiver<Event>>,
     checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
+    ready_rx: tokio::sync::watch::Receiver<bool>,
+    channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
+    turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
     discarded_payloads: Option<DiscardedPayloads>,
 }
 
@@ -703,7 +706,7 @@ async fn start_named_sequencer_with_config(
         log_step_error(step, world.zone.sequencer_signing_key(&sequencer_alias))?.clone();
     let node_client = log_step_error(step, world.zone_node_http_client())?;
     let node_url = log_step_error(step, world.zone_node_url())?;
-    let (sequencer, mut handle) = ZoneSequencer::init_with_config(
+    let (sequencer, handle) = ZoneSequencer::init_with_config(
         world.zone.sequencer_channel_id(&sequencer_alias)?,
         signing_key,
         ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url),
@@ -712,8 +715,10 @@ async fn start_named_sequencer_with_config(
     );
 
     let runtime = start_sequencer_runtime(sequencer, handle.clone(), mode);
+    let mut ready_rx = runtime.ready_rx.clone();
 
-    if let Err(error) = wait_for_sequencer_ready(&sequencer_alias, &node_client, &mut handle).await
+    if let Err(error) =
+        wait_for_sequencer_ready(&sequencer_alias, &node_client, &mut ready_rx).await
     {
         runtime.task.abort();
         return Err(error);
@@ -725,6 +730,9 @@ async fn start_named_sequencer_with_config(
         runtime.task,
         runtime.events,
         runtime.checkpoint_rx,
+        runtime.ready_rx,
+        runtime.channel_view_rx,
+        runtime.turn_to_write_rx,
         runtime.discarded_payloads,
     );
 
@@ -734,16 +742,18 @@ async fn start_named_sequencer_with_config(
 async fn wait_for_sequencer_ready(
     sequencer_alias: &str,
     node_client: &NodeHttpClient,
-    handle: &mut SequencerHandle<ZoneNodeHttpClient>,
+    ready_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) -> StepResult {
     timeout(SEQUENCER_READY_TIMEOUT, async {
         let mut last_height = node_client.consensus_info().await?.cryptarchia_info.height;
 
         loop {
-            if timeout(SEQUENCER_READY_POLL_TIMEOUT, handle.wait_ready())
-                .await
-                .is_ok()
-            {
+            let poll = timeout(
+                SEQUENCER_READY_POLL_TIMEOUT,
+                lb_zone_sdk::sequencer::wait_ready(ready_rx),
+            )
+            .await;
+            if matches!(poll, Ok(Ok(()))) {
                 return Ok(());
             }
 
@@ -776,6 +786,13 @@ fn start_sequencer_runtime(
     handle: SequencerHandle<ZoneNodeHttpClient>,
     mode: DriveMode,
 ) -> StartedSequencerRuntime {
+    // Subscribe to all sequencer-side watch channels BEFORE moving the
+    // sequencer into the drive task. The receivers stay valid from any task
+    // and are stashed in the runtime for later access by step helpers.
+    let ready_rx = sequencer.subscribe_ready();
+    let channel_view_rx = sequencer.subscribe_channel_view();
+    let turn_to_write_rx = sequencer.subscribe_turn_to_write();
+
     match mode {
         DriveMode::Passive { republish_orphans } => {
             let (task, events, checkpoint_rx) =
@@ -785,6 +802,9 @@ fn start_sequencer_runtime(
                 task,
                 events: Some(events),
                 checkpoint_rx: Some(checkpoint_rx),
+                ready_rx,
+                channel_view_rx,
+                turn_to_write_rx,
                 discarded_payloads: None,
             }
         }
@@ -792,12 +812,18 @@ fn start_sequencer_runtime(
             task: start_republish_policy(sequencer, handle),
             events: None,
             checkpoint_rx: None,
+            ready_rx,
+            channel_view_rx,
+            turn_to_write_rx,
             discarded_payloads: None,
         },
         DriveMode::Sorted { discarded } => StartedSequencerRuntime {
             task: start_sorted_conflict_policy(sequencer, handle, Arc::clone(&discarded)),
             events: None,
             checkpoint_rx: None,
+            ready_rx,
+            channel_view_rx,
+            turn_to_write_rx,
             discarded_payloads: Some(discarded),
         },
         DriveMode::BalanceAware {
@@ -807,6 +833,9 @@ fn start_sequencer_runtime(
             task: start_balance_aware_policy(sequencer, handle, initial_balances, planned_payloads),
             events: None,
             checkpoint_rx: None,
+            ready_rx,
+            channel_view_rx,
+            turn_to_write_rx,
             discarded_payloads: None,
         },
     }
