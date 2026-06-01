@@ -748,10 +748,16 @@ async fn wait_for_sequencer_ready(
         let mut last_height = node_client.consensus_info().await?.cryptarchia_info.height;
 
         loop {
-            let poll = timeout(
-                SEQUENCER_READY_POLL_TIMEOUT,
-                lb_zone_sdk::sequencer::wait_ready(ready_rx),
-            )
+            let poll = timeout(SEQUENCER_READY_POLL_TIMEOUT, async {
+                loop {
+                    if ready_rx.changed().await.is_err() {
+                        return Err(());
+                    }
+                    if *ready_rx.borrow() {
+                        return Ok(());
+                    }
+                }
+            })
             .await;
             if matches!(poll, Ok(Ok(()))) {
                 return Ok(());

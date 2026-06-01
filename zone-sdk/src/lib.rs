@@ -13,11 +13,11 @@
 //!
 //! # Quick start (sequencer)
 //!
-//! Drive the sequencer's event stream from one task; send commands through
-//! the cloneable [`sequencer::SequencerHandle`] from any other task. The
-//! borrow checker enforces the separation — while the event stream is alive,
-//! the sequencer is mutably borrowed, so all other interactions must go
-//! through the handle.
+//! The sequencer is the actor: it drives the event stream and exposes sync
+//! state (snapshots + watch subscriptions). The handle is the cloneable async
+//! command surface for publish / sign / submit / channel-config. Subscribe
+//! to whatever state you'll observe from other tasks before spawning the
+//! drive task; the receivers stay valid afterwards.
 //!
 //! ```no_run
 //! use futures::StreamExt as _;
@@ -32,10 +32,11 @@
 //! let node = NodeHttpClient::new(CommonHttpClient::new(None), "http://localhost:8080".parse().unwrap());
 //! let (sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, None);
 //!
-//! // Sync API lives on the sequencer (subscribe + snapshot reads).
-//! let ready_rx      = sequencer.subscribe_ready();
-//! let checkpoint_rx = sequencer.subscribe_checkpoint();
-//! let _initial_cp   = sequencer.checkpoint();
+//! // Subscribe to anything you'll observe from other tasks. The first
+//! // `.changed().await` on each receiver returns immediately with the
+//! // current value; subsequent calls wait for the next change.
+//! let mut ready_rx      = sequencer.subscribe_ready();
+//! let mut checkpoint_rx = sequencer.subscribe_checkpoint();
 //!
 //! // Drive task owns the sequencer:
 //! tokio::spawn(async move {
@@ -43,19 +44,22 @@
 //!     let mut events = sequencer.events();
 //!     while let Some(event) = events.next().await {
 //!         match event {
-//!             Event::Readiness { ready }               => { let _ = ready; }
-//!             Event::TxsFinalized { items }            => { let _ = items; }
+//!             Event::Readiness { ready }                 => { let _ = ready; }
+//!             Event::TxsFinalized { items }              => { let _ = items; }
 //!             Event::ChannelUpdate { orphaned, adopted } => { let _ = (orphaned, adopted); }
-//!             Event::Published { tx }                  => { let _ = tx; }
-//!             Event::Checkpoint { checkpoint }         => { let _ = checkpoint; }
-//!             Event::TurnNotification { notification } => { let _ = notification; }
+//!             Event::Published { tx }                    => { let _ = tx; }
+//!             Event::Checkpoint { checkpoint }           => { let _ = checkpoint; }
+//!             Event::TurnNotification { notification }   => { let _ = notification; }
 //!         }
 //!     }
 //! });
 //!
-//! // From any other task: async commands on the handle, sync reads via receivers.
-//! handle.publish_message(b"hello"[..].try_into().unwrap()).await.ok();
-//! let _ready_now = *ready_rx.borrow();
+//! // From any other task: async commands via the handle, current state via
+//! // the receivers you subscribed to above.
+//! ready_rx.changed().await.ok();        // returns immediately with current value
+//! if *ready_rx.borrow() {
+//!     handle.publish_message(b"hello"[..].try_into().unwrap()).await.ok();
+//! }
 //! let _last_cp = checkpoint_rx.borrow().clone();
 //! # }
 //! ```
