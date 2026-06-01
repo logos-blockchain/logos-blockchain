@@ -20,10 +20,28 @@ use tokio::time::error::Elapsed;
 use crate::cucumber::defaults::{E2E_KEEP_LOGS, E2E_TESTS_BASE_DIR_OVERRIDE};
 
 pub struct LocalManualClusterHarnessBase {
-    pub scenario_base_dir: PathBuf,
-    pub deployment: DeploymentPlan,
-    pub cluster: LbcManualCluster,
+    scenario_base_dir: PathBuf,
+    deployment: DeploymentPlan,
+    cluster: LbcManualCluster,
     _scenario_base_dir_guard: ScenarioBaseDirGuard,
+}
+
+impl LocalManualClusterHarnessBase {
+    pub fn scenario_base_dir(&self) -> &Path {
+        &self.scenario_base_dir
+    }
+
+    pub const fn deployment(&self) -> &DeploymentPlan {
+        &self.deployment
+    }
+
+    pub const fn cluster(&self) -> &LbcManualCluster {
+        &self.cluster
+    }
+
+    pub const fn cluster_mut(&mut self) -> &mut LbcManualCluster {
+        &mut self.cluster
+    }
 }
 
 struct ScenarioBaseDirGuard {
@@ -35,14 +53,7 @@ impl Drop for ScenarioBaseDirGuard {
     fn drop(&mut self) {
         unregister_system_monitor_output_file(&self.system_monitor_output_path);
 
-        if std::thread::panicking()
-            && let Some(tempdir) = self.tempdir.take()
-        {
-            let _kept_path = tempdir.keep();
-            return;
-        }
-
-        if e2e_keep_logs_enabled()
+        if (std::thread::panicking() || e2e_keep_logs_enabled())
             && let Some(tempdir) = self.tempdir.take()
         {
             let _kept_path = tempdir.keep();
@@ -50,7 +61,7 @@ impl Drop for ScenarioBaseDirGuard {
         }
 
         if let Some(tempdir) = self.tempdir.take()
-            && should_preserve_scenario_base_dir(tempdir.path())
+            && has_artifacts_beyond_system_monitor_outputs(tempdir.path())
         {
             let _kept_path = tempdir.keep();
         }
@@ -61,7 +72,10 @@ fn e2e_keep_logs_enabled() -> bool {
     is_truthy_env(E2E_KEEP_LOGS)
 }
 
-fn should_preserve_scenario_base_dir(path: &Path) -> bool {
+// If the directory only contains system monitor leftovers, clean it up.
+// Preserve it when other scenario artifacts were produced so they remain
+// inspectable.
+fn has_artifacts_beyond_system_monitor_outputs(path: &Path) -> bool {
     fs::read_dir(path).map_or(true, |entries| {
         entries.filter_map(Result::ok).any(|entry| {
             entry

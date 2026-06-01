@@ -35,8 +35,8 @@ async fn blend_devnet_setup() {
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     );
 
-    let cluster = base.cluster;
-    let nodes = start_manual_nodes(&cluster, base.scenario_base_dir.as_path(), node_count).await;
+    let cluster = base.cluster();
+    let nodes = start_manual_nodes(cluster, base.scenario_base_dir(), node_count).await;
 
     cluster
         .wait_network_ready()

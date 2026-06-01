@@ -30,14 +30,14 @@ async fn node_restart_with_initial_peer_override() {
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     );
 
-    let cluster = base.cluster;
+    let cluster = base.cluster();
 
     let node0 = cluster
         .start_node_with(
             "0",
             StartNodeOptions::default()
                 .with_peers(PeerSelection::None)
-                .with_persist_dir(base.scenario_base_dir.join("node-0")),
+                .with_persist_dir(base.scenario_base_dir().join("node-0")),
         )
         .await
         .unwrap_or_else(|_| panic!("starting node-0 should succeed"));
@@ -47,7 +47,7 @@ async fn node_restart_with_initial_peer_override() {
             "1",
             StartNodeOptions::default()
                 .with_peers(PeerSelection::Named(vec![node0.name.clone()]))
-                .with_persist_dir(base.scenario_base_dir.join("node-1")),
+                .with_persist_dir(base.scenario_base_dir().join("node-1")),
         )
         .await
         .unwrap_or_else(|_| panic!("starting node-1 should succeed"));
@@ -57,7 +57,7 @@ async fn node_restart_with_initial_peer_override() {
             "2",
             StartNodeOptions::default()
                 .with_peers(PeerSelection::Named(vec![node0.name.clone()]))
-                .with_persist_dir(base.scenario_base_dir.join("node-2")),
+                .with_persist_dir(base.scenario_base_dir().join("node-2")),
         )
         .await
         .unwrap_or_else(|_| panic!("starting node-2 should succeed"));
@@ -87,7 +87,7 @@ async fn node_restart_with_initial_peer_override() {
         .unwrap_or_else(|_| panic!("node-0 should stop cleanly"));
 
     let restarted_node2 =
-        restart_node_and_get_client(&cluster, &node2.name, vec![node1_dial_addr]).await;
+        restart_node_and_get_client(cluster, &node2.name, vec![node1_dial_addr]).await;
 
     wait_for_manual_cluster_height(&restarted_node2, 2, Duration::from_mins(2))
         .await

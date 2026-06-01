@@ -82,9 +82,10 @@ async fn channel_deposit() {
     // Also, record the channel balance before deposit
     // We use the channel created by the genesis inscription for simplicity.
     let channel_id = base
-        .deployment
+        .deployment()
         .config
         .genesis_block
+        .as_ref()
         .expect("manual-cluster deployment should include genesis tx")
         .genesis_tx()
         .genesis_inscription()
