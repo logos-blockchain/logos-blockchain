@@ -181,7 +181,11 @@ async fn transaction_is_in_chain(
 
 pub fn create_invalid_transaction() -> SignedMantleTx {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
-    let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new(vec![output_note]));
+    let transfer_op = TransferOp::new(
+        Inputs::empty(),
+        // Outputs::new([output_note]),
+        Outputs::new([output_note]),
+    );
 
     let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
 

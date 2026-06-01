@@ -10,11 +10,11 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-lb-circuits-utils = { workspace = true }
-tempfile          = { workspace = true }
+lbc-rapidsnark-sys = { workspace = true }
+tempfile           = { workspace = true }
 
 [lints]
 workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["lb-circuits-utils", "tempfile"] # machete hallucinations
+ignored = ["tempfile"] # machete hallucinations

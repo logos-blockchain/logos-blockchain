@@ -82,9 +82,7 @@ members = [
   "wallet",
   "wallet-http-client",
   "zk/circuits/prover",
-  "zk/circuits/utils",
   "zk/circuits/verifier",
-  "zk/circuits/witness-generator",
   "zk/groth16",
   "zk/poseidon2",
   "zk/proofs/error",
@@ -119,7 +117,6 @@ lb-chain-network-service           = { default-features = false, package = "logo
 lb-chain-service                   = { default-features = false, package = "logos-blockchain-chain-service", path = "./services/chain/chain-service" }
 lb-chain-service-common            = { default-features = false, package = "logos-blockchain-chain-service-common", path = "./services/chain/chain-common" }
 lb-circuits-prover                 = { default-features = false, package = "logos-blockchain-circuits-prover", path = "./zk/circuits/prover" }
-lb-circuits-utils                  = { default-features = false, package = "logos-blockchain-circuits-utils", path = "./zk/circuits/utils" }
 lb-circuits-verifier               = { default-features = false, package = "logos-blockchain-circuits-verifier", path = "./zk/circuits/verifier" }
 lb-common-http-client              = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-config                          = { default-features = false, package = "logos-blockchain-config", path = "./tools/config" }
@@ -162,16 +159,16 @@ lb-utxotree                        = { default-features = false, package = "logo
 lb-wallet                          = { default-features = false, package = "logos-blockchain-wallet", path = "./wallet" }
 lb-wallet-http-client              = { default-features = false, package = "logos-blockchain-wallet-http-client", path = "./wallet-http-client" }
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
-lb-witness-generator               = { default-features = false, package = "logos-blockchain-witness-generator", path = "./zk/circuits/witness-generator" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 lb_config                          = { default-features = false, package = "lb_config", path = "./tools/config" }
 lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
-lbc-poc-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", rev = "2e79ac30831d89e6a349720c08d5b8b9978970e0" }       # v0.5.0
-lbc-pol-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", rev = "2e79ac30831d89e6a349720c08d5b8b9978970e0" }       # v0.5.0
-lbc-poq-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", rev = "2e79ac30831d89e6a349720c08d5b8b9978970e0" }       # v0.5.0
-lbc-signature-sys                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", rev = "2e79ac30831d89e6a349720c08d5b8b9978970e0" } # v0.5.0
-lbc-types                          = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", rev = "2e79ac30831d89e6a349720c08d5b8b9978970e0" }         # v0.5.0
+lbc-poc-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", rev = "e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619" }        # v0.5.0
+lbc-pol-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", rev = "e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619" }        # v0.5.0
+lbc-poq-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", rev = "e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619" }        # v0.5.0
+lbc-rapidsnark-sys                 = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-rapidsnark-sys", rev = "e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619" } # v0.5.0
+lbc-signature-sys                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", rev = "e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619" }  # v0.5.0
+lbc-types                          = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", rev = "e6a8495dd39ed6fe94b071e8c60faa4dcdf0a619" }          # v0.5.0
 lbp-error                          = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
 testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
 testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }

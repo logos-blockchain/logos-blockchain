@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 # check=skip=SecretsUsedInArgOrEnv
 
-ARG LOGOS_CIRCUITS_VERSION
+# Cache directory used by the circuits. Not meant to be overridden.
+ARG LB_CACHE=/root/.cache/logos/blockchain
 
 FROM rust:1.94.0-slim-bookworm AS cfgsync-builder
 
@@ -18,7 +19,7 @@ RUN cargo build --locked --release \
 
 FROM rust:1.94.0-slim-bookworm AS builder
 
-ARG LOGOS_CIRCUITS_VERSION
+ARG LB_CACHE
 
 WORKDIR /workspace
 COPY . .
@@ -27,11 +28,6 @@ COPY --from=logos_blockchain_testing . /logos-blockchain-testing
 RUN apt-get update && apt-get install -yq \
     git gcc g++ clang libssl-dev pkg-config ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/*
-
-RUN test -n "${LOGOS_CIRCUITS_VERSION}"
-RUN scripts/setup-logos-blockchain-circuits.sh "${LOGOS_CIRCUITS_VERSION}" /opt/circuits
-
-ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
 RUN cargo build --locked --release \
     -p logos-blockchain-node \
@@ -44,10 +40,13 @@ RUN apt-get update && apt-get install -yq \
     libstdc++6 libssl3 ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /opt/circuits /opt/circuits
+ARG LB_CACHE
+
+# Copies the entire cache dir.
+# We only need the circuits, but this is currently much simpler than just copying the circuits subdir.
+# This might be addressed later, after the circuits directories structure is standardised.
+COPY --from=builder $LB_CACHE $LB_CACHE
 COPY --from=builder /workspace/target/release/logos-blockchain-node /usr/bin/logos-blockchain-node
 COPY --from=cfgsync-builder /logos-blockchain-testing/target/release/cfgsync-client /usr/bin/cfgsync-client
-
-ENV LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
 
 ENTRYPOINT ["/usr/bin/logos-blockchain-node"]

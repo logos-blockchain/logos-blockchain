@@ -6,6 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use lb_log_targets::tracing as log_targets_tracing;
 use lb_tracing::{
     filter::envfilter::{EnvFilterConfig, create_envfilter_layer, default_envfilter_config},
     logging::{
@@ -37,6 +38,8 @@ mod console;
 type LoggerSubscriber =
     tracing_subscriber::layer::Layered<LevelFilter, tracing_subscriber::Registry>;
 type FilterReloadHandle = tracing_subscriber::reload::Handle<EnvFilter, LoggerSubscriber>;
+
+const LOG_TARGET: &str = log_targets_tracing::SERVICE;
 
 pub struct Tracing<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -110,7 +113,10 @@ impl Write for SharedWriter {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| {
-                warn!("Tracing writer mutex poisoned on write, recovering");
+                warn!(
+                    target: LOG_TARGET,
+                    "Tracing writer mutex poisoned on write, recovering"
+                );
                 poisoned.into_inner()
             })
             .write(buf)
@@ -120,7 +126,10 @@ impl Write for SharedWriter {
         self.inner
             .lock()
             .unwrap_or_else(|poisoned| {
-                warn!("Tracing writer mutex poisoned on flush, recovering");
+                warn!(
+                    target: LOG_TARGET,
+                    "Tracing writer mutex poisoned on flush, recovering"
+                );
                 poisoned.into_inner()
             })
             .flush()
@@ -394,6 +403,7 @@ where
 
         service_resources_handle.status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );

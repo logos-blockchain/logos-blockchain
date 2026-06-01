@@ -27,6 +27,7 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use lb_log_targets::zone_sdk;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{debug, error, info, warn};
 
@@ -39,7 +40,7 @@ use crate::{
     },
 };
 
-const TARGET: &str = "zone_sdk::sequencer";
+const TARGET: &str = zone_sdk::SEQUENCER;
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -67,8 +68,6 @@ pub struct SequencerCheckpoint {
 pub struct PublishResult {
     /// The inscription ID (transaction hash).
     pub inscription_id: InscriptionId,
-    /// Current checkpoint for persistence.
-    pub checkpoint: SequencerCheckpoint,
 }
 
 /// One withdraw to bundle atomically with an inscription.
@@ -195,12 +194,12 @@ pub struct SequencerChannelView {
     pub current_slot: Slot,
     pub own_key_index: Option<u16>,
     pub authorized_key_index: Option<u16>,
-    pub is_our_turn: bool,
+    pub our_turn_to_write: bool,
     pub tip_message: MsgId,
     pub pending_publish_txs: usize,
     pub queued_messages: usize,
-    pub posting_timeframe: Option<u32>,
-    pub posting_timeout: Option<u32>,
+    pub turn_to_write_slots: Option<u32>,
+    pub posting_timeout_slots: Option<u32>,
     pub accredited_key_count: Option<usize>,
 }
 
@@ -212,12 +211,12 @@ impl SequencerChannelView {
             current_slot: Slot::genesis(),
             own_key_index: None,
             authorized_key_index: None,
-            is_our_turn: false,
+            our_turn_to_write: false,
             tip_message: MsgId::root(),
             pending_publish_txs: 0,
             queued_messages: 0,
-            posting_timeframe: None,
-            posting_timeout: None,
+            turn_to_write_slots: None,
+            posting_timeout_slots: None,
             accredited_key_count: None,
         }
     }
@@ -266,7 +265,8 @@ pub enum Event {
     /// Emitted in both regimes with identical semantics — consumers write a
     /// single apply loop:
     /// - during cold-start catch-up, multiple `TxsFinalized` events stream in
-    ///   (one per backfill batch) before [`Event::Ready`]
+    ///   (one per backfill batch) before [`Event::Readiness`] with `ready:
+    ///   true`
     /// - during live operation, one `TxsFinalized` is emitted whenever LIB
     ///   advances and brings new finalized channel txs
     ///
@@ -333,8 +333,14 @@ pub enum Event {
         /// against the internal outbox. See `Event::Published` for our own).
         adopted: Vec<InscriptionInfo>,
     },
-    /// Sequencer is connected, backfill complete, ready to accept publishes.
-    Ready,
+    /// Sequencer readiness changed.
+    ///
+    /// `ready: true` is emitted on the up edge — connected, backfill complete,
+    /// ready to accept publishes. `ready: false` is emitted on the down edge —
+    /// disconnect or transient processing failure dropped the stream; the SDK
+    /// is reconnecting. Consumers driving the event loop wait for the next
+    /// `Readiness { ready: true }` to resume submitting publishes.
+    Readiness { ready: bool },
     /// A tx (plain inscription or atomic-withdraw bundle) was created and
     /// submitted to the network.
     ///
@@ -344,10 +350,18 @@ pub enum Event {
     /// inscription is the lineage key for correlating later
     /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.items`
     /// entries back to the originating publish call.
-    Published {
-        tx: Box<PublishedTx>,
-        checkpoint: SequencerCheckpoint,
-    },
+    Published { tx: Box<PublishedTx> },
+    /// The SDK's checkpoint has advanced.
+    ///
+    /// Emitted after every backfill batch and after every live block,
+    /// following any block-derived events for that block/batch
+    /// ([`Event::TxsFinalized`], [`Event::ChannelUpdate`]).
+    Checkpoint { checkpoint: SequencerCheckpoint },
+    /// Turn-to-write status update for this sequencer.
+    ///
+    /// Emitted on the same change boundary as the `turn_to_write` watch
+    /// channel (excluding `current_slot`-only updates).
+    TurnNotification { notification: TurnNotification },
 }
 
 enum ActorRequest {
@@ -414,6 +428,7 @@ pub struct SequencerHandle<Node> {
     event_tx: broadcast::Sender<Event>,
     ready_rx: watch::Receiver<bool>,
     channel_view_rx: watch::Receiver<SequencerChannelView>,
+    turn_to_write_rx: watch::Receiver<TurnNotification>,
 }
 
 impl<Node> SequencerHandle<Node>
@@ -434,12 +449,21 @@ where
         self.channel_view_rx.clone()
     }
 
+    #[must_use]
+    pub fn subscribe_turn_to_write(&self) -> watch::Receiver<TurnNotification> {
+        self.turn_to_write_rx.clone()
+    }
+
     /// Publish an inscription to the zone's channel.
     ///
     /// Fire-and-forget: the inscription is queued for processing by the
-    /// sequencer's event loop. The result (inscription ID + checkpoint) is
-    /// delivered via [`Event::Published`] once the tx is created and posted
-    /// to the network.
+    /// sequencer's event loop. The result (inscription ID) is delivered via
+    /// [`Event::Published`] once the tx is created and posted to the network.
+    ///
+    /// Returns [`Error::Unavailable`] if the sequencer is not ready (cold
+    /// start before the first live block, or mid-reconnect after a stream
+    /// drop). Consumers driving the event loop can wait for the next
+    /// [`Event::Readiness`] with `ready: true` and retry.
     pub async fn publish_message(&self, data: Inscription) -> Result<(), Error> {
         if !*self.ready_rx.borrow() {
             return Err(Error::Unavailable {
@@ -631,6 +655,11 @@ where
     /// [`Event::Published`] (`PublishedTx::AtomicWithdraw` variant). Safe to
     /// call from the drive task itself (e.g. an orphan re-publish handler)
     /// because it does not await an actor reply.
+    ///
+    /// Returns [`Error::Unavailable`] if the sequencer is not ready (cold
+    /// start before the first live block, or mid-reconnect after a stream
+    /// drop). Consumers driving the event loop can wait for the next
+    /// [`Event::Readiness`] with `ready: true` and retry.
     pub async fn publish_atomic_withdraw(
         &self,
         inscribe: Inscription,
@@ -651,6 +680,31 @@ where
                 reason: "sequencer channel closed",
             })
     }
+}
+
+/// Information about whose turn it is to post and the current posting
+/// timeframe.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnNotification {
+    /// True if it's currently our turn to write.
+    pub our_turn_to_write: bool,
+    /// The current turn-to-write slot starting slot.
+    pub starting_slot: Option<u64>,
+    /// The slot at which the current turn-to-write ends, if known. This is not
+    /// guaranteed to be known, as it depends on the channel config and
+    /// current slot, which may not be available at the time of
+    /// notification.
+    pub ends_at_slot: Option<u64>,
+    /// The number of slots in the current turn-to-write timeframe, if known.
+    /// This is not guaranteed to be known, as it depends on the channel
+    /// config and current slot, which may not be available at the time of
+    /// notification.
+    pub turn_to_write_slots: Option<u32>,
+    /// The current slot at the time of notification, if known. This is not
+    /// guaranteed to be known, as it depends on the channel config and
+    /// current slot, which may not be available at the time
+    /// of notification.
+    pub current_slot: Option<u64>,
 }
 
 /// Zone sequencer.
@@ -706,6 +760,7 @@ pub struct ZoneSequencer<Node> {
     // Readiness signal — set to true when connected and backfill is complete
     ready_tx: watch::Sender<bool>,
     channel_view_tx: watch::Sender<SequencerChannelView>,
+    turn_to_write_tx: watch::Sender<TurnNotification>,
 }
 
 impl<Node> ZoneSequencer<Node>
@@ -734,8 +789,8 @@ where
 
     /// Create a new sequencer with custom configuration.
     ///
-    /// Returns immediately. The sequencer emits [`Event::Ready`] once it has
-    /// connected and completed backfill.
+    /// Returns immediately. The sequencer emits [`Event::Readiness`] with
+    /// `ready: true` once it has connected and completed backfill.
     ///
     /// Returns the sequencer (to drive via [`next_event`](Self::next_event))
     /// and a handle (for submitting requests from other tasks).
@@ -779,6 +834,13 @@ where
         let (ready_tx, ready_rx) = watch::channel(false);
         let (channel_view_tx, channel_view_rx) =
             watch::channel(SequencerChannelView::new(channel_id));
+        let (turn_to_write_tx, turn_to_write_rx) = watch::channel(TurnNotification {
+            our_turn_to_write: false,
+            starting_slot: None,
+            ends_at_slot: None,
+            turn_to_write_slots: None,
+            current_slot: None,
+        });
 
         let handle = SequencerHandle {
             request_tx,
@@ -786,6 +848,7 @@ where
             event_tx: event_tx.clone(),
             ready_rx,
             channel_view_rx,
+            turn_to_write_rx,
         };
 
         let sequencer = Self {
@@ -812,6 +875,7 @@ where
             event_tx,
             ready_tx,
             channel_view_tx,
+            turn_to_write_tx,
         };
 
         (sequencer, handle)
@@ -900,8 +964,7 @@ where
         let Some(block_event) = maybe_event else {
             warn!(target: TARGET, "Blocks stream disconnected, will reconnect on next call");
             self.blocks_stream = None;
-            let _ = self.ready_tx.send(false);
-            return None;
+            return self.signal_not_ready();
         };
 
         let result = match handle_block_event(
@@ -916,10 +979,12 @@ where
         {
             Ok(r) => r,
             Err(e) => {
-                error!("Block event processing failed; dropping stream so reconnect retries: {e}");
+                error!(
+                    target: TARGET,
+                    "Block event processing failed; dropping stream so reconnect retries: {e}"
+                );
                 self.blocks_stream = None;
-                let _ = self.ready_tx.send(false);
-                return None;
+                return self.signal_not_ready();
             }
         };
 
@@ -933,8 +998,7 @@ where
                 "Failed to refresh channel state after block; dropping stream so reconnect retries: {err}"
             );
             self.blocks_stream = None;
-            let _ = self.ready_tx.send(false);
-            return None;
+            return self.signal_not_ready();
         }
 
         let became_ready = self.maybe_signal_ready();
@@ -942,13 +1006,19 @@ where
 
         self.enqueue_pending_submit();
 
+        if let Some(state) = self.state.as_ref() {
+            events.push_back(Event::Checkpoint {
+                checkpoint: build_checkpoint(state, self.last_msg_id, self.lib_slot),
+            });
+        }
+
         if became_ready {
             // Preserve the existing public event contract: when readiness transitions,
             // Ready is emitted first. Any block-derived events and any Published event
             // produced by queue draining are buffered and emitted on subsequent
             // next_event() calls.
             self.buffered_events.extend(events);
-            return Some(self.emit_now(Event::Ready));
+            return Some(self.emit_now(Event::Readiness { ready: true }));
         }
 
         let event = events.pop_front()?;
@@ -980,6 +1050,25 @@ where
             );
             false
         }
+    }
+
+    /// Flip readiness to `false` and, if that was an actual transition (was
+    /// previously `true`), surface [`Event::Readiness`] so the consumer's
+    /// drive loop learns about the disconnect on the event stream. Returns
+    /// `None` when readiness was already `false` (no spurious event).
+    fn signal_not_ready(&self) -> Option<Event> {
+        let mut transitioned = false;
+        self.ready_tx.send_if_modified(|current| {
+            if *current {
+                *current = false;
+                transitioned = true;
+                true
+            } else {
+                false
+            }
+        });
+        self.publish_turn_to_write(false);
+        transitioned.then(|| self.emit_now(Event::Readiness { ready: false }))
     }
 
     async fn refresh_channel_state(&mut self) -> Result<(), Error> {
@@ -1037,18 +1126,80 @@ where
             current_slot,
             own_key_index: self.own_key_index,
             authorized_key_index,
-            is_our_turn: self.can_publish_inscription_now(),
+            our_turn_to_write: self.can_publish_inscription_now(),
             tip_message,
             pending_publish_txs,
             queued_messages: pending_publish_txs,
-            posting_timeframe,
-            posting_timeout,
+            turn_to_write_slots: posting_timeframe,
+            posting_timeout_slots: posting_timeout,
             accredited_key_count,
         }
     }
 
     fn publish_channel_view(&self) {
-        drop(self.channel_view_tx.send(self.channel_view()));
+        let view = self.channel_view();
+        let turn_to_write = self.is_ready() && view.our_turn_to_write;
+        drop(self.channel_view_tx.send(view));
+        self.publish_turn_to_write(turn_to_write);
+    }
+
+    fn publish_turn_to_write(&self, turn_to_write: bool) {
+        let mut emitted: Option<TurnNotification> = None;
+
+        self.turn_to_write_tx.send_if_modified(|current| {
+            let new = self.turn_notification(turn_to_write);
+            let changed = current.our_turn_to_write != new.our_turn_to_write
+                || current.starting_slot != new.starting_slot
+                || current.ends_at_slot != new.ends_at_slot
+                || current.turn_to_write_slots != new.turn_to_write_slots;
+
+            *current = new.clone();
+            if changed {
+                emitted = Some(new);
+            }
+
+            changed
+        });
+
+        if let Some(notification) = emitted {
+            drop(self.event_tx.send(Event::TurnNotification { notification }));
+        }
+    }
+
+    fn turn_notification(&self, our_turn_to_write: bool) -> TurnNotification {
+        let Some(slot_clock) = &self.slot_clock else {
+            return TurnNotification {
+                our_turn_to_write,
+                starting_slot: None,
+                ends_at_slot: None,
+                turn_to_write_slots: None,
+                current_slot: None,
+            };
+        };
+
+        let current_slot = slot_clock.current_slot();
+        let Some(channel) = &self.channel_state else {
+            return TurnNotification {
+                our_turn_to_write,
+                starting_slot: None,
+                ends_at_slot: None,
+                turn_to_write_slots: None,
+                current_slot: Some(slot_to_u64(current_slot)),
+            };
+        };
+
+        let (_, turn_start_slot) = channel.round_robin(current_slot);
+        let turn_to_write_slots = u32::from(channel.posting_timeframe.clone());
+        let starting_slot = slot_to_u64(turn_start_slot);
+        let ends_at_slot = starting_slot.saturating_add(u64::from(turn_to_write_slots));
+
+        TurnNotification {
+            our_turn_to_write,
+            starting_slot: Some(starting_slot),
+            ends_at_slot: Some(ends_at_slot),
+            turn_to_write_slots: Some(turn_to_write_slots),
+            current_slot: Some(slot_to_u64(current_slot)),
+        }
     }
 
     fn own_key_index_for(&self, channel: &ChannelState) -> Option<u16> {
@@ -1211,12 +1362,8 @@ where
             }),
             None => PublishedTx::Inscription(info),
         };
-        let checkpoint = build_checkpoint(state, self.last_msg_id, self.lib_slot);
 
-        Some(Event::Published {
-            tx: Box::new(tx),
-            checkpoint,
-        })
+        Some(Event::Published { tx: Box::new(tx) })
     }
 
     /// Process one batch of incremental backfill if active.
@@ -1251,6 +1398,7 @@ where
             Ok(b) => b,
             Err(e) => {
                 error!(
+                    target: TARGET,
                     from = from_u64,
                     to = batch_end,
                     "Backfill batch failed; will retry same range after delay: {e}"
@@ -1293,12 +1441,21 @@ where
             }
         }
 
+        self.lib_slot = Slot::from(batch_end);
+
+        let checkpoint_event = self.state.as_ref().map(|s| Event::Checkpoint {
+            checkpoint: build_checkpoint(s, self.last_msg_id, self.lib_slot),
+        });
+
         if batch.items.is_empty() {
-            return Some(None);
+            return checkpoint_event.map(Some);
         }
 
         let event = Event::TxsFinalized { items: batch.items };
         drop(self.event_tx.send(event.clone()));
+        if let Some(cp) = checkpoint_event {
+            self.buffered_events.push_back(cp);
+        }
         Some(Some(event))
     }
 
@@ -1423,7 +1580,6 @@ where
                     debug!(target: TARGET, "Starting incremental backfill from slot {start} to {to}");
                     self.backfill_from = Some(Slot::from(start));
                     self.backfill_to = Some(network_lib_slot);
-                    self.lib_slot = network_lib_slot;
                     return false;
                 }
                 true
@@ -1555,7 +1711,7 @@ where
             ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
                 // Safe to unwrap — is_ready() guarantees state is initialized
                 let s = self.state.as_mut().unwrap();
-                let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id, self.lib_slot);
+                let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id);
                 drop(reply.send(Ok(result)));
                 None
             }
@@ -1579,10 +1735,8 @@ where
                     withdraw_threshold,
                 );
                 s.submit_other(signed_tx.clone());
-                let checkpoint = build_checkpoint(s, self.last_msg_id, self.lib_slot);
                 let result = PublishResult {
                     inscription_id: signed_tx.mantle_tx.hash(),
-                    checkpoint,
                 };
                 drop(reply.send(Ok((signed_tx, result))));
                 self.publish_channel_view();
@@ -1597,7 +1751,7 @@ where
             {
                 Ok(event) => event,
                 Err(e) => {
-                    warn!("publish_atomic_withdraw failed: {e}");
+                    warn!(target: TARGET, "publish_atomic_withdraw failed: {e}");
                     None
                 }
             },
@@ -1786,7 +1940,7 @@ fn reject_not_ready(request: ActorRequest) {
     };
     match request {
         ActorRequest::PublishMessage { .. } | ActorRequest::PublishAtomicWithdraw { .. } => {
-            warn!("Publish dropped: sequencer not yet ready");
+            warn!(target: TARGET, "Publish dropped: sequencer not yet ready");
         }
         ActorRequest::ChannelConfig { reply, .. } => drop(reply.send(Err(err()))),
         ActorRequest::PrepareTx { reply, .. } => drop(reply.send(Err(err()))),
@@ -1800,17 +1954,11 @@ fn submit_signed_tx(
     tx: SignedMantleTx,
     msg_id: MsgId,
     last_msg_id: &mut MsgId,
-    lib_slot: Slot,
 ) -> PublishResult {
     let id = tx.mantle_tx.hash();
     state.submit_other(tx);
     *last_msg_id = msg_id;
-
-    let checkpoint = build_checkpoint(state, *last_msg_id, lib_slot);
-    PublishResult {
-        inscription_id: id,
-        checkpoint,
-    }
+    PublishResult { inscription_id: id }
 }
 
 fn build_checkpoint(state: &TxState, last_msg_id: MsgId, lib_slot: Slot) -> SequencerCheckpoint {
@@ -1887,6 +2035,7 @@ fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: Chann
     }
     if multi_inscribe {
         error!(
+            target: TARGET,
             tx_hash = %hex::encode(tx.mantle_tx.hash().0),
             "restore_pending_tx: tx has multiple ChannelInscribe ops for our channel; \
              tracking as opaque (no bundle lineage)"
@@ -2048,7 +2197,7 @@ fn orphan_from_shed(entry: PublishedTx) -> Option<OrphanedTx> {
         PublishedTx::Inscription(i) => Some(OrphanedTx::Inscription(i)),
         PublishedTx::AtomicWithdraw(a) => Some(OrphanedTx::AtomicWithdraw(a)),
         PublishedTx::Deposit(_) => {
-            debug!("  orphaned: unexpected Deposit entry in pending; skipping");
+            debug!(target: TARGET, "  orphaned: unexpected Deposit entry in pending; skipping");
             None
         }
     }
@@ -2094,7 +2243,7 @@ where
         .immutable_blocks(Slot::from(from_slot), Slot::from(to_slot))
         .await
         .map_err(|e| {
-            error!(?from_slot, ?to_slot, ?e, "Failed to fetch immutable blocks");
+            error!(target: TARGET, ?from_slot, ?to_slot, ?e, "Failed to fetch immutable blocks");
             Error::Network(format!(
                 "failed to fetch blocks (slots {from_slot}..{to_slot}): {e}"
             ))
@@ -2174,6 +2323,7 @@ where
         Ok(Some(events)) => events,
         Ok(None) => {
             error!(
+                target: TARGET,
                 ?block_id,
                 "Events endpoint returned no body for a block with a channel deposit; \
                  events should be atomically visible with the block"
@@ -2183,7 +2333,7 @@ where
             )));
         }
         Err(err) => {
-            error!(?block_id, ?err, "Failed to fetch events for block");
+            error!(target: TARGET, ?block_id, ?err, "Failed to fetch events for block");
             return Err(Error::Network(format!(
                 "failed to fetch events for block {block_id}: {err}"
             )));
@@ -2194,6 +2344,7 @@ where
     for key in &expected {
         if !amounts.contains_key(key) {
             error!(
+                target: TARGET,
                 ?block_id,
                 tx_hash = ?key.0,
                 op_id = ?key.1,
@@ -2309,13 +2460,13 @@ async fn backfill_canonical<Node>(
 ) where
     Node: adapter::Node + Sync,
 {
-    debug!("Backfilling canonical chain from {:?}", missing_parent);
+    debug!(target: TARGET, "Backfilling canonical chain from {:?}", missing_parent);
     let blocks = walk_back_to_known(state, missing_parent, node).await;
     let lib = state.lib();
     for block in &blocks {
         apply_backfilled_block(state, block, channel_id, lib);
     }
-    debug!("Canonical backfill complete");
+    debug!(target: TARGET, "Canonical backfill complete");
 }
 
 /// Walk backwards from `from` until a block the state already knows about (or
@@ -2340,11 +2491,12 @@ where
                 current = parent;
             }
             Ok(None) => {
-                warn!("Block {:?} not found during canonical backfill", current);
+                warn!(target: TARGET, "Block {:?} not found during canonical backfill", current);
                 break;
             }
             Err(e) => {
                 warn!(
+                    target: TARGET,
                     "Failed to fetch block {:?} during canonical backfill: {e}",
                     current
                 );
@@ -2419,7 +2571,7 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
                     tx_hash,
                     parent_msg,
                     this_msg: config.id(),
-                    payload: Inscription::empty(),
+                    payload: [].into(),
                 };
                 last_in_block = Some(info.this_msg);
                 items.push(info);
@@ -2562,7 +2714,6 @@ fn sign_tx(tx_hash: TxHash, signing_key: &Ed25519Key) -> Ed25519Signature {
 
 #[cfg(test)]
 mod tests {
-
     use async_trait::async_trait;
     use lb_common_http_client::{
         ApiBlock, ApiHeader, BlockInfo, ChainServiceMode, CryptarchiaInfo, State,
@@ -2571,6 +2722,7 @@ mod tests {
         header::ContentId,
         mantle::{
             Note, Utxo,
+            ledger::Inputs,
             ops::channel::deposit::{DepositOp, Metadata},
         },
         proofs::leader_proof::Groth16LeaderProof,
@@ -2607,7 +2759,10 @@ mod tests {
 
         // Drive sequencer until ready
         loop {
-            if matches!(sequencer.next_event().await, Some(Event::Ready)) {
+            if matches!(
+                sequencer.next_event().await,
+                Some(Event::Readiness { ready: true })
+            ) {
                 break;
             }
         }
@@ -2616,7 +2771,7 @@ mod tests {
         let (sk, utxo) = utxo_with_sk();
         let deposit_op = DepositOp {
             channel_id,
-            inputs: [utxo.id()].into(),
+            inputs: Inputs::new([utxo.id()]),
             metadata: b"to Alice".into(),
         };
 
@@ -2659,7 +2814,7 @@ mod tests {
             }
         };
         assert_eq!(result.inscription_id, signed_tx.mantle_tx.hash());
-        assert_eq!(result.checkpoint.last_msg_id, msg_id);
+        assert_eq!(sequencer.checkpoint().unwrap().last_msg_id, msg_id);
         assert_eq!(posted_txs.recv().await.unwrap(), signed_tx);
     }
 
@@ -2680,7 +2835,7 @@ mod tests {
         use lb_groth16::Fr;
         DepositOp {
             channel_id,
-            inputs: [NoteId::from(Fr::from(input_seed))].into(),
+            inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
             metadata,
         }
     }
@@ -2826,7 +2981,7 @@ mod tests {
         // finalized view, not a "what we tracked locally" view.
         let channel_id = ChannelId::from([0; 32]);
         let other_channel = ChannelId::from([9; 32]);
-        let outputs = Outputs::new(vec![Note::new(
+        let outputs = Outputs::new([Note::new(
             42,
             ZkKey::from(BigUint::from(0u64)).to_public_key(),
         )]);
@@ -2901,7 +3056,7 @@ mod tests {
         // withdraws field populated, so on orphan we emit
         // OrphanedTx::AtomicWithdraw (not Inscription).
         let channel_id = ChannelId::from([1u8; 32]);
-        let outputs = Outputs::new(vec![Note::new(
+        let outputs = Outputs::new([Note::new(
             5,
             ZkKey::from(BigUint::from(0u64)).to_public_key(),
         )]);
@@ -3294,7 +3449,7 @@ mod tests {
         let mut finalized_items: Vec<FinalizedTx> = Vec::new();
         loop {
             match sequencer.next_event().await {
-                Some(Event::Ready) => break,
+                Some(Event::Readiness { ready: true }) => break,
                 Some(Event::TxsFinalized { items }) => finalized_items.extend(items),
                 Some(_) | None => {}
             }

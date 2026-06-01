@@ -320,6 +320,9 @@ fn wallet_transaction_error(error: WalletTransactionError) -> StepError {
         WalletTransactionError::Gas(error) => StepError::LogicalError {
             message: error.to_string(),
         },
+        WalletTransactionError::Builder(error) => StepError::LogicalError {
+            message: error.to_string(),
+        },
         WalletTransactionError::OutputTotalOverflow => StepError::LogicalError {
             message: error.to_string(),
         },

@@ -20,14 +20,15 @@ ignored = [
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
-futures     = { workspace = true }
-log         = { workspace = true }
-overwatch   = { features = ["derive"], workspace = true }
-serde       = { workspace = true }
-serde_json  = { features = ["alloc"], workspace = true }
-thiserror   = { workspace = true }
-tracing     = { workspace = true }
+async-trait    = { workspace = true }
+futures        = { workspace = true }
+lb-log-targets = { workspace = true }
+log            = { workspace = true }
+overwatch      = { features = ["derive"], workspace = true }
+serde          = { workspace = true }
+serde_json     = { features = ["alloc"], workspace = true }
+thiserror      = { workspace = true }
+tracing        = { workspace = true }
 
 [dev-dependencies]
 overwatch-derive = { workspace = true }

@@ -1,15 +1,26 @@
-use std::collections::HashSet;
-
-pub mod api;
-pub mod blend;
-pub mod libp2p;
-pub mod mempool;
-pub mod network_service;
-pub mod storage;
-pub mod system_sig;
-pub mod time;
+use lb_log_targets_macros::log_target_modules;
 
 pub const ROOT: &str = "logos_blockchain";
+
+log_target_modules! {
+    api,
+    blend,
+    http_client,
+    kms,
+    libp2p,
+    mantle,
+    mempool,
+    network_service,
+    node,
+    proofs,
+    storage,
+    system_sig,
+    time,
+    tracing,
+    utils,
+    wallet,
+    zone_sdk,
+}
 
 /// Log target namespaces follow Rust-style `module::path` segments.
 const TARGET_NAMESPACE_DELIMITER: &str = "::";
@@ -28,20 +39,6 @@ fn target_root(target: &str) -> &str {
         .split(TARGET_NAMESPACE_DELIMITER)
         .next()
         .unwrap_or(target)
-}
-
-#[must_use]
-pub fn all_targets() -> HashSet<&'static str> {
-    std::iter::once(ROOT)
-        .chain(api::all_targets())
-        .chain(blend::all_targets())
-        .chain(libp2p::all_targets())
-        .chain(mempool::all_targets())
-        .chain(network_service::all_targets())
-        .chain(storage::all_targets())
-        .chain(system_sig::all_targets())
-        .chain(time::all_targets())
-        .collect()
 }
 
 #[must_use]

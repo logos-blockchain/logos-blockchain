@@ -27,11 +27,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Inject Variables into Template
         run: |
           cp testnet/ceremony/genesis/$LB_TARGET_ENV/deployment-template.yaml \

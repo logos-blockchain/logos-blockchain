@@ -431,6 +431,17 @@ impl ZoneState {
             })
     }
 
+    #[must_use]
+    pub fn checkpoint_receiver(
+        &self,
+        sequencer_alias: &str,
+    ) -> Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>> {
+        self.runtimes
+            .get(sequencer_alias)
+            .and_then(|runtime| runtime.checkpoint_rx.as_ref())
+            .cloned()
+    }
+
     pub fn resolve_checkpoint(
         &self,
         alias: impl AsRef<str>,

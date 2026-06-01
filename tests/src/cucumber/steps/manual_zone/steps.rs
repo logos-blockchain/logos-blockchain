@@ -30,7 +30,7 @@ use super::{
         wait_for_exact_indexed_payload_count, wait_for_finalized_deposit_via_sequencer,
         wait_for_finalized_withdraw_via_sequencer, wait_for_lib_advance,
         wait_for_published_payload, wait_for_published_payloads, wait_for_transactions_finalized,
-        wait_for_withdraw,
+        wait_for_turn_to_write, wait_for_withdraw,
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
@@ -356,7 +356,7 @@ async fn step_publish_single_zone_message_for_sequencer_on_turn(
     let mut view_rx = handle.subscribe_channel_view();
 
     wait_for_channel_view(&mut view_rx, Duration::from_mins(3), |view| {
-        view.is_our_turn
+        view.our_turn_to_write
             && view.authorized_key_index.is_some()
             && view.authorized_key_index == view.own_key_index
     })
@@ -936,7 +936,7 @@ async fn wait_for_sequencing_state(
         move |view| {
             view.own_key_index == Some(own_key_index as u16)
                 && view.authorized_key_index.is_some()
-                && view.is_our_turn == is_our_turn
+                && view.our_turn_to_write == is_our_turn
                 && (is_our_turn || view.authorized_key_index != view.own_key_index)
                 && (!is_our_turn || view.authorized_key_index == Some(own_key_index as u16))
                 && view.pending_publish_txs == pending_publish_txs
@@ -944,6 +944,28 @@ async fn wait_for_sequencing_state(
     )
     .await
     .map_err(|error| zone_step_error(step, &error))?;
+
+    Ok(())
+}
+
+#[cucumber::then(
+    expr = "sequencer {string} is notified it is their turn to write in {int} seconds"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_sequencer_notified_turn_to_write(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
+    let mut turn_rx = handle.subscribe_turn_to_write();
+    wait_for_turn_to_write(&mut turn_rx, Duration::from_secs(timeout_seconds))
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
 
     Ok(())
 }
@@ -962,7 +984,7 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
     let handle = log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
     let mut view_rx = handle.subscribe_channel_view();
     wait_for_channel_view(&mut view_rx, Duration::from_secs(timeout_seconds), |view| {
-        view.is_our_turn
+        view.our_turn_to_write
     })
     .await
     .map_err(|error| zone_step_error(step, &error))?;

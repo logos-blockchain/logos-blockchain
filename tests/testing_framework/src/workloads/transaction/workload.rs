@@ -286,8 +286,11 @@ fn build_wallet_transaction(
 
     let provisional_tx = MantleTxBuilder::new(tx_context.clone())
         .add_ledger_input(input.utxo)
+        .map_err(|err| format!("failed to add provisional input: {err}"))?
         .add_ledger_output(Note::new(input.utxo.note.value, receiver))
-        .build();
+        .map_err(|err| format!("failed to add provisional output: {err}"))?
+        .build()
+        .map_err(|err| format!("failed to build provisional tx: {err}"))?;
 
     let fee = provisional_tx
         .total_gas_cost::<MainnetGasConstants>(gas_context)?
@@ -301,8 +304,11 @@ fn build_wallet_transaction(
 
     let tx = MantleTxBuilder::new(tx_context)
         .add_ledger_input(input.utxo)
+        .map_err(|err| format!("failed to add input: {err}"))?
         .add_ledger_output(Note::new(output_value, receiver))
-        .build();
+        .map_err(|err| format!("failed to add output: {err}"))?
+        .build()
+        .map_err(|err| format!("failed to build tx: {err}"))?;
 
     let signature = ZkKey::multi_sign(
         slice::from_ref(&input.account.secret_key),

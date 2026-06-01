@@ -17,6 +17,7 @@ use lb_key_management_system_service::{
     keys::{Key, ZkPublicKey},
 };
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
+use lb_log_targets::node;
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
     logging::local::{AppenderType, CompressionType, RetentionType, RollingConfig, RotationType},
@@ -44,6 +45,8 @@ use crate::config::{
         logger::{FileConfig, GelfConfig},
     },
 };
+
+const LOG_TARGET: &str = node::CONFIG;
 
 pub mod api;
 pub mod blend;
@@ -679,6 +682,7 @@ fn apply_unknown_keys_strategy<Config>(
         (ignored_fields, _) if ignored_fields.is_empty() => Ok(config),
         (ignored_fields, OnUnknownKeys::Warn) => {
             warn!(
+                target: LOG_TARGET,
                 "The following unrecognized fields were found in the config: {ignored_fields:?}."
             );
             Ok(config)

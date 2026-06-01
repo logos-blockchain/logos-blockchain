@@ -2,13 +2,14 @@ use std::fmt::{Debug, Display};
 
 use axum::{Json, extract::State, response::Response};
 use lb_api_service::http::DynError;
+use lb_log_targets::node;
 use lb_tracing::filter::envfilter::EnvFilterConfig;
 use lb_tracing_service::TracingMessage;
 use overwatch::{overwatch::handle::OverwatchHandle, services::AsServiceId};
 
 use crate::{TracingService, make_request_and_return_response};
 
-const FILTER_RELOAD_LOG_TARGET: &str = "tracing_filter_reload";
+const LOG_TARGET: &str = node::api::TRACING;
 
 pub async fn reload_tracing_filter<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
@@ -29,7 +30,7 @@ where
 {
     request_filter_reload(handle, filter).await?;
 
-    tracing::debug!(target: FILTER_RELOAD_LOG_TARGET, "Tracing filter reloaded");
+    tracing::debug!(target: LOG_TARGET, "Tracing filter reloaded");
 
     Ok(())
 }

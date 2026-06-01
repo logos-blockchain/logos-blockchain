@@ -1,5 +1,6 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
-use tracing::info;
+use lb_log_targets::mantle;
+use tracing::debug;
 
 use super::{SDPActiveOp, SdpError};
 use crate::{
@@ -10,6 +11,8 @@ use crate::{
         ledger::{Declarations, Operation},
     },
 };
+
+const LOG_TARGET: &str = mantle::sdp::message::ACTIVE;
 
 pub struct SDPActiveValidationContext<'a> {
     pub declarations: &'a Declarations,
@@ -63,7 +66,8 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
 
         declaration.active = ctx.block_number;
         declaration.nonce = self.nonce;
-        info!(
+        debug!(
+            target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
             active = declaration.active,
             nonce = declaration.nonce,

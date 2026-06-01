@@ -16,6 +16,7 @@ pub use chain_inputs::{PoQChainInputs, PoQChainInputsData, PoQInputsFromDataErro
 pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData};
 pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
+use lb_log_targets::proofs;
 pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use tracing::error;
 pub use wallet_inputs::{AgedNotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData};
@@ -24,6 +25,8 @@ use crate::{inputs::PoQVerifierInputJson, proving_key::POQ_PROVING_KEY_PATH};
 
 pub type PoQProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
+
+const LOG_TARGET: &str = proofs::POQ;
 
 ///
 /// This function generates a proof for the given set of inputs.
@@ -53,7 +56,7 @@ pub fn prove(inputs: PoQWitnessInputs) -> Result<(PoQProof, PoQVerifierInput), P
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
-            error!("Fatal CompressedGroth16Proof::try_from: {e}");
+            error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
             // We panic here because this should never happen, and if it does, it's a
             // critical error that we want to be immediately visible during
             // development and testing.

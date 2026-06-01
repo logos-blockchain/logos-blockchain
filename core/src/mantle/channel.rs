@@ -433,7 +433,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new([Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
@@ -465,7 +465,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new([Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),
@@ -490,7 +490,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![Note {
+            outputs: Outputs::new([Note {
                 value: 6,
                 pk: ZkPublicKey::zero(),
             }]),

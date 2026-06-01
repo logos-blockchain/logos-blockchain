@@ -1,6 +1,6 @@
 //! Shared error type for wallet transaction preparation.
 
-use lb_core::mantle::{NoteId, VerificationError, gas::GasOverflow};
+use lb_core::mantle::{NoteId, VerificationError, gas::GasOverflow, tx_builder::TxBuilderError};
 use lb_wallet::WalletError;
 use lb_zksign::ZkSignError;
 use thiserror::Error;
@@ -19,6 +19,8 @@ pub enum WalletTransactionError {
     Verification(#[from] VerificationError),
     #[error(transparent)]
     Gas(#[from] GasOverflow),
+    #[error(transparent)]
+    Builder(#[from] TxBuilderError),
     #[error("wallet transaction output total overflowed u64")]
     OutputTotalOverflow,
 }

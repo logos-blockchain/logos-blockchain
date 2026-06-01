@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 pub use lb_key_management_system_keys::keys;
 use lb_key_management_system_keys::keys::secured_key::SecuredKey;
 pub use lb_key_management_system_operators as operators;
-use log::error;
+use lb_log_targets::kms;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
     services::{
@@ -11,6 +11,7 @@ use overwatch::{
         state::{NoOperator, NoState},
     },
 };
+use tracing::{debug, error, info};
 
 use crate::{
     backend::KMSBackend,
@@ -21,6 +22,8 @@ pub mod api;
 pub mod backend;
 pub mod message;
 mod metrics;
+
+const LOG_TARGET: &str = kms::SERVICE;
 
 pub struct KMSService<Backend, RuntimeServiceId>
 where
@@ -88,7 +91,8 @@ where
         } = self;
 
         status_updater.notify_ready();
-        tracing::info!(
+        info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
@@ -109,6 +113,10 @@ where
     Backend::Settings: Clone,
     Backend::Error: Debug,
 {
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn handle_kms_message(message: KMSMessage<Backend>, backend: &mut Backend) {
         match message {
             KMSMessage::Register {
@@ -122,14 +130,20 @@ where
                     metrics::kms_register_failures();
 
                     if reply_channel.send(Err(e)).is_err() {
-                        error!("Could not send backend key registration error to caller.");
+                        debug!(
+                            target: LOG_TARGET,
+                            "Could not send backend key registration error to caller."
+                        );
                     }
                     return;
                 }
 
                 let pk_bytes_result = backend.public_key(&key_id).map(|pk| (key_id.clone(), pk));
                 if reply_channel.send(pk_bytes_result).is_err() {
-                    error!("Could not reply to the public key request channel");
+                    debug!(
+                        target: LOG_TARGET,
+                        "Could not reply to the public key request channel"
+                    );
                 } else {
                     metrics::kms_register_success();
                 }
@@ -142,7 +156,10 @@ where
 
                 let pk_bytes_result = backend.public_key(&key_id);
                 if reply_channel.send(pk_bytes_result).is_err() {
-                    error!("Could not reply to the public key request channel");
+                    debug!(
+                        target: LOG_TARGET,
+                        "Could not reply to the public key request channel"
+                    );
                 }
             }
             KMSMessage::Sign {
@@ -165,7 +182,10 @@ where
                     }
                 };
                 if reply_channel.send(signature_result).is_err() {
-                    error!("Could not reply to the public key request channel");
+                    debug!(
+                        target: LOG_TARGET,
+                        "Could not reply to the public key request channel"
+                    );
                 }
             }
             KMSMessage::Execute { key_id, operator } => {
@@ -173,7 +193,10 @@ where
                 metrics::kms_execute_requests();
                 drop(backend.execute(&key_id, operator).await.inspect_err(|e| {
                     metrics::kms_execute_failures();
-                    error!("Failed to execute operator with key ID {key_id:?}. Error: {e:?}");
+                    error!(
+                        target: LOG_TARGET,
+                        "Failed to execute operator with key ID {key_id:?}. Error: {e:?}"
+                    );
                 }));
             }
         }

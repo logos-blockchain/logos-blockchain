@@ -3,5 +3,12 @@ use lb_log_targets_macros::log_targets;
 log_targets! {
     root = api;
 
-    http::{MANTLE},
+    http::{
+        MANTLE,
+        PPROF,
+        wallet::{
+            BALANCE,
+            TRANSFER_FUNDS,
+        },
+    },
 }

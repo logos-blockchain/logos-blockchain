@@ -16,10 +16,13 @@ use lb_core::{
     },
 };
 use lb_http_api_common::queries::BlocksStreamQuery;
+use lb_log_targets::zone_sdk;
 use reqwest::Url;
 use tracing::warn;
 
 use crate::{Deposit, Withdraw, ZoneBlock, ZoneMessage};
+
+const TARGET: &str = zone_sdk::ADAPTER;
 
 /// A boxed, pinned, Send stream.
 pub type BoxStream<T> = Pin<Box<dyn Stream<Item = T> + Send>>;
@@ -279,6 +282,7 @@ fn op_to_zone_message(
                 }))
             } else {
                 warn!(
+                    target: TARGET,
                     ?tx_hash,
                     ?op_id,
                     "Deposit op has no matching event in block; skipping"
