@@ -51,10 +51,10 @@ use lb_zone_sdk::{
     adapter::NodeHttpClient as ZoneNodeHttpClient,
     indexer::ZoneIndexer,
     sequencer::{
-        Event, InscriptionId, OrphanedTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
-        SequencerConfig, SequencerHandle, TurnNotification, WithdrawArg, ZoneSequencer,
+        Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx, PublishResult, PublishedTx,
+        SequencerChannelView, SequencerCheckpoint, SequencerConfig, SequencerHandle,
+        TurnNotification, WithdrawArg, ZoneSequencer,
     },
-    state::{FinalizedOp, InscriptionInfo, PublishedTx},
 };
 use rand::{Rng as _, thread_rng};
 use reqwest::Url;

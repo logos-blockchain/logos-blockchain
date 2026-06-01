@@ -1,7 +1,6 @@
 pub mod adapter;
 pub mod indexer;
 pub mod sequencer;
-pub mod state;
 
 pub use lb_common_http_client::{CommonHttpClient, Slot};
 pub use lb_core::mantle::ops::channel::Ed25519PublicKey;

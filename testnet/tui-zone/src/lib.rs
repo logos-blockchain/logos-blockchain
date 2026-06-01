@@ -10,8 +10,7 @@ use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{Event, OrphanedTx, SequencerHandle, ZoneSequencer},
-    state::{FinalizedOp, InscriptionInfo},
+    sequencer::{Event, FinalizedOp, InscriptionInfo, OrphanedTx, SequencerHandle, ZoneSequencer},
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
