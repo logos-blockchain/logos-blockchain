@@ -3,7 +3,7 @@ use std::{collections::HashMap, fmt::Display};
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use futures::{Stream, StreamExt as _, future::ready, stream::iter};
+use futures::Stream;
 use lb_core::{
     header::HeaderId,
     sdp::{ProviderId, ProviderInfo},
@@ -18,7 +18,6 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot};
-use tokio_stream::wrappers::BroadcastStream;
 use tracing::{error, info, trace};
 
 const BROADCAST_CHANNEL_SIZE: usize = 128;
@@ -41,22 +40,14 @@ pub struct BlockInfo {
 #[derivative(Debug)]
 pub enum BlockBroadcastMsg {
     BroadcastFinalizedBlock(BlockInfo),
-    BroadcastBlendProviders(ActiveProviders),
     SubscribeToFinalizedBlocks {
         result_sender: oneshot::Sender<broadcast::Receiver<BlockInfo>>,
-    },
-    SubscribeBlendProviders {
-        #[derivative(Debug = "ignore")]
-        result_sender: oneshot::Sender<ActiveProvidersSubscription>,
     },
 }
 
 pub struct BlockBroadcastService<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     finalized_blocks: broadcast::Sender<BlockInfo>,
-    blend_providers: broadcast::Sender<ActiveProviders>,
-    // For sending latest blend active providers on subscription.
-    last_blend_providers: Option<ActiveProviders>,
 }
 
 impl<RuntimeServiceId> ServiceData for BlockBroadcastService<RuntimeServiceId> {
@@ -76,13 +67,10 @@ where
         _initial_state: Self::State,
     ) -> Result<Self, overwatch::DynError> {
         let (finalized_blocks, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
-        let (blend_providers, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
 
         Ok(Self {
             service_resources_handle,
             finalized_blocks,
-            blend_providers,
-            last_blend_providers: None,
         })
     }
 
@@ -100,12 +88,6 @@ where
                         trace!("No listener for finalized blocks. Not broadcasting. ");
                     }
                 }
-                BlockBroadcastMsg::BroadcastBlendProviders(providers) => {
-                    self.last_blend_providers = Some(providers.clone());
-                    if self.blend_providers.send(providers).is_err() {
-                        trace!("No listener for blend active providers. Not broadcasting. ");
-                    }
-                }
                 BlockBroadcastMsg::SubscribeToFinalizedBlocks { result_sender } => {
                     // TODO: This naively broadcast what was sent from the chain service. In case
                     // of LIB branch change (might happend during bootstrapping), blocks should be
@@ -114,36 +96,9 @@ where
                         error!("Could not subscribe to new blocks channel: {err:?}");
                     }
                 }
-                BlockBroadcastMsg::SubscribeBlendProviders { result_sender } => {
-                    if result_sender
-                        .send(create_active_providers_stream(
-                            self.last_blend_providers.clone(),
-                            &self.blend_providers,
-                        ))
-                        .is_err()
-                    {
-                        error!("Could not subscribe to blend active providers channel.");
-                    }
-                }
             }
         }
 
         Ok(())
     }
-}
-
-/// Create a stream from the current optional, last-processed value and the
-/// broadcast sender.
-///
-/// The stream immediately yields the current value if `Some`, else it will wait
-/// for the first `Ok` value as returned by the broadcast channel wrapper
-/// stream.
-fn create_active_providers_stream(
-    current_value: Option<ActiveProviders>,
-    sender: &broadcast::Sender<ActiveProviders>,
-) -> ActiveProvidersSubscription {
-    Box::pin(
-        iter(current_value)
-            .chain(BroadcastStream::new(sender.subscribe()).filter_map(|item| ready(item.ok()))),
-    )
 }
