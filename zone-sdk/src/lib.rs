@@ -1,3 +1,42 @@
+//! Logos blockchain zone SDK.
+//!
+//! A Rust client for working with a Logos channel. Two subsystems:
+//!
+//! - [`sequencer`] — drive your own sequencer that publishes inscriptions to a
+//!   channel, tracks pending/finalized state, and surfaces chain events.
+//! - [`indexer`] — read-only stream of finalized channel messages, for
+//!   consumers that only need to observe.
+//!
+//! Both subsystems talk to a Logos node through the [`adapter`] module's
+//! [`adapter::Node`] trait; an HTTP implementation is provided as
+//! [`adapter::NodeHttpClient`].
+//!
+//! # Quick start (sequencer)
+//!
+//! ```no_run
+//! use lb_zone_sdk::{
+//!     CommonHttpClient,
+//!     adapter::NodeHttpClient,
+//!     sequencer::{Event, ZoneSequencer},
+//! };
+//! # use lb_core::mantle::ops::channel::ChannelId;
+//! # use lb_key_management_system_service::keys::Ed25519Key;
+//! # async fn run(channel_id: ChannelId, signing_key: Ed25519Key) {
+//! let node = NodeHttpClient::new(CommonHttpClient::new(None), "http://localhost:8080".parse().unwrap());
+//! let (mut sequencer, _handle) = ZoneSequencer::init(channel_id, signing_key, node, None);
+//!
+//! while let Some(event) = sequencer.next_event().await {
+//!     match event {
+//!         Event::Readiness { ready: true } => { /* ready to publish */ }
+//!         Event::TxsFinalized { items } => { /* apply finalized txs */ }
+//!         _ => {}
+//!     }
+//! }
+//! # }
+//! ```
+//!
+//! See the [`sequencer`] module for the full event vocabulary.
+
 pub mod adapter;
 pub mod indexer;
 pub mod sequencer;

@@ -146,12 +146,9 @@ async fn handle_event(
             ui::prompt();
         }
         Event::Published { tx } => {
-            // `publish_*` APIs only emit inscription / atomic-withdraw — never
-            // a deposit — so `inscription()` is `Some` here in practice.
-            if let Some(info) = tx.inscription() {
-                debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
-                state.on_published(info);
-            }
+            let info = tx.inscription();
+            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
+            state.on_published(info);
             ui::render_state(state);
             ui::prompt();
         }

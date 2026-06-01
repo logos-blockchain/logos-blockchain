@@ -372,9 +372,7 @@ pub fn start_balance_aware_policy(
         loop {
             match sequencer.next_event().await {
                 Some(Event::Published { tx, .. }) => {
-                    if let Some(info) = tx.inscription() {
-                        balances.record_applied_payload(&info.payload);
-                    }
+                    balances.record_applied_payload(&tx.inscription().payload);
                 }
                 Some(Event::ChannelUpdate { orphaned, adopted }) => {
                     let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
@@ -414,11 +412,9 @@ pub fn start_sorted_conflict_policy(
         loop {
             match sequencer.next_event().await {
                 Some(Event::Published { tx, .. }) => {
-                    if let Some(info) = tx.inscription() {
-                        sorted_state
-                            .record_published_payload(info.payload.clone())
-                            .await;
-                    }
+                    sorted_state
+                        .record_published_payload(tx.inscription().payload.clone())
+                        .await;
                 }
                 Some(Event::ChannelUpdate { orphaned, adopted }) => {
                     sorted_state.record_adoptions(&adopted).await;
@@ -695,8 +691,7 @@ async fn wait_for_published_event(
     timeout(deadline.remaining()?, async {
         while let Some(event) = sequencer_events.recv().await {
             if let Event::Published { tx } = event
-                && let Some(info) = tx.inscription()
-                && info.payload.as_slice() == data
+                && tx.inscription().payload.as_slice() == data
             {
                 return Ok(PublishResult {
                     inscription_id: tx.tx_hash(),
@@ -737,10 +732,7 @@ pub async fn wait_for_published_payloads(
             let Event::Published { tx } = event else {
                 continue;
             };
-            let Some(info) = tx.inscription() else {
-                continue;
-            };
-            let payload = info.payload.as_slice();
+            let payload = tx.inscription().payload.as_slice();
             let Some(index) = data.iter().enumerate().find_map(|(index, expected)| {
                 (results[index].is_none() && payload == expected.as_slice()).then_some(index)
             }) else {
@@ -1476,10 +1468,7 @@ pub async fn publish_atomic_zone_withdraw(
             let Event::Published { tx } = event else {
                 continue;
             };
-            let Some(info) = tx.inscription() else {
-                continue;
-            };
-            if info.payload != inscription_data {
+            if tx.inscription().payload != inscription_data {
                 continue;
             }
             let PublishedTx::AtomicWithdraw(info) = *tx else {
