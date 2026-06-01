@@ -20,7 +20,6 @@ use crate::api::backend::HeaderIdStream;
 pub trait StorageChainApi {
     type Error: Error + Send + Sync + Debug + 'static;
     type Block: Send + Sync;
-    type SdpDeclarations: Send + Sync;
     type Tx: Send + Sync;
     type Events: Send + Sync;
 
@@ -31,7 +30,6 @@ pub trait StorageChainApi {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
-        sdp_declarations: Self::SdpDeclarations,
         events: Self::Events,
     ) -> Result<(), Self::Error>;
 
@@ -44,11 +42,6 @@ pub trait StorageChainApi {
         &mut self,
         header_id: HeaderId,
     ) -> Result<Option<HeaderId>, Self::Error>;
-
-    async fn get_sdp_declarations(
-        &mut self,
-        header_id: HeaderId,
-    ) -> Result<Option<Self::SdpDeclarations>, Self::Error>;
 
     async fn get_block_events(
         &mut self,

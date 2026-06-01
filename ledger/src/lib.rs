@@ -28,7 +28,6 @@ use lb_core::{
         tx::{GasPrices, MantleTxContext, MantleTxGasContext},
     },
     proofs::leader_proof,
-    sdp::Declarations,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{Field as _, Fr};
@@ -505,11 +504,6 @@ impl LedgerState {
     #[must_use]
     pub const fn mantle_ledger(&self) -> &MantleLedger {
         &self.mantle_ledger
-    }
-
-    #[must_use]
-    pub fn sdp_declarations(&self) -> Declarations {
-        self.mantle_ledger.sdp_declarations()
     }
 
     #[must_use]

@@ -30,7 +30,6 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: <Backend as StorageChainApi>::Block,
-        sdp_declarations: <Backend as StorageChainApi>::SdpDeclarations,
         events: <Backend as StorageChainApi>::Events,
     },
     RemoveBlock {
@@ -40,10 +39,6 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
     GetBlockParent {
         header_id: HeaderId,
         response_tx: Sender<Option<HeaderId>>,
-    },
-    GetSdpDeclarations {
-        header_id: HeaderId,
-        response_tx: Sender<Option<<Backend as StorageChainApi>::SdpDeclarations>>,
     },
     GetBlockEvents {
         header_id: HeaderId,
@@ -92,19 +87,8 @@ where
                 header_id,
                 parent_id,
                 block,
-                sdp_declarations,
                 events,
-            } => {
-                handle_store_block(
-                    backend,
-                    header_id,
-                    parent_id,
-                    block,
-                    sdp_declarations,
-                    events,
-                )
-                .await
-            }
+            } => handle_store_block(backend, header_id, parent_id, block, events).await,
             Self::RemoveBlock {
                 header_id,
                 response_tx,
@@ -113,10 +97,6 @@ where
                 header_id,
                 response_tx,
             } => handle_get_block_parent(backend, header_id, response_tx).await,
-            Self::GetSdpDeclarations {
-                header_id,
-                response_tx,
-            } => handle_get_sdp_declarations(backend, header_id, response_tx).await,
             Self::GetBlockEvents {
                 header_id,
                 response_tx,
@@ -180,11 +160,10 @@ async fn handle_store_block<Backend: StorageBackend>(
     header_id: HeaderId,
     parent_id: HeaderId,
     block: Backend::Block,
-    sdp_declarations: Backend::SdpDeclarations,
     events: Backend::Events,
 ) -> Result<(), StorageServiceError> {
     backend
-        .store_block(header_id, parent_id, block, sdp_declarations, events)
+        .store_block(header_id, parent_id, block, events)
         .await
         .map_err(|e| StorageServiceError::BackendError(e.into()))
 }
@@ -203,27 +182,6 @@ async fn handle_get_block_parent<Backend: StorageBackend>(
         return Err(StorageServiceError::ReplyError {
             message: format!(
                 "Failed to send reply for get block parent request by header_id: {header_id}"
-            ),
-        });
-    }
-
-    Ok(())
-}
-
-async fn handle_get_sdp_declarations<Backend: StorageBackend>(
-    backend: &mut Backend,
-    header_id: HeaderId,
-    response_tx: Sender<Option<Backend::SdpDeclarations>>,
-) -> Result<(), StorageServiceError> {
-    let result = backend
-        .get_sdp_declarations(header_id)
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
-
-    if response_tx.send(result).is_err() {
-        return Err(StorageServiceError::ReplyError {
-            message: format!(
-                "Failed to send reply for get SDP declarations request for {header_id:?}"
             ),
         });
     }
@@ -355,7 +313,6 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: <Api as StorageChainApi>::Block,
-        sdp_declarations: <Api as StorageChainApi>::SdpDeclarations,
         events: <Api as StorageChainApi>::Events,
     ) -> Self {
         Self::Api {
@@ -363,7 +320,6 @@ impl<Api: StorageBackend> StorageMsg<Api> {
                 header_id,
                 parent_id,
                 block,
-                sdp_declarations,
                 events,
             }),
         }
@@ -376,19 +332,6 @@ impl<Api: StorageBackend> StorageMsg<Api> {
     ) -> Self {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::GetBlockParent {
-                header_id,
-                response_tx,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn get_sdp_declarations_request(
-        header_id: HeaderId,
-        response_tx: Sender<Option<<Api as StorageChainApi>::SdpDeclarations>>,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::GetSdpDeclarations {
                 header_id,
                 response_tx,
             }),

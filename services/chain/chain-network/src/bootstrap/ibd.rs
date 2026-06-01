@@ -432,7 +432,7 @@ mod tests {
 
     use lb_core::{
         block::Proposal,
-        sdp::{Declarations, MinStake, ServiceParameters, ServiceType},
+        sdp::{MinStake, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::{EpochConfig, Slot};
     use lb_ledger::{
@@ -1111,7 +1111,6 @@ mod tests {
             [GENESIS_ID; 32].into(),
             LedgerState::from_utxos(empty(), &ledger_config),
             [GENESIS_ID; 32].into(),
-            Declarations::default(),
             ledger_config,
             lb_cryptarchia_engine::State::Bootstrapping,
             0.into(),

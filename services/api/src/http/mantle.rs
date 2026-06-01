@@ -13,7 +13,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
-    sdp::{Declaration, Declarations},
+    sdp::Declaration,
 };
 use lb_log_targets::api;
 use lb_storage_service::{
@@ -227,8 +227,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     ConsensusService: ServiceData<Message = ConsensusMsg<Transaction>>,
@@ -327,8 +325,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -409,8 +405,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -524,8 +518,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -570,8 +562,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -752,8 +742,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -809,8 +797,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -855,8 +841,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -899,8 +883,6 @@ where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     <StorageBackend as StorageChainApi>::Block:
         TryFrom<Block<Transaction>> + TryInto<Block<Transaction>>,
-    <StorageBackend as StorageChainApi>::SdpDeclarations:
-        TryFrom<Declarations> + TryInto<Declarations>,
     <StorageBackend as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <StorageBackend as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     RuntimeServiceId: Debug
@@ -942,7 +924,7 @@ where
         .map_err(|(e, _)| e)?;
 
     let declarations = receiver
-        .await?
+        .await??
         .into_iter()
         .map(|(_, declaration)| declaration)
         .collect();

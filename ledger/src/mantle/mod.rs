@@ -24,7 +24,7 @@ use lb_core::{
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-    sdp::{Declarations, locked_notes::LockedNotes},
+    sdp::locked_notes::LockedNotes,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -121,11 +121,6 @@ impl LedgerState {
     #[must_use]
     pub fn update_channels(self, channels: channel::Channels) -> Self {
         Self { channels, ..self }
-    }
-
-    #[must_use]
-    pub fn sdp_declarations(&self) -> Declarations {
-        self.sdp.declarations()
     }
 
     /// Get the root of the voucher commitments snapshot.

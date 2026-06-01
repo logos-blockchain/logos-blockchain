@@ -15,7 +15,6 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 pub trait StorageAdapter<RuntimeServiceId> {
     type Backend: StorageBackend + Send + Sync + 'static;
     type Block: Send;
-    type SdpDeclarations: Send;
     type Tx: Send;
     type Events: Send;
 
@@ -38,16 +37,10 @@ pub trait StorageAdapter<RuntimeServiceId> {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
-        sdp_declarations: Self::SdpDeclarations,
         events: Self::Events,
     ) -> Result<(), overwatch::DynError>;
 
     async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId>;
-
-    async fn sdp_declarations_at(
-        &self,
-        block: HeaderId,
-    ) -> Result<Option<Self::SdpDeclarations>, overwatch::DynError>;
 
     /// Returns a stream of [`Self::Block`]s starting from the block with
     /// `from_descendant` (inclusive) until no parent block is found.

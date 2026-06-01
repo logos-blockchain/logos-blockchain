@@ -1,6 +1,3 @@
-mod node;
-mod sdp;
-
 use std::{
     collections::{HashMap, HashSet},
     fmt::{self, Display},
@@ -16,7 +13,7 @@ use lb_core::{
         ops::leader_claim::{VoucherCm, VoucherSecret},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic, check_winning},
-    sdp::{Declarations, ServiceParameters},
+    sdp::ServiceParameters,
 };
 use lb_cryptarchia_engine::{EpochConfig, Slot};
 use lb_cryptarchia_sync::HeaderId;
@@ -56,7 +53,6 @@ fn cryptarchia_switch_to_online() {
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
-        Declarations::default(),
         config,
         lb_cryptarchia_engine::State::Bootstrapping,
         Slot::new(0),
@@ -139,7 +135,6 @@ async fn get_block_ids() {
         genesis_id,
         LedgerState::from_utxos([utxo], &config),
         genesis_id,
-        Declarations::default(),
         config,
         lb_cryptarchia_engine::State::Online,
         Slot::genesis(),

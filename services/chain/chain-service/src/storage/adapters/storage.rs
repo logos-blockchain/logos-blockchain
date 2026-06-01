@@ -12,7 +12,6 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{Transaction, TxHash},
-    sdp::Declarations,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_storage_service::{
@@ -51,7 +50,6 @@ impl<Storage, Tx, RuntimeServiceId> StorageAdapterTrait<RuntimeServiceId>
 where
     Storage: StorageBackend + Send + Sync + 'static,
     <Storage as StorageChainApi>::Block: TryFrom<Block<Tx>> + TryInto<Block<Tx>>,
-    <Storage as StorageChainApi>::SdpDeclarations: TryFrom<Declarations> + TryInto<Declarations>,
     <Storage as StorageChainApi>::Tx: From<Bytes> + AsRef<[u8]>,
     <Storage as StorageChainApi>::Events: TryFrom<Events> + TryInto<Events>,
     Tx: Clone
@@ -66,7 +64,6 @@ where
 {
     type Backend = Storage;
     type Block = Block<Tx>;
-    type SdpDeclarations = Declarations;
     type Tx = Tx;
     type Events = Events;
 
@@ -103,26 +100,18 @@ where
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
-        sdp_declarations: Self::SdpDeclarations,
         events: Self::Events,
     ) -> Result<(), overwatch::DynError> {
         let block = block
             .try_into()
             .map_err(|_| "Failed to convert block to storage format")?;
-        let sdp_declarations = sdp_declarations
-            .try_into()
-            .map_err(|_| "Failed to convert sdp_declarations to storage format")?;
         let events = events
             .try_into()
             .map_err(|_| "Failed to convert events to storage format")?;
 
         self.storage_relay
             .send(StorageMsg::store_block_request(
-                header_id,
-                parent_id,
-                block,
-                sdp_declarations,
-                events,
+                header_id, parent_id, block, events,
             ))
             .await
             .map_err(|_| "Failed to send store block request to storage relay")?;
@@ -142,29 +131,6 @@ where
             tracing::error!("Failed to receive block parent from storage relay: {e}");
             None
         })
-    }
-
-    async fn sdp_declarations_at(
-        &self,
-        header_id: HeaderId,
-    ) -> Result<Option<Self::SdpDeclarations>, overwatch::DynError> {
-        let (sender, receiver) = oneshot::channel();
-        self.storage_relay
-            .send(StorageMsg::get_sdp_declarations_request(header_id, sender))
-            .await
-            .unwrap();
-
-        let Some(declarations) = receiver
-            .await
-            .map_err(|_| "Failed to receive SDP declarations from storage")?
-        else {
-            return Ok(None);
-        };
-
-        Ok(declarations
-            .try_into()
-            .map(Some)
-            .map_err(|_| "Failed to deserialize SDP declarations from storage")?)
     }
 
     /// Returns a stream of [`Self::Block`]s starting from the block with
@@ -296,14 +262,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZero, str::FromStr as _};
+    use std::num::NonZero;
 
-    use lb_core::{
-        mantle::SignedMantleTx,
-        sdp::{Declaration, DeclarationMessage, Locator, ServiceType},
-    };
-    use lb_groth16::{Field as _, Fr};
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_core::mantle::SignedMantleTx;
     use lb_ledger::LedgerState;
     use lb_storage_service::backends::rocksdb::RocksBackend;
     use tokio::sync::mpsc;
@@ -329,7 +290,6 @@ mod tests {
                     block.header().id(),
                     block.header().parent(),
                     block.clone(),
-                    Declarations::from(HashMap::new()),
                     Events::default(),
                 )
                 .await
@@ -350,69 +310,6 @@ mod tests {
         assert!(storage.blocks(unknown).await.next().await.is_none());
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_sdp_declarations_at_block() {
-        let (blocks, storage, _storage_svc) = build_chain(2).await;
-
-        let decl = DeclarationMessage {
-            service_type: ServiceType::BlendNetwork,
-            locators: Locator::from_str("/ip4/1.1.1.1/udp/7777").unwrap().into(),
-            provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
-            zk_id: ZkKey::zero().to_public_key(),
-            locked_note_id: Fr::ZERO.into(),
-        };
-        let decls_a = Declarations::from(HashMap::new());
-        let decls_b = Declarations::from_iter([(
-            decl.service_type,
-            HashMap::from_iter([(decl.id(), Declaration::new(0.into(), &decl))]),
-        )]);
-        storage
-            .store_block(
-                blocks[0].header().id(),
-                blocks[0].header().parent(),
-                blocks[0].clone(),
-                decls_a.clone(),
-                Events::default(),
-            )
-            .await
-            .unwrap();
-        storage
-            .store_block(
-                blocks[1].header().id(),
-                blocks[1].header().parent(),
-                blocks[1].clone(),
-                decls_b.clone(),
-                Events::default(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            storage
-                .sdp_declarations_at(blocks[0].header().id())
-                .await
-                .unwrap(),
-            Some(decls_a)
-        );
-        assert_eq!(
-            storage
-                .sdp_declarations_at(blocks[1].header().id())
-                .await
-                .unwrap(),
-            Some(decls_b)
-        );
-
-        // Unknown block id yields None
-        let unknown: HeaderId = [99; 32].into();
-        assert!(
-            storage
-                .sdp_declarations_at(unknown)
-                .await
-                .unwrap()
-                .is_none()
-        );
-    }
-
     async fn build_chain(
         num_blocks: usize,
     ) -> (Vec<Block<SignedMantleTx>>, Adapter, StorageHandle) {
@@ -424,7 +321,6 @@ mod tests {
             genesis_id,
             LedgerState::from_utxos([utxo], &config),
             genesis_id,
-            Declarations::default(),
             config,
             lb_cryptarchia_engine::State::Online,
             Slot::genesis(),
