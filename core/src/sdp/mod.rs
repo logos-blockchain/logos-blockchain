@@ -379,12 +379,12 @@ impl ActivityMetadata {
     }
 }
 
-fn parse_session_number(input: &[u8]) -> IResult<&[u8], SessionNumber> {
-    let (input, bytes) = take(size_of::<SessionNumber>()).parse(input)?;
-    let session_bytes: [u8; 8] = bytes
+fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
+    let (input, bytes) = take(size_of::<Epoch>()).parse(input)?;
+    let epoch_bytes: [u8; 4] = bytes
         .try_into()
         .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-    Ok((input, SessionNumber::from_le_bytes(session_bytes)))
+    Ok((input, u32::from_le_bytes(epoch_bytes).into()))
 }
 
 #[cfg(test)]

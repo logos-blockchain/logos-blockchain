@@ -241,6 +241,7 @@ impl LedgerState {
     where
         LeaderProof: leader_proof::LeaderProof,
     {
+        let last_epoch_state = self.cryptarchia_ledger.epoch_state().clone();
         let mut cryptarchia_ledger = self
             .cryptarchia_ledger
             .try_apply_header::<LeaderProof, Id>(
@@ -253,6 +254,7 @@ impl LedgerState {
                 config,
             )?;
         let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
+            &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
             config,

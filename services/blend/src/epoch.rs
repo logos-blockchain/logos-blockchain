@@ -3,18 +3,21 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
+use lb_core::crypto::ZkHash;
 
 #[derive(Clone, Debug)]
 // TODO: Refactor this so that it's a struct with the common fields, and
 // everything case-specific is an enum.
 pub enum MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator> {
-    Empty { epoch: Epoch },
+    Empty { epoch: Epoch, epoch_nonce: ZkHash },
     NonEmpty(Box<CoreEpochInfo<NodeId, CorePoQGenerator>>),
 }
 
-impl<NodeId, CorePoQGenerator> From<Epoch> for MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator> {
-    fn from(epoch: Epoch) -> Self {
-        Self::Empty { epoch }
+impl<NodeId, CorePoQGenerator> From<(Epoch, ZkHash)>
+    for MaybeEmptyCoreEpochInfo<NodeId, CorePoQGenerator>
+{
+    fn from((epoch, epoch_nonce): (Epoch, ZkHash)) -> Self {
+        Self::Empty { epoch, epoch_nonce }
     }
 }
 

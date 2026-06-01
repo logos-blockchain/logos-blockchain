@@ -142,12 +142,15 @@ impl LedgerState {
 
     pub fn try_apply_header(
         mut self,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         voucher: VoucherCm,
         config: &Config,
     ) -> Result<(Self, Vec<Utxo>), Error> {
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
-        let (new_sdp, reward_utxos) = self.sdp.try_apply_header(&config.sdp_config, epoch_state)?;
+        let (new_sdp, reward_utxos) =
+            self.sdp
+                .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
         Ok((self, reward_utxos))
     }

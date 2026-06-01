@@ -386,11 +386,9 @@ pub fn scheduler_epoch_info(public_info: &CoreEpochPublicInfo<NodeId>) -> Schedu
     }
 }
 
-pub fn reward_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward::SessionInfo {
-    reward::SessionInfo::new(
-        // TODO: Change when rewards implement epochs
-        // public_info.epoch,
-        0,
+pub fn reward_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward::EpochInfo {
+    reward::EpochInfo::new(
+        public_info.epoch,
         &public_info.poq_leadership_public_inputs.pol_epoch_nonce,
         public_info
             .membership

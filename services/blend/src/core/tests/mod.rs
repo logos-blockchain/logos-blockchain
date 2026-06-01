@@ -2,7 +2,7 @@ mod utils;
 
 use futures::StreamExt as _;
 use lb_blend::{
-    message::reward::{BlendingToken, SessionBlendingTokenCollector},
+    message::reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::{
         EpochMessageScheduler, epoch::EpochEvent,
@@ -102,7 +102,7 @@ async fn test_handle_incoming_blend_message() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info)),
+        EpochBlendingTokenCollector::new(&reward_session_info(&public_info)),
         None,
         state_updater,
     )
@@ -141,7 +141,7 @@ async fn test_handle_incoming_blend_message() {
     let (_, _, _, _, current_token_collector, _, state_updater) =
         recovery_checkpoint.into_components();
     let (new_token_collector, old_token_collector) =
-        current_token_collector.rotate_session(&reward_session_info(&public_info));
+        current_token_collector.rotate_epoch(&reward_session_info(&public_info));
 
     // Check that decapsulating the same message fails with the new processor
     // but succeeds with the old one. Also, it should be scheduled in the old
@@ -327,7 +327,7 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch_1,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
+        EpochBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
         None,
         state_updater,
     )
@@ -382,14 +382,13 @@ async fn test_handle_epoch_transition_expired() {
     let mut backend_event_receiver = backend.subscribe_to_events();
 
     // Create token collector and collect a token.
-    let mut token_collector =
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info))
-            .rotate_session(&reward_session_info(&new_epoch_info(
-                epoch + 1,
-                membership.clone(),
-                &settings,
-            )))
-            .1;
+    let mut token_collector = EpochBlendingTokenCollector::new(&reward_session_info(&public_info))
+        .rotate_epoch(&reward_session_info(&new_epoch_info(
+            epoch + 1,
+            membership.clone(),
+            &settings,
+        )))
+        .1;
     let token = BlendingToken::new(
         Ed25519Key::from_bytes(&[0; _]).public_key(),
         VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
@@ -417,15 +416,14 @@ async fn test_handle_epoch_transition_expired() {
 
     // Check that an activity proof has been submitted to SDP service.
     let lb_sdp_service::SdpMessage::PostActivity {
-        metadata: ActivityMetadata::Blend(_activity_proof),
+        metadata: ActivityMetadata::Blend(activity_proof),
     } = sdp_relay_receiver
         .try_recv()
         .expect("an activity proof must be submitted")
     else {
         panic!("expected PostActivity with ActivityMetadata::Blend");
     };
-    // TODO: Re-enable when activity proofs are migrated to epochs
-    // assert_eq!(*activity_proof, (&ActivityProof::new(epoch, token)).into());
+    assert_eq!(*activity_proof, (&ActivityProof::new(epoch, token)).into());
 }
 
 #[test_log::test(tokio::test)]
@@ -457,7 +455,7 @@ async fn test_handle_epoch_event() {
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let token_collector = EpochBlendingTokenCollector::new(&reward_session_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
@@ -623,7 +621,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let token_collector = EpochBlendingTokenCollector::new(&reward_session_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
@@ -725,8 +723,7 @@ async fn test_handle_epoch_event_applies_matching_secret_to_new_generator() {
             BlakeRng::from_entropy(),
             scheduler_settings(&settings.time, settings.num_blend_layers),
         );
-        let token_collector =
-            SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+        let token_collector = EpochBlendingTokenCollector::new(&reward_session_info(&public_info));
         let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
             settings.clone(),
             overwatch_handle.clone(),
@@ -813,7 +810,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let token_collector = EpochBlendingTokenCollector::new(&reward_session_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
@@ -825,7 +822,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     // Handle a NewEpoch(Empty) event - empty membership triggers Retiring.
     let empty_epoch = epoch + 1;
     let output = handle_epoch_event(
-        EpochEvent::NewEpoch(empty_epoch.into()),
+        EpochEvent::NewEpoch((empty_epoch, ZkHash::from(1)).into()),
         &settings,
         crypto_processor,
         scheduler,
@@ -879,7 +876,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let token_collector = EpochBlendingTokenCollector::new(&reward_session_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
@@ -1406,7 +1403,7 @@ async fn test_proof_generator_epoch_binding() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch_0,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
+        EpochBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
         None,
         state_updater,
     )
@@ -1436,7 +1433,7 @@ async fn test_proof_generator_epoch_binding() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch_0,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
+        EpochBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
         None,
         state_updater,
     )
@@ -1468,7 +1465,7 @@ async fn test_proof_generator_epoch_binding() {
     );
     let recovery_checkpoint = ServiceState::with_epoch(
         epoch_1,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
+        EpochBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
         None,
         state_updater,
     )
@@ -1527,7 +1524,7 @@ async fn test_initialize_recovers_matching_saved_state() {
 
     // Build a pre-populated saved state with matching epoch and some spent quota.
     let public_info = new_epoch_info(initial_epoch, membership.clone(), &settings);
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let token_collector = EpochBlendingTokenCollector::new(&reward_session_info(&public_info));
     let saved_state =
         ServiceState::with_epoch(initial_epoch, token_collector, None, state_updater.clone())
             .unwrap();
@@ -1593,7 +1590,7 @@ async fn test_initialize_recovers_matching_saved_state() {
     // Build a saved state for a *different* epoch (epoch 99) with spent quota.
     let stale_public_info = new_epoch_info(99.into(), membership.clone(), &settings);
     let stale_token_collector =
-        SessionBlendingTokenCollector::new(&reward_session_info(&stale_public_info));
+        EpochBlendingTokenCollector::new(&reward_session_info(&stale_public_info));
     let stale_state = ServiceState::with_epoch(
         99.into(),
         stale_token_collector,

@@ -39,14 +39,19 @@ enum Service {
 impl Service {
     fn try_apply_header(
         self,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         config: &ServiceParameters,
         rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>) {
         match self {
             Self::BlendNetwork(state) => {
-                let (new_state, utxos) =
-                    state.try_apply_header(epoch_state, config, &rewards_params.blend);
+                let (new_state, utxos) = state.try_apply_header(
+                    last_epoch_state,
+                    epoch_state,
+                    config,
+                    &rewards_params.blend,
+                );
                 (Self::BlendNetwork(new_state), utxos)
             }
         }
@@ -76,21 +81,18 @@ impl Service {
         }
     }
 
-    #[expect(clippy::missing_const_for_fn, reason = "tmp")]
-    #[expect(clippy::unnecessary_wraps, reason = "tmp")]
     pub fn update_rewards(
         &mut self,
-        _provider_id: ProviderId,
-        _metadata: &ActivityMetadata,
-        _rewards_params: &ServiceRewardsParameters,
+        provider_id: ProviderId,
+        metadata: &ActivityMetadata,
+        rewards_params: &ServiceRewardsParameters,
     ) -> Result<(), Error> {
         match self {
-            Self::BlendNetwork(_state) => {
-                // TODO: enable this after removing sessions from `rewards` module
-                // state.rewards =
-                //     state
-                //         .rewards
-                //         .update_active(provider_id, metadata, &rewards_params.blend)?;
+            Self::BlendNetwork(state) => {
+                state.rewards =
+                    state
+                        .rewards
+                        .update_active(provider_id, metadata, &rewards_params.blend)?;
                 Ok(())
             }
         }
@@ -157,15 +159,6 @@ pub enum Error {
     SdpOp(#[from] lb_core::mantle::ops::sdp::SdpError),
 }
 
-// State at the beginning of this session
-// TODO: Remove this after removing sessions from `rewards` module.
-//       Currently, this is used only in the `rewards` module.
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SessionState {
-    pub declarations: Declarations,
-    pub session_n: u64,
-}
-
 pub const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -187,9 +180,10 @@ fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServicePa
 impl<R: Rewards> ServiceState<R> {
     fn try_apply_header(
         mut self,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         service_params: &ServiceParameters,
-        _rewards_params: &R::Params,
+        rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
         // Remove expired declarations based on retention_period
         self.declarations = self
@@ -212,12 +206,15 @@ impl<R: Rewards> ServiceState<R> {
             .collect();
 
         // Update rewards with current session state and distribute rewards
-        let reward_utxos = Vec::new();
-        // TODO: enable this after removing sessions from `rewards` module
-        // (self.rewards, reward_utxos) =
-        //     self.rewards
-        //         .update_epoch(&self.active, epoch_state, service_params,
-        // rewards_params);
+        let mut reward_utxos = Vec::new();
+        if last_epoch_state.epoch() < epoch_state.epoch() {
+            (self.rewards, reward_utxos) = self.rewards.update_epoch(
+                last_epoch_state,
+                epoch_state,
+                service_params,
+                rewards_params,
+            );
+        }
 
         (self, reward_utxos)
     }
@@ -301,6 +298,7 @@ impl SdpLedger {
     pub fn try_apply_header(
         &self,
         config: &Config,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
     ) -> Result<(Self, Vec<Utxo>), Error> {
         let mut all_reward_utxos = Vec::new();
@@ -314,6 +312,7 @@ impl SdpLedger {
                     .get(service)
                     .ok_or(Error::SessionParamsNotFound(*service))?;
                 let (new_state, reward_utxos) = service_state.clone().try_apply_header(
+                    last_epoch_state,
                     epoch_state,
                     service_params,
                     &config.service_rewards_params,
@@ -688,10 +687,13 @@ mod tests {
 
         // Move forward enough epochs to satisfy lock_period
         let mut sdp_ledger = sdp_ledger;
+        let mut last_epoch_state = epoch_state;
         for epoch in 1..=11 {
+            let epoch_state = dummy_epoch_state(epoch.into());
             (sdp_ledger, _) = sdp_ledger
-                .try_apply_header(&config, &dummy_epoch_state(epoch.into()))
+                .try_apply_header(&config, &last_epoch_state, &epoch_state)
                 .unwrap();
+            last_epoch_state = epoch_state;
         }
 
         // Withdraw the declaration

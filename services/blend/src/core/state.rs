@@ -3,7 +3,7 @@ mod serde {
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-        reward::{OldSessionBlendingTokenCollector, SessionBlendingTokenCollector},
+        reward::{EpochBlendingTokenCollector, OldEpochBlendingTokenCollector},
     };
     use lb_chain_service::Epoch;
     use serde::{Deserialize, Serialize};
@@ -25,8 +25,8 @@ mod serde {
         ))]
         unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
-        current_epoch_token_collector: SessionBlendingTokenCollector,
-        old_epoch_token_collector: Option<OldSessionBlendingTokenCollector>,
+        current_epoch_token_collector: EpochBlendingTokenCollector,
+        old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
     }
 
     impl<BroadcastSettings> SerializableServiceState<BroadcastSettings> {
@@ -90,7 +90,7 @@ mod service {
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-        reward::{BlendingToken, OldSessionBlendingTokenCollector, SessionBlendingTokenCollector},
+        reward::{BlendingToken, EpochBlendingTokenCollector, OldEpochBlendingTokenCollector},
     };
     use lb_chain_service::Epoch;
 
@@ -109,8 +109,8 @@ mod service {
         spent_core_quota: u64,
         unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
-        current_epoch_token_collector: SessionBlendingTokenCollector,
-        old_epoch_token_collector: Option<OldSessionBlendingTokenCollector>,
+        current_epoch_token_collector: EpochBlendingTokenCollector,
+        old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
         state_updater: overwatch::services::state::StateUpdater<
             Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
         >,
@@ -151,8 +151,8 @@ mod service {
             spent_core_quota: u64,
             unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
             unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
-            current_epoch_token_collector: SessionBlendingTokenCollector,
-            old_epoch_token_collector: Option<OldSessionBlendingTokenCollector>,
+            current_epoch_token_collector: EpochBlendingTokenCollector,
+            old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
@@ -206,8 +206,8 @@ mod service {
         /// state was recovered.
         pub fn with_epoch(
             epoch: Epoch,
-            current_epoch_token_collector: SessionBlendingTokenCollector,
-            old_epoch_token_collector: Option<OldSessionBlendingTokenCollector>,
+            current_epoch_token_collector: EpochBlendingTokenCollector,
+            old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
@@ -277,12 +277,12 @@ mod service {
 
         pub(super) const fn clear_old_epoch_token_collector(
             &mut self,
-        ) -> Option<OldSessionBlendingTokenCollector> {
+        ) -> Option<OldEpochBlendingTokenCollector> {
             self.old_epoch_token_collector.take()
         }
 
         #[cfg(test)]
-        pub(crate) const fn current_epoch_token_collector(&self) -> &SessionBlendingTokenCollector {
+        pub(crate) const fn current_epoch_token_collector(&self) -> &EpochBlendingTokenCollector {
             &self.current_epoch_token_collector
         }
 
@@ -297,8 +297,8 @@ mod service {
             u64,
             HashSet<ProcessedMessage<BroadcastSettings>>,
             HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
-            SessionBlendingTokenCollector,
-            Option<OldSessionBlendingTokenCollector>,
+            EpochBlendingTokenCollector,
+            Option<OldEpochBlendingTokenCollector>,
             overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
@@ -384,7 +384,7 @@ mod state_updater {
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-        reward::{BlendingToken, OldSessionBlendingTokenCollector},
+        reward::{BlendingToken, OldEpochBlendingTokenCollector},
     };
 
     use crate::{
@@ -452,7 +452,7 @@ mod state_updater {
 
         pub const fn clear_old_epoch_token_collector(
             &mut self,
-        ) -> Option<OldSessionBlendingTokenCollector> {
+        ) -> Option<OldEpochBlendingTokenCollector> {
             self.changed = true;
             self.inner.clear_old_epoch_token_collector()
         }

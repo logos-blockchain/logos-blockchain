@@ -1,10 +1,14 @@
 use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
 use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    encap::ProofsVerifier as ProofsVerifierTrait, reward::SessionRandomness,
+    encap::ProofsVerifier as ProofsVerifierTrait, reward::EpochRandomness,
 };
 use lb_blend_proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs};
-use lb_core::{crypto::ZkHash, mantle::Value, sdp::ProviderId};
+use lb_core::{
+    crypto::ZkHash,
+    mantle::Value,
+    sdp::{Declaration, ProviderId, ServiceType},
+};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::HashTrieMapSync;
@@ -12,132 +16,146 @@ use tracing::debug;
 
 use crate::{
     EpochState,
-    mantle::sdp::{
-        SessionState,
-        rewards::blend::{LOG_TARGET, RewardsParameters, target_session::TargetSessionState},
+    mantle::sdp::rewards::blend::{
+        LOG_TARGET, RewardsParameters, target_session::TargetEpochState,
     },
 };
 
-/// Immutable state of the current session.
-/// The current session is `s` if `s-1` is the target session for which rewards
+/// Immutable state of the current epoch.
+/// The epoch session is `E` if `E-1` is the target epoch for which rewards
 /// are being calculated.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CurrentSessionState {
-    /// Current session randomness
-    session_randomness: SessionRandomness,
+pub struct CurrentEpochState {
+    epoch: Epoch,
+    /// Current epoch randomness
+    epoch_randomness: EpochRandomness,
+    /// The leader input derived from the current epoch state.
+    /// These will be used to create the proof verifier after the next
+    /// epoch update.
+    leader_input: LeaderInputs,
 }
 
-impl CurrentSessionState {
-    const fn new(session_randomness: SessionRandomness) -> Self {
-        Self { session_randomness }
+impl CurrentEpochState {
+    pub fn new(epoch_state: &EpochState, settings: &RewardsParameters) -> Self {
+        Self {
+            epoch: epoch_state.epoch(),
+            epoch_randomness: (*epoch_state.nonce()).into(),
+            leader_input: settings.leader_inputs(epoch_state),
+        }
     }
 
-    pub const fn session_randomness(&self) -> SessionRandomness {
-        self.session_randomness
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
+    }
+
+    pub const fn epoch_randomness(&self) -> EpochRandomness {
+        self.epoch_randomness
     }
 }
 
-/// Collects epoch states seen in the current session.
-/// The current session is `s` if `s-1` is the target session for which rewards
+/// Collects income for the current epoch.
+/// The current epoch is `E` if `E-1` is the target epoch for which rewards
 /// are being calculated.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CurrentSessionTracker {
-    /// Collecting leader inputs derived from epoch states seen in the current
-    /// session. These will be used to create proof verifiers after the next
-    /// session update.
-    leader_inputs: HashTrieMapSync<Epoch, LeaderInputs>,
-    /// Collecting service rewards over the session
-    session_income: Value,
+pub struct CurrentEpochTracker {
+    /// Collecting service rewards over the epoch
+    epoch_income: Value,
 }
 
-impl CurrentSessionTracker {
-    pub fn new(first_epoch_state: &EpochState, settings: &RewardsParameters) -> Self {
+impl CurrentEpochTracker {
+    pub fn new() -> Self {
         Self {
-            leader_inputs: std::iter::once((
-                first_epoch_state.epoch,
-                settings.leader_inputs(first_epoch_state),
-            ))
-            .collect(),
-            session_income: Value::default(),
+            epoch_income: Value::default(),
         }
     }
 
-    pub fn collect_epoch(&self, epoch_state: &EpochState, settings: &RewardsParameters) -> Self {
+    pub(crate) const fn add_block_rewards(&self, block_rewards: Value) -> Self {
         Self {
-            leader_inputs: self
-                .leader_inputs
-                .insert(epoch_state.epoch, settings.leader_inputs(epoch_state)),
-            session_income: self.session_income,
+            epoch_income: self.epoch_income + block_rewards,
         }
     }
 
-    pub(crate) fn add_block_rewards(&self, block_rewards: Value) -> Self {
-        Self {
-            leader_inputs: self.leader_inputs.clone(),
-            session_income: self.session_income + block_rewards,
-        }
-    }
-
-    /// Finalizes the current session tracker.
+    /// Finalizes the current epoch tracker.
     ///
-    /// It returns [`CurrentSessionTrackerOutput::WithTargetSession`] by
-    /// creating a [`TargetSessionState`] using the collected information,
-    /// if the network size of the new target session is not below the
+    /// It returns [`CurrentEpochTrackerOutput::WithTargetEpoch`] by
+    /// creating a [`TargetEpochState`] using the collected information,
+    /// if the network size of the new target epoch is not below the
     /// minimum required. Otherwise, it returns
-    /// [`CurrentSessionTrackerOutput::WithoutTargetSession`].
+    /// [`CurrentEpochTrackerOutput::WithoutTargetEpoch`].
     pub fn finalize<ProofsVerifier>(
         &self,
-        last_active_session_state: &SessionState,
-        next_session_first_epoch_state: &EpochState,
+        current_reward_epoch_state: &CurrentEpochState,
+        last_epoch_state: &EpochState,
+        next_epoch_state: &EpochState,
         settings: &RewardsParameters,
-    ) -> CurrentSessionTrackerOutput<ProofsVerifier>
+    ) -> CurrentEpochTrackerOutput<ProofsVerifier>
     where
         ProofsVerifier: ProofsVerifierTrait,
     {
-        if last_active_session_state.declarations.size()
-            < settings.minimum_network_size.get() as usize
-        {
-            debug!(target: LOG_TARGET, "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetSession mode",
-                last_active_session_state.declarations.size(),
+        assert_eq!(
+            last_epoch_state.epoch,
+            current_reward_epoch_state.epoch(),
+            "last_epoch_state.epoch({}) must match current_reward_epoch_state.epoch({})",
+            last_epoch_state.epoch,
+            current_reward_epoch_state.epoch(),
+        );
+        assert!(
+            last_epoch_state.epoch < next_epoch_state.epoch,
+            "next_epoch_state.epoch({}) must be greater than last_epoch_state.epoch({})",
+            next_epoch_state.epoch,
+            last_epoch_state.epoch,
+        );
+
+        let declarations = last_epoch_state
+            .sdp
+            .declarations()
+            .iter()
+            .filter(|(service_type, _)| matches!(service_type, ServiceType::BlendNetwork))
+            .flat_map(|(_, declarations)| declarations.values())
+            .cloned()
+            .collect::<Vec<_>>();
+
+        if declarations.len() < settings.minimum_network_size.get() as usize {
+            debug!(target: LOG_TARGET, "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetEpoch mode",
+                declarations.len(),
                 settings.minimum_network_size.get()
             );
-            return CurrentSessionTrackerOutput::WithoutTargetSession(Self::new(
-                next_session_first_epoch_state,
-                settings,
-            ));
+            return CurrentEpochTrackerOutput::WithoutTargetEpoch {
+                current_epoch_state: CurrentEpochState::new(next_epoch_state, settings),
+                current_epoch_tracker: Self::new(),
+            };
         }
 
-        let (providers, zk_root) = Self::providers_and_zk_root(last_active_session_state);
+        let (providers, zk_root) = Self::providers_and_zk_root(declarations.iter());
 
         let (core_quota, token_evaluation) = settings.core_quota_and_token_evaluation(
             providers.size() as u64,
         ).expect("evaluation parameters shouldn't overflow. panicking since we can't process the new session");
 
-        let proof_verifiers =
-            Self::create_proof_verifiers(self.leader_inputs.values().copied(), zk_root, core_quota);
+        let proof_verifier = Self::create_proof_verifier(
+            current_reward_epoch_state.leader_input,
+            zk_root,
+            core_quota,
+        );
 
-        CurrentSessionTrackerOutput::WithTargetSession {
-            target_session_state: TargetSessionState::new(
-                last_active_session_state.session_n,
+        CurrentEpochTrackerOutput::WithTargetEpoch {
+            target_epoch_state: TargetEpochState::new(
+                last_epoch_state.epoch(),
                 providers,
                 token_evaluation,
-                proof_verifiers,
-                self.session_income,
+                proof_verifier,
+                self.epoch_income,
             ),
-            current_session_state: CurrentSessionState::new(SessionRandomness::new(
-                last_active_session_state.session_n + 1,
-                &next_session_first_epoch_state.nonce,
-            )),
-            current_session_tracker: Self::new(next_session_first_epoch_state, settings),
+            current_epoch_state: CurrentEpochState::new(next_epoch_state, settings),
+            current_epoch_tracker: Self::new(),
         }
     }
 
-    fn providers_and_zk_root(
-        session_state: &SessionState,
+    #[expect(single_use_lifetimes, reason = "lifetime is required")]
+    fn providers_and_zk_root<'d>(
+        declarations: impl Iterator<Item = &'d Declaration>,
     ) -> (HashTrieMapSync<ProviderId, (ZkPublicKey, u64)>, ZkHash) {
-        let mut providers = session_state
-            .declarations
-            .values()
+        let mut providers = declarations
             .map(|declaration| (declaration.provider_id, declaration.zk_id))
             .collect::<Vec<_>>();
 
@@ -163,41 +181,35 @@ impl CurrentSessionTracker {
         (providers, zk_root)
     }
 
-    fn create_proof_verifiers<ProofsVerifier: ProofsVerifierTrait>(
-        leader_inputs: impl Iterator<Item = LeaderInputs>,
+    fn create_proof_verifier<ProofsVerifier: ProofsVerifierTrait>(
+        leader_input: LeaderInputs,
         zk_root: ZkHash,
         core_quota: u64,
-    ) -> Vec<ProofsVerifier> {
-        leader_inputs
-            .map(|leader| {
-                ProofsVerifier::new(PoQVerificationInputsMinusSigningKey {
-                    core: CoreInputs {
-                        zk_root,
-                        quota: core_quota,
-                    },
-                    leader,
-                })
-            })
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub fn epoch_count(&self) -> usize {
-        self.leader_inputs.size()
+    ) -> ProofsVerifier {
+        ProofsVerifier::new(PoQVerificationInputsMinusSigningKey {
+            core: CoreInputs {
+                zk_root,
+                quota: core_quota,
+            },
+            leader: leader_input,
+        })
     }
 }
 
-/// Result of finalizing the [`CurrentSessionTracker`].
-pub enum CurrentSessionTrackerOutput<ProofsVerifier> {
-    /// Target session has been built with the information collected by
-    /// the current session tracker.
-    /// Also, the new current session state and tracker have been initialized.
-    WithTargetSession {
-        target_session_state: TargetSessionState<ProofsVerifier>,
-        current_session_state: CurrentSessionState,
-        current_session_tracker: CurrentSessionTracker,
+/// Result of finalizing the [`CurrentEpochTracker`].
+pub enum CurrentEpochTrackerOutput<ProofsVerifier> {
+    /// Target epoch has been built with the information collected by
+    /// the current epoch tracker.
+    /// Also, the new current epoch state and tracker have been initialized.
+    WithTargetEpoch {
+        target_epoch_state: TargetEpochState<ProofsVerifier>,
+        current_epoch_state: CurrentEpochState,
+        current_epoch_tracker: CurrentEpochTracker,
     },
-    /// No target session has been built because the network size in the
-    /// session is below the minimum required.
-    WithoutTargetSession(CurrentSessionTracker),
+    /// No target epoch has been built because the network size in the
+    /// epoch is below the minimum required.
+    WithoutTargetEpoch {
+        current_epoch_state: CurrentEpochState,
+        current_epoch_tracker: CurrentEpochTracker,
+    },
 }

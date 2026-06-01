@@ -26,8 +26,8 @@ use lb_blend::{
             },
         },
         reward::{
-            self, ActivityProof, BlendingToken, OldSessionBlendingTokenCollector,
-            SessionBlendingTokenCollector,
+            self, ActivityProof, BlendingToken, EpochBlendingTokenCollector,
+            OldEpochBlendingTokenCollector,
         },
     },
     proofs::quota::inputs::prove::public::{CoreInputs, LeaderInputs},
@@ -515,7 +515,10 @@ where
                     core_and_path_selectors,
                 }) = membership_info.zk
                 else {
-                    return MaybeEmptyCoreEpochInfo::Empty { epoch };
+                    return MaybeEmptyCoreEpochInfo::Empty {
+                        epoch,
+                        epoch_nonce: nonce,
+                    };
                 };
                 // `None` when the local node is not part of the epoch membership. This can
                 // happen when the node transitions from core to edge mode.
@@ -611,10 +614,9 @@ where
 
         ServiceState::with_epoch(
             current_epoch_public_info.epoch,
-            SessionBlendingTokenCollector::new(
-                &reward::SessionInfo::new(
-                    // TODO: Remove once rewards remove sessions
-                    0,
+            EpochBlendingTokenCollector::new(
+                &reward::EpochInfo::new(
+                    current_epoch_public_info.epoch,
                     &current_epoch_public_info.poq_leadership_public_inputs.pol_epoch_nonce,
                     current_epoch_public_info.membership.size() as u64,
                     current_epoch_public_info.poq_core_public_inputs.quota,
@@ -756,7 +758,7 @@ async fn run_event_loop<
 ) -> (
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
     OldEpochMessageScheduler<Rng, ProcessedMessage<NetAdapter::BroadcastSettings>>,
-    OldSessionBlendingTokenCollector,
+    OldEpochBlendingTokenCollector,
 )
 where
     NodeId: Clone + Eq + Hash + Send + Sync + 'static,
@@ -894,7 +896,7 @@ async fn retire<
         ProcessedMessage<NetAdapter::BroadcastSettings>,
     >,
     mut rng: Rng,
-    mut blending_token_collector: OldSessionBlendingTokenCollector,
+    mut blending_token_collector: OldEpochBlendingTokenCollector,
     crypto_processor: CoreCryptographicProcessor<
         NodeId,
         CorePoQGenerator,
@@ -1007,10 +1009,8 @@ where
             let (_, _, _, _, current_epoch_blending_token_collector, _, state_updater) =
                 current_recovery_checkpoint.into_components();
 
-            let new_reward_epoch_info = reward::SessionInfo::new(
-                // TODO: Change when rewards are updated accordingly.
-                // new_session,
-                0,
+            let new_reward_epoch_info = reward::EpochInfo::new(
+                new_epoch_info.epoch,
                 &new_epoch_info.poq_leadership_public_inputs.pol_epoch_nonce,
                 new_epoch_info.membership.size() as u64,
                 new_epoch_info.poq_core_public_inputs.quota,
@@ -1018,7 +1018,7 @@ where
             )
             .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
             let (new_epoch_blending_token_collector, old_epoch_blending_token_collector) =
-                current_epoch_blending_token_collector.rotate_session(&new_reward_epoch_info);
+                current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
 
             backend
                 .rotate_epoch((new_epoch_info.membership.clone(), new_epoch_info.epoch))
@@ -1096,23 +1096,20 @@ where
                 new_epoch_info,
             }
         }
-        // TODO: Change when rewards are updated accordingly.
-        EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::Empty { epoch: _epoch }) => {
+        EpochEvent::NewEpoch(MaybeEmptyCoreEpochInfo::Empty { epoch, epoch_nonce }) => {
             tracing::info!(target: LOG_TARGET, "New epoch event received, but no epoch info is available due to empty membership set.");
             let (_, _, _, _, current_epoch_blending_token_collector, _, _) =
                 current_recovery_checkpoint.into_components();
-            let new_reward_epoch_info = reward::SessionInfo::new(
-                // TODO: Change when rewards are updated accordingly.
-                // new_session,
-                0,
-                &current_epoch_info.poq_leadership_public_inputs.pol_epoch_nonce,
+            let new_reward_epoch_info = reward::EpochInfo::new(
+                epoch,
+                &epoch_nonce,
                 0,
                 0,
                 settings.activity_threshold_sensitivity,
             )
             .expect("Reward epoch info must be created successfully. Panicking since the service cannot continue with this epoch");
             let (_, old_epoch_blending_token_collector) =
-                current_epoch_blending_token_collector.rotate_session(&new_reward_epoch_info);
+                current_epoch_blending_token_collector.rotate_epoch(&new_reward_epoch_info);
             HandleEpochEventOutput::Retiring {
                 old_crypto_processor: current_cryptographic_processor,
                 old_scheduler: current_scheduler.consume(),
@@ -1139,7 +1136,7 @@ where
 /// Handles [`EpochEvent::TransitionPeriodExpired`].
 async fn handle_epoch_transition_expired<Backend, NodeId, Rng, RuntimeServiceId>(
     backend: &mut Backend,
-    blending_token_collector: OldSessionBlendingTokenCollector,
+    blending_token_collector: OldEpochBlendingTokenCollector,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) where
     Backend: BlendBackend<NodeId, Rng, RuntimeServiceId>,
@@ -1150,7 +1147,7 @@ async fn handle_epoch_transition_expired<Backend, NodeId, Rng, RuntimeServiceId>
 }
 
 async fn compute_and_submit_activity_proof(
-    blending_token_collector: OldSessionBlendingTokenCollector,
+    blending_token_collector: OldEpochBlendingTokenCollector,
     sdp_relay: &OutboundRelay<SdpMessage>,
 ) {
     if let Some(activity_proof) = blending_token_collector.compute_activity_proof() {
@@ -1200,7 +1197,7 @@ enum HandleEpochEventOutput<
         old_crypto_processor:
             CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
         old_scheduler: OldEpochMessageScheduler<Rng, ProcessedMessage<BroadcastSettings>>,
-        old_token_collector: OldSessionBlendingTokenCollector,
+        old_token_collector: OldEpochBlendingTokenCollector,
     },
 }
 
@@ -1447,7 +1444,7 @@ fn handle_incoming_blend_message_from_old_epoch<
         ProofsGenerator,
         ProofsVerifier,
     >,
-    blending_token_collector: &mut OldSessionBlendingTokenCollector,
+    blending_token_collector: &mut OldEpochBlendingTokenCollector,
 ) where
     NodeId: 'static,
     BroadcastSettings: Serialize + for<'de> Deserialize<'de> + Debug + Eq + Hash + Clone + Send,

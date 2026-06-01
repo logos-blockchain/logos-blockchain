@@ -7,7 +7,7 @@ use lb_core::codec::SerializeOp as _;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Serialize};
 
-use crate::reward::session::SessionRandomness;
+use crate::reward::epoch::EpochRandomness;
 
 /// A blending token consisting of a proof of quota and a proof of selection.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -32,20 +32,23 @@ impl BlendingToken {
     }
 
     /// Computes the Hamming distance between this blending token and the next
-    /// session randomness.
+    /// epoch randomness.
     #[must_use]
     pub fn hamming_distance(
         &self,
         token_count_byte_len: u64,
-        next_session_randomness: SessionRandomness,
+        next_epoch_randomness: EpochRandomness,
     ) -> HammingDistance {
         let token = self
             .to_bytes()
             .expect("BlendingToken should be serializable");
         let token_hash = hash(&token, token_count_byte_len as usize);
-        let session_randomness_hash = hash(&next_session_randomness, token_count_byte_len as usize);
+        let epoch_randomness_hash = hash(
+            &next_epoch_randomness.as_bytes(),
+            token_count_byte_len as usize,
+        );
 
-        HammingDistance::new(&token_hash, &session_randomness_hash)
+        HammingDistance::new(&token_hash, &epoch_randomness_hash)
     }
 
     #[must_use]
@@ -107,6 +110,7 @@ impl From<u64> for HammingDistance {
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{quota::PROOF_OF_QUOTA_SIZE, selection::PROOF_OF_SELECTION_SIZE};
+    use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
@@ -150,7 +154,7 @@ mod tests {
     #[test]
     fn test_blending_token_hamming_distance() {
         let token = blending_token(1, 1, 2);
-        assert_eq!(token.hamming_distance(1, [3u8; 64].into()), 2.into());
+        assert_eq!(token.hamming_distance(1, Fr::ONE.into()), 6.into());
     }
 
     fn blending_token(

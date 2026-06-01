@@ -42,7 +42,7 @@ use crate::{
 
 // Maximum memory allocation size allowed for SDP activity metadata.
 // Protects against unbounded allocation in `decode_sdp_active`
-const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 234; // `ActiveMessage` has a fixed size of 234 bytes
+const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 230; // `ActiveMessage` has a fixed size of 230 bytes
 
 // Maximum byte size allowed for a locator in SDPDeclare operations.
 const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
@@ -1252,7 +1252,7 @@ mod tests {
 
         let signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
         let blend_proof = ActivityProof {
-            session: 42,
+            epoch: 42.into(),
             signing_key: signing_key.public_key(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
@@ -1310,7 +1310,7 @@ mod tests {
         };
 
         let blend_proof = ActivityProof {
-            session: u64::MAX,
+            epoch: u32::MAX.into(),
             signing_key: signing_key.public_key(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
@@ -1842,7 +1842,7 @@ mod tests {
     #[test]
     fn test_encode_reject_excessive_sdp_active() {
         let blend_proof = ActivityProof {
-            session: u64::MAX,
+            epoch: u32::MAX.into(),
             signing_key: Ed25519Key::from_bytes(&[1; 32]).public_key(),
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
