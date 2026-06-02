@@ -102,11 +102,11 @@ where
         .block
         .transactions
         .iter()
-        .filter(|tx| matches_channel(tx, channel_id))
+        .filter(|tx| touches_channel_tip(tx, channel_id))
         .map(|tx| tx.mantle_tx.hash())
         .collect();
 
-    let inscriptions = extract_inscriptions(&event.block.transactions, channel_id);
+    let inscriptions = extract_channel_tip_ops(&event.block.transactions, channel_id);
 
     // Process the actual event block
     s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
@@ -217,11 +217,11 @@ where
         let our_txs: Vec<TxHash> = block
             .transactions
             .iter()
-            .filter(|tx| matches_channel(tx, channel_id))
+            .filter(|tx| touches_channel_tip(tx, channel_id))
             .map(|tx| tx.mantle_tx.hash())
             .collect();
 
-        let inscriptions = extract_inscriptions(&block.transactions, channel_id);
+        let inscriptions = extract_channel_tip_ops(&block.transactions, channel_id);
 
         // Fetch + validate deposit events for this block BEFORE mutating
         // state — on error we leave state untouched so the caller can retry.
@@ -485,25 +485,31 @@ fn apply_backfilled_block(
     let our_txs: Vec<TxHash> = block
         .transactions
         .iter()
-        .filter(|tx| matches_channel(tx, channel_id))
+        .filter(|tx| touches_channel_tip(tx, channel_id))
         .map(|tx| tx.mantle_tx.hash())
         .collect();
 
-    let inscriptions = extract_inscriptions(&block.transactions, channel_id);
+    let inscriptions = extract_channel_tip_ops(&block.transactions, channel_id);
 
     // Use current state lib to avoid premature finalization
     state.process_block(block_id, parent_id, lib, our_txs, inscriptions);
 }
 
-/// Extract channel inscription info from a block's transactions, in
-/// parent→child chain order. Transactions in a block are not guaranteed
-/// to be in chain order, so we topologically sort by inscription lineage.
-/// Callers (e.g. `channel_tip_at`) rely on `last()` being the chain tail.
+/// Extract every op in a block that advances the channel's tip pointer, in
+/// parent→child chain order. Returns one [`InscriptionInfo`] per
+/// tip-advancing op — both real inscriptions (`ChannelInscribe`) and
+/// synthetic entries for `ChannelConfig` (which resets the tip per spec).
+/// The synthetic config entries carry an empty payload so payload-keyed
+/// consumers ignore them naturally.
 ///
-/// Panics if the inscriptions for the channel in a single block do not
+/// Transactions in a block are not guaranteed to be in chain order, so we
+/// topologically sort by lineage. Callers (e.g. `channel_tip_at`) rely on
+/// `last()` being the chain tail.
+///
+/// Panics if the tip-advancing ops for the channel in a single block do not
 /// form a single linear chain — that would be a protocol-level invariant
 /// violation.
-fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
+fn extract_channel_tip_ops(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
     // Also tracks ChannelConfig as a synthetic tip-update entry so the SDK's
     // channel_tip stays in sync with the chain. Per spec, ChannelConfig sets
     // `chan.tip_hash = hash(encode(config))`, replacing whatever was there.
@@ -569,7 +575,10 @@ fn extract_inscriptions(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<In
     sorted
 }
 
-fn matches_channel(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
+/// True iff this tx contains any op that advances our channel's tip pointer
+/// (`ChannelInscribe` or `ChannelConfig`). Deposits and withdraws don't move
+/// the tip and so don't make a tx "ours" for tip-tracking purposes.
+fn touches_channel_tip(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
     tx.mantle_tx.ops().iter().any(|op| match op {
         Op::ChannelInscribe(inscribe) => inscribe.channel_id == channel_id,
         Op::ChannelConfig(set_keys) => set_keys.channel == channel_id,
