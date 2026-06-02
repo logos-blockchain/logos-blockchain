@@ -13,7 +13,6 @@ use crate::message_blend::provers::{
 };
 
 #[test(tokio::test)]
-#[ignore = "TODO: Re-enable once we update to the new PoQ circuits."]
 async fn proof_generation() {
     let core_quota = 10;
     let (core_public_inputs, core_private_inputs) = valid_proof_of_quota_inputs(core_quota);
@@ -74,7 +73,7 @@ async fn proof_generation() {
         encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
-    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(1));
+    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(0));
 
     for _ in 0..leadership_quota {
         let proof = core_and_leader_proofs_generator
@@ -104,7 +103,6 @@ async fn proof_generation() {
 }
 
 #[test(tokio::test)]
-#[ignore = "TODO: Re-enable once we update to the new PoQ circuits."]
 async fn epoch_private_info() {
     let core_quota = 10;
     let leadership_quota = 15;
@@ -116,14 +114,24 @@ async fn epoch_private_info() {
         ProofsGeneratorSettings {
             local_node_index: None,
             membership_size: 1,
-            public_inputs: leadership_public_inputs,
+            public_inputs: core_public_inputs,
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
         },
         CorePoQGeneratorFromPrivateCoreQuotaInputs::new(core_private_inputs.clone()),
     );
 
-    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(1));
+    // Switch to leadership inputs before wiring leader private epoch info, because
+    // we use fixtures that yield different public inputs.
+    core_and_leader_proofs_generator.override_settings(ProofsGeneratorSettings {
+        local_node_index: None,
+        membership_size: 1,
+        public_inputs: leadership_public_inputs,
+        encapsulation_layers: 1.try_into().unwrap(),
+        epoch: Epoch::new(0),
+    });
+
+    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(0));
 
     // Leadership proof should be generated and verified correctly.
     let proof = core_and_leader_proofs_generator

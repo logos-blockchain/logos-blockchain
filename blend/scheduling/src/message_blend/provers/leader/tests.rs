@@ -14,7 +14,6 @@ use crate::message_blend::provers::{
 };
 
 #[test(tokio::test)]
-#[ignore = "TODO: Re-enable once we update to the new PoQ circuits."]
 async fn proof_generation() {
     let leadership_quota = 15;
     let (public_inputs, private_inputs) = valid_proof_of_leader_inputs(leadership_quota);
