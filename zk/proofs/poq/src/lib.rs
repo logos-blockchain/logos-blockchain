@@ -15,6 +15,7 @@ pub use blend_inputs::{
 pub use chain_inputs::{PoQChainInputs, PoQChainInputsData, PoQInputsFromDataError};
 pub use common_inputs::{PoQCommonInputs, PoQCommonInputsData};
 pub use inputs::{PoQVerifierInput, PoQVerifierInputData, PoQWitnessInputs};
+use lb_circuits_prover::Prover as _;
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
 use lb_log_targets::proofs;
 pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
@@ -49,10 +50,10 @@ const LOG_TARGET: &str = proofs::POQ;
 ///   serialization or deserialization.
 pub fn prove(inputs: PoQWitnessInputs) -> Result<(PoQProof, PoQVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
-    let (proof, verifier_inputs) =
-        lb_circuits_prover::prover_from_contents(POQ_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
-    let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof)?;
-    let verifier_inputs: PoQVerifierInputJson = serde_json::from_slice(&verifier_inputs)?;
+    let result =
+        lb_circuits_prover::Rapidsnark::prove(POQ_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
+    let proof: Groth16ProofJsonDeser = serde_json::from_str(&result.proof)?;
+    let verifier_inputs: PoQVerifierInputJson = serde_json::from_str(&result.public_signals)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
