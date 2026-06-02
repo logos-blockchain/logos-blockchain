@@ -282,13 +282,13 @@ impl Default for UpdateArgs {
             user_config: "user_config.yaml".into(),
             keystore: "keystore.yaml".into(),
             yes: false,
-            log: Default::default(),
-            network: Default::default(),
-            blend: Default::default(),
-            cryptarchia: Default::default(),
-            sdp: Default::default(),
-            api: Default::default(),
-            state: Default::default(),
+            log: LogArgs::default(),
+            network: NetworkArgs::default(),
+            blend: BlendArgs::default(),
+            cryptarchia: CryptarchiaArgs::default(),
+            sdp: SdpArgs::default(),
+            api: ApiArgs::default(),
+            state: StateArgs::default(),
         }
     }
 }

@@ -2,14 +2,21 @@ use std::path::PathBuf;
 
 use clap::{Parser, ValueEnum};
 use color_eyre::eyre::Result;
+use lb_key_management_system_service::keys::{Ed25519Key, Key, ZkKey, ZkPublicKey};
+use lb_libp2p::ed25519::SecretKey;
 use thiserror::Error;
 
 use crate::{
     UserConfig,
     cli::{
         UpdateArgs,
-        config::{keystore::Keystore, update::update_user_config},
+        config::{
+            confirm_overwrite,
+            keystore::{KeyTitle, Keystore},
+            update::update_user_config,
+        },
     },
+    config::{parse_hex_ed25519_key, parse_hex_public_key},
 };
 
 #[derive(Error, Debug)]
@@ -45,14 +52,80 @@ pub struct GenerateKeyArgs {
     #[arg(long, short, default_value_t = false)]
     yes: bool,
 
+    #[clap(long = "title")]
+    pub key_title: Option<String>,
+
     #[arg(long = "key-type", short = 't')]
     key_type: KeyType,
+}
+
+#[derive(Parser, Debug)]
+pub struct AddKeyArgs {
+    /// Path for the user config file.
+    #[clap(long = "user_config", short = 'c', default_value = "user_config.yaml")]
+    user_config: PathBuf,
+
+    /// Path for the keystore file.
+    #[clap(long = "keystore", short = 'k', default_value = "keystore.yaml")]
+    keystore: PathBuf,
+
+    /// Auto approve interactive promps.
+    #[arg(long, short, default_value_t = false)]
+    yes: bool,
+
+    #[clap(long = "title")]
+    pub key_title: Option<String>,
+
+    #[clap(
+        long = "zk_key",
+        value_parser = parse_hex_public_key
+    )]
+    pub zk_key: Option<ZkPublicKey>,
+
+    #[clap(
+        long = "ed25519_key",
+        value_parser = parse_hex_ed25519_key
+    )]
+    pub ed25519_key: Option<SecretKey>,
+}
+
+#[derive(Parser, Debug)]
+pub struct GetKeyArgs {
+    /// Path for the user config file.
+    #[clap(long = "user_config", short = 'c', default_value = "user_config.yaml")]
+    user_config: PathBuf,
+
+    /// Path for the keystore file.
+    #[clap(long = "keystore", short = 'k', default_value = "keystore.yaml")]
+    keystore: PathBuf,
+
+    #[clap(long = "title")]
+    pub key_title: String,
+}
+
+#[derive(Parser, Debug)]
+pub struct RemoveKeyArgs {
+    /// Path for the user config file.
+    #[clap(long = "user_config", short = 'c', default_value = "user_config.yaml")]
+    user_config: PathBuf,
+
+    /// Path for the keystore file.
+    #[clap(long = "keystore", short = 'k', default_value = "keystore.yaml")]
+    keystore: PathBuf,
+
+    /// Auto approve interactive promps.
+    #[arg(long, short, default_value_t = false)]
+    yes: bool,
+
+    #[clap(long = "title")]
+    pub key_title: String,
 }
 
 pub fn run_generate_key(args: &GenerateKeyArgs) -> Result<()> {
     let GenerateKeyArgs {
         user_config: user_config_path,
         keystore: keystore_path,
+        key_title,
         key_type,
         yes: auto_approve,
     } = args;
@@ -71,13 +144,45 @@ pub fn run_generate_key(args: &GenerateKeyArgs) -> Result<()> {
     let keystore_yaml = std::fs::read_to_string(keystore_path)?;
     let mut keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
 
-    update_user_config(&mut user_config, &keystore, UpdateArgs::default());
+    let determined_title = key_title
+        .as_ref()
+        .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
-    let user_config_yaml = serde_yaml::to_string(&user_config)?;
-    std::fs::write(user_config_path, &user_config_yaml)?;
+    let (key_id, key): (_, Key) = match key_type {
+        KeyType::Ed25519 => {
+            let (id, secret_key) = keystore.generate_ed25519(determined_title);
+            (id, Ed25519Key::from(secret_key).into())
+        }
+        KeyType::Zk => {
+            let (id, secret_key) = keystore.generate_zk(determined_title);
+            (id, ZkKey::from(secret_key).into())
+        }
+    };
 
-    let keystore_yaml = serde_yaml::to_string(&keystore)?;
-    std::fs::write(keystore_path, &keystore_yaml)?;
+    if !auto_approve && confirm_overwrite("Write key to keystore?")? {
+        update_user_config(&mut user_config, &keystore, UpdateArgs::default());
+
+        let user_config_yaml = serde_yaml::to_string(&user_config)?;
+        std::fs::write(user_config_path, &user_config_yaml)?;
+
+        let keystore_yaml = serde_yaml::to_string(&keystore)?;
+        std::fs::write(keystore_path, &keystore_yaml)?;
+    } else {
+        println!("KeyID: {key_id}");
+        println!("Key: {key:?}");
+    }
 
     Ok(())
+}
+
+fn next_user_key_title(keystore: &Keystore) -> String {
+    let mut counter = 1;
+    loop {
+        let candidate = format!("UserKey{counter}");
+        let candidate_title = KeyTitle::from(candidate.clone());
+        if keystore.get(candidate_title).is_none() {
+            break candidate;
+        }
+        counter += 1;
+    }
 }
