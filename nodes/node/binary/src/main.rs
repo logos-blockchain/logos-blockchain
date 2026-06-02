@@ -27,6 +27,12 @@ async fn main() -> Result<()> {
             Command::MigrateConfig(migrate_args) => {
                 return logos_blockchain_node::cli::config::migrate::run(*migrate_args);
             }
+            Command::GenerateKey(generate_args) => {
+                return logos_blockchain_node::cli::keys::run_generate_key(*generate_args);
+            }
+            Command::AddKey(add_args) => {
+                return logos_blockchain_node::cli::keys::run_add_key(*add_args);
+            }
             Command::Inscribe(inscribe_args) => {
                 lb_tui_zone::run(inscribe_args).await;
                 return Ok(());

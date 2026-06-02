@@ -12,11 +12,14 @@ use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
 use libp2p::Multiaddr;
 
-use crate::config::{
-    ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
-    LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, SdpArgs, StateArgs, UserConfig,
-    deserialize_config_at_path, update_api, update_blend, update_cryptarchia, update_network,
-    update_sdp, update_state, update_tracing,
+use crate::{
+    cli::keys::{AddKeyArgs, GenerateKeyArgs},
+    config::{
+        ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
+        LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, SdpArgs, StateArgs, UserConfig,
+        deserialize_config_at_path, update_api, update_blend, update_cryptarchia, update_network,
+        update_sdp, update_state, update_tracing,
+    },
 };
 
 fn long_version() -> String {
@@ -112,6 +115,10 @@ pub enum Command {
     UpdateConfig(Box<UpdateArgs>),
     /// Migrates a new user config with generated keys
     MigrateConfig(Box<MigrateArgs>),
+    /// Generate a new key of type.
+    GenerateKey(Box<GenerateKeyArgs>),
+    /// Add a key of type to a keystore.
+    AddKey(Box<AddKeyArgs>),
     /// Publish text inscriptions as zone blocks
     Inscribe(lb_tui_zone::InscribeArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config

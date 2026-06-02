@@ -14,13 +14,14 @@ use lb_core::sdp::ProviderId;
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_service::{
     backend::preload::KeyId,
-    keys::{Key, ZkPublicKey},
+    keys::{Key, UnsecuredZkKey, ZkPublicKey},
 };
 use lb_libp2p::{Multiaddr, ed25519::SecretKey};
 use lb_tracing::{
     filter::envfilter::{default_envfilter_config, parse_filter_directives},
     logging::local::{AppenderType, CompressionType, RetentionType, RollingConfig, RotationType},
 };
+use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
 pub use crate::config::{
@@ -714,6 +715,14 @@ pub fn parse_hex_public_key(key: &str) -> Result<ZkPublicKey, String> {
         fr_from_bytes(&bytes).map_err(|e| format!("Failed to deserialize Fr from bytes: {e}"))?;
 
     Ok(ZkPublicKey::new(fr))
+}
+
+pub fn parse_hex_zk_key(s: &str) -> Result<UnsecuredZkKey, String> {
+    let bytes = hex::decode(s).map_err(|e| format!("Invalid hex string for ZK key: {e}"))?;
+
+    let big_uint = BigUint::from_bytes_le(&bytes);
+
+    Ok(UnsecuredZkKey::from(big_uint))
 }
 
 pub fn parse_hex_ed25519_key(key: &str) -> Result<SecretKey, String> {
