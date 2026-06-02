@@ -90,13 +90,10 @@ where
         reference_epoch: Epoch,
     ) {
         // TODO: Change trait API to avoid runtime panics.
-        let (current_generator_epoch, current_leader_inputs) = {
-            let current_epoch_leader_generator = self.leader_proofs_generator.as_ref().expect("set_epoch_private should only be called once per epoch, and only after the core generator has been instantiated.");
-            (
-                current_epoch_leader_generator.settings.epoch,
-                current_epoch_leader_generator.settings.public_inputs.leader,
-            )
-        };
+        let (current_generator_epoch, current_leader_inputs) = (
+            self.core_proofs_generator.settings.epoch,
+            self.core_proofs_generator.settings.public_inputs.leader,
+        );
         assert!(
             current_generator_epoch == reference_epoch,
             "set_epoch_private should be called with a reference epoch matching the current core proofs generator's epoch."
