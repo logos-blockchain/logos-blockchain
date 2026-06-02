@@ -4283,7 +4283,6 @@ dependencies = [
  "overwatch",
  "serde",
  "tokio",
- "tokio-stream",
  "tracing",
 ]
 
