@@ -57,9 +57,9 @@ impl fmt::Display for WalletId {
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct WalletSyncSourceId(String);
+pub struct WalletChainSourceId(String);
 
-impl WalletSyncSourceId {
+impl WalletChainSourceId {
     #[must_use]
     pub fn new(value: impl Into<String>) -> Self {
         Self(value.into())
@@ -76,37 +76,37 @@ impl WalletSyncSourceId {
     }
 }
 
-impl From<String> for WalletSyncSourceId {
+impl From<String> for WalletChainSourceId {
     fn from(value: String) -> Self {
         Self::new(value)
     }
 }
 
-impl From<&str> for WalletSyncSourceId {
+impl From<&str> for WalletChainSourceId {
     fn from(value: &str) -> Self {
         Self::new(value)
     }
 }
 
-impl From<&String> for WalletSyncSourceId {
+impl From<&String> for WalletChainSourceId {
     fn from(value: &String) -> Self {
         Self::new(value.clone())
     }
 }
 
-impl AsRef<str> for WalletSyncSourceId {
+impl AsRef<str> for WalletChainSourceId {
     fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
 
-impl Borrow<str> for WalletSyncSourceId {
+impl Borrow<str> for WalletChainSourceId {
     fn borrow(&self) -> &str {
         self.as_str()
     }
 }
 
-impl fmt::Display for WalletSyncSourceId {
+impl fmt::Display for WalletChainSourceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_default() {
             f.write_str("<default>")
@@ -117,9 +117,9 @@ impl fmt::Display for WalletSyncSourceId {
 }
 
 #[must_use]
-pub fn wallet_id_for_sync_source(
+pub fn wallet_id_for_chain_source(
     base_wallet_id: impl AsRef<str>,
-    source_id: &WalletSyncSourceId,
+    source_id: &WalletChainSourceId,
 ) -> WalletId {
     if source_id.is_default() {
         WalletId::new(base_wallet_id.as_ref())

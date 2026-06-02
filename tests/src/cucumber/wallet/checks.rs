@@ -5,13 +5,13 @@ use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::{
-    common::wallet::{WalletBalance, WalletOutputState},
+    common::wallet::{TrackedWallets, WalletBalance, WalletOutputState},
     cucumber::{
         error::{StepError, StepResult},
         fee_reserve::SCENARIO_FEE_ACCOUNT_NAME,
         wallet::{
             TARGET,
-            sync::{sync_wallet_output_balance, sync_wallet_state_from_chain},
+            sync::{sync_wallet_output_balance, sync_wallet_state_from_feed},
             wallet_output_state_label,
         },
         world::CucumberWorld,
@@ -145,7 +145,7 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     let initial_sponsored_balance = (sponsored_genesis_account.token_count.get() as u64)
         * sponsored_genesis_account.token_value.get();
 
-    let fee_state = sync_wallet_state_from_chain(
+    let fee_state = sync_wallet_state_from_feed(
         world,
         SCENARIO_FEE_ACCOUNT_NAME,
         &query_node_name,
@@ -165,7 +165,7 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
         }
     })?;
 
-    let tracked_wallet_fees = world.wallets.total_tracked_spent_fees();
+    let tracked_wallet_fees = world.with_wallets(TrackedWallets::total_tracked_spent_fees)?;
 
     if tracked_wallet_fees != sponsored_fee_account_spent {
         return Err(StepError::StepFail {

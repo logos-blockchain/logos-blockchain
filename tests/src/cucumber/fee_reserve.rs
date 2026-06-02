@@ -9,7 +9,7 @@ use thiserror::Error;
 
 use crate::{
     common::wallet::{
-        WalletFundingSource, WalletId, WalletSyncSourceId, WalletUtxos, wallet_id_for_sync_source,
+        WalletChainSourceId, WalletFundingSource, WalletId, WalletUtxos, wallet_id_for_chain_source,
     },
     cucumber::{error::StepError, wallet::WalletStateView},
 };
@@ -60,9 +60,9 @@ impl ScenarioFeeState {
 
     #[must_use]
     pub fn wallet_name_for_group(group_key: &str) -> String {
-        wallet_id_for_sync_source(
+        wallet_id_for_chain_source(
             SCENARIO_FEE_ACCOUNT_NAME,
-            &WalletSyncSourceId::from(group_key),
+            &WalletChainSourceId::from(group_key),
         )
         .into_string()
     }

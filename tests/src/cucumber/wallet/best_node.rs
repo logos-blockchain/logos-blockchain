@@ -2,7 +2,7 @@ use std::{collections::HashMap, time::Duration};
 
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
-use lb_testing_framework::{NodeHttpClient, is_truthy_env};
+use lb_testing_framework::{BlockFeed, NodeHttpClient, is_truthy_env};
 use tokio::{
     task::JoinSet,
     time::{Instant, sleep, timeout},
@@ -10,7 +10,7 @@ use tokio::{
 use tracing::{info, warn};
 
 use crate::{
-    common::wallet::WalletSyncSourceId,
+    common::wallet::WalletChainSourceId,
     cucumber::{
         defaults::CUCUMBER_VERBOSE_CONSOLE, error::StepError, wallet::TARGET, world::CucumberWorld,
     },
@@ -61,51 +61,28 @@ impl BestNodeInfo {
 pub async fn sanitize_best_node_info<'a>(
     world: &'a CucumberWorld,
     wallet_name: &str,
-    best_node_info: Option<&'a BestNodeInfo>,
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
+    sanitize_best_node_info_with_feed(world, wallet_name, best_node_info, None).await
+}
+
+pub async fn sanitize_best_node_info_with_feed<'a>(
+    world: &'a CucumberWorld,
+    wallet_name: &str,
+    best_node_info: Option<&BestNodeInfo>,
+    feed: Option<&BlockFeed>,
 ) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
     let wallet_node_name = world.resolve_wallet_node_name(wallet_name)?;
 
     if let Some(best_info) = best_node_info
         && let Some(node) = best_info.for_wallet_node(&wallet_node_name, &world.node_to_group)
     {
-        let Some(node_info) = world.nodes_info.get(&node.node_name) else {
-            return Err(StepError::LogicalError {
-                message: format!("Best node '{}' not found in world state", node.node_name),
-            });
-        };
-
-        let consensus = node_info
-            .started_node
-            .client
-            .consensus_info()
-            .await
-            .map_err(|_| StepError::LogicalError {
-                message: "No available nodes to query for UTXOs".to_owned(),
-            })?;
-
-        let selected_tip = normalize_header_id_str(&node.tip);
-        let live_tip = consensus.cryptarchia_info.tip.encode_hex::<String>();
-        let tip_or_height_changed =
-            selected_tip != live_tip || consensus.cryptarchia_info.height != node.height;
-
-        if tip_or_height_changed
-            && !is_tip_still_on_canonical_chain(
-                &node_info.started_node.client,
-                &node.tip,
-                node.height,
-                &consensus.cryptarchia_info,
-            )
-            .await?
-        {
-            let refreshed = determine_best_node(world, &wallet_node_name).await?;
-            return resolve_selected_best_node(world, &wallet_node_name, &refreshed).await;
+        if let Some(selection) = resolve_cached_best_node(world, node, feed).await? {
+            return Ok(selection);
         }
 
-        return Ok((
-            node.node_name.clone(),
-            &node_info.started_node.client,
-            consensus.cryptarchia_info,
-        ));
+        let refreshed = determine_best_node(world, &wallet_node_name).await?;
+        return resolve_selected_best_node(world, &wallet_node_name, &refreshed).await;
     }
 
     let refreshed = determine_best_node(world, &wallet_node_name).await?;
@@ -114,8 +91,17 @@ pub async fn sanitize_best_node_info<'a>(
 
 pub async fn sanitize_best_node_info_for_group<'a>(
     world: &'a CucumberWorld,
-    source_id: &WalletSyncSourceId,
-    best_node_info: Option<&'a BestNodeInfo>,
+    source_id: &WalletChainSourceId,
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
+    sanitize_best_node_info_for_group_with_feed(world, source_id, best_node_info, None).await
+}
+
+pub async fn sanitize_best_node_info_for_group_with_feed<'a>(
+    world: &'a CucumberWorld,
+    source_id: &WalletChainSourceId,
+    best_node_info: Option<&BestNodeInfo>,
+    feed: Option<&BlockFeed>,
 ) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
     let group_key = source_id.as_str();
     let representative_node = representative_node_for_group(world, group_key)?;
@@ -126,44 +112,12 @@ pub async fn sanitize_best_node_info_for_group<'a>(
             .get(group_key)
             .or_else(|| best_info.best_nodes.get(""))
     {
-        let Some(node_info) = world.nodes_info.get(&node.node_name) else {
-            return Err(StepError::LogicalError {
-                message: format!("Best node '{}' not found in world state", node.node_name),
-            });
-        };
-
-        let consensus = node_info
-            .started_node
-            .client
-            .consensus_info()
-            .await
-            .map_err(|_| StepError::LogicalError {
-                message: "No available nodes to query for UTXOs".to_owned(),
-            })?;
-
-        let selected_tip = normalize_header_id_str(&node.tip);
-        let live_tip = consensus.cryptarchia_info.tip.encode_hex::<String>();
-        let tip_or_height_changed =
-            selected_tip != live_tip || consensus.cryptarchia_info.height != node.height;
-
-        if tip_or_height_changed
-            && !is_tip_still_on_canonical_chain(
-                &node_info.started_node.client,
-                &node.tip,
-                node.height,
-                &consensus.cryptarchia_info,
-            )
-            .await?
-        {
-            let refreshed = determine_best_node(world, &representative_node).await?;
-            return resolve_selected_best_node(world, &representative_node, &refreshed).await;
+        if let Some(selection) = resolve_cached_best_node(world, node, feed).await? {
+            return Ok(selection);
         }
 
-        return Ok((
-            node.node_name.clone(),
-            &node_info.started_node.client,
-            consensus.cryptarchia_info,
-        ));
+        let refreshed = determine_best_node(world, &representative_node).await?;
+        return resolve_selected_best_node(world, &representative_node, &refreshed).await;
     }
 
     let refreshed = determine_best_node(world, &representative_node).await?;
@@ -363,6 +317,62 @@ async fn resolve_selected_best_node<'a>(
     ))
 }
 
+async fn resolve_cached_best_node<'a>(
+    world: &'a CucumberWorld,
+    selected: &BestGroupNode,
+    feed: Option<&BlockFeed>,
+) -> Result<Option<(String, &'a NodeHttpClient, CryptarchiaInfo)>, StepError> {
+    let Some(node_info) = world.nodes_info.get(&selected.node_name) else {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Best node '{}' not found in world state",
+                selected.node_name
+            ),
+        });
+    };
+
+    let consensus = node_info
+        .started_node
+        .client
+        .consensus_info()
+        .await
+        .map_err(|_| StepError::LogicalError {
+            message: "No available nodes to query for UTXOs".to_owned(),
+        })?;
+
+    let selected_tip = normalize_header_id_str(&selected.tip);
+    let live_tip = consensus.cryptarchia_info.tip.encode_hex::<String>();
+    let tip_or_height_changed =
+        selected_tip != live_tip || consensus.cryptarchia_info.height != selected.height;
+
+    if tip_or_height_changed && !selected_tip_still_on_observed_chain(feed, selected) {
+        return Ok(None);
+    }
+
+    Ok(Some((
+        selected.node_name.clone(),
+        &node_info.started_node.client,
+        consensus.cryptarchia_info,
+    )))
+}
+
+fn selected_tip_still_on_observed_chain(
+    feed: Option<&BlockFeed>,
+    selected: &BestGroupNode,
+) -> bool {
+    let Some(observation) = feed.and_then(BlockFeed::latest_observation) else {
+        return false;
+    };
+    let Some(node_chain) = observation.node(&selected.node_name) else {
+        return false;
+    };
+    let Some(observed_header) = node_chain.header_at_height(selected.height) else {
+        return false;
+    };
+
+    normalize_header_id_str(&selected.tip) == observed_header.encode_hex::<String>()
+}
+
 const fn display_group_key(group_key: &str) -> &str {
     if group_key.is_empty() {
         "<ungrouped>"
@@ -537,35 +547,4 @@ fn normalize_header_id_str(header_id: &str) -> String {
         .trim()
         .trim_start_matches("0x")
         .to_ascii_lowercase()
-}
-
-async fn is_tip_still_on_canonical_chain(
-    client: &NodeHttpClient,
-    selected_tip: &str,
-    selected_height: u64,
-    live_consensus: &CryptarchiaInfo,
-) -> Result<bool, StepError> {
-    let selected_tip_normalized = normalize_header_id_str(selected_tip);
-    let live_tip_normalized = live_consensus.tip.encode_hex::<String>();
-
-    if selected_tip_normalized == live_tip_normalized {
-        return Ok(true);
-    }
-
-    if live_consensus.height < selected_height {
-        return Ok(false);
-    }
-
-    let mut current_header_id = live_consensus.tip;
-    let mut remaining_steps = live_consensus.height - selected_height;
-
-    while remaining_steps > 0 {
-        let Some(block) = client.block(&current_header_id).await? else {
-            return Ok(false);
-        };
-        current_header_id = block.header.parent_block;
-        remaining_steps -= 1;
-    }
-
-    Ok(normalize_header_id_str(&current_header_id.to_string()) == selected_tip_normalized)
 }

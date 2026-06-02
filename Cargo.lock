@@ -5092,6 +5092,7 @@ dependencies = [
 name = "logos-blockchain-tests"
 version = "0.1.2"
 dependencies = [
+ "async-trait",
  "cucumber",
  "derivative",
  "divan",
