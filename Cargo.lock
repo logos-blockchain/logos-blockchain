@@ -4366,7 +4366,6 @@ dependencies = [
  "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tracing",
- "logos-blockchain-tracing-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "overwatch",
