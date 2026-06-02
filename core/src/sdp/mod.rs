@@ -243,6 +243,8 @@ pub struct ProviderInfo {
     pub zk_id: ZkPublicKey,
 }
 
+const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
+
 impl Declaration {
     #[must_use]
     pub fn new(epoch: Epoch, declaration_msg: &DeclarationMessage) -> Self {
@@ -253,7 +255,7 @@ impl Declaration {
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
             created: epoch,
-            active: epoch,
+            active: epoch + SNAPSHOT_FINALIZATION_DELAY,
             withdrawn: None,
             nonce: 0,
         }
@@ -389,6 +391,9 @@ fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
 
 #[cfg(test)]
 mod tests {
+    use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::Ed25519Key;
+
     use super::*;
 
     #[test]
@@ -471,5 +476,29 @@ mod tests {
                 .to_string(),
             "Input cannot be empty."
         );
+    }
+
+    #[test]
+    fn declaration_initialization() {
+        let msg = DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            locators: vec!["/ip4/127.0.0.1/udp/3001/quic-v1".parse().unwrap()]
+                .try_into()
+                .unwrap(),
+            provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
+            zk_id: ZkPublicKey::zero(),
+            locked_note_id: Fr::ZERO.into(),
+        };
+
+        let declaration = Declaration::new(Epoch::new(10), &msg);
+        assert_eq!(declaration.service_type, msg.service_type);
+        assert_eq!(declaration.provider_id, msg.provider_id);
+        assert_eq!(declaration.locked_note_id, msg.locked_note_id);
+        assert_eq!(declaration.locators, msg.locators);
+        assert_eq!(declaration.zk_id, msg.zk_id);
+        assert_eq!(declaration.created, Epoch::new(10));
+        assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
+        assert_eq!(declaration.withdrawn, None);
+        assert_eq!(declaration.nonce, 0);
     }
 }
