@@ -38,6 +38,7 @@ use std::error::Error;
 
 pub use chain_inputs::{PolChainInputs, PolChainInputsData};
 pub use inputs::{PolVerifierInput, PolWitnessInputs, PolWitnessInputsData};
+use lb_circuits_prover::Prover as _;
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
 use lb_log_targets::proofs;
 use tracing::error;
@@ -75,10 +76,10 @@ const LOG_TARGET: &str = proofs::POL;
 ///   serialization or deserialization.
 pub fn prove(inputs: PolWitnessInputs) -> Result<(PoLProof, PolVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
-    let (proof, verifier_inputs) =
-        lb_circuits_prover::prover_from_contents(POL_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
-    let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof)?;
-    let verifier_inputs: PolVerifierInputJson = serde_json::from_slice(&verifier_inputs)?;
+    let result =
+        lb_circuits_prover::Rapidsnark::prove(POL_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
+    let proof: Groth16ProofJsonDeser = serde_json::from_str(&result.proof)?;
+    let verifier_inputs: PolVerifierInputJson = serde_json::from_str(&result.public_signals)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {

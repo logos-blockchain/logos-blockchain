@@ -166,7 +166,6 @@ lb_network                         = { default-features = false, package = "logo
 lbc-poc-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", tag = "v0.5.1" }
 lbc-pol-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", tag = "v0.5.1" }
 lbc-poq-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", tag = "v0.5.1" }
-lbc-rapidsnark-sys                 = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-rapidsnark-sys", tag = "v0.5.1" }
 lbc-signature-sys                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", tag = "v0.5.1" }
 lbc-types                          = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", tag = "v0.5.1" }
 lbp-error                          = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
@@ -259,6 +258,7 @@ reqwest                            = { default-features = false, version = "0.12
 rocksdb                            = { default-features = false, version = "0.24" }
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
+rust-rapidsnark                    = { default-features = false, version = "0.1.3" }
 serde                              = { default-features = false, version = "1.0" }
 serde-big-array                    = { default-features = false, version = "0.5" }
 serde_arrays                       = { default-features = false, version = "0.2.0" }
