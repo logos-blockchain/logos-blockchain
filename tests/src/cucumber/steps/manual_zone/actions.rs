@@ -203,6 +203,14 @@ pub(super) async fn submit_zone_channel_config(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let mut checkpoint_rx = world
+        .zone
+        .checkpoint_receiver(sequencer_alias)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone sequencer '{sequencer_alias}' has no checkpoint watch"),
+        })?;
+    checkpoint_rx.mark_unchanged();
+
     let (result, finalized) = handle
         .channel_config(
             Keys::new_unchecked(authorized_keys),
@@ -218,13 +226,25 @@ pub(super) async fn submit_zone_channel_config(
 
     drop(finalized);
 
+    // Wait until the SDK has published a checkpoint that contains our newly
+    // submitted tx — the watch is updated by the drive loop on its next
+    // iteration after the actor's reply, so a naive read here races.
+    let checkpoint = timeout(
+        Duration::from_secs(30),
+        wait_for_checkpoint_with_tx(&mut checkpoint_rx, result.inscription_id),
+    )
+    .await
+    .map_err(|_| StepError::LogicalError {
+        message: format!(
+            "timed out waiting for sequencer '{sequencer_alias}' checkpoint to include {:?}",
+            result.inscription_id
+        ),
+    })?
+    .map_err(|message| StepError::LogicalError { message })?;
+
     world
         .zone
-        .set_latest_checkpoint_for(sequencer_alias, result.checkpoint.clone());
-    world.zone.remember_checkpoint(
-        format!("{transaction_alias}_CHECKPOINT"),
-        result.checkpoint.clone(),
-    );
+        .remember_checkpoint(format!("{transaction_alias}_CHECKPOINT"), checkpoint);
     world.remember_submitted_transaction(transaction_alias, result.inscription_id);
 
     Ok(())
@@ -260,13 +280,31 @@ pub(super) fn remember_published_zone_message(
     payload: Inscription,
     result: &PublishResult,
 ) {
+    let checkpoint = world.zone.current_checkpoint_for(sequencer_alias).ok();
     world.zone.remember_zone_message(
         message_alias,
         payload,
         Some(result.inscription_id),
         Some(sequencer_alias),
-        Some(result.checkpoint.clone()),
+        checkpoint,
     );
+}
+
+async fn wait_for_checkpoint_with_tx(
+    rx: &mut tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
+    tx_hash: TxHash,
+) -> Result<SequencerCheckpoint, String> {
+    loop {
+        let snapshot = rx.borrow_and_update().clone();
+        if let Some(cp) = snapshot
+            && cp.pending_txs.iter().any(|(hash, _)| *hash == tx_hash)
+        {
+            return Ok(cp);
+        }
+        rx.changed()
+            .await
+            .map_err(|err| format!("checkpoint watch closed: {err}"))?;
+    }
 }
 
 async fn sync_zone_funding_wallet_utxos(

@@ -357,7 +357,9 @@ fn build_genesis_block(
     // Accumulate additional notes into WithNotes state.
     let mut builder = GenesisBlockBuilder::new().add_note(first_note);
     for note in notes_iter {
-        builder = builder.add_note(note);
+        builder = builder
+            .try_add_note(note)
+            .context("failed to append note to genesis transfer")?;
     }
 
     // Transition: WithNotes → WithNotesAndInscription → WithAll.

@@ -343,8 +343,7 @@ mod tests {
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
     fn create_tx(mut ops: Vec<Op>, mut ops_proofs: Vec<OpProof>) -> SignedMantleTx {
-        let transfer_op =
-            TransferOp::new(Inputs::empty(), Outputs::new(vec![create_test_note(1000)]));
+        let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
         let mantle_tx = MantleTx(Ops::new_unchecked(new_ops));

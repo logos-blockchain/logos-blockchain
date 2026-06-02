@@ -9,17 +9,82 @@ use lb_libp2p::Multiaddr;
 use lb_node::{UserConfig, config::RunConfig};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient,
-    USER_CONFIG_FILE, internal::DeploymentPlan, record_system_monitor_event,
-    register_system_monitor_output_file,
+    USER_CONFIG_FILE, internal::DeploymentPlan, is_truthy_env, record_system_monitor_event,
+    register_system_monitor_output_file, unregister_system_monitor_output_file,
 };
 use reqwest::Url;
+use tempfile::TempDir;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
 use tokio::time::error::Elapsed;
 
+use crate::cucumber::defaults::{E2E_KEEP_LOGS, E2E_TESTS_BASE_DIR_OVERRIDE};
+
 pub struct LocalManualClusterHarnessBase {
-    pub scenario_base_dir: PathBuf,
-    pub deployment: DeploymentPlan,
-    pub cluster: LbcManualCluster,
+    scenario_base_dir: PathBuf,
+    deployment: DeploymentPlan,
+    cluster: LbcManualCluster,
+    _scenario_base_dir_guard: ScenarioBaseDirGuard,
+}
+
+impl LocalManualClusterHarnessBase {
+    pub fn scenario_base_dir(&self) -> &Path {
+        &self.scenario_base_dir
+    }
+
+    pub const fn deployment(&self) -> &DeploymentPlan {
+        &self.deployment
+    }
+
+    pub const fn cluster(&self) -> &LbcManualCluster {
+        &self.cluster
+    }
+
+    pub const fn cluster_mut(&mut self) -> &mut LbcManualCluster {
+        &mut self.cluster
+    }
+}
+
+struct ScenarioBaseDirGuard {
+    tempdir: Option<TempDir>,
+    system_monitor_output_path: PathBuf,
+}
+
+impl Drop for ScenarioBaseDirGuard {
+    fn drop(&mut self) {
+        unregister_system_monitor_output_file(&self.system_monitor_output_path);
+
+        if (std::thread::panicking() || e2e_keep_logs_enabled())
+            && let Some(tempdir) = self.tempdir.take()
+        {
+            let _kept_path = tempdir.keep();
+            return;
+        }
+
+        if let Some(tempdir) = self.tempdir.take()
+            && has_artifacts_beyond_system_monitor_outputs(tempdir.path())
+        {
+            let _kept_path = tempdir.keep();
+        }
+    }
+}
+
+fn e2e_keep_logs_enabled() -> bool {
+    is_truthy_env(E2E_KEEP_LOGS)
+}
+
+// If the directory only contains system monitor leftovers, clean it up.
+// Preserve it when other scenario artifacts were produced so they remain
+// inspectable.
+fn has_artifacts_beyond_system_monitor_outputs(path: &Path) -> bool {
+    fs::read_dir(path).map_or(true, |entries| {
+        entries.filter_map(Result::ok).any(|entry| {
+            entry
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_none_or(|name| !matches!(name, "system_stats.ndjson" | "system_stats.csv"))
+        })
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -32,8 +97,10 @@ pub fn build_local_manual_cluster(
     test_name: &str,
     prefix: &str,
     builder: DeploymentBuilder,
+    scenario_dir_override: Option<PathBuf>,
 ) -> LocalManualClusterHarnessBase {
-    let scenario_base_dir = unique_scenario_base_dir(&format!("{prefix}-{test_name}"));
+    let (scenario_base_dir, scenario_base_dir_guard) =
+        managed_scenario_base_dir(&format!("{prefix}-{test_name}"), scenario_dir_override);
     register_system_monitor_output_file(&scenario_base_dir.join("system_stats.ndjson"));
     record_system_monitor_event(
         "manual_cluster_prepared",
@@ -46,11 +113,16 @@ pub fn build_local_manual_cluster(
         .expect("manual-cluster deployment should build");
 
     let cluster = LbcLocalDeployer::new().manual_cluster_from_descriptors(deployment.clone());
+    let system_monitor_output_path = scenario_base_dir.join("system_stats.ndjson");
 
     LocalManualClusterHarnessBase {
         scenario_base_dir,
         deployment,
         cluster,
+        _scenario_base_dir_guard: ScenarioBaseDirGuard {
+            tempdir: Some(scenario_base_dir_guard),
+            system_monitor_output_path,
+        },
     }
 }
 
@@ -61,11 +133,12 @@ pub async fn start_local_manual_cluster_with_layout<F>(
     node_count: usize,
     layout: ManualNodeLayout,
     config_patch: F,
+    scenario_dir_override: Option<PathBuf>,
 ) -> (LocalManualClusterHarnessBase, Vec<StartedNode<LbcEnv>>)
 where
     F: Fn(RunConfig) -> Result<RunConfig, DynError> + Clone + Send + Sync + 'static,
 {
-    let base = build_local_manual_cluster(test_name, prefix, builder);
+    let base = build_local_manual_cluster(test_name, prefix, builder, scenario_dir_override);
 
     let nodes = start_manual_nodes_with_layout(
         &base.cluster,
@@ -210,12 +283,76 @@ pub fn api_url(node: &NodeHttpClient, path: &str) -> Url {
 }
 
 #[must_use]
-pub fn unique_scenario_base_dir(label: &str) -> PathBuf {
+pub fn unique_scenario_base_dir(label: &str, scenario_dir_override: Option<PathBuf>) -> PathBuf {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0u128, |duration| duration.as_nanos());
 
-    std::env::temp_dir().join(format!("{label}-{nanos}"))
+    let unique_scenario_base_dir =
+        scenario_base_root_dir(scenario_dir_override).join(format!("{label}-{nanos}"));
+
+    println!(
+        "unique_scenario_base_dir: '{}'",
+        unique_scenario_base_dir.display()
+    );
+    unique_scenario_base_dir
+}
+
+fn managed_scenario_base_dir(
+    label: &str,
+    scenario_dir_override: Option<PathBuf>,
+) -> (PathBuf, TempDir) {
+    let base_root_dir = scenario_base_root_dir(scenario_dir_override);
+    fs::create_dir_all(&base_root_dir).unwrap_or_else(|error| {
+        panic!(
+            "failed to create scenario base root '{}': {error}",
+            base_root_dir.display()
+        )
+    });
+
+    let scenario_base_dir_guard = tempfile::Builder::new()
+        .prefix(&format!("{label}-"))
+        .tempdir_in(&base_root_dir)
+        .unwrap_or_else(|error| {
+            panic!(
+                "failed to create scenario base directory in '{}': {error}",
+                base_root_dir.display()
+            )
+        });
+    let scenario_base_dir = scenario_base_dir_guard.path().to_path_buf();
+
+    println!(
+        "unique_scenario_base_dir: '{}'",
+        scenario_base_dir.display()
+    );
+
+    (scenario_base_dir, scenario_base_dir_guard)
+}
+
+fn scenario_base_root_dir(scenario_dir_override: Option<PathBuf>) -> PathBuf {
+    if std::env::var_os(E2E_TESTS_BASE_DIR_OVERRIDE).is_some() {
+        e2e_tests_base_dir_from_env_override()
+    } else if let Some(dir_override) = scenario_dir_override {
+        dir_override
+    } else {
+        std::env::temp_dir()
+    }
+}
+
+fn e2e_tests_base_dir_from_env_override() -> PathBuf {
+    match std::env::var_os(E2E_TESTS_BASE_DIR_OVERRIDE) {
+        Some(raw) if !raw.is_empty() => PathBuf::from(raw),
+        Some(raw) => {
+            let temp_dir = std::env::temp_dir();
+            println!(
+                "Invalid value for {E2E_TESTS_BASE_DIR_OVERRIDE}: '{}', using '{}'",
+                raw.display(),
+                temp_dir.display(),
+            );
+            temp_dir
+        }
+        None => std::env::temp_dir(),
+    }
 }
 
 #[must_use]

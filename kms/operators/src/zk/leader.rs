@@ -8,7 +8,11 @@ use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{
     Ed25519PublicKey, ZkKey, errors::KeyError, secured_key::SecureKeyOperator,
 };
+use lb_log_targets::kms;
 use lb_utxotree::MerklePath;
+use tracing::debug;
+
+const LOG_TARGET: &str = kms::operators::ZK_LEADER;
 
 pub struct CheckLotteryWinning {
     result_channel: tokio::sync::oneshot::Sender<bool>,
@@ -57,7 +61,7 @@ impl SecureKeyOperator for CheckLotteryWinning {
             ))
             .is_err()
         {
-            tracing::error!("Failed to send result via channel");
+            debug!(target: LOG_TARGET, "Failed to send result via channel");
         }
         Ok(())
     }
@@ -124,7 +128,7 @@ impl SecureKeyOperator for BuildPrivateInputsWithLeaderKey {
             ))
             .is_err()
         {
-            tracing::error!("Failed to send result via channel");
+            debug!(target: LOG_TARGET, "Failed to send result via channel");
         }
         Ok(())
     }

@@ -121,9 +121,9 @@ pub(super) fn resolve_bootstrap_image() -> (String, Option<String>) {
 }
 
 fn maybe_add_circuits_mount(mounts: &mut Vec<DockerVolumeMount>, env: &mut Vec<(String, String)>) {
-    let circuits_dir = env::var("LOGOS_BLOCKCHAIN_CIRCUITS_DOCKER")
+    let circuits_dir = env::var("LBC_ROOT_DIR_DOCKER")
         .ok()
-        .or_else(|| env::var("LOGOS_BLOCKCHAIN_CIRCUITS").ok());
+        .or_else(|| env::var("LBC_ROOT_DIR").ok());
 
     let Some(circuits_dir) = circuits_dir else {
         return;

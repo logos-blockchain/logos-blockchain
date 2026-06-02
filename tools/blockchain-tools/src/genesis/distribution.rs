@@ -46,7 +46,8 @@ impl GenesisTransferOp {
 
         notes.push(Note::new(faucet.funds, faucet.zk_id));
 
-        let outputs = Outputs::new(notes);
+        let outputs = Outputs::try_new(notes)
+            .expect("genesis distribution outputs must fit transfer output bounds");
         let transfer_op = TransferOp::new(Inputs::empty(), outputs.clone());
 
         Self {

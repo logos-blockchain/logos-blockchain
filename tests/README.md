@@ -103,6 +103,37 @@ debug-only code paths to be enabled during the tests.
 To modify the tracing configuration when using `-F debug` flag go to `tests/src/topology/configs/tracing.rs`. If debug
 flag is not used, logs will be written into each nodes temporary directory.
 
+### E2E Artifact Location (nextest / cargo test)
+
+Manual-cluster E2E tests create per-run directories (node configs, state, and default node log files)
+under the OS temporary directory by default.
+
+You can override this root directory with:
+
+```text
+E2E_TESTS_BASE_DIR_OVERRIDE=/absolute/or/relative/path
+```
+
+You can force manual-cluster scenario directories to be kept even when tests pass:
+
+```text
+E2E_KEEP_LOGS=true
+```
+
+(`true`, `1`, `yes` are accepted.)
+
+For testing-framework tempdir behavior, you can also keep temp run directories with:
+
+```text
+TF_KEEP_LOGS=1
+```
+
+Optional stable node log output location:
+
+```text
+LOGOS_BLOCKCHAIN_LOG_DIR=/path/to/node-log-files
+```
+
 ## Running Cucumber tests
 
 To run the Cucumber tests, ensure the binaries are built (debug or release) and the environment variables below point to 

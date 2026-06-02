@@ -25,6 +25,7 @@ lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-log-targets                = { workspace = true }
 lb-mmr                        = { workspace = true }
 lb-poc                        = { workspace = true }
 lb-pol                        = { workspace = true }

@@ -6,7 +6,7 @@ use lb_core::{
         Note, Op, SignedMantleTx, Value,
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ops::leader_claim::LeaderClaimOp,
-        tx_builder::MantleTxBuilder,
+        tx_builder::{MantleTxBuilder, TxBuilderError},
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -41,7 +41,9 @@ where
         .map_err(|error| LeaderWalletError::WalletApi(Box::new(error)))?;
     let tx_builder = MantleTxBuilder::new(tx_context)
         .push_op(Op::LeaderClaim(op))
-        .add_ledger_output(Note::new(reward_amount, config.funding_pk));
+        .map_err(LeaderWalletError::TxBuilder)?
+        .add_ledger_output(Note::new(reward_amount, config.funding_pk))
+        .map_err(LeaderWalletError::TxBuilder)?;
     let funded_tx_builder = wallet
         .fund_tx(
             Some(tip),
@@ -83,4 +85,6 @@ pub enum LeaderWalletError {
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
+    #[error(transparent)]
+    TxBuilder(#[from] TxBuilderError),
 }

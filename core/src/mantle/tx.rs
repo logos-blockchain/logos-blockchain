@@ -734,7 +734,7 @@ mod tests {
         };
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new(vec![withdraw_note]),
+            outputs: Outputs::new([withdraw_note]),
             withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();

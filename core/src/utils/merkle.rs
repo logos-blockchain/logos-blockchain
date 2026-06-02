@@ -44,7 +44,7 @@ mod tests {
         MantleTx(
             [Op::Transfer(TransferOp::new(
                 Inputs::empty(),
-                Outputs::new(vec![Note {
+                Outputs::new([Note {
                     value: seed.into(),
                     pk: ZkPublicKey::zero(),
                 }]),

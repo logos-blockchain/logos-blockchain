@@ -317,9 +317,9 @@ Feature: Zone SDK
       | CHANNEL_CONFIG_1 | 2                 | 0               | SEQ_A, SEQ_B          |
     Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
     When I start zone sequencer "SEQ_B"
-    Then sequencer "SEQ_A" reaches sequencing state:
-      | own_key_index | turn_to_write | pending_transactions | time_out |
-      | 0             | OUR_TURN      | 0                    | 120      |
+    Then sequencer "SEQ_A" is notified it is their turn to write in 120 seconds
+    And sequencer "SEQ_B" is notified it is their turn to write in 120 seconds
+    And sequencer "SEQ_A" is notified it is their turn to write in 120 seconds
     When I submit zone message "MSG_A1" to sequencer "SEQ_A" with data "decentralized-immediate-publish" immediately
     Then sequencer "SEQ_A" publishes "MSG_A1" immediately while in turn in 120 seconds
     And the zone indexer returns messages in any order in 360 seconds:

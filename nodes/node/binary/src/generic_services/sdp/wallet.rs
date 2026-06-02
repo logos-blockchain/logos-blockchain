@@ -36,7 +36,7 @@ where
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
-        tx_builder = tx_builder.push_op(Op::SDPDeclare(declaration));
+        tx_builder = tx_builder.push_op(Op::SDPDeclare(declaration))?;
 
         let funded = self
             .api
@@ -69,7 +69,7 @@ where
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
-        tx_builder = tx_builder.push_op(Op::SDPWithdraw(withdraw));
+        tx_builder = tx_builder.push_op(Op::SDPWithdraw(withdraw))?;
 
         let funded = self
             .api
@@ -102,7 +102,7 @@ where
         active: ActiveMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
-        tx_builder = tx_builder.push_op(Op::SDPActive(active));
+        tx_builder = tx_builder.push_op(Op::SDPActive(active))?;
 
         let funded = self
             .api

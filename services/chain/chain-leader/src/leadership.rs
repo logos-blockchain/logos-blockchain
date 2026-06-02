@@ -403,7 +403,7 @@ mod pol_tests {
         let pk = sk.to_public_key();
 
         // Create a UTXO
-        let transfer = TransferOp::new(Inputs::empty(), Outputs::new(vec![Note::new(1000u64, pk)]));
+        let transfer = TransferOp::new(Inputs::empty(), Outputs::new([Note::new(1000u64, pk)]));
         let utxo = transfer.outputs.utxo_by_index(0, &transfer).unwrap();
 
         // Create aged/latest UTXO trees

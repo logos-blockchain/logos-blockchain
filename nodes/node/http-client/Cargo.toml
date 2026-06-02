@@ -21,6 +21,7 @@ lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
+lb-log-targets                = { workspace = true }
 log                           = { workspace = true }
 reqwest                       = { features = ["http2", "json", "rustls-tls", "stream"], workspace = true }
 serde                         = { workspace = true }

@@ -3,6 +3,10 @@ use std::{
     panic::PanicHookInfo,
 };
 
+use lb_log_targets::node;
+
+const LOG_TARGET: &str = node::ROOT;
+
 pub fn log_and_exit_hook(panic_info: &PanicHookInfo) {
     let payload = panic_info.payload();
 
@@ -17,10 +21,11 @@ pub fn log_and_exit_hook(panic_info: &PanicHookInfo) {
         .then_some("run with RUST_BACKTRACE=1 environment variable to display a backtrace");
 
     tracing::error!(
-        panic.payload = payload,
-        panic.location = location,
-        panic.backtrace = backtrace.to_string(),
-        panic.note = note,
+        target: LOG_TARGET,
+        panic_payload = payload,
+        panic_location = location,
+        panic_backtrace = backtrace.to_string(),
+        panic_note = note,
         "A panic occurred",
     );
 

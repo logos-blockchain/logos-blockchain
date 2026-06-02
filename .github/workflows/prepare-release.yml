@@ -85,11 +85,6 @@ jobs:
       - name: Add the target triple
         run: rustup target add ${{ matrix.platform.target_triple }}
 
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Build node binary
         run: cargo build -p logos-blockchain-node --release --target ${{ matrix.platform.target_triple }}
 

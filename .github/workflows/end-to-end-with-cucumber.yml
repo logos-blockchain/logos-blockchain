@@ -51,6 +51,12 @@ jobs:
       - name: Disable rustup override
         run: rustup override unset || true
 
+      - name: Expose gmp to cargo (macOS runners)
+        if: runner.os == 'macOS'
+        run: |
+          echo "RUSTFLAGS=-C linker=rust-lld -L /run/current-system/sw/lib" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=/run/current-system/sw/lib" >> "$GITHUB_ENV"
+
       # Checkout the repository code
       # Notes:
       # - We need to test the exact PR code, immutable, no synthetic merge commit from master
@@ -62,12 +68,6 @@ jobs:
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-
-      # Set up custom circuits required for tests
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # Set environment variables for circuits path - expand $HOME first since GitHub Actions env: blocks don't expand
       # shell variables
@@ -139,7 +139,8 @@ jobs:
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
-          path: tests/.run_*
+          path: tests/.e2e_artefacts
+          if-no-files-found: ignore
 
       # Run cucumber integration tests with environment variables for binaries and test params
       # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):

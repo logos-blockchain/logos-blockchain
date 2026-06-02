@@ -1,12 +1,18 @@
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };
-use logos_blockchain_tests::common::manual_cluster::{
-    build_local_manual_cluster, wait_for_height as wait_for_manual_cluster_height,
+use logos_blockchain_tests::{
+    common::manual_cluster::{
+        build_local_manual_cluster, wait_for_height as wait_for_manual_cluster_height,
+    },
+    cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
 
@@ -26,10 +32,11 @@ async fn blend_devnet_setup() {
         "blend-local-watch",
         "tf-local-debug",
         DeploymentBuilder::new(TfTopologyConfig::with_node_numbers(node_count)),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     );
 
-    let cluster = base.cluster;
-    let nodes = start_manual_nodes(&cluster, base.scenario_base_dir.as_path(), node_count).await;
+    let cluster = base.cluster();
+    let nodes = start_manual_nodes(cluster, base.scenario_base_dir(), node_count).await;
 
     cluster
         .wait_network_ready()

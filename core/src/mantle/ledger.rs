@@ -1,11 +1,11 @@
-use std::{collections::HashSet, slice, sync::LazyLock};
+use std::{collections::HashSet, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
-use lb_utils::bounded_vec::{BoundedError, UpperBoundedVec};
+use lb_utils::bounded_vec::BoundedError;
 use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -15,7 +15,8 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::Events,
     mantle::{
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        encoding::{BoundedInputs, BoundedOutputs, NomInputs, decode_uint64, decode_zk_public_key},
+        nom::{NomDecode, NomEncode},
         ops::OpId,
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -48,6 +49,8 @@ pub enum InputsError {
     DoubleSpend,
     #[error("Sum of input values overflows")]
     InputsOverflow,
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -56,6 +59,8 @@ pub enum OutputsError {
     ZeroValueNote,
     #[error("Sum of output values overflows")]
     OutputsOverflow,
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
 }
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
@@ -67,12 +72,23 @@ pub enum LedgerError {
 }
 
 #[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Outputs(Vec<Note>);
+pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
+    pub fn try_new(
+        notes: impl TryInto<BoundedOutputs, Error = BoundedError>,
+    ) -> Result<Self, OutputsError> {
+        notes.try_into().map(Self).map_err(OutputsError::from)
+    }
+
     #[must_use]
-    pub const fn new(notes: Vec<Note>) -> Self {
-        Self(notes)
+    pub fn new(notes: impl Into<BoundedOutputs>) -> Self {
+        Self(notes.into())
+    }
+
+    #[must_use]
+    pub fn empty() -> Self {
+        Self(BoundedOutputs::default())
     }
 
     pub fn utxos<O: OpId>(&self, op: &O) -> impl Iterator<Item = Utxo> {
@@ -128,66 +144,54 @@ impl Outputs {
         self.0.is_empty()
     }
 
-    pub fn iter(&self) -> slice::Iter<'_, Note> {
+    pub fn iter(&self) -> impl Iterator<Item = &Note> {
         <&Self as IntoIterator>::into_iter(self)
     }
 }
 
-impl AsRef<Vec<Note>> for Outputs {
-    fn as_ref(&self) -> &Vec<Note> {
+impl AsRef<BoundedOutputs> for Outputs {
+    fn as_ref(&self) -> &BoundedOutputs {
         &self.0
     }
 }
 
-impl AsMut<Vec<Note>> for Outputs {
-    fn as_mut(&mut self) -> &mut Vec<Note> {
+impl AsMut<BoundedOutputs> for Outputs {
+    fn as_mut(&mut self) -> &mut BoundedOutputs {
         &mut self.0
     }
 }
 
 impl<'output> IntoIterator for &'output Outputs {
-    type Item = <slice::Iter<'output, Note> as IntoIterator>::Item;
-    type IntoIter = slice::Iter<'output, Note>;
+    type Item = <&'output BoundedOutputs as IntoIterator>::Item;
+    type IntoIter = <&'output BoundedOutputs as IntoIterator>::IntoIter;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        (&self.0).into_iter()
     }
 }
-
-pub type InnerInputs = UpperBoundedVec<NoteId, { u8::MAX as usize }>;
-type NomInputs<'a> = NomBoundedVec<'a, NoteId, { InnerInputs::MIN }, { InnerInputs::MAX }, 1>;
 
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
-pub struct Inputs(InnerInputs);
-
-impl AsRef<[NoteId]> for Inputs {
-    fn as_ref(&self) -> &[NoteId] {
-        &self.0
-    }
-}
-
-impl<I> From<I> for Inputs
-where
-    I: Into<InnerInputs>,
-{
-    fn from(value: I) -> Self {
-        Self(value.into())
-    }
-}
+pub struct Inputs(BoundedInputs);
 
 impl Inputs {
     #[must_use]
-    pub const fn new(inputs: InnerInputs) -> Self {
-        Self(inputs)
+    pub fn new(note_ids: impl Into<BoundedInputs>) -> Self {
+        Self(note_ids.into())
+    }
+
+    pub fn try_new(
+        note_ids: impl TryInto<BoundedInputs, Error = BoundedError>,
+    ) -> Result<Self, InputsError> {
+        note_ids.try_into().map(Self).map_err(InputsError::from)
     }
 
     #[must_use]
-    pub const fn empty() -> Self {
-        Self(InnerInputs::new_unchecked(vec![]))
+    pub fn empty() -> Self {
+        Self(BoundedInputs::default())
     }
 
     #[must_use]
-    pub fn into_inner(self) -> InnerInputs {
+    pub fn into_inner(self) -> BoundedInputs {
         self.0
     }
 
@@ -206,7 +210,7 @@ impl Inputs {
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &NoteId> {
-        self.0.iter()
+        <&Self as IntoIterator>::into_iter(self)
     }
 
     pub fn validate(&self, locked_notes: &LockedNotes, utxos: &Utxos) -> Result<(), InputsError> {
@@ -261,6 +265,41 @@ impl Inputs {
             pks.push(utxo.note.pk);
         }
         Ok(pks)
+    }
+}
+
+impl AsRef<BoundedInputs> for Inputs {
+    fn as_ref(&self) -> &BoundedInputs {
+        &self.0
+    }
+}
+
+impl AsRef<[NoteId]> for Inputs {
+    fn as_ref(&self) -> &[NoteId] {
+        &self.0
+    }
+}
+
+impl<I> From<I> for Inputs
+where
+    I: Into<BoundedInputs>,
+{
+    fn from(value: I) -> Self {
+        Self(value.into())
+    }
+}
+
+impl AsMut<BoundedInputs> for Inputs {
+    fn as_mut(&mut self) -> &mut BoundedInputs {
+        &mut self.0
+    }
+}
+impl<'input> IntoIterator for &'input Inputs {
+    type Item = <&'input BoundedInputs as IntoIterator>::Item;
+    type IntoIter = <&'input BoundedInputs as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        (&self.0).into_iter()
     }
 }
 
@@ -335,6 +374,27 @@ impl Note {
     #[must_use]
     pub fn as_fr_components(&self) -> [Fr; 2] {
         [BigUint::from(self.value).into(), *self.pk.as_fr()]
+    }
+}
+
+impl NomEncode for Note {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(crate::mantle::encoding::encode_uint64(self.value));
+        bytes.extend(crate::mantle::encoding::encode_field_element(
+            self.pk.as_fr(),
+        ));
+        bytes
+    }
+}
+
+impl NomDecode for Note {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
+        let (bytes, value) = decode_uint64(bytes)?;
+        let (bytes, pk) = decode_zk_public_key(bytes)?;
+        Ok((bytes, Self::new(value, pk)))
     }
 }
 

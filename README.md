@@ -23,46 +23,19 @@ This node represents the reference implementation of the Logos Blockchain specif
 
 ### Prerequisites
 
-| Requirement | Details |
-|---|---|
-| **LLVM / Clang** | Required for RocksDB and C bindings |
-| **ZK Circuits** | Downloaded via setup script (see below) |
+| Requirement      | Details                                 |
+|------------------|-----------------------------------------|
+| **LLVM / Clang** | Required for RocksDB and C bindings     |
+| **ZK Circuits**  | Downloaded via setup script (see below) |
 
-### 1. Clone and install ZK circuits
+### 1. Clone the repository
 
 ```bash
 git clone https://github.com/logos-blockchain/logos-blockchain.git
 cd logos-blockchain
 ```
 
-<details>
-<summary><b>Linux / macOS</b></summary>
-
-```bash
-./scripts/setup-logos-blockchain-circuits.sh
-```
-
-Circuits are installed to `~/.logos-blockchain-circuits/` by default.
-
-> **macOS note:** The setup script automatically removes quarantine attributes from downloaded binaries since code-signing is not yet implemented.
-
-</details>
-
-<details>
-<summary><b>Custom version or directory</b></summary>
-
-```bash
-# Specific version
-./scripts/setup-logos-blockchain-circuits.sh v0.4.2
-
-# Custom directory
-./scripts/setup-logos-blockchain-circuits.sh v0.4.2 /opt/circuits
-export LOGOS_BLOCKCHAIN_CIRCUITS=/opt/circuits
-```
-
-</details>
-
-Verify the installation:
+If you want to verify the circuits were installed successfully:
 
 ```bash
 cargo test -p logos-blockchain-circuits-prover -p logos-blockchain-circuits-verifier
