@@ -156,6 +156,12 @@ impl Keystore {
         self.set(title.clone(), Key::Zk(secure_key));
         (key_id(&self.secret_keys[&title]), unsecured)
     }
+
+    pub fn remove(&mut self, title: impl Into<KeyTitle>) -> Option<(KeyId, Key)> {
+        let title = title.into();
+        self.public_keys.remove(&title);
+        self.secret_keys.remove(&title).map(|v| (key_id(&v), v))
+    }
 }
 
 impl Default for Keystore {

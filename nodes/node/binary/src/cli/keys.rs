@@ -78,13 +78,13 @@ pub struct AddKeyArgs {
     pub key_title: Option<String>,
 
     #[clap(
-        long = "zk_key",
+        long = "zk",
         value_parser = parse_hex_zk_key
     )]
     pub zk_key: Option<UnsecuredZkKey>,
 
     #[clap(
-        long = "ed25519_key",
+        long = "ed25519",
         value_parser = parse_hex_ed25519_key
     )]
     pub ed25519_key: Option<UnsecuredEd25519Key>,
@@ -206,21 +206,21 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
 
     let key: Key = match (ed25519_key, zk_key) {
         (Some(ed_secret), None) => {
-            let ed_key = Ed25519Key::from(ed_secret.clone());
+            let ed_key = Ed25519Key::from(ed_secret);
             Key::Ed25519(ed_key)
         }
         (None, Some(zk_sercret)) => {
-            let zk_key = ZkKey::from(zk_sercret.clone());
+            let zk_key = ZkKey::from(zk_sercret);
             Key::Zk(zk_key)
         }
         (Some(_), Some(_)) => {
             return Err(color_eyre::eyre::eyre!(
-                "Please provide either --ed25519_key or --zk_key, not both."
+                "Please provide either --ed25519 or --zk, not both."
             ));
         }
         (None, None) => {
             return Err(color_eyre::eyre::eyre!(
-                "You must provide a key via --ed25519_key or --zk_key."
+                "You must provide a key via --ed25519 or --zk."
             ));
         }
     };
@@ -239,6 +239,57 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
         println!("Successfully added key '{user_key_title}' to files.");
     } else {
         println!("Action discarded.");
+    }
+
+    Ok(())
+}
+
+pub fn run_remove_key(args: RemoveKeyArgs) -> Result<()> {
+    let RemoveKeyArgs {
+        user_config: user_config_path,
+        keystore: keystore_path,
+        yes: auto_approve,
+        key_title,
+    } = args;
+
+    if !user_config_path.exists() {
+        return Err(KeysError::UserFileDoesNotExist.into());
+    }
+
+    if !keystore_path.exists() {
+        return Err(KeysError::KeystoreFileDoesNotExist.into());
+    }
+
+    let user_config_yaml = std::fs::read_to_string(&user_config_path)?;
+    let mut user_config: UserConfig = serde_yaml::from_str(&user_config_yaml)?;
+
+    let keystore_yaml = std::fs::read_to_string(&keystore_path)?;
+    let mut keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
+
+    let title_key = KeyTitle::from(key_title.clone());
+
+    if keystore.get(title_key.clone()).is_none() {
+        return Err(crate::cli::config::keystore::KeystoreError::NotFound(title_key).into());
+    }
+
+    if auto_approve
+        || confirm_overwrite(&format!(
+            "Are you sure you want to remove the key '{key_title}'?"
+        ))?
+    {
+        keystore.remove(title_key);
+
+        update_user_config(&mut user_config, &keystore, UpdateArgs::default());
+
+        let user_config_yaml = serde_yaml::to_string(&user_config)?;
+        std::fs::write(&user_config_path, &user_config_yaml)?;
+
+        let keystore_yaml = serde_yaml::to_string(&keystore)?;
+        std::fs::write(&keystore_path, &keystore_yaml)?;
+
+        println!("Successfully removed key '{key_title}' from files.");
+    } else {
+        return Err(KeysError::UserCancelled.into());
     }
 
     Ok(())

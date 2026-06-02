@@ -13,7 +13,7 @@ use color_eyre::eyre::Result;
 use libp2p::Multiaddr;
 
 use crate::{
-    cli::keys::{AddKeyArgs, GenerateKeyArgs},
+    cli::keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
         LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, SdpArgs, StateArgs, UserConfig,
@@ -119,6 +119,8 @@ pub enum Command {
     GenerateKey(Box<GenerateKeyArgs>),
     /// Add a key of type to a keystore.
     AddKey(Box<AddKeyArgs>),
+    /// Remove a key with title from a keystore.
+    RemoveKey(Box<RemoveKeyArgs>),
     /// Publish text inscriptions as zone blocks
     Inscribe(lb_tui_zone::InscribeArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
