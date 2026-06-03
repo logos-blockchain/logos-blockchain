@@ -137,7 +137,7 @@ mod tests {
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
-                        rounds_per_session: epoch_length.try_into().unwrap(),
+                        rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -193,7 +193,7 @@ mod tests {
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
-                        rounds_per_session: epoch_length.try_into().unwrap(),
+                        rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),

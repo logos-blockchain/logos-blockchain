@@ -135,12 +135,8 @@ pub enum Error {
     ServiceNotFound(ServiceType),
     #[error("Duplicate sdp declaration id: {0:?}")]
     DuplicateDeclaration(DeclarationId),
-    #[error("Active session for service {0:?} not found")]
-    ActiveSessionNotFound(ServiceType),
-    #[error("Next session for service {0:?} not found")]
-    NextSessionNotFound(ServiceType),
-    #[error("Session parameters for {0:?} not found")]
-    SessionParamsNotFound(ServiceType),
+    #[error("Epoch parameters for {0:?} not found")]
+    EpochParamsNotFound(ServiceType),
     #[error("Service parameters are missing for {0:?}")]
     ServiceParamsNotFound(ServiceType),
     #[error("Can't update genesis state during different block number")]
@@ -206,7 +202,7 @@ impl<R: Rewards> ServiceState<R> {
             .map(|(id, declaration)| (*id, declaration.clone()))
             .collect();
 
-        // Update rewards with current session state and distribute rewards
+        // Update rewards with current epoch state and distribute rewards
         let reward_utxos = Vec::new();
         // TODO: enable this after making the `rewards` module stable
         // if last_epoch_state.epoch() < epoch_state.epoch() {
@@ -322,7 +318,7 @@ impl SdpLedger {
                 let service_params = config
                     .service_params
                     .get(service)
-                    .ok_or(Error::SessionParamsNotFound(*service))?;
+                    .ok_or(Error::EpochParamsNotFound(*service))?;
                 let (new_state, reward_utxos) = service_state.clone().try_apply_header(
                     last_epoch_state,
                     epoch_state,
@@ -580,7 +576,7 @@ mod tests {
             service_params: Arc::new(params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: blend::RewardsParameters {
-                    rounds_per_session: NonZeroU64::new(10).unwrap(),
+                    rounds_per_epoch: NonZeroU64::new(10).unwrap(),
                     message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                     num_blend_layers: NonZeroU64::new(3).unwrap(),
                     minimum_network_size: NonZeroU64::new(1).unwrap(),

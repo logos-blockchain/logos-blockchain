@@ -516,7 +516,7 @@ mod pol_tests {
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
-                        rounds_per_session: NonZero::new(10u64).unwrap(),
+                        rounds_per_epoch: NonZero::new(10u64).unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZero::new(3u64).unwrap(),
                         minimum_network_size: NonZero::new(1u64).unwrap(),

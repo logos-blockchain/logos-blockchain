@@ -1,5 +1,5 @@
-mod current_session;
-mod target_session;
+mod current_epoch;
+mod target_epoch;
 
 use std::{fmt::Debug, num::NonZeroU64};
 
@@ -19,8 +19,8 @@ use crate::{
     mantle::sdp::rewards::{
         Error,
         blend::{
-            current_session::{CurrentEpochState, CurrentEpochTracker, CurrentEpochTrackerOutput},
-            target_session::{TargetEpochState, TargetEpochTracker},
+            current_epoch::{CurrentEpochState, CurrentEpochTracker, CurrentEpochTrackerOutput},
+            target_epoch::{TargetEpochState, TargetEpochTracker},
         },
     },
 };
@@ -215,7 +215,7 @@ where
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RewardsParameters {
-    pub rounds_per_session: NonZeroU64,
+    pub rounds_per_epoch: NonZeroU64,
     pub message_frequency_per_round: NonNegativeF64,
     pub num_blend_layers: NonZeroU64,
     pub data_replication_factor: u64,
@@ -229,7 +229,7 @@ impl RewardsParameters {
         num_core_nodes: u64,
     ) -> Result<(u64, BlendingTokenEvaluation), lb_blend_message::reward::Error> {
         let core_quota = core_quota(
-            self.rounds_per_session,
+            self.rounds_per_epoch,
             self.message_frequency_per_round,
             self.num_blend_layers,
             num_core_nodes as usize,
@@ -280,11 +280,11 @@ mod tests {
     };
 
     fn create_blend_rewards_params(
-        rounds_per_session: u64,
+        rounds_per_epoch: u64,
         minimum_network_size: u64,
     ) -> RewardsParameters {
         RewardsParameters {
-            rounds_per_session: rounds_per_session.try_into().unwrap(),
+            rounds_per_epoch: rounds_per_epoch.try_into().unwrap(),
             message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
             num_blend_layers: NonZeroU64::new(3).unwrap(),
             minimum_network_size: minimum_network_size.try_into().unwrap(),
@@ -437,7 +437,7 @@ mod tests {
 
         // provider4 doesn't submit an activity proof.
 
-        // Update session from 1 to 2.
+        // Update epoch from 1 to 2.
         let epoch2 = EpochState {
             epoch: 2.into(),
             nonce: ZkHash::from(2),
@@ -516,7 +516,7 @@ mod tests {
             )
             .unwrap();
 
-        // provider1 submits another activity proof in the same session,
+        // provider1 submits another activity proof in the same epoch,
         // which should error.
         let err = rewards_tracker
             .update_active(
@@ -540,7 +540,7 @@ mod tests {
     }
 
     #[test]
-    fn test_blend_invalid_session() {
+    fn test_blend_invalid_epoch() {
         let provider1 = create_provider_id(1);
 
         // Create a reward tracker, and update epoch from 0 to 1.

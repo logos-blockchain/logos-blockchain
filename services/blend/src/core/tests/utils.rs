@@ -386,7 +386,7 @@ pub fn scheduler_epoch_info(public_info: &CoreEpochPublicInfo<NodeId>) -> Schedu
     }
 }
 
-pub fn reward_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward::EpochInfo {
+pub fn reward_epoch_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward::EpochInfo {
     reward::EpochInfo::new(
         public_info.epoch,
         &public_info.poq_leadership_public_inputs.pol_epoch_nonce,
@@ -398,7 +398,7 @@ pub fn reward_session_info(public_info: &CoreEpochPublicInfo<NodeId>) -> reward:
         public_info.poq_core_public_inputs.quota,
         1,
     )
-    .expect("session info must be created successfully")
+    .expect("epoch info must be created successfully")
 }
 
 thread_local! {

@@ -155,7 +155,7 @@ impl<Rng, RoundClock> EpochCoverTraffic<Rng, RoundClock> {
             .unprocessed_data_messages
             .checked_add(1)
             .expect("Overflow when incrementing unprocessed data messages.");
-        trace!(target: LOG_TARGET, "New data message event registered. Unprocessed messages count: {}", self.unprocessed_data_messages);
+        trace!(target: LOG_TARGET, "New data message event registered. Unprocessed messages count: {}", self.unprocessed_data_messages); 
     }
 }
 

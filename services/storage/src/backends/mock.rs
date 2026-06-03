@@ -7,7 +7,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use lb_core::{
-    block::{BlockNumber, SessionNumber},
+    block::BlockNumber,
     header::HeaderId,
     sdp::{Locator, ProviderId, ServiceType},
 };
@@ -182,43 +182,11 @@ impl StorageBackendApi for MockStorage {}
 
 #[async_trait]
 impl StorageMembershipApi for MockStorage {
-    async fn save_active_session(
-        &mut self,
-        _service_type: ServiceType,
-        _session_id: SessionNumber,
-        _providers: &HashMap<ProviderId, BTreeSet<Locator>>,
-    ) -> Result<(), DynError> {
-        unimplemented!()
-    }
-
-    async fn load_active_session(
-        &mut self,
-        _service_type: ServiceType,
-    ) -> Result<Option<(SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>)>, DynError> {
-        unimplemented!()
-    }
-
     async fn save_latest_block(&mut self, _block_number: BlockNumber) -> Result<(), DynError> {
         unimplemented!()
     }
 
     async fn load_latest_block(&mut self) -> Result<Option<BlockNumber>, DynError> {
-        unimplemented!()
-    }
-
-    async fn save_next_session(
-        &mut self,
-        _service_type: ServiceType,
-        _session_id: SessionNumber,
-        _providers: &HashMap<ProviderId, BTreeSet<Locator>>,
-    ) -> Result<(), DynError> {
-        unimplemented!()
-    }
-
-    async fn load_next_session(
-        &mut self,
-        _service_type: ServiceType,
-    ) -> Result<Option<(SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>)>, DynError> {
         unimplemented!()
     }
 }

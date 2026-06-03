@@ -76,7 +76,7 @@ impl Settings {
             message_frequency_per_round: self.core.scheduler.cover.message_frequency_per_round,
             minimum_network_size: self.common.minimum_network_size.into(),
             num_blend_layers: self.common.num_blend_layers,
-            rounds_per_session: self.rounds_per_epoch(
+            rounds_per_epoch: self.rounds_per_epoch(
                 cryptarchia_deployment.slots_per_epoch(),
                 &time_deployment.slot_duration,
             ),

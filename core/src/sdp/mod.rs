@@ -24,7 +24,6 @@ use crate::{
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
-pub type SessionNumber = u64;
 pub type StakeThreshold = u64;
 
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 0x01;

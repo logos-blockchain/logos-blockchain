@@ -30,7 +30,7 @@ use lb_core::{
         AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
         tx::GasPrices,
     },
-    sdp::{Declaration, DeclarationId, ServiceType},
+    sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
@@ -103,8 +103,6 @@ pub enum Error {
     HeaderIdNotFound(HeaderId),
     #[error("Parent header ID not found for child={0}")]
     ParentIdNotFound(HeaderId),
-    #[error("Service session not found: {0:?}")]
-    ServiceSessionNotFound(ServiceType),
 }
 
 #[derive(Derivative)]

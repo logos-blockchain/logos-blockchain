@@ -14,7 +14,7 @@ use rpds::{HashTrieMapSync, HashTrieSetSync};
 
 use crate::mantle::sdp::rewards::{
     Error,
-    blend::{RewardsParameters, current_session::CurrentEpochState},
+    blend::{RewardsParameters, current_epoch::CurrentEpochState},
     distribute_rewards,
 };
 
@@ -108,7 +108,7 @@ where
         .map_err(|_| Error::InvalidProof)?;
 
         tracing::trace!(
-            "Verifying activity proof {:?} with session randomness: {:?}",
+            "Verifying activity proof {:?} with epoch randomness: {:?}",
             verified_proof.token().signing_key(),
             current_epoch_state.epoch_randomness()
         );

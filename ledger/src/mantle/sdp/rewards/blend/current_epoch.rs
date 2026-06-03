@@ -16,13 +16,11 @@ use tracing::debug;
 
 use crate::{
     EpochState,
-    mantle::sdp::rewards::blend::{
-        LOG_TARGET, RewardsParameters, target_session::TargetEpochState,
-    },
+    mantle::sdp::rewards::blend::{LOG_TARGET, RewardsParameters, target_epoch::TargetEpochState},
 };
 
 /// Immutable state of the current epoch.
-/// The epoch session is `E` if `E-1` is the target epoch for which rewards
+/// The epoch is `E` if `E-1` is the target epoch for which rewards
 /// are being calculated.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CurrentEpochState {
@@ -130,7 +128,7 @@ impl CurrentEpochTracker {
 
         let (core_quota, token_evaluation) = settings.core_quota_and_token_evaluation(
             providers.size() as u64,
-        ).expect("evaluation parameters shouldn't overflow. panicking since we can't process the new session");
+        ).expect("evaluation parameters shouldn't overflow. panicking since we can't process the new epoch");
 
         let proof_verifier = Self::create_proof_verifier(
             current_reward_epoch_state.leader_input,

@@ -4,10 +4,11 @@ use std::{
 };
 
 use lb_libp2p::protocol_name::StreamProtocol;
-use lb_node::config::RunConfig;
+use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
 };
+use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
     common::manual_cluster::{
         build_local_manual_cluster, wait_for_height as wait_for_manual_cluster_height,
@@ -15,6 +16,7 @@ use logos_blockchain_tests::{
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
+use tracing::Level;
 
 const WATCH_PREFIX: &str = "blend-devnet-setup";
 const WATCH_INTERVAL: Duration = Duration::from_secs(2);
@@ -44,9 +46,9 @@ async fn blend_devnet_setup() {
         .expect("manual cluster should become ready");
 
     for node in &nodes {
-        wait_for_manual_cluster_height(&node.client, 2, Duration::from_mins(3))
+        wait_for_manual_cluster_height(&node.client, 500, Duration::from_mins(50))
             .await
-            .unwrap_or_else(|_| panic!("{} should reach height 2", node.name));
+            .unwrap_or_else(|_| panic!("{} should reach height 500", node.name));
     }
 
     if run_once() {
@@ -109,6 +111,17 @@ fn devnet_watch_patch(mut config: RunConfig) -> RunConfig {
         .service
         .bootstrap
         .prolonged_bootstrap_period = Duration::ZERO;
+    config.user.tracing.level = Level::TRACE;
+
+    config.deployment.cryptarchia.epoch_config = EpochConfig {
+        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+        epoch_period_nonce_buffer: 1.try_into().unwrap(),
+        epoch_period_nonce_stabilization: 2.try_into().unwrap(),
+    };
+
+    config.deployment.cryptarchia.security_param = 10.try_into().unwrap();
+    config.deployment.cryptarchia.slot_activation_coeff =
+        NonNegativeRatio::new(1, 5.try_into().unwrap());
 
     config.deployment.blend.common.protocol_name = StreamProtocol::new("/blend-devnet-setup/blend");
     config.deployment.network.chain_sync_protocol_name =

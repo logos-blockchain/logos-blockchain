@@ -48,7 +48,7 @@ Use log levels consistently so logs are easier to read and easier to filter by t
 
 - `info`
   - Use for important events that explain the node's current state or major transitions.
-  - Someone reading only `info` logs should still understand whether the node is starting, syncing, progressing, changing epoch/session, proposing blocks, or hitting notable conditions.
+  - Someone reading only `info` logs should still understand whether the node is starting, syncing, progressing, changing epoch, proposing blocks, or hitting notable conditions.
 
 - `debug`
   - Use for details that explain why the node behaved a certain way.

@@ -98,7 +98,7 @@ mod tests {
                 service_params: Arc::new(HashMap::new()),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: RewardsParameters {
-                        rounds_per_session: 10.try_into().unwrap(),
+                        rounds_per_epoch: 10.try_into().unwrap(),
                         message_frequency_per_round: 1.0.try_into().unwrap(),
                         num_blend_layers: 3.try_into().unwrap(),
                         minimum_network_size: 1.try_into().unwrap(),

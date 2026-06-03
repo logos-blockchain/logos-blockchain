@@ -270,7 +270,7 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
             service_params: Arc::new(service_params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: rewards::blend::RewardsParameters {
-                    rounds_per_session: epoch_length.try_into().unwrap(),
+                    rounds_per_epoch: epoch_length.try_into().unwrap(),
                     message_frequency_per_round: 1.0.try_into().unwrap(),
                     num_blend_layers: 3.try_into().unwrap(),
                     minimum_network_size: 1.try_into().unwrap(),

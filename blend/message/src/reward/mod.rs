@@ -154,9 +154,9 @@ mod tests {
     fn test_blending_token_collector() {
         let num_core_nodes = 2;
         let core_quota = 15;
-        let session_info =
+        let epoch_info =
             EpochInfo::new(1.into(), &ZkHash::from(1), num_core_nodes, core_quota, 1).unwrap();
-        let mut tokens = EpochBlendingTokenCollector::new(&session_info);
+        let mut tokens = EpochBlendingTokenCollector::new(&epoch_info);
         assert!(tokens.tokens().is_empty());
 
         // Insert `total_core_quota-1` tokens.
@@ -171,10 +171,10 @@ mod tests {
             i += 1;
         }
 
-        // Prepare a new session info.
-        let session_info =
+        // Prepare a new epoch info.
+        let epoch_info =
             EpochInfo::new(2.into(), &ZkHash::from(2), num_core_nodes, core_quota, 1).unwrap();
-        let (_, mut tokens) = tokens.rotate_epoch(&session_info);
+        let (_, mut tokens) = tokens.rotate_epoch(&epoch_info);
 
         // Insert one more tokens.
         // Now,`total_core_quota` tokens have been collected.

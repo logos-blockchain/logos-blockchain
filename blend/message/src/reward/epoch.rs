@@ -44,7 +44,7 @@ impl EpochInfo {
     }
 }
 
-/// Parameters to evaluate a blending token for a session.
+/// Parameters to evaluate a blending token for an epoch.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlendingTokenEvaluation {
     token_count_byte_len: u64,
@@ -125,7 +125,7 @@ pub enum Error {
 }
 
 /// The number of bits that can represent the maximum number of blending
-/// tokens generated during a single session.
+/// tokens generated during a single epoch.
 pub fn token_count_bit_len(core_quota: u64, num_core_nodes: u64) -> Result<u64, Error> {
     let total_core_quota = core_quota
         .checked_mul(num_core_nodes)

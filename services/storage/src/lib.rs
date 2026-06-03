@@ -3,7 +3,6 @@ pub mod backends;
 mod metrics;
 
 use std::{
-    collections::{BTreeSet, HashMap},
     fmt::{Debug, Display, Formatter},
     marker::PhantomData,
     num::NonZeroUsize,
@@ -16,7 +15,6 @@ use bytes::Bytes;
 use lb_core::{
     block::BlockNumber,
     codec::{DeserializeOp as _, SerializeOp as _},
-    sdp::{Locator, ProviderId, ServiceType, SessionNumber},
 };
 use lb_log_targets::storage;
 use overwatch::{
@@ -29,10 +27,7 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot::Sender;
 
-use crate::api::{
-    StorageApiRequest, StorageOperation,
-    membership::requests::{MembershipApiRequest, SessionSender},
-};
+use crate::api::{StorageApiRequest, StorageOperation, membership::requests::MembershipApiRequest};
 
 const LOG_TARGET: &str = storage::ROOT;
 
@@ -150,34 +145,6 @@ impl<Backend: StorageBackend> StorageMsg<Backend> {
     }
 
     #[must_use]
-    pub const fn save_active_session_request(
-        service_type: ServiceType,
-        session_id: SessionNumber,
-        providers: HashMap<ProviderId, BTreeSet<Locator>>,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::SaveActiveSession {
-                service_type,
-                session_id,
-                providers,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn load_active_session_request(
-        service_type: ServiceType,
-        response_tx: SessionSender,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::LoadActiveSession {
-                service_type,
-                response_tx,
-            }),
-        }
-    }
-
-    #[must_use]
     pub const fn save_latest_block_request(block_number: BlockNumber) -> Self {
         Self::Api {
             request: StorageApiRequest::Membership(MembershipApiRequest::SaveLatestBlock {
@@ -190,34 +157,6 @@ impl<Backend: StorageBackend> StorageMsg<Backend> {
     pub const fn load_latest_block_request(response_tx: Sender<Option<BlockNumber>>) -> Self {
         Self::Api {
             request: StorageApiRequest::Membership(MembershipApiRequest::LoadLatestBlock {
-                response_tx,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn save_next_session_request(
-        service_type: ServiceType,
-        session_id: SessionNumber,
-        providers: HashMap<ProviderId, BTreeSet<Locator>>,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::SaveNextSession {
-                service_type,
-                session_id,
-                providers,
-            }),
-        }
-    }
-
-    #[must_use]
-    pub const fn load_next_session_request(
-        service_type: ServiceType,
-        response_tx: SessionSender,
-    ) -> Self {
-        Self::Api {
-            request: StorageApiRequest::Membership(MembershipApiRequest::LoadNextSession {
-                service_type,
                 response_tx,
             }),
         }

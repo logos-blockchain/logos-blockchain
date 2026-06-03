@@ -84,9 +84,7 @@ pub struct SdpConfig {
     pub min_stake: MinStake,
 }
 
-// The same as `lb_core::sdp::ServiceParameters`, minus the
-// `session_duration` values which are calculated from the other values
-// provided.
+// The same as `lb_core::sdp::ServiceParameters`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServiceParameters {
     pub lock_period: NumberOfEpochs,

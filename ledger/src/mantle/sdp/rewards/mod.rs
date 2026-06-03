@@ -64,7 +64,7 @@ pub trait Rewards: Clone + PartialEq + Send + Sync + std::fmt::Debug {
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum Error {
-    #[error("Target session is not set")]
+    #[error("Target epoch is not set")]
     TargetEpochNotSet,
     #[error("Invalid epoch: expected {expected}, got {got}")]
     InvalidEpoch { expected: Epoch, got: Epoch },

@@ -61,7 +61,7 @@ impl ActivityProof {
 }
 
 /// Computes the activity threshold, which is the expected maximum Hamming
-/// distance from any blending token in a session to the next session
+/// distance from any blending token in an epoch to the next epoch
 /// randomness.
 pub fn activity_threshold(
     token_count_bit_len: u64,
