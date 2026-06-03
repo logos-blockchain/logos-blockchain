@@ -21,7 +21,9 @@ use lb_core::{
     sdp::{Declaration, DeclarationMessage, Locator, NumberOfEpochs, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
-use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
+use lb_node::config::{
+    RunConfig, blend::deployment::MinimumNetworkSize, cryptarchia::deployment::EpochConfig,
+};
 use lb_testing_framework::{
     DeploymentBuilder, LbcManualCluster, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
@@ -75,7 +77,7 @@ async fn sdp_ops_e2e() {
         slot_duration,
     ) = start_sdp_manual_cluster("sdp-ops").await;
 
-    let inclusion_timeout = Duration::from_mins(3);
+    let inclusion_timeout = Duration::from_mins(1);
     let state_timeout = Duration::from_secs(45);
 
     let existing = wait_for_sdp_declarations(&node0, Duration::from_secs(30))
@@ -159,11 +161,10 @@ async fn sdp_ops_e2e() {
     .expect("declaration should appear after submission");
 
     // Wait until we're past the lock period
-    let wait = (Epoch::new(1) + lock_period).into_inner()
+    let wait_lock_period = (Epoch::new(1) + lock_period).into_inner() // +1 buffer
         * u32::try_from(slots_per_epoch).unwrap()
         * slot_duration;
-    println!("waiting {wait:?}");
-    sleep(wait).await;
+    sleep(wait_lock_period).await;
 
     let withdraw_message = WithdrawMessage {
         declaration_id,
@@ -472,6 +473,7 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
         epoch_period_nonce_stabilization: 1.try_into().unwrap(),
     };
     config.deployment.cryptarchia.learning_rate = 0.5.try_into().unwrap();
+
     let service_params = config
         .deployment
         .cryptarchia
@@ -482,6 +484,17 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
     service_params.lock_period = LOCK_PERIOD;
     service_params.inactivity_period = 10.into();
     service_params.retention_period = 10.into();
+
+    config.deployment.blend.common.num_blend_layers = 1.try_into().unwrap();
+    config.deployment.blend.common.minimum_network_size = MinimumNetworkSize::try_new(2).unwrap();
+    config
+        .deployment
+        .blend
+        .core
+        .scheduler
+        .delayer
+        .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+
     config
 }
 
