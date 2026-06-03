@@ -715,14 +715,14 @@ pub mod tests {
             SignedMantleTx, Transaction as _,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
-            ops::leader_claim::VoucherCm,
+            ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},
             tx::GasPrices,
         },
-        sdp::ServiceParameters,
+        sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
     use lb_groth16::Field as _;
-    use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -731,7 +731,10 @@ pub mod tests {
     use crate::{
         Ledger,
         leader_proof::LeaderProof,
-        mantle::sdp::{ServiceRewardsParameters, rewards},
+        mantle::sdp::{
+            ServiceRewardsParameters,
+            rewards::{self},
+        },
     };
 
     type HeaderId = [u8; 32];
@@ -873,7 +876,7 @@ pub mod tests {
     pub fn config() -> Config {
         let mut service_params = std::collections::HashMap::new();
         service_params.insert(
-            lb_core::sdp::ServiceType::BlendNetwork,
+            ServiceType::BlendNetwork,
             ServiceParameters {
                 lock_period: 10.into(),
                 inactivity_period: 1.into(),
@@ -936,28 +939,41 @@ pub mod tests {
             config.total_stake_inference_period(),
         ));
         let block_density = BlockDensity::new(config.epoch(slot), &config);
-        LedgerState {
+
+        let mut epoch_state = EpochState {
+            epoch: 0.into(),
+            nonce: Fr::ZERO,
             utxos: utxos.clone(),
+            total_stake,
+            lottery_0,
+            lottery_1,
+            sdp: SdpLedger::new(0.into()),
+        };
+        epoch_state.sdp = epoch_state.sdp.clone().with_blend_service(
+            &config.sdp_config.service_rewards_params.blend,
+            &epoch_state,
+        );
+
+        let mut next_epoch_state = EpochState {
+            epoch: 1.into(),
+            nonce: Fr::ZERO,
+            utxos: utxos.clone(),
+            total_stake,
+            lottery_0,
+            lottery_1,
+            sdp: SdpLedger::new(1.into()),
+        };
+        next_epoch_state.sdp = next_epoch_state.sdp.clone().with_blend_service(
+            &config.sdp_config.service_rewards_params.blend,
+            &next_epoch_state,
+        );
+
+        LedgerState {
+            utxos,
             nonce: Fr::ZERO,
             slot,
-            next_epoch_state: EpochState {
-                epoch: 1.into(),
-                nonce: Fr::ZERO,
-                utxos: utxos.clone(),
-                total_stake,
-                lottery_0,
-                lottery_1,
-                sdp: SdpLedger::new(1.into()),
-            },
-            epoch_state: EpochState {
-                epoch: 0.into(),
-                nonce: Fr::ZERO,
-                utxos,
-                total_stake,
-                lottery_0,
-                lottery_1,
-                sdp: SdpLedger::new(0.into()),
-            },
+            next_epoch_state,
+            epoch_state,
             stake_inference,
             fee_window: [0.into(); 120],
             average_execution_gas: 0.into(),
@@ -1007,6 +1023,94 @@ pub mod tests {
         id
     }
 
+    fn apply_and_add_utxo_and_declaration(
+        ledger: &mut Ledger<HeaderId>,
+        parent: HeaderId,
+        slot: impl Into<Slot>,
+        utxo_proof: Utxo,
+        utxo_add: Utxo,
+        sdp_utxo: Utxo,
+        sdp_note_sk: ZkKey,
+    ) -> (HeaderId, SDPDeclareOp) {
+        let id = apply_and_add_utxo(ledger, parent, slot, utxo_proof, utxo_add);
+
+        let tx_hash = TxHash::from([0u8; 32]);
+
+        let mut zk_key = [0u8; 16];
+        thread_rng().fill_bytes(&mut zk_key);
+        let zk_key: ZkKey = fr_from_bytes(&zk_key).unwrap().into();
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let declare_op = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+            provider_id: signing_key.public_key().into(),
+            zk_id: zk_key.to_public_key(),
+            locked_note_id: sdp_utxo.id(),
+        };
+        let config = ledger.config().clone();
+
+        let block_ledger = ledger.states.get_mut(&id).unwrap();
+        block_ledger.mantle_ledger = block_ledger
+            .mantle_ledger
+            .clone()
+            .try_apply_sdp_declaration(
+                &declare_op,
+                &ZkKey::multi_sign(&[sdp_note_sk, zk_key], &tx_hash.to_fr()).unwrap(),
+                &signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+                block_ledger.cryptarchia_ledger.latest_utxos(),
+                tx_hash,
+                &config,
+            )
+            .unwrap()
+            .0;
+
+        (id, declare_op)
+    }
+
+    fn assert_sdp_snapshot(
+        ledger: &Ledger<HeaderId>,
+        header_id: &HeaderId,
+        snapshot_header_id: &HeaderId,
+    ) {
+        assert_eq!(
+            ledger.states[header_id]
+                .cryptarchia_ledger
+                .epoch_state
+                .sdp
+                .declarations(),
+            ledger.states[snapshot_header_id]
+                .mantle_ledger
+                .sdp
+                .declarations(),
+        );
+    }
+
+    fn assert_declaration_exists(
+        ledger: &Ledger<HeaderId>,
+        header_id: &HeaderId,
+        declaration_id: &DeclarationId,
+    ) {
+        assert!(
+            ledger.states[header_id]
+                .mantle_ledger
+                .sdp
+                .get_declaration(declaration_id)
+                .is_some()
+        );
+    }
+
+    fn declaration_in_snapshot<'l>(
+        ledger: &'l Ledger<HeaderId>,
+        header_id: &HeaderId,
+        declaration_id: &DeclarationId,
+    ) -> Option<&'l Declaration> {
+        ledger.states[header_id]
+            .cryptarchia_ledger
+            .epoch_state
+            .sdp
+            .get_declaration(declaration_id)
+    }
+
     #[test]
     fn test_ledger_state_allow_leadership_utxo_reuse() {
         let utxo = utxo();
@@ -1030,13 +1134,21 @@ pub mod tests {
 
     #[test]
     fn test_epoch_transition() {
-        let utxos = std::iter::repeat_with(utxo).take(4).collect::<Vec<_>>();
-        let utxo_4 = utxo();
-        let utxo_5 = utxo();
+        let leader_utxos = std::iter::repeat_with(utxo).take(4).collect::<Vec<_>>();
+        let (sdp_utxo_key_1, sdp_utxo_1) = utxo_with_sk();
+        let (sdp_utxo_key_2, sdp_utxo_2) = utxo_with_sk();
+        let genesis_utxos = leader_utxos
+            .iter()
+            .copied()
+            .chain(std::iter::once(sdp_utxo_1))
+            .chain(std::iter::once(sdp_utxo_2))
+            .collect::<Vec<_>>();
+        let new_utxo_1 = utxo();
+        let new_utxo_2 = utxo();
 
         let config = config();
         assert_eq!(config.epoch_length(), 100);
-        let (mut ledger, genesis) = ledger(&utxos, config);
+        let (mut ledger, genesis) = ledger(&genesis_utxos, config);
         // block density slot range should be [0, 59]
         assert_eq!(
             ledger.states[&genesis]
@@ -1046,16 +1158,25 @@ pub mod tests {
             &(0.into()..=59.into())
         );
 
-        let h_1 = update_ledger(&mut ledger, genesis, 10, utxos[0]).unwrap();
+        let h_1 = update_ledger(&mut ledger, genesis, 10, leader_utxos[0]).unwrap();
         assert_eq!(ledger.states[&h_1].cryptarchia_ledger.epoch_state.epoch, 0);
 
-        let h_2 = update_ledger(&mut ledger, h_1, 60, utxos[1]).unwrap();
+        let h_2 = update_ledger(&mut ledger, h_1, 60, leader_utxos[1]).unwrap();
 
-        let h_3 = apply_and_add_utxo(&mut ledger, h_2, 90, utxos[2], utxo_4);
+        let (h_3, declare_1) = apply_and_add_utxo_and_declaration(
+            &mut ledger,
+            h_2,
+            90,
+            leader_utxos[2],
+            new_utxo_1,
+            sdp_utxo_1,
+            sdp_utxo_key_1,
+        );
+        assert_declaration_exists(&ledger, &h_3, &declare_1.id());
 
         // Epoch jump: epoch 0 -> 2
         // Jump to the slot that is not the 1st slot of epoch 2
-        let h_4 = update_ledger(&mut ledger, h_3, 222, utxos[3]).unwrap();
+        let h_4 = update_ledger(&mut ledger, h_3, 222, leader_utxos[3]).unwrap();
         // nonce for epoch 2 should be taken at the end of slot 160, but in our case
         // the last block is at slot 90 because of epoch jumps
         assert_eq!(
@@ -1067,6 +1188,9 @@ pub mod tests {
             ledger.states[&h_4].cryptarchia_ledger.epoch_state.utxos,
             ledger.states[&h_3].cryptarchia_ledger.utxos,
         );
+        // SDP snapshot should be taken at the end of slot 90
+        assert_sdp_snapshot(&ledger, &h_4, &h_3);
+        assert!(declaration_in_snapshot(&ledger, &h_4, &declare_1.id()).is_some());
         // block density slot range should be [200, 259]
         assert_eq!(
             ledger.states[&h_4]
@@ -1077,9 +1201,18 @@ pub mod tests {
         );
 
         // Epoch transition: 0 -> 1
+        let (h_5, declare_2) = apply_and_add_utxo_and_declaration(
+            &mut ledger,
+            h_3,
+            100,
+            leader_utxos[3],
+            new_utxo_2,
+            sdp_utxo_2,
+            sdp_utxo_key_2,
+        );
+        assert_declaration_exists(&ledger, &h_5, &declare_2.id());
         // nonce for epoch 1 should be taken at the end of slot 10,
         // ignoring updates (`h_2` and `h_3`) after slot 59.
-        let h_5 = apply_and_add_utxo(&mut ledger, h_3, 100, utxos[3], utxo_5);
         assert_eq!(
             ledger.states[&h_5].cryptarchia_ledger.epoch_state.nonce,
             ledger.states[&h_1].cryptarchia_ledger.nonce,
@@ -1089,6 +1222,10 @@ pub mod tests {
             ledger.states[&h_5].cryptarchia_ledger.epoch_state.utxos,
             ledger.states[&genesis].cryptarchia_ledger.utxos,
         );
+        // SDP snapshot should be the same as the one in genesis
+        assert_sdp_snapshot(&ledger, &h_5, &genesis);
+        assert!(declaration_in_snapshot(&ledger, &h_5, &declare_1.id()).is_none());
+        assert!(declaration_in_snapshot(&ledger, &h_5, &declare_2.id()).is_none());
         // block density slot range should be [100, 159]
         assert_eq!(
             ledger.states[&h_5]
@@ -1099,7 +1236,7 @@ pub mod tests {
         );
 
         // Epoch transition: 1 -> 2
-        let h_6 = update_ledger(&mut ledger, h_5, 200, utxos[3]).unwrap();
+        let h_6 = update_ledger(&mut ledger, h_5, 200, leader_utxos[3]).unwrap();
         // nonce should be taken at the end of slot 100,
         // which was the only one update in the previous epoch.
         assert_eq!(
@@ -1111,6 +1248,10 @@ pub mod tests {
             ledger.states[&h_6].cryptarchia_ledger.epoch_state.utxos,
             ledger.states[&h_3].cryptarchia_ledger.utxos,
         );
+        // SDP snapshot should be taken before the slot 100
+        assert_sdp_snapshot(&ledger, &h_6, &h_3);
+        assert!(declaration_in_snapshot(&ledger, &h_6, &declare_1.id()).is_some());
+        assert!(declaration_in_snapshot(&ledger, &h_6, &declare_2.id()).is_none());
         // block density slot range should be [200, 259]
         assert_eq!(
             ledger.states[&h_6]
