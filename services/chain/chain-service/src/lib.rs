@@ -130,7 +130,7 @@ pub enum ConsensusMsg<Tx> {
         reply_channel: oneshot::Sender<Option<LedgerState>>,
     },
     GetSdpDeclarations {
-        reply_channel: oneshot::Sender<Result<Vec<(DeclarationId, Declaration)>, Error>>,
+        reply_channel: oneshot::Sender<Vec<(DeclarationId, Declaration)>>,
     },
     GetEpochState {
         slot: Slot,
@@ -753,7 +753,7 @@ where
                                 });
                             }
                             msg => {
-                                Self::process_message(&cryptarchia, current_slot, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
+                                Self::process_message(&cryptarchia, &self.new_block_subscription_sender, &self.lib_subscription_sender, &chain_online_notifier, msg, relays.storage_adapter()).await;
                             }
                         }
                     }
@@ -848,7 +848,6 @@ where
     #[expect(clippy::too_many_lines, reason = "TODO: refactor into funcs")]
     async fn process_message(
         cryptarchia: &Cryptarchia,
-        current_slot: Slot,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
         lib_channel: &broadcast::Sender<LibUpdate>,
         chain_online_notifier: &ChainOnlineNotifier,
@@ -898,21 +897,20 @@ where
                 });
             }
             ConsensusMsg::GetSdpDeclarations { reply_channel } => {
-                let result = cryptarchia
-                    .epoch_state_for_slot(current_slot)
-                    .map(|epoch_state| {
-                        epoch_state
-                            .sdp
-                            .declarations()
+                let tip = cryptarchia.tip();
+                let declarations = cryptarchia
+                    .ledger
+                    .state(&tip)
+                    .map(|ledger_state| ledger_state.mantle_ledger().sdp.declarations())
+                    .unwrap_or_default()
+                    .iter()
+                    .flat_map(|(_, declarations)| {
+                        declarations
                             .iter()
-                            .flat_map(|(_, declarations)| {
-                                declarations
-                                    .iter()
-                                    .map(|(id, declaration)| (*id, declaration.clone()))
-                            })
-                            .collect()
-                    });
-                reply_channel.send(result).unwrap_or_else(|_| {
+                            .map(|(id, declaration)| (*id, declaration.clone()))
+                    })
+                    .collect();
+                reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!("Could not send SDP declarations through channel");
                 });
             }

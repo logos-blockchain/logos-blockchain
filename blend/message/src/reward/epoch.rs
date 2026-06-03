@@ -84,10 +84,6 @@ impl BlendingTokenEvaluation {
             "Evaluated blending token {:?} for activity proof. Calculated Hamming distance = {distance:?}",
             token.signing_key()
         );
-        println!(
-            "distance:{:?}, threshold:{:?}",
-            distance, self.activity_threshold
-        );
         (distance <= self.activity_threshold).then_some(distance)
     }
 

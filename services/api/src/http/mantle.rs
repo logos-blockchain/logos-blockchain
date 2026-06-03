@@ -924,7 +924,7 @@ where
         .map_err(|(e, _)| e)?;
 
     let declarations = receiver
-        .await??
+        .await?
         .into_iter()
         .map(|(_, declaration)| declaration)
         .collect();
