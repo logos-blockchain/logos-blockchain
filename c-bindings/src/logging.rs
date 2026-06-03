@@ -1,25 +1,39 @@
-use std::io::Write as _;
-
-pub struct StderrLogger;
-
-impl log::Log for StderrLogger {
-    fn enabled(&self, _: &log::Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &log::Record) {
-        let mut stderr = std::io::stderr().lock();
-        drop(writeln!(stderr, "[{}] {}", record.level(), record.args()));
-        drop(stderr.flush());
-    }
-
-    fn flush(&self) {}
+/// Logs a message to stderr with level, scope, and message.
+///
+/// # Arguments
+///
+/// - `$level`: An identifier for the log level (`ERROR`, `WARN`, etc.). Printed
+///   uppercase, left-padded to 5 characters.
+/// - `$scope`: A string literal identifying the call site (typically the
+///   function name).
+/// - `$($arg:tt)*`: Format string and arguments, same syntax as [`eprintln!`].
+///
+/// # Example
+///
+/// ```rust,ignore
+/// logging::log!(ERROR, "start_lb_node", "Failed to parse config: {e}");
+/// // stderr: ERROR [start_lb_node] Failed to parse config: ...
+/// logging::log!(WARN, "subscribe_to_new_blocks_sync", "Block stream closed");
+/// // stderr: WARN  [subscribe_to_new_blocks_sync] Block stream closed
+/// ```
+macro_rules! log {
+    ($level:ident, $scope:literal, $($arg:tt)*) => {
+        ::std::eprintln!("{:<5} [{}] {}", stringify!($level), $scope, ::std::format_args!($($arg)*));
+    };
 }
 
-/// Installs a minimal stderr logger via the `log` crate (once).
-/// Ensures that `log::error!` calls are visible on stderr when no other logger
-/// is configured.
-pub fn install_stderr_logger() {
-    let _ = log::set_logger(&StderrLogger);
-    log::set_max_level(log::LevelFilter::Warn);
+macro_rules! error {
+    ($scope:literal, $($arg:tt)*) => {
+        $crate::logging::log!(ERROR, $scope, $($arg)*)
+    };
 }
+
+macro_rules! warning {
+    ($scope:literal, $($arg:tt)*) => {
+        $crate::logging::log!(WARN, $scope, $($arg)*)
+    };
+}
+
+pub(crate) use error;
+pub(crate) use log;
+pub(crate) use warning;
