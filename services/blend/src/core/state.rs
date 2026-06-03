@@ -142,10 +142,6 @@ mod service {
     {
         // Creates a new instance with the provided fields, and saves it using
         // `state_updater`.
-        #[expect(
-            clippy::unnecessary_wraps,
-            reason = "TODO: This function will fail once the token collector will check for epoch mismatches."
-        )]
         pub(super) fn new(
             last_seen_epoch: Epoch,
             spent_core_quota: u64,
@@ -158,30 +154,24 @@ mod service {
             >,
         ) -> Result<Self, error::EpochMismatch> {
             // Check if `current_epoch_token_collector` has the correct epoch number.
-            // TODO: Change with epochs
-            // let provided_current_epoch = current_epoch_token_collector.session_number();
-            // if provided_current_epoch != last_seen_epoch {
-            //     return Err(error::EpochMismatch {
-            //         last_seen: last_seen_epoch,
-            //         provided: provided_current_epoch,
-            //     });
-            // }
+            let provided_current_epoch = current_epoch_token_collector.epoch();
+            if provided_current_epoch != last_seen_epoch {
+                return Err(error::EpochMismatch {
+                    last_seen: last_seen_epoch,
+                    provided: provided_current_epoch,
+                });
+            }
 
             // Check if `old_epoch_token_collector` has the correct epoch number.
-            if let Some(_old_epoch_token_collector) = &old_epoch_token_collector {
-                // TODO: Change with epochs
-                // let provided_current_epoch = Epoch::new(
-                //     old_epoch_token_collector
-                //         .epoch_number()
-                //         .into_inner()
-                //         .saturating_add(1),
-                // );
-                // if provided_current_epoch != last_seen_epoch {
-                //     return Err(error::EpochMismatch {
-                //         last_seen: last_seen_epoch,
-                //         provided: provided_current_epoch,
-                //     });
-                // }
+            if let Some(old_epoch_token_collector) = &old_epoch_token_collector {
+                let provided_current_epoch =
+                    old_epoch_token_collector.epoch().saturating_add(1.into());
+                if provided_current_epoch != last_seen_epoch {
+                    return Err(error::EpochMismatch {
+                        last_seen: last_seen_epoch,
+                        provided: provided_current_epoch,
+                    });
+                }
             }
 
             let this = Self {
