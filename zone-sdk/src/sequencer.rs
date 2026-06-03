@@ -4,7 +4,7 @@ use std::{
 };
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
-use lb_common_http_client::{ChainServiceInfo, ProcessedBlockEvent, SequencerTimingInfo, Slot};
+use lb_common_http_client::{ChainServiceInfo, ProcessedBlockEvent, Slot, TimeInfo};
 use lb_core::{
     crypto::Hash,
     header::HeaderId,
@@ -1491,10 +1491,10 @@ where
         if self.state.is_some() && self.slot_clock.is_some() {
             return true;
         }
-        let timing_info = match self.node.sequencer_timing_info().await {
+        let timing_info = match self.node.time_info().await {
             Ok(info) => info,
             Err(err) => {
-                warn!(target: TARGET, "Failed to fetch sequencer timing info: {err}");
+                warn!(target: TARGET, "Failed to fetch time info: {err}");
                 tokio::time::sleep(self.config.reconnect_delay).await;
                 return false;
             }
@@ -1519,7 +1519,7 @@ where
                     match Self::build_initial_slot_clock(cryptarchia_info.slot, &timing_info) {
                         Ok(clock) => clock,
                         Err(err) => {
-                            warn!(target: TARGET, "Invalid sequencer timing info from node: {err}");
+                            warn!(target: TARGET, "Invalid time info from node: {err}");
                             tokio::time::sleep(self.config.reconnect_delay).await;
                             return false;
                         }
@@ -1538,12 +1538,12 @@ where
 
     fn build_initial_slot_clock(
         observed_slot: Slot,
-        timing_info: &SequencerTimingInfo,
+        timing_info: &TimeInfo,
     ) -> Result<SlotClock, Error> {
         let slot_duration = Duration::from_millis(timing_info.slot_duration_ms);
         if slot_duration.is_zero() {
             return Err(Error::Network(
-                "node reported slot_duration_ms=0 for sequencer timing".to_owned(),
+                "node reported slot_duration_ms=0 for time info".to_owned(),
             ));
         }
 
@@ -3206,10 +3206,8 @@ mod tests {
             })
         }
 
-        async fn sequencer_timing_info(
-            &self,
-        ) -> Result<SequencerTimingInfo, lb_common_http_client::Error> {
-            Ok(SequencerTimingInfo {
+        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
+            Ok(TimeInfo {
                 slot_duration_ms: 1_000,
                 genesis_time_unix_ms: 0,
             })
@@ -3331,10 +3329,8 @@ mod tests {
             })
         }
 
-        async fn sequencer_timing_info(
-            &self,
-        ) -> Result<SequencerTimingInfo, lb_common_http_client::Error> {
-            Ok(SequencerTimingInfo {
+        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
+            Ok(TimeInfo {
                 slot_duration_ms: 1_000,
                 genesis_time_unix_ms: 0,
             })
@@ -3523,7 +3519,7 @@ mod tests {
     }
     #[test]
     fn build_initial_slot_clock_rejects_zero_slot_duration() {
-        let timing_info = SequencerTimingInfo {
+        let timing_info = TimeInfo {
             slot_duration_ms: 0,
             genesis_time_unix_ms: 0,
         };
@@ -3537,7 +3533,7 @@ mod tests {
     }
     #[test]
     fn build_initial_slot_clock_rejects_negative_genesis_time() {
-        let timing_info = SequencerTimingInfo {
+        let timing_info = TimeInfo {
             slot_duration_ms: 1_000,
             genesis_time_unix_ms: -500,
         };
@@ -3551,7 +3547,7 @@ mod tests {
     }
     #[test]
     fn build_initial_slot_clock_accepts_valid_zero_genesis_time() {
-        let timing_info = SequencerTimingInfo {
+        let timing_info = TimeInfo {
             slot_duration_ms: 1_000,
             genesis_time_unix_ms: 0,
         };
@@ -3565,7 +3561,7 @@ mod tests {
     }
     #[test]
     fn build_initial_slot_clock_accepts_large_genesis_time() {
-        let timing_info = SequencerTimingInfo {
+        let timing_info = TimeInfo {
             slot_duration_ms: 2_000,
             genesis_time_unix_ms: 1_779_820_800_000i64,
         };

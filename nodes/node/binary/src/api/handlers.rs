@@ -49,6 +49,7 @@ use lb_sdp_service::{
 use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
+use lb_time_service::TimeServiceMessage;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -63,14 +64,17 @@ use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
 use tracing::debug;
 
-use crate::api::{
-    errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
-    openapi::schema,
-    queries::{BlockRangeQuery, BlocksStreamRequest},
-    responses::{self, overwatch::get_relay_or_500},
-    serializers::{
-        blocks::{ApiBlock, ApiProcessedBlockEvent},
-        transactions::ApiSignedTransactionRef,
+use crate::{
+    TimeService,
+    api::{
+        errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
+        openapi::schema,
+        queries::{BlockRangeQuery, BlocksStreamRequest},
+        responses::{self, overwatch::get_relay_or_500},
+        serializers::{
+            blocks::{ApiBlock, ApiProcessedBlockEvent},
+            transactions::ApiSignedTransactionRef,
+        },
     },
 };
 
@@ -478,28 +482,31 @@ where
 
 #[utoipa::path(
     get,
-    path = paths::CRYPTARCHIA_SEQUENCER_TIMING,
+    path = paths::TIME_INFO,
     responses(
-        (status = 200, description = "Query sequencer deployment timing", body = lb_chain_service::SequencerTimingInfo),
+        (status = 200, description = "Query time service information", body = lb_http_api_common::TimeInfo),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
-pub async fn cryptarchia_sequencer_timing<RuntimeServiceId>(
+pub async fn time_info<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    RuntimeServiceId:
-        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
 {
-    let relay = match get_relay_or_500(&handle).await {
+    let relay = match handle.relay::<TimeService>().await {
         Ok(relay) => relay,
-        Err(error_response) => return error_response,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
     };
-
-    let chain_api =
-        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
-    match chain_api.sequencer_timing_info().await {
-        Ok(info) => (StatusCode::OK, Json(info)).into_response(),
+    let (sender, receiver) = oneshot::channel();
+    if let Err((error, _)) = relay.send(TimeServiceMessage::Info { sender }).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    match receiver.await {
+        Ok(Ok(info)) => (StatusCode::OK, Json(info)).into_response(),
+        Ok(Err(error)) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }

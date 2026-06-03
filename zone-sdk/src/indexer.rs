@@ -343,11 +343,10 @@ mod tests {
             })
         }
 
-        async fn sequencer_timing_info(
+        async fn time_info(
             &self,
-        ) -> Result<lb_common_http_client::SequencerTimingInfo, lb_common_http_client::Error>
-        {
-            Ok(lb_common_http_client::SequencerTimingInfo {
+        ) -> Result<lb_common_http_client::TimeInfo, lb_common_http_client::Error> {
+            Ok(lb_common_http_client::TimeInfo {
                 slot_duration_ms: 1_000,
                 genesis_time_unix_ms: 0,
             })

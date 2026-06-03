@@ -8,10 +8,7 @@ use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
-use crate::{
-    ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent,
-    SequencerTimingInfo,
-};
+use crate::{ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
 
 pub trait CryptarchiaServiceData:
     ServiceData<Message = ConsensusMsg<Self::Tx>> + Send + 'static
@@ -90,22 +87,6 @@ where
 
         rx.await.map_err(|relay_error| {
             ApiError::CommsFailure(format!("{relay_error} while receiving GetInfo"))
-        })
-    }
-
-    /// Get deployment timing values required by sequencers.
-    pub async fn sequencer_timing_info(&self) -> Result<SequencerTimingInfo, ApiError> {
-        let (reply_channel, rx) = oneshot::channel();
-
-        self.relay
-            .send(ConsensusMsg::SequencerTimingInfo { reply_channel })
-            .await
-            .map_err(|(relay_error, _)| {
-                ApiError::CommsFailure(format!("{relay_error} while sending SequencerTimingInfo"))
-            })?;
-
-        rx.await.map_err(|relay_error| {
-            ApiError::CommsFailure(format!("{relay_error} while receiving SequencerTimingInfo"))
         })
     }
 

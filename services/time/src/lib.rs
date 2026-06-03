@@ -6,6 +6,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
+use lb_http_api_common::TimeInfo;
 use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
@@ -34,6 +35,9 @@ pub struct SlotTick {
 pub type EpochSlotTickStream = Pin<Box<dyn Stream<Item = SlotTick> + Send + Sync + Unpin>>;
 
 pub enum TimeServiceMessage {
+    Info {
+        sender: oneshot::Sender<Result<TimeInfo, String>>,
+    },
     Subscribe {
         sender: oneshot::Sender<EpochSlotTickStream>,
     },
@@ -45,6 +49,7 @@ pub enum TimeServiceMessage {
 impl Debug for TimeServiceMessage {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Info { .. } => f.write_str("Info"),
             Self::Subscribe { .. } => f.write_str("Subscribe"),
             Self::CurrentSlot { .. } => f.write_str("CurrentSlot"),
         }
@@ -68,6 +73,7 @@ where
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     backend: Backend,
+    settings: TimeServiceSettings<Backend::Settings>,
 }
 
 impl<Backend, RuntimeServiceId> ServiceData for TimeService<Backend, RuntimeServiceId>
@@ -96,10 +102,11 @@ where
             .settings_handle
             .notifier()
             .get_updated_settings();
-        let backend = Backend::init(settings);
+        let backend = Backend::init(settings.clone());
         Ok(Self {
             service_resources_handle,
             backend,
+            settings,
         })
     }
 
@@ -107,6 +114,7 @@ where
         let Self {
             service_resources_handle,
             backend,
+            settings,
         } = self;
         let mut inbound_relay = service_resources_handle.inbound_relay;
         let (mut current_slot_tick, mut tick_stream) = backend.tick_stream();
@@ -123,7 +131,12 @@ where
         loop {
             tokio::select! {
                 Some(service_message) = inbound_relay.recv() => {
-                    handle_service_message(service_message, &watch_receiver, &current_slot_tick);
+                    handle_service_message(
+                        service_message,
+                        &watch_receiver,
+                        &current_slot_tick,
+                        &settings,
+                    );
                 }
                 Some(slot_tick) = tick_stream.next() => {
                     current_slot_tick = slot_tick;
@@ -140,12 +153,37 @@ where
     }
 }
 
-fn handle_service_message(
+fn handle_service_message<BackendSettings>(
     message: TimeServiceMessage,
     watch_receiver: &watch::Receiver<SlotTick>,
     current_slot_tick: &SlotTick,
+    settings: &TimeServiceSettings<BackendSettings>,
 ) {
     match message {
+        TimeServiceMessage::Info { sender } => {
+            let Ok(slot_duration_ms) =
+                u64::try_from(settings.slot_config.slot_duration.as_millis())
+            else {
+                drop(sender.send(Err(
+                    "slot duration exceeds u64::MAX milliseconds".to_owned(),
+                )));
+                return;
+            };
+            let Ok(genesis_time_unix_ms) = i64::try_from(
+                settings
+                    .slot_config
+                    .genesis_time
+                    .unix_timestamp_nanos()
+                    .div_euclid(1_000_000),
+            ) else {
+                drop(sender.send(Err("genesis time exceeds i64::MAX milliseconds".to_owned())));
+                return;
+            };
+            drop(sender.send(Ok(TimeInfo {
+                slot_duration_ms,
+                genesis_time_unix_ms,
+            })));
+        }
         TimeServiceMessage::Subscribe { sender } => {
             let stream = Pin::new(Box::new(WatchStream::from_changes(watch_receiver.clone())));
             if sender.send(stream).is_err() {

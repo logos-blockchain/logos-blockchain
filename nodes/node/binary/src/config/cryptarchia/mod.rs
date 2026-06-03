@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
-use lb_core::{mantle::GenesisTx as _, sdp::ServiceParameters};
+use lb_core::sdp::ServiceParameters;
 use lb_cryptarchia_engine::EpochConfig;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
@@ -29,7 +29,6 @@ impl ServiceConfig {
     pub fn into_cryptarchia_services_settings(
         self,
         blend_rewards_params: RewardsParameters,
-        slot_duration: std::time::Duration,
         state_config: &StateConfig,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
@@ -99,13 +98,6 @@ impl ServiceConfig {
                 },
             },
             config: ledger_config.clone(),
-            slot_duration,
-            genesis_start_time: self
-                .deployment
-                .genesis_block
-                .genesis_tx()
-                .cryptarchia_parameter()
-                .genesis_time,
             recovery_file: state_config.get_path_for_recovery_state(
                 PathBuf::new()
                     .join("consensus")
