@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use lb_testing_framework::LOGOS_BLOCKCHAIN_LOG_LEVEL;
+use lb_testing_framework::LOG_LEVEL;
 use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -50,26 +50,20 @@ pub fn init_logging_defaults() {
     // Always keep RUST_LOG at info for console output
     set_default_env(RUST_LOG, "info");
 
-    std::env::var_os(CUCUMBER_LOG_LEVEL).map_or_else(
-        || {
-            set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, "info");
-        },
-        |log_level| {
-            let log_level = log_level.to_string_lossy().to_lowercase();
-            match log_level.as_str() {
-                "trace" | "debug" | "info" | "warn" | "error" => {
-                    set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, log_level.as_str());
-                }
-                other => {
-                    warn!(
-                        target: TARGET,
-                        "Invalid log level '{other}' in {CUCUMBER_LOG_LEVEL}; using 'info' level"
-                    );
-                    set_default_env(LOGOS_BLOCKCHAIN_LOG_LEVEL, "info");
-                }
+    if let Some(log_level) = std::env::var_os(CUCUMBER_LOG_LEVEL) {
+        let log_level = log_level.to_string_lossy().to_lowercase();
+        match log_level.as_str() {
+            "trace" | "debug" | "info" | "warn" | "error" => {
+                set_default_env(LOG_LEVEL, log_level.as_str());
             }
-        },
-    );
+            other => {
+                warn!(
+                    target: TARGET,
+                    "Invalid log level '{other}' in {CUCUMBER_LOG_LEVEL}; ignoring override"
+                );
+            }
+        }
+    }
 }
 
 pub fn init_node_log_dir_defaults(deployer: &DeployerKind, log_dir: Option<&PathBuf>) {
