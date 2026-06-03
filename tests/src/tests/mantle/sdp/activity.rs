@@ -63,7 +63,9 @@ async fn sdp_blend_activity() {
 
     // Wait past the point where declarations would be removed if no activity
     // proofs were submitted.
-    let survival_epochs = INACTIVITY_PERIOD + RETENTION_PERIOD + 1.into(); // +1 margin
+    let initial_active_epoch = declarations[0].active;
+    let survival_epochs =
+        initial_active_epoch + INACTIVITY_PERIOD + RETENTION_PERIOD + Epoch::new(2); // +1 margin
     let survival_slots = Slot::new(u64::from(u32::from(survival_epochs)) * slots_per_epoch);
     wait_for_nodes_tip_slot(
         &[&node0.client, &node1.client],
@@ -100,7 +102,8 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
     };
     config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
     config.deployment.cryptarchia.slot_activation_coeff =
-        NonNegativeRatio::new(1, 10.try_into().unwrap());
+        NonNegativeRatio::new(1, 2.try_into().unwrap());
+    config.deployment.cryptarchia.learning_rate = 0.5.try_into().unwrap();
 
     slots_per_epoch.store(
         config.deployment.cryptarchia.slots_per_epoch(),
