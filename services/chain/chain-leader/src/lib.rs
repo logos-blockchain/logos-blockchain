@@ -11,7 +11,7 @@ use core::fmt::Debug;
 use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, stream};
-use lb_chain_network_service::api::ChainNetworkServiceData;
+use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
     Epoch,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -44,7 +44,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{oneshot, watch};
-use tracing::{Level, debug, error, info, instrument, span, trace};
+use tracing::{Level, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
 pub use crate::wallet::LeaderWalletConfig;
@@ -315,6 +315,14 @@ where
                 .expect("Failed to estabilish connection with Cryptarchia"),
         );
 
+        let chain_network_api = ChainNetworkServiceApi::<ChainNetwork, RuntimeServiceId>::new(
+            self.service_resources_handle
+                .overwatch_handle
+                .relay::<ChainNetwork>()
+                .await
+                .expect("Failed to estabilish connection with ChainNetwork"),
+        );
+
         let LeaderSettings {
             config: ledger_config,
             transaction_selector_settings,
@@ -459,7 +467,7 @@ where
                             .await
                             {
                                 Ok(block) => {
-                                    Self::publish_block_proposal(block, &blend_adapter).await;
+                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
                                 }
                                 Err(e) => {
                                     metrics::consensus_proposals_create_failed();
@@ -645,18 +653,20 @@ where
         Ok(block)
     }
 
-    /// Publish our own proposed block to the blend network.
-    async fn publish_block_proposal(
+    /// Apply our own proposed block to the chain and publish it to the blend
+    /// network.
+    async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
+        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
         blend_adapter: &BlendAdapter<BlendService>,
     ) {
-        // TODO: enable this once we elimnate sessions from Blend and so on
-        // Now we're disabling this to avoid a case which a proposing node
-        // transitions to a new session much earlier than other nodes.
-        debug!(
-            target: LOG_TARGET, header_id = ?block.header().id(),
-            "skipping self-applying block and just publishing it",
-        );
+        if let Err(e) = chain_network_api
+            .apply_block_and_reconcile_mempool(block.clone())
+            .await
+        {
+            error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
+            return;
+        }
 
         blend_adapter.publish_proposal(block.to_proposal()).await;
         metrics::consensus_proposals_created_local();
