@@ -645,7 +645,7 @@ where
 
         // Transactions that never became applicable are genuinely invalid against
         // this block's ledger state and can be evicted from the mempool.
-        let invalid_tx_hashes: Vec<_> = pending.iter().map(|tx| tx.hash()).collect();
+        let invalid_tx_hashes: Vec<_> = pending.iter().map(Transaction::hash).collect();
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
