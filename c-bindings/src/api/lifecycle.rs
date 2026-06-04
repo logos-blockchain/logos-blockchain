@@ -103,7 +103,7 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
             log::error!("Could not convert the config path to string: {e}");
             OperationStatus::InitializationError
         })?;
-    deserialize_value_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Warn).map_err(
+    deserialize_value_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Fail).map_err(
         |e| {
             log::error!("Could not parse config file: {e}");
             OperationStatus::InitializationError
@@ -130,7 +130,7 @@ fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<Deployme
     match deployment_type {
         DeploymentType::WellKnown(well_known_deployment) => Ok(well_known_deployment.into()),
         DeploymentType::Custom(path) => {
-            deserialize_value_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Warn)
+            deserialize_value_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Fail)
                 .map_err(|e| {
                     log::error!("Could not parse deployment file: {e}");
                     OperationStatus::InitializationError

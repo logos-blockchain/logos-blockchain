@@ -407,7 +407,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
         DeploymentType::Custom(custom_deployment_config_path) => {
             deserialize_value_at_path::<DeploymentSettings>(
                 custom_deployment_config_path,
-                OnUnknownKeys::Warn,
+                OnUnknownKeys::Fail,
             )?
         }
     };

@@ -78,7 +78,7 @@ async fn main() -> Result<()> {
 
     let run_config = {
         let user_config =
-            deserialize_value_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)
+            deserialize_value_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Fail)
                 .inspect_err(|e| {
                     eprintln!("\nExiting... {e}.\n");
                 })?;

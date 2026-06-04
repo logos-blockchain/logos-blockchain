@@ -84,10 +84,14 @@ fn apply_unknown_keys_strategy<Value>(
     match (ignored_fields, strategy) {
         (ignored_fields, _) if ignored_fields.is_empty() => Ok(value),
         (ignored_fields, OnUnknownKeys::Warn) => {
-            warn!(
-                target: LOG_TARGET,
+            let message = format!(
                 "The following unrecognized fields were found in the value: {ignored_fields:?}."
             );
+            warn!(
+                target: LOG_TARGET,
+                message
+            );
+            eprintln!("{message}");
             Ok(value)
         }
         (ignored_fields, OnUnknownKeys::Fail) => {
