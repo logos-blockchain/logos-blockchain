@@ -11,13 +11,12 @@ const BINARY_NAME: &str = "prover.exe";
 #[cfg(not(target_os = "windows"))]
 const BINARY_NAME: &str = "prover";
 
-/// Path to the prover binary in the `LOGOS_BLOCKCHAIN_CIRCUITS` directory.
+/// Path to the prover binary in the prebuilt or `LBC_ROOT_DIR` directory.
 ///
 /// # Panics
 ///
 /// Panics if the prover binary is not found at the expected path.
 fn prover_binary() -> PathBuf {
-    // Check for prover binary at the root of logos-blockchain-circuits directory
     let prover_path = lbc_rapidsnark_sys::prover();
     if prover_path.is_file() {
         return prover_path;

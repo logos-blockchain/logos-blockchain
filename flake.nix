@@ -119,7 +119,6 @@
             ];
             shellHook = ''
               export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
-              export LOGOS_BLOCKCHAIN_CIRCUITS=${logos-blockchain-circuits.packages.${system}.default}
             '';
           };
         }

@@ -2,14 +2,7 @@
 
 ### 📦 Prerequisites
 
-1. Download and unzip the **circuits** for your architecture from the release artifacts.
-2. Rename the downloaded `logos-blockchain-circuits` to `.logos-blockchain-circuits` and move it to your home directory:
-
-   ```bash
-    mv logos-blockchain-circuits ~/.logos-blockchain-circuits
-   ```
-
-3. Download and unzip the **node binary** for your architecture:
+1. Download and unzip the **node binary** for your architecture:
 
    ```bash
     tar -xzf logos-blockchain-node-<arch>-<version>.tar.gz
@@ -124,7 +117,6 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
     * If this is a release candidate but not the first one that has a GH release, then the previous tag is the version of previous release candidate for this release, e.g., `0.1.3-rc.2` compares against `0.1.3-rc.1`
     * If this is an actual release, then the previous tag is the latest release, e.g., `0.1.3` compares against `0.1.2`
 - [ ] Verify binaries are present for **Mac** and **Linux**
-- [ ] Verify circuits of the expected version are present for **Mac** and **Linux**
 - [ ] Replace `{TODO}` peer IDs:
     * For a release candidate (for devnet), copy-paste the new devnet addresses from the [devnet dashboard][devnet-dashboard]
     * For a release (for testnet), copy-paste the new testnet addresses from the [testnet dashboard][testnet-dashboard]

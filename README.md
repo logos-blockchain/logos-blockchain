@@ -26,7 +26,6 @@ This node represents the reference implementation of the Logos Blockchain specif
 | Requirement      | Details                                 |
 |------------------|-----------------------------------------|
 | **LLVM / Clang** | Required for RocksDB and C bindings     |
-| **ZK Circuits**  | Downloaded via setup script (see below) |
 
 ### 1. Clone the repository
 

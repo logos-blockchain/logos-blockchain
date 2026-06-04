@@ -11,13 +11,12 @@ const BINARY_NAME: &str = "verifier.exe";
 #[cfg(not(target_os = "windows"))]
 const BINARY_NAME: &str = "verifier";
 
-/// Path to the verifier binary in the `LOGOS_BLOCKCHAIN_CIRCUITS` directory.
+/// Path to the verifier binary in the prebuilt or `LBC_ROOT_DIR` directory.
 ///
 /// # Panics
 ///
 /// Panics if the verifier binary is not found at the expected path.
 fn verifier_binary() -> PathBuf {
-    // Check for verifier binary at the root of logos-blockchain-circuits directory
     let verifier_path = lbc_rapidsnark_sys::verifier();
     if verifier_path.is_file() {
         return verifier_path;
