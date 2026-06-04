@@ -9,7 +9,8 @@ use lb_core::{
 };
 use lb_http_api_common::bodies::wallet::balance::WalletBalanceResponseBody;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_node::config::{OnUnknownKeys, UserConfig, deserialize_config_at_path};
+use lb_node::config::UserConfig;
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use serde::{Deserialize, de::IntoDeserializer as _};
 use url::Url;
 
@@ -130,7 +131,7 @@ async fn post_blend_declaration(
     }: PostBlendDeclarationArgs,
 ) -> Result<()> {
     let user_config =
-        deserialize_config_at_path::<UserConfig>(&user_config_path, OnUnknownKeys::Warn)
+        deserialize_value_at_path::<UserConfig>(&user_config_path, OnUnknownKeys::Warn)
             .with_context(|| {
                 format!(
                     "Failed to read user config at '{}'",

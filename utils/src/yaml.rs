@@ -1,6 +1,103 @@
-use std::path::{Path, PathBuf};
+use std::{
+    io::Read,
+    path::{Path, PathBuf},
+};
 
+use serde::Deserialize;
 use serde_yaml::Value;
+use tracing::warn;
+
+const LOG_TARGET: &str = lb_log_targets::utils::YAML;
+
+#[derive(thiserror::Error, Debug)]
+pub enum ValueDeserializationError<Value> {
+    #[error("Unrecognized fields in value: {fields:?}")]
+    UnrecognizedFields { fields: Vec<String>, value: Value },
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+    #[error(transparent)]
+    SerdeError(#[from] serde_yaml::Error),
+    #[error("YAML include error: {0}")]
+    IncludeError(String),
+}
+
+pub enum OnUnknownKeys {
+    Fail,
+    Warn,
+}
+
+pub fn deserialize_value_at_path<Value>(
+    path: &Path,
+    unknown_keys_strategy: OnUnknownKeys,
+) -> Result<Value, ValueDeserializationError<Value>>
+where
+    Value: for<'de> Deserialize<'de>,
+{
+    let base_dir = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let file = std::fs::File::open(path)?;
+    let raw: serde_yaml::Value = serde_yaml::from_reader(file)?;
+    let resolved = resolve_includes(raw, &base_dir).map_err(ValueDeserializationError::from)?;
+    deserialize_from_value(resolved, unknown_keys_strategy)
+}
+
+fn deserialize_from_value<Value>(
+    value: serde_yaml::Value,
+    unknown_keys_strategy: OnUnknownKeys,
+) -> Result<Value, ValueDeserializationError<Value>>
+where
+    Value: for<'de> Deserialize<'de>,
+{
+    use serde::de::IntoDeserializer as _;
+    let mut ignored_fields = Vec::new();
+    let value = serde_ignored::deserialize::<_, _, Value>(value.into_deserializer(), |path| {
+        ignored_fields.push(path.to_string());
+    })?;
+    apply_unknown_keys_strategy(value, ignored_fields, unknown_keys_strategy)
+}
+
+pub fn deserialize_value_from_reader<Value, Reader>(
+    reader: Reader,
+    unknown_keys_strategy: OnUnknownKeys,
+) -> Result<Value, ValueDeserializationError<Value>>
+where
+    Value: for<'de> Deserialize<'de>,
+    Reader: Read,
+{
+    let mut ignored_fields = Vec::new();
+    let value = serde_ignored::deserialize::<_, _, Value>(
+        serde_yaml::Deserializer::from_reader(reader),
+        |path| {
+            ignored_fields.push(path.to_string());
+        },
+    )?;
+    apply_unknown_keys_strategy(value, ignored_fields, unknown_keys_strategy)
+}
+
+fn apply_unknown_keys_strategy<Value>(
+    value: Value,
+    ignored_fields: Vec<String>,
+    strategy: OnUnknownKeys,
+) -> Result<Value, ValueDeserializationError<Value>> {
+    match (ignored_fields, strategy) {
+        (ignored_fields, _) if ignored_fields.is_empty() => Ok(value),
+        (ignored_fields, OnUnknownKeys::Warn) => {
+            warn!(
+                target: LOG_TARGET,
+                "The following unrecognized fields were found in the value: {ignored_fields:?}."
+            );
+            Ok(value)
+        }
+        (ignored_fields, OnUnknownKeys::Fail) => {
+            Err(ValueDeserializationError::UnrecognizedFields {
+                fields: ignored_fields,
+                value,
+            })
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum YamlIncludeError {
@@ -12,12 +109,23 @@ pub enum YamlIncludeError {
     InvalidInclude(String),
 }
 
+impl<Value> From<YamlIncludeError> for ValueDeserializationError<Value> {
+    fn from(e: YamlIncludeError) -> Self {
+        use YamlIncludeError as E;
+        match e {
+            E::Io(e) => Self::IoError(e),
+            E::Serde(e) => Self::SerdeError(e),
+            E::InvalidInclude(msg) => Self::IncludeError(msg),
+        }
+    }
+}
+
 /// Recursively resolves `!include <path>` tags in a YAML value.
 ///
 /// Paths are resolved relative to `base_dir`. Nested includes are supported
 /// (each included file's own includes resolve relative to that file's
 /// directory).
-pub fn resolve_includes(value: Value, base_dir: &Path) -> Result<Value, YamlIncludeError> {
+fn resolve_includes(value: Value, base_dir: &Path) -> Result<Value, YamlIncludeError> {
     match value {
         Value::Tagged(tagged) if tagged.tag == "include" => {
             let path_str = match &tagged.value {

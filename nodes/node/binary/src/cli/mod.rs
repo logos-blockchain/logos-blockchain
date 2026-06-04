@@ -10,15 +10,15 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
 use crate::{
     cli::keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
-        LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, SdpArgs, StateArgs, UserConfig,
-        deserialize_config_at_path, update_api, update_blend, update_cryptarchia, update_network,
-        update_sdp, update_state, update_tracing,
+        LogArgs, NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, update_api, update_blend,
+        update_cryptarchia, update_network, update_sdp, update_state, update_tracing,
     },
 };
 
@@ -405,7 +405,7 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     let deployment_settings = match deployment_args.deployment_type() {
         DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
         DeploymentType::Custom(custom_deployment_config_path) => {
-            deserialize_config_at_path::<DeploymentSettings>(
+            deserialize_value_at_path::<DeploymentSettings>(
                 custom_deployment_config_path,
                 OnUnknownKeys::Warn,
             )?
