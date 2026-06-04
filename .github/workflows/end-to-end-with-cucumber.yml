@@ -45,6 +45,7 @@ jobs:
       # Heavy Rust e2e tests become less stable when nextest oversubscribes the
       # self-hosted runners. Keep these lanes single-job to reduce retries.
       E2E_NEXTEST_JOBS: 1
+      LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
 
     steps:
       # Remove any rustup override to ensure default toolchain is used
