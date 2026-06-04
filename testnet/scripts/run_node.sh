@@ -7,7 +7,6 @@ export CFG_FILE_PATH="/node-data/${LB_HOST_IDX}/config.yaml" \
        CFG_HOST_IDENTIFIER="i-${LB_HOST_IDX}" \
        CFG_DEPLOYMENT_PATH="/node-data/cfgsync/deployment-settings.yaml" \
        LOG_BACKEND="file" \
-       LOG_DIR="/node-data/${LB_HOST_IDX}/" \
-       STATE_PATH="/node-data/${LB_HOST_IDX}/state"
+       LOG_DIR="/node-data/${LB_HOST_IDX}/"
 
 exec /usr/local/bin/logos-blockchain-node --deployment $CFG_DEPLOYMENT_PATH $CFG_FILE_PATH
