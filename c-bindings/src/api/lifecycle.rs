@@ -210,9 +210,8 @@ mod test {
             let node_config = std::fs::read_to_string(STANDALONE_NODE_CONFIG_PATH.as_path())
                 .expect("Failed to read standalone node config")
                 .replace("./state/logs", &log_dir.to_string_lossy());
-            let node_config = format!(
-                "{node_config}\napi:\n  backend:\n    listen_address: 127.0.0.1:0\n  testing:\n    listen_address: 127.0.0.1:0\n"
-            );
+            let node_config =
+                format!("{node_config}\napi:\n  backend:\n    listen_address: 127.0.0.1:0\n");
             std::fs::write(&node_config_path, node_config)
                 .expect("Failed to write isolated node config");
             std::fs::copy(
