@@ -1,0 +1,25 @@
+name: Debug Env
+
+on:
+  pull_request:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check LBC_ROOT_DIR
+        run: |
+          if [ -n "${LBC_ROOT_DIR}" ]; then
+            echo "LBC_ROOT_DIR=${LBC_ROOT_DIR}"
+          else
+            echo "LBC_ROOT_DIR is not set"
+          fi
+
+      - name: List .cache/logos/blockchain
+        run: |
+          DIR="${HOME}/.cache/logos/blockchain"
+          if [ -d "${DIR}" ]; then
+            find "${DIR}" -maxdepth 3 | sort
+          else
+            echo "${DIR} does not exist"
+          fi
