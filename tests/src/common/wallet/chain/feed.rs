@@ -272,8 +272,8 @@ impl WalletFeedStateResults {
 ///
 /// This type is intentionally limited to feed-backed tracking: register wallets
 /// to observe, apply retained feed blocks to those wallets, and expose the
-/// latest observed UTXOs per source. Legacy compatibility and direct chain queries
-/// live outside this tracker.
+/// latest observed UTXOs per source. Legacy compatibility and direct chain
+/// queries live outside this tracker.
 #[derive(Default)]
 pub struct WalletBlockFeedTracker {
     source_trackers: HashMap<String, WalletSourceTracker>,

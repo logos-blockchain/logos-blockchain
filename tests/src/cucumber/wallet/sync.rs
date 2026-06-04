@@ -421,7 +421,7 @@ impl WalletFeedSourceTrackingPlan {
         min_height: u64,
         source_wallet_keys: &TrackedWalletKeysForSource,
     ) {
-        self.min_height = self.min_height.max(min_height);
+        self.min_height = self.min_height.min(min_height);
         self.tracking_batch
             .extend_wallet_keys(source_wallet_keys.wallet_keys().iter().cloned());
     }
