@@ -10,13 +10,12 @@ use crate::{
         TxHash,
         ledger::{Declarations, Operation},
     },
-    sdp::{NumberOfEpochs, locked_notes::LockedNotes},
+    sdp::{self, locked_notes::LockedNotes},
 };
 
 const LOG_TARGET: &str = mantle::sdp::message::WITHDRAW;
 
 pub struct SDPWithdrawValidationContext<'a> {
-    pub lock_period: NumberOfEpochs,
     pub declarations: &'a Declarations,
     pub epoch: Epoch,
     pub locked_notes: &'a LockedNotes,
@@ -27,6 +26,7 @@ pub struct SDPWithdrawValidationContext<'a> {
 pub struct SDPWithdrawExecutionContext {
     pub declarations: Declarations,
     pub locked_notes: LockedNotes,
+    pub epoch: Epoch,
 }
 
 impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
@@ -41,6 +41,14 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
+
+        // Check that the declaration hasn't been withdrawn
+        if let Some(withdrawn) = declaration.withdrawn {
+            return Err(SdpError::DeclarationWithdrawn {
+                declaration_id: self.declaration_id,
+                withdrawn_epoch: withdrawn,
+            });
+        }
 
         // Check that the locked note is locked for this service
         if !ctx
@@ -60,11 +68,6 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
                 note_id: self.locked_note_id,
                 expected: declaration.locked_note_id,
             });
-        }
-
-        // Check the note can be unlocked
-        if declaration.created + ctx.lock_period >= ctx.epoch {
-            return Err(SdpError::WithdrawalWhileLocked);
         }
 
         // Ensure locked note pk and zk_id attached to this declaration authorized this
@@ -98,24 +101,25 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
     ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         let declaration = ctx
             .declarations
-            .get(&self.declaration_id)
+            .get_mut(&self.declaration_id)
             .expect("The operation should have been validated");
+
+        // Delay the withdrawal by `SNAPSHOT_FINALIZATION_DELAY` epochs
+        // to prevent "stake-less service provision".
+        // Otherwise, providers can continue providing the service even after
+        // withdrawal because SDP uses the snapshot from `SNAPSHOT_FINALIZATION_DELAY`
+        // epochs ago.
+        // The note will be unlocked once the withdrawn epoch set here is reached.
+        declaration.withdrawn = Some(ctx.epoch + sdp::SNAPSHOT_FINALIZATION_DELAY);
+        declaration.nonce = self.nonce;
 
         debug!(
             target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
-            nonce = self.nonce,
+            withdrawn = ?declaration.withdrawn,
+            nonce = ?declaration.nonce,
             "updated declaration with withdraw message"
         );
-
-        // TODO: Delay the unlock for SNAPSHOT_FINALIZATION_DELAY epochs to prevent
-        // stake-less service provision: https://www.notion.so/RFC-Remove-Concept-of-a-Session-f39261aa09df826db83e81613bb454dc?source=copy_link#357261aa09df80d79dcbeccd5487b5a5
-        let _ = ctx
-            .locked_notes
-            .unlock(declaration.service_type, &self.locked_note_id)
-            .expect("The operation should have been validated");
-
-        ctx.declarations = ctx.declarations.remove(&self.declaration_id);
 
         Ok((ctx, Events::new()))
     }

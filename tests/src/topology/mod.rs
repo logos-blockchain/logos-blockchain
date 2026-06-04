@@ -11,7 +11,7 @@ use lb_config::kms::key_id_for_preload_backend;
 use lb_core::{
     block::genesis::GenesisBlock,
     mantle::{GenesisTx as _, Note, NoteId},
-    sdp::{Locator, NumberOfEpochs, ServiceType},
+    sdp::{Locator, ServiceType},
 };
 use lb_key_management_system_service::keys::ZkKey;
 use lb_network_service::backends::libp2p::Libp2pInfo;
@@ -36,9 +36,6 @@ pub struct TopologyConfig {
     pub blend_core_nodes: usize,
     pub network_params: NetworkParams,
     pub extra_genesis_notes: Vec<GenesisNoteSpec>,
-    /// Override the SDP `lock_period` for this test topology.
-    /// If None, uses the default from deployment settings (10).
-    pub lock_period_override: Option<NumberOfEpochs>,
 }
 
 impl TopologyConfig {
@@ -49,7 +46,6 @@ impl TopologyConfig {
             blend_core_nodes: 1,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
-            lock_period_override: None,
         }
     }
 
@@ -60,7 +56,6 @@ impl TopologyConfig {
             blend_core_nodes: 2,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
-            lock_period_override: None,
         }
     }
 
@@ -71,19 +66,12 @@ impl TopologyConfig {
             blend_core_nodes: n_validators,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
-            lock_period_override: None,
         }
     }
 
     #[must_use]
     pub fn with_extra_genesis_note(mut self, note_spec: GenesisNoteSpec) -> Self {
         self.extra_genesis_notes.push(note_spec);
-        self
-    }
-
-    #[must_use]
-    pub const fn with_lock_period(mut self, lock_period: NumberOfEpochs) -> Self {
-        self.lock_period_override = Some(lock_period);
         self
     }
 
@@ -98,7 +86,6 @@ impl TopologyConfig {
             blend_core_nodes: m,
             network_params: NetworkParams::default(),
             extra_genesis_notes: Vec::new(),
-            lock_period_override: None,
         }
     }
 }
@@ -208,8 +195,7 @@ impl Topology {
 
         let general_configs = node_configs.clone();
 
-        let validators =
-            Self::spawn_validators(node_configs, genesis_block, config.lock_period_override).await;
+        let validators = Self::spawn_validators(node_configs, genesis_block).await;
 
         Self {
             validators,
@@ -221,21 +207,10 @@ impl Topology {
     async fn spawn_validators(
         config: Vec<GeneralConfig>,
         genesis_block: GenesisBlock,
-        lock_period_override: Option<NumberOfEpochs>,
     ) -> Vec<Validator> {
         let mut validators = Vec::new();
         for general_config in config {
             let mut deployment = e2e_deployment_settings_with_genesis_block(&genesis_block);
-            if let Some(lock_period) = lock_period_override {
-                for params in deployment
-                    .cryptarchia
-                    .sdp_config
-                    .service_params
-                    .values_mut()
-                {
-                    params.lock_period = lock_period;
-                }
-            }
             let config = create_validator_config(general_config, deployment);
             validators.push(Validator::spawn(config).await.unwrap());
         }
