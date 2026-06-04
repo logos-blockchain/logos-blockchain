@@ -770,14 +770,8 @@ where
     }
 }
 
-/// Select the transactions to include in a block from an ordered stream.
-///
-/// The input stream is expected to be in dependency (topological) order: a
-/// transaction may only depend on transactions that appear before it. To
-/// preserve that invariant under the block size/count limits we take the
-/// longest prefix that fits rather than skipping over transactions that do not
-/// fit — skipping a transaction while keeping a later one could drop a
-/// dependency and leave its dependent in the block, producing an invalid block.
+/// Select transactions for a block, truncating the stream at the first
+/// transaction that trips the block size or count limits.
 async fn txs_for_block<Tx, S>(mut txs: S) -> Vec<Tx>
 where
     Tx: StorageSize,
