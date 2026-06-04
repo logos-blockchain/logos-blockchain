@@ -3210,6 +3210,8 @@ mod tests {
             Ok(TimeInfo {
                 slot_duration_ms: 1_000,
                 genesis_time_unix_ms: 0,
+                current_slot: 0,
+                current_epoch: 0,
             })
         }
 
@@ -3333,6 +3335,8 @@ mod tests {
             Ok(TimeInfo {
                 slot_duration_ms: 1_000,
                 genesis_time_unix_ms: 0,
+                current_slot: 0,
+                current_epoch: 0,
             })
         }
 
@@ -3522,6 +3526,8 @@ mod tests {
         let timing_info = TimeInfo {
             slot_duration_ms: 0,
             genesis_time_unix_ms: 0,
+            current_slot: 0,
+            current_epoch: 0,
         };
         let observed_slot = Slot::default();
         let result =
@@ -3536,6 +3542,8 @@ mod tests {
         let timing_info = TimeInfo {
             slot_duration_ms: 1_000,
             genesis_time_unix_ms: -500,
+            current_slot: 0,
+            current_epoch: 0,
         };
         let observed_slot = Slot::default();
         let result =
@@ -3550,6 +3558,8 @@ mod tests {
         let timing_info = TimeInfo {
             slot_duration_ms: 1_000,
             genesis_time_unix_ms: 0,
+            current_slot: 0,
+            current_epoch: 0,
         };
         let observed_slot = Slot::default();
         let result =
@@ -3564,6 +3574,8 @@ mod tests {
         let timing_info = TimeInfo {
             slot_duration_ms: 2_000,
             genesis_time_unix_ms: 1_779_820_800_000i64,
+            current_slot: 42,
+            current_epoch: 0,
         };
         let observed_slot = Slot::from(42u64);
         let result =

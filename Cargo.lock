@@ -5148,7 +5148,6 @@ dependencies = [
  "futures",
  "log",
  "logos-blockchain-cryptarchia-engine",
- "logos-blockchain-http-api-common",
  "logos-blockchain-log-targets",
  "logos-blockchain-tracing",
  "logos-blockchain-utils",

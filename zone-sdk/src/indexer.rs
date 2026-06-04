@@ -349,6 +349,8 @@ mod tests {
             Ok(lb_common_http_client::TimeInfo {
                 slot_duration_ms: 1_000,
                 genesis_time_unix_ms: 0,
+                current_slot: 0,
+                current_epoch: 0,
             })
         }
 

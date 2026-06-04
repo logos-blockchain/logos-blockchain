@@ -6,7 +6,6 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_cryptarchia_engine::{Epoch, EpochConfig, Slot, time::SlotConfig};
-use lb_http_api_common::TimeInfo;
 use lb_log_targets::time as log_targets_time;
 use log::error;
 use overwatch::{
@@ -26,6 +25,17 @@ mod metrics;
 
 const LOG_TARGET: &str = log_targets_time::ROOT;
 
+/// Service-owned struct for time information
+/// This is the internal representation used by the time service
+/// and is mapped to the API response struct by the API layer
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TimeServiceInfo {
+    pub slot_duration_ms: u64,
+    pub genesis_time_unix_ms: i64,
+    pub current_slot: Slot,
+    pub current_epoch: Epoch,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SlotTick {
     pub epoch: Epoch,
@@ -36,7 +46,7 @@ pub type EpochSlotTickStream = Pin<Box<dyn Stream<Item = SlotTick> + Send + Sync
 
 pub enum TimeServiceMessage {
     Info {
-        sender: oneshot::Sender<Result<TimeInfo, String>>,
+        sender: oneshot::Sender<Result<TimeServiceInfo, String>>,
     },
     Subscribe {
         sender: oneshot::Sender<EpochSlotTickStream>,
@@ -179,9 +189,11 @@ fn handle_service_message<BackendSettings>(
                 drop(sender.send(Err("genesis time exceeds i64::MAX milliseconds".to_owned())));
                 return;
             };
-            drop(sender.send(Ok(TimeInfo {
+            drop(sender.send(Ok(TimeServiceInfo {
                 slot_duration_ms,
                 genesis_time_unix_ms,
+                current_slot: current_slot_tick.slot,
+                current_epoch: current_slot_tick.epoch,
             })));
         }
         TimeServiceMessage::Subscribe { sender } => {

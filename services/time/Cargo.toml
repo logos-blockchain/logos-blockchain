@@ -16,7 +16,6 @@ workspace = true
 async-trait           = { workspace = true }
 futures               = { workspace = true }
 lb-cryptarchia-engine = { features = ["tokio"], workspace = true }
-lb-http-api-common    = { workspace = true }
 lb-log-targets        = { workspace = true }
 lb-tracing            = { workspace = true }
 lb-utils              = { workspace = true }

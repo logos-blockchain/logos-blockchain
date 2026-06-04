@@ -30,6 +30,7 @@ use lb_core::{
     },
 };
 use lb_http_api_common::{
+    TimeInfo,
     bodies::{
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
         wallet::{
@@ -484,7 +485,7 @@ where
     get,
     path = paths::TIME_INFO,
     responses(
-        (status = 200, description = "Query time service information", body = lb_http_api_common::TimeInfo),
+        (status = 200, description = "Query time service information", body = TimeInfo),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
@@ -505,7 +506,15 @@ where
         return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
     }
     match receiver.await {
-        Ok(Ok(info)) => (StatusCode::OK, Json(info)).into_response(),
+        Ok(Ok(service_info)) => {
+            let api_info = TimeInfo {
+                slot_duration_ms: service_info.slot_duration_ms,
+                genesis_time_unix_ms: service_info.genesis_time_unix_ms,
+                current_slot: u64::from(service_info.current_slot),
+                current_epoch: u32::from(service_info.current_epoch),
+            };
+            (StatusCode::OK, Json(api_info)).into_response()
+        }
         Ok(Err(error)) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
