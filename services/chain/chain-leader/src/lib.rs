@@ -593,7 +593,7 @@ where
             .await
             .map_err(Error::FetchBlockTransactions)?;
 
-        let mut tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
+        let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
         ledger_state = ledger_state
             .clone()
@@ -601,10 +601,7 @@ where
 
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
-        let mut pending = Vec::new();
-        while let Some(tx) = tx_stream.next().await {
-            pending.push(tx);
-        }
+        let mut pending: Vec<_> = tx_stream.collect().await;
 
         let mut valid_txs = Vec::new();
 
