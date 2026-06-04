@@ -601,21 +601,7 @@ where
 
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
-        let candidate_txs: Vec<_> = tx_stream.collect().await;
-
-        // A transaction larger than the maximum block size can never be included
-        // in any block. Evict such transactions up front so they cannot stall
-        // block assembly; any of their dependents will fail to apply below and be
-        // evicted in turn.
-        let mut pending = Vec::with_capacity(candidate_txs.len());
-        let mut invalid_tx_hashes = Vec::new();
-        for tx in candidate_txs {
-            if tx.storage_size() > MAX_BLOCK_SIZE {
-                invalid_tx_hashes.push(tx.hash());
-            } else {
-                pending.push(tx);
-            }
-        }
+        let mut pending: Vec<_> = tx_stream.collect().await;
 
         let mut valid_txs = Vec::new();
 
@@ -655,8 +641,8 @@ where
         }
 
         // Transactions that never became applicable are genuinely invalid against
-        // this block's ledger state and can be evicted from the mempool too.
-        invalid_tx_hashes.extend(pending.iter().map(Transaction::hash));
+        // this block's ledger state and can be evicted from the mempool.
+        let invalid_tx_hashes: Vec<_> = pending.iter().map(Transaction::hash).collect();
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
