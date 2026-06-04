@@ -599,31 +599,53 @@ where
             .clone()
             .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
 
-        let mut valid_txs = Vec::new();
-        let mut invalid_tx_hashes = Vec::new();
-
+        // Collect all candidate transactions up front so the ones that fail can
+        // be retried across multiple rounds.
+        let mut pending = Vec::new();
         while let Some(tx) = tx_stream.next().await {
-            let tx_hash = tx.hash();
-            match ledger_state
-                .clone()
-                .try_apply_contents::<HeaderId, MainnetGasConstants>(
-                    ledger_config,
-                    iter::once(tx.clone()),
-                ) {
-                Ok((new_state, _events)) => {
-                    ledger_state = new_state;
-                    valid_txs.push(tx);
-                }
-                Err(err) => {
-                    tracing::debug!(
-                        "failed to apply tx {:?} during block assembly: {:?}",
-                        tx_hash,
-                        err
-                    );
-                    invalid_tx_hashes.push(tx_hash);
+            pending.push(tx);
+        }
+
+        let mut valid_txs = Vec::new();
+
+        // A transaction may only become valid once another transaction it depends
+        // on has already been applied. Repeatedly attempt to apply the pending
+        // transactions, retrying the full set of failures each round, while a
+        // round keeps adding new transactions to the block.
+        let mut applied_any = true;
+        while applied_any {
+            applied_any = false;
+            let mut still_pending = Vec::with_capacity(pending.len());
+
+            for tx in pending {
+                match ledger_state
+                    .clone()
+                    .try_apply_contents::<HeaderId, MainnetGasConstants>(
+                        ledger_config,
+                        iter::once(tx.clone()),
+                    ) {
+                    Ok((new_state, _events)) => {
+                        ledger_state = new_state;
+                        valid_txs.push(tx);
+                        applied_any = true;
+                    }
+                    Err(err) => {
+                        tracing::trace!(
+                            "tx {:?} not (yet) applicable during block assembly: {:?}",
+                            tx.hash(),
+                            err
+                        );
+                        still_pending.push(tx);
+                    }
                 }
             }
+
+            pending = still_pending;
         }
+
+        // Transactions that never became applicable are genuinely invalid against
+        // this block's ledger state and can be evicted from the mempool.
+        let invalid_tx_hashes: Vec<_> = pending.iter().map(|tx| tx.hash()).collect();
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
