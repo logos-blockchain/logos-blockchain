@@ -601,7 +601,21 @@ where
 
         // Collect all candidate transactions up front so the ones that fail can
         // be retried across multiple rounds.
-        let mut pending: Vec<_> = tx_stream.collect().await;
+        let candidate_txs: Vec<_> = tx_stream.collect().await;
+
+        // A transaction larger than the maximum block size can never be included
+        // in any block. Evict such transactions up front so they cannot stall
+        // block assembly; any of their dependents will fail to apply below and be
+        // evicted in turn.
+        let mut pending = Vec::with_capacity(candidate_txs.len());
+        let mut invalid_tx_hashes = Vec::new();
+        for tx in candidate_txs {
+            if tx.storage_size() > MAX_BLOCK_SIZE {
+                invalid_tx_hashes.push(tx.hash());
+            } else {
+                pending.push(tx);
+            }
+        }
 
         let mut valid_txs = Vec::new();
 
@@ -641,8 +655,8 @@ where
         }
 
         // Transactions that never became applicable are genuinely invalid against
-        // this block's ledger state and can be evicted from the mempool.
-        let invalid_tx_hashes: Vec<_> = pending.iter().map(Transaction::hash).collect();
+        // this block's ledger state and can be evicted from the mempool too.
+        invalid_tx_hashes.extend(pending.iter().map(Transaction::hash));
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -770,6 +784,14 @@ where
     }
 }
 
+/// Select the transactions to include in a block from an ordered stream.
+///
+/// The input stream is expected to be in dependency (topological) order: a
+/// transaction may only depend on transactions that appear before it. To
+/// preserve that invariant under the block size/count limits we take the
+/// longest prefix that fits rather than skipping over transactions that do not
+/// fit — skipping a transaction while keeping a later one could drop a
+/// dependency and leave its dependent in the block, producing an invalid block.
 async fn txs_for_block<Tx, S>(mut txs: S) -> Vec<Tx>
 where
     Tx: StorageSize,
@@ -785,11 +807,11 @@ where
 
         let tx_size = tx.storage_size();
         let Some(next_block_size) = block_size.checked_add(tx_size) else {
-            continue;
+            break;
         };
 
         if next_block_size > MAX_BLOCK_SIZE {
-            continue;
+            break;
         }
 
         block_size = next_block_size;
@@ -843,7 +865,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn block_tx_selection_skips_oversized_transactions() {
+    async fn block_tx_selection_stops_at_first_transaction_that_does_not_fit() {
+        // The middle transaction does not fit alongside the first, so selection
+        // must stop there and must not pull the third (which would fit on its
+        // own) ahead of it — doing so could drop a dependency of the third.
+        let txs = stream::iter(vec![
+            TestTx { size: 10 },
+            TestTx {
+                size: MAX_BLOCK_SIZE,
+            },
+            TestTx { size: 10 },
+        ]);
+
+        let selected = txs_for_block(txs).await;
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].storage_size(), 10);
+    }
+
+    #[tokio::test]
+    async fn block_tx_selection_stops_at_leading_oversized_transaction() {
+        // A transaction larger than the whole block can never fit. Selection
+        // stops at it rather than skipping past to later transactions, which may
+        // depend on it. (In practice such transactions are filtered out before
+        // reaching here, but the prefix invariant must hold regardless.)
         let txs = stream::iter(vec![
             TestTx {
                 size: MAX_BLOCK_SIZE + 1,
@@ -853,7 +898,6 @@ mod tests {
 
         let selected = txs_for_block(txs).await;
 
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].storage_size(), 1);
+        assert!(selected.is_empty());
     }
 }
