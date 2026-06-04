@@ -8,12 +8,19 @@ mod funding;
 mod funding_from_chain;
 
 pub use chain::{
-    source::{NodeHttpWalletChainSource, WalletChainSource},
-    sync::{
-        WalletSyncBatch, WalletSyncError, WalletSyncRequestError, WalletSyncRequests,
-        WalletSyncResult, WalletSyncResults, WalletSyncedBlock, WalletSyncedOutput,
-        WalletSyncedSpend, WalletUtxos, sync_batch_from_chain, sync_batches_from_chain,
+    feed::{
+        WalletBlockFeedTracker, WalletBlockFeedTrackerError, WalletFeedStateResult,
+        WalletFeedStateResults, WalletFeedTrackingBatch, WalletFeedTrackingResult,
+        WalletObservedBlock,
     },
+    source::{NodeHttpWalletChainSource, WalletChainSource},
+    state::{TrackedWalletKeys, TrackedWalletKeysError, WalletObservedOutput, WalletObservedSpend},
+    sync::{
+        WalletSyncResult, WalletSyncResults, WalletSyncTrackedKeysBySource,
+        WalletSyncTrackedKeysError, WalletSyncTrackedKeysForSource, WalletSyncedBlock,
+        WalletSyncedOutput, WalletSyncedSpend, WalletUtxos,
+    },
+    tracked_keys::{TrackedWalletKeysBySource, TrackedWalletKeysForSource},
 };
 pub use funding::{
     WalletFundedTransfer, WalletFundingPolicy, WalletFundingResources, WalletFundingSource,
@@ -24,9 +31,9 @@ pub(crate) use funding::{
 };
 pub use funding_from_chain::{
     DirectWalletSourceError, WalletFundingSourceFromChainError, current_wallet_funding_source,
-    wallet_funding_source_from_chain,
+    wallet_funding_source_from_chain, wallet_utxos_from_chain,
 };
-pub use ids::{WalletId, WalletSyncSourceId, wallet_id_for_sync_source};
+pub use ids::{WalletChainSourceId, WalletId, wallet_id_for_chain_source};
 pub use tracked::{
     RecordedWalletSubmission, TrackedWallets, WalletDiagnostics, WalletPendingStateDiagnostics,
     WalletUtxoSnapshotDiagnostics,

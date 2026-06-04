@@ -28,11 +28,12 @@ pub use diagnostics::{
     unregister_system_monitor_output_file,
 };
 pub use framework::{
-    BlockFeed, BlockFeedExtensionFactory, BlockFeedObservation, BlockFeedObserver,
-    BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, CoreBuilderExt, LbcComposeDeployer, LbcEnv,
-    LbcK8sDeployer, LbcK8sManualCluster, LbcLocalDeployer, LbcManualCluster, NodeHeadSnapshot,
-    ObservedBlock, ScenarioBuilder, ScenarioBuilderExt, block_feed_source_provider,
-    block_feed_sources, named_block_feed_sources,
+    BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedExtensionFactory,
+    BlockFeedObservation, BlockFeedObserver, BlockFeedSnapshot, BlockFeedWaitError, BlockRecord,
+    BoxedBlockFeedCollector, CoreBuilderExt, LbcComposeDeployer, LbcEnv, LbcK8sDeployer,
+    LbcK8sManualCluster, LbcLocalDeployer, LbcManualCluster, NodeHeadSnapshot, ObservedBlock,
+    ScenarioBuilder, ScenarioBuilderExt, block_feed_source_provider, block_feed_sources,
+    named_block_feed_sources,
 };
 // Required by reused node-test config modules importing from crate root.
 pub use node::configs::deployment::{DeploymentBuilder, TopologyConfig};

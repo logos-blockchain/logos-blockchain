@@ -43,7 +43,7 @@ use crate::{
     cucumber::{
         error::{StepError, StepResult},
         steps::TARGET,
-        wallet::sync::sync_wallet_state_from_chain,
+        wallet::sync::sync_wallet_state_from_feed,
         world::{CucumberWorld, NodeInfo},
     },
 };
@@ -314,7 +314,7 @@ async fn sync_zone_funding_wallet_utxos(
     let node_name = world.zone.node_name()?.to_owned();
     let funding_public_key = world.zone.funding_public_key()?;
 
-    Ok(sync_wallet_state_from_chain(
+    Ok(sync_wallet_state_from_feed(
         world,
         ZONE_FUNDING_WALLET_NAME,
         &node_name,
@@ -328,16 +328,18 @@ async fn sync_zone_funding_wallet_utxos(
 }
 
 fn record_zone_wallet_submission(
-    world: &mut CucumberWorld,
+    world: &CucumberWorld,
     tx_hash: TxHash,
     reserved_inputs: Vec<Utxo>,
-) {
-    world.wallets.record_wallet_reservation(
-        ZONE_FUNDING_WALLET_NAME.to_owned(),
-        tx_hash,
-        WalletReservedInputs::new(reserved_inputs, Vec::new()),
-        0,
-    );
+) -> StepResult {
+    world.with_wallets_mut(|wallets| {
+        wallets.record_wallet_reservation(
+            ZONE_FUNDING_WALLET_NAME.to_owned(),
+            tx_hash,
+            WalletReservedInputs::new(reserved_inputs, Vec::new()),
+            0,
+        );
+    })
 }
 
 pub(super) async fn submit_zone_deposit_transaction(
@@ -369,7 +371,7 @@ pub(super) async fn submit_zone_deposit_transaction(
     world
         .zone
         .remember_submitted_deposit(transaction_alias.clone(), deposit, amount);
-    record_zone_wallet_submission(world, response, reserved_inputs);
+    record_zone_wallet_submission(world, response, reserved_inputs)?;
     world.remember_submitted_transaction(transaction_alias, response);
 
     Ok(())
@@ -419,7 +421,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
         world,
         submission.publish.inscription_id,
         submission.reserved_inputs,
-    );
+    )?;
     world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id);
 
     Ok(())

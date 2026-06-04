@@ -1007,6 +1007,7 @@ fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
         info!(target: TARGET, "Stopping node '{node_name}'");
     }
     world.nodes_info.clear();
+    world.reset_wallet_block_feed();
 
     Ok(())
 }

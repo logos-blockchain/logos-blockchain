@@ -13,9 +13,10 @@ use std::{
 
 use async_trait::async_trait;
 pub use block_feed::{
-    BlockFeed, BlockFeedExtensionFactory, BlockFeedObservation, BlockFeedObserver,
-    BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, NodeHeadSnapshot, ObservedBlock,
-    block_feed_source_provider, block_feed_sources, named_block_feed_sources,
+    BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedExtensionFactory,
+    BlockFeedObservation, BlockFeedObserver, BlockFeedSnapshot, BlockFeedWaitError, BlockRecord,
+    BoxedBlockFeedCollector, NodeHeadSnapshot, ObservedBlock, block_feed_source_provider,
+    block_feed_sources, named_block_feed_sources,
 };
 use common_http_client::BasicAuthCredentials;
 use lb_config::kms::key_id_for_preload_backend;

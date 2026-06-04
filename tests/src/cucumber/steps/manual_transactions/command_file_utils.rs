@@ -557,7 +557,7 @@ fn clear_wallet_encumbrances(
         });
     }
 
-    world.wallets.clear_encumbrances(wallet_name);
+    world.with_wallets_mut(|wallets| wallets.clear_encumbrances(wallet_name))?;
     world.fee_state.clear_wallet_reservations(wallet_name);
     info!(target: TARGET, "Cleared encumbrances for wallet '{wallet_name}'");
     Ok(())
