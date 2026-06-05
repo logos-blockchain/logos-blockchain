@@ -167,12 +167,14 @@ pub enum Error {
 /// [`SequencerCheckpoint`] inline. There is no separate `Published` event.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Fires once per live block while the sequencer is ready. Carries
-    /// both finalized txs and the non-finalized channel-tip delta
-    /// (`channel_update`); either may be empty.
+    /// Fires once per live block while the sequencer is ready. Carries both
+    /// finalized txs and the non-finalized channel-tip delta
+    /// (`channel_update`); either may be empty. A `channel_update` with both
+    /// `orphaned` and `adopted` empty means the canonical channel tip did not
+    /// change for this block.
     BlockProcessed {
         checkpoint: SequencerCheckpoint,
-        channel_update: Option<ChannelUpdate>,
+        channel_update: ChannelUpdate,
         finalized: Vec<FinalizedTx>,
     },
     /// Fires once per backfill batch (up to ~100 historical blocks)
@@ -200,18 +202,18 @@ pub enum Event {
 
 /// Channel state delta from one [`Event::BlockProcessed`].
 ///
-/// Emitted when at least one of `orphaned` or `adopted` is non-empty.
-/// `safe → pending` transitions whose original signed tx is still valid
-/// (parent unchanged on the new branch) are not surfaced — the SDK
-/// keeps retrying them internally.
+/// Both vecs are empty when the canonical channel tip did not change for this
+/// block. `safe → pending` transitions whose original signed tx is still valid
+/// (parent unchanged on the new branch) are not surfaced — the SDK keeps
+/// retrying them internally.
 ///
 /// Consumer pattern:
 /// 1. On publish-return: optimistically apply your own inscription to local
 ///    state and record its `this_msg`.
-/// 2. On [`Event::BlockProcessed`] with `Some(ChannelUpdate)`: apply `adopted`
-///    (filtered against your local outbox of `this_msg`s if you don't want to
-///    double-apply your own publishes) to local state, revert `orphaned` (yours
-///    that can no longer land).
+/// 2. On [`Event::BlockProcessed`]: apply `adopted` (filtered against your
+///    local outbox of `this_msg`s if you don't want to double-apply your own
+///    publishes) to local state, revert `orphaned` (yours that can no longer
+///    land). Both being empty is a no-op.
 /// 3. For each entry in `orphaned`, decide whether to republish (with a fresh
 ///    parent — SDK handles parent selection).
 #[derive(Debug, Clone)]

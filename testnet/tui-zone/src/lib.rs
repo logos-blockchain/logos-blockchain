@@ -132,9 +132,7 @@ fn handle_event(
             channel_update,
             finalized,
         } => {
-            if let Some(update) = channel_update {
-                apply_channel_update(update, state, sequencer);
-            }
+            apply_channel_update(channel_update, state, sequencer);
             if !finalized.is_empty() {
                 apply_finalized(&finalized, state);
             }
@@ -175,6 +173,9 @@ fn apply_channel_update(
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
 ) {
     let ChannelUpdate { orphaned, adopted } = update;
+    if orphaned.is_empty() && adopted.is_empty() {
+        return;
+    }
     state.on_adopted(&adopted);
     for entry in &orphaned {
         handle_orphan(state, sequencer, entry);

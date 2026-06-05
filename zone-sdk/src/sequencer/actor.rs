@@ -407,25 +407,34 @@ where
     }
 
     /// Process a `BlockEventResult`: apply channel updates to local state and
-    /// return the resulting channel-update + finalized-tx delta.
+    /// return the resulting channel-update + finalized-tx delta. When the tip
+    /// did not change, returns an empty [`ChannelUpdate`] (both vecs empty) —
+    /// internally we still skip the orphan/adopted computation in that case
+    /// via `block_fetch::handle_block_event`'s `Option` short-circuit.
     fn apply_block_result(
         &mut self,
         result: BlockEventResult,
-    ) -> (Option<ChannelUpdate>, Vec<FinalizedTx>) {
-        if let Some(update) = result.channel_update.as_ref() {
-            Self::log_channel_update(update);
+    ) -> (ChannelUpdate, Vec<FinalizedTx>) {
+        let channel_update = match result.channel_update {
+            Some(update) => {
+                Self::log_channel_update(&update);
 
-            let has_pending = self
-                .state
-                .as_ref()
-                .is_some_and(TxState::has_pending_inscriptions);
+                let has_pending = self
+                    .state
+                    .as_ref()
+                    .is_some_and(TxState::has_pending_inscriptions);
 
-            if !update.orphaned.is_empty() || !has_pending {
-                self.last_msg_id = update.new_channel_tip;
+                if !update.orphaned.is_empty() || !has_pending {
+                    self.last_msg_id = update.new_channel_tip;
+                }
+
+                self.build_channel_update(update)
             }
-        }
-
-        let channel_update = result.channel_update.map(|u| self.build_channel_update(u));
+            None => ChannelUpdate {
+                orphaned: Vec::new(),
+                adopted: Vec::new(),
+            },
+        };
         (channel_update, result.finalized_items)
     }
 

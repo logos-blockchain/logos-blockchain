@@ -246,14 +246,10 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlockProcessed {
-            channel_update: Some(update),
-            ..
-        } = event
-        else {
+        let Event::BlockProcessed { channel_update, .. } = event else {
             return;
         };
-        for entry in &update.orphaned {
+        for entry in &channel_update.orphaned {
             let OrphanedTx::Inscription(info) = entry else {
                 continue;
             };
@@ -277,12 +273,8 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        if let Event::BlockProcessed {
-            channel_update: Some(update),
-            ..
-        } = event
-        {
-            let ChannelUpdate { orphaned, adopted } = update;
+        if let Event::BlockProcessed { channel_update, .. } = event {
+            let ChannelUpdate { orphaned, adopted } = channel_update;
             let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
                 .iter()
                 .filter_map(|o| match o {
@@ -333,14 +325,10 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlockProcessed {
-            channel_update: Some(update),
-            ..
-        } = event
-        else {
+        let Event::BlockProcessed { channel_update, .. } = event else {
             return;
         };
-        let ChannelUpdate { orphaned, adopted } = update;
+        let ChannelUpdate { orphaned, adopted } = channel_update;
         self.state.record_adoptions(adopted).await;
         for entry in orphaned {
             let OrphanedTx::Inscription(inscription) = entry else {
@@ -578,14 +566,10 @@ pub async fn wait_for_adopted_payload(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
-            let Event::BlockProcessed {
-                channel_update: Some(update),
-                ..
-            } = event
-            else {
+            let Event::BlockProcessed { channel_update, .. } = event else {
                 continue;
             };
-            for info in update.adopted {
+            for info in channel_update.adopted {
                 if info.payload.as_slice() == data {
                     return Ok(PublishResult {
                         tx: PublishedTx::Inscription(info),
@@ -621,14 +605,10 @@ pub async fn wait_for_adopted_payloads(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
-            let Event::BlockProcessed {
-                channel_update: Some(update),
-                ..
-            } = event
-            else {
+            let Event::BlockProcessed { channel_update, .. } = event else {
                 continue;
             };
-            for info in update.adopted {
+            for info in channel_update.adopted {
                 let payload = info.payload.as_slice();
                 let Some(index) = data.iter().enumerate().find_map(|(index, expected)| {
                     (results[index].is_none() && payload == expected.as_slice()).then_some(index)
