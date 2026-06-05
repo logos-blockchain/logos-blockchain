@@ -35,19 +35,22 @@ where
         let Some(block_event) = maybe_event else {
             warn!(target: TARGET, "Blocks stream disconnected, will reconnect on next call");
             self.blocks_stream = None;
-            return self.signal_not_ready();
+            self.handle_stream_drop();
+            return None;
         };
 
-        match self.process_block_event(&block_event).await {
-            Ok(result) => self.finish_block_processing(result),
-            Err(()) => self.signal_not_ready(),
+        if let Ok(result) = self.process_block_event(&block_event).await {
+            self.finish_block_processing(result)
+        } else {
+            self.handle_stream_drop();
+            None
         }
     }
 
     /// Ingest one live block event into local state. On any per-block error
     /// (block processing, channel-state refresh) the stream is dropped so
     /// the reconnect path retries the same event, and `Err(())` is returned
-    /// — the caller maps that to `signal_not_ready`.
+    /// — the caller maps that to `handle_stream_drop`.
     async fn process_block_event(
         &mut self,
         block_event: &ProcessedBlockEvent,
@@ -139,11 +142,9 @@ where
     /// Readiness stays latched true after the first cold-start completion —
     /// in-memory state remains valid, publishes keep flowing, and any tx
     /// invalidated during the disconnect surfaces as an orphan on the next
-    /// `BlockProcessed` once the stream resumes. Returns `None` so the
-    /// stream-disconnect path doesn't emit an event.
-    fn signal_not_ready(&self) -> Option<Event> {
+    /// `BlockProcessed` once the stream resumes.
+    fn handle_stream_drop(&self) {
         self.publish_turn_to_write(false);
-        None
     }
 
     /// Build the current checkpoint from internal state and publish it to the
