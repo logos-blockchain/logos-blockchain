@@ -7,74 +7,11 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
+      - ./nodes/node/binary/src/config/deployment/devnet/deployment.yaml:/deployment.yaml
       - ./testnet:/etc/logos-blockchain
     ports:
       - "4400:4400/tcp"
-    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_server.sh
-
-  client-0:
-    container_name: client_0
-    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
-    volumes:
-      - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
-    depends_on:
-      - cfgsync
-    environment:
-      - LB_HOST_IDX=0
-      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
-      - CFG_NETWORK_PORT=${NODE0_NET_PORT}
-      - CFG_BLEND_PORT=${NODE0_BLEND_PORT}
-      - CFG_API_PORT=${NODE0_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
-
-  client-1:
-    container_name: client_1
-    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
-    volumes:
-      - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
-    depends_on:
-      - cfgsync
-    environment:
-      - LB_HOST_IDX=1
-      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
-      - CFG_NETWORK_PORT=${NODE1_NET_PORT}
-      - CFG_BLEND_PORT=${NODE1_BLEND_PORT}
-      - CFG_API_PORT=${NODE1_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
-
-  client-2:
-    container_name: client_2
-    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
-    volumes:
-      - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
-    depends_on:
-      - cfgsync
-    environment:
-      - LB_HOST_IDX=2
-      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
-      - CFG_NETWORK_PORT=${NODE2_NET_PORT}
-      - CFG_BLEND_PORT=${NODE2_BLEND_PORT}
-      - CFG_API_PORT=${NODE2_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
-
-  client-3:
-    container_name: client_3
-    image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
-    volumes:
-      - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
-    depends_on:
-      - cfgsync
-    environment:
-      - LB_HOST_IDX=3
-      - CFG_HOST_IP=${PUBLIC_IP_ADDR}
-      - CFG_NETWORK_PORT=${NODE3_NET_PORT}
-      - CFG_BLEND_PORT=${NODE3_BLEND_PORT}
-      - CFG_API_PORT=${NODE3_API_PORT}
-    entrypoint: /etc/logos-blockchain/scripts/setup_cfgsync_client.sh
+    entrypoint: /etc/logos-blockchain/scripts/cleanup_node_data.sh
 
   nginx:
     container_name: nginx
