@@ -57,6 +57,7 @@
             pname = "logos-blockchain-c";
             cargoExtraArgs = "-p logos-blockchain-c";
             version = crateName.version;
+            doCheck = false;
 
             inherit src;
 

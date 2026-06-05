@@ -5,13 +5,13 @@ mod ui;
 use std::{fs, path::Path};
 
 use clap::Parser;
+use futures::StreamExt as _;
 use lb_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{Event, OrphanedTx, SequencerHandle, ZoneSequencer},
-    state::{FinalizedOp, InscriptionInfo},
+    sequencer::{Event, FinalizedOp, InscriptionInfo, OrphanedTx, SequencerHandle, ZoneSequencer},
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
@@ -54,7 +54,8 @@ pub async fn run(args: InscribeArgs) {
 
     let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
     let (mut sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
-    let mut channel_view_rx = handle.subscribe_channel_view();
+    let view_rx = sequencer.subscribe_channel_view();
+    let mut events = sequencer.events();
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let mut stdin_rx = spawn_stdin_reader(ready_rx);
@@ -64,17 +65,10 @@ pub async fn run(args: InscribeArgs) {
 
     loop {
         tokio::select! {
-            event = sequencer.next_event() => {
+            event = events.next() => {
                 if let Some(event) = event {
+                    state.set_channel_view(view_rx.borrow().clone());
                     handle_event(event, &mut state, &handle, &mut ready_tx).await;
-                }
-            }
-
-            changed = channel_view_rx.changed() => {
-                if changed.is_ok() {
-                    state.set_channel_view(channel_view_rx.borrow().clone());
-                    ui::render_state(&state);
-                    ui::prompt();
                 }
             }
 
@@ -147,12 +141,9 @@ async fn handle_event(
             ui::prompt();
         }
         Event::Published { tx } => {
-            // `publish_*` APIs only emit inscription / atomic-withdraw — never
-            // a deposit — so `inscription()` is `Some` here in practice.
-            if let Some(info) = tx.inscription() {
-                debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
-                state.on_published(info);
-            }
+            let info = tx.inscription();
+            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
+            state.on_published(info);
             ui::render_state(state);
             ui::prompt();
         }

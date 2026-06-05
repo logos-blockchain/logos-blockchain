@@ -20,7 +20,7 @@ pub use unique_persistent::{
 };
 
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(env::debug_tracing);
-pub const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
+pub const LOG_LEVEL: &str = "LOG_LEVEL";
 
 pub use diagnostics::{
     FailureDiagnosticsExpectation, ScenarioRunDiagnosticsError, record_system_monitor_event,

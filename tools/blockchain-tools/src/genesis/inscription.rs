@@ -12,7 +12,7 @@ use serde_with::{hex::Hex, serde_as};
 use time::OffsetDateTime;
 
 #[serde_as]
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, Debug)]
 pub struct InscribeParams {
     pub chain_id: String,
     #[serde(with = "time::serde::iso8601")]

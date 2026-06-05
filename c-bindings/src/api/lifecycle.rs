@@ -3,12 +3,12 @@ use std::{ffi::c_char, path::PathBuf};
 use lb_node::{
     UserConfig,
     config::{
-        DeploymentType, OnUnknownKeys, RunConfig,
+        DeploymentType, RunConfig,
         deployment::{DeploymentSettings, WellKnownDeployment},
-        deserialize_config_at_path,
     },
     get_services_to_start, run_node_from_config,
 };
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tokio::runtime::Runtime;
 
 use crate::{
@@ -103,11 +103,12 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
             log::error!("Could not convert the config path to string: {e}");
             OperationStatus::InitializationError
         })?;
-    deserialize_config_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Warn)
-        .map_err(|e| {
+    deserialize_value_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Fail).map_err(
+        |e| {
             log::error!("Could not parse config file: {e}");
             OperationStatus::InitializationError
-        })
+        },
+    )
 }
 
 fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<DeploymentSettings> {
@@ -129,7 +130,7 @@ fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<Deployme
     match deployment_type {
         DeploymentType::WellKnown(well_known_deployment) => Ok(well_known_deployment.into()),
         DeploymentType::Custom(path) => {
-            deserialize_config_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Warn)
+            deserialize_value_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Fail)
                 .map_err(|e| {
                     log::error!("Could not parse deployment file: {e}");
                     OperationStatus::InitializationError
@@ -209,9 +210,8 @@ mod test {
             let node_config = std::fs::read_to_string(STANDALONE_NODE_CONFIG_PATH.as_path())
                 .expect("Failed to read standalone node config")
                 .replace("./state/logs", &log_dir.to_string_lossy());
-            let node_config = format!(
-                "{node_config}\napi:\n  backend:\n    listen_address: 127.0.0.1:0\n  testing:\n    listen_address: 127.0.0.1:0\n"
-            );
+            let node_config =
+                format!("{node_config}\napi:\n  backend:\n    listen_address: 127.0.0.1:0\n");
             std::fs::write(&node_config_path, node_config)
                 .expect("Failed to write isolated node config");
             std::fs::copy(

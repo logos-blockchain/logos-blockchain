@@ -17,6 +17,7 @@ lb-groth16                    = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
 lb-sdp-service                = { workspace = true }
+lb-utils                      = { workspace = true }
 lb-wallet-service             = { workspace = true }
 log                           = { workspace = true }
 multiaddr                     = { workspace = true }

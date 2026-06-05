@@ -36,7 +36,7 @@ use testing_framework_runner_local::{
 use tracing::debug;
 
 use crate::{
-    LOGOS_BLOCKCHAIN_LOG_LEVEL,
+    LOG_LEVEL,
     diagnostics::{record_system_monitor_event, register_system_monitor_output_file},
     env as tf_env,
     framework::LbcEnv,
@@ -156,7 +156,9 @@ impl LocalDeployerEnv for LbcEnv {
             format!("{label}:{}", dir.display()),
         );
 
-        config.user.tracing.level = configured_node_log_level();
+        if let Some(level) = configured_node_log_level() {
+            config.user.tracing.level = level;
+        }
 
         if !tf_env::debug_tracing() {
             let log_prefix = format!("{LOGS_PREFIX}-{label}");
@@ -367,11 +369,10 @@ fn configure_logging(base_dir: &Path, prefix: &str) -> logger::Layers {
     }
 }
 
-fn configured_node_log_level() -> Level {
-    env::var(LOGOS_BLOCKCHAIN_LOG_LEVEL)
+fn configured_node_log_level() -> Option<Level> {
+    env::var(LOG_LEVEL)
         .ok()
-        .and_then(|raw| raw.parse::<Level>().ok())
-        .unwrap_or(Level::INFO)
+        .map(|level| level.parse::<Level>().unwrap_or(Level::INFO))
 }
 
 fn build_dynamic_node_config(
@@ -538,13 +539,15 @@ fn finalize_dynamic_run_config(
 
 fn build_run_config(config: Config, genesis_block: &GenesisBlock) -> RunConfig {
     let deployment_config = default_e2e_deployment_settings(genesis_block);
+    let mut tracing = config.tracing_config.tracing_settings;
+    tracing.level = Level::INFO;
 
     let user_config = UserConfig {
         network: config.network_config,
         blend: config.blend_config.0,
         time: config.time_config,
         cryptarchia: build_cryptarchia_user_config(&config.consensus_config),
-        tracing: config.tracing_config.tracing_settings,
+        tracing,
         api: api::serde::Config {
             backend: api::serde::AxumBackendSettings {
                 listen_address: config.api_config.address,
