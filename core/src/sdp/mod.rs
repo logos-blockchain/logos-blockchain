@@ -2,6 +2,7 @@ pub mod blend;
 pub mod locked_notes;
 
 use core::{
+    fmt::{self, Display, Formatter},
     ops::{Add, Sub},
     str::FromStr,
 };
@@ -157,6 +158,12 @@ impl FromStr for Locator {
             .map_err(|e| format!("Invalid multiaddr: {e}"))?;
         println!("Multiaddr: {multiaddr}");
         Self::try_from(multiaddr)
+    }
+}
+
+impl Display for Locator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

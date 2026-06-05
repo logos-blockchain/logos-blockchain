@@ -1094,6 +1094,7 @@ async fn step_run_blend_sdp_declaration_cli(
     declarer_node_name: String,
 ) -> StepResult {
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
+    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
 
     let declarer_api_base_url = world
@@ -1155,6 +1156,8 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg("post-blend-declaration")
         .arg("--user-config-path")
         .arg(user_config_path)
+        .arg("--blend-addr")
+        .arg(format!("{locator}"))
         .arg("--locked-note-id")
         .arg(locked_note_id)
         .arg("--node-address")
