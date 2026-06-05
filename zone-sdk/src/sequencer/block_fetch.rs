@@ -333,9 +333,10 @@ where
 /// the same [`FinalizedTx`] succeeded together on chain.
 ///
 /// The channel protocol guarantees a linear parent-child chain per channel
-/// within a block, so tx order already equals parent-chain order — do NOT
-/// add a topological sort here, it would mask any real protocol violation
-/// rather than fix it.
+/// within a block, so tx order already equals parent-chain order. We do NOT
+/// reorder — the trust assumption (each `ChannelInscribe`'s `parent` chains
+/// off the running tip) is asserted by [`extract_channel_tip_ops`], which
+/// every caller runs on the same `transactions` before this walker.
 ///
 /// Deposits without a matching event entry are skipped with a warning.
 fn extract_finalized_items(
@@ -352,6 +353,9 @@ fn extract_finalized_items(
         for op in tx.mantle_tx.ops() {
             match op {
                 Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                    // Chain order is asserted by `extract_channel_tip_ops`,
+                    // which runs on the same `transactions` before this
+                    // walker on every call site (live + backfill).
                     let info = InscriptionInfo {
                         tx_hash,
                         parent_msg: inscribe.parent,
@@ -362,9 +366,11 @@ fn extract_finalized_items(
                     ops.push(FinalizedOp::Inscription(info));
                 }
                 Op::ChannelConfig(config) if config.channel == channel_id => {
-                    // Synthetic entry — keeps `channel_tip` in sync when the
-                    // chain `ChannelConfig` resets it. Empty payload so
-                    // payload-keyed consumers ignore it naturally.
+                    // `ChannelConfig` has no parent on the wire — it
+                    // unconditionally overwrites the channel tip. Synthetic
+                    // entry below keeps `channel_tip` in sync; we set
+                    // parent_msg to the prior in-block tip so the value
+                    // remains coherent if a consumer inspects it.
                     let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
                     let info = InscriptionInfo {
                         tx_hash,
@@ -507,13 +513,19 @@ fn apply_backfilled_block(
 /// unconditionally overwriting the tip. A block in which tip-advancing ops
 /// for one channel appear out of chain order would fail validation, so
 /// tx-then-op order is already chain order — callers (e.g. `channel_tip_at`)
-/// can rely on `last()` being the post-block tip.
+/// can rely on `last()` being the post-block tip. We verify this trust
+/// assumption with an inline assertion: each `ChannelInscribe`'s `parent`
+/// must equal the running in-block tip. A mismatch panics rather than
+/// silently re-deriving order, because the same node bug could produce an
+/// undetectable mis-ordering elsewhere.
 ///
 /// Same-block `ChannelConfig` replay (e.g. `[Inscribe, Config X, Inscribe,
 /// Config X]`) yields items with a repeated `this_msg = hash(X)`. That's
 /// the correct representation: at the ledger, the final tip is `hash(X)`,
-/// matching `items.last().this_msg`. Downstream consumers that want
-/// unique-by-`this_msg` semantics dedup themselves.
+/// matching `items.last().this_msg`. The running tip stays at `hash(X)`
+/// after a repeat, so the inscription-chain assertion continues to verify
+/// subsequent entries. Downstream consumers that want unique-by-`this_msg`
+/// semantics dedup themselves.
 fn extract_channel_tip_ops(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
     let mut items: Vec<InscriptionInfo> = Vec::new();
     let hash_and_ops = txs
@@ -523,6 +535,14 @@ fn extract_channel_tip_ops(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec
     for (tx_hash, op) in hash_and_ops {
         match op {
             Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                if let Some(prev) = items.last() {
+                    assert_eq!(
+                        inscribe.parent, prev.this_msg,
+                        "block delivered inscription out of execution order: \
+                         inscribe.parent {:?} does not chain off the prior in-block tip {:?}",
+                        inscribe.parent, prev.this_msg
+                    );
+                }
                 items.push(InscriptionInfo {
                     tx_hash,
                     parent_msg: inscribe.parent,
