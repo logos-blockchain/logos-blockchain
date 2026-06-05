@@ -843,7 +843,6 @@ mod tests {
         let mut previous_tick: Option<SlotTick> = None;
         for _ in 0..poll_count {
             let tick = stream.next().await;
-            // println!("tick: {tick:?}");
             if let Some(current) = tick {
                 if let Some(previous) = previous_tick {
                     assert!(current.slot.into_inner() > previous.slot.into_inner());

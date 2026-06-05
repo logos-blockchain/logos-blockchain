@@ -190,6 +190,11 @@ async fn extract_values(
     locked_note_id: NoteId,
     blend_address: Option<Locator>,
 ) -> Result<ExtractedUserConfigValues> {
+    let sdp_wallet_funding_pk = config.sdp.wallet.funding_pk;
+    verify_sdp_wallet_funding_pk_balance(client, node_address.clone(), sdp_wallet_funding_pk)
+        .await
+        .context("Failed to verify balance for SDP wallet funding key")?;
+
     // Keep all config-derived declaration fields in one place so the CLI and
     // node service remain aligned on identity/key source semantics.
     let locator = if let Some(blend_address) = blend_address {
@@ -248,6 +253,25 @@ fn extract_blend_zk_key(config: &UserConfig) -> Result<ZkPublicKey> {
         );
     }
     Ok(zk_public_key)
+}
+
+async fn verify_sdp_wallet_funding_pk_balance(
+    client: &CommonHttpClient,
+    node_address: Url,
+    funding_pk: ZkPublicKey,
+) -> Result<()> {
+    let WalletBalanceResponseBody { balance, .. } = client
+        .get_wallet_balance(node_address, funding_pk, None)
+        .await
+        .context("Failed to fetch wallet balance for SDP wallet funding pk.")?;
+
+    // TODO: Improve check to verify that the balance is not only non-zero, but also
+    // sufficient to cover the tx fees.
+    if balance == 0 {
+        bail!("The provided SDP wallet funding key does not have any balance");
+    }
+
+    Ok(())
 }
 
 async fn verify_locked_note_id_value(
