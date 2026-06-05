@@ -86,8 +86,8 @@ where
 
     /// Convert a successfully-ingested block into the public event. Handles
     /// the readiness-transition special case: when this is the block that
-    /// flips the sequencer to ready, emit `Readiness { ready: true }` first
-    /// and buffer the `BlockProcessed` for the next drive turn.
+    /// flips the sequencer to ready, emit `Ready` first and buffer the
+    /// `BlockProcessed` for the next drive turn.
     fn finish_block_processing(&mut self, result: BlockEventResult) -> Option<Event> {
         let became_ready = self.maybe_signal_ready();
         let (channel_update, finalized) = self.apply_block_result(result);
@@ -108,7 +108,7 @@ where
             if let Some(ev) = block_event {
                 self.buffered_events.push_back(ev);
             }
-            return Some(self.emit_now(Event::Readiness { ready: true }));
+            return Some(self.emit_now(Event::Ready));
         }
 
         block_event
@@ -134,23 +134,16 @@ where
         }
     }
 
-    /// Flip readiness to `false` and, if that was an actual transition (was
-    /// previously `true`), surface [`Event::Readiness`] so the consumer's
-    /// drive loop learns about the disconnect on the event stream. Returns
-    /// `None` when readiness was already `false` (no spurious event).
+    /// Bookkeeping for a stream drop: clears turn-to-write so consumers
+    /// observing the watch don't see a stale "our turn" while disconnected.
+    /// Readiness stays latched true after the first cold-start completion —
+    /// in-memory state remains valid, publishes keep flowing, and any tx
+    /// invalidated during the disconnect surfaces as an orphan on the next
+    /// `BlockProcessed` once the stream resumes. Returns `None` so the
+    /// stream-disconnect path doesn't emit an event.
     fn signal_not_ready(&self) -> Option<Event> {
-        let mut transitioned = false;
-        self.ready_tx.send_if_modified(|current| {
-            if *current {
-                *current = false;
-                transitioned = true;
-                true
-            } else {
-                false
-            }
-        });
         self.publish_turn_to_write(false);
-        transitioned.then(|| self.emit_now(Event::Readiness { ready: false }))
+        None
     }
 
     /// Build the current checkpoint from internal state and publish it to the
@@ -567,10 +560,7 @@ mod tests {
 
         // Drive sequencer until ready
         loop {
-            if matches!(
-                sequencer.next_event().await,
-                Some(Event::Readiness { ready: true })
-            ) {
+            if matches!(sequencer.next_event().await, Some(Event::Ready)) {
                 break;
             }
         }
@@ -1050,11 +1040,8 @@ mod tests {
         let mut finalized_items: Vec<FinalizedTx> = Vec::new();
         loop {
             match sequencer.next_event().await {
-                Some(Event::Readiness { ready: true }) => break,
-                Some(
-                    Event::BackfillProcessed { finalized, .. }
-                    | Event::BlockProcessed { finalized, .. },
-                ) => {
+                Some(Event::Ready) => break,
+                Some(Event::BlockProcessed { finalized, .. }) => {
                     finalized_items.extend(finalized);
                 }
                 Some(_) | None => {}

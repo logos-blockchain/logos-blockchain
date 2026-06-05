@@ -42,9 +42,9 @@
 //!
 //! # Restart
 //!
-//! Persist [`SequencerCheckpoint`] received via [`Event::BlockProcessed`] /
-//! [`Event::BackfillProcessed`] (or directly from a publish call). Pass the
-//! most recent checkpoint back to [`ZoneSequencer::init`] to resume.
+//! Persist [`SequencerCheckpoint`] received via [`Event::BlockProcessed`]
+//! (or directly from a publish call). Pass the most recent checkpoint back
+//! to [`ZoneSequencer::init`] to resume.
 
 mod actor;
 mod backfill;

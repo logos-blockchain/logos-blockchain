@@ -43,11 +43,8 @@
 //!             Event::BlockProcessed { checkpoint, channel_update, finalized } => {
 //!                 let _ = (checkpoint, channel_update, finalized);
 //!             }
-//!             Event::BackfillProcessed { checkpoint, finalized } => {
-//!                 let _ = (checkpoint, finalized);
-//!             }
-//!             Event::Readiness { ready }                  => { let _ = ready; }
-//!             Event::TurnNotification { notification }    => { let _ = notification; }
+//!             Event::Ready                             => {}
+//!             Event::TurnNotification { notification } => { let _ = notification; }
 //!         },
 //!     }
 //! }

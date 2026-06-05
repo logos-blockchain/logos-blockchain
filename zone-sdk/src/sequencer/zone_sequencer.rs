@@ -114,8 +114,8 @@ where
 
     /// Create a new sequencer with custom configuration.
     ///
-    /// Returns immediately. The sequencer emits [`Event::Readiness`] with
-    /// `ready: true` once it has connected and completed backfill.
+    /// Returns immediately. The sequencer emits [`Event::Ready`] once it
+    /// has connected and completed cold-start backfill.
     #[must_use]
     pub fn init_with_config(
         channel_id: ChannelId,

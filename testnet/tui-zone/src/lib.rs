@@ -125,23 +125,13 @@ fn handle_event(
     ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     match event {
-        Event::Readiness { ready: true } => handle_ready(state, ready_tx),
-        Event::Readiness { ready: false } => handle_not_ready(state),
+        Event::Ready => handle_ready(state, ready_tx),
         Event::BlockProcessed {
             checkpoint,
             channel_update,
             finalized,
         } => {
             apply_channel_update(channel_update, state, sequencer);
-            if !finalized.is_empty() {
-                apply_finalized(&finalized, state);
-            }
-            state.save_checkpoint(checkpoint);
-        }
-        Event::BackfillProcessed {
-            checkpoint,
-            finalized,
-        } => {
             if !finalized.is_empty() {
                 apply_finalized(&finalized, state);
             }
@@ -220,13 +210,6 @@ fn handle_ready(
     println!("Type a message and press Enter to publish.");
     println!("Press Ctrl-D or type an empty line to exit.");
     println!();
-    ui::render_state(state);
-    ui::prompt();
-}
-
-fn handle_not_ready(state: &InMemoryZoneState) {
-    warn!("Sequencer disconnected - publishes will fail until reconnected");
-    println!("Sequencer disconnected. Reconnecting...");
     ui::render_state(state);
     ui::prompt();
 }

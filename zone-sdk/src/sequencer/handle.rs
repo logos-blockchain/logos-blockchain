@@ -75,11 +75,12 @@ where
     /// checkpoint reflecting the new pending state so the caller can
     /// persist outbox + checkpoint atomically.
     ///
-    /// Returns [`Error::Unavailable`] if the sequencer is not ready (cold
-    /// start before the first live block, or mid-reconnect after a stream
-    /// drop). Consumers driving the event loop can wait for the next
-    /// [`super::Event::Readiness`] with `ready: true` and retry. To wait
-    /// asynchronously, subscribe via
+    /// Returns [`Error::Unavailable`] only if cold-start backfill is still
+    /// in progress (the sequencer hasn't emitted [`super::Event::Ready`]
+    /// yet). After the first `Ready`, publishes are always accepted:
+    /// during a mid-life reconnect the tx is queued locally and posted
+    /// when the stream resumes (or when our turn comes back). To wait for
+    /// readiness asynchronously, subscribe via
     /// [`ZoneSequencer::subscribe_ready`].
     pub fn publish(
         &mut self,

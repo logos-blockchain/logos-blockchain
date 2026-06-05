@@ -925,8 +925,7 @@ pub async fn wait_for_withdraw(
 }
 
 /// Waits until the sequencer's event stream surfaces the expected deposit
-/// in [`Event::BlockProcessed::finalized`] or
-/// [`Event::BackfillProcessed::finalized`] (matched by `inputs`, `amount`,
+/// in [`Event::BlockProcessed::finalized`] (matched by `inputs`, `amount`,
 /// and `metadata`). Drains the events channel as it goes — call this
 /// after any earlier event consumers in the scenario have moved past the
 /// relevant publish events.
@@ -979,9 +978,7 @@ async fn poll_sequencer_finalized_until(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
-            let (Event::BlockProcessed { finalized, .. }
-            | Event::BackfillProcessed { finalized, .. }) = event
-            else {
+            let Event::BlockProcessed { finalized, .. } = event else {
                 continue;
             };
             for tx in finalized {

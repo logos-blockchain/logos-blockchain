@@ -12,7 +12,7 @@ use super::{
     block_fetch::fetch_and_process_blocks,
     slot_clock::SlotClock,
     state::TxState,
-    types::{Event, FinalizedOp},
+    types::{ChannelUpdate, Event, FinalizedOp},
     zone_sequencer::ZoneSequencer,
 };
 use crate::adapter;
@@ -104,8 +104,12 @@ where
             return Some(None);
         };
 
-        Some(Some(Event::BackfillProcessed {
+        Some(Some(Event::BlockProcessed {
             checkpoint,
+            channel_update: ChannelUpdate {
+                orphaned: Vec::new(),
+                adopted: Vec::new(),
+            },
             finalized: batch.items,
         }))
     }

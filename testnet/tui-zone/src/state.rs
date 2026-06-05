@@ -16,7 +16,7 @@ use crate::message::Msg;
 /// - `adopted`: others' inscriptions on canonical, deduped by `msg_id` (reorgs
 ///   can re-adopt the same one), in first-sighting order.
 /// - `finalized`: all inscriptions below LIB, in canonical order — the SDK
-///   delivers `finalized` on `BlockProcessed` / `BackfillProcessed`.
+///   delivers `finalized` on `BlockProcessed`.
 ///
 /// Replay-idempotent: `on_adopted` and `on_finalized` dedup by `msg_id`, so
 /// resuming from a persisted state and re-receiving backfill is harmless.

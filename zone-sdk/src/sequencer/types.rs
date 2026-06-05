@@ -153,44 +153,38 @@ pub enum Error {
 
 /// Events emitted by the sequencer.
 ///
-/// [`Event::BlockProcessed`] and [`Event::BackfillProcessed`] are the two
-/// state-mutating events — both carry a [`SequencerCheckpoint`] reflecting
-/// state after the event is applied, so consumers persist the contained
-/// fields plus `checkpoint` in one atomic transaction.
+/// [`Event::BlockProcessed`] is the state-mutating event — it carries a
+/// [`SequencerCheckpoint`] reflecting state after the event is applied, so
+/// consumers persist the contained fields plus `checkpoint` in one atomic
+/// transaction.
 ///
-/// [`Event::Readiness`] and [`Event::TurnNotification`] are connection /
-/// turn-status signals; they do not mutate consumer state and do not carry
-/// a checkpoint.
+/// [`Event::Ready`] and [`Event::TurnNotification`] are lifecycle / turn-
+/// status signals; they do not mutate consumer state and do not carry a
+/// checkpoint.
 ///
 /// Publishes mutate state synchronously inside the [`super::SequencerHandle`]
 /// methods that produce them; those methods return the resulting
 /// [`SequencerCheckpoint`] inline. There is no separate `Published` event.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Fires once per live block while the sequencer is ready. Carries both
-    /// finalized txs and the non-finalized channel-tip delta
-    /// (`channel_update`); either may be empty.
+    /// Fires per ingested block. Carries finalized txs and the non-finalized
+    /// channel-tip delta (`channel_update`); either may be empty. Backfill
+    /// batches (cold start and reconnect catch-up) emit a single
+    /// `BlockProcessed` per batch with empty `channel_update` — backfill
+    /// walks canonical history, so there is no tip delta to report.
     BlockProcessed {
         checkpoint: SequencerCheckpoint,
         channel_update: ChannelUpdate,
         finalized: Vec<FinalizedTx>,
     },
-    /// Fires once per backfill batch (up to ~100 historical blocks)
-    /// while the sequencer is not yet ready. Only carries finalized txs
-    /// — backfill walks canonical history sequentially, so there is no
-    /// channel-tip delta to report.
-    BackfillProcessed {
-        checkpoint: SequencerCheckpoint,
-        finalized: Vec<FinalizedTx>,
-    },
-    /// Sequencer readiness changed.
-    ///
-    /// `ready: true` is emitted on the up edge — connected, backfill complete,
-    /// ready to accept publishes. `ready: false` is emitted on the down edge —
-    /// disconnect or transient processing failure dropped the stream; the SDK
-    /// is reconnecting. Consumers driving the event loop wait for the next
-    /// `Readiness { ready: true }` to resume submitting publishes.
-    Readiness { ready: bool },
+    /// Cold-start backfill is complete and the sequencer has a baseline
+    /// channel view — publishes are now meaningful. Emitted exactly once
+    /// per sequencer lifetime. Stream drops and reconnects after this
+    /// point are invisible on the event stream: in-memory state stays
+    /// valid, publishes keep flowing, and any tx invalidated by the
+    /// catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
+    /// `BlockProcessed` once the stream resumes.
+    Ready,
     /// Turn-to-write status update for this sequencer.
     ///
     /// Emitted on the same change boundary as the `turn_to_write` watch
