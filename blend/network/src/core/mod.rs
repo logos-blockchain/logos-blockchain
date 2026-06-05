@@ -5,6 +5,7 @@ pub mod with_edge;
 mod tests;
 
 use lb_blend_scheduling::membership::Membership;
+use lb_cryptarchia_engine::Epoch;
 use libp2p::{PeerId, StreamProtocol};
 
 use self::{
@@ -33,7 +34,7 @@ impl<ObservationWindowClockProvider> NetworkBehaviour<ObservationWindowClockProv
     pub fn new(
         config: &Config,
         observation_window_clock_provider: ObservationWindowClockProvider,
-        current_session_info: (Membership<PeerId>, u64),
+        current_epoch_info: (Membership<PeerId>, Epoch),
         local_peer_id: PeerId,
         protocol_name: StreamProtocol,
     ) -> Self {
@@ -41,22 +42,21 @@ impl<ObservationWindowClockProvider> NetworkBehaviour<ObservationWindowClockProv
             with_core: CoreToCoreBehaviour::new(
                 &config.with_core,
                 observation_window_clock_provider,
-                current_session_info.clone(),
+                current_epoch_info.clone(),
                 local_peer_id,
                 protocol_name.clone(),
             ),
             with_edge: CoreToEdgeBehaviour::new(
                 &config.with_edge,
-                current_session_info.0,
+                current_epoch_info.0,
                 protocol_name,
             ),
         }
     }
 
-    pub fn start_new_session(&mut self, new_session_info: (Membership<PeerId>, u64)) {
-        self.with_core_mut()
-            .start_new_session(new_session_info.clone());
-        self.with_edge_mut().start_new_session(new_session_info.0);
+    pub fn start_new_epoch(&mut self, new_epoch_info: (Membership<PeerId>, Epoch)) {
+        self.with_core_mut().start_new_epoch(new_epoch_info.clone());
+        self.with_edge_mut().start_new_epoch(new_epoch_info.0);
     }
 
     pub const fn with_core(&self) -> &CoreToCoreBehaviour<ObservationWindowClockProvider> {
@@ -77,7 +77,7 @@ impl<ObservationWindowClockProvider> NetworkBehaviour<ObservationWindowClockProv
         &mut self.with_edge
     }
 
-    pub fn finish_session_transition(&mut self) {
-        self.with_core_mut().finish_session_transition();
+    pub fn finish_epoch_transition(&mut self) {
+        self.with_core_mut().finish_epoch_transition();
     }
 }

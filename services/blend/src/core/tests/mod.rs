@@ -2,11 +2,11 @@ mod utils;
 
 use futures::StreamExt as _;
 use lb_blend::{
-    message::reward::{ActivityProof, BlendingToken, SessionBlendingTokenCollector},
+    message::reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::{
-        SessionMessageScheduler, message_blend::crypto::SessionCryptographicProcessorSettings,
-        session::SessionEvent,
+        EpochMessageScheduler, epoch::EpochEvent,
+        message_blend::crypto::EpochCryptographicProcessorSettings,
     },
 };
 use lb_chain_service::Epoch;
@@ -14,36 +14,47 @@ use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
 use lb_groth16::Field as _;
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::CORE_MERKLE_TREE_HEIGHT;
-use lb_time_service::SlotTick;
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 
 use crate::{
     core::{
-        HandleSessionEventOutput,
+        HandleEpochEventOutput,
         backends::BlendBackend,
-        handle_clock_event, handle_incoming_blend_message, handle_new_secret_epoch_info,
-        handle_session_event, handle_session_transition_expired, initialize, post_initialize,
-        retire, run_event_loop,
+        handle_epoch_event, handle_epoch_transition_expired, handle_incoming_blend_message,
+        initialize, post_initialize, retire, run_event_loop,
         state::ServiceState,
         tests::utils::{
             MockKmsAdapter, MockProofsVerifier, NodeId, TestBlendBackend, TestBlendBackendEvent,
-            TestNetworkAdapter, dummy_overwatch_resources, new_crypto_processor, new_membership,
-            new_public_info, new_stream, reward_session_info, scheduler_session_info,
-            scheduler_settings, sdp_relay, settings, timing_settings, wait_for_blend_backend_event,
+            TestNetworkAdapter, dummy_overwatch_resources, dummy_pol_private_inputs,
+            new_crypto_processor, new_epoch_info, new_membership, new_stream,
+            recorded_set_epoch_private_calls, reset_set_epoch_private_calls, reward_epoch_info,
+            scheduler_epoch_info, scheduler_settings, sdp_relay, settings, timing_settings,
+            wait_for_blend_backend_event,
         },
     },
-    epoch_info::{EpochHandler, PolEpochInfo},
-    membership::{MembershipInfo, ZkInfo},
+    epoch::{CoreEpochInfo, CoreEpochPublicInfo},
+    epoch_info::PolEpochInfo,
+    membership::{MembershipInfo, ZkInfo, chain::BlendEpochState},
     message::NetworkMessage,
-    session::{CoreSessionInfo, CoreSessionPublicInfo},
-    test_utils::{
-        crypto::MockCoreAndLeaderProofsGenerator,
-        epoch::{OncePolStreamProvider, TestChainService},
-    },
+    test_utils::{crypto::MockCoreAndLeaderProofsGenerator, epoch::OncePolStreamProvider},
 };
 
 type RuntimeServiceId = ();
+
+fn test_blend_epoch_state(
+    epoch: u32,
+    membership_info: MembershipInfo<NodeId>,
+) -> BlendEpochState<NodeId> {
+    BlendEpochState {
+        epoch: epoch.into(),
+        nonce: ZkHash::ZERO,
+        aged: ZkHash::ZERO,
+        lottery_0: ZkHash::ZERO,
+        lottery_1: ZkHash::ZERO,
+        membership_info,
+    }
+}
 
 /// Check if incoming encapsulated messages are properly decapsulated and
 /// scheduled by [`handle_incoming_blend_message`].
@@ -53,7 +64,7 @@ async fn test_handle_incoming_blend_message() {
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
     // Prepare a encapsulated message.
-    let mut session = 0;
+    let mut epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let (settings, _recovery_file) = settings(
@@ -62,9 +73,9 @@ async fn test_handle_incoming_blend_message() {
         (),
         0,
     );
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -84,20 +95,20 @@ async fn test_handle_incoming_blend_message() {
 
     // Check that the message is successfully decapsulated and scheduled.
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
-    let mut scheduler = SessionMessageScheduler::new(
-        scheduler_session_info(&public_info),
+    let mut scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
-        session,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info)),
+    let recovery_checkpoint = ServiceState::with_epoch(
+        epoch,
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info)),
         None,
         state_updater,
     )
     .unwrap();
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.clone().into(), 0),
+        (msg.clone().into(), 0.into()),
         &mut scheduler,
         None,
         &processor,
@@ -107,18 +118,18 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(scheduler.release_delayer().unreleased_messages().len(), 1);
     assert_eq!(
         recovery_checkpoint
-            .current_session_token_collector()
+            .current_epoch_token_collector()
             .tokens()
             .len(),
         1
     );
 
-    // Creates a new processor/scheduler/token_collector with the new session
+    // Creates a new processor/scheduler/token_collector with the new epoch
     // number.
-    session += 1;
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    epoch += 1;
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut new_processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -126,24 +137,24 @@ async fn test_handle_incoming_blend_message() {
         (),
     );
     let (mut new_scheduler, mut scheduler) =
-        scheduler.rotate_session(scheduler_session_info(&public_info), scheduler_settings);
+        scheduler.rotate_epoch(scheduler_epoch_info(&public_info), scheduler_settings);
     let (_, _, _, _, current_token_collector, _, state_updater) =
         recovery_checkpoint.into_components();
     let (new_token_collector, old_token_collector) =
-        current_token_collector.rotate_session(&reward_session_info(&public_info));
+        current_token_collector.rotate_epoch(&reward_epoch_info(&public_info));
 
     // Check that decapsulating the same message fails with the new processor
     // but succeeds with the old one. Also, it should be scheduled in the old
     // scheduler.
-    let recovery_checkpoint = ServiceState::with_session(
-        session,
+    let recovery_checkpoint = ServiceState::with_epoch(
+        epoch,
         new_token_collector,
         Some(old_token_collector),
         state_updater,
     )
     .unwrap();
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.clone().into(), 0),
+        (msg.clone().into(), 0.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -157,7 +168,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(scheduler.release_delayer().unreleased_messages().len(), 2);
     assert_eq!(
         recovery_checkpoint
-            .current_session_token_collector()
+            .current_epoch_token_collector()
             .tokens()
             .len(),
         0
@@ -167,7 +178,7 @@ async fn test_handle_incoming_blend_message() {
         recovery_checkpoint
             .clone()
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .unwrap()
             .tokens()
             .len(),
@@ -181,7 +192,7 @@ async fn test_handle_incoming_blend_message() {
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.into(), 1),
+        (msg.into(), 1.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -195,7 +206,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(scheduler.release_delayer().unreleased_messages().len(), 2);
     assert_eq!(
         recovery_checkpoint
-            .current_session_token_collector()
+            .current_epoch_token_collector()
             .tokens()
             .len(),
         1
@@ -204,22 +215,22 @@ async fn test_handle_incoming_blend_message() {
         recovery_checkpoint
             .clone()
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .unwrap()
             .tokens()
             .len(),
         1
     );
 
-    // Check that a message built with a future session cannot be
+    // Check that a message built with a future epoch cannot be
     // decapsulated by either processor, and thus not scheduled.
-    session += 1;
+    epoch += 1;
     let mut future_processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
-        &new_public_info(session, membership, &settings),
+        &new_epoch_info(epoch, membership, &settings),
         (),
     );
     let msg = future_processor
@@ -227,7 +238,7 @@ async fn test_handle_incoming_blend_message() {
         .await
         .expect("encapsulation must succeed");
     let recovery_checkpoint = handle_incoming_blend_message(
-        (msg.into(), 2),
+        (msg.into(), 2.into()),
         &mut new_scheduler,
         Some(&mut scheduler),
         &new_processor,
@@ -242,7 +253,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(scheduler.release_delayer().unreleased_messages().len(), 2);
     assert_eq!(
         recovery_checkpoint
-            .current_session_token_collector()
+            .current_epoch_token_collector()
             .tokens()
             .len(),
         1
@@ -250,7 +261,7 @@ async fn test_handle_incoming_blend_message() {
     assert_eq!(
         recovery_checkpoint
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .unwrap()
             .tokens()
             .len(),
@@ -272,11 +283,11 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
         0,
     );
 
-    // Create session 0 processor and build a message with session 0 proofs.
-    let session_0 = 0;
-    let public_info_0 = new_public_info(session_0, membership.clone(), &settings);
+    // Create epoch 0 processor and build a message with epoch 0 proofs.
+    let epoch_0 = 0.into();
+    let public_info_0 = new_epoch_info(epoch_0, membership.clone(), &settings);
     let mut processor_0 = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -295,12 +306,12 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
         .await
         .expect("encapsulation must succeed");
 
-    // Create session 1 processor - its MockProofsVerifier expects session 1
+    // Create epoch 1 processor - its MockProofsVerifier expects epoch 1
     // proofs.
-    let session_1 = 1;
-    let public_info_1 = new_public_info(session_1, membership, &settings);
+    let epoch_1 = 1.into();
+    let public_info_1 = new_epoch_info(epoch_1, membership, &settings);
     let processor_1 = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -309,24 +320,24 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
     );
 
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
-    let mut scheduler = SessionMessageScheduler::new(
-        scheduler_session_info(&public_info_1),
+    let mut scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info_1),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
-        session_1,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
+    let recovery_checkpoint = ServiceState::with_epoch(
+        epoch_1,
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info_1)),
         None,
         state_updater,
     )
     .unwrap();
 
-    // Send session 0 message claiming to be for session 1.
+    // Send epoch 0 message claiming to be for epoch 1.
     // Signature is valid (built correctly) but PoQ will fail because the
-    // MockProofsVerifier for session 1 expects session 1 proofs.
+    // MockProofsVerifier for epoch 1 expects epoch 1 proofs.
     drop(handle_incoming_blend_message(
-        (msg.into(), session_1),
+        (msg.into(), epoch_1),
         &mut scheduler,
         None,
         &processor_1,
@@ -343,11 +354,11 @@ async fn test_handle_incoming_blend_message_with_invalid_poq() {
 }
 
 #[test_log::test(tokio::test)]
-async fn test_handle_session_transition_expired() {
+async fn test_handle_epoch_transition_expired() {
     let (overwatch_handle, _, _, _) = dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
     // Prepare settings.
-    let session = 0;
+    let epoch = 0.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let (mut settings, _recovery_file) = settings(
@@ -356,29 +367,28 @@ async fn test_handle_session_transition_expired() {
         (),
         0,
     );
-    // Set a long rounds_per_session to make the core quota large enough,
+    // Set a long rounds_per_epoch to make the core quota large enough,
     // since we want the activity threshold to be sufficiently high.
-    settings.time.rounds_per_session = 648_000.try_into().unwrap();
+    settings.time.rounds_per_epoch = 648_000.try_into().unwrap();
 
     // Create backend.
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        public_info.clone(),
+        (public_info.membership.clone(), public_info.epoch),
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
 
     // Create token collector and collect a token.
-    let mut token_collector =
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info))
-            .rotate_session(&reward_session_info(&new_public_info(
-                session + 1,
-                membership.clone(),
-                &settings,
-            )))
-            .1;
+    let mut token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info))
+        .rotate_epoch(&reward_epoch_info(&new_epoch_info(
+            epoch + 1,
+            membership.clone(),
+            &settings,
+        )))
+        .1;
     let token = BlendingToken::new(
         Ed25519Key::from_bytes(&[0; _]).public_key(),
         VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
@@ -389,8 +399,8 @@ async fn test_handle_session_transition_expired() {
     // Create SDP relay.
     let (sdp_relay, mut sdp_relay_receiver) = sdp_relay();
 
-    // Call `handle_session_transition_expired`.
-    handle_session_transition_expired::<_, NodeId, BlakeRng, _>(
+    // Call `handle_epoch_transition_expired`.
+    handle_epoch_transition_expired::<_, NodeId, BlakeRng, _>(
         &mut backend,
         token_collector,
         &sdp_relay,
@@ -400,7 +410,7 @@ async fn test_handle_session_transition_expired() {
     // Check that the backend handled the transition completion.
     wait_for_blend_backend_event(
         &mut backend_event_receiver,
-        TestBlendBackendEvent::SessionTransitionCompleted,
+        TestBlendBackendEvent::EpochTransitionCompleted,
     )
     .await;
 
@@ -413,21 +423,16 @@ async fn test_handle_session_transition_expired() {
     else {
         panic!("expected PostActivity with ActivityMetadata::Blend");
     };
-    assert_eq!(
-        *activity_proof,
-        (&ActivityProof::new(session, token)).into()
-    );
+    assert_eq!(*activity_proof, (&ActivityProof::new(epoch, token)).into());
 }
 
 #[test_log::test(tokio::test)]
-async fn test_handle_session_event() {
-    use lb_chain_service::Epoch;
-
+async fn test_handle_epoch_event() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
-    // Prepare components for session event handling.
-    let session = 0;
+    // Prepare components for epoch event handling.
+    let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let (settings, _recovery_file) = settings(
@@ -436,38 +441,37 @@ async fn test_handle_session_event() {
         (),
         0,
     );
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
         &public_info,
         (),
     );
-    let scheduler = SessionMessageScheduler::new(
-        scheduler_session_info(&public_info),
+    let scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        public_info.clone(),
+        (public_info.membership.clone(), public_info.epoch),
         BlakeRng::from_entropy(),
     );
     let mut backend_event_receiver = backend.subscribe_to_events();
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
-    // Handle a NewSession event, expecting Transitioning output.
-    let output = handle_session_event(
-        SessionEvent::NewSession(
-            CoreSessionInfo {
-                public: CoreSessionPublicInfo {
-                    membership: membership.clone(),
-                    session: session + 1,
-                    poq_core_public_inputs: public_info.session.core_public_inputs,
+    // Handle a NewEpoch event, expecting Transitioning output.
+    let output = handle_epoch_event(
+        EpochEvent::NewEpoch(
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
+                    epoch: epoch + 1,
+                    ..public_info.clone()
                 },
                 core_poq_generator: Some(()),
             }
@@ -477,29 +481,25 @@ async fn test_handle_session_event() {
         crypto_processor,
         scheduler,
         public_info,
-        ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
-        Epoch::new(0),
         None,
     )
     .await;
-    let HandleSessionEventOutput::Transitioning {
+    let HandleEpochEventOutput::Transitioning {
         new_crypto_processor,
-        old_crypto_processor,
         new_scheduler,
         old_scheduler,
-        new_public_info,
+        new_epoch_info,
         new_recovery_checkpoint,
+        old_crypto_processor,
     } = output
     else {
         panic!("expected Transitioning output");
     };
-    assert_eq!(
-        new_crypto_processor.verifier().session_number(),
-        session + 1
-    );
-    assert_eq!(old_crypto_processor.verifier().session_number(), session);
+    assert_eq!(new_crypto_processor.epoch(), epoch + 1);
+    assert_eq!(old_crypto_processor.epoch(), epoch);
     assert_eq!(
         new_scheduler.release_delayer().unreleased_messages().len(),
         0
@@ -508,65 +508,61 @@ async fn test_handle_session_event() {
         old_scheduler.release_delayer().unreleased_messages().len(),
         0
     );
-    assert_eq!(new_public_info.session.session_number, session + 1);
+    assert_eq!(new_epoch_info.epoch, epoch + 1);
     assert!(
         new_recovery_checkpoint
             .clone()
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .is_some()
     );
 
     // Handle a TransitionExpired event, expecting TransitionCompleted output.
-    let output = handle_session_event(
-        SessionEvent::TransitionPeriodExpired,
+    let output = handle_epoch_event(
+        EpochEvent::TransitionPeriodExpired,
         &settings,
         new_crypto_processor,
         new_scheduler,
-        new_public_info,
+        new_epoch_info,
         new_recovery_checkpoint,
         &mut backend,
         &sdp_relay,
-        Epoch::new(0),
         None,
     )
     .await;
-    let HandleSessionEventOutput::TransitionCompleted {
+    let HandleEpochEventOutput::TransitionCompleted {
         current_crypto_processor,
         current_scheduler,
-        current_public_info,
+        current_epoch_info,
         new_recovery_checkpoint,
     } = output
     else {
         panic!("expected TransitionCompleted output");
     };
-    assert_eq!(
-        current_crypto_processor.verifier().session_number(),
-        session + 1
-    );
-    assert_eq!(current_public_info.session.session_number, session + 1);
+    assert_eq!(current_crypto_processor.epoch(), epoch + 1);
+    assert_eq!(current_epoch_info.epoch, epoch + 1);
     assert!(
         new_recovery_checkpoint
             .clone()
             .start_updating()
-            .clear_old_session_token_collector()
+            .clear_old_epoch_token_collector()
             .is_none()
     );
     wait_for_blend_backend_event(
         &mut backend_event_receiver,
-        TestBlendBackendEvent::SessionTransitionCompleted,
+        TestBlendBackendEvent::EpochTransitionCompleted,
     )
     .await;
 
-    // Handle a NewSession event with a new too small membership,
+    // Handle a NewEpoch event with a new too small membership,
     // expecting Retiring output.
-    let output = handle_session_event(
-        SessionEvent::NewSession(
-            CoreSessionInfo {
-                public: CoreSessionPublicInfo {
+    let output = handle_epoch_event(
+        EpochEvent::NewEpoch(
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
                     membership: new_membership(minimal_network_size - 1).0,
-                    session: session + 2,
-                    poq_core_public_inputs: current_public_info.session.core_public_inputs,
+                    epoch: epoch + 2,
+                    ..current_epoch_info.clone()
                 },
                 core_poq_generator: Some(()),
             }
@@ -575,38 +571,34 @@ async fn test_handle_session_event() {
         &settings,
         current_crypto_processor,
         current_scheduler,
-        current_public_info,
+        current_epoch_info,
         new_recovery_checkpoint,
         &mut backend,
         &sdp_relay,
-        Epoch::new(0),
         None,
     )
     .await;
-    let HandleSessionEventOutput::Retiring {
+    let HandleEpochEventOutput::Retiring {
         old_crypto_processor,
-        old_public_info,
         ..
     } = output
     else {
         panic!("expected Retiring output");
     };
-    assert_eq!(
-        old_crypto_processor.verifier().session_number(),
-        session + 1
-    );
-    assert_eq!(old_public_info.session.session_number, session + 1);
+    assert_eq!(old_crypto_processor.epoch(), epoch + 1);
 }
 
-/// Handle a `NewSession(Empty)` event (empty membership), expecting `Retiring`
-/// output. This exercises the `MaybeEmptyCoreSessionInfo::Empty` branch of
-/// `handle_session_event` directly.
+/// On an epoch change where the membership actually changes (and the local node
+/// remains part of the core), the service must transition: build a new
+/// cryptographic generator bound to the new epoch, retain the old one for the
+/// old epoch, and propagate the *new* membership to the backend via
+/// `rotate_epoch`.
 #[test_log::test(tokio::test)]
-async fn test_handle_session_event_empty_session_retires() {
+async fn test_handle_epoch_event_membership_change_rewires_backend_and_generators() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
-    let session = 0;
+    let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let (settings, _recovery_file) = settings(
@@ -615,67 +607,253 @@ async fn test_handle_session_event_empty_session_retires() {
         (),
         0,
     );
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
         &public_info,
         (),
     );
-    let scheduler = SessionMessageScheduler::new(
-        scheduler_session_info(&public_info),
+    let scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        public_info.clone(),
+        (public_info.membership.clone(), public_info.epoch),
+        BlakeRng::from_entropy(),
+    );
+    let mut backend_event_receiver = backend.subscribe_to_events();
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    // The new epoch has a *different* (larger) membership; `new_membership`
+    // always includes the local node, so the node stays part of the core.
+    let new_epoch = epoch + 1;
+    let new_membership = new_membership(minimal_network_size + 1).0;
+    assert_ne!(
+        new_membership.size(),
+        membership.size(),
+        "the test must exercise an actual membership change"
+    );
+    let new_public_info = new_epoch_info(new_epoch, new_membership.clone(), &settings);
+
+    let output = handle_epoch_event(
+        EpochEvent::NewEpoch(
+            CoreEpochInfo {
+                public: new_public_info.clone(),
+                core_poq_generator: Some(()),
+            }
+            .into(),
+        ),
+        &settings,
+        crypto_processor,
+        scheduler,
+        public_info,
+        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+        &mut backend,
+        &sdp_relay,
+        None,
+    )
+    .await;
+
+    let HandleEpochEventOutput::Transitioning {
+        new_crypto_processor,
+        old_crypto_processor,
+        new_epoch_info: returned_epoch_info,
+        ..
+    } = output
+    else {
+        panic!("expected Transitioning output");
+    };
+
+    // A fresh generator is built for the new epoch, and the previous one is
+    // retained for the old epoch.
+    assert_eq!(new_crypto_processor.epoch(), new_epoch);
+    assert_eq!(old_crypto_processor.epoch(), epoch);
+    // The returned public info carries the new membership.
+    assert_eq!(returned_epoch_info.epoch, new_epoch);
+    assert_eq!(returned_epoch_info.membership.size(), new_membership.size());
+
+    // The backend was rotated to the new epoch, carrying the *new* membership.
+    wait_for_blend_backend_event(
+        &mut backend_event_receiver,
+        TestBlendBackendEvent::EpochRotated {
+            epoch: new_epoch,
+            membership_size: new_membership.size(),
+        },
+    )
+    .await;
+}
+
+/// On an epoch change, if secret `PoL` info for the *new* epoch is already
+/// available (`current_secret_info`), it must be applied to the *new*
+/// cryptographic generator via `set_epoch_private`. If the available secret
+/// info is for a different epoch, it must not be applied. This is the
+/// public-stream side of the public/secret out-of-order coordination.
+#[test_log::test(tokio::test)]
+async fn test_handle_epoch_event_applies_matching_secret_to_new_generator() {
+    async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> {
+        let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+            dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+        let epoch = 0.into();
+        let minimal_network_size = 2;
+        let (membership, local_private_key) = new_membership(minimal_network_size);
+        let (settings, _recovery_file) = settings(
+            local_private_key.clone(),
+            u64::from(minimal_network_size).try_into().unwrap(),
+            (),
+            0,
+        );
+        let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+        let crypto_processor = new_crypto_processor(
+            EpochCryptographicProcessorSettings {
+                non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+                num_blend_layers: settings.num_blend_layers,
+            },
+            &public_info,
+            (),
+        );
+        let scheduler = EpochMessageScheduler::new(
+            scheduler_epoch_info(&public_info),
+            BlakeRng::from_entropy(),
+            scheduler_settings(&settings.time, settings.num_blend_layers),
+        );
+        let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
+        let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+            settings.clone(),
+            overwatch_handle.clone(),
+            (public_info.membership.clone(), public_info.epoch),
+            BlakeRng::from_entropy(),
+        );
+        let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+        let secret_info = PolEpochInfo {
+            epoch: secret_epoch,
+            poq_private_inputs: dummy_pol_private_inputs(),
+        };
+
+        // Isolate the `set_epoch_private` calls made by `handle_epoch_event`.
+        reset_set_epoch_private_calls();
+        let _output = handle_epoch_event(
+            EpochEvent::NewEpoch(
+                CoreEpochInfo {
+                    public: CoreEpochPublicInfo {
+                        epoch: epoch + 1,
+                        ..public_info.clone()
+                    },
+                    core_poq_generator: Some(()),
+                }
+                .into(),
+            ),
+            &settings,
+            crypto_processor,
+            scheduler,
+            public_info,
+            ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+            &mut backend,
+            &sdp_relay,
+            Some(&secret_info),
+        )
+        .await;
+        recorded_set_epoch_private_calls()
+    }
+
+    // Secret for the new epoch (1) is applied to the new generator.
+    assert_eq!(
+        transition_to_new_epoch_with_secret(1.into()).await,
+        vec![Epoch::new(1)],
+        "secret matching the new epoch must be applied to the new generator"
+    );
+
+    // Secret for a non-matching epoch (5) must not be applied.
+    assert!(
+        transition_to_new_epoch_with_secret(5.into())
+            .await
+            .is_empty(),
+        "secret for a non-matching epoch must not be applied to the new generator"
+    );
+}
+
+/// Handle a `NewEpoch(Empty)` event (empty membership), expecting `Retiring`
+/// output. This exercises the `MaybeEmptyCoreEpochInfo::Empty` branch of
+/// `handle_epoch_event` directly.
+#[test_log::test(tokio::test)]
+async fn test_handle_epoch_event_empty_epoch_retires() {
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    let epoch = 0.into();
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+    let crypto_processor = new_crypto_processor(
+        EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+    let scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings(&settings.time, settings.num_blend_layers),
+    );
+    let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+        settings.clone(),
+        overwatch_handle.clone(),
+        (public_info.membership.clone(), public_info.epoch),
         BlakeRng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
-    // Handle a NewSession(Empty) event - empty membership triggers Retiring.
-    let empty_session: u64 = session + 1;
-    let output = handle_session_event(
-        SessionEvent::NewSession(empty_session.into()),
+    // Handle a NewEpoch(Empty) event - empty membership triggers Retiring.
+    let empty_epoch = epoch + 1;
+    let output = handle_epoch_event(
+        EpochEvent::NewEpoch((empty_epoch, ZkHash::from(1)).into()),
         &settings,
         crypto_processor,
         scheduler,
         public_info.clone(),
-        ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
-        Epoch::new(0),
         None,
     )
     .await;
-    let HandleSessionEventOutput::Retiring {
+    let HandleEpochEventOutput::Retiring {
         old_crypto_processor,
-        old_public_info,
         ..
     } = output
     else {
-        panic!("expected Retiring output for Empty session");
+        panic!("expected Retiring output for Empty epoch");
     };
-    // The old processor/info should be from the session we were on before
-    // the empty session arrived.
-    assert_eq!(old_crypto_processor.verifier().session_number(), session);
-    assert_eq!(old_public_info.session.session_number, session);
+    // The old processor/info should be from the epoch we were on before
+    // the empty epoch arrived.
+    assert_eq!(old_crypto_processor.epoch(), epoch);
 }
 
-/// Handle a `NewSession(NonEmpty)` event where membership exists but the local
+/// Handle a `NewEpoch(NonEmpty)` event where membership exists but the local
 /// node is not part of it (`core_poq_generator = None`), expecting `Retiring`
 /// output.
 #[test_log::test(tokio::test)]
-async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
+async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
-    let session = 0;
+    let epoch = 0.into();
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let (settings, _recovery_file) = settings(
@@ -684,36 +862,35 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
         (),
         0,
     );
-    let public_info = new_public_info(session, membership.clone(), &settings);
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let crypto_processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
         &public_info,
         (),
     );
-    let scheduler = SessionMessageScheduler::new(
-        scheduler_session_info(&public_info),
+    let scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
         BlakeRng::from_entropy(),
         scheduler_settings(&settings.time, settings.num_blend_layers),
     );
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
+    let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
     let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
         settings.clone(),
         overwatch_handle.clone(),
-        public_info.clone(),
+        (public_info.membership.clone(), public_info.epoch),
         BlakeRng::from_entropy(),
     );
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
-    let output = handle_session_event(
-        SessionEvent::NewSession(
-            CoreSessionInfo {
-                public: CoreSessionPublicInfo {
-                    membership,
-                    session: session + 1,
-                    poq_core_public_inputs: public_info.session.core_public_inputs,
+    let output = handle_epoch_event(
+        EpochEvent::NewEpoch(
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
+                    epoch: epoch + 1,
+                    ..public_info.clone()
                 },
                 core_poq_generator: None,
             }
@@ -723,33 +900,30 @@ async fn test_handle_session_event_non_empty_without_local_core_path_retires() {
         crypto_processor,
         scheduler,
         public_info.clone(),
-        ServiceState::with_session(session, token_collector, None, state_updater.clone()).unwrap(),
+        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
-        Epoch::new(0),
         None,
     )
     .await;
 
-    let HandleSessionEventOutput::Retiring {
+    let HandleEpochEventOutput::Retiring {
         old_crypto_processor,
-        old_public_info,
         ..
     } = output
     else {
-        panic!("expected Retiring output for NonEmpty session without local core path");
+        panic!("expected Retiring output for NonEmpty epoch without local core path");
     };
 
-    assert_eq!(old_crypto_processor.verifier().session_number(), session);
-    assert_eq!(old_public_info.session.session_number, session);
+    assert_eq!(old_crypto_processor.epoch(), epoch);
 }
 
-/// Check if the service keeps running after it receives a new session where
-/// it's still core. Also, check if it stops after the session transition period
-/// if it receives another new session that doesn't meet the core node
+/// Check if the service keeps running after it receives a new epoch where
+/// it's still core. Also, check if it stops after the epoch transition period
+/// if it receives another new epoch that doesn't meet the core node
 /// conditions.
 #[test_log::test(tokio::test)]
-async fn complete_old_session_after_main_loop_done() {
+async fn complete_old_epoch_after_main_loop_done() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
@@ -765,42 +939,22 @@ async fn complete_old_session_after_main_loop_done() {
     let (inbound_relay, _inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
-    let (clock_stream, clock_sender) = new_stream();
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
-    let initial_session = 0;
     let mut membership_info = MembershipInfo {
         membership: membership.clone(),
         zk: Some(ZkInfo {
             root: ZkHash::ZERO,
             core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
         }),
-        session_number: initial_session,
     };
     membership_sender
-        .send(membership_info.clone())
+        .send(test_blend_epoch_state(0, membership_info.clone()))
         .await
         .unwrap();
 
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
-
-    // Send the initial slot tick that the service will expect to receive
-    // immediately.
-    clock_sender
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 0.into(),
-        })
-        .await
-        .unwrap();
-
-    // Prepare an epoch handler with the mock chain service that always returns the
-    // same epoch state.
-    let mut epoch_handler = EpochHandler::new(
-        TestChainService,
-        settings.time.epoch_transition_period_in_slots,
-    );
 
     // Prepare dummy Overwatch resources.
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
@@ -808,10 +962,8 @@ async fn complete_old_session_after_main_loop_done() {
 
     // Initialize the service.
     let (
-        mut remaining_session_stream,
-        mut remaining_clock_stream,
+        mut remaining_epoch_stream,
         current_public_info,
-        _,
         crypto_processor,
         current_recovery_checkpoint,
         message_scheduler,
@@ -821,7 +973,6 @@ async fn complete_old_session_after_main_loop_done() {
         NodeId,
         TestBlendBackend,
         TestNetworkAdapter,
-        TestChainService,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -829,8 +980,6 @@ async fn complete_old_session_after_main_loop_done() {
     >(
         settings.clone(),
         membership_stream,
-        clock_stream,
-        &mut epoch_handler,
         overwatch_handle.clone(),
         MockKmsAdapter,
         &sdp_relay,
@@ -847,76 +996,69 @@ async fn complete_old_session_after_main_loop_done() {
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
         let (
-            old_session_crypto_processor,
-            old_session_message_scheduler,
-            old_session_blending_token_collector,
-            old_session_public_info,
-            _,
+            old_epoch_crypto_processor,
+            old_epoch_message_scheduler,
+            old_epoch_blending_token_collector,
         ) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
-            &mut remaining_clock_stream,
             secret_pol_info_stream,
-            &mut remaining_session_stream,
+            &mut remaining_epoch_stream,
             &settings_cloned,
             &mut backend,
             &TestNetworkAdapter,
             &sdp_relay,
-            &mut epoch_handler,
             message_scheduler.into(),
             &mut rng,
             crypto_processor,
             current_public_info,
-            Epoch::new(0),
             current_recovery_checkpoint,
         )
         .await;
 
         retire(
             blend_message_stream.map(|(msg, _)| msg),
-            remaining_clock_stream,
-            remaining_session_stream,
-            &settings_cloned,
+            remaining_epoch_stream,
             backend,
             TestNetworkAdapter,
             sdp_relay,
-            epoch_handler,
-            old_session_message_scheduler,
+            old_epoch_message_scheduler,
             rng,
-            old_session_blending_token_collector,
-            old_session_crypto_processor,
-            old_session_public_info,
-            Epoch::new(0),
+            old_epoch_blending_token_collector,
+            old_epoch_crypto_processor,
         )
         .await;
     });
 
-    // Send a new session with the same membership.
-    membership_info.session_number += 1;
+    // Send a new epoch with the same membership.
+
     membership_sender
-        .send(membership_info.clone())
+        .send(test_blend_epoch_state(1, membership_info.clone()))
         .await
         .unwrap();
 
-    // Since the node is still core in the new session,
-    // the service must keep running even after a session transition period.
+    // Since the node is still core in the new epoch,
+    // the service must keep running even after a epoch transition period.
     wait_for_blend_backend_event(
         &mut backend_event_receiver,
-        TestBlendBackendEvent::SessionTransitionCompleted,
+        TestBlendBackendEvent::EpochTransitionCompleted,
     )
     .await;
     assert!(!join_handle.is_finished());
 
-    // Send a new session with a new membership smaller than minimal size
+    // Send a new epoch with a new membership smaller than minimal size
     membership_info.membership = new_membership(minimal_network_size.checked_sub(1).unwrap()).0;
-    membership_info.session_number += 1;
-    membership_sender.send(membership_info).await.unwrap();
+
+    membership_sender
+        .send(test_blend_epoch_state(2, membership_info))
+        .await
+        .unwrap();
 
     // Since the network is smaller than the minimal size,
-    // the service must stop after a session transition period.
+    // the service must stop after a epoch transition period.
     wait_for_blend_backend_event(
         &mut backend_event_receiver,
-        TestBlendBackendEvent::SessionTransitionCompleted,
+        TestBlendBackendEvent::EpochTransitionCompleted,
     )
     .await;
     join_handle
@@ -924,10 +1066,10 @@ async fn complete_old_session_after_main_loop_done() {
         .expect("the service should stop without error");
 }
 
-/// Check that the service handles a new session with empty providers (zk: None)
+/// Check that the service handles a new epoch with empty providers (zk: None)
 /// without panicking. It should retire gracefully.
 #[test_log::test(tokio::test)]
-async fn stop_on_empty_session() {
+async fn stop_on_empty_epoch() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
@@ -943,42 +1085,22 @@ async fn stop_on_empty_session() {
     let (inbound_relay, _inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
-    let (clock_stream, clock_sender) = new_stream();
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
-    let initial_session = 0;
     let membership_info = MembershipInfo {
         membership: membership.clone(),
         zk: Some(ZkInfo {
             root: ZkHash::ZERO,
             core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
         }),
-        session_number: initial_session,
     };
     membership_sender
-        .send(membership_info.clone())
+        .send(test_blend_epoch_state(0, membership_info.clone()))
         .await
         .unwrap();
 
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
-
-    // Send the initial slot tick that the service will expect to receive
-    // immediately.
-    clock_sender
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 0.into(),
-        })
-        .await
-        .unwrap();
-
-    // Prepare an epoch handler with the mock chain service that always returns the
-    // same epoch state.
-    let mut epoch_handler = EpochHandler::new(
-        TestChainService,
-        settings.time.epoch_transition_period_in_slots,
-    );
 
     // Prepare dummy Overwatch resources.
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
@@ -986,10 +1108,8 @@ async fn stop_on_empty_session() {
 
     // Initialize the service.
     let (
-        mut remaining_session_stream,
-        mut remaining_clock_stream,
+        mut remaining_epoch_stream,
         current_public_info,
-        _,
         crypto_processor,
         current_recovery_checkpoint,
         message_scheduler,
@@ -999,7 +1119,6 @@ async fn stop_on_empty_session() {
         NodeId,
         TestBlendBackend,
         TestNetworkAdapter,
-        TestChainService,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1007,8 +1126,6 @@ async fn stop_on_empty_session() {
     >(
         settings.clone(),
         membership_stream,
-        clock_stream,
-        &mut epoch_handler,
         overwatch_handle.clone(),
         MockKmsAdapter,
         &sdp_relay,
@@ -1025,77 +1142,69 @@ async fn stop_on_empty_session() {
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
         let (
-            old_session_crypto_processor,
-            old_session_message_scheduler,
-            old_session_blending_token_collector,
-            old_session_public_info,
-            _,
+            old_epoch_crypto_processor,
+            old_epoch_message_scheduler,
+            old_epoch_blending_token_collector,
         ) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
-            &mut remaining_clock_stream,
             secret_pol_info_stream,
-            &mut remaining_session_stream,
+            &mut remaining_epoch_stream,
             &settings_cloned,
             &mut backend,
             &TestNetworkAdapter,
             &sdp_relay,
-            &mut epoch_handler,
             message_scheduler.into(),
             &mut rng,
             crypto_processor,
             current_public_info,
-            Epoch::new(0),
             current_recovery_checkpoint,
         )
         .await;
 
         retire(
             blend_message_stream.map(|(msg, _)| msg),
-            remaining_clock_stream,
-            remaining_session_stream,
-            &settings_cloned,
+            remaining_epoch_stream,
             backend,
             TestNetworkAdapter,
             sdp_relay,
-            epoch_handler,
-            old_session_message_scheduler,
+            old_epoch_message_scheduler,
             rng,
-            old_session_blending_token_collector,
-            old_session_crypto_processor,
-            old_session_public_info,
-            Epoch::new(0),
+            old_epoch_blending_token_collector,
+            old_epoch_crypto_processor,
         )
         .await;
     });
 
-    // Send a new session with empty providers (zk: None).
-    // This simulates a session where no providers are available.
+    // Send a new epoch with empty providers (zk: None).
+    // This simulates an epoch where no providers are available.
     membership_sender
-        .send(MembershipInfo {
-            membership: membership.clone(),
-            zk: None,
-            session_number: initial_session + 1,
-        })
+        .send(test_blend_epoch_state(
+            1,
+            MembershipInfo {
+                membership: membership.clone(),
+                zk: None,
+            },
+        ))
         .await
         .unwrap();
 
     wait_for_blend_backend_event(
         &mut backend_event_receiver,
-        TestBlendBackendEvent::SessionTransitionCompleted,
+        TestBlendBackendEvent::EpochTransitionCompleted,
     )
     .await;
     // The service should stop without panicking.
     join_handle
         .await
-        .expect("the service should stop without panic on empty session");
+        .expect("the service should stop without panic on empty epoch");
 }
 
-/// Check that the service handles a non-empty new session where the local node
+/// Check that the service handles a non-empty new epoch where the local node
 /// has no core path (`core_poq_generator = None`) without panicking. It should
 /// retire gracefully.
 #[test_log::test(tokio::test)]
-async fn stop_on_non_empty_session_without_local_core_path() {
+async fn stop_on_non_empty_epoch_without_local_core_path() {
     let minimal_network_size = 2;
     let (membership, local_private_key) = new_membership(minimal_network_size);
 
@@ -1111,42 +1220,22 @@ async fn stop_on_non_empty_session_without_local_core_path() {
     let (inbound_relay, _inbound_message_sender) = new_stream();
     let (mut blend_message_stream, _blend_message_sender) = new_stream();
     let (membership_stream, membership_sender) = new_stream();
-    let (clock_stream, clock_sender) = new_stream();
 
     // Send the initial membership info that the service will expect to receive
     // immediately.
-    let initial_session = 0;
     let membership_info = MembershipInfo {
         membership: membership.clone(),
         zk: Some(ZkInfo {
             root: ZkHash::ZERO,
             core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
         }),
-        session_number: initial_session,
     };
     membership_sender
-        .send(membership_info.clone())
+        .send(test_blend_epoch_state(0, membership_info.clone()))
         .await
         .unwrap();
 
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
-
-    // Send the initial slot tick that the service will expect to receive
-    // immediately.
-    clock_sender
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 0.into(),
-        })
-        .await
-        .unwrap();
-
-    // Prepare an epoch handler with the mock chain service that always returns the
-    // same epoch state.
-    let mut epoch_handler = EpochHandler::new(
-        TestChainService,
-        settings.time.epoch_transition_period_in_slots,
-    );
 
     // Prepare dummy Overwatch resources.
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
@@ -1154,10 +1243,8 @@ async fn stop_on_non_empty_session_without_local_core_path() {
 
     // Initialize the service.
     let (
-        mut remaining_session_stream,
-        mut remaining_clock_stream,
+        mut remaining_epoch_stream,
         current_public_info,
-        _,
         crypto_processor,
         current_recovery_checkpoint,
         message_scheduler,
@@ -1167,7 +1254,6 @@ async fn stop_on_non_empty_session_without_local_core_path() {
         NodeId,
         TestBlendBackend,
         TestNetworkAdapter,
-        TestChainService,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1175,8 +1261,6 @@ async fn stop_on_non_empty_session_without_local_core_path() {
     >(
         settings.clone(),
         membership_stream,
-        clock_stream,
-        &mut epoch_handler,
         overwatch_handle.clone(),
         MockKmsAdapter,
         &sdp_relay,
@@ -1193,66 +1277,58 @@ async fn stop_on_non_empty_session_without_local_core_path() {
             post_initialize::<OncePolStreamProvider, RuntimeServiceId>(&overwatch_handle).await;
 
         let (
-            old_session_crypto_processor,
-            old_session_message_scheduler,
-            old_session_blending_token_collector,
-            old_session_public_info,
-            _,
+            old_epoch_crypto_processor,
+            old_epoch_message_scheduler,
+            old_epoch_blending_token_collector,
         ) = run_event_loop(
             inbound_relay,
             &mut blend_message_stream,
-            &mut remaining_clock_stream,
             secret_pol_info_stream,
-            &mut remaining_session_stream,
+            &mut remaining_epoch_stream,
             &settings_cloned,
             &mut backend,
             &TestNetworkAdapter,
             &sdp_relay,
-            &mut epoch_handler,
             message_scheduler.into(),
             &mut rng,
             crypto_processor,
             current_public_info,
-            Epoch::new(0),
             current_recovery_checkpoint,
         )
         .await;
 
         retire(
             blend_message_stream.map(|(msg, _)| msg),
-            remaining_clock_stream,
-            remaining_session_stream,
-            &settings_cloned,
+            remaining_epoch_stream,
             backend,
             TestNetworkAdapter,
             sdp_relay,
-            epoch_handler,
-            old_session_message_scheduler,
+            old_epoch_message_scheduler,
             rng,
-            old_session_blending_token_collector,
-            old_session_crypto_processor,
-            old_session_public_info,
-            Epoch::new(0),
+            old_epoch_blending_token_collector,
+            old_epoch_crypto_processor,
         )
         .await;
     });
 
-    // Send a new non-empty session without local core path.
+    // Send a new non-empty epoch without local core path.
     membership_sender
-        .send(MembershipInfo {
-            membership,
-            zk: Some(ZkInfo {
-                root: ZkHash::ZERO,
-                core_and_path_selectors: None,
-            }),
-            session_number: initial_session + 1,
-        })
+        .send(test_blend_epoch_state(
+            1,
+            MembershipInfo {
+                membership,
+                zk: Some(ZkInfo {
+                    root: ZkHash::ZERO,
+                    core_and_path_selectors: None,
+                }),
+            },
+        ))
         .await
         .unwrap();
 
     wait_for_blend_backend_event(
         &mut backend_event_receiver,
-        TestBlendBackendEvent::SessionTransitionCompleted,
+        TestBlendBackendEvent::EpochTransitionCompleted,
     )
     .await;
     // The service should stop without panicking.
@@ -1261,12 +1337,12 @@ async fn stop_on_non_empty_session_without_local_core_path() {
         .expect("the service should stop without panic when local core path is missing");
 }
 
-/// Verify that the proof generator produces proofs for the correct session,
-/// and that those proofs are only accepted by a verifier for the same session.
+/// Verify that the proof generator produces proofs for the correct epoch,
+/// and that those proofs are only accepted by a verifier for the same epoch.
 #[test_log::test(tokio::test)]
-async fn test_proof_generator_session_binding() {
-    let session_0 = 0u64;
-    let session_1 = 1u64;
+async fn test_proof_generator_epoch_binding() {
+    let epoch_0 = 0.into();
+    let epoch_1 = 1.into();
     let minimal_network_size = 1;
     let (membership, local_private_key) = new_membership(minimal_network_size);
     let (settings, _recovery_file) = settings(
@@ -1276,12 +1352,12 @@ async fn test_proof_generator_session_binding() {
         0,
     );
 
-    // Create proof generators for session 0 and session 1.
-    let public_info_0 = new_public_info(session_0, membership.clone(), &settings);
-    let public_info_1 = new_public_info(session_1, membership.clone(), &settings);
+    // Create proof generators for epoch 0 and epoch 1.
+    let public_info_0 = new_epoch_info(epoch_0, membership.clone(), &settings);
+    let public_info_1 = new_epoch_info(epoch_1, membership.clone(), &settings);
 
     let mut generator_0 = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -1290,7 +1366,7 @@ async fn test_proof_generator_session_binding() {
     );
 
     let mut generator_1 = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
             num_blend_layers: settings.num_blend_layers,
         },
@@ -1298,7 +1374,7 @@ async fn test_proof_generator_session_binding() {
         (),
     );
 
-    // Build a message with session 0 proofs.
+    // Build a message with epoch 0 proofs.
     let payload = NetworkMessage {
         message: vec![],
         broadcast_settings: (),
@@ -1308,32 +1384,32 @@ async fn test_proof_generator_session_binding() {
     let msg_0 = generator_0
         .encapsulate_data_payload(&payload)
         .await
-        .expect("encapsulation with session 0 must succeed");
+        .expect("encapsulation with epoch 0 must succeed");
 
-    // Build a message with session 1 proofs.
+    // Build a message with epoch 1 proofs.
     let msg_1 = generator_1
         .encapsulate_data_payload(&payload)
         .await
-        .expect("encapsulation with session 1 must succeed");
+        .expect("encapsulation with epoch 1 must succeed");
 
-    // Session 0 message should be decapsulable by session 0 processor.
+    // Epoch 0 message should be decapsulable by epoch 0 processor.
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
     let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
-    let mut scheduler_0 = SessionMessageScheduler::new(
-        scheduler_session_info(&public_info_0),
+    let mut scheduler_0 = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info_0),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
-        session_0,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
+    let recovery_checkpoint = ServiceState::with_epoch(
+        epoch_0,
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info_0)),
         None,
         state_updater,
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_0.clone().into(), session_0),
+        (msg_0.clone().into(), epoch_0),
         &mut scheduler_0,
         None,
         &generator_0,
@@ -1343,27 +1419,27 @@ async fn test_proof_generator_session_binding() {
     assert_eq!(
         scheduler_0.release_delayer().unreleased_messages().len(),
         1,
-        "Session 0 message must be scheduled by session 0 processor"
+        "Epoch 0 message must be scheduled by epoch 0 processor"
     );
 
-    // Session 1 message should NOT be decapsulable by session 0 processor
-    // (wrong PoQ proofs for session 0).
+    // Epoch 1 message should NOT be decapsulable by epoch 0 processor
+    // (wrong PoQ proofs for epoch 0).
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
-    let mut scheduler_0_only = SessionMessageScheduler::new(
-        scheduler_session_info(&public_info_0),
+    let mut scheduler_0_only = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info_0),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
-        session_0,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_0)),
+    let recovery_checkpoint = ServiceState::with_epoch(
+        epoch_0,
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info_0)),
         None,
         state_updater,
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_1.clone().into(), session_0),
+        (msg_1.clone().into(), epoch_0),
         &mut scheduler_0_only,
         None,
         &generator_0,
@@ -1376,26 +1452,26 @@ async fn test_proof_generator_session_binding() {
             .unreleased_messages()
             .len(),
         0,
-        "Session 1 message must NOT be scheduled by session 0 processor"
+        "Epoch 1 message must NOT be scheduled by epoch 0 processor"
     );
 
-    // Session 1 message should be decapsulable by session 1 processor.
+    // Epoch 1 message should be decapsulable by epoch 1 processor.
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
-    let mut scheduler_1 = SessionMessageScheduler::new(
-        scheduler_session_info(&public_info_1),
+    let mut scheduler_1 = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info_1),
         BlakeRng::from_entropy(),
         scheduler_settings,
     );
-    let recovery_checkpoint = ServiceState::with_session(
-        session_1,
-        SessionBlendingTokenCollector::new(&reward_session_info(&public_info_1)),
+    let recovery_checkpoint = ServiceState::with_epoch(
+        epoch_1,
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info_1)),
         None,
         state_updater,
     )
     .unwrap();
     drop(handle_incoming_blend_message(
-        (msg_1.into(), session_1),
+        (msg_1.into(), epoch_1),
         &mut scheduler_1,
         None,
         &generator_1,
@@ -1405,185 +1481,13 @@ async fn test_proof_generator_session_binding() {
     assert_eq!(
         scheduler_1.release_delayer().unreleased_messages().len(),
         1,
-        "Session 1 message must be scheduled by session 1 processor"
+        "Epoch 1 message must be scheduled by epoch 1 processor"
     );
 }
 
-/// Verify that `handle_clock_event` correctly updates the public info and
-/// epoch number when the `EpochHandler` emits a `NewEpoch` event.
-#[test_log::test(tokio::test)]
-async fn test_handle_clock_event_new_epoch() {
-    let minimal_network_size = 1;
-    let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
-        local_private_key.clone(),
-        u64::from(minimal_network_size).try_into().unwrap(),
-        (),
-        0,
-    );
-    let session = 0;
-    let public_info = new_public_info(session, membership.clone(), &settings);
-    let mut processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
-        },
-        &public_info,
-        (),
-    );
-
-    let initial_epoch = Epoch::new(0);
-
-    // Create an EpochHandler with a transition period of 1 slot.
-    let mut epoch_handler: EpochHandler<_, RuntimeServiceId> =
-        EpochHandler::new(TestChainService, 1.try_into().unwrap());
-
-    // First tick initializes the epoch handler.
-    let (updated_info, updated_epoch) = handle_clock_event(
-        SlotTick {
-            epoch: 1.into(),
-            slot: 1.into(),
-        },
-        &settings,
-        &mut epoch_handler,
-        &mut processor,
-        public_info.clone(),
-        initial_epoch,
-    )
-    .await;
-    assert_eq!(
-        updated_epoch,
-        Epoch::new(1),
-        "Epoch must advance to 1 after first tick in epoch 1"
-    );
-    // Public info should be updated with new leader inputs derived from chain
-    // state.
-    assert_ne!(
-        updated_info.epoch, public_info.epoch,
-        "Leader inputs should be updated from chain epoch state"
-    );
-
-    // Tick in the same epoch should not change epoch.
-    let (unchanged_info, unchanged_epoch) = handle_clock_event(
-        SlotTick {
-            epoch: 1.into(),
-            slot: 2.into(),
-        },
-        &settings,
-        &mut epoch_handler,
-        &mut processor,
-        updated_info.clone(),
-        updated_epoch,
-    )
-    .await;
-    assert_eq!(unchanged_epoch, Epoch::new(1));
-    assert_eq!(unchanged_info.epoch, updated_info.epoch);
-
-    // Tick in a new epoch should advance again.
-    let (final_info, final_epoch) = handle_clock_event(
-        SlotTick {
-            epoch: 2.into(),
-            slot: 3.into(),
-        },
-        &settings,
-        &mut epoch_handler,
-        &mut processor,
-        unchanged_info.clone(),
-        unchanged_epoch,
-    )
-    .await;
-    assert_eq!(
-        final_epoch,
-        Epoch::new(2),
-        "Epoch must advance to 2 after tick in epoch 2"
-    );
-    // Since epoch_transition_period is 1 slot and slot 2 was the last in epoch 1,
-    // this triggers NewEpochAndOldEpochTransitionExpired which both completes the
-    // old transition and rotates to epoch 2.
-    assert_eq!(final_info.session.session_number, session);
-}
-
-/// Verify that `handle_new_secret_epoch_info` returns updated leader inputs
-/// when the `PoL` info epoch is newer than the current epoch, and returns
-/// `None` when the epoch has already been processed.
-#[test_log::test(tokio::test)]
-async fn test_handle_new_secret_epoch_info() {
-    let minimal_network_size = 1;
-    let (membership, local_private_key) = new_membership(minimal_network_size);
-    let (settings, _recovery_file) = settings(
-        local_private_key,
-        u64::from(minimal_network_size).try_into().unwrap(),
-        (),
-        0,
-    );
-    let session = 0;
-    let public_info = new_public_info(session, membership, &settings);
-    let mut processor = new_crypto_processor(
-        SessionCryptographicProcessorSettings {
-            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-            num_blend_layers: settings.num_blend_layers,
-        },
-        &public_info,
-        (),
-    );
-
-    let current_epoch = Epoch::new(0);
-
-    // PoL info for a new epoch (epoch 1 > current 0): should return Some.
-    let pol_info = PolEpochInfo {
-        epoch: Epoch::new(1),
-        poq_public_inputs: lb_core::proofs::leader_proof::LeaderPublic {
-            slot: 1,
-            latest_root: lb_groth16::Fr::ZERO,
-            lottery_0: lb_groth16::Fr::ONE,
-            lottery_1: lb_groth16::Fr::ONE,
-            epoch_nonce: ZkHash::ONE,
-            aged_root: ZkHash::ONE,
-        },
-        poq_private_inputs:
-            lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs {
-                slot: 1,
-                note_value: 1,
-                transaction_hash: ZkHash::ZERO,
-                output_number: 1,
-                aged_path_and_selectors: [(ZkHash::ZERO, false); _],
-                secret_key: ZkHash::ZERO,
-            },
-    };
-    let result = handle_new_secret_epoch_info(&settings, &pol_info, &mut processor, current_epoch);
-    assert!(
-        result.is_some(),
-        "Should return Some(LeaderInputs) when PoL epoch > current epoch"
-    );
-    let new_leader = result.unwrap();
-    assert_eq!(new_leader.pol_epoch_nonce, ZkHash::ONE);
-    assert_eq!(new_leader.pol_ledger_aged, ZkHash::ONE);
-
-    // PoL info for the same epoch (epoch 1 == current 1): should return None.
-    let already_processed_epoch = Epoch::new(1);
-    let result = handle_new_secret_epoch_info(
-        &settings,
-        &pol_info,
-        &mut processor,
-        already_processed_epoch,
-    );
-    assert!(
-        result.is_none(),
-        "Should return None when PoL epoch <= current epoch"
-    );
-
-    // PoL info for an older epoch: should return None.
-    let future_epoch = Epoch::new(5);
-    let result = handle_new_secret_epoch_info(&settings, &pol_info, &mut processor, future_epoch);
-    assert!(
-        result.is_none(),
-        "Should return None when PoL epoch < current epoch"
-    );
-}
-
-/// When `initialize` receives a `last_saved_state` whose session matches the
-/// current membership session, the saved state is restored (e.g. `spent_quota`
-/// is preserved). When the session does not match, a fresh state is created.
+/// When `initialize` receives a `last_saved_state` whose epoch matches the
+/// current membership epoch, the saved state is restored (e.g. `spent_quota`
+/// is preserved). When the epoch does not match, a fresh state is created.
 #[test_log::test(tokio::test)]
 async fn test_initialize_recovers_matching_saved_state() {
     let minimal_network_size = 2;
@@ -1595,58 +1499,42 @@ async fn test_initialize_recovers_matching_saved_state() {
         0,
     );
 
-    let initial_session = 0;
+    let initial_epoch = 0.into();
 
-    // Matching session: saved state should be restored
+    // Matching epoch: saved state should be restored
 
     let (membership_stream, membership_sender) = new_stream();
-    let (clock_stream, clock_sender) = new_stream();
     membership_sender
-        .send(MembershipInfo {
-            membership: membership.clone(),
-            zk: Some(ZkInfo {
-                root: ZkHash::ZERO,
-                core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
-            }),
-            session_number: initial_session,
-        })
-        .await
-        .unwrap();
-    clock_sender
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 0.into(),
-        })
+        .send(test_blend_epoch_state(
+            0,
+            MembershipInfo {
+                membership: membership.clone(),
+                zk: Some(ZkInfo {
+                    root: ZkHash::ZERO,
+                    core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+                }),
+            },
+        ))
         .await
         .unwrap();
 
-    let mut epoch_handler = EpochHandler::new(
-        TestChainService,
-        settings.time.epoch_transition_period_in_slots,
-    );
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources();
     let (sdp_relay_1, _sdp_relay_receiver) = sdp_relay();
 
-    // Build a pre-populated saved state with matching session and some spent quota.
-    let public_info = new_public_info(initial_session, membership.clone(), &settings);
-    let token_collector = SessionBlendingTokenCollector::new(&reward_session_info(&public_info));
-    let saved_state = ServiceState::with_session(
-        initial_session,
-        token_collector,
-        None,
-        state_updater.clone(),
-    )
-    .unwrap();
+    // Build a pre-populated saved state with matching epoch and some spent quota.
+    let public_info = new_epoch_info(initial_epoch, membership.clone(), &settings);
+    let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
+    let saved_state =
+        ServiceState::with_epoch(initial_epoch, token_collector, None, state_updater.clone())
+            .unwrap();
     let mut updater = saved_state.start_updating();
     updater.consume_core_quota(5);
     let saved_state = updater.commit_changes();
 
     let (
-        _remaining_session_stream,
-        _remaining_clock_stream,
+        _remaining_epoch_stream,
         _current_public_info,
-        _current_epoch,
         _crypto_processor,
         recovered_checkpoint,
         _message_scheduler,
@@ -1656,7 +1544,6 @@ async fn test_initialize_recovers_matching_saved_state() {
         NodeId,
         TestBlendBackend,
         TestNetworkAdapter,
-        TestChainService,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1664,8 +1551,6 @@ async fn test_initialize_recovers_matching_saved_state() {
     >(
         settings.clone(),
         membership_stream,
-        clock_stream,
-        &mut epoch_handler,
         overwatch_handle,
         MockKmsAdapter,
         &sdp_relay_1,
@@ -1677,57 +1562,49 @@ async fn test_initialize_recovers_matching_saved_state() {
     assert_eq!(
         recovered_checkpoint.spent_quota(),
         5,
-        "Matching session: spent_quota should be restored from saved state"
+        "Matching epoch: spent_quota should be restored from saved state"
     );
-    assert_eq!(recovered_checkpoint.last_seen_session(), initial_session);
+    assert_eq!(recovered_checkpoint.last_seen_epoch(), initial_epoch);
 
-    // Mismatched session: fresh state should be created
+    // Mismatched epoch: fresh state should be created
 
     let (membership_stream2, membership_sender2) = new_stream();
-    let (clock_stream2, clock_sender2) = new_stream();
     membership_sender2
-        .send(MembershipInfo {
-            membership: membership.clone(),
-            zk: Some(ZkInfo {
-                root: ZkHash::ZERO,
-                core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
-            }),
-            session_number: initial_session,
-        })
-        .await
-        .unwrap();
-    clock_sender2
-        .send(SlotTick {
-            epoch: 0.into(),
-            slot: 1.into(),
-        })
+        .send(test_blend_epoch_state(
+            0,
+            MembershipInfo {
+                membership: membership.clone(),
+                zk: Some(ZkInfo {
+                    root: ZkHash::ZERO,
+                    core_and_path_selectors: Some([(ZkHash::ZERO, false); CORE_MERKLE_TREE_HEIGHT]),
+                }),
+            },
+        ))
         .await
         .unwrap();
 
-    let mut epoch_handler2 = EpochHandler::new(
-        TestChainService,
-        settings.time.epoch_transition_period_in_slots,
-    );
     let (overwatch_handle2, _overwatch_cmd_receiver2, state_updater2, _state_receiver2) =
         dummy_overwatch_resources();
     let (sdp_relay2, _sdp_relay_receiver2) = sdp_relay();
 
-    // Build a saved state for a *different* session (session 99) with spent quota.
-    let stale_public_info = new_public_info(99, membership.clone(), &settings);
+    // Build a saved state for a *different* epoch (epoch 99) with spent quota.
+    let stale_public_info = new_epoch_info(99.into(), membership.clone(), &settings);
     let stale_token_collector =
-        SessionBlendingTokenCollector::new(&reward_session_info(&stale_public_info));
-    let stale_state =
-        ServiceState::with_session(99, stale_token_collector, None, state_updater2.clone())
-            .unwrap();
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&stale_public_info));
+    let stale_state = ServiceState::with_epoch(
+        99.into(),
+        stale_token_collector,
+        None,
+        state_updater2.clone(),
+    )
+    .unwrap();
     let mut updater = stale_state.start_updating();
     updater.consume_core_quota(42);
     let stale_state = updater.commit_changes();
 
     let (
-        _remaining_session_stream2,
-        _remaining_clock_stream2,
+        _remaining_epoch_stream2,
         _current_public_info2,
-        _current_epoch2,
         _crypto_processor2,
         recovered_checkpoint2,
         _message_scheduler2,
@@ -1737,7 +1614,6 @@ async fn test_initialize_recovers_matching_saved_state() {
         NodeId,
         TestBlendBackend,
         TestNetworkAdapter,
-        TestChainService,
         MockCoreAndLeaderProofsGenerator,
         MockProofsVerifier,
         MockKmsAdapter,
@@ -1745,8 +1621,6 @@ async fn test_initialize_recovers_matching_saved_state() {
     >(
         settings.clone(),
         membership_stream2,
-        clock_stream2,
-        &mut epoch_handler2,
         overwatch_handle2,
         MockKmsAdapter,
         &sdp_relay2,
@@ -1758,11 +1632,11 @@ async fn test_initialize_recovers_matching_saved_state() {
     assert_eq!(
         recovered_checkpoint2.spent_quota(),
         0,
-        "Mismatched session: spent_quota should be 0 for fresh state"
+        "Mismatched epoch: spent_quota should be 0 for fresh state"
     );
     assert_eq!(
-        recovered_checkpoint2.last_seen_session(),
-        initial_session,
-        "Mismatched session: should track the current session, not the stale one"
+        recovered_checkpoint2.last_seen_epoch(),
+        initial_epoch,
+        "Mismatched epoch: should track the current epoch, not the stale one"
     );
 }

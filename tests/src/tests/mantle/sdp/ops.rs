@@ -2,9 +2,14 @@ use std::{
     collections::{HashMap, HashSet},
     num::NonZero,
     path::PathBuf,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
+use lb_chain_service::Epoch;
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
@@ -13,14 +18,17 @@ use lb_core::{
         tx::{GasPrices, MantleTxGasContext},
         tx_builder::MantleTxBuilder,
     },
-    sdp::{Declaration, DeclarationMessage, Locator, ServiceType, WithdrawMessage},
+    sdp::{Declaration, DeclarationMessage, Locator, NumberOfEpochs, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
-use lb_node::config::RunConfig;
+use lb_node::config::{
+    RunConfig, blend::deployment::MinimumNetworkSize, cryptarchia::deployment::EpochConfig,
+};
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
     configs::wallet::{WalletAccount, WalletConfig},
 };
+use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
     common::{
         chain::wait_for_transactions_inclusion,
@@ -36,7 +44,7 @@ use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
 
-const LOCK_PERIOD: u64 = 3;
+const LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
 
 /// High-level SDP flow covered by this E2E:
 /// - submit a `Declare` transaction backed by an unused genesis note and wait
@@ -67,6 +75,8 @@ async fn sdp_ops_e2e() {
         spare_note_secret_key,
         spare_note_id,
         lock_period,
+        slots_per_epoch,
+        slot_duration,
     ) = start_sdp_manual_cluster("sdp-ops").await;
 
     let inclusion_timeout = Duration::from_mins(1);
@@ -152,21 +162,16 @@ async fn sdp_ops_e2e() {
     .await
     .expect("declaration should appear after submission");
 
-    let created_height = declaration_state.created;
-    let current_nonce = declaration_state.nonce;
-
-    wait_for_manual_cluster_height(
-        &node0,
-        created_height + lock_period + 1,
-        Duration::from_mins(2),
-    )
-    .await
-    .expect("consensus height should pass the SDP lock period");
+    // Wait until we're past the lock period
+    let wait_lock_period = (Epoch::new(1) + lock_period).into_inner() // +1 buffer
+        * u32::try_from(slots_per_epoch).unwrap()
+        * slot_duration;
+    sleep(wait_lock_period).await;
 
     let withdraw_message = WithdrawMessage {
         declaration_id,
         locked_note_id,
-        nonce: current_nonce + 1,
+        nonce: declaration_state.nonce + 1,
     };
 
     let (withdraw_mantle_tx, withdraw_signing_keys) = fund_sdp_transaction(
@@ -356,8 +361,12 @@ async fn start_sdp_manual_cluster(
     WalletAccount,
     ZkKey,
     NoteId,
+    NumberOfEpochs,
     u64,
+    Duration,
 ) {
+    let slots_per_epoch = Arc::new(AtomicU64::new(0));
+    let slot_duration = Arc::new(Mutex::new(Duration::ZERO));
     let funding_wallet =
         WalletAccount::deterministic(0, 2_000_000, false).expect("funding wallet should build");
 
@@ -384,7 +393,19 @@ async fn start_sdp_manual_cluster(
             "0",
             StartNodeOptions::default()
                 .with_persist_dir(node0_persist_dir)
-                .create_patch(|config| Ok::<_, DynError>(patch_sdp_manual_cluster_config(config))),
+                .create_patch({
+                    let slots_per_epoch = Arc::clone(&slots_per_epoch);
+                    let slot_duration = Arc::clone(&slot_duration);
+                    move |config| {
+                        let config = patch_sdp_manual_cluster_config(config);
+                        slots_per_epoch.store(
+                            config.deployment.cryptarchia.slots_per_epoch(),
+                            Ordering::Relaxed,
+                        );
+                        *slot_duration.lock().unwrap() = config.deployment.time.slot_duration;
+                        Ok::<_, DynError>(config)
+                    }
+                }),
         )
         .await
         .expect("starting node-0 should succeed");
@@ -439,6 +460,8 @@ async fn start_sdp_manual_cluster(
         spare_wallet.secret_key,
         spare_note_id,
         LOCK_PERIOD,
+        slots_per_epoch.load(Ordering::Relaxed),
+        *slot_duration.lock().unwrap(),
     )
 }
 
@@ -450,15 +473,37 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
         .service
         .bootstrap
         .prolonged_bootstrap_period = Duration::ZERO;
-    config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
-    config
+    config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
+    config.deployment.cryptarchia.slot_activation_coeff =
+        NonNegativeRatio::new(1, 2.try_into().unwrap());
+    config.deployment.cryptarchia.epoch_config = EpochConfig {
+        epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+        epoch_period_nonce_buffer: 1.try_into().unwrap(),
+        epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+    };
+    config.deployment.cryptarchia.learning_rate = 0.5.try_into().unwrap();
+
+    let service_params = config
         .deployment
         .cryptarchia
         .sdp_config
         .service_params
         .get_mut(&ServiceType::BlendNetwork)
-        .expect("blend network params should exist")
-        .lock_period = LOCK_PERIOD;
+        .expect("blend network params should exist");
+    service_params.lock_period = LOCK_PERIOD;
+    service_params.inactivity_period = 10.into();
+    service_params.retention_period = 10.into();
+
+    config.deployment.blend.common.num_blend_layers = 1.try_into().unwrap();
+    config.deployment.blend.common.minimum_network_size = MinimumNetworkSize::try_new(2).unwrap();
+    config
+        .deployment
+        .blend
+        .core
+        .scheduler
+        .delayer
+        .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+
     config
 }
 

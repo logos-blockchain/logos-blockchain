@@ -29,7 +29,7 @@ use crate::{
         fee_reserve::{DEFAULT_STORAGE_GAS_PRICE, ScenarioFeeFundingError},
         wallet::{
             TARGET,
-            best_node::{BestNodeInfo, sanitize_best_node_info},
+            best_node::{BestNodeInfo, sanitize_best_node_info_with_feed},
             sync::sync_available_utxos_for_user_wallets,
         },
         world::{CucumberWorld, WalletInfo, WalletType},
@@ -158,7 +158,8 @@ pub async fn wait_for_wallet_submitted_transactions_inclusion(
     wallet_name: &str,
     timeout: Duration,
 ) -> Result<(), StepError> {
-    let tx_hashes = world.wallets.submitted_tx_hashes_for(wallet_name).to_vec();
+    let tx_hashes =
+        world.with_wallets(|wallets| wallets.submitted_tx_hashes_for(wallet_name).to_vec())?;
     let wallet_node_name = world.resolve_wallet(wallet_name)?.node_name;
     let client = &world
         .nodes_info
@@ -188,8 +189,11 @@ pub async fn submit_prepared_user_wallet_transaction(
         })?;
     let tx_hash = signed_submission.tx_hash();
 
+    world.ensure_wallet_block_feed().await?;
+    let feed = world.wallet_block_feed()?;
     let (_, best_node_client, _) =
-        sanitize_best_node_info(world, &wallet.wallet_name, best_node_info).await?;
+        sanitize_best_node_info_with_feed(world, &wallet.wallet_name, best_node_info, Some(&feed))
+            .await?;
     world
         .submit_transaction(&wallet, signed_submission.signed_tx(), best_node_client)
         .await
@@ -197,7 +201,7 @@ pub async fn submit_prepared_user_wallet_transaction(
             warn!(target: TARGET, "Step `{}` error: {e}", step);
         })?;
 
-    record_wallet_submission(world, &wallet, &signed_submission);
+    record_wallet_submission(world, &wallet, &signed_submission)?;
     Ok(tx_hash)
 }
 
@@ -223,12 +227,12 @@ pub(crate) fn sign_prepared_user_wallet_transaction(
 pub(crate) fn record_signed_user_wallet_submission(
     world: &mut CucumberWorld,
     signed_submission: &SignedUserWalletSubmission,
-) {
+) -> Result<(), StepError> {
     record_wallet_submission(
         world,
         &signed_submission.wallet,
         &signed_submission.submission,
-    );
+    )
 }
 
 pub(crate) async fn prepare_user_wallet_transaction_submission(
@@ -337,7 +341,7 @@ fn record_wallet_submission(
     world: &mut CucumberWorld,
     wallet: &WalletInfo,
     signed_submission: &SignedWalletTransaction,
-) {
+) -> Result<(), StepError> {
     let wallet_name = wallet.wallet_name.as_str();
     let group_key = world
         .node_to_group
@@ -345,18 +349,22 @@ fn record_wallet_submission(
         .cloned()
         .unwrap_or_default();
     let reserved_inputs = signed_submission.reserved_inputs();
-    let recorded = world.wallets.record_wallet_reservation(
-        wallet_name.to_owned(),
-        signed_submission.tx_hash(),
-        reserved_inputs,
-        signed_submission.spent_fee(),
-    );
+    let recorded = world.with_wallets_mut(|wallets| {
+        wallets.record_wallet_reservation(
+            wallet_name.to_owned(),
+            signed_submission.tx_hash(),
+            reserved_inputs,
+            signed_submission.spent_fee(),
+        )
+    })?;
 
     world.fee_state.reserve_for_wallet(
         wallet_name.to_owned(),
         group_key,
         recorded.into_fee_sponsor_reserved_inputs(),
     );
+
+    Ok(())
 }
 
 fn scenario_fee_account_state(

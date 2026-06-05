@@ -3,7 +3,11 @@ use core::{
     time::Duration,
 };
 
-use lb_core::{block::genesis::GenesisBlock, sdp::ServiceType};
+use lb_core::{
+    block::genesis::GenesisBlock,
+    sdp::{NumberOfEpochs, ServiceType},
+};
+use lb_cryptarchia_engine::Epoch;
 use lb_libp2p::protocol_name::StreamProtocol;
 use lb_node::config::{
     blend::deployment::{
@@ -33,7 +37,6 @@ const DATA_REPLICATION_FACTOR: u64 = 0;
 
 const MINIMUM_MESSAGES_COEFFICIENT: u64 = 1;
 const BLEND_NORMALIZATION_CONSTANT: f64 = 1.03;
-const COVER_SAFETY_BUFFER_INTERVALS: u64 = 100;
 const COVER_MESSAGE_FREQUENCY_PER_ROUND: f64 = 1.0;
 const MAXIMUM_RELEASE_DELAY_IN_ROUNDS: u64 = 3;
 const ACTIVITY_THRESHOLD_SENSITIVITY: u64 = 1;
@@ -50,10 +53,10 @@ const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
 const EPOCH_PERIOD_NONCE_BUFFER: u8 = 3;
 const EPOCH_PERIOD_NONCE_STABILIZATION: u8 = 4;
 
-const SDP_LOCK_PERIOD: u64 = 10;
-const SDP_INACTIVITY_PERIOD: u64 = 1;
-const SDP_RETENTION_PERIOD: u64 = 1;
-const SDP_TIMESTAMP: u64 = 0;
+const SDP_LOCK_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(10));
+const SDP_INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
+const SDP_RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
+const SDP_EPOCH: Epoch = Epoch::new(0);
 const MIN_STAKE_THRESHOLD: u64 = 1;
 const MIN_STAKE_TIMESTAMP: u64 = 0;
 const LEARNING_RATE: f64 = 0.1;
@@ -89,7 +92,6 @@ pub fn e2e_deployment_settings_with_genesis_block(
                     .expect("Normalization constant cannot be negative."),
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {
-                        intervals_for_safety_buffer: COVER_SAFETY_BUFFER_INTERVALS,
                         message_frequency_per_round: NonNegativeF64::try_from(
                             COVER_MESSAGE_FREQUENCY_PER_ROUND,
                         )
@@ -133,7 +135,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                         lock_period: SDP_LOCK_PERIOD,
                         inactivity_period: SDP_INACTIVITY_PERIOD,
                         retention_period: SDP_RETENTION_PERIOD,
-                        timestamp: SDP_TIMESTAMP,
+                        epoch: SDP_EPOCH,
                     },
                 )]
                 .into(),

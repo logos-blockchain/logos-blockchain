@@ -1,30 +1,30 @@
 use core::fmt::{self, Debug, Formatter};
-use std::ops::{Add as _, Deref};
+use std::ops::Add as _;
 
-use lb_blend_crypto::blake2b512;
-use lb_core::{crypto::ZkHash, sdp::SessionNumber};
-use lb_groth16::fr_to_bytes;
+use lb_core::crypto::ZkHash;
+use lb_cryptarchia_engine::Epoch;
+use lb_groth16::{Fr, FrBytes, fr_to_bytes};
 use lb_utils::math::{F64Ge1, NonNegativeF64};
 use serde::{Deserialize, Serialize};
 
 use crate::reward::{BlendingToken, activity, token::HammingDistance};
 
-/// Session-specific information to compute an activity proof.
-pub struct SessionInfo {
-    pub(crate) session_number: SessionNumber,
-    pub(crate) session_randomness: SessionRandomness,
+/// Epoch-specific information to compute an activity proof.
+pub struct EpochInfo {
+    pub(crate) epoch: Epoch,
+    pub(crate) epoch_randomness: EpochRandomness,
     pub(crate) token_evaluation: BlendingTokenEvaluation,
 }
 
-impl SessionInfo {
+impl EpochInfo {
     pub fn new(
-        session_number: SessionNumber,
+        epoch: Epoch,
         pol_epoch_nonce: &ZkHash,
         num_core_nodes: u64,
         core_quota: u64,
         activity_threshold_sensitivity: u64,
     ) -> Result<Self, Error> {
-        let session_randomness = SessionRandomness::new(session_number, pol_epoch_nonce);
+        let epoch_randomness = (*pol_epoch_nonce).into();
         let token_evaluation = BlendingTokenEvaluation::new(
             core_quota,
             num_core_nodes,
@@ -32,19 +32,19 @@ impl SessionInfo {
         )?;
 
         Ok(Self {
-            session_number,
-            session_randomness,
+            epoch,
+            epoch_randomness,
             token_evaluation,
         })
     }
 
     #[must_use]
-    pub const fn session_randomness(&self) -> SessionRandomness {
-        self.session_randomness
+    pub const fn epoch_randomness(&self) -> EpochRandomness {
+        self.epoch_randomness
     }
 }
 
-/// Parameters to evaluate a blending token for a session.
+/// Parameters to evaluate a blending token for an epoch.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlendingTokenEvaluation {
     token_count_byte_len: u64,
@@ -71,15 +71,15 @@ impl BlendingTokenEvaluation {
     }
 
     /// Calculate the Hamming distance of the given blending token to the next
-    /// session randomness, and return it only if it is not larger than the
+    /// epoch randomness, and return it only if it is not larger than the
     /// activity threshold.
     #[must_use]
     pub fn evaluate(
         &self,
         token: &BlendingToken,
-        next_session_randomness: SessionRandomness,
+        next_epoch_randomness: EpochRandomness,
     ) -> Option<HammingDistance> {
-        let distance = token.hamming_distance(self.token_count_byte_len, next_session_randomness);
+        let distance = token.hamming_distance(self.token_count_byte_len, next_epoch_randomness);
         tracing::trace!(
             "Evaluated blending token {:?} for activity proof. Calculated Hamming distance = {distance:?}",
             token.signing_key()
@@ -93,42 +93,26 @@ impl BlendingTokenEvaluation {
     }
 }
 
-/// Deterministic unbiased randomness for a session.
+/// Deterministic unbiased randomness for an epoch.
 #[derive(Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionRandomness(#[serde(with = "serde_big_array::BigArray")] [u8; 64]);
+pub struct EpochRandomness(#[serde(with = "lb_groth16::serde::serde_fr")] Fr);
 
-impl Debug for SessionRandomness {
+impl Debug for EpochRandomness {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "SessionRandomness({})", hex::encode(self.0))
+        write!(f, "EpochRandomness({})", hex::encode(self.as_bytes()))
     }
 }
 
-impl Deref for SessionRandomness {
-    type Target = [u8];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl From<Fr> for EpochRandomness {
+    fn from(value: Fr) -> Self {
+        Self(value)
     }
 }
 
-impl From<[u8; 64]> for SessionRandomness {
-    fn from(bytes: [u8; 64]) -> Self {
-        Self(bytes)
-    }
-}
-
-const SESSION_RANDOMNESS_TAG: [u8; 27] = *b"BLEND_SESSION_RANDOMNESS_V1";
-
-impl SessionRandomness {
-    /// Derive the session randomness from the given session number and epoch
-    /// nonce.
+impl EpochRandomness {
     #[must_use]
-    pub fn new(session_number: SessionNumber, epoch_nonce: &ZkHash) -> Self {
-        Self(blake2b512(&[
-            &SESSION_RANDOMNESS_TAG,
-            &fr_to_bytes(epoch_nonce),
-            &session_number.to_le_bytes(),
-        ]))
+    pub fn as_bytes(&self) -> FrBytes {
+        fr_to_bytes(&self.0)
     }
 }
 
@@ -141,7 +125,7 @@ pub enum Error {
 }
 
 /// The number of bits that can represent the maximum number of blending
-/// tokens generated during a single session.
+/// tokens generated during a single epoch.
 pub fn token_count_bit_len(core_quota: u64, num_core_nodes: u64) -> Result<u64, Error> {
     let total_core_quota = core_quota
         .checked_mul(num_core_nodes)
@@ -179,6 +163,7 @@ pub fn activity_threshold(
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_groth16::Field as _;
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
@@ -231,17 +216,17 @@ mod tests {
                 VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
                 VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             ),
-            SessionRandomness::from([0; 64]),
+            EpochRandomness::from(Fr::ZERO),
         );
         assert_eq!(maybe_distance, Some(8.into()));
 
         let maybe_distance = evaluation.evaluate(
             &BlendingToken::new(
-                Ed25519Key::from_bytes(&[1; _]).public_key(),
-                VerifiedProofOfQuota::from_bytes_unchecked([1; _]),
-                VerifiedProofOfSelection::from_bytes_unchecked([1; _]),
+                Ed25519Key::from_bytes(&[0; _]).public_key(),
+                VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
+                VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             ),
-            SessionRandomness::from([0; 64]),
+            EpochRandomness::from(ZkHash::from(100)),
         );
         assert_eq!(maybe_distance, None);
     }

@@ -1,16 +1,12 @@
 use core::time::Duration;
 
 use lb_blend::{
-    message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    proofs::quota::inputs::prove::{
-        private::ProofOfLeadershipQuotaInputs,
-        public::{CoreInputs, LeaderInputs},
-    },
+    proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
+    scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
-use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
+use lb_core::crypto::ZkHash;
 use lb_groth16::{Field as _, Fr};
-use lb_time_service::SlotTick;
 use tokio::time::sleep;
 
 use crate::{
@@ -20,9 +16,9 @@ use crate::{
             MockLeaderProofsGenerator, NodeId, TestBackend, overwatch_handle, settings, spawn_run,
         },
     },
-    epoch_info::{EpochHandler, PolEpochInfo},
-    membership::MembershipInfo,
-    test_utils::{epoch::TestChainService, membership::membership},
+    epoch_info::PolEpochInfo,
+    membership::chain::BlendEpochState,
+    test_utils::membership::membership,
 };
 
 pub mod utils;
@@ -30,11 +26,11 @@ pub mod utils;
 /// [`run`] forwards messages to the core nodes in the updated membership.
 #[test_log::test(tokio::test)]
 #[ignore = "We need a different test setup since we are not blocking the edge tokio task until the secret PoL info is fetched, which makes this test flaky."]
-async fn run_with_session_transition() {
+async fn run_with_epoch_transition() {
     let local_node = NodeId(99);
     let mut core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (_, session_sender, msg_sender, mut node_id_receiver) = spawn_run(
+    let (_, epoch_sender, msg_sender, mut node_id_receiver) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
@@ -48,9 +44,9 @@ async fn run_with_session_transition() {
         core_node
     );
 
-    // Send a new session with another core node 1.
+    // Send a new epoch with another core node 1.
     core_node = NodeId(1);
-    session_sender
+    epoch_sender
         .send(membership(&[core_node], local_node))
         .await
         .expect("channel opened");
@@ -71,15 +67,15 @@ async fn run_shuts_down_if_new_membership_is_small() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (join_handle, session_sender, _, _) = spawn_run(
+    let (join_handle, epoch_sender, _, _) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
     )
     .await;
 
-    // Send a new session with an empty membership (smaller than the min size).
-    session_sender
+    // Send a new epoch with an empty membership (smaller than the min size).
+    epoch_sender
         .send(membership(&[], local_node))
         .await
         .expect("channel opened");
@@ -92,15 +88,15 @@ async fn run_fails_if_local_is_core_in_new_membership() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let minimal_network_size = 1;
-    let (join_handle, session_sender, _, _) = spawn_run(
+    let (join_handle, epoch_sender, _, _) = spawn_run(
         local_node,
         minimal_network_size,
         Some(membership(&[core_node], local_node)),
     )
     .await;
 
-    // Send a new session with a membership where the local node is core.
-    session_sender
+    // Send a new epoch with a membership where the local node is core.
+    epoch_sender
         .send(membership(&[local_node], local_node))
         .await
         .expect("channel opened");
@@ -113,14 +109,6 @@ async fn run_fails_if_local_is_core_in_new_membership() {
 fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
     PolEpochInfo {
         epoch,
-        poq_public_inputs: LeaderPublic {
-            slot: 1,
-            latest_root: Fr::ZERO,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ZERO,
-            epoch_nonce: ZkHash::ZERO,
-            aged_root: ZkHash::ZERO,
-        },
         poq_private_inputs: ProofOfLeadershipQuotaInputs {
             slot: 1,
             note_value: 1,
@@ -132,206 +120,197 @@ fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
     }
 }
 
-fn poq_verification_inputs() -> PoQVerificationInputsMinusSigningKey {
-    PoQVerificationInputsMinusSigningKey {
-        leader: LeaderInputs {
-            pol_ledger_aged: ZkHash::ZERO,
-            pol_epoch_nonce: ZkHash::ZERO,
-            message_quota: 10,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ZERO,
-        },
-        core: CoreInputs {
-            quota: 1,
-            zk_root: Fr::ZERO,
-        },
-        session: 1,
-    }
-}
-
-/// `handle_clock_event` shuts down the message handler when a new epoch is
-/// detected ahead of the current handler's epoch.
-#[test_log::test(tokio::test)]
-async fn handle_clock_event_new_epoch_shuts_down_handler() {
-    let local_node = NodeId(99);
-    let core_node = NodeId(0);
-    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
-
-    let edge_membership = membership(&[core_node], local_node);
-    let pol_info = test_pol_epoch_info(Epoch::new(1));
-
-    let handler = super::handlers::MessageHandler::<
-        TestBackend,
-        NodeId,
-        MockLeaderProofsGenerator,
-        usize,
-    >::try_new_with_edge_condition_check(
-        settings(local_node, 1, node_id_sender),
-        edge_membership,
-        poq_verification_inputs(),
-        pol_info.poq_private_inputs.clone(),
-        overwatch_handle(),
-        Epoch::new(1),
-    )
-    .unwrap();
-
-    let mut handler_state = Some((pol_info, handler));
-
-    // Create an EpochHandler and initialize it with an epoch-1 tick.
-    let mut epoch_handler = EpochHandler::new(TestChainService, 1.try_into().unwrap());
-    super::handle_clock_event::<TestBackend, NodeId, MockLeaderProofsGenerator, _, _>(
-        SlotTick {
-            epoch: Epoch::new(1),
-            slot: 1.into(),
-        },
-        &mut epoch_handler,
-        &mut handler_state,
-    )
-    .await;
-    // After the first tick (matching handler's epoch), handler should still be up.
-    assert!(
-        handler_state.is_some(),
-        "Handler should remain active for a tick within the same epoch"
-    );
-
-    // Send a tick for epoch 2, which is ahead of the handler's epoch (1).
-    super::handle_clock_event::<TestBackend, NodeId, MockLeaderProofsGenerator, _, _>(
-        SlotTick {
-            epoch: Epoch::new(2),
-            slot: 2.into(),
-        },
-        &mut epoch_handler,
-        &mut handler_state,
-    )
-    .await;
-    // The handler should be shut down because epoch 2 > handler's epoch 1.
-    assert!(
-        handler_state.is_none(),
-        "Handler should be shut down when clock tick reveals a newer epoch"
-    );
-}
-
-/// `handle_new_secret_epoch_info` creates a new message handler with the
-/// provided epoch's public and private inputs.
+/// `handle_new_epoch_event` creates a new message handler with the provided
+/// epoch's public and private inputs, and replaces it on the next epoch.
 #[test_log::test(tokio::test)]
 async fn handle_new_secret_epoch_info_recreates_handler() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
 
-    let edge_membership = membership(&[core_node], local_node);
-    let membership_info = MembershipInfo::from_membership_and_session_number(edge_membership, 1);
-
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
 
-    // Start with no handler (e.g. after an epoch transition shut it down).
-    let mut handler_state: Option<(
-        PolEpochInfo,
+    let mut handler_state: Option<
         super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
-    )> = None;
+    > = None;
 
-    // Provide secret PoL info for epoch 2.
-    let new_pol_info = test_pol_epoch_info(Epoch::new(2));
-    super::handle_new_secret_epoch_info(
-        &new_pol_info,
-        settings.clone(),
-        &overwatch,
-        &membership_info,
+    // Public + secret for epoch 2 -> handler is created.
+    let public_2 = test_blend_epoch_state(Epoch::new(2), membership(&[core_node], local_node));
+    let secret_2 = test_pol_epoch_info(Epoch::new(2));
+    super::handle_new_epoch_event(
+        &public_2,
+        Some(&secret_2),
         &mut handler_state,
-    );
+        settings.clone(),
+        overwatch.clone(),
+    )
+    .unwrap();
     assert!(
         handler_state.is_some(),
-        "Handler should be created after secret PoL info is provided"
+        "Handler should be created when public and secret info for the same epoch are present"
     );
-    assert_eq!(handler_state.as_ref().unwrap().0.epoch, Epoch::new(2));
+    assert_eq!(handler_state.as_ref().unwrap().epoch(), Epoch::new(2));
 
-    // Provide secret PoL info for epoch 3 - handler should be replaced.
-    let newer_pol_info = test_pol_epoch_info(Epoch::new(3));
-    super::handle_new_secret_epoch_info(
-        &newer_pol_info,
-        settings,
-        &overwatch,
-        &membership_info,
+    // Public + secret for epoch 3 -> handler is replaced.
+    let public_3 = test_blend_epoch_state(Epoch::new(3), membership(&[core_node], local_node));
+    let secret_3 = test_pol_epoch_info(Epoch::new(3));
+    super::handle_new_epoch_event(
+        &public_3,
+        Some(&secret_3),
         &mut handler_state,
-    );
+        settings,
+        overwatch,
+    )
+    .unwrap();
     assert!(handler_state.is_some());
-    assert_eq!(handler_state.as_ref().unwrap().0.epoch, Epoch::new(3));
+    assert_eq!(handler_state.as_ref().unwrap().epoch(), Epoch::new(3));
 }
 
-/// Full epoch lifecycle: handler active → clock advances epoch → handler shut
-/// down → new secret `PoL` info → handler recreated.
+fn test_blend_epoch_state(epoch: Epoch, membership: Membership<NodeId>) -> BlendEpochState<NodeId> {
+    BlendEpochState {
+        epoch,
+        nonce: Fr::ZERO,
+        aged: Fr::ZERO,
+        lottery_0: Fr::ZERO,
+        lottery_1: Fr::ZERO,
+        membership_info: membership.into(),
+    }
+}
+
+/// Two consecutive public epoch infos with no private in between (e.g. the
+/// node had no winning slot in the first epoch). The handler must stay down
+/// as long as no secret `PoL` info is available.
 #[test_log::test(tokio::test)]
-async fn epoch_transition_full_lifecycle() {
+async fn two_publics_without_private_in_between() {
     let local_node = NodeId(99);
     let core_node = NodeId(0);
     let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
 
-    let edge_membership = membership(&[core_node], local_node);
-    let membership_info =
-        MembershipInfo::from_membership_and_session_number(edge_membership.clone(), 1);
     let settings = settings(local_node, 1, node_id_sender);
     let overwatch = overwatch_handle();
 
-    // Start with handler active at epoch 1.
-    let pol_info = test_pol_epoch_info(Epoch::new(1));
-    let handler = super::handlers::MessageHandler::<
-        TestBackend,
-        NodeId,
-        MockLeaderProofsGenerator,
-        usize,
-    >::try_new_with_edge_condition_check(
+    let mut handler_state: Option<
+        super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
+    > = None;
+
+    // First public, no secret yet -> handler must stay down.
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
+        None,
+        &mut handler_state,
         settings.clone(),
-        edge_membership,
-        poq_verification_inputs(),
-        pol_info.poq_private_inputs.clone(),
         overwatch.clone(),
-        Epoch::new(1),
     )
     .unwrap();
-    let mut handler_state = Some((pol_info, handler));
-
-    let mut epoch_handler = EpochHandler::new(TestChainService, 1.try_into().unwrap());
-
-    // Initialize epoch handler with epoch-1 tick.
-    super::handle_clock_event::<TestBackend, NodeId, MockLeaderProofsGenerator, _, _>(
-        SlotTick {
-            epoch: Epoch::new(1),
-            slot: 1.into(),
-        },
-        &mut epoch_handler,
-        &mut handler_state,
-    )
-    .await;
-    assert!(handler_state.is_some());
-
-    // Clock advances to epoch 2 - handler shut down.
-    super::handle_clock_event::<TestBackend, NodeId, MockLeaderProofsGenerator, _, _>(
-        SlotTick {
-            epoch: Epoch::new(2),
-            slot: 2.into(),
-        },
-        &mut epoch_handler,
-        &mut handler_state,
-    )
-    .await;
     assert!(
         handler_state.is_none(),
-        "Handler should be shut down on epoch advance"
+        "Handler must not be created without the private info"
     );
 
-    // Secret PoL info arrives for epoch 2 - handler recreated.
-    let new_pol_info = test_pol_epoch_info(Epoch::new(2));
-    super::handle_new_secret_epoch_info(
-        &new_pol_info,
-        settings,
-        &overwatch,
-        &membership_info,
+    // Second public for a later epoch, still no secret -> handler stays down.
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(2), membership(&[core_node], local_node)),
+        None,
         &mut handler_state,
-    );
+        settings,
+        overwatch,
+    )
+    .unwrap();
     assert!(
-        handler_state.is_some(),
-        "Handler should be recreated after secret PoL info"
+        handler_state.is_none(),
+        "Handler must remain down: no private info has been received"
     );
-    assert_eq!(handler_state.as_ref().unwrap().0.epoch, Epoch::new(2));
+}
+
+/// Public arrives first, then private for the same epoch: handler is created
+/// on the second call once both sides line up on the same epoch.
+#[test_log::test(tokio::test)]
+async fn public_then_private_same_epoch_creates_handler() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+
+    let settings = settings(local_node, 1, node_id_sender);
+    let overwatch = overwatch_handle();
+
+    let mut handler_state: Option<
+        super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
+    > = None;
+
+    let public_1 = test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node));
+
+    // Public for epoch 1, no secret yet -> no handler.
+    super::handle_new_epoch_event(
+        &public_1,
+        None,
+        &mut handler_state,
+        settings.clone(),
+        overwatch.clone(),
+    )
+    .unwrap();
+    assert!(handler_state.is_none());
+
+    // Secret for epoch 1 arrives, same public -> handler is created.
+    super::handle_new_epoch_event(
+        &public_1,
+        Some(&test_pol_epoch_info(Epoch::new(1))),
+        &mut handler_state,
+        settings,
+        overwatch,
+    )
+    .unwrap();
+    assert_eq!(
+        handler_state
+            .as_ref()
+            .expect("Handler must be created")
+            .epoch(),
+        Epoch::new(1)
+    );
+}
+
+/// Secret arrives for an epoch ahead of the current public (mismatch), then
+/// public catches up to the same epoch: handler is created on the match.
+#[test_log::test(tokio::test)]
+async fn private_then_public_same_epoch_creates_handler() {
+    let local_node = NodeId(99);
+    let core_node = NodeId(0);
+    let (node_id_sender, _node_id_receiver) = tokio::sync::mpsc::channel(1);
+
+    let settings = settings(local_node, 1, node_id_sender);
+    let overwatch = overwatch_handle();
+
+    let mut handler_state: Option<
+        super::handlers::MessageHandler<TestBackend, NodeId, MockLeaderProofsGenerator, usize>,
+    > = None;
+
+    // Secret for epoch 1 while public is still on epoch 0 -> epochs mismatch,
+    // no handler.
+    let secret_1 = test_pol_epoch_info(Epoch::new(1));
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(0), membership(&[core_node], local_node)),
+        Some(&secret_1),
+        &mut handler_state,
+        settings.clone(),
+        overwatch.clone(),
+    )
+    .unwrap();
+    assert!(handler_state.is_none());
+
+    // Public catches up to epoch 1 -> handler is created.
+    super::handle_new_epoch_event(
+        &test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
+        Some(&secret_1),
+        &mut handler_state,
+        settings,
+        overwatch,
+    )
+    .unwrap();
+    assert_eq!(
+        handler_state
+            .as_ref()
+            .expect("Handler must be created")
+            .epoch(),
+        Epoch::new(1)
+    );
 }

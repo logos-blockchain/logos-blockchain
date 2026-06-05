@@ -9,23 +9,23 @@ use rand::SeedableRng as _;
 use tokio_stream::iter;
 
 use crate::{
-    cover_traffic::SessionCoverTraffic,
+    cover_traffic::EpochCoverTraffic,
     message_scheduler::{
-        SessionMessageScheduler,
+        EpochMessageScheduler,
         round_info::{Round, RoundInfo, RoundReleaseType},
     },
-    release_delayer::SessionProcessedMessageDelayer,
+    release_delayer::EpochProcessedMessageDelayer,
 };
 
 #[tokio::test]
 async fn no_substream_ready_and_no_data_messages() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
-    let mut scheduler = SessionMessageScheduler::<_, (), ()>::with_test_values(
+    let mut scheduler = EpochMessageScheduler::<_, (), ()>::with_test_values(
         // No cover messages to emit, tick will yield round `0`.
-        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
         // Round `1` scheduled, tick will yield round `0`.
-        SessionProcessedMessageDelayer::with_test_values(
+        EpochProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
             1u128.into(),
             rng,
@@ -47,11 +47,11 @@ async fn no_substream_ready_and_no_data_messages() {
 async fn no_substream_ready_with_data_messages() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
-    let mut scheduler = SessionMessageScheduler::<_, (), u32>::with_test_values(
+    let mut scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
         // No cover messages to emit, tick will yield round `0`.
-        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
         // Round `1` scheduled, tick will yield round `0`.
-        SessionProcessedMessageDelayer::with_test_values(
+        EpochProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
             1u128.into(),
             rng,
@@ -81,11 +81,11 @@ async fn no_substream_ready_with_data_messages() {
 async fn cover_traffic_substream_ready() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
-    let mut scheduler = SessionMessageScheduler::<_, (), u32>::with_test_values(
+    let mut scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
         // 1 cover message over 1 round: guaranteed emission.
-        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 1, 1.into(), rng.clone(), 0),
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 1, 1.into(), rng.clone(), 0),
         // Round `1` scheduled, tick will yield round `0`.
-        SessionProcessedMessageDelayer::with_test_values(
+        EpochProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
             1u128.into(),
             rng,
@@ -112,11 +112,11 @@ async fn cover_traffic_substream_ready() {
 async fn release_delayer_substream_ready() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
-    let mut scheduler = SessionMessageScheduler::<_, u32, u32>::with_test_values(
+    let mut scheduler = EpochMessageScheduler::<_, u32, u32>::with_test_values(
         // No cover messages to emit.
-        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
         // Round `0` scheduled, tick will yield round `0`.
-        SessionProcessedMessageDelayer::with_test_values(
+        EpochProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
             0u128.into(),
             rng,
@@ -143,11 +143,11 @@ async fn release_delayer_substream_ready() {
 async fn both_substreams_ready() {
     let rng = BlakeRng::from_entropy();
     let rounds = [Round::from(0)];
-    let mut scheduler = SessionMessageScheduler::<_, u32, ()>::with_test_values(
+    let mut scheduler = EpochMessageScheduler::<_, u32, ()>::with_test_values(
         // 1 cover message over 1 round: guaranteed emission.
-        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 1, 1.into(), rng.clone(), 0),
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 1, 1.into(), rng.clone(), 0),
         // Round `0` scheduled, tick will yield round `0`.
-        SessionProcessedMessageDelayer::with_test_values(
+        EpochProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
             0u128.into(),
             rng,
@@ -180,13 +180,13 @@ async fn round_change() {
         Round::from(2),
         Round::from(3),
     ];
-    let mut scheduler = SessionMessageScheduler::<_, (), u32>::with_test_values(
+    let mut scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
         // 2 cover messages over 2 remaining rounds: every round is guaranteed to be a
         // release round. After the first emission, a data message will cause the second
         // release to be skipped (threshold = 1/1 = 1.0).
-        SessionCoverTraffic::with_test_values(Box::new(iter(rounds)), 2, 2.into(), rng.clone(), 0),
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 2, 2.into(), rng.clone(), 0),
         // Round `3` scheduled, tick will yield rounds `0` through `3`.
-        SessionProcessedMessageDelayer::with_test_values(
+        EpochProcessedMessageDelayer::with_test_values(
             NonZeroU64::try_from(1).unwrap(),
             3u128.into(),
             rng,

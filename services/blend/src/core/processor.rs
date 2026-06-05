@@ -23,8 +23,8 @@ use lb_blend::{
         membership::Membership,
         message_blend::{
             crypto::{
-                SessionCryptographicProcessorSettings,
-                core_and_leader::send_and_receive::SessionCryptographicProcessor,
+                EpochCryptographicProcessorSettings,
+                core_and_leader::send_and_receive::EpochCryptographicProcessor,
             },
             provers::core_and_leader::CoreAndLeaderProofsGenerator,
         },
@@ -33,8 +33,16 @@ use lb_blend::{
 use lb_chain_service::Epoch;
 
 pub struct CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>(
-    SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
+    EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>,
 );
+
+impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+    CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
+{
+    pub const fn epoch(&self) -> Epoch {
+        self.0.epoch()
+    }
+}
 
 impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
     CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
@@ -45,7 +53,7 @@ where
     pub fn try_new_with_core_condition_check(
         membership: Membership<NodeId>,
         minimum_network_size: NonZeroU64,
-        settings: SessionCryptographicProcessorSettings,
+        settings: EpochCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
         epoch: Epoch,
@@ -70,12 +78,12 @@ where
 
     fn new(
         membership: Membership<NodeId>,
-        settings: SessionCryptographicProcessorSettings,
+        settings: EpochCryptographicProcessorSettings,
         public_info: PoQVerificationInputsMinusSigningKey,
         core_proof_of_quota_generator: CorePoQGenerator,
         epoch: Epoch,
     ) -> Self {
-        Self(SessionCryptographicProcessor::new(
+        Self(EpochCryptographicProcessor::new(
             settings,
             membership,
             public_info,
@@ -148,13 +156,13 @@ where
     }
 
     /// Semantically similar to the underlying
-    /// [`SessionCryptographicProcessor::decapsulate_message`], but it does not
+    /// [`EpochCryptographicProcessor::decapsulate_message`], but it does not
     /// stop after decapsulating the outermost layer. It stops only when a layer
     /// cannot be decapsulated or when the decapsulation is completed.
     ///
     /// If no layer (`Err`) or at most one layer (`Ok`) can be decapsulated,
     /// this is semantically equivalent to
-    /// calling [`SessionCryptographicProcessor::decapsulate_message`].
+    /// calling [`EpochCryptographicProcessor::decapsulate_message`].
     ///
     /// If more than a single layer can be decapsulated, then the decapsulation
     /// happens recursively until the first layer that cannot be decapsulated is
@@ -224,7 +232,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> Deref
     for CoreCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>
 {
     type Target =
-        SessionCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>;
+        EpochCryptographicProcessor<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -267,7 +275,7 @@ mod tests {
             },
             selection::{self, VerifiedProofOfSelection},
         },
-        scheduling::message_blend::crypto::SessionCryptographicProcessorSettings,
+        scheduling::message_blend::crypto::EpochCryptographicProcessorSettings,
     };
     use lb_chain_service::Epoch;
     use lb_core::crypto::ZkHash;
@@ -286,7 +294,6 @@ mod tests {
         use lb_groth16::Field as _;
 
         PoQVerificationInputsMinusSigningKey {
-            session: 1,
             core: CoreInputs {
                 quota: 1,
                 zk_root: ZkHash::ZERO,
@@ -514,8 +521,8 @@ mod tests {
         .unwrap()
     }
 
-    fn settings(local_id: NodeId) -> SessionCryptographicProcessorSettings {
-        SessionCryptographicProcessorSettings {
+    fn settings(local_id: NodeId) -> EpochCryptographicProcessorSettings {
+        EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: key(local_id).0.derive_x25519(),
             num_blend_layers: NonZeroU64::new(1).unwrap(),
         }

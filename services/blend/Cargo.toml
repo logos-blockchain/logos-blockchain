@@ -18,7 +18,6 @@ fork_stream                      = { workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
 lb-blend                         = { workspace = true }
-lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }

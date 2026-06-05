@@ -2,10 +2,7 @@ use lb_common_http_client::{ApiBlock, Error as HttpClientError};
 use lb_core::header::HeaderId;
 use lb_testing_framework::NodeHttpClient;
 
-/// Source of blocks for wallet chain sync.
-///
-/// Today this is backed by node HTTP calls. Keeping the sync code behind this
-/// small boundary also lets tests later feed blocks from a live block stream.
+/// Source of blocks for building wallet chain state outside the feed.
 pub trait WalletChainSource {
     type Error;
 

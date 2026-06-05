@@ -5,7 +5,7 @@ use thiserror::Error;
 
 use super::{
     NodeHttpWalletChainSource, WalletChainSource, WalletId, WalletUtxos,
-    chain::scan::{WalletChainScanner, WalletScanRequest, WalletSyncRequestError},
+    chain::state::{TrackedWalletKeys, TrackedWalletKeysError, WalletChainState},
 };
 use crate::common::wallet::WalletFundingSource;
 
@@ -19,10 +19,10 @@ pub enum DirectWalletSourceError {
 
 #[derive(Debug, Error)]
 pub enum WalletFundingSourceFromChainError<FetchError> {
-    #[error("wallet source scan did not return wallet `{wallet_id}`")]
+    #[error("wallet source sync did not return wallet `{wallet_id}`")]
     MissingWallet { wallet_id: WalletId },
     #[error(transparent)]
-    Request(#[from] WalletSyncRequestError),
+    TrackedKeys(#[from] TrackedWalletKeysError),
     #[error(transparent)]
     FetchBlock(FetchError),
 }
@@ -47,9 +47,9 @@ where
     BlockSource: WalletChainSource,
 {
     let wallet_id = WalletId::from(account.label.clone());
-    let request = WalletScanRequest::new(wallet_id.clone(), [account.public_key()]);
+    let tracked_wallet = TrackedWalletKeys::new(wallet_id.clone(), [account.public_key()]);
 
-    let wallet_utxos = scan_wallet_utxos_from_chain(source, &[request], genesis_utxos).await?;
+    let wallet_utxos = wallet_utxos_from_chain(source, &[tracked_wallet], genesis_utxos).await?;
     let available_utxos = wallet_utxos
         .get(wallet_id.as_str())
         .cloned()
@@ -58,15 +58,15 @@ where
     Ok(WalletFundingSource::new(account, available_utxos))
 }
 
-async fn scan_wallet_utxos_from_chain<BlockSource>(
+pub async fn wallet_utxos_from_chain<BlockSource>(
     source: &mut BlockSource,
-    requests: &[WalletScanRequest],
+    tracked_wallets: &[TrackedWalletKeys],
     genesis_utxos: &[Utxo],
 ) -> Result<WalletUtxos, WalletFundingSourceFromChainError<BlockSource::Error>>
 where
     BlockSource: WalletChainSource,
 {
-    let mut scanner = WalletChainScanner::from_requests(requests)?;
+    let mut chain_state = WalletChainState::from_tracked_wallets(tracked_wallets)?;
     let mut tail_blocks = Vec::new();
     let mut current = source.tip();
 
@@ -75,14 +75,14 @@ where
         tail_blocks.push(block);
     }
 
-    scanner.seed_genesis_utxos(genesis_utxos);
+    chain_state.seed_genesis_utxos(genesis_utxos);
     tail_blocks.reverse();
 
     for block in tail_blocks {
-        scan_block_transactions(&mut scanner, &block);
+        apply_block_transactions(&mut chain_state, &block);
     }
 
-    Ok(scanner.into_wallet_utxos())
+    Ok(chain_state.into_wallet_utxos())
 }
 
 async fn fetch_block<BlockSource>(
@@ -98,8 +98,8 @@ where
         .map_err(WalletFundingSourceFromChainError::FetchBlock)
 }
 
-fn scan_block_transactions(scanner: &mut WalletChainScanner, block: &ApiBlock) {
+fn apply_block_transactions(chain_state: &mut WalletChainState, block: &ApiBlock) {
     for tx in &block.transactions {
-        scanner.scan_transaction(tx);
+        chain_state.apply_transaction(tx);
     }
 }

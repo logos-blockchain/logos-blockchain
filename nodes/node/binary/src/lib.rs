@@ -9,12 +9,9 @@ pub mod global_allocators;
 use std::panic::set_hook;
 
 use color_eyre::eyre::{Result, eyre};
-pub use lb_blend_service::{
-    core::{
-        backends::libp2p::Libp2pBlendBackend as BlendBackend,
-        network::libp2p::Libp2pAdapter as BlendNetworkAdapter,
-    },
-    membership::service::Adapter as BlendMembershipAdapter,
+pub use lb_blend_service::core::{
+    backends::libp2p::Libp2pBlendBackend as BlendBackend,
+    network::libp2p::Libp2pAdapter as BlendNetworkAdapter,
 };
 pub use lb_core::{
     codec,

@@ -78,7 +78,6 @@ impl ServiceState for CryptarchiaConsensusState {
                     &settings.config,
                     genesis_tx.cryptarchia_parameter().epoch_nonce,
                 )?;
-                // TODO: store genesis block and events to DB: https://github.com/logos-blockchain/logos-blockchain/issues/2747
                 (lib_id, lib_id, ledger)
             }
             StartingState::Lib {
@@ -132,30 +131,33 @@ mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
         );
+        let epoch_config = lb_cryptarchia_engine::EpochConfig {
+            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+            epoch_period_nonce_buffer: 1.try_into().unwrap(),
+            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+        };
+        let epoch_length =
+            epoch_config.epoch_length(cryptarchia_engine_config.base_period_length());
+
         let ledger_config = lb_ledger::Config {
-            epoch_config: lb_cryptarchia_engine::EpochConfig {
-                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-                epoch_period_nonce_buffer: 1.try_into().unwrap(),
-                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-            },
+            epoch_config,
             consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            lock_period: 10,
-                            inactivity_period: 20,
-                            retention_period: 100,
-                            timestamp: 0,
-                            session_duration: 10,
+                            lock_period: 10.into(),
+                            inactivity_period: 20.into(),
+                            retention_period: 100.into(),
+                            epoch: 0.into(),
                         },
                     )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
-                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -256,36 +258,40 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "Test function")]
     fn restore_preserves_info() {
         let genesis_header_id: HeaderId = [0; 32].into();
+
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
         );
+        let epoch_config = lb_cryptarchia_engine::EpochConfig {
+            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+            epoch_period_nonce_buffer: 1.try_into().unwrap(),
+            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+        };
+        let epoch_length =
+            epoch_config.epoch_length(cryptarchia_engine_config.base_period_length());
+
         let ledger_config = lb_ledger::Config {
-            epoch_config: lb_cryptarchia_engine::EpochConfig {
-                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-                epoch_period_nonce_buffer: 1.try_into().unwrap(),
-                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-            },
+            epoch_config,
             consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            lock_period: 10,
-                            inactivity_period: 20,
-                            retention_period: 100,
-                            timestamp: 0,
-                            session_duration: 10,
+                            lock_period: 10.into(),
+                            inactivity_period: 20.into(),
+                            retention_period: 100.into(),
+                            epoch: 0.into(),
                         },
                     )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
-                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),

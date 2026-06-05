@@ -7,18 +7,15 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    num::NonZero,
-    path::{Path, PathBuf},
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 
 use futures::StreamExt as _;
 use lb_common_http_client::{CommonHttpClient, Slot};
-use lb_config::consensus::{ProviderInfo, create_genesis_block_with_declarations};
 use lb_core::{
     mantle::{
-        GenesisTx as _, MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
+        MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
         ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
@@ -31,58 +28,39 @@ use lb_core::{
         },
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
-    sdp::{Locator, ServiceType},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
     wallet::sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
 };
-use lb_key_management_system_service::keys::{
-    Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey as _,
-};
-use lb_node::{SignedMantleTx, config::RunConfig};
-use lb_testing_framework::{
-    DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
-    internal::DeploymentPlan,
-};
-use lb_utils::{bounded_vec::BoundedError, math::NonNegativeRatio};
+use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
+use lb_node::SignedMantleTx;
+use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
     ZoneMessage,
     adapter::NodeHttpClient as ZoneNodeHttpClient,
     indexer::ZoneIndexer,
     sequencer::{
-        Event, InscriptionId, OrphanedTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
-        SequencerConfig, SequencerHandle, TurnNotification, WithdrawArg, ZoneSequencer,
+        Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx, PublishResult, PublishedTx,
+        SequencerChannelView, SequencerCheckpoint, SequencerConfig, SequencerHandle,
+        TurnNotification, WithdrawArg, ZoneSequencer,
     },
-    state::{FinalizedOp, InscriptionInfo, PublishedTx},
 };
 use rand::{Rng as _, thread_rng};
 use reqwest::Url;
-use testing_framework_core::scenario::{DynError, StartNodeOptions, StartedNode};
 use tokio::{
     task::JoinHandle,
     time::{sleep, timeout},
 };
 use tracing::warn;
 
-use crate::{
-    common::{
-        chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
-        wallet::build_wallet_funded_transfer,
-    },
-    cucumber::utils::{extract_child_dir_name, matching_child_dirs},
+use crate::common::{
+    chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
+    wallet::build_wallet_funded_transfer,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum ZoneTestError {
-    #[error("failed to build zone deployment: {message}")]
-    BuildDeployment { message: String },
-    #[error("failed to start zone node: {message}")]
-    StartNode { message: String },
-    #[error("failed to resolve zone runtime dir: {message}")]
-    RuntimeDir { message: String },
-    #[error("zone network did not become ready: {message}")]
-    NetworkReady { message: String },
     #[error("timed out waiting for zone sequencer to accept a publish request")]
     PublishTimeout,
     #[error("zone indexer request failed: {message}")]
@@ -124,23 +102,9 @@ pub enum ZoneTestError {
     #[error("zone sequencer event stream stopped before observing the expected event")]
     SequencerStopped,
     #[error(transparent)]
-    BoundedError(#[from] BoundedError),
+    BoundedError(#[from] lb_utils::bounded_vec::BoundedError),
     #[error(transparent)]
     OutputsError(#[from] OutputsError),
-}
-
-/// Prepared deployment resources for the single-node zone test cluster.
-pub struct ZoneClusterTemplate {
-    pub cluster: LbcManualCluster,
-    pub funding_public_key: ZkPublicKey,
-    pub genesis_block_utxos: Vec<Utxo>,
-}
-
-/// A started single-node zone chain plus the resolved runtime directory used
-/// for logs, recovery files, and diagnostics.
-pub struct StartedZoneNode {
-    pub started_node: StartedNode<LbcEnv>,
-    pub runtime_dir: PathBuf,
 }
 
 /// Result of an atomic deposit scenario where a deposit and zone inscription
@@ -203,96 +167,6 @@ impl PublishDeadline {
     }
 }
 
-/// Builds the manual-cluster template used by zone scenarios.
-///
-/// The generated genesis state includes the node funding key and Blend
-/// declarations expected by the zone SDK tests. The caller still decides when
-/// to start the node so Cucumber can keep cluster setup and runtime startup
-/// visible as separate scenario phases.
-pub fn prepare_zone_cluster(
-    scenario_base_dir: PathBuf,
-) -> Result<ZoneClusterTemplate, ZoneTestError> {
-    let deployment = build_zone_deployment(scenario_base_dir)?;
-    let funding_public_key = deployment.nodes()[0]
-        .general
-        .consensus_config
-        .funding_sk
-        .as_public_key();
-    let genesis_block_utxos = deployment
-        .config
-        .genesis_block
-        .as_ref()
-        .map(|genesis_block| {
-            crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(
-                &genesis_block.genesis_tx(),
-            )
-        })
-        .unwrap_or_default();
-
-    let cluster = LbcLocalDeployer::new().manual_cluster_from_descriptors(deployment);
-
-    Ok(ZoneClusterTemplate {
-        cluster,
-        funding_public_key,
-        genesis_block_utxos,
-    })
-}
-
-/// Starts the zone node from a prepared manual cluster and resolves the actual
-/// runtime directory created by the local deployer.
-pub async fn start_zone_node(
-    cluster: &LbcManualCluster,
-    scenario_base_dir: &Path,
-) -> Result<StartedZoneNode, ZoneTestError> {
-    let node_name = "0";
-    let persist_dir = scenario_base_dir.join("node-0");
-
-    let runtime_dir_prefix = format!(
-        "{}_",
-        persist_dir
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("node-0")
-    );
-    let ignore_list = matching_child_dirs(&persist_dir, &runtime_dir_prefix);
-
-    let started_node = Box::pin(
-        cluster.start_node_with(
-            node_name,
-            StartNodeOptions::default()
-                .with_persist_dir(persist_dir)
-                .create_patch(fast_zone_config_patch),
-        ),
-    )
-    .await
-    .map_err(|error| ZoneTestError::StartNode {
-        message: error.to_string(),
-    })?;
-
-    let runtime_dir_name =
-        extract_child_dir_name(scenario_base_dir, &runtime_dir_prefix, &ignore_list).map_err(
-            |error| ZoneTestError::RuntimeDir {
-                message: error.to_string(),
-            },
-        )?;
-
-    Ok(StartedZoneNode {
-        started_node,
-        runtime_dir: scenario_base_dir.join(runtime_dir_name),
-    })
-}
-
-/// Waits until the local node reports that its networking layer is ready for
-/// the zone SDK to publish transactions through it.
-pub async fn wait_for_zone_network_ready(cluster: &LbcManualCluster) -> Result<(), ZoneTestError> {
-    cluster
-        .wait_network_ready()
-        .await
-        .map_err(|error| ZoneTestError::NetworkReady {
-            message: error.to_string(),
-        })
-}
-
 /// Runs the SDK sequencer event stream in the background and exposes events to
 /// test code that needs to wait for a specific publish result.
 pub fn start_sequencer_event_loop(
@@ -305,24 +179,20 @@ pub fn start_sequencer_event_loop(
     tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
 ) {
     let (tx, rx) = tokio::sync::mpsc::channel(256);
-    let (checkpoint_tx, checkpoint_rx) = tokio::sync::watch::channel(sequencer.checkpoint());
+    let checkpoint_rx = sequencer.subscribe_checkpoint();
 
-    let handle = tokio::spawn(async move {
-        loop {
-            let event = sequencer.next_event().await;
-            drop(checkpoint_tx.send(sequencer.checkpoint()));
-
-            if let Some(event) = event {
-                if let (true, Event::ChannelUpdate { orphaned, .. }) = (republish_orphans, &event) {
-                    republish_orphaned_inscriptions(&handle, orphaned).await;
-                }
-
-                drop(tx.send(event).await);
+    let task = tokio::spawn(async move {
+        let mut events = sequencer.events();
+        while let Some(event) = events.next().await {
+            if let (true, Event::ChannelUpdate { orphaned, .. }) = (republish_orphans, &event) {
+                republish_orphaned_inscriptions(&handle, orphaned).await;
             }
+
+            drop(tx.send(event).await);
         }
     });
 
-    (handle, rx, checkpoint_rx)
+    (task, rx, checkpoint_rx)
 }
 
 /// Drives a competing-sequencer policy that re-publishes invalidated payloads
@@ -332,8 +202,9 @@ pub fn start_republish_policy(
     handle: SequencerHandle<ZoneNodeHttpClient>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
-        loop {
-            if let Some(Event::ChannelUpdate { orphaned, .. }) = sequencer.next_event().await {
+        let mut events = sequencer.events();
+        while let Some(event) = events.next().await {
+            if let Event::ChannelUpdate { orphaned, .. } = event {
                 republish_orphaned_inscriptions(&handle, &orphaned).await;
             }
         }
@@ -364,19 +235,18 @@ pub fn start_balance_aware_policy(
     initial_balances: ZoneAccountBalances,
     planned_payloads: Vec<Inscription>,
 ) -> JoinHandle<()> {
+    let view_rx = sequencer.subscribe_channel_view();
     tokio::spawn(async move {
         let mut balances = BalanceAwareState::new(initial_balances);
         let mut planned = VecDeque::from(planned_payloads);
-        let view_rx = handle.subscribe_channel_view();
+        let mut events = sequencer.events();
 
-        loop {
-            match sequencer.next_event().await {
-                Some(Event::Published { tx, .. }) => {
-                    if let Some(info) = tx.inscription() {
-                        balances.record_applied_payload(&info.payload);
-                    }
+        while let Some(event) = events.next().await {
+            match event {
+                Event::Published { tx, .. } => {
+                    balances.record_applied_payload(&tx.inscription().payload);
                 }
-                Some(Event::ChannelUpdate { orphaned, adopted }) => {
+                Event::ChannelUpdate { orphaned, adopted } => {
                     let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
                         .into_iter()
                         .filter_map(|o| match o {
@@ -410,17 +280,16 @@ pub fn start_sorted_conflict_policy(
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut sorted_state = SortedConflictState::new(discarded);
+        let mut events = sequencer.events();
 
-        loop {
-            match sequencer.next_event().await {
-                Some(Event::Published { tx, .. }) => {
-                    if let Some(info) = tx.inscription() {
-                        sorted_state
-                            .record_published_payload(info.payload.clone())
-                            .await;
-                    }
+        while let Some(event) = events.next().await {
+            match event {
+                Event::Published { tx, .. } => {
+                    sorted_state
+                        .record_published_payload(tx.inscription().payload.clone())
+                        .await;
                 }
-                Some(Event::ChannelUpdate { orphaned, adopted }) => {
+                Event::ChannelUpdate { orphaned, adopted } => {
                     sorted_state.record_adoptions(&adopted).await;
 
                     for entry in orphaned {
@@ -695,8 +564,7 @@ async fn wait_for_published_event(
     timeout(deadline.remaining()?, async {
         while let Some(event) = sequencer_events.recv().await {
             if let Event::Published { tx } = event
-                && let Some(info) = tx.inscription()
-                && info.payload.as_slice() == data
+                && tx.inscription().payload.as_slice() == data
             {
                 return Ok(PublishResult {
                     inscription_id: tx.tx_hash(),
@@ -737,10 +605,7 @@ pub async fn wait_for_published_payloads(
             let Event::Published { tx } = event else {
                 continue;
             };
-            let Some(info) = tx.inscription() else {
-                continue;
-            };
-            let payload = info.payload.as_slice();
+            let payload = tx.inscription().payload.as_slice();
             let Some(index) = data.iter().enumerate().find_map(|(index, expected)| {
                 (results[index].is_none() && payload == expected.as_slice()).then_some(index)
             }) else {
@@ -789,20 +654,22 @@ pub async fn wait_for_channel_view(
     })?
 }
 
+/// Waits until the sequencer emits a turn-to-write notification.
 pub async fn wait_for_turn_to_write(
     turn_rx: &mut tokio::sync::watch::Receiver<TurnNotification>,
     duration: Duration,
-) -> Result<(), ZoneTestError> {
+) -> Result<TurnNotification, ZoneTestError> {
     timeout(duration, async {
         loop {
-            if turn_rx.borrow_and_update().our_turn_to_write {
-                return Ok(());
+            let current = turn_rx.borrow().clone();
+            if current.our_turn_to_write {
+                return Ok(current);
             }
 
             turn_rx
                 .changed()
                 .await
-                .map_err(|error| ZoneTestError::ChannelViewTimeout {
+                .map_err(|error| ZoneTestError::Indexer {
                     message: format!("turn-to-write sender closed: {error}"),
                 })?;
         }
@@ -810,7 +677,7 @@ pub async fn wait_for_turn_to_write(
     .await
     .map_err(|_| ZoneTestError::ChannelViewTimeout {
         message: format!(
-            "turn-to-write notification not received within {} seconds",
+            "turn to write not reached within {} seconds",
             duration.as_secs()
         ),
     })?
@@ -1462,7 +1329,7 @@ pub async fn publish_atomic_zone_withdraw(
                 )?,
             })
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, ZoneTestError>>()?;
 
     sequencer
         .publish_atomic_withdraw(inscription_data.clone(), withdraw_args)
@@ -1476,10 +1343,7 @@ pub async fn publish_atomic_zone_withdraw(
             let Event::Published { tx } = event else {
                 continue;
             };
-            let Some(info) = tx.inscription() else {
-                continue;
-            };
-            if info.payload != inscription_data {
+            if tx.inscription().payload != inscription_data {
                 continue;
             }
             let PublishedTx::AtomicWithdraw(info) = *tx else {
@@ -1539,100 +1403,4 @@ async fn sign_tx_zk(
         })?;
 
     Ok(response.sig)
-}
-
-/// Builds the single-node deployment shape used by all migrated zone tests.
-fn build_zone_deployment(scenario_base_dir: PathBuf) -> Result<DeploymentPlan, ZoneTestError> {
-    let deployment = DeploymentBuilder::new(TopologyConfig::with_node_numbers(1))
-        .scenario_base_dir(scenario_base_dir)
-        .build()
-        .map_err(|error| ZoneTestError::BuildDeployment {
-            message: error.to_string(),
-        })?;
-
-    Ok(add_exact_deposit_notes_to_funding_key(
-        deployment,
-        [1, 3, 5],
-    ))
-}
-
-/// Adds small exact-value notes that make deposit assertions deterministic
-/// without setup transfers inside each scenario.
-fn add_exact_deposit_notes_to_funding_key(
-    mut deployment: DeploymentPlan,
-    note_values: impl IntoIterator<Item = Value>,
-) -> DeploymentPlan {
-    let values = note_values.into_iter().collect::<Vec<_>>();
-
-    if values.is_empty() {
-        return deployment;
-    }
-
-    let funding_public_key = deployment.nodes()[0].general.consensus_config.funding_pk;
-    let mut transfer_op = deployment
-        .config
-        .genesis_block
-        .as_ref()
-        .expect("zone deployment should include a genesis block")
-        .genesis_tx()
-        .genesis_transfer()
-        .clone();
-
-    for value in values {
-        transfer_op
-            .outputs
-            .as_mut()
-            .try_push(Note::new(value, funding_public_key))
-            .expect("zone helper note set should stay within transfer output bounds");
-    }
-
-    let providers = deployment
-        .nodes()
-        .iter()
-        .take(deployment.config.blend_core_nodes)
-        .map(|node| {
-            let (blend_config, provider_sk, zk_sk) = &node.general.blend_config;
-
-            ProviderInfo {
-                service_type: ServiceType::BlendNetwork,
-                provider_sk: provider_sk.clone(),
-                zk_sk: zk_sk.clone(),
-                locator: Locator::new_unchecked(
-                    blend_config.core.backend.listening_address.clone(),
-                ),
-                note: node.general.consensus_config.blend_note.clone(),
-            }
-        })
-        .collect();
-
-    deployment.config.genesis_block = Some(create_genesis_block_with_declarations(
-        transfer_op,
-        providers,
-        deployment.config.test_context.as_deref(),
-    ));
-
-    deployment
-}
-
-/// Shrinks consensus timing for zone Cucumber scenarios while keeping the node
-/// otherwise close to the generated local deployment config.
-fn fast_zone_config_patch(mut config: RunConfig) -> Result<RunConfig, DynError> {
-    if config.user.api.backend.listen_address.port() == 0 {
-        return Err("zone test config patch requires a non-zero API port".into());
-    }
-
-    config.deployment.time.slot_duration = Duration::from_secs(1);
-    config.deployment.cryptarchia.slot_activation_coeff =
-        NonNegativeRatio::new(1, 2.try_into().unwrap());
-
-    config
-        .user
-        .cryptarchia
-        .service
-        .bootstrap
-        .prolonged_bootstrap_period = Duration::ZERO;
-
-    config.deployment.cryptarchia.security_param = NonZero::new(5).unwrap();
-
-    Ok(config)
 }

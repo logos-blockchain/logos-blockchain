@@ -1,5 +1,6 @@
 pub mod config;
 pub mod get_peer_id;
+pub mod keys;
 pub mod participate;
 
 use std::{
@@ -9,13 +10,16 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
-use crate::config::{
-    ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
-    LogArgs, NetworkArgs, OnUnknownKeys, RunConfig, SdpArgs, StateArgs, UserConfig,
-    deserialize_config_at_path, update_api, update_blend, update_cryptarchia, update_network,
-    update_sdp, update_state, update_tracing,
+use crate::{
+    cli::keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
+    config::{
+        ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
+        LogArgs, NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, update_api, update_blend,
+        update_cryptarchia, update_network, update_sdp, update_state, update_tracing,
+    },
 };
 
 fn long_version() -> String {
@@ -111,6 +115,12 @@ pub enum Command {
     UpdateConfig(Box<UpdateArgs>),
     /// Migrates a new user config with generated keys
     MigrateConfig(Box<MigrateArgs>),
+    /// Generate a new key of type.
+    GenerateKey(Box<GenerateKeyArgs>),
+    /// Add a key of type to a keystore.
+    AddKey(Box<AddKeyArgs>),
+    /// Remove a key with title from a keystore.
+    RemoveKey(Box<RemoveKeyArgs>),
     /// Publish text inscriptions as zone blocks
     Inscribe(lb_tui_zone::InscribeArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
@@ -274,6 +284,24 @@ pub struct UpdateArgs {
     state: StateArgs,
 }
 
+// Custom default implementation to require keystore path initialized from clap.
+impl Default for UpdateArgs {
+    fn default() -> Self {
+        Self {
+            user_config: "user_config.yaml".into(),
+            keystore: "keystore.yaml".into(),
+            yes: false,
+            log: LogArgs::default(),
+            network: NetworkArgs::default(),
+            blend: BlendArgs::default(),
+            cryptarchia: CryptarchiaArgs::default(),
+            sdp: SdpArgs::default(),
+            api: ApiArgs::default(),
+            state: StateArgs::default(),
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 pub struct MigrateArgs {
     /// Output file path for the generated config.
@@ -377,9 +405,9 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     let deployment_settings = match deployment_args.deployment_type() {
         DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
         DeploymentType::Custom(custom_deployment_config_path) => {
-            deserialize_config_at_path::<DeploymentSettings>(
+            deserialize_value_at_path::<DeploymentSettings>(
                 custom_deployment_config_path,
-                OnUnknownKeys::Warn,
+                OnUnknownKeys::Fail,
             )?
         }
     };

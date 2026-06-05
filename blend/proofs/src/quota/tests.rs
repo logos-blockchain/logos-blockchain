@@ -133,12 +133,10 @@ fn generate_inputs<const INPUTS: usize>() -> PoQInputs<INPUTS> {
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
         };
-        let session = 1;
         let signing_key = Ed25519PublicKey::from_bytes(&[10; ED25519_PUBLIC_KEY_SIZE]).unwrap();
         PublicInputs {
             core: core_inputs,
             leader: leader_inputs,
-            session,
             signing_key,
         }
     };

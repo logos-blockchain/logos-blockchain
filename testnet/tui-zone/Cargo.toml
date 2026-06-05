@@ -22,6 +22,7 @@ workspace = true
 
 [dependencies]
 clap                             = { features = ["derive", "env", "std"], workspace = true }
+futures                          = { workspace = true }
 hex                              = { workspace = true }
 lb-core                          = { workspace = true }
 lb-key-management-system-service = { workspace = true }

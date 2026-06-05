@@ -15,6 +15,7 @@ use lb_blend_message::encap::validated::{
     EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
 };
 use lb_blend_scheduling::membership::Membership;
+use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
@@ -32,7 +33,7 @@ use crate::core::with_core::{
             ConnectionHandler, FromBehaviour, ToBehaviour, conn_maintenance::ConnectionMonitor,
         },
         message_cache::MessageCache,
-        old_session::OldSession,
+        old_epoch::OldEpoch,
         utils::{
             forward_validated_message_and_update_cache,
             handle_received_serialized_encapsulated_message_and_update_cache,
@@ -43,7 +44,7 @@ use crate::core::with_core::{
 
 mod handler;
 mod message_cache;
-mod old_session;
+mod old_epoch;
 mod utils;
 
 #[cfg(test)]
@@ -112,16 +113,16 @@ pub struct Behaviour<ObservationWindowClockProvider> {
     /// as malicious by our peers.
     message_cache: MessageCache,
     observation_window_clock_provider: ObservationWindowClockProvider,
-    current_session_info: (Membership<PeerId>, u64),
+    current_epoch_info: (Membership<PeerId>, Epoch),
     /// The [minimum, maximum] peering degree of this node.
     peering_degree: RangeInclusive<usize>,
     local_peer_id: PeerId,
     protocol_name: StreamProtocol,
     /// The minimum Blend network size for messages to be relayed between peers.
     minimum_network_size: NonZeroUsize,
-    /// States for processing messages from the old session
+    /// States for processing messages from the old epoch
     /// before the transition period has passed.
-    old_session: Option<OldSession>,
+    old_epoch: Option<OldEpoch>,
 }
 
 #[derive(Debug, Eq, PartialEq, Clone, Copy)]
@@ -185,7 +186,7 @@ pub enum Event {
     Message {
         message: Box<EncapsulatedMessageWithVerifiedSignature>,
         sender: PeerId,
-        session: u64,
+        epoch: Epoch,
     },
     /// A peer on a given connection has been detected as unhealthy.
     UnhealthyPeer(PeerId),
@@ -221,7 +222,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     pub fn new(
         config: &Config,
         observation_window_clock_provider: ObservationWindowClockProvider,
-        session_info: (Membership<PeerId>, u64),
+        epoch_info: (Membership<PeerId>, Epoch),
         local_peer_id: PeerId,
         protocol_name: StreamProtocol,
     ) -> Self {
@@ -230,19 +231,19 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             events: VecDeque::new(),
             waker: None,
             observation_window_clock_provider,
-            message_cache: MessageCache::new_with_peer_capacity(session_info.0.size()),
-            current_session_info: session_info,
+            message_cache: MessageCache::new_with_peer_capacity(epoch_info.0.size()),
+            current_epoch_info: epoch_info,
             peering_degree: config.peering_degree.clone(),
             connections_waiting_upgrade: HashMap::new(),
             local_peer_id,
             protocol_name,
             minimum_network_size: config.minimum_network_size,
-            old_session: None,
+            old_epoch: None,
         }
     }
 
-    pub(crate) fn start_new_session(&mut self, new_session_info: (Membership<PeerId>, u64)) {
-        let current_session_number = self.current_session_info.1;
+    pub(crate) fn start_new_epoch(&mut self, new_epoch_info: (Membership<PeerId>, Epoch)) {
+        let current_epoch_number = self.current_epoch_info.1;
 
         // Close any connections that were still waiting to be upgraded. Without
         // this, a late `FullyNegotiated` event from one of those handlers would
@@ -253,29 +254,29 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         for (connection, _) in pending_upgrades {
             self.close_connection(connection);
         }
-        self.current_session_info = new_session_info;
+        self.current_epoch_info = new_epoch_info;
 
-        self.stop_old_session();
+        self.stop_old_epoch();
 
-        self.old_session = Some(OldSession::new(
+        self.old_epoch = Some(OldEpoch::new(
             mem::take(&mut self.negotiated_peers)
                 .into_iter()
                 .map(|(peer_id, details)| (peer_id, details.connection_id))
                 .collect(),
             mem::take(&mut self.message_cache),
-            current_session_number,
+            current_epoch_number,
         ));
 
-        tracing::debug!(target: LOG_TARGET, "Started a new session by passing negotiated peers and exchanged message IDs to the old session. Now, no negotiated peers in the current session.");
+        tracing::debug!(target: LOG_TARGET, "Started a new epoch by passing negotiated peers and exchanged message IDs to the old epoch. Now, no negotiated peers in the current epoch.");
     }
 
-    pub(crate) fn finish_session_transition(&mut self) {
-        self.stop_old_session();
+    pub(crate) fn finish_epoch_transition(&mut self) {
+        self.stop_old_epoch();
     }
 
-    fn stop_old_session(&mut self) {
-        if let Some(old_session) = self.old_session.take() {
-            let mut events = old_session.stop();
+    fn stop_old_epoch(&mut self) {
+        if let Some(old_epoch) = self.old_epoch.take() {
+            let mut events = old_epoch.stop();
             let num_events = events.len();
             self.events.append(&mut events);
             if num_events > 0 {
@@ -306,61 +307,61 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// Force send a message to a peer, as long as the peer is connected, no
     /// matter the state the connection is in.
     #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub fn force_send_message_to_current_session_peer(
+    pub fn force_send_message_to_current_epoch_peer(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
     ) -> Result<(), SendError> {
-        self.force_send_message_to_peer_at_session(message, peer_id, self.current_session_info.1)
+        self.force_send_message_to_peer_at_epoch(message, peer_id, self.current_epoch_info.1)
     }
 
     /// Force send a message to a peer, as long as the peer is connected, no
     /// matter the state the connection is in.
     #[cfg(any(test, feature = "unsafe-test-functions"))]
-    fn force_send_message_to_peer_at_session(
+    fn force_send_message_to_peer_at_epoch(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedPublicHeader,
         peer_id: PeerId,
-        session: u64,
+        epoch: Epoch,
     ) -> Result<(), SendError> {
         let serialized_message =
             lb_blend_scheduling::serialize_encapsulated_message_with_verified_public_header(
                 message,
             );
-        self.force_send_serialized_message_to_peer_at_session(serialized_message, peer_id, session)
+        self.force_send_serialized_message_to_peer_at_epoch(serialized_message, peer_id, epoch)
     }
 
     /// Force send a serialized message to a peer (without trying to deserialize
     /// nor validating it first), as long as the peer is connected, no
     /// matter the state the connection is in.
     #[cfg(test)]
-    fn force_send_serialized_message_to_current_session_peer(
+    fn force_send_serialized_message_to_current_epoch_peer(
         &mut self,
         serialized_message: Vec<u8>,
         peer_id: PeerId,
     ) -> Result<(), SendError> {
-        self.force_send_serialized_message_to_peer_at_session(
+        self.force_send_serialized_message_to_peer_at_epoch(
             serialized_message,
             peer_id,
-            self.current_session_info.1,
+            self.current_epoch_info.1,
         )
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
-    pub fn force_send_serialized_message_to_peer_at_session(
+    pub fn force_send_serialized_message_to_peer_at_epoch(
         &mut self,
         serialized_message: Vec<u8>,
         peer_id: PeerId,
-        session: u64,
+        epoch: Epoch,
     ) -> Result<(), SendError> {
-        if session != self.current_session_info.1 {
-            let Some(old_session) = &mut self.old_session else {
-                return Err(SendError::InvalidSession);
+        if epoch != self.current_epoch_info.1 {
+            let Some(old_epoch) = &mut self.old_epoch else {
+                return Err(SendError::InvalidEpoch);
             };
-            return old_session.force_send_serialized_message_to_peer_at_session(
+            return old_epoch.force_send_serialized_message_to_peer_at_epoch(
                 serialized_message,
                 peer_id,
-                session,
+                epoch,
             );
         }
 
@@ -372,7 +373,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
 
         tracing::trace!(
             target: LOG_TARGET,
-            "Notifying handler with peer {peer_id:?} on current session connection {connection_id:?} to deliver already-serialized message."
+            "Notifying handler with peer {peer_id:?} on current epoch connection {connection_id:?} to deliver already-serialized message."
         );
         self.events.push_back(ToSwarm::NotifyHandler {
             peer_id,
@@ -387,12 +388,10 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         &self.negotiated_peers
     }
 
-    /// Returns the peer IDs of the old session's negotiated peers, if a
-    /// session transition is in progress.
-    pub fn old_session_peer_ids(&self) -> Option<impl Iterator<Item = &PeerId> + '_> {
-        self.old_session
-            .as_ref()
-            .map(OldSession::negotiated_peer_ids)
+    /// Returns the peer IDs of the old epoch's negotiated peers, if an
+    /// epoch transition is in progress.
+    pub fn old_epoch_peer_ids(&self) -> Option<impl Iterator<Item = &PeerId> + '_> {
+        self.old_epoch.as_ref().map(OldEpoch::negotiated_peer_ids)
     }
 
     fn try_wake(&mut self) {
@@ -455,7 +454,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     }
 
     fn is_network_large_enough(&self) -> bool {
-        self.current_session_info.0.size() >= self.minimum_network_size.get()
+        self.current_epoch_info.0.size() >= self.minimum_network_size.get()
     }
 
     /// Handle a new negotiated connection.
@@ -473,7 +472,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// returned from the `Either::Left` branch of
     /// [`Self::handle_established_inbound_connection`]
     /// [`Self::handle_established_outbound_connection`]), so the entry must be
-    /// present. Pending entries are proactively closed on session transition to
+    /// present. Pending entries are proactively closed on epoch transition to
     /// preserve this invariant.
     ///
     /// # Panics
@@ -513,7 +512,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         remote_peer_role: Endpoint,
     ) {
         // We need to check if we still have available connection slots, as it is
-        // possible, especially upon session transition, that more than the maximum
+        // possible, especially upon epoch transition, that more than the maximum
         // allowed number of peers are trying to connect to us. So once the stream is
         // actually upgraded, we downgrade it again if we do not have space left for it.
         // By not adding the new connection to the map of negotiated peers, the swarm
@@ -703,7 +702,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     ) -> Option<NegotiatedPeerState> {
         let peer_details = self.negotiated_peers.get_mut(&peer_id)?;
         // We double check we are dealing with the expected connection.
-        // This could be false if `connection_id` is from the old session.
+        // This could be false if `connection_id` is from the old epoch.
         if peer_details.connection_id != connection_id {
             tracing::trace!(
                 target: LOG_TARGET,
@@ -715,7 +714,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         Some(mem::replace(&mut peer_details.negotiated_state, state))
     }
 
-    /// Handle an unhealthy connection if it exists in the current session.
+    /// Handle an unhealthy connection if it exists in the current epoch.
     /// If not, it is ignored.
     #[expect(
         dead_code,
@@ -735,7 +734,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         }
     }
 
-    /// Handle a unhealthy connection if it exists in the current session.
+    /// Handle a unhealthy connection if it exists in the current epoch.
     /// If not, it is ignored.
     fn handle_healthy_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
         // Notify swarm only on first transition into healthy state.
@@ -806,24 +805,24 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     }
 
     /// Publish an already-encapsulated and validated message to all connected
-    /// peers in the specified session.
+    /// peers in the specified epoch.
     pub fn publish_message_with_validated_header(
         &mut self,
         message: EncapsulatedMessageWithVerifiedPublicHeader,
-        intended_session: u64,
+        intended_epoch: Epoch,
     ) -> Result<(), SendError> {
-        if self.current_session_info.1 != intended_session {
-            let Some(old_session) = &mut self.old_session else {
-                return Err(SendError::InvalidSession);
+        if self.current_epoch_info.1 != intended_epoch {
+            let Some(old_epoch) = &mut self.old_epoch else {
+                return Err(SendError::InvalidEpoch);
             };
-            return old_session.publish_message_with_validated_header(message, intended_session);
+            return old_epoch.publish_message_with_validated_header(message, intended_epoch);
         }
         self.forward_maybe_excluding(&message.into(), None)
     }
 
     /// Publish an already-encapsulated message with a valid public header
-    /// signature to all connected peers in the current session.
-    pub fn publish_message_with_validated_signature_to_current_session(
+    /// signature to all connected peers in the current epoch.
+    pub fn publish_message_with_validated_signature_to_current_epoch(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedSignature,
     ) -> Result<(), SendError> {
@@ -831,30 +830,30 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     }
 
     /// Forwards a message with a valid public header signature to all
-    /// non-spammy peers in the specified session, except the
+    /// non-spammy peers in the specified epoch, except the
     /// [`except`] peer.
     ///
-    /// If the session is the previous session, the message is forwarded to the
-    /// peers in the old session. Otherwise, it is forwarded to the peers in
-    /// the current session.
+    /// If the epoch is the previous epoch, the message is forwarded to the
+    /// peers in the old epoch. Otherwise, it is forwarded to the peers in
+    /// the current epoch.
     ///
     /// Returns [`Error::NoPeers`] if there are no connected peers that support
-    /// the blend protocol, and [`Error::InvalidSession`] if the provided
-    /// session does not match neither the current session nor the old session.
+    /// the blend protocol, and [`Error::InvalidEpoch`] if the provided
+    /// epoch does not match neither the current epoch nor the old epoch.
     pub fn forward_message_with_validated_signature(
         &mut self,
         message: &EncapsulatedMessageWithVerifiedSignature,
         except: PeerId,
-        intended_session: u64,
+        intended_epoch: Epoch,
     ) -> Result<(), SendError> {
-        if self.current_session_info.1 != intended_session {
-            let Some(old_session) = &mut self.old_session else {
-                return Err(SendError::InvalidSession);
+        if self.current_epoch_info.1 != intended_epoch {
+            let Some(old_epoch) = &mut self.old_epoch else {
+                return Err(SendError::InvalidEpoch);
             };
-            return old_session.forward_message_with_validated_signature(
+            return old_epoch.forward_message_with_validated_signature(
                 message,
                 except,
-                intended_session,
+                intended_epoch,
             );
         }
 
@@ -867,7 +866,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         excluded_peer: Option<PeerId>,
     ) -> Result<(), SendError> {
         tracing::trace!(
-            "Forwarding message with id {:?} to current session peers. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}",
+            "Forwarding message with id {:?} to current epoch peers. Negotiated peers: {:?}. Excluded peer: {excluded_peer:?}",
             hex::encode(message.id()),
             self.negotiated_peers()
         );
@@ -897,10 +896,10 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
         serialized_message: &[u8],
         (from_peer_id, from_connection_id): (PeerId, ConnectionId),
     ) {
-        // First, try to handle the message in the context of the old session.
-        // If it is not part of the old session, try with the current session.
-        if let Some(old_session) = &mut self.old_session {
-            match old_session.handle_received_serialized_encapsulated_message(
+        // First, try to handle the message in the context of the old epoch.
+        // If it is not part of the old epoch, try with the current epoch.
+        if let Some(old_epoch) = &mut self.old_epoch {
+            match old_epoch.handle_received_serialized_encapsulated_message(
                 serialized_message,
                 (from_peer_id, from_connection_id),
             ) {
@@ -921,9 +920,9 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             from_peer_id,
             &mut self.events,
             self.waker.take(),
-            self.current_session_info.1,
+            self.current_epoch_info.1,
         ) {
-            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current session: {receive_error:?}");
+            tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current epoch: {receive_error:?}");
             let spam_reason = match receive_error {
                 ReceiveError::DuplicateMessageFromPeer(_) => SpamReason::DuplicateMessage,
                 ReceiveError::InvalidHeaderSignature => SpamReason::InvalidHeaderSignature,
@@ -986,7 +985,7 @@ where
         Ok(if !self.is_network_large_enough() {
             tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer_id:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
-        } else if self.current_session_info.0.contains(&peer_id) {
+        } else if self.current_epoch_info.0.contains(&peer_id) {
             tracing::trace!(
                 target: LOG_TARGET,
                 "Upgrading inbound connection {connection_id:?} with core peer {peer_id:?}."
@@ -1035,7 +1034,7 @@ where
         Ok(if !self.is_network_large_enough() {
             tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with peer {peer_id:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
-        } else if self.current_session_info.0.contains(&peer_id) {
+        } else if self.current_epoch_info.0.contains(&peer_id) {
             tracing::trace!(
                 target: LOG_TARGET,
                 "Upgrading outbound connection {connection_id:?} with core peer {peer_id:?}."
@@ -1062,9 +1061,9 @@ where
             ..
         }) = event
         {
-            // Try to close the connection if it exists in the old session.
-            if let Some(old_session) = &mut self.old_session
-                && old_session.handle_closed_connection(&(peer_id, connection_id))
+            // Try to close the connection if it exists in the old epoch.
+            if let Some(old_epoch) = &mut self.old_epoch
+                && old_epoch.handle_closed_connection(&(peer_id, connection_id))
             {
                 return;
             }
@@ -1173,8 +1172,8 @@ where
         &mut self,
         cx: &mut Context<'_>,
     ) -> Poll<ToSwarm<Self::ToSwarm, THandlerInEvent<Self>>> {
-        if let Some(old_session) = &mut self.old_session
-            && let Poll::Ready(event) = old_session.poll(cx)
+        if let Some(old_epoch) = &mut self.old_epoch
+            && let Poll::Ready(event) = old_epoch.poll(cx)
         {
             return Poll::Ready(event);
         }

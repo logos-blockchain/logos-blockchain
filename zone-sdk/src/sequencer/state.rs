@@ -1,144 +1,16 @@
 use std::collections::{BTreeMap, HashMap};
 
 use lb_core::{
-    crypto::Hash,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Transaction as _, Value,
-        ledger::Inputs,
-        ops::channel::{
-            ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
-        },
+        SignedMantleTx, Transaction as _,
+        ops::channel::{MsgId, inscribe::Inscription},
         tx::TxHash,
     },
 };
 use rpds::HashTrieSetSync;
 
-/// Channel inscription observed in an L1 block.
-#[derive(Debug, Clone)]
-pub struct InscriptionInfo {
-    /// The transaction hash containing this inscription.
-    pub tx_hash: TxHash,
-    /// The parent message ID this inscription chains from.
-    pub parent_msg: MsgId,
-    /// The message ID of this inscription.
-    pub this_msg: MsgId,
-    /// The opaque inscription payload.
-    pub payload: Inscription,
-}
-
-/// A channel withdraw observed on chain or bundled in a pending atomic tx.
-#[derive(Debug, Clone)]
-pub struct WithdrawInfo {
-    /// Transaction hash that contained this withdraw op. For bundled
-    /// withdraws inside [`AtomicWithdrawInfo`] this equals the bundle's
-    /// `tx_hash`; for standalone withdraws surfaced via
-    /// [`FinalizedOp::Withdraw`] this is the source tx.
-    pub tx_hash: TxHash,
-    /// The withdraw op (`channel_id`, outputs, `withdraw_nonce`).
-    pub op: ChannelWithdrawOp,
-}
-
-/// An inscription bundled atomically with one or more withdraws in a single
-/// `MantleTx`. All ops in this tx adopt/orphan/finalize as a unit.
-#[derive(Debug, Clone)]
-pub struct AtomicWithdrawInfo {
-    /// Transaction hash of the bundled `MantleTx`.
-    pub tx_hash: TxHash,
-    /// The inscription op carried by the bundle.
-    pub inscription: InscriptionInfo,
-    /// The withdraw ops carried by the bundle, in tx order.
-    pub withdraws: Vec<WithdrawInfo>,
-}
-
-/// A channel deposit observed in a finalized L1 block. Sequencers do not
-/// publish deposits — these are pure observations enriched with the deposit
-/// `amount` from the chain events API.
-#[derive(Debug, Clone)]
-pub struct DepositInfo {
-    /// The transaction hash containing this deposit op.
-    pub tx_hash: TxHash,
-    /// The `op_id` of the deposit op (stable identity within the tx).
-    pub op_id: Hash,
-    /// Target channel.
-    pub channel_id: ChannelId,
-    /// Notes consumed by the deposit (spent-once at the UTXO layer).
-    pub inputs: Inputs,
-    /// Total value deposited, sourced from the block's events.
-    pub amount: Value,
-    /// Opaque metadata associated with this deposit.
-    pub metadata: Metadata,
-}
-
-/// A tx surfaced by the SDK in event payloads.
-///
-/// Either our own publish (inscription / atomic withdraw bundle), or an
-/// observed deposit from a finalized L1 block. Used for
-/// adopted/published/finalized observations.
-#[derive(Debug, Clone)]
-pub enum PublishedTx {
-    /// A plain inscription published via `publish_message`.
-    Inscription(InscriptionInfo),
-    /// A bundled inscription+withdraw(s) published via
-    /// `publish_atomic_withdraw`.
-    AtomicWithdraw(AtomicWithdrawInfo),
-    /// An observed channel deposit (finalized on L1). Sequencers never
-    /// publish deposits — these are surfaced for consumers (e.g. bridge
-    /// implementations) that need to react to finalized deposits.
-    Deposit(DepositInfo),
-}
-
-impl PublishedTx {
-    /// The tx hash for this entry.
-    #[must_use]
-    pub const fn tx_hash(&self) -> TxHash {
-        match self {
-            Self::Inscription(i) => i.tx_hash,
-            Self::AtomicWithdraw(a) => a.tx_hash,
-            Self::Deposit(d) => d.tx_hash,
-        }
-    }
-
-    /// The inscription info for this entry. Returns `None` for
-    /// [`PublishedTx::Deposit`] which has no inscription.
-    #[must_use]
-    pub const fn inscription(&self) -> Option<&InscriptionInfo> {
-        match self {
-            Self::Inscription(i) => Some(i),
-            Self::AtomicWithdraw(a) => Some(&a.inscription),
-            Self::Deposit(_) => None,
-        }
-    }
-}
-
-/// A finalized Mantle tx that touched our channel.
-///
-/// Carries the channel-relevant ops in on-chain execution order. Atomicity
-/// is structural: every [`FinalizedOp`] inside the same [`FinalizedTx`]
-/// succeeded or failed together on chain.
-#[derive(Debug, Clone)]
-pub struct FinalizedTx {
-    /// Transaction hash of the Mantle tx.
-    pub tx_hash: TxHash,
-    /// Channel-relevant ops in on-chain execution order. A tx with a
-    /// deposit and an inscription emits both, deposit-first.
-    pub ops: Vec<FinalizedOp>,
-}
-
-/// A single channel-relevant op observed in a finalized block. Surfaced as a
-/// member of [`FinalizedTx::ops`].
-#[derive(Debug, Clone)]
-pub enum FinalizedOp {
-    /// Any inscription on the channel — ours or another sequencer's.
-    Inscription(InscriptionInfo),
-    /// A finalized L1 deposit on the channel, with `amount` populated from
-    /// the chain events API.
-    Deposit(DepositInfo),
-    /// A withdraw op on the channel — standalone or part of an atomic
-    /// inscription+withdraw bundle (the bundling is implicit via the parent
-    /// [`FinalizedTx::tx_hash`]).
-    Withdraw(WithdrawInfo),
-}
+use super::types::{AtomicWithdrawInfo, InscriptionInfo, PublishedTx, WithdrawInfo};
 
 /// Result of channel update detection — the linear block-level delta
 /// between two canonical chains.
@@ -156,15 +28,6 @@ pub struct ChannelUpdateInfo {
     pub adopted: Vec<InscriptionInfo>,
     /// The new channel tip `MsgId`.
     pub new_channel_tip: MsgId,
-}
-
-impl ChannelUpdateInfo {
-    /// Returns true if this update orphaned pending inscriptions,
-    /// meaning a competing inscription or L1 reorg broke our pending chain.
-    #[must_use]
-    pub const fn is_conflict(&self) -> bool {
-        !self.orphaned.is_empty()
-    }
 }
 
 /// Local pending inscription with lineage metadata.
@@ -218,12 +81,6 @@ impl TxState {
             block_inscriptions: HashMap::new(),
             finalized_msg,
         }
-    }
-
-    /// Last finalized channel tip `MsgId`.
-    #[must_use]
-    pub const fn finalized_msg(&self) -> MsgId {
-        self.finalized_msg
     }
 
     /// Update the finalized channel tip from backfilled finalized history.
@@ -429,6 +286,7 @@ impl TxState {
     }
 
     /// Number of pending transactions (all types).
+    #[cfg(test)]
     #[must_use]
     pub fn unfinalized_count(&self) -> usize {
         self.pending.len() + self.pending_other.len()
@@ -460,18 +318,6 @@ impl TxState {
     #[must_use]
     pub fn outbox_contains(&self, msg_id: MsgId) -> bool {
         self.pending.values().any(|p| p.this_msg == msg_id)
-    }
-
-    /// Pending inscriptions valid to be added at the current channel tip:
-    /// inscriptions in `self.pending` that chain transitively from the
-    /// channel tip at `tip`.
-    ///
-    /// Excludes pending inscriptions already included in a block — those are
-    /// reported via `adopted` in [`ChannelUpdateInfo`] instead.
-    #[must_use]
-    pub fn pending_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
-        let channel_tip = self.channel_tip_at(tip);
-        self.collect_pending_suffix(channel_tip)
     }
 
     /// Remove pending inscriptions whose lineage does NOT reach the current

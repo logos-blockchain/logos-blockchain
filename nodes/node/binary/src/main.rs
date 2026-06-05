@@ -1,11 +1,10 @@
 use clap::Parser as _;
 use color_eyre::eyre::{Result, eyre};
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use logos_blockchain_node::{
     UserConfig,
     cli::{CliArgs, Command, build_run_config},
-    config::{
-        DeploymentType, OnUnknownKeys, deployment::DeploymentSettings, deserialize_config_at_path,
-    },
+    config::{DeploymentType, deployment::DeploymentSettings},
     get_services_to_start, run_node_from_config,
 };
 
@@ -27,6 +26,15 @@ async fn main() -> Result<()> {
             Command::MigrateConfig(migrate_args) => {
                 return logos_blockchain_node::cli::config::migrate::run(*migrate_args);
             }
+            Command::GenerateKey(generate_args) => {
+                return logos_blockchain_node::cli::keys::run_generate_key(*generate_args);
+            }
+            Command::AddKey(add_args) => {
+                return logos_blockchain_node::cli::keys::run_add_key(*add_args);
+            }
+            Command::RemoveKey(remove_args) => {
+                return logos_blockchain_node::cli::keys::run_remove_key(*remove_args);
+            }
             Command::Inscribe(inscribe_args) => {
                 lb_tui_zone::run(inscribe_args).await;
                 return Ok(());
@@ -46,13 +54,13 @@ async fn main() -> Result<()> {
     // configs are found or exit successfully if deserializations succeed.
     if is_dry_run {
         // Check user config.
-        drop(deserialize_config_at_path::<UserConfig>(
+        drop(deserialize_value_at_path::<UserConfig>(
             cli_args.config_path(),
             OnUnknownKeys::Fail,
         )?);
         // If custom, check deployment config.
         if let DeploymentType::Custom(custom_deployment_config_file) = cli_args.deployment_type() {
-            drop(deserialize_config_at_path::<DeploymentSettings>(
+            drop(deserialize_value_at_path::<DeploymentSettings>(
                 custom_deployment_config_file,
                 OnUnknownKeys::Fail,
             )?);
@@ -70,10 +78,10 @@ async fn main() -> Result<()> {
 
     let run_config = {
         let user_config =
-            deserialize_config_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Warn)
+            deserialize_value_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Fail)
                 .inspect_err(|e| {
-                eprintln!("\nExiting... {e}.\n");
-            })?;
+                    eprintln!("\nExiting... {e}.\n");
+                })?;
         build_run_config(user_config, cli_args)?
     };
 

@@ -4,13 +4,14 @@ use color_eyre::eyre::{Result, bail, eyre};
 use lb_core::sdp::{Locator, Locators, ServiceType};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, Protocol};
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use serde::Serialize;
 
 use super::ParticipateArgs;
 use crate::{
     UserConfig,
     cli::config::keystore::{KeyTitle, Keystore},
-    config::{OnUnknownKeys, deserialize_config_at_path, network::serde::nat},
+    config::network::serde::nat,
 };
 
 #[derive(Serialize)]
@@ -29,14 +30,14 @@ struct BlendParticipationData {
 }
 
 pub fn run(args: &ParticipateArgs) -> Result<()> {
-    let user_config = deserialize_config_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
+    let user_config = deserialize_value_at_path::<UserConfig>(&args.config, OnUnknownKeys::Warn)?;
 
     let keystore_yaml = std::fs::read_to_string(&args.keystore)?;
     let keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
 
-    let (_, stake_key) = keystore.get_zk(KeyTitle::Stake)?;
-    let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LeaderFunding)?;
-    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SdpFunding)?;
+    let (_, stake_key) = keystore.get_zk(KeyTitle::STAKE)?;
+    let (_, leader_funding_key) = keystore.get_zk(KeyTitle::LEADER_FUNDING)?;
+    let (_, sdp_funding_key) = keystore.get_zk(KeyTitle::SDP_FUNDING)?;
 
     let mut stakeholder_identities = vec![
         stake_key.to_public_key(),
@@ -80,7 +81,7 @@ fn build_blend_data(
     let locator_addr = resolve_locator_addr(listen_addr, nat_config, external_address)?;
     let locator = Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?;
 
-    let (_, blend_key) = keystore.get_zk(KeyTitle::BlendZk)?;
+    let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
     Ok(Some(BlendParticipationData {
         provider_id,
         zk_id: blend_key.to_public_key(),

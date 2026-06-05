@@ -68,8 +68,8 @@ pub fn logos_blockchain_log_dir() -> Option<PathBuf> {
 }
 
 #[must_use]
-pub fn logos_blockchain_log_level() -> Option<String> {
-    std::env::var("LOGOS_BLOCKCHAIN_LOG_LEVEL").ok()
+pub fn log_level() -> Option<String> {
+    std::env::var("LOG_LEVEL").ok()
 }
 
 #[must_use]

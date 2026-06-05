@@ -161,22 +161,25 @@ fn default_extra_hosts() -> Vec<String> {
 
 fn base_environment(cfgsync_port: u16) -> Vec<EnvEntry> {
     let rust_log = env_value_or_default(tf_env::rust_log, "info");
-    let logos_blockchain_log_level =
-        env_value_or_default(tf_env::logos_blockchain_log_level, "info");
     let time_backend = env_value_or_default(tf_env::lb_time_service_backend, "monotonic");
     let cfgsync_host = env::var("LOGOS_BLOCKCHAIN_CFGSYNC_HOST")
         .unwrap_or_else(|_| String::from(DEFAULT_CFGSYNC_HOST));
 
-    vec![
+    let mut environment = vec![
         EnvEntry::new("RUST_LOG", rust_log),
-        EnvEntry::new("LOGOS_BLOCKCHAIN_LOG_LEVEL", logos_blockchain_log_level),
         EnvEntry::new("LOGOS_BLOCKCHAIN_TIME_BACKEND", time_backend),
         EnvEntry::new(
             "CFG_SERVER_ADDR",
             format!("http://{cfgsync_host}:{cfgsync_port}"),
         ),
         EnvEntry::new("OTEL_METRIC_EXPORT_INTERVAL", "5000"),
-    ]
+    ];
+
+    if let Some(log_level) = tf_env::log_level() {
+        environment.push(EnvEntry::new("LOG_LEVEL", log_level));
+    }
+
+    environment
 }
 
 fn env_value_or_default(getter: impl Fn() -> Option<String>, default: &'static str) -> String {

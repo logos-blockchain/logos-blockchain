@@ -3,8 +3,9 @@ mod serde {
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-        reward::{OldSessionBlendingTokenCollector, SessionBlendingTokenCollector},
+        reward::{EpochBlendingTokenCollector, OldEpochBlendingTokenCollector},
     };
+    use lb_chain_service::Epoch;
     use serde::{Deserialize, Serialize};
 
     use crate::{
@@ -17,15 +18,15 @@ mod serde {
     ///
     /// For details about its fields, check [`ServiceState`].
     pub struct SerializableServiceState<BroadcastSettings> {
-        last_seen_session: u64,
+        last_seen_epoch: Epoch,
         spent_core_quota: u64,
         #[serde(bound(
             deserialize = "BroadcastSettings: Deserialize<'de> + Eq + core::hash::Hash"
         ))]
         unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
-        current_session_token_collector: SessionBlendingTokenCollector,
-        old_session_token_collector: Option<OldSessionBlendingTokenCollector>,
+        current_epoch_token_collector: EpochBlendingTokenCollector,
+        old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
     }
 
     impl<BroadcastSettings> SerializableServiceState<BroadcastSettings> {
@@ -37,18 +38,18 @@ mod serde {
             state_updater: overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
-        ) -> Result<ServiceState<BackendSettings, BroadcastSettings>, error::SessionMismatch>
+        ) -> Result<ServiceState<BackendSettings, BroadcastSettings>, error::EpochMismatch>
         where
             BackendSettings: Clone,
             BroadcastSettings: Clone,
         {
             ServiceState::new(
-                self.last_seen_session,
+                self.last_seen_epoch,
                 self.spent_core_quota,
                 self.unsent_processed_messages,
                 self.unsent_data_messages,
-                self.current_session_token_collector,
-                self.old_session_token_collector,
+                self.current_epoch_token_collector,
+                self.old_epoch_token_collector,
                 state_updater,
             )
         }
@@ -59,21 +60,21 @@ mod serde {
     {
         fn from(value: ServiceState<BackendSettings, BroadcastSettings>) -> Self {
             let (
-                last_seen_session,
+                last_seen_epoch,
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
-                current_session_token_collector,
-                old_session_token_collector,
+                current_epoch_token_collector,
+                old_epoch_token_collector,
                 _,
             ) = value.into_components();
             Self {
-                last_seen_session,
+                last_seen_epoch,
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
-                current_session_token_collector,
-                old_session_token_collector,
+                current_epoch_token_collector,
+                old_epoch_token_collector,
             }
         }
     }
@@ -89,8 +90,9 @@ mod service {
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-        reward::{BlendingToken, OldSessionBlendingTokenCollector, SessionBlendingTokenCollector},
+        reward::{BlendingToken, EpochBlendingTokenCollector, OldEpochBlendingTokenCollector},
     };
+    use lb_chain_service::Epoch;
 
     use crate::{
         core::state::{error, recovery_state::RecoveryServiceState, state_updater::StateUpdater},
@@ -100,15 +102,15 @@ mod service {
     #[derive(Clone)]
     /// Recovery state for Blend core service.
     pub struct ServiceState<BackendSettings, BroadcastSettings> {
-        /// The last session that was saved.
-        last_seen_session: u64,
-        /// The last value for the core quota allowance for the session that is
+        /// The last epoch that was saved.
+        last_seen_epoch: Epoch,
+        /// The last value for the core quota allowance for the epoch that is
         /// tracked.
         spent_core_quota: u64,
         unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
         unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
-        current_session_token_collector: SessionBlendingTokenCollector,
-        old_session_token_collector: Option<OldSessionBlendingTokenCollector>,
+        current_epoch_token_collector: EpochBlendingTokenCollector,
+        old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
         state_updater: overwatch::services::state::StateUpdater<
             Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
         >,
@@ -120,18 +122,15 @@ mod service {
     {
         fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
             f.debug_struct("ServiceState")
-                .field("last_seen_session", &self.last_seen_session)
+                .field("last_seen_epoch", &self.last_seen_epoch)
                 .field("spent_core_quota", &self.spent_core_quota)
                 .field("unsent_processed_messages", &self.unsent_processed_messages)
                 .field("unsent_data_messages", &self.unsent_data_messages)
                 .field(
-                    "current_session_token_collector",
-                    &self.current_session_token_collector,
+                    "current_epoch_token_collector",
+                    &self.current_epoch_token_collector,
                 )
-                .field(
-                    "old_session_token_collector",
-                    &self.old_session_token_collector,
-                )
+                .field("old_epoch_token_collector", &self.old_epoch_token_collector)
                 .finish_non_exhaustive()
         }
     }
@@ -144,73 +143,72 @@ mod service {
         // Creates a new instance with the provided fields, and saves it using
         // `state_updater`.
         pub(super) fn new(
-            last_seen_session: u64,
+            last_seen_epoch: Epoch,
             spent_core_quota: u64,
             unsent_processed_messages: HashSet<ProcessedMessage<BroadcastSettings>>,
             unsent_data_messages: HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
-            current_session_token_collector: SessionBlendingTokenCollector,
-            old_session_token_collector: Option<OldSessionBlendingTokenCollector>,
+            current_epoch_token_collector: EpochBlendingTokenCollector,
+            old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
-        ) -> Result<Self, error::SessionMismatch> {
-            // Check if `current_session_token_collector` has the correct session number.
-            let provided_current_session = current_session_token_collector.session_number();
-            if provided_current_session != last_seen_session {
-                return Err(error::SessionMismatch {
-                    last_seen: last_seen_session,
-                    provided: provided_current_session,
+        ) -> Result<Self, error::EpochMismatch> {
+            // Check if `current_epoch_token_collector` has the correct epoch number.
+            let provided_current_epoch = current_epoch_token_collector.epoch();
+            if provided_current_epoch != last_seen_epoch {
+                return Err(error::EpochMismatch {
+                    last_seen: last_seen_epoch,
+                    provided: provided_current_epoch,
                 });
             }
 
-            // Check if `old_session_token_collector` has the correct session number.
-            if let Some(old_session_token_collector) = &old_session_token_collector {
-                let provided_current_session = old_session_token_collector
-                    .session_number()
-                    .saturating_add(1);
-                if provided_current_session != last_seen_session {
-                    return Err(error::SessionMismatch {
-                        last_seen: last_seen_session,
-                        provided: provided_current_session,
+            // Check if `old_epoch_token_collector` has the correct epoch number.
+            if let Some(old_epoch_token_collector) = &old_epoch_token_collector {
+                let provided_current_epoch =
+                    old_epoch_token_collector.epoch().saturating_add(1.into());
+                if provided_current_epoch != last_seen_epoch {
+                    return Err(error::EpochMismatch {
+                        last_seen: last_seen_epoch,
+                        provided: provided_current_epoch,
                     });
                 }
             }
 
             let this = Self {
-                last_seen_session,
+                last_seen_epoch,
                 spent_core_quota,
                 unsent_processed_messages,
                 unsent_data_messages,
-                current_session_token_collector,
-                old_session_token_collector,
+                current_epoch_token_collector,
+                old_epoch_token_collector,
                 state_updater,
             };
             this.save();
             Ok(this)
         }
 
-        /// Create a new instance with the provided session, and empty state for
+        /// Create a new instance with the provided epoch, and empty state for
         /// the rest.
         ///
         /// The new instance is saved immediately using `state_updater`.
         ///
-        /// This is typically used on session rotations or when no previous
+        /// This is typically used on epoch rotations or when no previous
         /// state was recovered.
-        pub fn with_session(
-            session: u64,
-            current_session_token_collector: SessionBlendingTokenCollector,
-            old_session_token_collector: Option<OldSessionBlendingTokenCollector>,
+        pub fn with_epoch(
+            epoch: Epoch,
+            current_epoch_token_collector: EpochBlendingTokenCollector,
+            old_epoch_token_collector: Option<OldEpochBlendingTokenCollector>,
             state_updater: overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
-        ) -> Result<Self, error::SessionMismatch> {
+        ) -> Result<Self, error::EpochMismatch> {
             Self::new(
-                session,
+                epoch,
                 0,
                 HashSet::new(),
                 HashSet::new(),
-                current_session_token_collector,
-                old_session_token_collector,
+                current_epoch_token_collector,
+                old_epoch_token_collector,
                 state_updater,
             )
         }
@@ -228,8 +226,8 @@ mod service {
             StateUpdater::new(self)
         }
 
-        pub const fn last_seen_session(&self) -> u64 {
-            self.last_seen_session
+        pub const fn last_seen_epoch(&self) -> Epoch {
+            self.last_seen_epoch
         }
 
         pub(super) const fn spend_quota(&mut self, quota: u64) {
@@ -243,21 +241,21 @@ mod service {
             self.spent_core_quota
         }
 
-        pub(super) fn collect_current_session_tokens(
+        pub(super) fn collect_current_epoch_tokens(
             &mut self,
             tokens: impl Iterator<Item = BlendingToken>,
         ) {
             for token in tokens {
-                self.current_session_token_collector.collect(token);
+                self.current_epoch_token_collector.collect(token);
             }
         }
 
-        pub(super) fn collect_old_session_tokens(
+        pub(super) fn collect_old_epoch_tokens(
             &mut self,
             tokens: impl Iterator<Item = BlendingToken>,
-        ) -> Result<(), error::OldSessionTokenCollectorNotExist> {
-            self.old_session_token_collector.as_mut().map_or(
-                Err(error::OldSessionTokenCollectorNotExist),
+        ) -> Result<(), error::OldEpochTokenCollectorNotExist> {
+            self.old_epoch_token_collector.as_mut().map_or(
+                Err(error::OldEpochTokenCollectorNotExist),
                 |collector| {
                     for token in tokens {
                         collector.collect(token);
@@ -267,17 +265,15 @@ mod service {
             )
         }
 
-        pub(super) const fn clear_old_session_token_collector(
+        pub(super) const fn clear_old_epoch_token_collector(
             &mut self,
-        ) -> Option<OldSessionBlendingTokenCollector> {
-            self.old_session_token_collector.take()
+        ) -> Option<OldEpochBlendingTokenCollector> {
+            self.old_epoch_token_collector.take()
         }
 
         #[cfg(test)]
-        pub(crate) const fn current_session_token_collector(
-            &self,
-        ) -> &SessionBlendingTokenCollector {
-            &self.current_session_token_collector
+        pub(crate) const fn current_epoch_token_collector(&self) -> &EpochBlendingTokenCollector {
+            &self.current_epoch_token_collector
         }
 
         #[expect(
@@ -287,23 +283,23 @@ mod service {
         pub fn into_components(
             self,
         ) -> (
-            u64,
+            Epoch,
             u64,
             HashSet<ProcessedMessage<BroadcastSettings>>,
             HashSet<EncapsulatedMessageWithVerifiedPublicHeader>,
-            SessionBlendingTokenCollector,
-            Option<OldSessionBlendingTokenCollector>,
+            EpochBlendingTokenCollector,
+            Option<OldEpochBlendingTokenCollector>,
             overwatch::services::state::StateUpdater<
                 Option<RecoveryServiceState<BackendSettings, BroadcastSettings>>,
             >,
         ) {
             (
-                self.last_seen_session,
+                self.last_seen_epoch,
                 self.spent_core_quota,
                 self.unsent_processed_messages,
                 self.unsent_data_messages,
-                self.current_session_token_collector,
-                self.old_session_token_collector,
+                self.current_epoch_token_collector,
+                self.old_epoch_token_collector,
                 self.state_updater,
             )
         }
@@ -378,7 +374,7 @@ mod state_updater {
 
     use lb_blend::message::{
         encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-        reward::{BlendingToken, OldSessionBlendingTokenCollector},
+        reward::{BlendingToken, OldEpochBlendingTokenCollector},
     };
 
     use crate::{
@@ -428,27 +424,27 @@ mod state_updater {
             self.inner
         }
 
-        pub fn collect_current_session_tokens(
+        pub fn collect_current_epoch_tokens(
             &mut self,
             tokens: impl Iterator<Item = BlendingToken>,
         ) {
             self.changed = true;
-            self.inner.collect_current_session_tokens(tokens);
+            self.inner.collect_current_epoch_tokens(tokens);
         }
 
-        pub fn collect_old_session_tokens(
+        pub fn collect_old_epoch_tokens(
             &mut self,
             tokens: impl Iterator<Item = BlendingToken>,
-        ) -> Result<(), error::OldSessionTokenCollectorNotExist> {
+        ) -> Result<(), error::OldEpochTokenCollectorNotExist> {
             self.changed = true;
-            self.inner.collect_old_session_tokens(tokens)
+            self.inner.collect_old_epoch_tokens(tokens)
         }
 
-        pub const fn clear_old_session_token_collector(
+        pub const fn clear_old_epoch_token_collector(
             &mut self,
-        ) -> Option<OldSessionBlendingTokenCollector> {
+        ) -> Option<OldEpochBlendingTokenCollector> {
             self.changed = true;
-            self.inner.clear_old_session_token_collector()
+            self.inner.clear_old_epoch_token_collector()
         }
     }
 
@@ -583,14 +579,14 @@ mod recovery_state {
 }
 
 pub mod error {
-    use lb_core::sdp::SessionNumber;
+    use lb_chain_service::Epoch;
 
     #[derive(Debug)]
-    pub struct SessionMismatch {
-        pub last_seen: SessionNumber,
-        pub provided: SessionNumber,
+    pub struct EpochMismatch {
+        pub last_seen: Epoch,
+        pub provided: Epoch,
     }
 
     #[derive(Debug)]
-    pub struct OldSessionTokenCollectorNotExist;
+    pub struct OldEpochTokenCollectorNotExist;
 }

@@ -24,27 +24,13 @@ impl Settings {
         *slot_duration
     }
 
-    /// Number of rounds per session, calculated as the number of slots per
+    /// Number of rounds per epoch, calculated as the number of slots per
     /// epoch, correctly scaled to account for the slot/round ratio.
     #[must_use]
-    pub fn rounds_per_session(&self, slots_per_epoch: u64, slot_duration: &Duration) -> NonZeroU64 {
+    pub fn rounds_per_epoch(&self, slots_per_epoch: u64, slot_duration: &Duration) -> NonZeroU64 {
         ((slots_per_epoch * slot_duration.as_secs()) / self.round_duration(slot_duration).as_secs())
             .try_into()
-            .expect("There must be at least one round per session.")
-    }
-
-    /// Number of rounds per interval, calculated as the average number of slots
-    /// per block (slot activation threshold), correctly scaled to account for
-    /// the slot/round ratio.
-    #[must_use]
-    pub fn rounds_per_interval(
-        &self,
-        slots_per_block: u64,
-        slot_duration: &Duration,
-    ) -> NonZeroU64 {
-        ((slots_per_block * slot_duration.as_secs()) / self.round_duration(slot_duration).as_secs())
-            .try_into()
-            .expect("There must be at least one round per interval.")
+            .expect("There must be at least one round per epoch.")
     }
 
     /// Number of rounds per observation window.
@@ -65,36 +51,17 @@ impl Settings {
         .unwrap()
     }
 
-    /// Number of rounds per session transition period.
-    ///
-    /// The Blend spec defines this as roughly the same as
-    /// [`rounds_per_interval`].
-    #[must_use]
-    pub fn rounds_per_session_transition_period(
-        &self,
-        slots_per_block: u64,
-        slot_duration: &Duration,
-    ) -> NonZeroU64 {
-        self.rounds_per_interval(slots_per_block, slot_duration)
-    }
-
-    /// Number of rounds per epoch transition period.
+    /// Duration of the epoch transition period.
     ///
     /// The Blend spec defines this as roughly the same time it takes to propose
     /// a new block.
     #[must_use]
-    pub fn slots_per_epoch_transition_period(
+    pub const fn epoch_transition(
         &self,
         slots_per_block: u64,
         slot_duration: &Duration,
-    ) -> NonZeroU64 {
-        let rounds_per_session_transition_period =
-            self.rounds_per_session_transition_period(slots_per_block, slot_duration);
-        ((self.round_duration(slot_duration).as_secs()
-            * rounds_per_session_transition_period.get())
-            / slot_duration.as_secs())
-        .try_into()
-        .expect("There must be at least one slot per epoch transition period.")
+    ) -> Duration {
+        Duration::from_secs(slot_duration.as_secs() * slots_per_block)
     }
 
     #[must_use]
@@ -109,7 +76,7 @@ impl Settings {
             message_frequency_per_round: self.core.scheduler.cover.message_frequency_per_round,
             minimum_network_size: self.common.minimum_network_size.into(),
             num_blend_layers: self.common.num_blend_layers,
-            rounds_per_session: self.rounds_per_session(
+            rounds_per_epoch: self.rounds_per_epoch(
                 cryptarchia_deployment.slots_per_epoch(),
                 &time_deployment.slot_duration,
             ),
@@ -161,9 +128,6 @@ pub struct SchedulerSettings {
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
     pub message_frequency_per_round: NonNegativeF64,
-    // `max`: safety buffer length, expressed in intervals
-    // TODO: Can we derive this?
-    pub intervals_for_safety_buffer: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -181,12 +145,9 @@ mod tests {
     #[test]
     fn blend_devnet() {
         const EXPECTED_ROUND_DURATION: Duration = Duration::from_secs(1);
-        const EXPECTED_ROUNDS_PER_SESSION: NonZeroU64 = NonZeroU64::new(6_000).unwrap();
-        const EXPECTED_ROUNDS_PER_INTERVAL: NonZeroU64 = NonZeroU64::new(20).unwrap();
+        const EXPECTED_ROUNDS_PER_EPOCH: NonZeroU64 = NonZeroU64::new(6_000).unwrap();
         const EXPECTED_ROUNDS_PER_OBSERVATION_WINDOW: NonZeroU64 = NonZeroU64::new(10).unwrap();
-        const EXPECTED_ROUNDS_PER_SESSION_TRANSITION_PERIOD: NonZeroU64 =
-            NonZeroU64::new(20).unwrap();
-        const EXPECTED_SLOTS_PER_EPOCH_TRANSITION_PERIOD: NonZeroU64 = NonZeroU64::new(20).unwrap();
+        const EXPECTED_EPOCH_TRANSITION_PERIOD: Duration = Duration::from_secs(20);
 
         let deployment: DeploymentSettings = WellKnownDeployment::Devnet.into();
 
@@ -199,15 +160,8 @@ mod tests {
         assert_eq!(
             deployment
                 .blend
-                .rounds_per_session(slots_per_epoch, &slot_duration),
-            EXPECTED_ROUNDS_PER_SESSION
-        );
-
-        assert_eq!(
-            deployment
-                .blend
-                .rounds_per_interval(slots_per_block, &slot_duration),
-            EXPECTED_ROUNDS_PER_INTERVAL
+                .rounds_per_epoch(slots_per_epoch, &slot_duration),
+            EXPECTED_ROUNDS_PER_EPOCH
         );
 
         assert_eq!(
@@ -218,15 +172,8 @@ mod tests {
         assert_eq!(
             deployment
                 .blend
-                .rounds_per_session_transition_period(slots_per_block, &slot_duration),
-            EXPECTED_ROUNDS_PER_SESSION_TRANSITION_PERIOD
-        );
-
-        assert_eq!(
-            deployment
-                .blend
-                .slots_per_epoch_transition_period(slots_per_block, &slot_duration),
-            EXPECTED_SLOTS_PER_EPOCH_TRANSITION_PERIOD
+                .epoch_transition(slots_per_block, &slot_duration),
+            EXPECTED_EPOCH_TRANSITION_PERIOD
         );
     }
 }

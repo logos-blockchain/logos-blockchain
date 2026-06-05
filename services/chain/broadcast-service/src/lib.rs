@@ -1,13 +1,9 @@
-use core::{fmt::Debug, pin::Pin};
-use std::{collections::HashMap, fmt::Display};
+use core::fmt::Debug;
+use std::fmt::Display;
 
 use async_trait::async_trait;
 use derivative::Derivative;
-use futures::{Stream, StreamExt as _, future::ready, stream::iter};
-use lb_core::{
-    header::HeaderId,
-    sdp::{ProviderId, ProviderInfo, SessionNumber},
-};
+use lb_core::header::HeaderId;
 use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{
@@ -17,18 +13,9 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, oneshot};
-use tokio_stream::wrappers::BroadcastStream;
 use tracing::{error, info, trace};
 
 const BROADCAST_CHANNEL_SIZE: usize = 128;
-
-pub type SessionSubscription = Pin<Box<dyn Stream<Item = SessionUpdate> + Send + Sync>>;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SessionUpdate {
-    pub session_number: SessionNumber,
-    pub providers: HashMap<ProviderId, ProviderInfo>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlockInfo {
@@ -40,22 +27,14 @@ pub struct BlockInfo {
 #[derivative(Debug)]
 pub enum BlockBroadcastMsg {
     BroadcastFinalizedBlock(BlockInfo),
-    BroadcastBlendSession(SessionUpdate),
     SubscribeToFinalizedBlocks {
         result_sender: oneshot::Sender<broadcast::Receiver<BlockInfo>>,
-    },
-    SubscribeBlendSession {
-        #[derivative(Debug = "ignore")]
-        result_sender: oneshot::Sender<SessionSubscription>,
     },
 }
 
 pub struct BlockBroadcastService<RuntimeServiceId> {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     finalized_blocks: broadcast::Sender<BlockInfo>,
-    blend_session: broadcast::Sender<SessionUpdate>,
-    // For sending latest session on subscription.
-    last_blend_session: Option<SessionUpdate>,
 }
 
 impl<RuntimeServiceId> ServiceData for BlockBroadcastService<RuntimeServiceId> {
@@ -75,13 +54,10 @@ where
         _initial_state: Self::State,
     ) -> Result<Self, overwatch::DynError> {
         let (finalized_blocks, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
-        let (blend_session, _) = broadcast::channel(BROADCAST_CHANNEL_SIZE);
 
         Ok(Self {
             service_resources_handle,
             finalized_blocks,
-            blend_session,
-            last_blend_session: None,
         })
     }
 
@@ -99,12 +75,6 @@ where
                         trace!("No listener for finalized blocks. Not broadcasting. ");
                     }
                 }
-                BlockBroadcastMsg::BroadcastBlendSession(session) => {
-                    self.last_blend_session = Some(session.clone());
-                    if self.blend_session.send(session).is_err() {
-                        trace!("No listener for blend sessions. Not broadcasting. ");
-                    }
-                }
                 BlockBroadcastMsg::SubscribeToFinalizedBlocks { result_sender } => {
                     // TODO: This naively broadcast what was sent from the chain service. In case
                     // of LIB branch change (might happend during bootstrapping), blocks should be
@@ -113,36 +83,9 @@ where
                         error!("Could not subscribe to new blocks channel: {err:?}");
                     }
                 }
-                BlockBroadcastMsg::SubscribeBlendSession { result_sender } => {
-                    if result_sender
-                        .send(create_session_stream(
-                            self.last_blend_session.clone(),
-                            &self.blend_session,
-                        ))
-                        .is_err()
-                    {
-                        error!("Could not subscribe to blend session channel.");
-                    }
-                }
             }
         }
 
         Ok(())
     }
-}
-
-/// Create a stream from the current optional, last-processed value and the
-/// broadcast sender.
-///
-/// The stream immediately yields the current value if `Some`, else it will wait
-/// for the first `Ok` value as returned by the broadcast channel wrapper
-/// stream.
-fn create_session_stream(
-    current_value: Option<SessionUpdate>,
-    sender: &broadcast::Sender<SessionUpdate>,
-) -> SessionSubscription {
-    Box::pin(
-        iter(current_value)
-            .chain(BroadcastStream::new(sender.subscribe()).filter_map(|item| ready(item.ok()))),
-    )
 }

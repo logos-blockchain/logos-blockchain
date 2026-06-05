@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 pub enum MempoolError {
     #[error("Item already in mempool")]
     ExistingItem,
+    #[error("Item is too large: {size} bytes exceeds maximum {max} bytes")]
+    ItemTooLarge { size: usize, max: usize },
     #[error("Storage operation failed: {0}")]
     StorageError(String),
     #[error(transparent)]

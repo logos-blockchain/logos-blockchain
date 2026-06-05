@@ -1,10 +1,15 @@
 pub mod blend;
 pub mod locked_notes;
 
-use core::str::FromStr;
-use std::hash::Hash;
+use core::{
+    ops::{Add, Sub},
+    str::FromStr,
+};
+use std::{collections::HashMap, hash::Hash};
 
 use blake2::{Blake2b, Digest as _};
+use bytes::Bytes;
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded_vec::LowerBoundedVec;
 use multiaddr::{Multiaddr, Protocol};
@@ -14,11 +19,11 @@ use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
+    codec::{self, DeserializeOp as _, SerializeOp as _},
     mantle::{NoteId, ops::channel::Ed25519PublicKey},
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
-pub type SessionNumber = u64;
 pub type StakeThreshold = u64;
 
 const ACTIVE_METADATA_BLEND_TYPE: u8 = 0x01;
@@ -31,17 +36,60 @@ pub struct MinStake {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
-    pub lock_period: u64,
-    pub inactivity_period: u64,
-    pub retention_period: u64,
-    pub timestamp: BlockNumber,
-    pub session_duration: BlockNumber,
+    /// Minimum epochs during which a declaration cannot be withdrawn
+    pub lock_period: NumberOfEpochs,
+    /// Maximum epochs during which an activity message must be sent
+    pub inactivity_period: NumberOfEpochs,
+    /// Epochs after which a declaration can be safely deleted by Garbage
+    /// Collection
+    pub retention_period: NumberOfEpochs,
+    // Epoch number at which this parameter was set
+    pub epoch: Epoch,
 }
 
-impl ServiceParameters {
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NumberOfEpochs(Epoch);
+
+impl NumberOfEpochs {
     #[must_use]
-    pub const fn session_for_block(&self, block_number: BlockNumber) -> SessionNumber {
-        block_number / self.session_duration
+    pub const fn new(epoch: Epoch) -> Self {
+        Self(epoch)
+    }
+}
+
+impl From<u32> for NumberOfEpochs {
+    fn from(value: u32) -> Self {
+        Self(value.into())
+    }
+}
+
+impl From<NumberOfEpochs> for u32 {
+    fn from(this: NumberOfEpochs) -> Self {
+        this.0.into_inner()
+    }
+}
+
+impl Add for NumberOfEpochs {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self(self.0 + rhs.0)
+    }
+}
+
+impl Add<NumberOfEpochs> for Epoch {
+    type Output = Self;
+
+    fn add(self, rhs: NumberOfEpochs) -> Self::Output {
+        self + rhs.0
+    }
+}
+
+impl Sub<NumberOfEpochs> for Epoch {
+    type Output = Self;
+
+    fn sub(self, rhs: NumberOfEpochs) -> Self::Output {
+        self - rhs.0
     }
 }
 
@@ -182,9 +230,9 @@ pub struct Declaration {
     pub locked_note_id: NoteId,
     pub locators: Locators,
     pub zk_id: ZkPublicKey,
-    pub created: BlockNumber,
-    pub active: BlockNumber,
-    pub withdrawn: Option<BlockNumber>,
+    pub created: Epoch,
+    pub active: Epoch,
+    pub withdrawn: Option<Epoch>,
     pub nonce: Nonce,
 }
 
@@ -194,20 +242,63 @@ pub struct ProviderInfo {
     pub zk_id: ZkPublicKey,
 }
 
+const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
+
 impl Declaration {
     #[must_use]
-    pub fn new(block_number: BlockNumber, declaration_msg: &DeclarationMessage) -> Self {
+    pub fn new(epoch: Epoch, declaration_msg: &DeclarationMessage) -> Self {
         Self {
             service_type: declaration_msg.service_type,
             provider_id: declaration_msg.provider_id,
             locked_note_id: declaration_msg.locked_note_id,
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
-            created: block_number,
-            active: block_number,
+            created: epoch,
+            active: epoch + SNAPSHOT_FINALIZATION_DELAY,
             withdrawn: None,
             nonce: 0,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct Declarations(HashMap<ServiceType, HashMap<DeclarationId, Declaration>>);
+
+impl Declarations {
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&ServiceType, &HashMap<DeclarationId, Declaration>)> {
+        self.0.iter()
+    }
+}
+
+impl From<HashMap<ServiceType, HashMap<DeclarationId, Declaration>>> for Declarations {
+    fn from(value: HashMap<ServiceType, HashMap<DeclarationId, Declaration>>) -> Self {
+        Self(value)
+    }
+}
+
+impl FromIterator<(ServiceType, HashMap<DeclarationId, Declaration>)> for Declarations {
+    fn from_iter<I: IntoIterator<Item = (ServiceType, HashMap<DeclarationId, Declaration>)>>(
+        iter: I,
+    ) -> Self {
+        Self(iter.into_iter().collect())
+    }
+}
+
+impl TryFrom<Bytes> for Declarations {
+    type Error = codec::Error;
+
+    fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
+        Self::from_bytes(&bytes)
+    }
+}
+
+impl TryFrom<Declarations> for Bytes {
+    type Error = codec::Error;
+
+    fn try_from(this: Declarations) -> Result<Self, Self::Error> {
+        this.to_bytes()
     }
 }
 
@@ -289,16 +380,19 @@ impl ActivityMetadata {
     }
 }
 
-fn parse_session_number(input: &[u8]) -> IResult<&[u8], SessionNumber> {
-    let (input, bytes) = take(size_of::<SessionNumber>()).parse(input)?;
-    let session_bytes: [u8; 8] = bytes
+fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
+    let (input, bytes) = take(size_of::<Epoch>()).parse(input)?;
+    let epoch_bytes: [u8; 4] = bytes
         .try_into()
         .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-    Ok((input, SessionNumber::from_le_bytes(session_bytes)))
+    Ok((input, u32::from_le_bytes(epoch_bytes).into()))
 }
 
 #[cfg(test)]
 mod tests {
+    use lb_groth16::{Field as _, Fr};
+    use lb_key_management_system_keys::keys::Ed25519Key;
+
     use super::*;
 
     #[test]
@@ -381,5 +475,29 @@ mod tests {
                 .to_string(),
             "Input cannot be empty."
         );
+    }
+
+    #[test]
+    fn declaration_initialization() {
+        let msg = DeclarationMessage {
+            service_type: ServiceType::BlendNetwork,
+            locators: vec!["/ip4/127.0.0.1/udp/3001/quic-v1".parse().unwrap()]
+                .try_into()
+                .unwrap(),
+            provider_id: Ed25519Key::from_bytes(&[0; _]).public_key().into(),
+            zk_id: ZkPublicKey::zero(),
+            locked_note_id: Fr::ZERO.into(),
+        };
+
+        let declaration = Declaration::new(Epoch::new(10), &msg);
+        assert_eq!(declaration.service_type, msg.service_type);
+        assert_eq!(declaration.provider_id, msg.provider_id);
+        assert_eq!(declaration.locked_note_id, msg.locked_note_id);
+        assert_eq!(declaration.locators, msg.locators);
+        assert_eq!(declaration.zk_id, msg.zk_id);
+        assert_eq!(declaration.created, Epoch::new(10));
+        assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
+        assert_eq!(declaration.withdrawn, None);
+        assert_eq!(declaration.nonce, 0);
     }
 }

@@ -11,7 +11,7 @@ use lb_blend_message::{
 };
 use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_blend_scheduling::message_blend::provers::BlendLayerProof;
-use lb_core::sdp::SessionNumber;
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, UnsecuredEd25519Key};
 use lb_libp2p::{NetworkBehaviour, ed25519, upgrade::Version};
 use libp2p::{
@@ -99,7 +99,7 @@ impl TestEncapsulatedMessage {
     pub fn new(payload: &[u8]) -> Self {
         Self(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
-                &generate_valid_inputs(0),
+                &generate_valid_inputs(0.into()),
                 PayloadType::Data,
                 payload.try_into().unwrap(),
             )
@@ -128,13 +128,13 @@ impl AsRef<EncapsulatedMessageWithVerifiedPublicHeader> for TestEncapsulatedMess
     }
 }
 
-pub struct TestEncapsulatedMessageWithSession(EncapsulatedMessageWithVerifiedPublicHeader);
+pub struct TestEncapsulatedMessageWithEpoch(EncapsulatedMessageWithVerifiedPublicHeader);
 
-impl TestEncapsulatedMessageWithSession {
-    pub fn new(session: SessionNumber, payload: &[u8]) -> Self {
+impl TestEncapsulatedMessageWithEpoch {
+    pub fn new(epoch: Epoch, payload: &[u8]) -> Self {
         Self(
             EncapsulatedMessageWithVerifiedPublicHeader::try_new(
-                &generate_valid_inputs(session),
+                &generate_valid_inputs(epoch),
                 PayloadType::Data,
                 payload.try_into().unwrap(),
             )
@@ -143,7 +143,7 @@ impl TestEncapsulatedMessageWithSession {
     }
 }
 
-impl Deref for TestEncapsulatedMessageWithSession {
+impl Deref for TestEncapsulatedMessageWithEpoch {
     type Target = EncapsulatedMessageWithVerifiedPublicHeader;
 
     fn deref(&self) -> &Self::Target {
@@ -151,11 +151,11 @@ impl Deref for TestEncapsulatedMessageWithSession {
     }
 }
 
-fn generate_valid_inputs(session: SessionNumber) -> Vec<EncapsulationInput> {
+fn generate_valid_inputs(epoch: Epoch) -> Vec<EncapsulationInput> {
     repeat_with(UnsecuredEd25519Key::generate_with_blake_rng)
         .take(3)
         .map(|recipient_signing_key| {
-            let proofs = session_based_mock_blend_proof(session);
+            let proofs = epoch_based_mock_blend_proof(epoch);
             EncapsulationInput::try_new(
                 UnsecuredEd25519Key::generate_with_blake_rng(),
                 &recipient_signing_key.public_key(),
@@ -167,17 +167,17 @@ fn generate_valid_inputs(session: SessionNumber) -> Vec<EncapsulationInput> {
         .collect::<Vec<_>>()
 }
 
-fn session_based_mock_blend_proof(session: SessionNumber) -> BlendLayerProof {
-    let session_bytes = session.to_le_bytes();
+fn epoch_based_mock_blend_proof(epoch: Epoch) -> BlendLayerProof {
+    let epoch_bytes = epoch.into_inner().to_le_bytes();
     BlendLayerProof {
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked({
             let mut bytes = [0u8; _];
-            bytes[..session_bytes.len()].copy_from_slice(&session_bytes);
+            bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
             bytes
         }),
         proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked({
             let mut bytes = [0u8; _];
-            bytes[..session_bytes.len()].copy_from_slice(&session_bytes);
+            bytes[..epoch_bytes.len()].copy_from_slice(&epoch_bytes);
             bytes
         }),
         ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),

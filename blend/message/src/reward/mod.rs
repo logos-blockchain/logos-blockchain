@@ -1,34 +1,34 @@
 mod activity;
-mod session;
+mod epoch;
 mod token;
 
 use std::collections::HashSet;
 
 pub use activity::ActivityProof;
-use lb_core::sdp::SessionNumber;
+pub use epoch::EpochInfo;
+use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 use serde::{Deserialize, Serialize};
-pub use session::SessionInfo;
 pub use token::{BlendingToken, HammingDistance};
 
-pub use crate::reward::session::{BlendingTokenEvaluation, Error, SessionRandomness};
+pub use crate::reward::epoch::{BlendingTokenEvaluation, EpochRandomness, Error};
 
 const LOG_TARGET: &str = blend::message::REWARD;
 
-/// Holds blending tokens collected during a single session.
+/// Holds blending tokens collected during a single epoch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionBlendingTokenCollector {
-    session_number: SessionNumber,
+pub struct EpochBlendingTokenCollector {
+    epoch: Epoch,
     token_evaluation: BlendingTokenEvaluation,
     tokens: HashSet<BlendingToken>,
 }
 
-impl SessionBlendingTokenCollector {
+impl EpochBlendingTokenCollector {
     #[must_use]
-    pub fn new(session_info: &SessionInfo) -> Self {
+    pub fn new(epoch_info: &EpochInfo) -> Self {
         Self {
-            session_number: session_info.session_number,
-            token_evaluation: session_info.token_evaluation,
+            epoch: epoch_info.epoch,
+            token_evaluation: epoch_info.token_evaluation,
             tokens: HashSet::new(),
         }
     }
@@ -38,21 +38,21 @@ impl SessionBlendingTokenCollector {
     }
 
     #[must_use]
-    pub fn rotate_session(
+    pub fn rotate_epoch(
         self,
-        new_session_info: &SessionInfo,
-    ) -> (Self, OldSessionBlendingTokenCollector) {
-        let new_collector = Self::new(new_session_info);
-        let old_collector = OldSessionBlendingTokenCollector {
+        new_epoch_info: &EpochInfo,
+    ) -> (Self, OldEpochBlendingTokenCollector) {
+        let new_collector = Self::new(new_epoch_info);
+        let old_collector = OldEpochBlendingTokenCollector {
             collector: self,
-            next_session_randomness: new_session_info.session_randomness(),
+            next_epoch_randomness: new_epoch_info.epoch_randomness(),
         };
         (new_collector, old_collector)
     }
 
     #[must_use]
-    pub const fn session_number(&self) -> SessionNumber {
-        self.session_number
+    pub const fn epoch(&self) -> Epoch {
+        self.epoch
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
@@ -62,19 +62,19 @@ impl SessionBlendingTokenCollector {
     }
 }
 
-/// Holds blending tokens collected during the old session.
+/// Holds blending tokens collected during the old epoch.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OldSessionBlendingTokenCollector {
-    collector: SessionBlendingTokenCollector,
-    next_session_randomness: SessionRandomness,
+pub struct OldEpochBlendingTokenCollector {
+    collector: EpochBlendingTokenCollector,
+    next_epoch_randomness: EpochRandomness,
 }
 
-impl OldSessionBlendingTokenCollector {
+impl OldEpochBlendingTokenCollector {
     pub fn collect(&mut self, token: BlendingToken) {
         self.collector.collect(token);
     }
 
-    /// Computes an activity proof for this session by consuming tokens.
+    /// Computes an activity proof for this epoch by consuming tokens.
     ///
     /// It returns `None` if there was no blending token satisfying the
     /// activity threshold calculated.
@@ -84,10 +84,10 @@ impl OldSessionBlendingTokenCollector {
         // which is <= activity threshold.
         tracing::trace!(
             LOG_TARGET,
-            "Computing activity proof for session {} with activity threshold {:?} and next session randomness {:?} for {} candidate tokens",
-            self.collector.session_number(),
+            "Computing activity proof for epoch {} with activity threshold {:?} and next epoch randomness {:?} for {} candidate tokens",
+            self.collector.epoch(),
             self.collector.token_evaluation.activity_threshold(),
-            self.next_session_randomness,
+            self.next_epoch_randomness,
             self.collector.tokens.len()
         );
         let (winning_activity_proof, distance) = self
@@ -100,7 +100,7 @@ impl OldSessionBlendingTokenCollector {
                 let distance = self
                     .collector
                     .token_evaluation
-                    .evaluate(&token, self.next_session_randomness)
+                    .evaluate(&token, self.next_epoch_randomness)
                     .map(|distance| (token, distance));
 
                 tracing::trace!(
@@ -111,25 +111,20 @@ impl OldSessionBlendingTokenCollector {
                 distance
             })
             .min_by_key(|(_, distance)| *distance)
-            .map(|(token, distance)| {
-                (
-                    ActivityProof::new(self.collector.session_number, token),
-                    distance,
-                )
-            })?;
+            .map(|(token, distance)| (ActivityProof::new(self.collector.epoch, token), distance))?;
 
         tracing::trace!(
             LOG_TARGET,
-            "Computed activity proof for session {}: {winning_activity_proof:?} with Hamming distance {distance:?}",
-            self.collector.session_number,
+            "Computed activity proof for epoch {}: {winning_activity_proof:?} with Hamming distance {distance:?}",
+            self.collector.epoch,
         );
 
         Some(winning_activity_proof)
     }
 
     #[must_use]
-    pub const fn session_number(&self) -> SessionNumber {
-        self.collector.session_number()
+    pub const fn epoch(&self) -> Epoch {
+        self.collector.epoch()
     }
 
     #[cfg(any(test, feature = "unsafe-test-functions"))]
@@ -159,9 +154,9 @@ mod tests {
     fn test_blending_token_collector() {
         let num_core_nodes = 2;
         let core_quota = 15;
-        let session_info =
-            SessionInfo::new(1, &ZkHash::from(1), num_core_nodes, core_quota, 1).unwrap();
-        let mut tokens = SessionBlendingTokenCollector::new(&session_info);
+        let epoch_info =
+            EpochInfo::new(1.into(), &ZkHash::from(1), num_core_nodes, core_quota, 1).unwrap();
+        let mut tokens = EpochBlendingTokenCollector::new(&epoch_info);
         assert!(tokens.tokens().is_empty());
 
         // Insert `total_core_quota-1` tokens.
@@ -176,10 +171,10 @@ mod tests {
             i += 1;
         }
 
-        // Prepare a new session info.
-        let session_info =
-            SessionInfo::new(2, &ZkHash::from(2), num_core_nodes, core_quota, 1).unwrap();
-        let (_, mut tokens) = tokens.rotate_session(&session_info);
+        // Prepare a new epoch info.
+        let epoch_info =
+            EpochInfo::new(2.into(), &ZkHash::from(2), num_core_nodes, core_quota, 1).unwrap();
+        let (_, mut tokens) = tokens.rotate_epoch(&epoch_info);
 
         // Insert one more tokens.
         // Now,`total_core_quota` tokens have been collected.

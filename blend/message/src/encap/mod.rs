@@ -1,5 +1,5 @@
 use lb_blend_proofs::{
-    quota::{ProofOfQuota, VerifiedProofOfQuota, inputs::prove::public::LeaderInputs},
+    quota::{ProofOfQuota, VerifiedProofOfQuota},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
@@ -13,20 +13,13 @@ pub mod validated;
 #[cfg(test)]
 mod tests;
 
-/// A session-bound `PoQ` verifier.
+/// An epoch-bound `PoQ` verifier.
 pub trait ProofsVerifier {
     type Error;
 
     /// Create a new proof verifier with the public inputs corresponding to the
-    /// current Blend session and cryptarchia epoch.
+    /// current epoch.
     fn new(public_inputs: PoQVerificationInputsMinusSigningKey) -> Self;
-
-    /// Start a new epoch while still maintaining the old one around for
-    /// messages that are propagated around the bound between two epochs.
-    fn start_epoch_transition(&mut self, new_pol_inputs: LeaderInputs);
-    /// Complete the transition period and discard any messages generated in the
-    /// previous epoch.
-    fn complete_epoch_transition(&mut self);
 
     /// Proof of Quota verification logic.
     fn verify_proof_of_quota(

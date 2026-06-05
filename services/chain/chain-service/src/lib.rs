@@ -11,7 +11,7 @@ mod tests;
 
 use core::fmt::Debug;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     fmt::Display,
     path::PathBuf,
     pin::Pin,
@@ -20,12 +20,8 @@ use std::{
 
 use bytes::Bytes;
 use derivative::Derivative;
-use futures::{
-    FutureExt as _, Stream, StreamExt as _, TryStreamExt as _, future::join_all, stream,
-};
-use lb_chain_broadcast_service::{
-    BlockBroadcastMsg, BlockBroadcastService, BlockInfo, SessionUpdate,
-};
+use futures::{Stream, StreamExt as _, TryStreamExt as _, future::join_all, stream};
+use lb_chain_broadcast_service::{BlockBroadcastMsg, BlockBroadcastService, BlockInfo};
 use lb_core::{
     block::{Block, genesis::GenesisBlock},
     events::Events,
@@ -34,7 +30,7 @@ use lb_core::{
         AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
         tx::GasPrices,
     },
-    sdp::{Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType},
+    sdp::{Declaration, DeclarationId},
 };
 use lb_cryptarchia_engine::{Branch, PrunedBlocks, ReorgedBlocks};
 pub use lb_cryptarchia_engine::{Epoch, Slot, State};
@@ -55,7 +51,6 @@ use overwatch::{
 use relays::BroadcastRelay;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_with::serde_as;
-use strum::IntoEnumIterator as _;
 use thiserror::Error;
 use time::OffsetDateTime;
 use tokio::{
@@ -108,8 +103,6 @@ pub enum Error {
     HeaderIdNotFound(HeaderId),
     #[error("Parent header ID not found for child={0}")]
     ParentIdNotFound(HeaderId),
-    #[error("Service session not found: {0:?}")]
-    ServiceSessionNotFound(ServiceType),
 }
 
 #[derive(Derivative)]
@@ -474,33 +467,6 @@ impl Cryptarchia {
     pub fn has_block(&self, block_id: &HeaderId) -> bool {
         self.consensus.branches().get(block_id).is_some()
     }
-
-    fn active_session_providers(
-        &self,
-        block_id: &HeaderId,
-        service_type: ServiceType,
-    ) -> Result<HashMap<ProviderId, ProviderInfo>, Error> {
-        let ledger = self
-            .ledger
-            .state(block_id)
-            .ok_or(Error::HeaderIdNotFound(*block_id))?;
-
-        ledger
-            .active_session_providers(service_type)
-            .ok_or(Error::ServiceSessionNotFound(service_type))
-    }
-
-    fn active_sessions_numbers(
-        &self,
-        block_id: &HeaderId,
-    ) -> Result<HashMap<ServiceType, u64>, Error> {
-        let ledger = self
-            .ledger
-            .state(block_id)
-            .ok_or(Error::HeaderIdNotFound(*block_id))?;
-
-        Ok(ledger.active_sessions())
-    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -649,6 +615,7 @@ where
                 current_slot,
             )
             .await;
+
         // These are blocks that have been pruned by the cryptarchia engine but have not
         // yet been deleted from the storage layer.
         let mut storage_blocks_to_remove = Self::delete_stale_blocks_from_storage(
@@ -789,8 +756,8 @@ where
                         }
                     }
 
-                    Some(lb_time_service::SlotTick { slot, .. }) = slot_timer.next() => {
-                        current_slot = slot;
+                    Some(lb_time_service::SlotTick { slot: new_slot, .. }) = slot_timer.next() => {
+                        current_slot = new_slot;
                     }
 
                     _ = state_recording_timer.tick() => {
@@ -876,6 +843,7 @@ where
         Ok((current_slot, slot_timer))
     }
 
+    #[expect(clippy::too_many_lines, reason = "TODO: refactor into funcs")]
     async fn process_message(
         cryptarchia: &Cryptarchia,
         new_block_channel: &broadcast::Sender<ProcessedBlockEvent>,
@@ -931,9 +899,15 @@ where
                 let declarations = cryptarchia
                     .ledger
                     .state(&tip)
-                    .map(LedgerState::sdp_declarations)
-                    .unwrap_or_default();
-
+                    .map(|ledger_state| ledger_state.mantle_ledger().sdp.declarations())
+                    .unwrap_or_default()
+                    .iter()
+                    .flat_map(|(_, declarations)| {
+                        declarations
+                            .iter()
+                            .map(|(id, declaration)| (*id, declaration.clone()))
+                    })
+                    .collect();
                 reply_channel.send(declarations).unwrap_or_else(|_| {
                     error!("Could not send SDP declarations through channel");
                 });
@@ -1071,14 +1045,6 @@ where
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
-        let previous_session_numbers = match cryptarchia.active_sessions_numbers(&prev_lib) {
-            Ok(session_numbers) => session_numbers,
-            Err(e) => {
-                warn!("Error getting previous session numbers: {e}");
-                ServiceType::iter().map(|s| (s, 0)).collect()
-            }
-        };
-
         let (pruned_blocks, reorged_blocks, events) =
             cryptarchia.try_apply_block(&block, current_slot)?;
         let new_lib = cryptarchia.lib();
@@ -1150,14 +1116,6 @@ where
             if let Err(e) = lib_broadcaster.send(lib_update) {
                 warn!("No LIB-update subscribers to notify: {e}");
             }
-
-            Self::broadcast_session_updates_for_block(
-                cryptarchia,
-                &new_lib,
-                relays,
-                Some(&previous_session_numbers),
-            )
-            .await;
         }
 
         let reorged_txs: Vec<_> = join_all(
@@ -1338,7 +1296,6 @@ where
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
             warn!("No new-block subscribers to notify: {e}");
         }
-        Self::broadcast_session_updates_for_block(&cryptarchia, &init_tip.id(), relays, None).await;
 
         // Phase 1: Collect only block IDs in (LIB, tip].
         info!(
@@ -1585,74 +1542,6 @@ where
 
         (cryptarchia, storage_blocks_to_remove)
     }
-
-    async fn broadcast_session_updates_for_block(
-        cryptarchia: &Cryptarchia,
-        block_id: &HeaderId,
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        previous_sessions: Option<&HashMap<ServiceType, u64>>,
-    ) {
-        let Ok(new_sessions) = cryptarchia.active_sessions_numbers(block_id) else {
-            error!("Could not get active session numbers for block {block_id:?}");
-            return;
-        };
-
-        for (service, new_session_number) in &new_sessions {
-            Self::handle_service_update(
-                cryptarchia,
-                block_id,
-                relays,
-                previous_sessions,
-                service,
-                new_session_number,
-            )
-            .await;
-        }
-    }
-
-    async fn handle_service_update(
-        cryptarchia: &Cryptarchia,
-        block_id: &HeaderId,
-        relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
-        previous_sessions: Option<&HashMap<ServiceType, u64>>,
-        service: &ServiceType,
-        new_session_number: &u64,
-    ) {
-        // If `previous_sessions` is provided, check if the session number has changed.
-        // Otherwise, always broadcast (for initialization).
-        if previous_sessions.is_some_and(|prev| {
-            prev.get(service)
-                .copied()
-                .expect("previous session number is set")
-                == *new_session_number
-        }) {
-            return;
-        }
-
-        match cryptarchia.active_session_providers(block_id, *service) {
-            Ok(providers) => {
-                let update = SessionUpdate {
-                    session_number: *new_session_number,
-                    providers,
-                };
-
-                let broadcast_relay = relays.broadcast_relay();
-
-                let broadcast_future = match service {
-                    ServiceType::BlendNetwork => {
-                        broadcast_blend_session(broadcast_relay, update).boxed()
-                    }
-                };
-
-                if let Err(e) = broadcast_future.await {
-                    error!("Failed to broadcast session update for {service:?}: {e}");
-                }
-            }
-            Err(e) => {
-                error!("Could not get session providers for service {service:?}: {e}");
-            }
-        }
-    }
 }
 
 async fn broadcast_finalized_block(
@@ -1661,16 +1550,6 @@ async fn broadcast_finalized_block(
 ) -> Result<(), DynError> {
     broadcast_relay
         .send(BlockBroadcastMsg::BroadcastFinalizedBlock(block_info))
-        .await
-        .map_err(|(error, _)| Box::new(error) as DynError)
-}
-
-async fn broadcast_blend_session(
-    broadcast_relay: &BroadcastRelay,
-    session: SessionUpdate,
-) -> Result<(), DynError> {
-    broadcast_relay
-        .send(BlockBroadcastMsg::BroadcastBlendSession(session))
         .await
         .map_err(|(error, _)| Box::new(error) as DynError)
 }

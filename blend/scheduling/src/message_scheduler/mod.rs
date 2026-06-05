@@ -16,16 +16,16 @@ use tokio_stream::wrappers::IntervalStream;
 use tracing::trace;
 
 use crate::{
-    cover_traffic::SessionCoverTraffic,
+    cover_traffic::EpochCoverTraffic,
     message_scheduler::{
+        epoch_info::EpochInfo,
         round_info::{RoundClock, RoundInfo, RoundReleaseType},
-        session_info::SessionInfo,
     },
-    release_delayer::SessionProcessedMessageDelayer,
+    release_delayer::EpochProcessedMessageDelayer,
 };
 
+pub mod epoch_info;
 pub mod round_info;
-pub mod session_info;
 
 #[cfg(test)]
 mod tests;
@@ -39,28 +39,28 @@ pub trait ProcessedMessageScheduler<ProcessedMessage> {
     fn schedule_processed_message(&mut self, message: ProcessedMessage);
 }
 
-/// Message scheduler that is valid only for a specific session.
-pub struct SessionMessageScheduler<Rng, ProcessedMessage, DataMessage> {
+/// Message scheduler that is valid only for a specific epoch.
+pub struct EpochMessageScheduler<Rng, ProcessedMessage, DataMessage> {
     /// The module responsible for randomly generated cover messages, given the
-    /// allowed session quota and accounting for data messages generated within
-    /// the session.
-    cover_traffic: SessionCoverTraffic<Rng, RoundClock>,
+    /// allowed epoch quota and accounting for data messages generated within
+    /// the epoch.
+    cover_traffic: EpochCoverTraffic<Rng, RoundClock>,
     /// The module responsible for delaying the release of processed messages
     /// that have not been fully decapsulated.
-    release_delayer: SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
+    release_delayer: EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
     /// The queue of data messages that are stored in between rounds.
     data_messages: Vec<DataMessage>,
     /// The multi-consumer stream forked on each sub-stream.
     round_clock: RoundClock,
 }
 
-impl<Rng, ProcessedMessage, DataMessage> SessionMessageScheduler<Rng, ProcessedMessage, DataMessage>
+impl<Rng, ProcessedMessage, DataMessage> EpochMessageScheduler<Rng, ProcessedMessage, DataMessage>
 where
     Rng: RngCore + Clone + Unpin,
     ProcessedMessage: Debug + Unpin,
     DataMessage: Debug + Unpin,
 {
-    pub fn new(session_info: SessionInfo, rng: Rng, settings: Settings) -> Self {
+    pub fn new(epoch_info: EpochInfo, rng: Rng, settings: Settings) -> Self {
         let interval = {
             let mut interval = interval(settings.round_duration);
             interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -74,19 +74,17 @@ where
         )
         .fork();
 
-        let cover_traffic = SessionCoverTraffic::new(
+        let cover_traffic = EpochCoverTraffic::new(
             crate::cover_traffic::Settings {
-                additional_safety_intervals: settings.additional_safety_intervals,
-                expected_intervals_per_session: settings.expected_intervals_per_session,
-                rounds_per_interval: settings.rounds_per_interval,
-                message_count: session_info
+                rounds_per_epoch: settings.rounds_per_epoch,
+                message_count: epoch_info
                     .core_quota
                     .div_ceil(settings.num_blend_layers.into()),
             },
             rng.clone(),
             Box::new(round_clock.clone()) as RoundClock,
         );
-        let release_delayer = SessionProcessedMessageDelayer::new(
+        let release_delayer = EpochProcessedMessageDelayer::new(
             crate::release_delayer::Settings {
                 maximum_release_delay_in_rounds: settings.maximum_release_delay_in_rounds,
             },
@@ -102,27 +100,23 @@ where
         }
     }
 
-    pub fn consume(self) -> OldSessionMessageScheduler<Rng, ProcessedMessage> {
-        OldSessionMessageScheduler(self.release_delayer)
+    pub fn consume(self) -> OldEpochMessageScheduler<Rng, ProcessedMessage> {
+        OldEpochMessageScheduler(self.release_delayer)
     }
 
-    pub fn rotate_session(
+    pub fn rotate_epoch(
         self,
-        new_session_info: SessionInfo,
+        new_epoch_info: EpochInfo,
         settings: Settings,
-    ) -> (Self, OldSessionMessageScheduler<Rng, ProcessedMessage>) {
+    ) -> (Self, OldEpochMessageScheduler<Rng, ProcessedMessage>) {
         (
-            Self::new(
-                new_session_info,
-                self.release_delayer.rng().clone(),
-                settings,
-            ),
-            OldSessionMessageScheduler(self.release_delayer),
+            Self::new(new_epoch_info, self.release_delayer.rng().clone(), settings),
+            OldEpochMessageScheduler(self.release_delayer),
         )
     }
 
     /// Notify the cover message submodule that a new data message has been
-    /// generated in this session, which will reduce the number of cover
+    /// generated in this epoch, which will reduce the number of cover
     /// messages generated going forward.
     pub fn queue_data_message(&mut self, message: DataMessage) {
         self.data_messages.push(message);
@@ -130,13 +124,11 @@ where
     }
 }
 
-impl<Rng, ProcessedMessage, DataMessage>
-    SessionMessageScheduler<Rng, ProcessedMessage, DataMessage>
-{
+impl<Rng, ProcessedMessage, DataMessage> EpochMessageScheduler<Rng, ProcessedMessage, DataMessage> {
     #[cfg(test)]
     pub fn with_test_values(
-        cover_traffic: SessionCoverTraffic<Rng, RoundClock>,
-        release_delayer: SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
+        cover_traffic: EpochCoverTraffic<Rng, RoundClock>,
+        release_delayer: EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
         round_clock: RoundClock,
         data_messages: Vec<DataMessage>,
     ) -> Self {
@@ -151,13 +143,13 @@ impl<Rng, ProcessedMessage, DataMessage>
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub fn release_delayer(
         &self,
-    ) -> &SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
+    ) -> &EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
         &self.release_delayer
     }
 }
 
 impl<Rng, ProcessedMessage, DataMessage> ProcessedMessageScheduler<ProcessedMessage>
-    for SessionMessageScheduler<Rng, ProcessedMessage, DataMessage>
+    for EpochMessageScheduler<Rng, ProcessedMessage, DataMessage>
 {
     fn schedule_processed_message(&mut self, message: ProcessedMessage) {
         self.release_delayer.schedule_message(message);
@@ -165,7 +157,7 @@ impl<Rng, ProcessedMessage, DataMessage> ProcessedMessageScheduler<ProcessedMess
 }
 
 impl<Rng, ProcessedMessage, DataMessage> Stream
-    for SessionMessageScheduler<Rng, ProcessedMessage, DataMessage>
+    for EpochMessageScheduler<Rng, ProcessedMessage, DataMessage>
 where
     Rng: rand::Rng + Clone + Unpin,
     ProcessedMessage: Debug + Unpin,
@@ -246,11 +238,9 @@ where
 
 #[derive(Debug, Clone, Copy)]
 pub struct Settings {
-    pub additional_safety_intervals: u64,
-    pub expected_intervals_per_session: NonZeroU64,
     pub maximum_release_delay_in_rounds: NonZeroU64,
     pub round_duration: Duration,
-    pub rounds_per_interval: NonZeroU64,
+    pub rounds_per_epoch: NonZeroU64,
     pub num_blend_layers: NonZeroU64,
 }
 
@@ -258,34 +248,32 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            additional_safety_intervals: 0,
-            expected_intervals_per_session: NonZeroU64::try_from(1).unwrap(),
             maximum_release_delay_in_rounds: NonZeroU64::try_from(1).unwrap(),
             round_duration: Duration::from_secs(1),
-            rounds_per_interval: NonZeroU64::try_from(1).unwrap(),
+            rounds_per_epoch: NonZeroU64::try_from(1).unwrap(),
             num_blend_layers: NonZeroU64::try_from(1).unwrap(),
         }
     }
 }
 
-/// Message scheduler that is only for an old session during session transition.
+/// Message scheduler that is only for an old epoch during epoch transition.
 ///
-/// Unlike [`SessionMessageScheduler`], this supports only scheduling processed
+/// Unlike [`EpochMessageScheduler`], this supports only scheduling processed
 /// messages. Data messages cannot be scheduled, and it does not generate cover
 /// messages.
-pub struct OldSessionMessageScheduler<Rng, ProcessedMessage>(
-    SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
+pub struct OldEpochMessageScheduler<Rng, ProcessedMessage>(
+    EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>,
 );
 
 impl<Rng, ProcessedMessage> ProcessedMessageScheduler<ProcessedMessage>
-    for OldSessionMessageScheduler<Rng, ProcessedMessage>
+    for OldEpochMessageScheduler<Rng, ProcessedMessage>
 {
     fn schedule_processed_message(&mut self, message: ProcessedMessage) {
         self.0.schedule_message(message);
     }
 }
 
-impl<Rng, ProcessedMessage> Stream for OldSessionMessageScheduler<Rng, ProcessedMessage>
+impl<Rng, ProcessedMessage> Stream for OldEpochMessageScheduler<Rng, ProcessedMessage>
 where
     Rng: rand::Rng + Unpin,
     ProcessedMessage: Unpin,
@@ -297,11 +285,11 @@ where
     }
 }
 
-impl<Rng, ProcessedMessage> OldSessionMessageScheduler<Rng, ProcessedMessage> {
+impl<Rng, ProcessedMessage> OldEpochMessageScheduler<Rng, ProcessedMessage> {
     #[cfg(any(test, feature = "unsafe-test-functions"))]
     pub fn release_delayer(
         &self,
-    ) -> &SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
+    ) -> &EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
         &self.0
     }
 }

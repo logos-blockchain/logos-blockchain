@@ -13,12 +13,12 @@ pub struct NetworkInfo<NodeId> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CoreInfo<NodeId> {
-    /// Negotiated peers for the current session, with a flag indicating whether
+    /// Negotiated peers for the current epoch, with a flag indicating whether
     /// they are healthy (`true`) or not (`false`).
-    pub current_session_peers: Vec<(NodeId, bool)>,
-    /// Negotiated peers for the old session, if a session transition is in
+    pub current_epoch_peers: Vec<(NodeId, bool)>,
+    /// Negotiated peers for the old epoch, if an epoch transition is in
     /// progress.
-    pub old_session_peers: Option<Vec<NodeId>>,
+    pub old_epoch_peers: Option<Vec<NodeId>>,
 }
 
 /// A message that is handled by [`BlendService`].

@@ -2,20 +2,15 @@ use core::time::Duration;
 use std::collections::HashSet;
 
 use lb_blend::scheduling::membership::Membership;
-use lb_core::crypto::ZkHash;
-use lb_groth16::Field as _;
 use lb_libp2p::{Protocol, SwarmEvent};
 use libp2p::{Multiaddr, PeerId};
 use test_log::test;
 use tokio::{select, time, time::sleep};
 
-use crate::core::backends::{
-    SessionInfo,
-    libp2p::{
-        core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
-        swarm::BlendSwarmMessage,
-        tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm},
-    },
+use crate::core::backends::libp2p::{
+    core_swarm_test_utils::{SwarmExt as _, new_nodes_with_empty_address, update_nodes},
+    swarm::BlendSwarmMessage,
+    tests::utils::{BlendBehaviourBuilder, SwarmBuilder, TestSwarm},
 };
 
 #[test(tokio::test)]
@@ -289,10 +284,10 @@ async fn core_clears_failed_peers_memory_when_all_exhausted() {
     );
 }
 
-/// When a new session rotation occurs, pending backoff retries should be
+/// When a new epoch rotation occurs, pending backoff retries should be
 /// discarded along with ongoing dials.
 #[test(tokio::test)]
-async fn core_session_rotation_clears_pending_retries() {
+async fn core_epoch_rotation_clears_pending_retries() {
     let (mut identities, peer_ids) = new_nodes_with_empty_address(1);
     let TestSwarm {
         swarm: mut dialing_swarm,
@@ -315,22 +310,15 @@ async fn core_session_rotation_clears_pending_retries() {
         .await;
     assert_eq!(dialing_swarm.pending_retries_count(), 1);
 
-    // Trigger a new session via the swarm message channel.
-    let new_session_info = SessionInfo {
-        membership: Membership::new_without_local(&[]),
-        session_number: 2,
-        core_public_inputs: lb_blend::proofs::quota::inputs::prove::public::CoreInputs {
-            quota: 1,
-            zk_root: ZkHash::ZERO,
-        },
-    };
+    // Trigger a new epoch via the swarm message channel.
+    let new_epoch_info = (Membership::new_without_local(&[]), 2.into());
     swarm_message_sender
-        .send(BlendSwarmMessage::StartNewSession(new_session_info))
+        .send(BlendSwarmMessage::StartNewEpoch(new_epoch_info))
         .await
         .unwrap();
     dialing_swarm.poll_next().await;
 
-    // Session rotation should have cleared both ongoing dials and pending retries.
+    // Epoch rotation should have cleared both ongoing dials and pending retries.
     assert!(dialing_swarm.ongoing_dials().is_empty());
     assert_eq!(dialing_swarm.pending_retries_count(), 0);
 }

@@ -30,7 +30,7 @@ pub async fn prepare_transfer_transaction(
         prepare_user_wallet_transaction_submission(world, step, &sender_wallet_name, intent, None)
             .await?;
     let signed = sign_prepared_user_wallet_transaction(step, prepared, Vec::new())?;
-    let tx_hash = record_prepared_transaction(world, transaction_alias.clone(), &signed);
+    let tx_hash = record_prepared_transaction(world, transaction_alias.clone(), &signed)?;
 
     report_prepared_transaction(
         &transaction_alias,
@@ -136,14 +136,14 @@ fn record_prepared_transaction(
     world: &mut CucumberWorld,
     transaction_alias: String,
     signed: &SignedUserWalletSubmission,
-) -> TxHash {
+) -> Result<TxHash, StepError> {
     let tx_hash = signed.tx_hash();
 
-    record_signed_user_wallet_submission(world, signed);
+    record_signed_user_wallet_submission(world, signed)?;
     world.remember_submitted_transaction(transaction_alias.clone(), tx_hash);
     world.remember_prepared_transaction(transaction_alias, signed.signed_tx().clone());
 
-    tx_hash
+    Ok(tx_hash)
 }
 
 async fn submit_prepared_transaction_to_node(

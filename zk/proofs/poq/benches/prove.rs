@@ -44,7 +44,6 @@ fn common_data_leader() -> PoQCommonInputsData {
 fn make_core_node_inputs() -> PoQWitnessInputs {
     let (lottery_0, lottery_1) = lottery();
     let chain_data = PoQChainInputsData {
-        session: 150,
         core_root: BigUint::from_str(
             "10774149910279330054096178616484626574938100628643657398591620611653283350567",
         )
@@ -164,7 +163,6 @@ fn make_core_node_inputs() -> PoQWitnessInputs {
 fn make_leader_inputs() -> PoQWitnessInputs {
     let (lottery_0, lottery_1) = lottery();
     let chain_data = PoQChainInputsData {
-        session: 150,
         core_root: BigUint::from_str(
             "11932007478822307154060471648284351639702201082133930350572683284818742022376",
         )

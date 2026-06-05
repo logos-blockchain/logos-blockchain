@@ -11,16 +11,16 @@ use core::fmt::Debug;
 use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
 use futures::{StreamExt as _, stream};
-use lb_chain_network_service::api::ChainNetworkServiceData;
+use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
     Epoch,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, Error as BlockError, MAX_BLOCK_TRANSACTIONS},
+    block::{Block, Error as BlockError, MAX_BLOCK_SIZE, MAX_BLOCK_TRANSACTIONS},
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, SignedMantleTx, Transaction, TxHash, TxSelect,
+        AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash, TxSelect,
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
@@ -44,7 +44,7 @@ use overwatch::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use tokio::sync::{oneshot, watch};
-use tracing::{Level, debug, error, info, instrument, span, trace};
+use tracing::{Level, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
 pub use crate::wallet::LeaderWalletConfig;
@@ -315,6 +315,14 @@ where
                 .expect("Failed to estabilish connection with Cryptarchia"),
         );
 
+        let chain_network_api = ChainNetworkServiceApi::<ChainNetwork, RuntimeServiceId>::new(
+            self.service_resources_handle
+                .overwatch_handle
+                .relay::<ChainNetwork>()
+                .await
+                .expect("Failed to estabilish connection with ChainNetwork"),
+        );
+
         let LeaderSettings {
             config: ledger_config,
             transaction_selector_settings,
@@ -459,7 +467,7 @@ where
                             .await
                             {
                                 Ok(block) => {
-                                    Self::publish_block_proposal(block, &blend_adapter).await;
+                                    Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
                                 }
                                 Err(e) => {
                                     metrics::consensus_proposals_create_failed();
@@ -585,37 +593,56 @@ where
             .await
             .map_err(Error::FetchBlockTransactions)?;
 
-        let mut tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
+        let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
         ledger_state = ledger_state
             .clone()
             .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
 
-        let mut valid_txs = Vec::new();
-        let mut invalid_tx_hashes = Vec::new();
+        // Collect all candidate transactions up front so the ones that fail can
+        // be retried across multiple rounds.
+        let mut pending: Vec<_> = tx_stream.collect().await;
 
-        while let Some(tx) = tx_stream.next().await {
-            let tx_hash = tx.hash();
-            match ledger_state
-                .clone()
-                .try_apply_contents::<HeaderId, MainnetGasConstants>(
-                    ledger_config,
-                    iter::once(tx.clone()),
-                ) {
-                Ok((new_state, _events)) => {
-                    ledger_state = new_state;
-                    valid_txs.push(tx);
-                }
-                Err(err) => {
-                    tracing::debug!(
-                        "failed to apply tx {:?} during block assembly: {:?}",
-                        tx_hash,
-                        err
-                    );
-                    invalid_tx_hashes.push(tx_hash);
+        let mut valid_txs = Vec::new();
+
+        // A transaction may only become valid once another transaction it depends
+        // on has already been applied. Repeatedly attempt to apply the pending
+        // transactions, retrying the full set of failures each round, while a
+        // round keeps adding new transactions to the block.
+        let mut applied_any = true;
+        while applied_any {
+            applied_any = false;
+            let mut still_pending = Vec::with_capacity(pending.len());
+
+            for tx in pending {
+                match ledger_state
+                    .clone()
+                    .try_apply_contents::<HeaderId, MainnetGasConstants>(
+                        ledger_config,
+                        iter::once(tx.clone()),
+                    ) {
+                    Ok((new_state, _events)) => {
+                        ledger_state = new_state;
+                        valid_txs.push(tx);
+                        applied_any = true;
+                    }
+                    Err(err) => {
+                        tracing::trace!(
+                            "tx {:?} not (yet) applicable during block assembly: {:?}",
+                            tx.hash(),
+                            err
+                        );
+                        still_pending.push(tx);
+                    }
                 }
             }
+
+            pending = still_pending;
         }
+
+        // Transactions that never became applicable are genuinely invalid against
+        // this block's ledger state and can be evicted from the mempool.
+        let invalid_tx_hashes: Vec<_> = pending.iter().map(Transaction::hash).collect();
 
         if !invalid_tx_hashes.is_empty()
             && let Err(e) = relays
@@ -627,11 +654,7 @@ where
         }
 
         let valid_tx_stream = stream::iter(valid_txs);
-        let selected_txs_stream = tx_selector.select_tx_from(valid_tx_stream);
-        let txs: Vec<_> = selected_txs_stream
-            .take(MAX_BLOCK_TRANSACTIONS)
-            .collect()
-            .await;
+        let txs = txs_for_block(tx_selector.select_tx_from(valid_tx_stream)).await;
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
@@ -645,18 +668,20 @@ where
         Ok(block)
     }
 
-    /// Publish our own proposed block to the blend network.
-    async fn publish_block_proposal(
+    /// Apply our own proposed block to the chain and publish it to the blend
+    /// network.
+    async fn apply_and_publish_block_proposal(
         block: Block<Mempool::Item>,
+        chain_network_api: &ChainNetworkServiceApi<ChainNetwork, RuntimeServiceId>,
         blend_adapter: &BlendAdapter<BlendService>,
     ) {
-        // TODO: enable this once we elimnate sessions from Blend and so on
-        // Now we're disabling this to avoid a case which a proposing node
-        // transitions to a new session much earlier than other nodes.
-        debug!(
-            target: LOG_TARGET, header_id = ?block.header().id(),
-            "skipping self-applying block and just publishing it",
-        );
+        if let Err(e) = chain_network_api
+            .apply_block_and_reconcile_mempool(block.clone())
+            .await
+        {
+            error!(target: LOG_TARGET, "Failed to apply our own proposed block {:?}: {e:?}", block.header().id());
+            return;
+        }
 
         blend_adapter.publish_proposal(block.to_proposal()).await;
         metrics::consensus_proposals_created_local();
@@ -742,5 +767,117 @@ where
             .await?
             .ok_or(Error::LedgerStateNotFound(tip))?;
         Ok((tip, ledger_state))
+    }
+}
+
+/// Select transactions for a block, truncating the stream at the first
+/// transaction that trips the block size or count limits.
+async fn txs_for_block<Tx, S>(mut txs: S) -> Vec<Tx>
+where
+    Tx: StorageSize,
+    S: futures::Stream<Item = Tx> + Unpin,
+{
+    let mut block_size: usize = 0;
+    let mut selected_txs = Vec::new();
+
+    while selected_txs.len() < MAX_BLOCK_TRANSACTIONS {
+        let Some(tx) = txs.next().await else {
+            break;
+        };
+
+        let tx_size = tx.storage_size();
+        let Some(next_block_size) = block_size.checked_add(tx_size) else {
+            break;
+        };
+
+        if next_block_size > MAX_BLOCK_SIZE {
+            break;
+        }
+
+        block_size = next_block_size;
+        selected_txs.push(tx);
+    }
+
+    selected_txs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Clone)]
+    struct TestTx {
+        size: usize,
+    }
+
+    impl StorageSize for TestTx {
+        fn storage_size(&self) -> usize {
+            self.size
+        }
+    }
+
+    #[tokio::test]
+    async fn block_tx_selection_respects_transaction_count_limit() {
+        let txs = stream::iter(vec![TestTx { size: 1 }; MAX_BLOCK_TRANSACTIONS + 1]);
+
+        let selected = txs_for_block(txs).await;
+
+        assert_eq!(selected.len(), MAX_BLOCK_TRANSACTIONS);
+    }
+
+    #[tokio::test]
+    async fn block_tx_selection_respects_block_size_limit() {
+        let txs = stream::iter(vec![
+            TestTx {
+                size: MAX_BLOCK_SIZE / 2,
+            },
+            TestTx {
+                size: MAX_BLOCK_SIZE / 2,
+            },
+            TestTx { size: 1 },
+        ]);
+
+        let selected = txs_for_block(txs).await;
+        let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
+
+        assert_eq!(selected.len(), 2);
+        assert_eq!(selected_size, MAX_BLOCK_SIZE);
+    }
+
+    #[tokio::test]
+    async fn block_tx_selection_stops_at_first_transaction_that_does_not_fit() {
+        // The middle transaction does not fit alongside the first, so selection
+        // must stop there and must not pull the third (which would fit on its
+        // own) ahead of it — doing so could drop a dependency of the third.
+        let txs = stream::iter(vec![
+            TestTx { size: 10 },
+            TestTx {
+                size: MAX_BLOCK_SIZE,
+            },
+            TestTx { size: 10 },
+        ]);
+
+        let selected = txs_for_block(txs).await;
+
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].storage_size(), 10);
+    }
+
+    #[tokio::test]
+    async fn block_tx_selection_stops_at_leading_oversized_transaction() {
+        // A transaction larger than the whole block can never fit. Selection
+        // stops at it rather than skipping past to later transactions, which may
+        // depend on it. (In practice such transactions are filtered out before
+        // reaching here, but the prefix invariant must hold regardless.)
+        let txs = stream::iter(vec![
+            TestTx {
+                size: MAX_BLOCK_SIZE + 1,
+            },
+            TestTx { size: 1 },
+        ]);
+
+        let selected = txs_for_block(txs).await;
+
+        assert!(selected.is_empty());
     }
 }

@@ -58,47 +58,43 @@ where
         Some(Box::new(
             WatchStream::new(pol_winning_slot_receiver)
                 .filter_map(ready)
-                .scan(
-                    None,
-                    |processed_epoch, (leader_private, leader_public, epoch)| {
-                        let should_yield_new_epoch =
-                            processed_epoch.is_none_or(|processed_epoch| processed_epoch < epoch);
-                        if !should_yield_new_epoch {
-                            return ready(Some(None));
-                        }
+                .scan(None, |processed_epoch, (leader_private, _, epoch)| {
+                    let should_yield_new_epoch =
+                        processed_epoch.is_none_or(|processed_epoch| processed_epoch < epoch);
+                    if !should_yield_new_epoch {
+                        return ready(Some(None));
+                    }
 
-                        *processed_epoch = Some(epoch);
-                        let PolWitnessInputsData {
-                            wallet:
-                                PolWalletInputsData {
-                                    aged_path,
-                                    aged_selectors,
-                                    note_value,
-                                    output_number,
-                                    secret_key,
-                                    transaction_hash,
-                                    ..
-                                },
-                            chain: PolChainInputsData { slot_number, .. },
-                        } = leader_private.input();
-
-                        let aged_path_and_selectors =
-                            core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
-
-                        ready(Some(Some(PolEpochInfo {
-                            epoch,
-                            poq_public_inputs: leader_public,
-                            poq_private_inputs: ProofOfLeadershipQuotaInputs {
-                                aged_path_and_selectors,
-                                note_value: *note_value,
-                                output_number: *output_number,
-                                secret_key: *secret_key,
-                                slot: *slot_number,
-                                transaction_hash: *transaction_hash,
+                    *processed_epoch = Some(epoch);
+                    let PolWitnessInputsData {
+                        wallet:
+                            PolWalletInputsData {
+                                aged_path,
+                                aged_selectors,
+                                note_value,
+                                output_number,
+                                secret_key,
+                                transaction_hash,
+                                ..
                             },
-                        })))
-                    },
-                )
+                        chain: PolChainInputsData { slot_number, .. },
+                    } = leader_private.input();
+
+                    let aged_path_and_selectors =
+                        core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
+
+                    ready(Some(Some(PolEpochInfo {
+                        epoch,
+                        poq_private_inputs: ProofOfLeadershipQuotaInputs {
+                            aged_path_and_selectors,
+                            note_value: *note_value,
+                            output_number: *output_number,
+                            secret_key: *secret_key,
+                            slot: *slot_number,
+                            transaction_hash: *transaction_hash,
+                        },
+                    })))
+                })
                 .filter_map(ready),
         ))
     }

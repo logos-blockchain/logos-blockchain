@@ -133,10 +133,10 @@ impl BehaviourBuilder {
             observation_window_clock_provider: self
                 .provider
                 .unwrap_or_else(|| IntervalProviderBuilder::default().build()),
-            current_session_info: (
+            current_epoch_info: (
                 self.membership
                     .unwrap_or_else(|| Membership::new_without_local(&[])),
-                0,
+                0.into(),
             ),
             peering_degree: self.peering_degree.unwrap_or(1..=1),
             local_peer_id: PublicKey::from(self.local_public_key).into(),
@@ -144,7 +144,7 @@ impl BehaviourBuilder {
             minimum_network_size: self
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
-            old_session: None,
+            old_epoch: None,
             message_cache: MessageCache::new(),
         }
     }

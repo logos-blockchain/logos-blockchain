@@ -3,22 +3,19 @@ use std::collections::{BTreeMap, HashMap};
 use lb_core::mantle::{NoteId, TxHash, Utxo};
 
 use super::{
-    TrackedWallet, WalletId, WalletReservedInputs, WalletStateView, WalletSyncRequests,
-    chain::{
-        scan::WalletScanRequest,
-        sync_cache::{WalletChainSyncCache, WalletChainSyncHeight},
-    },
+    TrackedWallet, WalletId, WalletReservedInputs, WalletStateView,
+    chain::{state::TrackedWalletKeys, state_cache::WalletChainStateCache},
 };
 
 /// Collection of wallets tracked from a chain view.
 ///
-/// This is the wallet-facing entry point for code that needs synced wallet
-/// state, submitted transactions, and chain sync cache state without
+/// This is the wallet-facing entry point for code that needs observed wallet
+/// state, submitted transactions, and chain cache state without
 /// coordinating those maps directly.
 #[derive(Debug, Default)]
 pub struct TrackedWallets {
     wallets: HashMap<WalletId, TrackedWallet>,
-    chain_sync_cache: WalletChainSyncCache<WalletId>,
+    chain_state_cache: WalletChainStateCache<WalletId>,
     submitted_tx_hashes: HashMap<WalletId, Vec<TxHash>>,
 }
 
@@ -81,7 +78,7 @@ impl TrackedWallets {
             .collect();
 
         let utxo_snapshots = self
-            .chain_sync_cache
+            .chain_state_cache
             .utxo_snapshots()
             .iter()
             .map(|(block_hash, snapshot)| WalletUtxoSnapshotDiagnostics {
@@ -96,7 +93,7 @@ impl TrackedWallets {
             .collect();
 
         let header_heights = self
-            .chain_sync_cache
+            .chain_state_cache
             .header_heights()
             .iter()
             .map(|(node_name, heights)| {
@@ -116,36 +113,23 @@ impl TrackedWallets {
         }
     }
 
-    pub(crate) fn ensure_wallets_from_scan_requests(&mut self, requests: &[WalletScanRequest]) {
-        for request in requests {
-            self.ensure_wallet(request.wallet_id().clone());
+    pub(crate) fn ensure_wallets_from_tracked_keys(
+        &mut self,
+        tracked_wallets: &[TrackedWalletKeys],
+    ) {
+        for tracked_wallet in tracked_wallets {
+            self.ensure_wallet(tracked_wallet.wallet_id().clone());
         }
     }
 
-    #[must_use]
-    pub(crate) fn cached_utxos(&self, header_id: &str, wallet_id: &str) -> Option<&[Utxo]> {
-        self.chain_sync_cache.cached_utxos(header_id, wallet_id)
-    }
-
-    #[must_use]
-    pub(crate) fn has_cached_wallets(
-        &self,
-        header_id: &str,
-        wallet_ids: impl IntoIterator<Item = WalletId>,
-    ) -> bool {
-        let wallet_ids = wallet_ids.into_iter().collect::<Vec<_>>();
-        self.chain_sync_cache
-            .has_cached_wallets(header_id, wallet_ids.iter().map(WalletId::as_str))
-    }
-
-    pub(crate) fn record_synced_wallets_utxos(
+    pub(crate) fn record_observed_wallets_utxos(
         &mut self,
         header_id: String,
         wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<Utxo>)>,
     ) {
         let wallet_utxos = wallet_utxos.into_iter().collect::<Vec<_>>();
 
-        self.chain_sync_cache
+        self.chain_state_cache
             .record_wallets_utxos(header_id, wallet_utxos.iter().cloned());
 
         for (wallet_id, utxos) in wallet_utxos {
@@ -160,22 +144,8 @@ impl TrackedWallets {
     }
 
     pub(crate) fn record_header_height(&mut self, node_name: &str, header_id: &str, height: u64) {
-        self.chain_sync_cache
+        self.chain_state_cache
             .record_header_height(node_name, header_id, height);
-    }
-
-    #[must_use]
-    pub(crate) fn next_chain_sync_height(
-        &self,
-        cached_ancestor_header_id: Option<&String>,
-        node_name: &str,
-        reached_chain_start: bool,
-    ) -> WalletChainSyncHeight {
-        self.chain_sync_cache.next_chain_sync_height(
-            cached_ancestor_header_id,
-            node_name,
-            reached_chain_start,
-        )
     }
 
     pub(crate) fn release_spent_note(&mut self, wallet_id: &WalletId, spent: NoteId) {
@@ -185,14 +155,14 @@ impl TrackedWallets {
     }
 
     #[must_use]
-    pub(crate) fn observe_synced_wallets(
+    pub(crate) fn observe_wallets(
         &self,
-        requests: &WalletSyncRequests,
+        tracked_wallets: impl IntoIterator<Item = TrackedWalletKeys>,
     ) -> BTreeMap<WalletId, WalletStateView> {
         let mut observations = BTreeMap::new();
 
-        for request in requests.wallet_requests() {
-            let wallet_id = request.wallet_id();
+        for tracked_wallet in tracked_wallets {
+            let wallet_id = tracked_wallet.wallet_id();
             let observation = self.observe_wallet(wallet_id);
 
             observations.insert(wallet_id.clone(), observation);
@@ -254,7 +224,7 @@ impl TrackedWallets {
 
     #[must_use]
     fn utxo_snapshot_count(&self) -> usize {
-        self.chain_sync_cache.utxo_snapshot_count()
+        self.chain_state_cache.utxo_snapshot_count()
     }
 
     #[must_use]
@@ -267,7 +237,7 @@ impl TrackedWallets {
 
     #[must_use]
     fn header_height_node_count(&self) -> usize {
-        self.chain_sync_cache.header_height_node_count()
+        self.chain_state_cache.header_height_node_count()
     }
 }
 

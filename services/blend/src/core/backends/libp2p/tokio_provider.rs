@@ -78,7 +78,7 @@ where
         Self {
             blending_ops_per_message: config.num_blend_layers.into(),
             maximal_delay_rounds: config.scheduler.delayer.maximum_release_delay_in_rounds,
-            // TODO: Replace with a session stream: https://github.com/logos-blockchain/logos-blockchain/issues/1533
+            // TODO: Replace with an epoch stream: https://github.com/logos-blockchain/logos-blockchain/issues/1533
             membership_size: NonZeroU64::try_from(membership.size() as u64)
                 .expect("Membership size cannot be zero."),
             minimum_messages_coefficient: config.backend.minimum_messages_coefficient,

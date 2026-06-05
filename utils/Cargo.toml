@@ -13,20 +13,23 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait = { workspace = true }
-blake2      = { optional = true, workspace = true }
-cipher      = { workspace = true }
-const-hex   = { features = ["alloc"], workspace = true }
-futures     = { optional = true, workspace = true }
-humantime   = { optional = true, workspace = true }
-overwatch   = { workspace = true }
-rand        = { features = ["getrandom"], workspace = true }
-serde       = { features = ["alloc", "derive"], workspace = true }
-serde_with  = { optional = true, workspace = true }
-serde_yaml  = { workspace = true }
-thiserror   = { workspace = true }
-time        = { features = ["serde-human-readable"], optional = true, workspace = true }
-tokio       = { optional = true, workspace = true }
+async-trait    = { workspace = true }
+blake2         = { optional = true, workspace = true }
+cipher         = { workspace = true }
+const-hex      = { features = ["alloc"], workspace = true }
+futures        = { optional = true, workspace = true }
+humantime      = { optional = true, workspace = true }
+lb-log-targets = { workspace = true }
+overwatch      = { workspace = true }
+rand           = { features = ["getrandom"], workspace = true }
+serde          = { features = ["alloc", "derive"], workspace = true }
+serde_ignored  = { workspace = true }
+serde_with     = { optional = true, workspace = true }
+serde_yaml     = { workspace = true }
+thiserror      = { workspace = true }
+time           = { features = ["serde-human-readable"], optional = true, workspace = true }
+tokio          = { optional = true, workspace = true }
+tracing        = { workspace = true }
 
 [features]
 rng   = ["dep:blake2"]

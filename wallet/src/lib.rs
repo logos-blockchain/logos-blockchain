@@ -1091,34 +1091,37 @@ mod tests {
 
     #[must_use]
     fn ledger_config() -> lb_ledger::Config {
+        let epoch_config = EpochConfig {
+            epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
+            epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
+            epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
+        };
+        let consensus_config = lb_cryptarchia_engine::Config::new(
+            NonZero::new(1).unwrap(),
+            NonNegativeRatio::new(1, 10.try_into().unwrap()),
+            1f64.try_into().expect("1 > 0"),
+        );
+        let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
+
         lb_ledger::Config {
-            epoch_config: EpochConfig {
-                epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
-                epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
-                epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
-            },
-            consensus_config: lb_cryptarchia_engine::Config::new(
-                NonZero::new(1).unwrap(),
-                NonNegativeRatio::new(1, 10.try_into().unwrap()),
-                1f64.try_into().expect("1 > 0"),
-            ),
+            epoch_config,
+            consensus_config,
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            lock_period: 10,
-                            inactivity_period: 20,
-                            retention_period: 100,
-                            timestamp: 0,
-                            session_duration: 10,
+                            lock_period: 10.into(),
+                            inactivity_period: 20.into(),
+                            retention_period: 100.into(),
+                            epoch: 0.into(),
                         },
                     )]
                     .into(),
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
-                        rounds_per_session: NonZeroU64::new(10).unwrap(),
+                        rounds_per_epoch: epoch_length.try_into().unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),

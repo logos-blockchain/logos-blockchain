@@ -6,6 +6,7 @@ use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature
 use lb_blend_scheduling::{
     deserialize_encapsulated_message, serialize_encapsulated_message_with_verified_signature,
 };
+use lb_cryptarchia_engine::Epoch;
 use libp2p::{
     PeerId,
     swarm::{ConnectionId, NotifyHandler, ToSwarm},
@@ -22,15 +23,15 @@ use crate::core::with_core::{
 /// The message cache is also updated accordingly to mark the sent message as
 /// processed if it was sent to at least one peer, or to ignore it if it has
 /// already been forwarded before.
-pub fn forward_validated_message_and_update_cache<'session, PeerConnections>(
+pub fn forward_validated_message_and_update_cache<'epoch, PeerConnections>(
     message: &EncapsulatedMessageWithVerifiedSignature,
     peer_connections: PeerConnections,
-    events_queue: &'session mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
-    message_cache: &'session mut MessageCache,
+    events_queue: &'epoch mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
+    message_cache: &'epoch mut MessageCache,
     waker: Option<Waker>,
 ) -> Result<(), SendError>
 where
-    PeerConnections: Iterator<Item = (&'session PeerId, &'session ConnectionId)>,
+    PeerConnections: Iterator<Item = (&'epoch PeerId, &'epoch ConnectionId)>,
 {
     if message_cache.is_message_forwarded(&message.clone().into()) {
         return Err(SendError::DuplicateMessage);
@@ -74,7 +75,7 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
     sender: PeerId,
     events_queue: &mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: Option<Waker>,
-    session_number: u64,
+    epoch: Epoch,
 ) -> Result<(), ReceiveError> {
     // Deserialize the message.
     let deserialized_encapsulated_message = deserialize_encapsulated_message(serialized_message)
@@ -103,7 +104,7 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
     events_queue.push_back(ToSwarm::GenerateEvent(Event::Message {
         message: Box::new(validated_message),
         sender,
-        session: session_number,
+        epoch,
     }));
     if let Some(waker) = waker {
         waker.wake();

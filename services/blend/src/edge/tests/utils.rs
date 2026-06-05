@@ -2,21 +2,19 @@ use core::{num::NonZeroU64, time::Duration};
 use std::fmt::{Debug, Display};
 
 use async_trait::async_trait;
-use futures::{StreamExt as _, future::ready, stream::once};
+use futures::StreamExt as _;
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    proofs::quota::inputs::prove::{private::ProofOfLeadershipQuotaInputs, public::LeaderInputs},
+    proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::{
+        epoch::UninitializedEpochEventStream,
         membership::Membership,
         message_blend::provers::{
             BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator,
         },
-        session::UninitializedSessionEventStream,
     },
 };
-use lb_chain_service::Epoch;
 use lb_key_management_system_service::keys::UnsecuredEd25519Key;
-use lb_time_service::SlotTick;
 use overwatch::overwatch::{OverwatchHandle, commands::OverwatchCommand};
 use rand::{RngCore, rngs::OsRng};
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -26,15 +24,10 @@ use crate::{
     core::settings::CoverTrafficSettings,
     edge::{
         backends::BlendBackend, handlers::Error, run, settings::RunningBlendConfig as BlendConfig,
+        tests::test_blend_epoch_state,
     },
-    epoch_info::EpochHandler,
-    membership::MembershipInfo,
-    settings::{FIRST_STREAM_ITEM_READY_TIMEOUT, TimingSettings},
-    test_utils::{
-        crypto::mock_blend_proof,
-        epoch::{OncePolStreamProvider, TestChainService},
-        membership::key,
-    },
+    settings::TimingSettings,
+    test_utils::{crypto::mock_blend_proof, epoch::OncePolStreamProvider, membership::key},
 };
 
 pub struct MockLeaderProofsGenerator;
@@ -46,14 +39,6 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         _private_inputs: ProofOfLeadershipQuotaInputs,
     ) -> Self {
         Self
-    }
-
-    fn rotate_epoch(
-        &mut self,
-        _new_epoch_public: LeaderInputs,
-        _new_private_inputs: ProofOfLeadershipQuotaInputs,
-        _new_epoch: Epoch,
-    ) {
     }
 
     async fn get_next_proof(&mut self) -> BlendLayerProof {
@@ -71,19 +56,19 @@ pub async fn spawn_run(
     mpsc::Sender<Vec<u8>>,
     mpsc::Receiver<NodeId>,
 ) {
-    let (session_sender, session_receiver) = mpsc::channel(1);
+    let (epoch_sender, epoch_receiver) = mpsc::channel(1);
     let (msg_sender, msg_receiver) = mpsc::channel(1);
     let (node_id_sender, node_id_receiver) = mpsc::channel(1);
 
     if let Some(initial_membership) = initial_membership {
-        session_sender
+        epoch_sender
             .send(initial_membership)
             .await
             .expect("channel opened");
     }
 
-    let session_stream = ReceiverStream::new(session_receiver)
-        .map(|membership| MembershipInfo::from_membership_and_session_number(membership, 1));
+    let epoch_stream = ReceiverStream::new(epoch_receiver)
+        .map(|membership| test_blend_epoch_state(0.into(), membership));
 
     let settings = settings(local_node, minimal_network_size, node_id_sender);
     let join_handle = tokio::spawn(async move {
@@ -91,21 +76,11 @@ pub async fn spawn_run(
             TestBackend,
             _,
             MockLeaderProofsGenerator,
-            _,
             OncePolStreamProvider,
             _,
         >(
-            UninitializedSessionEventStream::new(
-                session_stream,
-                FIRST_STREAM_ITEM_READY_TIMEOUT,
-                Duration::ZERO,
-            ),
-            once(ready(SlotTick {
-                epoch: 1.into(),
-                slot: 1.into(),
-            })),
+            UninitializedEpochEventStream::new(epoch_stream, Duration::ZERO),
             ReceiverStream::new(msg_receiver),
-            EpochHandler::new(TestChainService, 1.try_into().unwrap()),
             settings,
             &overwatch_handle(),
             || {},
@@ -113,7 +88,7 @@ pub async fn spawn_run(
         .await
     });
 
-    (join_handle, session_sender, msg_sender, node_id_receiver)
+    (join_handle, epoch_sender, msg_sender, node_id_receiver)
 }
 
 pub fn settings(
@@ -123,12 +98,10 @@ pub fn settings(
 ) -> BlendConfig<NodeIdSender> {
     BlendConfig {
         time: TimingSettings {
-            rounds_per_session: NonZeroU64::new(1).unwrap(),
-            rounds_per_interval: NonZeroU64::new(1).unwrap(),
+            rounds_per_epoch: NonZeroU64::new(1).unwrap(),
             round_duration: Duration::from_secs(1),
             rounds_per_observation_window: NonZeroU64::new(1).unwrap(),
-            rounds_per_session_transition_period: NonZeroU64::new(1).unwrap(),
-            epoch_transition_period_in_slots: NonZeroU64::new(1).unwrap(),
+            epoch_transition_period: Duration::from_secs(1),
         },
         non_ephemeral_signing_key: key(local_id).0,
         num_blend_layers: NonZeroU64::new(1).unwrap(),

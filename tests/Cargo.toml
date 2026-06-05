@@ -21,6 +21,7 @@ lb-mmr      = { workspace = true }
 lb-utxotree = { workspace = true }
 
 [dependencies]
+async-trait                      = { workspace = true }
 cucumber                         = { features = ["macros", "output-junit"], workspace = true }
 derivative                       = { workspace = true }
 ed25519                          = { workspace = true }

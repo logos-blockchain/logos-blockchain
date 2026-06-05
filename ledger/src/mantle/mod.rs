@@ -3,8 +3,6 @@ pub mod helpers;
 pub mod leader;
 pub mod sdp;
 
-use std::collections::HashMap;
-
 use lb_core::{
     crypto::ZkHasher,
     events::Events,
@@ -26,10 +24,7 @@ use lb_core::{
         },
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-    sdp::{
-        Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber,
-        locked_notes::LockedNotes,
-    },
+    sdp::locked_notes::LockedNotes,
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
@@ -73,7 +68,7 @@ impl LedgerState {
     pub fn new(config: &Config, epoch_state: &EpochState) -> Self {
         Self {
             channels: channel::Channels::new(),
-            sdp: sdp::SdpLedger::new()
+            sdp: sdp::SdpLedger::new(epoch_state.epoch())
                 .with_blend_service(&config.sdp_config.service_rewards_params.blend, epoch_state),
             leaders: leader::LeaderState::new(),
         }
@@ -128,24 +123,6 @@ impl LedgerState {
         Self { channels, ..self }
     }
 
-    #[must_use]
-    pub fn active_session_providers(
-        &self,
-        service_type: ServiceType,
-    ) -> Option<HashMap<ProviderId, ProviderInfo>> {
-        self.sdp.active_session_providers(service_type)
-    }
-
-    #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, SessionNumber> {
-        self.sdp.active_sessions()
-    }
-
-    #[must_use]
-    pub fn sdp_declarations(&self) -> Vec<(DeclarationId, Declaration)> {
-        self.sdp.declarations()
-    }
-
     /// Get the root of the voucher commitments snapshot.
     #[must_use]
     pub const fn vouchers_snapshot_root(&self) -> RewardsRoot {
@@ -165,12 +142,15 @@ impl LedgerState {
 
     pub fn try_apply_header(
         mut self,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         voucher: VoucherCm,
         config: &Config,
     ) -> Result<(Self, Vec<Utxo>), Error> {
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
-        let (new_sdp, reward_utxos) = self.sdp.try_apply_header(&config.sdp_config, epoch_state)?;
+        let (new_sdp, reward_utxos) =
+            self.sdp
+                .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
         Ok((self, reward_utxos))
     }

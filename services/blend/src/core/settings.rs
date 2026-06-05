@@ -40,13 +40,13 @@ pub struct RunningBlendConfig<BackendSettings> {
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
-    pub fn session_core_quota(&self, membership_size: usize) -> u64 {
+    pub fn epoch_core_quota(&self, membership_size: usize) -> u64 {
         self.scheduler
             .cover
-            .session_core_quota(self.num_blend_layers, &self.time, membership_size)
+            .epoch_core_quota(self.num_blend_layers, &self.time, membership_size)
     }
 
-    pub const fn session_leadership_quota(&self) -> u64 {
+    pub const fn epoch_leadership_quota(&self) -> u64 {
         let num_blend_layers = self.num_blend_layers.get();
         let additional_encapsulations = num_blend_layers
             .checked_mul(self.data_replication_factor)
@@ -56,13 +56,13 @@ impl<BackendSettings> RunningBlendConfig<BackendSettings> {
             .expect("Overflow when computing leadership quota.")
     }
 
-    pub(super) fn scheduler_settings(&self) -> lb_blend::scheduling::message_scheduler::Settings {
+    pub(super) const fn scheduler_settings(
+        &self,
+    ) -> lb_blend::scheduling::message_scheduler::Settings {
         lb_blend::scheduling::message_scheduler::Settings {
-            additional_safety_intervals: self.scheduler.cover.intervals_for_safety_buffer,
-            expected_intervals_per_session: self.time.intervals_per_session(),
             maximum_release_delay_in_rounds: self.scheduler.delayer.maximum_release_delay_in_rounds,
             round_duration: self.time.round_duration,
-            rounds_per_interval: self.time.rounds_per_interval,
+            rounds_per_epoch: self.time.rounds_per_epoch,
             num_blend_layers: self.num_blend_layers,
         }
     }
@@ -84,15 +84,12 @@ pub struct SchedulerSettings {
 pub struct CoverTrafficSettings {
     /// `F_c`: frequency at which cover messages are generated per round.
     pub message_frequency_per_round: NonNegativeF64,
-    // `max`: safety buffer length, expressed in intervals
-    pub intervals_for_safety_buffer: u64,
 }
 
 #[cfg(test)]
 impl Default for CoverTrafficSettings {
     fn default() -> Self {
         Self {
-            intervals_for_safety_buffer: 1,
             message_frequency_per_round: 1.try_into().unwrap(),
         }
     }
@@ -100,14 +97,14 @@ impl Default for CoverTrafficSettings {
 
 impl CoverTrafficSettings {
     #[must_use]
-    pub(crate) fn session_core_quota(
+    pub(crate) fn epoch_core_quota(
         &self,
         num_blend_layers: NonZeroU64,
         timings: &TimingSettings,
         membership_size: usize,
     ) -> u64 {
         core_quota(
-            timings.rounds_per_session,
+            timings.rounds_per_epoch,
             self.message_frequency_per_round,
             num_blend_layers,
             membership_size,

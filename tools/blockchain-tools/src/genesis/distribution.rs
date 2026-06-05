@@ -12,7 +12,7 @@ use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct StakeHolderInfo {
     pub zk_id: ZkPublicKey,
     pub stake: NoteValue,

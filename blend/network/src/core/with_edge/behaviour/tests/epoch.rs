@@ -15,10 +15,10 @@ use crate::core::{
     with_edge::behaviour::tests::utils::{BehaviourBuilder, StreamBehaviourExt as _},
 };
 
-/// After `start_new_session()`, the edge behaviour must immediately close all
-/// existing upgraded edge peer connections (no dual-session for edge).
+/// After `start_new_epoch()`, the edge behaviour must immediately close all
+/// existing upgraded edge peer connections (no dual-epoch for edge).
 #[test(tokio::test)]
-async fn start_new_session_closes_all_edge_connections() {
+async fn start_new_epoch_closes_all_edge_connections() {
     let core_membership_peer = PeerId::random();
     let mut edge_swarm = TestSwarm::new_ephemeral(|_| StreamBehaviour::new());
     let mut blend_swarm = TestSwarm::new_ephemeral(|_| {
@@ -36,20 +36,18 @@ async fn start_new_session_closes_all_edge_connections() {
 
     assert_eq!(blend_swarm.behaviour().upgraded_edge_peers.len(), 1);
 
-    // Start a new session: all edge connections should be closed immediately.
+    // Start a new epoch: all edge connections should be closed immediately.
     let new_membership = Membership::new_without_local(&[Node {
         address: Multiaddr::empty(),
         id: core_membership_peer,
         public_key: Ed25519PublicKey::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).unwrap(),
     }]);
-    blend_swarm
-        .behaviour_mut()
-        .start_new_session(new_membership);
+    blend_swarm.behaviour_mut().start_new_epoch(new_membership);
 
     assert_eq!(
         blend_swarm.behaviour().upgraded_edge_peers.len(),
         0,
-        "All edge peers must be removed immediately after start_new_session"
+        "All edge peers must be removed immediately after start_new_epoch"
     );
 
     // Drive the swarms until the connection actually closes.
@@ -63,18 +61,18 @@ async fn start_new_session_closes_all_edge_connections() {
                 }
             }
             () = sleep(Duration::from_secs(15)) => {
-                panic!("Timed out waiting for edge connection to close after session transition");
+                panic!("Timed out waiting for edge connection to close after epoch transition");
             }
         }
     }
 }
 
-/// After a session transition with an updated membership, the edge behaviour
+/// After an epoch transition with an updated membership, the edge behaviour
 /// should accept new edge connections based on the new membership.
 #[test(tokio::test)]
-async fn session_transition_updates_membership_for_new_connections() {
+async fn epoch_transition_updates_membership_for_new_connections() {
     // Initially, edge_swarm_1's peer id is in the membership (core), so it
-    // should be rejected. After session transition with a different membership
+    // should be rejected. After epoch transition with a different membership
     // that does NOT contain edge_swarm_1, it becomes an edge node.
     let mut edge_swarm = TestSwarm::new_ephemeral(|_| StreamBehaviour::new());
     let edge_peer_id = *edge_swarm.local_peer_id();
@@ -110,7 +108,7 @@ async fn session_transition_updates_membership_for_new_connections() {
         }
     }
 
-    // Transition to a new session where the membership no longer includes
+    // Transition to a new epoch where the membership no longer includes
     // edge_peer_id. Now edge_peer_id is a real edge node.
     let other_core_peer = PeerId::random();
     let new_membership = Membership::new_without_local(&[Node {
@@ -118,9 +116,7 @@ async fn session_transition_updates_membership_for_new_connections() {
         id: other_core_peer,
         public_key: Ed25519PublicKey::from_bytes(&[0; _]).unwrap(),
     }]);
-    blend_swarm
-        .behaviour_mut()
-        .start_new_session(new_membership);
+    blend_swarm.behaviour_mut().start_new_epoch(new_membership);
 
     // Now edge_swarm should be able to connect and upgrade.
     let _stream = edge_swarm
@@ -130,6 +126,6 @@ async fn session_transition_updates_membership_for_new_connections() {
     assert_eq!(
         blend_swarm.behaviour().upgraded_edge_peers.len(),
         1,
-        "Edge peer should be accepted after session transition updated membership"
+        "Edge peer should be accepted after epoch transition updated membership"
     );
 }

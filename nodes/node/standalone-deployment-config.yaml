@@ -8,7 +8,6 @@ blend:
     scheduler:
       cover:
         message_frequency_per_round: 1.0
-        intervals_for_safety_buffer: 100
       delayer:
         maximum_release_delay_in_rounds: 3
     minimum_messages_coefficient: 1
@@ -34,7 +33,7 @@ cryptarchia:
         lock_period: 10
         inactivity_period: 1
         retention_period: 1
-        timestamp: 0
+        epoch: 0
     min_stake:
       threshold: 1
       timestamp: 0

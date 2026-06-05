@@ -1,8 +1,5 @@
 use lb_core::mantle::ops::channel::MsgId;
-use lb_zone_sdk::{
-    sequencer::{SequencerChannelView, SequencerCheckpoint},
-    state::InscriptionInfo,
-};
+use lb_zone_sdk::sequencer::{InscriptionInfo, SequencerChannelView, SequencerCheckpoint};
 
 use crate::message::Msg;
 

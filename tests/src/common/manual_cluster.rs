@@ -12,6 +12,7 @@ use lb_testing_framework::{
     USER_CONFIG_FILE, internal::DeploymentPlan, is_truthy_env, record_system_monitor_event,
     register_system_monitor_output_file, unregister_system_monitor_output_file,
 };
+use lb_zone_sdk::Slot;
 use reqwest::Url;
 use tempfile::TempDir;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
@@ -250,6 +251,33 @@ pub async fn wait_for_nodes_height(
         wait_for_height(node, target_height, duration)
             .await
             .unwrap_or_else(|_| panic!("node should reach height {target_height}"));
+    }
+}
+
+pub async fn wait_for_tip_slot(
+    client: &NodeHttpClient,
+    slot: Slot,
+    timeout: Duration,
+) -> Result<(), Elapsed> {
+    tokio::time::timeout(timeout, async {
+        loop {
+            if let Ok(info) = client.consensus_info().await
+                && info.cryptarchia_info.slot >= slot
+            {
+                return;
+            }
+
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    })
+    .await
+}
+
+pub async fn wait_for_nodes_tip_slot(nodes: &[&NodeHttpClient], slot: Slot, duration: Duration) {
+    for node in nodes {
+        wait_for_tip_slot(node, slot, duration)
+            .await
+            .unwrap_or_else(|_| panic!("node should reach tip slot {slot:?}"));
     }
 }
 

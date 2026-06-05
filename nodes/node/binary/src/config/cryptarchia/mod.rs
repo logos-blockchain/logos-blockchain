@@ -35,8 +35,6 @@ impl ServiceConfig {
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
         lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
     ) {
-        let blocks_per_session = self.deployment.blocks_per_epoch();
-
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),
             epoch_config: EpochConfig {
@@ -62,11 +60,10 @@ impl ServiceConfig {
                             (
                                 service_type,
                                 ServiceParameters {
-                                    session_duration: blocks_per_session,
                                     inactivity_period: service_params.inactivity_period,
                                     lock_period: service_params.lock_period,
                                     retention_period: service_params.retention_period,
-                                    timestamp: service_params.timestamp,
+                                    epoch: service_params.epoch,
                                 },
                             )
                         })

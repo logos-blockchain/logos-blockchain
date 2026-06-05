@@ -20,7 +20,7 @@ hex                           = { workspace = true }
 lb-blend-message              = { workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-blend-scheduling           = { workspace = true }
-lb-core                       = { workspace = true }
+lb-cryptarchia-engine         = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-libp2p                     = { workspace = true }
 lb-log-targets                = { workspace = true }

@@ -5,12 +5,13 @@ use core::{
 };
 
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use serde::{Deserialize, Serialize};
 
 use crate::config::{
-    OnUnknownKeys, blend::deployment::Settings as BlendDeploymentSettings,
+    blend::deployment::Settings as BlendDeploymentSettings,
     cryptarchia::deployment::Settings as CryptarchiaDeploymentSettings,
-    deserialize_config_from_reader, mempool::deployment::Settings as MempoolDeploymentSettings,
+    mempool::deployment::Settings as MempoolDeploymentSettings,
     network::deployment::Settings as NetworkDeploymentSettings,
     time::deployment::Settings as TimeDeploymentSettings,
 };
@@ -57,7 +58,7 @@ impl From<WellKnownDeployment> for DeploymentSettings {
     fn from(value: WellKnownDeployment) -> Self {
         match value {
             WellKnownDeployment::Devnet => {
-                deserialize_config_from_reader(devnet::SERIALIZED_DEPLOYMENT, OnUnknownKeys::Fail)
+                deserialize_value_from_reader(devnet::SERIALIZED_DEPLOYMENT, OnUnknownKeys::Fail)
                     .expect("Devnet deployment config is valid.")
             }
         }
