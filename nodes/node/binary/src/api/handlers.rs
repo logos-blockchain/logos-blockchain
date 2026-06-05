@@ -17,6 +17,7 @@ use lb_api_service::http::{
     libp2p, mantle, mempool,
     storage::StorageAdapter,
 };
+use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::{ConsensusMsg, Slot, api::CryptarchiaServiceApi};
@@ -32,6 +33,7 @@ use lb_core::{
 use lb_http_api_common::{
     TimeInfo,
     bodies::{
+        blend::JoinBlendRequestBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
@@ -624,8 +626,11 @@ pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    BlendService: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
-        + 'static,
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
+            >,
+        > + 'static,
     BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
@@ -634,6 +639,35 @@ where
         BroadcastSettings,
         RuntimeServiceId,
     >(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::BLEND_JOIN_NETWORK,
+    request_body = BlendJoinNetworkRequestBody,
+    responses(
+        (status = 200, description = "Join the blend network", body = Option<lb_core::sdp::DeclarationId>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<JoinBlendRequestBody>,
+) -> Response
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
+            >,
+        > + 'static,
+    BroadcastSettings: Send + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+{
+    make_request_and_return_response!(blend::blend_join_network::<
+        BlendService,
+        BroadcastSettings,
+        RuntimeServiceId,
+    >(&handle, req.locator, req.locked_note_id))
 }
 
 #[utoipa::path(

@@ -10,9 +10,17 @@ use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use lb_blend::scheduling::epoch::UninitializedEpochEventStream;
 use lb_chain_service::api::CryptarchiaServiceData;
-use lb_key_management_system_service::{api::KmsServiceApi, keys::PublicKeyEncoding};
+use lb_core::{
+    mantle::NoteId,
+    sdp::{DeclarationId, DeclarationMessage, Locator, ProviderId, ServiceType},
+};
+use lb_key_management_system_service::{
+    api::KmsServiceApi,
+    keys::{Ed25519PublicKey, PublicKeyEncoding, ZkPublicKey},
+};
 use lb_log_targets::blend;
 use lb_network_service::NetworkService;
+use lb_sdp_service::{SdpMessage, SdpServiceApi};
 use lb_services_utils::wait_until_services_are_ready;
 use lb_time_service::TimeService;
 use overwatch::{
@@ -40,6 +48,7 @@ use crate::{
         chain::BlendEpochState,
         node_id::{self, TryFrom as _},
     },
+    message::ProxyServiceMessage,
     settings::Settings,
 };
 
@@ -63,17 +72,17 @@ mod test_utils;
 
 const LOG_TARGET: &str = blend::service::ROOT;
 
-pub struct BlendService<CoreService, EdgeService, RuntimeServiceId>
+pub struct BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
 where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    _phantom: PhantomData<(CoreService, EdgeService)>,
+    _phantom: PhantomData<(CoreService, EdgeService, SdpService)>,
 }
 
-impl<CoreService, EdgeService, RuntimeServiceId> ServiceData
-    for BlendService<CoreService, EdgeService, RuntimeServiceId>
+impl<CoreService, EdgeService, SdpService, RuntimeServiceId> ServiceData
+    for BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
 where
     CoreService: ServiceData + CoreServiceComponents<RuntimeServiceId>,
     EdgeService: EdgeServiceComponents,
@@ -84,12 +93,13 @@ where
     >;
     type State = NoState<Self::Settings>;
     type StateOperator = NoOperator<Self::State>;
-    type Message = CoreService::Message;
+    type Message = ProxyServiceMessage<CoreService::Message>;
 }
 
+#[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
 #[async_trait]
-impl<CoreService, EdgeService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for BlendService<CoreService, EdgeService, RuntimeServiceId>
+impl<CoreService, EdgeService, SdpService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
+    for BlendService<CoreService, EdgeService, SdpService, RuntimeServiceId>
 where
     CoreService: ServiceData<
             Message: MessageComponents<CoreService::NodeId, Payload: Into<Vec<u8>>>
@@ -117,6 +127,7 @@ where
             TimeBackend: lb_time_service::backends::TimeBackend + Send,
         > + Send
         + 'static,
+    SdpService: ServiceData<Message = SdpMessage> + Send,
     RuntimeServiceId: AsServiceId<Self>
         + AsServiceId<CoreService>
         + AsServiceId<EdgeService>
@@ -129,7 +140,8 @@ where
                 NetworkBackendOfService<CoreService, RuntimeServiceId>,
                 RuntimeServiceId,
             >,
-        > + Debug
+        > + AsServiceId<SdpService>
+        + Debug
         + Display
         + Clone
         + Send
@@ -166,13 +178,25 @@ where
         wait_until_services_are_ready!(
             &overwatch_handle,
             Some(Duration::from_mins(1)),
-            PreloadKmsService<_>
+            PreloadKmsService<_>,
+            SdpService
         )
         .await?;
+
+        let sdp_service_api =
+            SdpServiceApi::<SdpService>::from_overwatch_handle(overwatch_handle).await;
 
         let kms = KmsServiceApi::<PreloadKmsService<_>, RuntimeServiceId>::new(
             overwatch_handle.relay::<PreloadKmsService<_>>().await?,
         );
+
+        let PublicKeyEncoding::Zk(zk_public_key) = kms
+            .public_key(settings.core.zk.secret_key_kms_id.clone())
+            .await
+            .expect("ZK public key for provided ID should be stored in KMS.")
+        else {
+            panic!("Key with specified ID is not a ZK key.");
+        };
 
         let PublicKeyEncoding::Ed25519(non_ephemeral_signing_key_public) = kms
             .public_key(settings.common.non_ephemeral_signing_key_id)
@@ -249,13 +273,55 @@ where
                         .await?;
                 },
                 Some(message) = inbound_relay.next() => {
-                    if let Err(e) = instance.handle_inbound_message(message).await {
-                        error!(target: LOG_TARGET, "Failed to handle inbound message: {e:?}");
+                    match message {
+                        ProxyServiceMessage::JoinAsCore { locator, locked_note_id, reply } => {
+                            reply.send(
+                                submit_blend_sdp_declaration(
+                                    &sdp_service_api,
+                                    locator,
+                                    locked_note_id,
+                                    non_ephemeral_signing_key_public,
+                                    zk_public_key,
+                                )
+                                .await
+                            ).unwrap_or_else(|e| {
+                                debug!(target: LOG_TARGET, "Failed to send JoinAsCore reply: {e:?}");
+                            });
+                        },
+                        ProxyServiceMessage::Inner(inner_message) => {
+                            if let Err(e) = instance.handle_inbound_message(inner_message).await {
+                                error!(target: LOG_TARGET, "Failed to handle inbound message: {e:?}");
+                            }
+                        },
                     }
                 },
             }
         }
     }
+}
+
+async fn submit_blend_sdp_declaration<SdpService>(
+    sdp_service_api: &SdpServiceApi<SdpService>,
+    locator: Locator,
+    locked_note_id: NoteId,
+    non_ephemeral_signing_key_public: Ed25519PublicKey,
+    zk_id: ZkPublicKey,
+) -> Result<DeclarationId, lb_sdp_service::api::Error>
+where
+    SdpService: ServiceData<Message = SdpMessage>,
+{
+    tracing::info!(
+        target: LOG_TARGET,
+        "Submitting Blend service declaration to SDP with locator {locator:?} and locked note id {locked_note_id:?}",
+    );
+    let sdp_declaration = DeclarationMessage {
+        locators: [locator].into(),
+        locked_note_id,
+        provider_id: ProviderId(non_ephemeral_signing_key_public),
+        service_type: ServiceType::BlendNetwork,
+        zk_id,
+    };
+    sdp_service_api.post_declaration(sdp_declaration).await
 }
 
 type BroadcastSettings<CoreService, RuntimeServiceId> =

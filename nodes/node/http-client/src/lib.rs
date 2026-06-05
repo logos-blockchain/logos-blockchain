@@ -15,13 +15,17 @@ use lb_groth16::fr_to_bytes;
 pub use lb_http_api_common::TimeInfo;
 use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
-    bodies::wallet::{
-        balance::WalletBalanceResponseBody,
-        transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+    bodies::{
+        blend::JoinBlendRequestBody,
+        wallet::{
+            balance::WalletBalanceResponseBody,
+            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+        },
     },
     paths::{
-        BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM, BLOCKS_STREAM, CHANNEL,
-        CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
+        BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
+        BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX,
+        SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -542,6 +546,20 @@ impl CommonHttpClient {
     ) -> Result<WalletTransferFundsResponseBody, Error> {
         let request_url = base_url
             .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Post a request via an SDP declaration to join the blend network and
+    /// returns its declaration ID if successful.
+    pub async fn join_blend_network(
+        &self,
+        base_url: &Url,
+        body: JoinBlendRequestBody,
+    ) -> Result<DeclarationId, Error> {
+        let request_url = base_url
+            .join(BLEND_JOIN_NETWORK.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await
