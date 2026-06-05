@@ -1,5 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
+use lb_core::crypto::ZkHash;
 use lb_core::sdp::{
     Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters, ServiceType,
 };
@@ -8,14 +9,13 @@ use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 
-use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
+use crate::{EpochState, UtxoTree};
 
 pub fn create_epoch_state(
     provider_ids: &[ProviderId],
     service_type: ServiceType,
     epoch: Epoch,
     nonce: Fr,
-    _params: &blend::RewardsParameters,
 ) -> EpochState {
     let entries: HashMap<DeclarationId, Declaration> = provider_ids
         .iter()
@@ -48,6 +48,17 @@ pub fn create_epoch_state(
         lottery_1: Fr::ZERO,
         active_declarations: Arc::new(active_declarations),
     }
+}
+
+pub fn new_epoch_state_with_same_snapshot(
+    epoch: u32,
+    nonce: i32,
+    last_epoch_state: &EpochState,
+) -> EpochState {
+    let mut epoch_state = last_epoch_state.clone();
+    epoch_state.epoch = epoch.into();
+    epoch_state.nonce = ZkHash::from(nonce);
+    epoch_state
 }
 
 pub fn create_provider_id(byte: u8) -> ProviderId {
