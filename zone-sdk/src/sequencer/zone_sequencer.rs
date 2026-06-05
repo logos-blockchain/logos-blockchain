@@ -84,7 +84,8 @@ pub struct ZoneSequencer<Node> {
     // Broadcast channel for events — late subscribers receive future events.
     pub(super) event_tx: broadcast::Sender<Event>,
 
-    // Readiness signal — set to true when connected and backfill is complete
+    // Readiness latch — set to true once on cold-start backfill completion,
+    // never flipped back. Mid-life reconnects don't affect it.
     pub(super) ready_tx: watch::Sender<bool>,
     pub(super) channel_view_tx: watch::Sender<SequencerChannelView>,
     pub(super) turn_to_write_tx: watch::Sender<TurnNotification>,

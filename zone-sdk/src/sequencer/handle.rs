@@ -316,9 +316,10 @@ where
     /// with the sequencer's key, and submits. Scoped to single-sequencer
     /// (centralized) channels — only the sequencer's own signature is used.
     ///
-    /// Returns [`Error::Unavailable`] if the sequencer is not ready, or if
-    /// the channel's `withdraw_threshold > 1` (which would require multi-sig
-    /// orchestration this API doesn't support).
+    /// Returns [`Error::Unavailable`] if cold-start backfill is still in
+    /// progress (see [`Self::publish`] for the latched readiness contract),
+    /// or if the channel's `withdraw_threshold > 1` (which would require
+    /// multi-sig orchestration this API doesn't support).
     pub async fn publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
