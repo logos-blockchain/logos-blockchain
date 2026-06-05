@@ -56,17 +56,14 @@ impl CliCommand {
 
 #[derive(Debug, Subcommand)]
 enum SdpSubCommand {
-    /// Post a Blend SDP declaration using values extracted from the user
-    /// config.
+    /// Post a Blend SDP declaration using the specified locator address and ID
+    /// of a note to lock.
     ///
-    /// The command derives the following from `--user-config-path`:
-    /// - `provider_id` (from Blend non-ephemeral signing key)
-    /// - `zk_id` (from Blend core ZK key)
-    /// - `locator` (from Blend core listening address, unless overridden by
-    ///   `--blend-addr`)
     ///
-    /// It then validates that `--locked-note-id` exists for that ZK key before
-    /// submitting the declaration.
+    /// The command validates that:
+    /// - the SDP funding key has non-zero balance
+    /// - `--locked-note-id` exists for the Blend ZK key before submitting the
+    ///   declaration.
     PostBlendDeclaration(PostBlendDeclarationArgs),
 }
 
@@ -84,11 +81,10 @@ struct PostBlendDeclarationArgs {
     #[arg(long, value_name = "USER_CONFIG_YAML")]
     user_config_path: PathBuf,
 
-    /// Address of the Blend service to use in the declaration that overrides
-    /// the one present in the config file. This is useful for the case in which
-    /// a node is listening on the `0.0.0.0` address, and the declaration needs
-    /// to be posted with the externally reachable address, since `0.0.0.0` is
-    /// not a valid `Locator` value.
+    /// Address of the Blend service to include in the declaration.
+    ///
+    /// This must be externally reachable, because listening addresses such as
+    /// `0.0.0.0` are not valid `Locator` values for declarations.
     #[arg(long, value_name = "BLEND_ADDR")]
     blend_addr: Locator,
 
@@ -208,8 +204,8 @@ async fn verify_sdp_wallet_funding_pk_balance(
         .await
         .context("Failed to fetch wallet balance for SDP wallet funding pk.")?;
 
-    // TODO: Improve check to verify that the balance is not only non-zero, but also
-    // sufficient to cover the tx fees.
+    // TODO: Strengthen this preflight check to verify fee sufficiency, not only
+    // non-zero balance.
     if balance == 0 {
         bail!("The provided SDP wallet funding key does not have any balance");
     }

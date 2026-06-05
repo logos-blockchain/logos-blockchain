@@ -542,7 +542,8 @@ impl CommonHttpClient {
         self.post(request_url, &body).await
     }
 
-    /// Post a request via an SDP declaration to join the blend network.
+    /// Post a request via an SDP declaration to join the blend network and
+    /// returns its declaration ID if successful.
     pub async fn join_blend_network(
         &self,
         base_url: &Url,

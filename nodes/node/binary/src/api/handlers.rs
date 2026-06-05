@@ -32,6 +32,7 @@ use lb_core::{
 };
 use lb_http_api_common::{
     bodies::{
+        blend::JoinBlendRequestBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
@@ -596,12 +597,6 @@ where
     >(&handle))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlendJoinNetworkRequestBody {
-    pub locator: lb_core::sdp::Locator,
-    pub locked_note_id: lb_core::mantle::NoteId,
-}
-
 #[utoipa::path(
     post,
     path = paths::BLEND_JOIN_NETWORK,
@@ -613,7 +608,7 @@ pub struct BlendJoinNetworkRequestBody {
 )]
 pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
-    Json(req): Json<BlendJoinNetworkRequestBody>,
+    Json(req): Json<JoinBlendRequestBody>,
 ) -> Response
 where
     BlendService: ServiceData<
