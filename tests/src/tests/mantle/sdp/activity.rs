@@ -145,8 +145,9 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
         .scheduler
         .delayer
         .maximum_release_delay_in_rounds = 1.try_into().unwrap();
-    // Set num_blend_layers to NODE_COUNT to ensure that all nodes can collect
-    // a blend token from a single blend message.
+    // Set num_blend_layers to NODE_COUNT (instead of 1) to increase
+    // the probability that all nodes can collect a blend token from
+    // a single blend message.
     config.deployment.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
 
     config
