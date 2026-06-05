@@ -107,6 +107,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
         with:
           command: nextest
           args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features mantle_sdp --test test_mantle_sdp_ops --test test_mantle_sdp_blend --no-fail-fast
@@ -129,6 +130,7 @@ jobs:
         uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
         env:
           USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+          LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
         with:
           command: nextest
           # - We don't test benches as they take 6h+, leading to a timeout
