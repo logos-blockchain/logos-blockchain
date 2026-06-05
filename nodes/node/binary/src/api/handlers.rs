@@ -596,6 +596,41 @@ where
     >(&handle))
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlendJoinNetworkRequestBody {
+    pub locator: lb_core::sdp::Locator,
+    pub locked_note_id: lb_core::mantle::NoteId,
+}
+
+#[utoipa::path(
+    post,
+    path = paths::BLEND_JOIN_NETWORK,
+    request_body = BlendJoinNetworkRequestBody,
+    responses(
+        (status = 200, description = "Join the blend network", body = Option<lb_core::sdp::DeclarationId>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<BlendJoinNetworkRequestBody>,
+) -> Response
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
+            >,
+        > + 'static,
+    BroadcastSettings: Send + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+{
+    make_request_and_return_response!(blend::blend_join_network::<
+        BlendService,
+        BroadcastSettings,
+        RuntimeServiceId,
+    >(&handle, req.locator, req.locked_note_id))
+}
+
 #[utoipa::path(
     post,
     path = paths::MEMPOOL_ADD_TX,

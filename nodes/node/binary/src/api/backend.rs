@@ -53,8 +53,8 @@ use crate::{
     BlendBroadcastSettings, BlendService, TracingService, WalletService,
     api::{
         handlers::{
-            channel, channel_deposit, leader_claim, post_activity, post_declaration,
-            post_set_declaration_id, post_withdrawal,
+            blend_join_network, channel, channel_deposit, leader_claim, post_activity,
+            post_declaration, post_set_declaration_id, post_withdrawal,
         },
         openapi::ApiDoc,
         tracing::reload_tracing_filter,
@@ -232,6 +232,12 @@ where
             .route(
                 paths::BLEND_NETWORK_INFO,
                 routing::get(blend_info::<BlendService, BlendBroadcastSettings, RuntimeServiceId>),
+            )
+            .route(
+                paths::BLEND_JOIN_NETWORK,
+                routing::post(
+                    blend_join_network::<BlendService, BlendBroadcastSettings, RuntimeServiceId>,
+                ),
             )
             .route(
                 paths::MEMPOOL_ADD_TX,

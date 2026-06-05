@@ -6,6 +6,7 @@ pub const CRYPTARCHIA_HEADERS: &str = "/cryptarchia/headers";
 pub const CRYPTARCHIA_LIB_STREAM: &str = "/cryptarchia/lib-stream";
 pub const NETWORK_INFO: &str = "/network/info";
 pub const BLEND_NETWORK_INFO: &str = "/blend/info";
+pub const BLEND_JOIN_NETWORK: &str = "/blend/join";
 pub const MEMPOOL_ADD_TX: &str = "/mempool/add/tx";
 pub const CHANNEL: &str = "/channel/:id";
 pub const CHANNEL_DEPOSIT: &str = "/channel/deposit";

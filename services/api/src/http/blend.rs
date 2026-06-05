@@ -26,3 +26,33 @@ where
         .await
         .map_err(|e| Box::new(e) as overwatch::DynError)
 }
+
+pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
+    handle: &overwatch::overwatch::OverwatchHandle<RuntimeServiceId>,
+    locator: lb_core::sdp::Locator,
+    locked_note_id: lb_core::mantle::NoteId,
+) -> Result<lb_core::sdp::DeclarationId, overwatch::DynError>
+where
+    BlendService:
+        ServiceData<Message = ProxyServiceMessage<ServiceMessage<BroadcastSettings, PeerId>>>,
+    RuntimeServiceId: AsServiceId<BlendService> + Debug + Sync + Display + 'static,
+    BroadcastSettings: Send + 'static,
+{
+    let relay = handle.relay::<BlendService>().await?;
+    let (sender, receiver) = oneshot::channel();
+
+    relay
+        .send(ProxyServiceMessage::JoinAsCore {
+            locator,
+            locked_note_id,
+            reply: sender,
+        })
+        .await
+        .map_err(|(e, _)| e)?;
+
+    let result = receiver
+        .await
+        .map_err(|e| Box::new(e) as overwatch::DynError)??;
+
+    Ok(result)
+}
