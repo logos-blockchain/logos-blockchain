@@ -17,6 +17,7 @@ use lb_api_service::http::{
     libp2p, mantle, mempool,
     storage::StorageAdapter,
 };
+use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::{ConsensusMsg, Slot, api::CryptarchiaServiceApi};
@@ -580,8 +581,11 @@ pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    BlendService: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
-        + 'static,
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
+            >,
+        > + 'static,
     BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {

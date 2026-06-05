@@ -67,6 +67,7 @@ pub type BlendEdgeService<RuntimeServiceId> = lb_blend_service::edge::BlendServi
 pub type BlendService<RuntimeServiceId> = lb_blend_service::BlendService<
     BlendCoreService<RuntimeServiceId>,
     BlendEdgeService<RuntimeServiceId>,
+    SdpService<RuntimeServiceId>,
     RuntimeServiceId,
 >;
 
