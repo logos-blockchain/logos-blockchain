@@ -156,7 +156,6 @@ impl FromStr for Locator {
         let multiaddr = s
             .parse::<Multiaddr>()
             .map_err(|e| format!("Invalid multiaddr: {e}"))?;
-        println!("Multiaddr: {multiaddr}");
         Self::try_from(multiaddr)
     }
 }
