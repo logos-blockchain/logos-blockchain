@@ -145,7 +145,7 @@ async fn post_blend_declaration(
 
     validate_config_values(&client, node_address.clone(), &user_config, locked_note_id)
         .await
-        .with_context(|| "Failed to extract necessary values from user config")?;
+        .with_context(|| "Failed to validate values from user config")?;
 
     let declaration_id = client
         .join_blend_network(
