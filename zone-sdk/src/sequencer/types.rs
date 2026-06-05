@@ -36,10 +36,23 @@ pub struct SequencerCheckpoint {
 }
 
 /// Result of a publish operation.
+///
+/// `tx` carries the [`PublishedTx`] the caller just submitted —
+/// inscriptions or atomic-withdraw bundles. Consumers use this to record
+/// their local outbox and to dedup the same entry when it later shows up
+/// in [`ChannelUpdate::adopted`] (match by `this_msg`).
 #[derive(Debug, Clone)]
 pub struct PublishResult {
-    /// The inscription ID (transaction hash).
-    pub inscription_id: InscriptionId,
+    /// The submitted tx (inscription or atomic withdraw bundle).
+    pub tx: PublishedTx,
+}
+
+impl PublishResult {
+    /// The inscription id (transaction hash) of the submitted tx.
+    #[must_use]
+    pub const fn inscription_id(&self) -> InscriptionId {
+        self.tx.tx_hash()
+    }
 }
 
 /// One withdraw to bundle atomically with an inscription.
@@ -55,8 +68,8 @@ pub struct WithdrawArg {
 ///
 /// The consumer republishes by calling the same SDK method they used
 /// originally with the data carried inside the variant:
-/// - [`OrphanedTx::Inscription`] → [`super::SequencerHandle::publish_message`]
-///   with `info.payload`
+/// - [`OrphanedTx::Inscription`] → [`super::SequencerHandle::publish`] with
+///   `info.payload`
 /// - [`OrphanedTx::AtomicWithdraw`] →
 ///   [`super::SequencerHandle::publish_atomic_withdraw`] with
 ///   `info.inscription.payload` and `WithdrawArg`s reconstructed from
@@ -139,80 +152,36 @@ pub enum Error {
 }
 
 /// Events emitted by the sequencer.
+///
+/// [`Event::BlockProcessed`] and [`Event::BackfillProcessed`] are the two
+/// state-mutating events — both carry a [`SequencerCheckpoint`] reflecting
+/// state after the event is applied, so consumers persist the contained
+/// fields plus `checkpoint` in one atomic transaction.
+///
+/// [`Event::Readiness`] and [`Event::TurnNotification`] are connection /
+/// turn-status signals; they do not mutate consumer state and do not carry
+/// a checkpoint.
+///
+/// Publishes mutate state synchronously inside the [`super::SequencerHandle`]
+/// methods that produce them; those methods return the resulting
+/// [`SequencerCheckpoint`] inline. There is no separate `Published` event.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// Transactions finalized (at or below LIB), in chain-execution order.
-    ///
-    /// Emitted in both regimes with identical semantics — consumers write a
-    /// single apply loop:
-    /// - during cold-start catch-up, multiple `TxsFinalized` events stream in
-    ///   (one per backfill batch) before [`Event::Readiness`] with `ready:
-    ///   true`
-    /// - during live operation, one `TxsFinalized` is emitted whenever LIB
-    ///   advances and brings new finalized channel txs
-    ///
-    /// `items` is one [`FinalizedTx`] per finalized Mantle tx that touched
-    /// our channel, in block then tx order. Each [`FinalizedTx`] contains its
-    /// channel-relevant ops in on-chain execution order:
-    /// - inscriptions (ours or others') → [`FinalizedOp::Inscription`]
-    /// - deposits enriched with `amount` from the chain events API →
-    ///   [`FinalizedOp::Deposit`]
-    /// - withdraws — standalone or bundled with an inscription in the same tx →
-    ///   [`FinalizedOp::Withdraw`]
-    ///
-    /// Atomicity is structural: ops sharing a parent [`FinalizedTx`] were
-    /// applied as one Mantle tx.
-    ///
-    /// Consumers can filter to "ours" via [`Event::Published`] — every tx
-    /// this sequencer submits has its hash surfaced there, so the consumer
-    /// can match against `items[i].tx_hash`.
-    TxsFinalized { items: Vec<FinalizedTx> },
-    /// Channel state changed.
-    ///
-    /// Emitted when at least one of `orphaned` or `adopted` is non-empty.
-    /// `safe → pending` transitions whose original signed tx is still valid
-    /// (parent unchanged on the new branch) are not surfaced — the SDK
-    /// keeps retrying them internally.
-    ///
-    /// `orphaned` contains only items the SDK has given up on: our own
-    /// pending whose original signed tx is permanently invalid because a
-    /// competing inscription claimed the parent slot (or because the parent
-    /// is now off the canonical chain transitively). These need a user
-    /// decision — re-creation requires your signing key.
-    ///
-    /// `adopted` is the block-delta of inscriptions newly on the canonical
-    /// branch, filtered to **exclude items that originated from this
-    /// sequencer instance** (matched by `this_msg` against the internal
-    /// outbox). Consumers learn about their own publishes via
-    /// `Event::Published` (optimistic apply pattern) — those don't need to
-    /// be re-surfaced here. The outbox-based filter works correctly even
-    /// when multiple sequencer instances share a signing key: each
-    /// instance's outbox only contains what it itself submitted.
-    ///
-    /// Consumer pattern:
-    /// 1. On `Event::Published`: optimistically apply your own inscription to
-    ///    local state.
-    /// 2. On `ChannelUpdate`: apply `adopted` (others' new inscriptions) to
-    ///    local state, revert `orphaned` (yours that can no longer land).
-    /// 3. For each entry in `orphaned`, decide whether to republish (with a
-    ///    fresh parent — SDK handles parent selection).
-    ChannelUpdate {
-        /// Our pending whose original signed tx is permanently invalid
-        /// (parent slot claimed by something in `adopted`, or parent
-        /// transitively off canonical).
-        ///
-        /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
-        /// via [`super::SequencerHandle::publish_message`]. For
-        /// [`OrphanedTx::AtomicWithdraw`] entries, the consumer republishes
-        /// via [`super::SequencerHandle::publish_atomic_withdraw`] with the
-        /// original payload and reconstructed [`WithdrawArg`]s from the
-        /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
-        /// `withdraw_nonce` internally on each publish.
-        orphaned: Vec<OrphanedTx>,
-        /// Others' inscriptions newly on the canonical branch (block-delta,
-        /// excluding entries this instance submitted — matched by `this_msg`
-        /// against the internal outbox. See `Event::Published` for our own).
-        adopted: Vec<InscriptionInfo>,
+    /// Fires once per live block while the sequencer is ready. Carries
+    /// both finalized txs and the non-finalized channel-tip delta
+    /// (`channel_update`); either may be empty.
+    BlockProcessed {
+        checkpoint: SequencerCheckpoint,
+        channel_update: Option<ChannelUpdate>,
+        finalized: Vec<FinalizedTx>,
+    },
+    /// Fires once per backfill batch (up to ~100 historical blocks)
+    /// while the sequencer is not yet ready. Only carries finalized txs
+    /// — backfill walks canonical history sequentially, so there is no
+    /// channel-tip delta to report.
+    BackfillProcessed {
+        checkpoint: SequencerCheckpoint,
+        finalized: Vec<FinalizedTx>,
     },
     /// Sequencer readiness changed.
     ///
@@ -222,27 +191,48 @@ pub enum Event {
     /// is reconnecting. Consumers driving the event loop wait for the next
     /// `Readiness { ready: true }` to resume submitting publishes.
     Readiness { ready: bool },
-    /// A tx (plain inscription or atomic-withdraw bundle) was created and
-    /// submitted to the network.
-    ///
-    /// The inner [`PublishedTx`] variant tells the consumer
-    /// whether this came from [`super::SequencerHandle::publish_message`] or
-    /// [`super::SequencerHandle::publish_atomic_withdraw`]. `this_msg` on the
-    /// inscription is the lineage key for correlating later
-    /// `ChannelUpdate.orphaned`/`adopted` and `TxsFinalized.items`
-    /// entries back to the originating publish call.
-    Published { tx: Box<PublishedTx> },
-    /// The SDK's checkpoint has advanced.
-    ///
-    /// Emitted after every backfill batch and after every live block,
-    /// following any block-derived events for that block/batch
-    /// ([`Event::TxsFinalized`], [`Event::ChannelUpdate`]).
-    Checkpoint { checkpoint: SequencerCheckpoint },
     /// Turn-to-write status update for this sequencer.
     ///
     /// Emitted on the same change boundary as the `turn_to_write` watch
     /// channel (excluding `current_slot`-only updates).
     TurnNotification { notification: TurnNotification },
+}
+
+/// Channel state delta from one [`Event::BlockProcessed`].
+///
+/// Emitted when at least one of `orphaned` or `adopted` is non-empty.
+/// `safe → pending` transitions whose original signed tx is still valid
+/// (parent unchanged on the new branch) are not surfaced — the SDK
+/// keeps retrying them internally.
+///
+/// Consumer pattern:
+/// 1. On publish-return: optimistically apply your own inscription to local
+///    state and record its `this_msg`.
+/// 2. On [`Event::BlockProcessed`] with `Some(ChannelUpdate)`: apply `adopted`
+///    (filtered against your local outbox of `this_msg`s if you don't want to
+///    double-apply your own publishes) to local state, revert `orphaned` (yours
+///    that can no longer land).
+/// 3. For each entry in `orphaned`, decide whether to republish (with a fresh
+///    parent — SDK handles parent selection).
+#[derive(Debug, Clone)]
+pub struct ChannelUpdate {
+    /// Our pending whose original signed tx is permanently invalid because
+    /// a competing inscription claimed the parent slot (or because the
+    /// parent is now off the canonical chain transitively). These need a
+    /// user decision — re-creation requires your signing key.
+    ///
+    /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
+    /// via [`super::SequencerHandle::publish`]. For
+    /// [`OrphanedTx::AtomicWithdraw`] entries, the consumer republishes
+    /// via [`super::SequencerHandle::publish_atomic_withdraw`] with the
+    /// original payload and reconstructed [`WithdrawArg`]s from the
+    /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
+    /// `withdraw_nonce` internally on each publish.
+    pub orphaned: Vec<OrphanedTx>,
+    /// Inscriptions newly on the canonical branch (block-delta). Includes
+    /// entries this instance submitted — consumers dedup by `this_msg`
+    /// against the values returned from their publish calls.
+    pub adopted: Vec<InscriptionInfo>,
 }
 
 /// Information about whose turn it is to post and the current posting
@@ -326,14 +316,14 @@ pub struct DepositInfo {
     pub metadata: Metadata,
 }
 
-/// A tx surfaced by the SDK in event payloads.
+/// A tx surfaced by the SDK as a publish return value or in orphan payloads.
 ///
 /// Either our own publish (inscription / atomic withdraw bundle), or an
-/// observed deposit from a finalized L1 block. Used for
-/// adopted/published/finalized observations.
+/// observed deposit from a finalized L1 block. Returned from publish methods
+/// and carried by [`OrphanedTx`] / [`FinalizedOp`] adjacent contexts.
 #[derive(Debug, Clone)]
 pub enum PublishedTx {
-    /// A plain inscription published via `publish_message`.
+    /// A plain inscription published via `publish`.
     Inscription(InscriptionInfo),
     /// A bundled inscription+withdraw(s) published via
     /// `publish_atomic_withdraw`.

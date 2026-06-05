@@ -5,13 +5,14 @@ mod ui;
 use std::{fs, path::Path};
 
 use clap::Parser;
-use futures::StreamExt as _;
 use lb_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{Event, FinalizedOp, InscriptionInfo, OrphanedTx, SequencerHandle, ZoneSequencer},
+    sequencer::{
+        ChannelUpdate, Event, FinalizedOp, FinalizedTx, InscriptionInfo, OrphanedTx, ZoneSequencer,
+    },
 };
 use reqwest::Url;
 use tokio::sync::mpsc;
@@ -53,9 +54,8 @@ pub async fn run(args: InscribeArgs) {
     let checkpoint = state.load_checkpoint().cloned();
 
     let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
-    let (mut sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
+    let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
     let view_rx = sequencer.subscribe_channel_view();
-    let mut events = sequencer.events();
 
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
     let mut stdin_rx = spawn_stdin_reader(ready_rx);
@@ -65,10 +65,10 @@ pub async fn run(args: InscribeArgs) {
 
     loop {
         tokio::select! {
-            event = events.next() => {
+            event = sequencer.next_event() => {
                 if let Some(event) = event {
                     state.set_channel_view(view_rx.borrow().clone());
-                    handle_event(event, &mut state, &handle, &mut ready_tx).await;
+                    handle_event(event, &mut state, &mut sequencer, &mut ready_tx);
                 }
             }
 
@@ -84,8 +84,13 @@ pub async fn run(args: InscribeArgs) {
                     error!("Message is too large to fit in an inscription");
                     continue;
                 };
-                match handle.publish_message(inscription).await {
-                    Ok(()) => {
+                match sequencer.handle().publish(inscription) {
+                    Ok((result, checkpoint)) => {
+                        let info = result.tx.inscription();
+                        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
+                        state.on_published(info);
+                        state.save_checkpoint(checkpoint);
+                        ui::render_state(&state);
                         eprintln!("  \x1b[90mpending...\x1b[0m");
                         ui::prompt();
                     }
@@ -113,72 +118,86 @@ pub async fn run(args: InscribeArgs) {
     println!("Goodbye!");
 }
 
-async fn handle_event(
+fn handle_event(
     event: Event,
     state: &mut InMemoryZoneState,
-    handle: &SequencerHandle<NodeHttpClient>,
+    sequencer: &mut ZoneSequencer<NodeHttpClient>,
     ready_tx: &mut Option<tokio::sync::oneshot::Sender<()>>,
 ) {
     match event {
         Event::Readiness { ready: true } => handle_ready(state, ready_tx),
         Event::Readiness { ready: false } => handle_not_ready(state),
-        Event::ChannelUpdate { orphaned, adopted } => {
-            handle_channel_update(state, handle, &adopted, &orphaned).await;
+        Event::BlockProcessed {
+            checkpoint,
+            channel_update,
+            finalized,
+        } => {
+            if let Some(update) = channel_update {
+                apply_channel_update(update, state, sequencer);
+            }
+            if !finalized.is_empty() {
+                apply_finalized(&finalized, state);
+            }
+            state.save_checkpoint(checkpoint);
         }
-        Event::TxsFinalized { items } => {
-            // TUI only cares about inscriptions for rendering; deposit /
-            // withdraw ops have no inscription payload.
-            let inscriptions: Vec<InscriptionInfo> = items
-                .iter()
-                .flat_map(|t| t.ops.iter())
-                .filter_map(|op| match op {
-                    FinalizedOp::Inscription(i) => Some(i.clone()),
-                    FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
-                })
-                .collect();
-            state.on_finalized(&inscriptions);
-            ui::render_state(state);
-            ui::prompt();
-        }
-        Event::Published { tx } => {
-            let info = tx.inscription();
-            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
-            state.on_published(info);
-            ui::render_state(state);
-            ui::prompt();
-        }
-        Event::Checkpoint { checkpoint } => {
+        Event::BackfillProcessed {
+            checkpoint,
+            finalized,
+        } => {
+            if !finalized.is_empty() {
+                apply_finalized(&finalized, state);
+            }
             state.save_checkpoint(checkpoint);
         }
         Event::TurnNotification { .. } => {}
     }
 }
 
-async fn handle_channel_update(
+fn apply_finalized(items: &[FinalizedTx], state: &mut InMemoryZoneState) {
+    // TUI only cares about inscriptions for rendering; deposit / withdraw
+    // ops have no inscription payload.
+    let inscriptions: Vec<InscriptionInfo> = items
+        .iter()
+        .flat_map(|t| t.ops.iter())
+        .filter_map(|op| match op {
+            FinalizedOp::Inscription(i) => Some(i.clone()),
+            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+        })
+        .collect();
+    state.on_finalized(&inscriptions);
+    ui::render_state(state);
+    ui::prompt();
+}
+
+fn apply_channel_update(
+    update: ChannelUpdate,
     state: &mut InMemoryZoneState,
-    handle: &SequencerHandle<NodeHttpClient>,
-    adopted: &[InscriptionInfo],
-    orphaned: &[OrphanedTx],
+    sequencer: &mut ZoneSequencer<NodeHttpClient>,
 ) {
-    state.on_adopted(adopted);
-    for entry in orphaned {
-        handle_orphan(state, handle, entry).await;
+    let ChannelUpdate { orphaned, adopted } = update;
+    state.on_adopted(&adopted);
+    for entry in &orphaned {
+        handle_orphan(state, sequencer, entry);
     }
     ui::render_state(state);
     ui::prompt();
 }
 
-async fn handle_orphan(
+fn handle_orphan(
     state: &mut InMemoryZoneState,
-    handle: &SequencerHandle<NodeHttpClient>,
+    sequencer: &mut ZoneSequencer<NodeHttpClient>,
     entry: &OrphanedTx,
 ) {
     match entry {
         OrphanedTx::Inscription(info) => {
             state.on_orphaned(&info.this_msg);
             debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
-            if let Err(e) = handle.publish_message(info.payload.clone()).await {
-                error!("failed to auto-republish: {e}");
+            match sequencer.handle().publish(info.payload.clone()) {
+                Ok((result, checkpoint)) => {
+                    state.on_published(result.tx.inscription());
+                    state.save_checkpoint(checkpoint);
+                }
+                Err(e) => error!("failed to auto-republish: {e}"),
             }
         }
         OrphanedTx::AtomicWithdraw(_) => {

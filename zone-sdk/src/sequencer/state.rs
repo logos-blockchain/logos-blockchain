@@ -311,15 +311,6 @@ impl TxState {
         !self.pending.is_empty()
     }
 
-    /// Whether `msg_id` matches the `this_msg` of any inscription currently
-    /// in our outbox. Used to identify chain-observed inscriptions that
-    /// originated from this sequencer instance — robust to shared signing
-    /// keys (each instance's outbox is independent).
-    #[must_use]
-    pub fn outbox_contains(&self, msg_id: MsgId) -> bool {
-        self.pending.values().any(|p| p.this_msg == msg_id)
-    }
-
     /// Remove pending inscriptions whose lineage does NOT reach the current
     /// channel tip and that aren't already in a block on this branch.
     /// Returns the removed entries in **parent-before-child (BFS) order** so

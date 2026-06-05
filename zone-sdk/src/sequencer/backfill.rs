@@ -100,20 +100,14 @@ where
 
         self.lib_slot = Slot::from(batch_end);
 
-        let checkpoint_event = self
-            .publish_checkpoint()
-            .map(|checkpoint| Event::Checkpoint { checkpoint });
+        let Some(checkpoint) = self.publish_checkpoint() else {
+            return Some(None);
+        };
 
-        if batch.items.is_empty() {
-            return checkpoint_event.map(Some);
-        }
-
-        let event = Event::TxsFinalized { items: batch.items };
-        drop(self.event_tx.send(event.clone()));
-        if let Some(cp) = checkpoint_event {
-            self.buffered_events.push_back(cp);
-        }
-        Some(Some(event))
+        Some(Some(Event::BackfillProcessed {
+            checkpoint,
+            finalized: batch.items,
+        }))
     }
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet
