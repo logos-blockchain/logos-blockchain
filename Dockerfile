@@ -3,8 +3,7 @@
 # Ignore warnings about sensitive information as this is test data.
 
 ARG LB_NODE_VERSION=0.1.3
-# Cache directory used by the circuits. Not meant to be overridden.
-ARG LB_CACHE=/root/.cache/logos/blockchain
+ARG LB_CIRCUITS_VERSION=v0.5.1
 
 # ===========================
 # BUILD IMAGE
@@ -13,11 +12,13 @@ ARG LB_CACHE=/root/.cache/logos/blockchain
 FROM alpine:latest AS builder
 
 ARG LB_NODE_VERSION
+ARG LB_CIRCUITS_VERSION
 
 WORKDIR /logos-blockchain
 COPY . .
 
 RUN apk add --no-cache curl bash
+RUN scripts/setup-logos-blockchain-circuits.sh "$LB_CIRCUITS_VERSION" "linux-$(uname -m)"
 RUN scripts/setup-logos-blockchain-node.sh "$LB_NODE_VERSION" "linux-$(uname -m)"
 
 # ===========================
@@ -26,8 +27,6 @@ RUN scripts/setup-logos-blockchain-node.sh "$LB_NODE_VERSION" "linux-$(uname -m)
 
 FROM debian:trixie-slim
 
-ARG LB_CACHE
-
 LABEL maintainer="augustinas@status.im" \
     source="https://github.com/logos-blockchain/logos-blockchain" \
     description="Logos blockchain node image"
@@ -35,7 +34,8 @@ LABEL maintainer="augustinas@status.im" \
 # Copies the entire cache dir.
 # We only need the circuits, but this is currently much simpler than just copying the circuits subdir.
 # This might be addressed later, after the circuits directories structure is standardised.
-COPY --from=builder $LB_CACHE $LB_CACHE
+RUN mkdir -p /home/runner/.cache/logos/blockchain/
+COPY --from=builder /opt/circuits /home/runner/.cache/logos/blockchain/
 COPY --from=builder /usr/local/bin/logos-blockchain-node /usr/local/bin/logos-blockchain-node
 
 EXPOSE 3000 8080 9000 60000
