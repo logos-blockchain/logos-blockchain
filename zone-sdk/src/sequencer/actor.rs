@@ -606,7 +606,18 @@ mod tests {
             .unwrap();
         assert_eq!(result.inscription_id(), signed_tx.mantle_tx.hash());
         assert_eq!(checkpoint.last_msg_id, msg_id);
-        assert_eq!(posted_txs.recv().await.unwrap(), signed_tx);
+
+        // The post lives in `in_flight` until the drive loop polls it.
+        // Drive `next_event` concurrently with the recv so the post future
+        // runs and MockNode delivers to `posted_txs`.
+        tokio::select! {
+            tx = posted_txs.recv() => assert_eq!(tx.unwrap(), signed_tx),
+            () = async {
+                loop {
+                    let _ = sequencer.next_event().await;
+                }
+            } => unreachable!(),
+        }
     }
 
     #[derive(Clone)]
