@@ -614,7 +614,7 @@ mod tests {
             tx = posted_txs.recv() => assert_eq!(tx.unwrap(), signed_tx),
             () = async {
                 loop {
-                    let _ = sequencer.next_event().await;
+                    drop(sequencer.next_event().await);
                 }
             } => unreachable!(),
         }
