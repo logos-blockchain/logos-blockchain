@@ -92,9 +92,9 @@ where
         let became_ready = self.maybe_signal_ready();
         let (channel_update, finalized) = self.apply_block_result(result);
 
-        // Push pending posts into the in-flight batch queue. The drive loop
-        // drains `in_flight` via `next_event`'s arm; we don't await here.
-        self.resubmit_pending();
+        // Failed posts (still `!posted`) get retried by the turn-change
+        // handler and the `resubmit_interval` self-heal tick. Don't queue
+        // unconditionally on every block.
 
         let block_event = self
             .publish_checkpoint()
@@ -245,6 +245,7 @@ where
 
     fn publish_turn_to_write(&self, turn_to_write: bool) {
         let mut emitted: Option<TurnNotification> = None;
+        let mut became_our_turn = false;
 
         self.turn_to_write_tx.send_if_modified(|current| {
             let new = self.turn_notification(turn_to_write);
@@ -253,6 +254,7 @@ where
                 || current.ends_at_slot != new.ends_at_slot
                 || current.turn_to_write_slots != new.turn_to_write_slots;
 
+            became_our_turn = !current.our_turn_to_write && new.our_turn_to_write;
             *current = new.clone();
             if changed {
                 emitted = Some(new);
@@ -261,6 +263,12 @@ where
             changed
         });
 
+        if became_our_turn {
+            // Drain whatever accumulated while not-our-turn (turn-gated
+            // publishes were skipped) and refresh mempool for any posted
+            // tx that may have been evicted. Idempotent via mempool dedup.
+            self.resubmit_pending();
+        }
         if let Some(notification) = emitted {
             drop(self.event_tx.send(Event::TurnNotification { notification }));
         }

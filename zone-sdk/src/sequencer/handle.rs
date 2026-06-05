@@ -116,10 +116,15 @@ where
         state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
         self.sequencer.last_msg_id = new_msg_id;
 
-        // Queue the post into the in-flight batch pool; the drive loop will
-        // drain it. Failure is handled there (tx stays unposted, next
-        // `resubmit_pending` tick re-queues).
-        self.sequencer.queue_posts(vec![(id, signed_tx)]);
+        // Queue the post into the in-flight batch pool only if it's our
+        // turn — otherwise the tx sits in `state.pending` as `!posted` and
+        // is drained by `submit_unposted_inscriptions` on the next turn-
+        // change. Failure of the immediate post is handled the same way:
+        // tx stays `!posted` and the `resubmit_interval` self-heal tick (or
+        // the next turn-change) re-queues.
+        if self.sequencer.can_publish_inscription_now() {
+            self.sequencer.queue_posts(vec![(id, signed_tx)]);
+        }
 
         self.sequencer.publish_channel_view();
 
@@ -402,9 +407,11 @@ where
         );
         self.sequencer.last_msg_id = msg_id;
 
-        // Queue the post into the in-flight batch pool; the drive loop will
-        // drain it.
-        self.sequencer.queue_posts(vec![(tx_hash, signed_tx)]);
+        // Queue the post only if it's our turn — see `publish` for the
+        // turn-gate rationale.
+        if self.sequencer.can_publish_inscription_now() {
+            self.sequencer.queue_posts(vec![(tx_hash, signed_tx)]);
+        }
 
         self.sequencer.publish_channel_view();
 
