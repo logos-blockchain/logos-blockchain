@@ -12,12 +12,13 @@ use lb_core::{
     sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_http_api_common::{
-    bodies::wallet::transfer_funds::{
-        WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
+    bodies::{
+        blend::JoinBlendRequestBody,
+        wallet::transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
-        BLEND_JOIN_NETWORK, BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS,
-        MEMPOOL_VIEW, NETWORK_INFO,
+        BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
+        NETWORK_INFO,
     },
     queries::BlocksStreamQuery,
 };
@@ -77,26 +78,6 @@ impl NodeHttpClient {
 
         self.http_client
             .get::<(), Option<BlendNetworkInfo<PeerId>>>(request_url, None)
-            .await
-    }
-
-    /// Requests that the node join the Blend network as a core node by posting
-    /// an SDP declaration for its Blend ZK identity.
-    pub async fn join_blend_network(
-        &self,
-        locator: Locator,
-        locked_note_id: NoteId,
-    ) -> Result<DeclarationId, Error> {
-        let request_url = Self::join_path(&self.base_url, BLEND_JOIN_NETWORK)?;
-
-        self.http_client
-            .post::<_, DeclarationId>(
-                request_url,
-                &JoinBlendNetworkRequestBody {
-                    locator,
-                    locked_note_id,
-                },
-            )
             .await
     }
 
@@ -196,15 +177,25 @@ impl NodeHttpClient {
             .join(path.trim_start_matches('/'))
             .map_err(Error::Url)
     }
+
+    pub async fn join_blend_network(
+        &self,
+        locator: Locator,
+        locked_note_id: NoteId,
+    ) -> Result<DeclarationId, Error> {
+        self.http_client
+            .join_blend_network(
+                &self.base_url,
+                JoinBlendRequestBody {
+                    locator,
+                    locked_note_id,
+                },
+            )
+            .await
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DialPeerRequestBody {
     addr: Multiaddr,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct JoinBlendNetworkRequestBody {
-    locator: Locator,
-    locked_note_id: NoteId,
 }
