@@ -3,7 +3,9 @@
     reason = "`ZoneSequencer` impl is split across actor.rs / backfill.rs / zone_sequencer.rs by concern for navigability."
 )]
 
-use lb_common_http_client::{ChainServiceInfo, Slot};
+use std::time::{Duration, SystemTime};
+
+use lb_common_http_client::{ChainServiceInfo, Slot, TimeInfo};
 use lb_core::mantle::ops::channel::MsgId;
 use tracing::{debug, error, info, warn};
 
@@ -12,7 +14,7 @@ use super::{
     block_fetch::fetch_and_process_blocks,
     slot_clock::SlotClock,
     state::TxState,
-    types::{Event, FinalizedOp},
+    types::{Error, Event, FinalizedOp},
     zone_sequencer::ZoneSequencer,
 };
 use crate::adapter;
@@ -152,6 +154,14 @@ where
         if self.state.is_some() && self.slot_clock.is_some() {
             return true;
         }
+        let timing_info = match self.node.time_info().await {
+            Ok(info) => info,
+            Err(err) => {
+                warn!(target: TARGET, "Failed to fetch time info: {err}");
+                tokio::time::sleep(self.config.reconnect_delay).await;
+                return false;
+            }
+        };
         match self.node.consensus_info().await {
             Ok(ChainServiceInfo {
                 cryptarchia_info, ..
@@ -168,7 +178,16 @@ where
                 if self.state.is_none() {
                     self.state = Some(TxState::new(cryptarchia_info.lib, MsgId::root()));
                 }
-                self.slot_clock = Some(self.build_initial_slot_clock(cryptarchia_info.slot));
+                let slot_clock =
+                    match Self::build_initial_slot_clock(cryptarchia_info.slot, &timing_info) {
+                        Ok(clock) => clock,
+                        Err(err) => {
+                            warn!(target: TARGET, "Invalid time info from node: {err}");
+                            tokio::time::sleep(self.config.reconnect_delay).await;
+                            return false;
+                        }
+                    };
+                self.slot_clock = Some(slot_clock);
                 self.publish_channel_view();
                 true
             }
@@ -180,16 +199,34 @@ where
         }
     }
 
-    fn build_initial_slot_clock(&self, observed_slot: Slot) -> SlotClock {
-        self.config.chain_start_time.map_or_else(
-            || SlotClock::from_observed_slot(observed_slot, self.config.slot_duration),
-            |chain_start_time| {
-                let mut slot_clock =
-                    SlotClock::from_chain_start_time(chain_start_time, self.config.slot_duration);
-                slot_clock.observe_slot(observed_slot);
-                slot_clock
-            },
-        )
+    fn build_initial_slot_clock(
+        observed_slot: Slot,
+        timing_info: &TimeInfo,
+    ) -> Result<SlotClock, Error> {
+        let slot_duration = Duration::from_millis(timing_info.slot_duration_ms);
+        if slot_duration.is_zero() {
+            return Err(Error::Network(
+                "node reported slot_duration_ms=0 for time info".to_owned(),
+            ));
+        }
+
+        let genesis_ms = u64::try_from(timing_info.genesis_time_unix_ms).map_err(|_| {
+            Error::Network(format!(
+                "node reported negative genesis_time_unix_ms: {}",
+                timing_info.genesis_time_unix_ms
+            ))
+        })?;
+        let chain_start_time = SystemTime::UNIX_EPOCH
+            .checked_add(Duration::from_millis(genesis_ms))
+            .ok_or_else(|| {
+                Error::Network(format!(
+                    "node reported out-of-range genesis_time_unix_ms: {genesis_ms}"
+                ))
+            })?;
+
+        let mut slot_clock = SlotClock::from_chain_start_time(chain_start_time, slot_duration);
+        slot_clock.observe_slot(observed_slot);
+        Ok(slot_clock)
     }
 
     async fn open_block_stream(&mut self) -> bool {
