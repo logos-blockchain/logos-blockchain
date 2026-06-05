@@ -169,9 +169,7 @@ pub enum Error {
 pub enum Event {
     /// Fires once per live block while the sequencer is ready. Carries both
     /// finalized txs and the non-finalized channel-tip delta
-    /// (`channel_update`); either may be empty. A `channel_update` with both
-    /// `orphaned` and `adopted` empty means the canonical channel tip did not
-    /// change for this block.
+    /// (`channel_update`); either may be empty.
     BlockProcessed {
         checkpoint: SequencerCheckpoint,
         channel_update: ChannelUpdate,
@@ -202,10 +200,10 @@ pub enum Event {
 
 /// Channel state delta from one [`Event::BlockProcessed`].
 ///
-/// Both vecs are empty when the canonical channel tip did not change for this
-/// block. `safe → pending` transitions whose original signed tx is still valid
-/// (parent unchanged on the new branch) are not surfaced — the SDK keeps
-/// retrying them internally.
+/// Both vecs are empty when there is nothing for the consumer to adopt or
+/// orphan in this block. `safe → pending` transitions whose original signed
+/// tx is still valid (parent unchanged on the new branch) are not surfaced
+/// — the SDK keeps retrying them internally.
 ///
 /// Consumer pattern:
 /// 1. On publish-return: optimistically apply your own inscription to local
