@@ -202,9 +202,11 @@ where
         SequencerHandle::new(self)
     }
 
-    /// Whether the sequencer is connected and ready to accept requests.
+    /// Whether the sequencer has completed cold-start backfill.
     ///
-    /// Sync snapshot read. For change notifications, use
+    /// Latched: returns `false` until the first [`Event::Ready`], then `true`
+    /// for the rest of the sequencer's lifetime — mid-life reconnects do not
+    /// flip this back. Sync snapshot read; for change notifications, use
     /// [`Self::subscribe_ready`].
     #[must_use]
     pub fn is_ready(&self) -> bool {
@@ -220,9 +222,12 @@ where
         self.checkpoint_tx.borrow().clone()
     }
 
-    /// Subscribe to readiness. Returns a [`watch::Receiver<bool>`] where the
-    /// first `.changed().await` returns immediately with the current value;
-    /// subsequent calls wait for the next change.
+    /// Subscribe to readiness. Returns a [`watch::Receiver<bool>`] that
+    /// transitions `false → true` exactly once on cold-start completion and
+    /// stays `true`. The first `.changed().await` returns immediately with
+    /// the current value (`false` if cold start is still in progress, `true`
+    /// once complete); after the latch flips, `.changed().await` never fires
+    /// again.
     #[must_use]
     pub fn subscribe_ready(&self) -> watch::Receiver<bool> {
         let mut rx = self.ready_tx.subscribe();
