@@ -29,7 +29,6 @@
 mod chain_inputs;
 mod inputs;
 mod lottery;
-mod proving_key;
 mod verification_key;
 mod wallet_inputs;
 mod witness;
@@ -48,7 +47,7 @@ pub use wallet_inputs::{
 };
 
 pub use crate::lottery::{LotteryConstants, P};
-use crate::{inputs::PolVerifierInputJson, proving_key::POL_PROVING_KEY_PATH};
+use crate::inputs::PolVerifierInputJson;
 
 pub type PoLProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
@@ -77,7 +76,7 @@ const LOG_TARGET: &str = proofs::POL;
 pub fn prove(inputs: PolWitnessInputs) -> Result<(PoLProof, PolVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
     let result =
-        lb_circuits_prover::Rapidsnark::prove(POL_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
+        lb_circuits_prover::Rapidsnark::prove(lbc_pol_sys::artifacts::PROVING_KEY, witness.as_ref())?;
     let proof: Groth16ProofJsonDeser = serde_json::from_str(&result.proof)?;
     let verifier_inputs: PolVerifierInputJson = serde_json::from_str(&result.public_signals)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
