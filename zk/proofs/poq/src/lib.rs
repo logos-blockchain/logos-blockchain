@@ -2,7 +2,6 @@ mod blend_inputs;
 mod chain_inputs;
 mod common_inputs;
 mod inputs;
-mod proving_key;
 mod verification_key;
 mod wallet_inputs;
 mod witness;
@@ -22,7 +21,7 @@ pub use lb_pol::AGED_NOTE_MERKLE_TREE_HEIGHT;
 use tracing::error;
 pub use wallet_inputs::{AgedNotePathAndSelectors, PoQWalletInputs, PoQWalletInputsData};
 
-use crate::{inputs::PoQVerifierInputJson, proving_key::POQ_PROVING_KEY_PATH};
+use crate::inputs::PoQVerifierInputJson;
 
 pub type PoQProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
@@ -51,7 +50,7 @@ const LOG_TARGET: &str = proofs::POQ;
 pub fn prove(inputs: PoQWitnessInputs) -> Result<(PoQProof, PoQVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
     let result =
-        lb_circuits_prover::Rapidsnark::prove(POQ_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
+        lb_circuits_prover::Rapidsnark::prove(lbc_poq_sys::artifacts::PROVING_KEY, witness.as_ref())?;
     let proof: Groth16ProofJsonDeser = serde_json::from_str(&result.proof)?;
     let verifier_inputs: PoQVerifierInputJson = serde_json::from_str(&result.public_signals)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;

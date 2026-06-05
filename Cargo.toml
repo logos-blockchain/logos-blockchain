@@ -258,9 +258,9 @@ reqwest = { default-features = false, version = "0.12" }
 rocksdb = { default-features = false, version = "0.24" }
 rpds = { default-features = false, version = "1" }
 rs-merkle-tree = { default-features = false, version = "0.1" }
-rust-rapidsnark = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "2001a8e", features = [
+rust-rapidsnark = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "25dd302e924167a83ecc39b1de42917f2dad84ea", features = [
   "static-rapidsnark",
-] } # feat/rapidsnark-v0.0.8
+] } # feat/prover/buffer
 serde = { default-features = false, version = "1.0" }
 serde-big-array = { default-features = false, version = "0.5" }
 serde_arrays = { default-features = false, version = "0.2.0" }

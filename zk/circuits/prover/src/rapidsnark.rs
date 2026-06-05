@@ -1,4 +1,4 @@
-use std::{io::Error, path::Path};
+use std::io::Error;
 
 use crate::traits::Prover;
 
@@ -8,14 +8,11 @@ impl Prover for Rapidsnark {
     type Error = Error;
 
     fn prove(
-        proving_key_path: &Path,
+        proving_key: &[u8],
         witness_contents: &[u8],
     ) -> Result<rust_rapidsnark::ProofResult, Self::Error> {
-        let zkey_path = proving_key_path
-            .to_str()
-            .ok_or_else(|| Error::other("invalid UTF-8 in proving key path"))?;
         let result =
-            rust_rapidsnark::groth16_prover_zkey_file_wrapper(zkey_path, witness_contents.to_vec())
+            rust_rapidsnark::groth16_prover_zkey_buffer_wrapper(proving_key, witness_contents)
                 .map_err(|error| Error::other(error.to_string()))?;
         Ok(result)
     }
@@ -27,22 +24,21 @@ mod tests {
 
     use super::*;
 
-    static CIRCUIT_ZKEY: LazyLock<PathBuf> = LazyLock::new(|| {
+    static PROVING_KEY: LazyLock<Vec<u8>> = LazyLock::new(|| {
         let file = PathBuf::from("../resources/tests/pol/pol.zkey");
         assert!(file.exists(), "Could not find {}.", file.display());
-        file
+        std::fs::read(&file).expect("Failed to read the proving key file")
     });
 
-    static WITNESS_WTNS: LazyLock<PathBuf> = LazyLock::new(|| {
+    static WITNESS: LazyLock<Vec<u8>> = LazyLock::new(|| {
         let file = PathBuf::from("../resources/tests/pol/witness.wtns");
         assert!(file.exists(), "Could not find {}.", file.display());
-        file
+        std::fs::read(&file).expect("Failed to read the witness file")
     });
 
     #[test]
     fn test_prove() {
-        let witness_contents = std::fs::read(&*WITNESS_WTNS).unwrap();
-        let result = Rapidsnark::prove(CIRCUIT_ZKEY.as_path(), &witness_contents).unwrap();
+        let result = Rapidsnark::prove(PROVING_KEY.as_slice(), WITNESS.as_slice()).unwrap();
         assert!(!result.proof.is_empty(), "The proof should not be empty");
         assert!(
             !result.public_signals.is_empty(),
@@ -52,7 +48,7 @@ mod tests {
 
     #[test]
     fn test_prove_invalid() {
-        let result = Rapidsnark::prove(&CIRCUIT_ZKEY, b"invalid witness");
+        let result = Rapidsnark::prove(PROVING_KEY.as_slice(), b"invalid witness");
         assert!(
             result.is_err(),
             "Expected prover to fail with invalid input"
