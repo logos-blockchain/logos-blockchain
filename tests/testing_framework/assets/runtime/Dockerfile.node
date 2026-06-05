@@ -4,7 +4,7 @@
 # Cache directory used by the circuits. Not meant to be overridden.
 ARG LB_CACHE=/root/.cache/logos/blockchain
 
-FROM rust:1.94.0-slim-bookworm AS cfgsync-builder
+FROM rust:1.96.0-slim-bookworm AS cfgsync-builder
 
 WORKDIR /logos-blockchain-testing
 COPY --from=logos_blockchain_testing . /logos-blockchain-testing
@@ -17,7 +17,7 @@ RUN cargo build --locked --release \
     -p cfgsync-runtime \
     --bin cfgsync-client
 
-FROM rust:1.94.0-slim-bookworm AS builder
+FROM rust:1.96.0-slim-bookworm AS builder
 
 ARG LB_CACHE
 

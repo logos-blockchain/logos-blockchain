@@ -1,3 +1,4 @@
+use core::fmt::Debug;
 use std::{
     fs,
     io::{self, Write as _},
@@ -15,6 +16,7 @@ use lb_core::{
     },
 };
 use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use logos_blockchain_tools::{
     genesis::{
         distribution::{self, Faucet, ProviderInfo, StakeHolderInfo},
@@ -260,6 +262,8 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
     let faucet_patch = wrap_as_cryptarchia_faucet_pk(faucet_pk_value);
     let final_config = overwrite_yaml(config_value, faucet_patch);
 
+    ensure_valid_deployment_settings(&final_config)?;
+
     write_yaml(&final_config, args.output.as_deref())
 }
 
@@ -273,6 +277,8 @@ fn run_config(args: &ConfigArgs) -> Result<()> {
         let patch = resolve_override(raw)?;
         config = overwrite_yaml(config, patch);
     }
+
+    ensure_valid_deployment_settings(&config)?;
 
     write_yaml(&config, args.output.as_deref())
 }
@@ -465,10 +471,25 @@ fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
     serde_yml::from_str(&yaml_string).map_err(Into::into)
 }
 
-fn load_yaml_file<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+fn ensure_valid_deployment_settings(value: &Value) -> Result<()> {
+    let yaml = serde_yml::to_string(value)?;
+    drop(
+        deserialize_value_from_reader::<DeploymentSettings, _>(
+            yaml.as_bytes(),
+            OnUnknownKeys::Fail,
+        )
+        .context("generated config is not a valid DeploymentSettings value")?,
+    );
+    Ok(())
+}
+
+fn load_yaml_file<T>(path: &Path) -> Result<T>
+where
+    T: serde::de::DeserializeOwned + Send + Sync + Debug + 'static,
+{
     let content =
         fs::read_to_string(path).with_context(|| format!("cannot read '{}'", path.display()))?;
-    serde_yml::from_str(&content)
+    deserialize_value_from_reader(content.as_bytes(), OnUnknownKeys::Fail)
         .with_context(|| format!("cannot parse YAML from '{}'", path.display()))
 }
 

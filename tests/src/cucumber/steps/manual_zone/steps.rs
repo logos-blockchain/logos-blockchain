@@ -9,13 +9,12 @@ use lb_core::mantle::ops::channel::inscribe::Inscription;
 
 use super::{
     actions::{
-        DriveMode, ensure_zone_sequencer_exists, initialize_zone_indexer,
-        publish_atomic_zone_withdraw_transaction, publish_zone_messages,
-        publish_zone_messages_concurrently, register_zone_sequencers,
+        DriveMode, initialize_zone_indexer, publish_atomic_zone_withdraw_transaction,
+        publish_zone_messages, publish_zone_messages_concurrently,
         register_zone_sequencers_with_shared_key, remember_published_zone_message,
         save_zone_checkpoint, start_named_sequencer,
-        start_named_sequencer_with_pending_submit_depth, start_zone_cluster, stop_zone_sequencer,
-        submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
+        start_named_sequencer_with_pending_submit_depth, start_nodes_with_zone_resources,
+        stop_zone_sequencer, submit_atomic_zone_deposit_transaction, submit_zone_channel_config,
         submit_zone_deposit_transaction, submit_zone_withdraw_transaction,
     },
     assertions::{
@@ -37,11 +36,11 @@ use super::{
         generated_zone_message_batches, generated_zone_message_sequencers,
         group_zone_messages_by_sequencer, single_column_table, zone_account_balances,
         zone_atomic_withdraw_rows, zone_balance_rows, zone_config_row, zone_message_rows,
-        zone_sequencer_start_rows, zone_sequencing_state_row,
+        zone_node_resource_rows, zone_sequencer_start_rows, zone_sequencing_state_row,
     },
 };
 use crate::{
-    common::{mantle_inscription::make_inscription, manual_cluster::wait_for_height},
+    common::mantle_inscription::make_inscription,
     cucumber::{
         error::{StepError, StepResult},
         world::{CucumberWorld, ZoneSequencerStartup},
@@ -114,17 +113,15 @@ async fn start_named_sequencer_with_startup(
 }
 const CONCURRENT_DUPLICATE_SETTLE_SECS: u64 = 30;
 
-#[given("I have a zone cluster")]
-async fn step_zone_cluster(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    start_zone_cluster(world, step).await
-}
+#[given("I start nodes with wallet and sequencer resources:")]
+#[when("I start nodes with wallet and sequencer resources:")]
+async fn step_start_nodes_with_wallet_and_sequencer_resources(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    let rows = zone_node_resource_rows(step)?;
 
-#[given("the following zone sequencers exist:")]
-fn step_zone_sequencers_exist(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    let aliases = single_column_table(step, "alias", "zone sequencer aliases")?;
-    register_zone_sequencers(world, aliases);
-
-    Ok(())
+    start_nodes_with_zone_resources(world, step, rows).await
 }
 
 #[given(expr = "the following zone sequencers share the signing key of {string}:")]
@@ -151,16 +148,6 @@ fn step_zone_account_balances(world: &mut CucumberWorld, step: &Step) -> StepRes
     world.zone.set_zone_account_balances(balances);
 
     Ok(())
-}
-
-#[given("a zone sequencer is initialized")]
-#[when("a zone sequencer is initialized")]
-async fn step_default_zone_sequencer_initialized(
-    world: &mut CucumberWorld,
-    step: &Step,
-) -> StepResult {
-    ensure_zone_sequencer_exists(world, DEFAULT_ZONE_SEQUENCER);
-    start_sequencer_with_indexer(world, step, DEFAULT_ZONE_SEQUENCER).await
 }
 
 #[when(expr = "I start zone sequencer {string}")]
@@ -218,28 +205,6 @@ fn step_stop_zone_sequencer(
 ) -> StepResult {
     let _ = step;
     stop_zone_sequencer(world, sequencer_alias)
-}
-
-#[cucumber::when(expr = "the zone node is at height {int} in {int} seconds")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn step_zone_node_is_at_height(
-    world: &mut CucumberWorld,
-    step: &Step,
-    height: u64,
-    timeout_seconds: u64,
-) -> StepResult {
-    let client = log_step_error(step, world.zone_node_http_client())?;
-
-    wait_for_height(&client, height, Duration::from_secs(timeout_seconds))
-        .await
-        .map_err(|_| StepError::Timeout {
-            message: format!(
-                "Zone node did not reach height {height} in {timeout_seconds} seconds"
-            ),
-        })
 }
 
 #[cucumber::when(expr = "the zone LIB advances in {int} seconds")]

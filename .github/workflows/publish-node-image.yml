@@ -3,6 +3,7 @@ name: Publish Logos Blockchain Node Docker Image
 on:
   release:
     types: [published, created]
+  workflow_dispatch:
 
 env:
   REGISTRY: ghcr.io

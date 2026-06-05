@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cucumber::gherkin::Step;
 use lb_core::mantle::ops::channel::inscribe::Inscription;
@@ -49,6 +49,134 @@ pub(super) struct ZoneConfigRow {
     pub posting_timeframe: u32,
     pub posting_timeout: u32,
     pub authorized_sequencers: Vec<String>,
+}
+
+pub(super) struct ZoneNodeResourcesRow {
+    pub node_name: String,
+    pub account_index: usize,
+    pub wallet_name: String,
+    pub connected_to: Option<String>,
+    pub sequencers: Vec<String>,
+}
+
+pub(super) fn zone_node_resource_rows(step: &Step) -> Result<Vec<ZoneNodeResourcesRow>, StepError> {
+    let rows = parse_zone_table_rows(
+        step,
+        &[
+            "node_name",
+            "account_index",
+            "wallet_name",
+            "connected_to",
+            "sequencers",
+        ],
+        "Zone node resources",
+        parse_zone_node_resource_row,
+    )?;
+
+    ensure_unique_zone_node_resources(&rows)?;
+
+    Ok(rows)
+}
+
+fn parse_zone_node_resource_row(row: &[String]) -> Result<ZoneNodeResourcesRow, StepError> {
+    match row {
+        [
+            node_name,
+            account_index,
+            wallet_name,
+            connected_to,
+            sequencers,
+        ] => {
+            let node_name = required_cell(node_name, "node_name")?;
+            let account_index =
+                account_index
+                    .trim()
+                    .parse()
+                    .map_err(|error| StepError::InvalidArgument {
+                        message: format!("Invalid zone account index '{account_index}': {error}"),
+                    })?;
+            let wallet_name = required_cell(wallet_name, "wallet_name")?;
+            let connected_to = optional_cell(connected_to);
+            let sequencers = comma_separated_aliases(sequencers, "sequencers")?;
+
+            Ok(ZoneNodeResourcesRow {
+                node_name,
+                account_index,
+                wallet_name,
+                connected_to,
+                sequencers,
+            })
+        }
+        _ => invalid_zone_table_row(
+            "Zone node resources",
+            &[
+                "node_name",
+                "account_index",
+                "wallet_name",
+                "connected_to",
+                "sequencers",
+            ],
+            row.len(),
+        ),
+    }
+}
+
+fn ensure_unique_zone_node_resources(rows: &[ZoneNodeResourcesRow]) -> Result<(), StepError> {
+    let mut wallets = HashSet::new();
+    let mut sequencers = HashSet::new();
+
+    for row in rows {
+        if !wallets.insert(row.wallet_name.clone()) {
+            return Err(StepError::InvalidArgument {
+                message: format!("Duplicate zone wallet '{}'", row.wallet_name),
+            });
+        }
+
+        for sequencer in &row.sequencers {
+            if !sequencers.insert(sequencer.clone()) {
+                return Err(StepError::InvalidArgument {
+                    message: format!("Duplicate zone sequencer '{sequencer}'"),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn required_cell(value: &str, name: &str) -> Result<String, StepError> {
+    let value = value.trim();
+
+    if value.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!("Zone node resources `{name}` cannot be empty"),
+        });
+    }
+
+    Ok(value.to_owned())
+}
+
+fn optional_cell(value: &str) -> Option<String> {
+    let value = value.trim();
+
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn comma_separated_aliases(value: &str, name: &str) -> Result<Vec<String>, StepError> {
+    let aliases = value
+        .split(',')
+        .map(str::trim)
+        .filter(|alias| !alias.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+
+    if aliases.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: format!("Zone node resources `{name}` must list at least one alias"),
+        });
+    }
+
+    Ok(aliases)
 }
 
 pub(super) fn zone_message_rows(step: &Step) -> Result<Vec<(String, Inscription)>, StepError> {

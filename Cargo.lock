@@ -1786,7 +1786,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2050,7 +2050,7 @@ checksum = "0ce92ff622d6dadf7349484f42c93271a0d49b7cc4d466a936405bacbe10aa78"
 dependencies = [
  "cfg-if",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4238,6 +4238,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
  "logos-blockchain-sdp-service",
+ "logos-blockchain-utils",
  "logos-blockchain-wallet-service",
  "multiaddr",
  "num-bigint",
@@ -4925,7 +4926,6 @@ dependencies = [
  "overwatch",
  "rand 0.8.6",
  "serde",
- "serde_ignored",
  "serde_json",
  "serde_urlencoded",
  "serde_with",
@@ -5173,6 +5173,7 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
+ "logos-blockchain-utils",
  "num-bigint",
  "serde",
  "serde_with",
@@ -5285,11 +5286,13 @@ dependencies = [
  "const-hex",
  "futures",
  "humantime",
+ "logos-blockchain-log-targets",
  "nistrs",
  "overwatch",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "serde",
+ "serde_ignored",
  "serde_json",
  "serde_with",
  "serde_yaml",
@@ -5297,6 +5300,7 @@ dependencies = [
  "thiserror 2.0.18",
  "time",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

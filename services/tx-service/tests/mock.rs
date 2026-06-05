@@ -9,6 +9,7 @@ use std::{
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream};
 use lb_core::{
+    block::MAX_BLOCK_SIZE,
     codec::{DeserializeOp as _, SerializeOp as _},
     header::HeaderId,
     mantle::mock::{MockTransaction, MockTxId},
@@ -88,6 +89,77 @@ fn sample_removed_tx() -> MockTransaction<MockMessage> {
         version: 0,
         timestamp: 0,
     })
+}
+
+fn mock_pool_node_settings(
+    recovery_file_path: &Path,
+    predefined_messages: Vec<MockMessage>,
+) -> (MockPoolNodeServiceSettings, TempDir) {
+    let temp_dir = TempDir::new().expect("Failed to create temp directory");
+    let db_path = temp_dir.path().join("test_db");
+
+    (
+        MockPoolNodeServiceSettings {
+            network: NetworkConfig {
+                backend: MockConfig {
+                    predefined_messages,
+                    duration: tokio::time::Duration::from_millis(100),
+                    seed: 0,
+                    version: 1,
+                    weights: None,
+                },
+            },
+            storage: rocksdb::RocksBackendSettings {
+                db_path,
+                read_only: false,
+                column_family: None,
+            },
+            mockpool: TxMempoolSettings {
+                pool: (),
+                network_adapter: (),
+                recovery_path: recovery_file_path.to_path_buf(),
+            },
+            logging: TracingSettings::default(),
+            no_service: (),
+        },
+        temp_dir,
+    )
+}
+
+async fn add_tx(
+    mempool_outbound: &OutboundRelay<<MockMempoolService as ServiceData>::Message>,
+    tx: MockTransaction<MockMessage>,
+) -> Result<(), MempoolError> {
+    let (reply_channel, reply) = tokio::sync::oneshot::channel();
+    mempool_outbound
+        .send(MempoolMsg::Add {
+            key: tx.id(),
+            payload: tx,
+            reply_channel,
+        })
+        .await
+        .unwrap();
+
+    reply.await.expect("mempool should reply to local add")
+}
+
+async fn pending_txs(
+    mempool_outbound: &OutboundRelay<<MockMempoolService as ServiceData>::Message>,
+) -> Vec<MockTransaction<MockMessage>> {
+    let (reply_channel, reply) = tokio::sync::oneshot::channel();
+    mempool_outbound
+        .send(MempoolMsg::View {
+            ancestor_hint: [0; 32].into(),
+            reply_channel,
+        })
+        .await
+        .unwrap();
+
+    reply
+        .await
+        .expect("mempool should reply to view")
+        .collect::<Vec<_>>()
+        .await
 }
 
 #[derive(Clone, Default)]
@@ -323,7 +395,59 @@ async fn removed_items_remain_fetchable_after_recovery() {
 }
 
 #[test]
-#[expect(clippy::too_many_lines, reason = "self contained test")]
+fn local_submission_rejects_oversized_tx() {
+    let recovery_file_path = get_test_random_path();
+    run_with_recovery_teardown(&recovery_file_path, || {
+        let (settings, _temp_dir) = mock_pool_node_settings(&recovery_file_path, Vec::new());
+        let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
+            .map_err(|e| eprintln!("Error encountered: {e}"))
+            .unwrap();
+
+        drop(
+            app.runtime()
+                .handle()
+                .block_on(app.handle().start_all_services()),
+        );
+
+        let mempool_outbound = app
+            .runtime()
+            .handle()
+            .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
+
+        let oversized_tx = MockTransaction::new(MockMessage {
+            payload: "x".repeat(MAX_BLOCK_SIZE + 1),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 0,
+        });
+
+        let error = app
+            .runtime()
+            .handle()
+            .block_on(add_tx(&mempool_outbound, oversized_tx))
+            .expect_err("oversized tx should be rejected");
+
+        assert!(matches!(
+            error,
+            MempoolError::ItemTooLarge {
+                size,
+                max: MAX_BLOCK_SIZE,
+            } if size > MAX_BLOCK_SIZE
+        ));
+
+        assert!(
+            app.runtime()
+                .handle()
+                .block_on(pending_txs(&mempool_outbound))
+                .is_empty()
+        );
+
+        drop(app.runtime().handle().block_on(app.handle().shutdown()));
+        app.blocking_wait_finished();
+    });
+}
+
+#[test]
 fn test_mock_mempool() {
     let recovery_file_path = get_test_random_path();
     run_with_recovery_teardown(&recovery_file_path, || {
@@ -347,32 +471,8 @@ fn test_mock_mempool() {
 
         let exp_txns: HashSet<MockMessage> = predefined_messages.iter().cloned().collect();
 
-        let temp_dir = TempDir::new().expect("Failed to create temp directory");
-        let db_path = temp_dir.path().join("test_db");
-
-        let settings = MockPoolNodeServiceSettings {
-            network: NetworkConfig {
-                backend: MockConfig {
-                    predefined_messages,
-                    duration: tokio::time::Duration::from_millis(100),
-                    seed: 0,
-                    version: 1,
-                    weights: None,
-                },
-            },
-            storage: rocksdb::RocksBackendSettings {
-                db_path,
-                read_only: false,
-                column_family: None,
-            },
-            mockpool: TxMempoolSettings {
-                pool: (),
-                network_adapter: (),
-                recovery_path: recovery_file_path.clone(),
-            },
-            logging: TracingSettings::default(),
-            no_service: (),
-        };
+        let (settings, _temp_dir) =
+            mock_pool_node_settings(&recovery_file_path, predefined_messages);
         let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
             .map_err(|e| eprintln!("Error encountered: {e}"))
             .unwrap();

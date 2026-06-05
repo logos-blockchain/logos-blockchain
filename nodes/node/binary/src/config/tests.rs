@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tracing::Level;
 
 use crate::{
@@ -244,8 +245,7 @@ fn standalone_node_config_deserializes() {
     let parsed: Result<UserConfig, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
     assert!(parsed.is_ok(), "standalone node config should deserialize");
 
-    let parsed =
-        super::deserialize_config_at_path::<UserConfig>(&yaml_path, super::OnUnknownKeys::Fail);
+    let parsed = deserialize_value_at_path::<UserConfig>(&yaml_path, OnUnknownKeys::Fail);
     assert!(
         parsed.is_ok(),
         "standalone node config should deserialize via loader, got: {:?}",
@@ -268,10 +268,7 @@ fn standalone_deployment_config_deserializes() {
         "standalone deployment config should deserialize"
     );
 
-    let parsed = super::deserialize_config_at_path::<DeploymentSettings>(
-        &yaml_path,
-        super::OnUnknownKeys::Fail,
-    );
+    let parsed = deserialize_value_at_path::<DeploymentSettings>(&yaml_path, OnUnknownKeys::Fail);
     assert!(
         parsed.is_ok(),
         "standalone deployment config should deserialize via loader, got: {:?}",
