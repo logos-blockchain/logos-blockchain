@@ -8,7 +8,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
     codec::SerializeOp as _,
-    mantle::{Transaction, TransactionHasher, TxHash},
+    mantle::{StorageSize, Transaction, TransactionHasher, TxHash},
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
@@ -44,6 +44,14 @@ impl<M: Serialize + DeserializeOwned + Clone> Transaction for MockTransaction<M>
 
     fn as_signing(&self) -> Vec<u8> {
         todo!()
+    }
+}
+
+impl<M: Serialize + DeserializeOwned + Clone> StorageSize for MockTransaction<M> {
+    fn storage_size(&self) -> usize {
+        self.to_bytes()
+            .expect("MockTransaction should be able to be serialized")
+            .len()
     }
 }
 

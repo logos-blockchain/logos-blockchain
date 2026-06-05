@@ -13,7 +13,10 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use lb_core::mantle::Transaction;
+use lb_core::{
+    block::MAX_BLOCK_SIZE,
+    mantle::{StorageSize, Transaction},
+};
 use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
@@ -161,7 +164,7 @@ where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + Clone + Send + 'static,
+    Pool::Item: Transaction<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Settings: Clone + Sync + Send,
     NetworkAdapter:
         NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
@@ -262,7 +265,7 @@ impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + Clone + Send + 'static,
+    Pool::Item: Transaction<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + 'static,
@@ -372,6 +375,11 @@ where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
+        if let Err(error) = Self::validate_item_for_mempool(&item) {
+            Self::handle_add_error(error, reply_channel);
+            return;
+        }
+
         let item_for_broadcast = item.clone();
 
         match pool.add_item(key, item).await {
@@ -504,6 +512,18 @@ where
         }
     }
 
+    fn validate_item_for_mempool(item: &Pool::Item) -> Result<(), MempoolError> {
+        let size = item.storage_size();
+        if size > MAX_BLOCK_SIZE {
+            return Err(MempoolError::ItemTooLarge {
+                size,
+                max: MAX_BLOCK_SIZE,
+            });
+        }
+
+        Ok(())
+    }
+
     async fn handle_network_item(
         pool: &mut Pool,
         key: Pool::Key,
@@ -513,21 +533,16 @@ where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
+        if let Err(err) = Self::validate_item_for_mempool(&item) {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "could not add network item to the pool due to: {err}"
+            );
+            return;
+        }
+
         if let Err(e) = pool.add_item(key, item).await {
-            match e {
-                MempoolError::ExistingItem => {
-                    tracing::trace!(
-                        target: LOG_TARGET,
-                        "network item already exists in the mempool"
-                    );
-                }
-                err => {
-                    tracing::debug!(
-                        target: LOG_TARGET,
-                        "could not add item to the pool due to: {err}"
-                    );
-                }
-            }
+            Self::handle_network_add_error(e);
             return;
         }
 
@@ -540,5 +555,22 @@ where
         );
 
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
+    }
+
+    fn handle_network_add_error(error: MempoolError) {
+        match error {
+            MempoolError::ExistingItem => {
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    "network item already exists in the mempool"
+                );
+            }
+            err => {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "could not add item to the pool due to: {err}"
+                );
+            }
+        }
     }
 }
