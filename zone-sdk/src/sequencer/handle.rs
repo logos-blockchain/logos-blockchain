@@ -124,7 +124,7 @@ where
         // tx stays `!posted` and the `resubmit_interval` self-heal tick (or
         // the next turn-change) re-queues.
         if self.sequencer.can_publish_inscription_now() {
-            self.sequencer.queue_posts(vec![(id, signed_tx)]);
+            self.sequencer.queue_publish_post(id, signed_tx);
         }
 
         self.sequencer.publish_channel_view();
@@ -215,7 +215,7 @@ where
 
         // Queue the post into the in-flight batch pool; the drive loop will
         // drain it.
-        self.sequencer.queue_posts(vec![(id, tx)]);
+        self.sequencer.queue_publish_post(id, tx);
 
         let checkpoint = self
             .sequencer
@@ -280,7 +280,7 @@ where
         // Queue the post into the in-flight batch pool; the drive loop will
         // drain it.
         self.sequencer
-            .queue_posts(vec![(tx_hash, signed_tx.clone())]);
+            .queue_publish_post(tx_hash, signed_tx.clone());
 
         self.sequencer.publish_channel_view();
 
@@ -412,7 +412,7 @@ where
         // Queue the post only if it's our turn — see `publish` for the
         // turn-gate rationale.
         if self.sequencer.can_publish_inscription_now() {
-            self.sequencer.queue_posts(vec![(tx_hash, signed_tx)]);
+            self.sequencer.queue_publish_post(tx_hash, signed_tx);
         }
 
         self.sequencer.publish_channel_view();

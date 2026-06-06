@@ -1,4 +1,10 @@
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
@@ -57,14 +63,17 @@ pub struct ZoneSequencer<Node> {
     // Resubmission
     pub(super) resubmit_interval: tokio::time::Interval,
 
-    // In-flight `post_transaction` batches. Publishes and resubmits push
+    // In-flight `post_transaction` batches. Publishes and broad sweeps push
     // here; the drive loop polls `in_flight.next()` from `next_event` to
     // drive batches to completion. Each future processes its batch
-    // sequentially (one HTTP at a time, like the old `enqueue_pending_submit`
-    // design) and returns one `(tx_hash, success)` per tx. On `success`,
-    // `mark_pending_inscription_posted` is called; on failure the tx stays
-    // unposted in `state.pending` for the next `resubmit_pending` tick.
+    // sequentially (one HTTP at a time) and returns one `(tx_hash, success)`
+    // per tx. On `success`, `mark_pending_inscription_posted` is called; on
+    // failure the tx stays unposted for the next `resubmit_pending` tick.
     pub(super) in_flight: FuturesUnordered<BoxFuture<'static, Vec<(TxHash, bool)>>>,
+
+    // Guard: only one broad sweep in flight at a time. Cleared by the
+    // pushed future on completion via the captured `Arc`.
+    pub(super) resubmit_active: Arc<AtomicBool>,
 
     // Buffered events — when one drive step produces multiple events.
     pub(super) buffered_events: VecDeque<Event>,
@@ -181,6 +190,7 @@ where
             blocks_stream: None,
             resubmit_interval,
             in_flight: FuturesUnordered::new(),
+            resubmit_active: Arc::new(AtomicBool::new(false)),
             buffered_events: VecDeque::new(),
             backfill_from: None,
             backfill_to: None,
@@ -350,31 +360,54 @@ where
         event
     }
 
-    /// Push a batch of `post_transaction` calls into `in_flight`. Each batch
-    /// runs sequentially in one future (one HTTP at a time), so concurrency
-    /// at the node is bounded by the number of distinct batches currently
-    /// in `in_flight`. The drive loop polls completions via `next_event`'s
-    /// `in_flight.next()` arm and marks each successful tx as posted; failed
-    /// txs stay unposted for the next `resubmit_pending` tick.
-    pub(super) fn queue_posts(&self, batch: Vec<(TxHash, SignedMantleTx)>) {
+    /// Push a single-tx publish post into `in_flight`. Used by
+    /// `handle.publish` / `submit_signed_tx` / `channel_config` —
+    /// independent user-initiated actions that can run concurrently.
+    pub(super) fn queue_publish_post(&self, tx_hash: TxHash, signed_tx: SignedMantleTx) {
+        self.in_flight.push(Box::pin(post_batch(
+            self.node.clone(),
+            vec![(tx_hash, signed_tx)],
+        )));
+    }
+
+    /// Push a broad-sweep batch into `in_flight`. Sets `resubmit_active`
+    /// before pushing; the future clears it on completion. Caller must
+    /// check `resubmit_active` first to avoid duplicate sweeps —
+    /// `resubmit_pending` does this gate.
+    pub(super) fn queue_resubmit_batch(&self, batch: Vec<(TxHash, SignedMantleTx)>) {
         if batch.is_empty() {
             return;
         }
+        self.resubmit_active.store(true, Ordering::Relaxed);
         let node = self.node.clone();
+        let flag = Arc::clone(&self.resubmit_active);
         self.in_flight.push(Box::pin(async move {
-            let mut results = Vec::with_capacity(batch.len());
-            for (tx_hash, signed_tx) in batch {
-                match node.post_transaction(signed_tx).await {
-                    Ok(()) => results.push((tx_hash, true)),
-                    Err(e) => {
-                        warn!(target: TARGET, "Failed to post transaction {tx_hash:?}: {e}");
-                        results.push((tx_hash, false));
-                    }
-                }
-            }
+            let results = post_batch(node, batch).await;
+            flag.store(false, Ordering::Relaxed);
             results
         }));
     }
+}
+
+async fn post_batch<Node>(node: Node, batch: Vec<(TxHash, SignedMantleTx)>) -> Vec<(TxHash, bool)>
+where
+    Node: adapter::Node + Clone + Send + Sync + 'static,
+{
+    let mut results = Vec::with_capacity(batch.len());
+    for (tx_hash, signed_tx) in batch {
+        match node.post_transaction(signed_tx).await {
+            Ok(()) => results.push((tx_hash, true)),
+            Err(e) => {
+                // Node looks unavailable — bail on the rest of the batch.
+                // Remaining txs stay `!posted` in `state.pending` and the
+                // next `resubmit_pending` tick retries.
+                warn!(target: TARGET, "Failed to post transaction {tx_hash:?}: {e}; aborting batch");
+                results.push((tx_hash, false));
+                return results;
+            }
+        }
+    }
+    results
 }
 
 pub(super) fn build_checkpoint(

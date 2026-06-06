@@ -358,12 +358,25 @@ where
     }
 
     /// Re-post pending txs that aren't safe at the current tip by pushing
-    /// `post_transaction` futures into `in_flight`. The drive loop's
-    /// `next_event` arm drains `in_flight` and marks successful posts as
-    /// posted; failures stay unposted for the next tick. Inscription
-    /// publishes are gated by the round-robin window; first-time posts are
-    /// bounded by `max_pending_publish_depth`.
+    /// a `post_transaction` batch into `in_flight_resubmit`. The drive
+    /// loop's `next_event` arm drains it and marks successful posts;
+    /// failures stay unposted for the next tick. Inscription publishes
+    /// are gated by the round-robin window; first-time posts are bounded
+    /// by `max_pending_publish_depth`.
+    ///
+    /// Skips if a previous broad sweep is still in flight — guards against
+    /// the 30s timer + turn-change handler firing close together and
+    /// producing duplicate POSTs for the same pending set.
     pub(super) fn resubmit_pending(&self) {
+        if self
+            .resubmit_active
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            debug!(target: TARGET, "Skipping resubmit; previous broad sweep still in flight");
+            self.publish_channel_view();
+            return;
+        }
+
         let Some(tip) = self.current_tip else {
             self.publish_channel_view();
             return;
@@ -409,7 +422,7 @@ where
         }
 
         debug!(target: TARGET, "Queueing {} pending transaction(s) for resubmit", submit.len());
-        self.queue_posts(submit);
+        self.queue_resubmit_batch(submit);
 
         self.publish_channel_view();
     }
