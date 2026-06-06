@@ -97,7 +97,7 @@ pub async fn run(args: InscribeArgs) {
                     Err(lb_zone_sdk::sequencer::Error::Unavailable { reason }) => {
                         warn!("publish rejected: {reason}");
                         eprintln!(
-                            "  \x1b[33msequencer reconnecting, try again in a moment\x1b[0m"
+                            "  \x1b[33msequencer is still starting up, try again in a moment\x1b[0m"
                         );
                         ui::prompt();
                     }
