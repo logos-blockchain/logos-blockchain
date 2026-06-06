@@ -8,12 +8,13 @@ use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_chain_service::ChainServiceInfo;
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, TxHash},
-    sdp::Declaration,
+    mantle::{NoteId, SignedMantleTx, TxHash},
+    sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_http_api_common::{
-    bodies::wallet::transfer_funds::{
-        WalletTransferFundsRequestBody, WalletTransferFundsResponseBody,
+    bodies::{
+        blend::JoinBlendRequestBody,
+        wallet::transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
     },
     paths::{
         BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
@@ -175,6 +176,22 @@ impl NodeHttpClient {
         base_url
             .join(path.trim_start_matches('/'))
             .map_err(Error::Url)
+    }
+
+    pub async fn join_blend_network(
+        &self,
+        locator: Locator,
+        locked_note_id: NoteId,
+    ) -> Result<DeclarationId, Error> {
+        self.http_client
+            .join_blend_network(
+                &self.base_url,
+                JoinBlendRequestBody {
+                    locator,
+                    locked_note_id,
+                },
+            )
+            .await
     }
 }
 
