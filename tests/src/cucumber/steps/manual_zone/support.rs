@@ -246,7 +246,7 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlockProcessed { channel_update, .. } = event else {
+        let Event::BlocksProcessed { channel_update, .. } = event else {
             return;
         };
         for entry in &channel_update.orphaned {
@@ -273,7 +273,7 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        if let Event::BlockProcessed { channel_update, .. } = event {
+        if let Event::BlocksProcessed { channel_update, .. } = event {
             let ChannelUpdate { orphaned, adopted } = channel_update;
             let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
                 .iter()
@@ -325,7 +325,7 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlockProcessed { channel_update, .. } = event else {
+        let Event::BlocksProcessed { channel_update, .. } = event else {
             return;
         };
         let ChannelUpdate { orphaned, adopted } = channel_update;
@@ -566,7 +566,7 @@ pub async fn wait_for_adopted_payload(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
-            let Event::BlockProcessed { channel_update, .. } = event else {
+            let Event::BlocksProcessed { channel_update, .. } = event else {
                 continue;
             };
             for info in channel_update.adopted {
@@ -605,7 +605,7 @@ pub async fn wait_for_adopted_payloads(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
-            let Event::BlockProcessed { channel_update, .. } = event else {
+            let Event::BlocksProcessed { channel_update, .. } = event else {
                 continue;
             };
             for info in channel_update.adopted {
@@ -925,7 +925,7 @@ pub async fn wait_for_withdraw(
 }
 
 /// Waits until the sequencer's event stream surfaces the expected deposit
-/// in [`Event::BlockProcessed::finalized`] (matched by `inputs`, `amount`,
+/// in [`Event::BlocksProcessed::finalized`] (matched by `inputs`, `amount`,
 /// and `metadata`). Drains the events channel as it goes — call this
 /// after any earlier event consumers in the scenario have moved past the
 /// relevant publish events.
@@ -978,7 +978,7 @@ async fn poll_sequencer_finalized_until(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
-            let Event::BlockProcessed { finalized, .. } = event else {
+            let Event::BlocksProcessed { finalized, .. } = event else {
                 continue;
             };
             for tx in finalized {

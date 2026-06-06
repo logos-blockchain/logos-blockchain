@@ -126,7 +126,7 @@ fn handle_event(
 ) {
     match event {
         Event::Ready => handle_ready(state, ready_tx),
-        Event::BlockProcessed {
+        Event::BlocksProcessed {
             checkpoint,
             channel_update,
             finalized,

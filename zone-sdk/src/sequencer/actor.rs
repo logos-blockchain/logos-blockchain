@@ -26,7 +26,7 @@ where
 {
     /// Handle a single item from the blocks stream. `None` means the stream
     /// disconnected; any other value is processed as a block event and
-    /// produces an [`Event::BlockProcessed`] carrying the checkpoint, the
+    /// produces an [`Event::BlocksProcessed`] carrying the checkpoint, the
     /// optional `ChannelUpdate`, and the block's finalized txs.
     pub(super) async fn handle_stream_item(
         &mut self,
@@ -90,7 +90,7 @@ where
     /// Convert a successfully-ingested block into the public event. Handles
     /// the readiness-transition special case: when this is the block that
     /// flips the sequencer to ready, emit `Ready` first and buffer the
-    /// `BlockProcessed` for the next drive turn.
+    /// `BlocksProcessed` for the next drive turn.
     fn finish_block_processing(&mut self, result: BlockEventResult) -> Option<Event> {
         let became_ready = self.maybe_signal_ready();
         let (channel_update, finalized) = self.apply_block_result(result);
@@ -98,10 +98,16 @@ where
         // Failed posts (still `!posted`) get retried by the turn-change
         // handler and the `resubmit_interval` self-heal tick. Don't queue
         // unconditionally on every block.
+        //
+        // Refresh the channel view so `our_turn_to_write` re-evaluates
+        // against the just-advanced slot clock — the turn-change handler
+        // inside relies on this to fire `resubmit_pending` when our turn
+        // arrives.
+        self.publish_channel_view();
 
         let block_event = self
             .publish_checkpoint()
-            .map(|checkpoint| Event::BlockProcessed {
+            .map(|checkpoint| Event::BlocksProcessed {
                 checkpoint,
                 channel_update,
                 finalized,
@@ -142,7 +148,7 @@ where
     /// Readiness stays latched true after the first cold-start completion —
     /// in-memory state remains valid, publishes keep flowing, and any tx
     /// invalidated during the disconnect surfaces as an orphan on the next
-    /// `BlockProcessed` once the stream resumes.
+    /// `BlocksProcessed` once the stream resumes.
     fn handle_stream_drop(&self) {
         self.publish_turn_to_write(false);
     }
@@ -150,7 +156,7 @@ where
     /// Build the current checkpoint from internal state and publish it to the
     /// `checkpoint_tx` watch channel. Returns the built checkpoint (or `None`
     /// if state isn't initialised yet) so callers can reuse it to construct
-    /// the matching [`Event::BlockProcessed`].
+    /// the matching [`Event::BlocksProcessed`].
     pub(super) fn publish_checkpoint(&self) -> Option<SequencerCheckpoint> {
         let checkpoint = self
             .state
@@ -1053,7 +1059,7 @@ mod tests {
         loop {
             match sequencer.next_event().await {
                 Some(Event::Ready) => break,
-                Some(Event::BlockProcessed { finalized, .. }) => {
+                Some(Event::BlocksProcessed { finalized, .. }) => {
                     finalized_items.extend(finalized);
                 }
                 Some(_) | None => {}

@@ -42,7 +42,7 @@
 //!
 //! # Restart
 //!
-//! Persist [`SequencerCheckpoint`] received via [`Event::BlockProcessed`]
+//! Persist [`SequencerCheckpoint`] received via [`Event::BlocksProcessed`]
 //! (or directly from a publish call). Pass the most recent checkpoint back
 //! to [`ZoneSequencer::init`] to resume.
 

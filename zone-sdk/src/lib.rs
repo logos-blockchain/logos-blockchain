@@ -40,7 +40,7 @@
 //! loop {
 //!     tokio::select! {
 //!         Some(ev) = sequencer.next_event() => match ev {
-//!             Event::BlockProcessed { checkpoint, channel_update, finalized } => {
+//!             Event::BlocksProcessed { checkpoint, channel_update, finalized } => {
 //!                 let _ = (checkpoint, channel_update, finalized);
 //!             }
 //!             Event::Ready                             => {}

@@ -153,7 +153,7 @@ pub enum Error {
 
 /// Events emitted by the sequencer.
 ///
-/// [`Event::BlockProcessed`] is the state-mutating event — it carries a
+/// [`Event::BlocksProcessed`] is the state-mutating event — it carries a
 /// [`SequencerCheckpoint`] reflecting state after the event is applied, so
 /// consumers persist the contained fields plus `checkpoint` in one atomic
 /// transaction.
@@ -170,9 +170,9 @@ pub enum Event {
     /// Fires per ingested block. Carries finalized txs and the non-finalized
     /// channel-tip delta (`channel_update`); either may be empty. Backfill
     /// batches (cold start and reconnect catch-up) emit a single
-    /// `BlockProcessed` per batch with empty `channel_update` — backfill
+    /// `BlocksProcessed` per batch with empty `channel_update` — backfill
     /// walks canonical history, so there is no tip delta to report.
-    BlockProcessed {
+    BlocksProcessed {
         checkpoint: SequencerCheckpoint,
         channel_update: ChannelUpdate,
         finalized: Vec<FinalizedTx>,
@@ -183,7 +183,7 @@ pub enum Event {
     /// point are invisible on the event stream: in-memory state stays
     /// valid, publishes keep flowing, and any tx invalidated by the
     /// catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
-    /// `BlockProcessed` once the stream resumes.
+    /// `BlocksProcessed` once the stream resumes.
     Ready,
     /// Turn-to-write status update for this sequencer.
     ///
@@ -192,7 +192,7 @@ pub enum Event {
     TurnNotification { notification: TurnNotification },
 }
 
-/// Channel state delta from one [`Event::BlockProcessed`].
+/// Channel state delta from one [`Event::BlocksProcessed`].
 ///
 /// Both vecs are empty when there is nothing for the consumer to adopt or
 /// orphan in this block. `safe → pending` transitions whose original signed
@@ -202,7 +202,7 @@ pub enum Event {
 /// Consumer pattern:
 /// 1. On publish-return: optimistically apply your own inscription to local
 ///    state and record its `this_msg`.
-/// 2. On [`Event::BlockProcessed`]: apply `adopted` (filtered against your
+/// 2. On [`Event::BlocksProcessed`]: apply `adopted` (filtered against your
 ///    local outbox of `this_msg`s if you don't want to double-apply your own
 ///    publishes) to local state, revert `orphaned` (yours that can no longer
 ///    land). Both being empty is a no-op.

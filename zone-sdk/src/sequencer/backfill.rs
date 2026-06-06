@@ -104,7 +104,7 @@ where
             return Some(None);
         };
 
-        Some(Some(Event::BlockProcessed {
+        Some(Some(Event::BlocksProcessed {
             checkpoint,
             channel_update: ChannelUpdate {
                 orphaned: Vec::new(),
