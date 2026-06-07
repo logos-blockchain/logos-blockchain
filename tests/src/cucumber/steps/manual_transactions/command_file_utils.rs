@@ -215,7 +215,6 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
         verify_transactions_mined(
             world,
             step,
-            &wallet_names,
             &cycle_tx_hashes,
             wallet_names.len() * transactions_per_wallet,
             Some(cycle + 1),
@@ -257,11 +256,9 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn verify_transactions_mined(
-    world: &mut CucumberWorld,
+    world: &CucumberWorld,
     step: &str,
-    wallet_names: &[String],
     tx_hashes: &HashSet<TxHash>,
     expected_tx_count: usize,
     cycle: Option<usize>,
@@ -285,15 +282,7 @@ async fn verify_transactions_mined(
         tx_hashes.len(),
     );
 
-    let best_node_info = get_best_node_info_choose(world, wallet_names).await?;
-    wait_for_scanned_transaction_hashes(
-        world,
-        step,
-        tx_hashes,
-        &best_node_info,
-        Duration::from_mins(3),
-    )
-    .await
+    wait_for_scanned_transaction_hashes(world, step, tx_hashes, Duration::from_mins(3)).await
 }
 
 #[expect(
@@ -938,7 +927,6 @@ async fn execute_continuous_round_robin(
         verify_transactions_mined(
             world,
             step,
-            &wallet_names,
             &cycle_tx_hashes,
             wallet_names.len() * transactions,
             Some(cycle + 1),
@@ -960,12 +948,10 @@ async fn execute_continuous_round_robin(
         all_round_robin_tx_hashes.len(),
     );
 
-    let best_node_info = get_best_node_info_choose(world, &wallet_names).await?;
     wait_for_scanned_transaction_hashes(
         world,
         step,
         &all_round_robin_tx_hashes,
-        &best_node_info,
         Duration::from_mins(3),
     )
     .await?;
@@ -1030,23 +1016,23 @@ async fn send_round_robin_with_utxo_cache(
 }
 
 async fn wait_for_scanned_transaction_hashes(
-    world: &mut CucumberWorld,
+    world: &CucumberWorld,
     step: &str,
     expected_hashes: &HashSet<TxHash>,
-    best_node_info: &BestNodeInfo,
     timeout: Duration,
 ) -> Result<(), StepError> {
     let start = Instant::now();
 
     loop {
         let missing = world.missing_scanned_transaction_hashes(expected_hashes);
+        let observed = expected_hashes.len().saturating_sub(missing.len());
 
         if missing.is_empty() {
             info!(
                 target: TARGET,
                 "Step `{}` observed {}/{} submitted transaction hash(es) in scanned blocks",
                 step,
-                expected_hashes.len(),
+                observed,
                 expected_hashes.len(),
             );
 
@@ -1054,21 +1040,20 @@ async fn wait_for_scanned_transaction_hashes(
         }
 
         if start.elapsed() >= timeout {
-            return Err(StepError::Timeout {
-                message: format!(
-                    "Timed out waiting for submitted transaction hashes to appear in scanned blocks: observed {}/{}, missing {}",
-                    expected_hashes.len() - missing.len(),
-                    expected_hashes.len(),
-                    missing.len(),
-                ),
-            });
+            let missing_set = missing.into_iter().collect::<HashSet<_>>();
+
+            let msg = format!(
+                "Step `{step}` transaction inclusion timeout: submitted={} \
+                scanned_observed={observed} missing={}",
+                expected_hashes.len(),
+                missing_set.len(),
+            );
+            warn!(target: TARGET, "{msg}");
+
+            return Err(StepError::Timeout { message: msg });
         }
 
-        // Drive the shared wallet sync path; scanned transaction hashes are only
-        // discovered when sync processes blocks.
-        utils::sync_available_utxos_for_user_wallets(world, step, Some(best_node_info)).await?;
-
-        sleep(Duration::from_millis(500)).await;
+        sleep(Duration::from_millis(250)).await;
     }
 }
 

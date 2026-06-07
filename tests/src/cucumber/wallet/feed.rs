@@ -15,10 +15,16 @@ use testing_framework_core::{
     scenario::DynError,
 };
 use thiserror::Error;
+use tracing::info;
 
 use crate::{
-    common::wallet::WalletBlockFeedTrackerError,
-    cucumber::world::{SharedTrackedWallets, SharedWalletBlockFeedTracker},
+    common::wallet::{WalletBlockFeedTrackerError, WalletObservedBlock},
+    cucumber::{
+        TARGET,
+        world::{
+            SharedScannedTransactionHashes, SharedTrackedWallets, SharedWalletBlockFeedTracker,
+        },
+    },
 };
 
 #[derive(Debug, Error)]
@@ -40,6 +46,7 @@ impl CucumberWalletBlockFeed {
     pub async fn start(
         wallets: SharedTrackedWallets,
         tracker: SharedWalletBlockFeedTracker,
+        scanned_transaction_hashes: SharedScannedTransactionHashes,
         genesis_utxos: Vec<Utxo>,
     ) -> Result<Self, CucumberWalletBlockFeedError> {
         let provider = DynamicWalletBlockFeedSources::default();
@@ -55,6 +62,7 @@ impl CucumberWalletBlockFeed {
             vec![Box::new(WalletBlockFeedStateCollector::new(
                 wallets,
                 tracker,
+                scanned_transaction_hashes,
                 genesis_utxos,
             ))],
         );
@@ -101,6 +109,7 @@ enum WalletBlockFeedStateCollectorError {
 struct WalletBlockFeedStateCollector {
     wallets: SharedTrackedWallets,
     tracker: SharedWalletBlockFeedTracker,
+    scanned_transaction_hashes: SharedScannedTransactionHashes,
     genesis_utxos: Vec<Utxo>,
 }
 
@@ -108,11 +117,13 @@ impl WalletBlockFeedStateCollector {
     const fn new(
         wallets: SharedTrackedWallets,
         tracker: SharedWalletBlockFeedTracker,
+        scanned_transaction_hashes: SharedScannedTransactionHashes,
         genesis_utxos: Vec<Utxo>,
     ) -> Self {
         Self {
             wallets,
             tracker,
+            scanned_transaction_hashes,
             genesis_utxos,
         }
     }
@@ -122,20 +133,44 @@ impl WalletBlockFeedStateCollector {
         feed: &BlockFeed,
     ) -> Result<(), WalletBlockFeedStateCollectorError> {
         let update_result = {
-            let mut tracker = self
-                .tracker
-                .lock()
-                .map_err(|_| WalletBlockFeedStateCollectorError::TrackerLockPoisoned)?;
-            let mut wallets = self
-                .wallets
-                .lock()
-                .map_err(|_| WalletBlockFeedStateCollectorError::WalletLockPoisoned)?;
+            let observed_blocks = {
+                let mut tracker = self
+                    .tracker
+                    .lock()
+                    .map_err(|_| WalletBlockFeedStateCollectorError::TrackerLockPoisoned)?;
+                let mut wallets = self
+                    .wallets
+                    .lock()
+                    .map_err(|_| WalletBlockFeedStateCollectorError::WalletLockPoisoned)?;
 
-            tracker.apply_feed(&mut wallets, feed, &self.genesis_utxos)
+                tracker.apply_feed(&mut wallets, feed, &self.genesis_utxos)?
+            };
+
+            let mut sink = self
+                .scanned_transaction_hashes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let before = sink.len();
+            for observed in &observed_blocks {
+                sink.extend(observed.transaction_hashes().iter().copied());
+            }
+            let after = sink.len();
+            drop(sink);
+            let new_blocks = observed_blocks
+                .iter()
+                .map(WalletObservedBlock::height)
+                .collect::<Vec<_>>();
+            let new = after.saturating_sub(before);
+            info!(
+                target: TARGET,
+                "observed blocks={new_blocks:?}, new transactions={new} total recorded transactions={after}",
+            );
+
+            Ok::<_, WalletBlockFeedTrackerError>(())
         };
 
         match update_result {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(error) if error.requires_direct_backfill() => Ok(()),
             Err(error) => Err(error.into()),
         }

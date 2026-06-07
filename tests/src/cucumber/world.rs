@@ -63,6 +63,7 @@ type ScenarioBuilderWith = ScenarioBuilder;
 type ConsensusLiveness = workloads::ConsensusLiveness;
 pub type SharedTrackedWallets = Arc<Mutex<TrackedWallets>>;
 pub type SharedWalletBlockFeedTracker = Arc<Mutex<WalletBlockFeedTracker>>;
+pub type SharedScannedTransactionHashes = Arc<Mutex<HashSet<TxHash>>>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeployerKind {
@@ -824,7 +825,7 @@ pub struct CucumberWorld {
     pub prepared_transactions: HashMap<String, SignedMantleTx>,
     /// Manual: Transaction hashes observed while wallet/block sync scanned
     /// blocks.
-    pub scanned_transaction_hashes: HashSet<TxHash>,
+    pub scanned_transaction_hashes: SharedScannedTransactionHashes,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -985,7 +986,7 @@ impl Debug for CucumberWorld {
             .field("prepared_transactions", &self.prepared_transactions.len())
             .field(
                 "scanned_transaction_hashes",
-                &self.scanned_transaction_hashes.len(),
+                &self.scanned_transaction_hashes_len(),
             )
             .field("wallet_utxos_by_block", &wallet_utxo_snapshot_count)
             .field("wallet_pending_states", &wallet_pending_count)
@@ -1267,6 +1268,7 @@ impl CucumberWorld {
         let feed = CucumberWalletBlockFeed::start(
             Arc::clone(&self.wallets),
             Arc::clone(&self.wallet_feed_tracker),
+            Arc::clone(&self.scanned_transaction_hashes),
             self.genesis_block_utxos.clone(),
         )
         .await
@@ -1749,18 +1751,24 @@ impl CucumberWorld {
         self.submitted_transactions.insert(alias, tx_hash);
     }
 
-    pub fn record_scanned_transaction_hashes(
-        &mut self,
-        tx_hashes: impl IntoIterator<Item = TxHash>,
-    ) {
-        self.scanned_transaction_hashes.extend(tx_hashes);
+    #[must_use]
+    pub fn scanned_transaction_hashes_len(&self) -> usize {
+        self.scanned_transaction_hashes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
     }
 
     pub fn missing_scanned_transaction_hashes(&self, expected: &HashSet<TxHash>) -> Vec<TxHash> {
+        let scanned_transaction_hashes = self
+            .scanned_transaction_hashes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         expected
             .iter()
             .copied()
-            .filter(|hash| !self.scanned_transaction_hashes.contains(hash))
+            .filter(|hash| !scanned_transaction_hashes.contains(hash))
             .collect()
     }
 
@@ -1946,7 +1954,7 @@ impl CucumberWorld {
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field(
                 "scanned_transaction_hashes",
-                &self.scanned_transaction_hashes.len(),
+                &self.scanned_transaction_hashes_len(),
             )
             .field(
                 "wallet_utxos_by_block",

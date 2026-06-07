@@ -455,7 +455,22 @@ async fn observe_wallet_feed_batches(
 ) -> Result<WalletFeedStateResults, StepError> {
     let feed_result = world.with_wallet_feed_state_mut(|tracker, wallets| {
         let observed_blocks = tracker.apply_feed(wallets, feed, genesis_utxos)?;
-
+        let mut sink = world
+            .scanned_transaction_hashes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = sink.len();
+        for observed in &observed_blocks {
+            sink.extend(observed.transaction_hashes().iter().copied());
+        }
+        let after = sink.len();
+        drop(sink);
+        let new = after.saturating_sub(before);
+        let new_blocks = observed_blocks.iter().map(WalletObservedBlock::height).collect::<Vec<_>>();
+        info!(
+            target: TARGET,
+            "observed blocks={new_blocks:?}, new transactions={new} total recorded transactions={after}",
+        );
         observed_wallet_results(tracker, &tracking_batches, observed_blocks)
     })?;
 
@@ -542,7 +557,7 @@ async fn backfill_wallet_feed_batch(
         node.started_node.client.clone(),
         tip,
     );
-    let wallet_utxos =
+    let (wallet_utxos, transaction_hashes, new_blocks) =
         wallet_utxos_from_chain(&mut source, tracking_batch.wallet_keys(), genesis_utxos)
             .await
             .map_err(|error| StepError::LogicalError {
@@ -553,6 +568,17 @@ async fn backfill_wallet_feed_batch(
     let observed_utxos = wallet_utxos.clone();
     let tracked_utxos = wallet_utxos.clone();
     let tip_string = tip.to_string();
+
+    let mut sink = world
+        .scanned_transaction_hashes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = sink.len();
+    sink.extend(transaction_hashes);
+    let after = sink.len();
+    drop(sink);
+    let new = after.saturating_sub(before);
+    info!(target: TARGET, "observed blocks={new_blocks}, new transactions={new} total recorded transactions={}", after);
 
     world
         .with_wallet_feed_state_mut(|tracker, wallets| {
@@ -858,7 +884,26 @@ fn update_wallet_feed_state(
 ) -> Result<Result<(), WalletBlockFeedTrackerError>, StepError> {
     world
         .with_wallet_feed_state_mut(|tracker, wallets| {
-            tracker.apply_feed(wallets, feed, genesis_utxos)
+            let result = tracker.apply_feed(wallets, feed, genesis_utxos);
+            if let Ok(observed_blocks) = result.as_ref() {
+                let mut sink = world
+                    .scanned_transaction_hashes
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let before = sink.len();
+                for observed_block in observed_blocks {
+                    sink.extend(observed_block.transaction_hashes().iter().copied());
+                }
+                let after = sink.len();
+                drop(sink);
+                let new_blocks = observed_blocks.iter().map(WalletObservedBlock::height).collect::<Vec<_>>();
+                let new = after.saturating_sub(before);
+                info!(
+                    target: TARGET,
+                    "observed blocks={new_blocks:?}, new transactions={new} total recorded transactions={after}",
+                );
+            }
+            result
         })
         .map(|result| result.map(|_| ()))
 }
@@ -867,13 +912,12 @@ fn log_wallet_observed_block(block: &WalletObservedBlock) {
     if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
         info!(
             target: TARGET,
-            "Evaluating block {height} for {} wallets on `{}`: {header_id}, \
-            transactions len: {}",
+            "Evaluating block {} for {} wallets on `{}`: {}, transactions len: {}",
+            block.height(),
             block.wallet_count(),
             block.source_node_name(),
+            block.header_id(),
             block.transaction_count(),
-            height = block.height(),
-            header_id = block.header_id(),
         );
     }
 
