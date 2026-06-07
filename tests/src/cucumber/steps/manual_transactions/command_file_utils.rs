@@ -12,6 +12,7 @@
 //! COIN_SPLIT, wallet '<wallet_name>', outputs <count>, value <amount>
 //! VERIFY, wallet '<wallet_name>', outputs <count>, time_out <duration_seconds>
 //! BALANCE, wallet '<wallet_name>'
+//! EXPORT_FUNDS, wallet '<wallet_name>', value <amount>, output '<path>', include_secret true|false
 //! BALANCE_ALL_WALLETS
 //! BALANCE_ALL_USER_WALLETS
 //! BALANCE_ALL_FUNDING_WALLETS
@@ -34,10 +35,12 @@
 //! STOP
 //! ```
 
-use std::{collections::HashSet, env, num::NonZero, path::Path, time::Duration};
+use std::{collections::HashSet, env, fs, num::NonZero, path::Path, time::Duration};
 
-use lb_core::mantle::TxHash;
+use lb_core::mantle::{TxHash, Utxo};
+use lb_tui_zone::run_commands::{ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT};
 use lb_wallet::WalletError;
+use serde::Serialize;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
@@ -63,8 +66,9 @@ use crate::{
         wallet::{
             best_node::{get_best_node_info, get_best_node_info_choose},
             checks::wait_for_observed_transaction_hashes,
+            sync::current_available_utxos_for_user_wallets,
         },
-        world::{CucumberWorld, WalletInfo},
+        world::{CucumberWorld, WalletInfo, WalletType},
     },
 };
 
@@ -199,8 +203,7 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
 
     let mut all_next_wallet_tx_hashes = HashSet::new();
     for cycle in 0..cycles {
-        let mut available_utxos =
-            utils::current_available_utxos_for_user_wallets(world, step).await?;
+        let mut available_utxos = current_available_utxos_for_user_wallets(world, step).await?;
 
         let cycle_tx_hashes = execute_ring_send_round_with_utxo_cache(
             world,
@@ -458,6 +461,22 @@ async fn execute_non_stop_manual_command(
 
             log_wallet_balances(world, step, wallets).await
         }
+        ManualCommand::ExportFunds {
+            wallet_name,
+            value,
+            output_path,
+            include_secret,
+        } => {
+            export_funds(
+                world,
+                step,
+                wallet_name,
+                *value,
+                output_path,
+                *include_secret,
+            )
+            .await
+        }
         ManualCommand::ClearEncumbrances { wallet_name } => {
             clear_wallet_encumbrances(world, step, wallet_name)
         }
@@ -521,7 +540,6 @@ async fn log_wallet_balances(
     for wallet in wallets {
         log_wallet_balance(world, step, &wallet.wallet_name).await?;
     }
-
     Ok(())
 }
 
@@ -554,6 +572,166 @@ async fn log_wallet_balance(
     );
 
     Ok(())
+}
+
+#[derive(Serialize)]
+struct WalletFundsExport {
+    version: u8,
+    kind: &'static str,
+    wallet: String,
+    node_url: String,
+    public_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    secret_key: Option<String>,
+    requested_value: u64,
+    selected_value: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    height: Option<u64>,
+    utxos: Vec<ExportedUtxo>,
+}
+
+#[derive(Serialize)]
+struct ExportedUtxo {
+    utxo_id: String,
+    value: u64,
+    encoded_utxo: String,
+}
+
+async fn export_funds(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    value: u64,
+    output_path: &str,
+    include_secret: bool,
+) -> Result<(), StepError> {
+    let wallet = world.resolve_wallet(wallet_name)?.clone();
+    let available_utxos = current_available_utxos_for_user_wallets(world, step)
+        .await?
+        .get(wallet_name)
+        .cloned()
+        .ok_or(StepError::LogicalError {
+            message: format!("Wallet '{wallet_name}' not found in updated balances"),
+        })?;
+    let selected = select_utxos_covering(available_utxos.clone(), value)?;
+    let selected_value = selected.iter().map(|utxo| utxo.note.value).sum();
+    let export = WalletFundsExport {
+        version: ZONE_FILE_TRANSFER_VERSION,
+        kind: ZONE_WALLET_FUNDS_EXPORT,
+        wallet: wallet.wallet_name.clone(),
+        node_url: format!(
+            "{}",
+            world
+                .resolve_node_http_client(&wallet.node_name)?
+                .base_url()
+        ),
+        public_key: wallet.public_key_hex(),
+        secret_key: exported_secret_key(&wallet, include_secret)?,
+        requested_value: value,
+        selected_value,
+        height: best_known_wallet_node_height(world, &wallet).await,
+        utxos: selected
+            .iter()
+            .map(exported_utxo)
+            .collect::<Result<Vec<_>, _>>()?,
+    };
+
+    let path = Path::new(output_path);
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| StepError::StepFail {
+            message: format!(
+                "Failed to create EXPORT_FUNDS output directory '{}': {error}",
+                parent.display()
+            ),
+        })?;
+    }
+    let json = serde_json::to_string_pretty(&export).map_err(|error| StepError::StepFail {
+        message: format!("Failed to serialize EXPORT_FUNDS JSON: {error}"),
+    })?;
+    fs::write(path, json).map_err(|error| StepError::StepFail {
+        message: format!(
+            "Failed to write EXPORT_FUNDS output '{}': {error}",
+            path.display()
+        ),
+    })?;
+
+    info!(
+        target: TARGET,
+        "EXPORT_FUNDS wrote {} UTXO(s), selected value {}, requested value {}, output '{}'",
+        export.utxos.len(),
+        selected_value,
+        value,
+        path.display()
+    );
+    Ok(())
+}
+
+fn select_utxos_covering(mut utxos: Vec<Utxo>, value: u64) -> Result<Vec<Utxo>, StepError> {
+    utxos.sort_by_key(|utxo| std::cmp::Reverse(utxo.note.value));
+    let available = utxos.iter().map(|utxo| utxo.note.value).sum();
+    let mut selected = Vec::new();
+    let mut selected_value = 0u64;
+
+    for utxo in utxos {
+        selected_value = selected_value.saturating_add(utxo.note.value);
+        selected.push(utxo);
+        if selected_value >= value {
+            return Ok(selected);
+        }
+    }
+
+    Err(StepError::WalletError(WalletError::InsufficientFunds {
+        available,
+    }))
+}
+
+fn exported_secret_key(
+    wallet: &WalletInfo,
+    include_secret: bool,
+) -> Result<Option<String>, StepError> {
+    if !include_secret {
+        return Ok(None);
+    }
+
+    let WalletType::User { wallet_account } = &wallet.wallet_type else {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "EXPORT_FUNDS include_secret true requires a user wallet; '{}' is a funding wallet",
+                wallet.wallet_name
+            ),
+        });
+    };
+
+    bincode::serialize(&wallet_account.secret_key)
+        .map(hex::encode)
+        .map(Some)
+        .map_err(|error| StepError::StepFail {
+            message: format!("Failed to encode wallet secret key for EXPORT_FUNDS: {error}"),
+        })
+}
+
+fn exported_utxo(utxo: &Utxo) -> Result<ExportedUtxo, StepError> {
+    Ok(ExportedUtxo {
+        utxo_id: hex::encode(utxo.id().as_bytes()),
+        value: utxo.note.value,
+        encoded_utxo: bincode::serialize(utxo).map(hex::encode).map_err(|error| {
+            StepError::StepFail {
+                message: format!("Failed to encode UTXO for EXPORT_FUNDS: {error}"),
+            }
+        })?,
+    })
+}
+
+async fn best_known_wallet_node_height(world: &CucumberWorld, wallet: &WalletInfo) -> Option<u64> {
+    let node = world.nodes_info.get(&wallet.node_name)?;
+    node.started_node
+        .client
+        .consensus_info()
+        .await
+        .ok()
+        .map(|info| info.cryptarchia_info.height)
 }
 
 fn clear_wallet_encumbrances(

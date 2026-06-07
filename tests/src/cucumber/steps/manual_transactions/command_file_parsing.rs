@@ -31,6 +31,12 @@ pub enum ManualCommand {
     WalletBalance {
         wallet_name: String,
     },
+    ExportFunds {
+        wallet_name: String,
+        value: u64,
+        output_path: String,
+        include_secret: bool,
+    },
     WalletBalanceAllUserWallets,
     WalletBalanceAllFundingWallets,
     WalletBalanceAllWallets,
@@ -214,6 +220,12 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
         "BALANCE" => Ok(ManualCommand::WalletBalance {
             wallet_name: parse_quoted_field(&parts, "wallet")?,
         }),
+        "EXPORT_FUNDS" => Ok(ManualCommand::ExportFunds {
+            wallet_name: parse_quoted_field(&parts, "wallet")?,
+            value: parse_u64_field(&parts, "value")?,
+            output_path: parse_quoted_field(&parts, "output")?,
+            include_secret: parse_bool_field(&parts, "include_secret")?,
+        }),
         "BALANCE_ALL_USER_WALLETS" => Ok(ManualCommand::WalletBalanceAllUserWallets),
         "BALANCE_ALL_FUNDING_WALLETS" => Ok(ManualCommand::WalletBalanceAllFundingWallets),
         "BALANCE_ALL_WALLETS" => Ok(ManualCommand::WalletBalanceAllWallets),
@@ -311,6 +323,17 @@ fn parse_usize_field(parts: &[String], key: &str) -> Result<usize, StepError> {
         .map_err(|_| StepError::InvalidArgument {
             message: format!("Invalid value for '{key}': '{raw}'"),
         })
+}
+
+fn parse_bool_field(parts: &[String], key: &str) -> Result<bool, StepError> {
+    let raw = parse_number_field(parts, key)?;
+    match raw {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(StepError::InvalidArgument {
+            message: format!("Invalid value for '{key}': '{raw}'"),
+        }),
+    }
 }
 
 fn parse_optional_usize_field(parts: &[String], key: &str) -> Result<Option<usize>, StepError> {
@@ -442,6 +465,25 @@ mod tests {
         assert!(matches!(
             command,
             ManualCommand::WalletBalance { wallet_name } if wallet_name == "WALLET_1A"
+        ));
+    }
+
+    fn assert_export_funds_command() {
+        let command = parse_ok(
+            "EXPORT_FUNDS, wallet 'WALLET_1A', value 1000, output '/tmp/tui-zone/funds-wallet-1a.json', include_secret true",
+        );
+
+        assert!(matches!(
+            command,
+            ManualCommand::ExportFunds {
+                wallet_name,
+                value,
+                output_path,
+                include_secret,
+            } if wallet_name == "WALLET_1A"
+                && value == 1000
+                && output_path == "/tmp/tui-zone/funds-wallet-1a.json"
+                && include_secret
         ));
     }
 
@@ -630,6 +672,12 @@ mod tests {
             ManualCommand::WalletBalance {
                 wallet_name: String::new(),
             },
+            ManualCommand::ExportFunds {
+                wallet_name: String::new(),
+                value: 0,
+                output_path: String::new(),
+                include_secret: false,
+            },
             ManualCommand::WalletBalanceAllUserWallets,
             ManualCommand::WalletBalanceAllFundingWallets,
             ManualCommand::WalletBalanceAllWallets,
@@ -712,6 +760,10 @@ mod tests {
                 }
                 ManualCommand::WalletBalance { .. } => {
                     assert_balance_command();
+                    visited += 1;
+                }
+                ManualCommand::ExportFunds { .. } => {
+                    assert_export_funds_command();
                     visited += 1;
                 }
                 ManualCommand::WalletBalanceAllUserWallets => {

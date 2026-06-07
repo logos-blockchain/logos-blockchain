@@ -947,8 +947,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
+ "js-sys",
  "num-traits",
  "serde",
+ "wasm-bindgen",
  "windows-link 0.2.1",
 ]
 
@@ -4984,6 +4986,7 @@ name = "logos-blockchain-tests"
 version = "0.1.2"
 dependencies = [
  "async-trait",
+ "bincode",
  "cucumber",
  "derivative",
  "divan",
@@ -5003,6 +5006,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
@@ -5123,9 +5127,12 @@ dependencies = [
 name = "logos-blockchain-tui-zone"
 version = "0.1.2"
 dependencies = [
+ "bincode",
+ "chrono",
  "clap",
  "hex",
  "logos-blockchain-core",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "rand 0.8.6",
