@@ -258,7 +258,7 @@ reqwest                            = { default-features = false, version = "0.12
 rocksdb                            = { default-features = false, version = "0.24" }
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
-rust-rapidsnark                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "632ef6f64353da4efb43b6729b3dc0e6d41f159c" } # fix/static-linux-glibc-pie-compat
+rust-rapidsnark                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "8f51c339fd4d4a3e30c361a20cc118ce20f9f39f" } # fix/static-linux-glibc-pie-compat
 serde                              = { default-features = false, version = "1.0" }
 serde-big-array                    = { default-features = false, version = "0.5" }
 serde_arrays                       = { default-features = false, version = "0.2.0" }
