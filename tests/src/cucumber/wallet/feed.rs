@@ -146,25 +146,28 @@ impl WalletBlockFeedStateCollector {
                 tracker.apply_feed(&mut wallets, feed, &self.genesis_utxos)?
             };
 
-            let mut sink = self
-                .scanned_transaction_hashes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let before = sink.len();
-            for observed in &observed_blocks {
-                sink.extend(observed.transaction_hashes().iter().copied());
+            if !observed_blocks.is_empty() {
+                let mut sink = self
+                    .scanned_transaction_hashes
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let before = sink.len();
+                for observed in &observed_blocks {
+                    sink.extend(observed.transaction_hashes().iter().copied());
+                }
+                let after = sink.len();
+                drop(sink);
+                let new_blocks = observed_blocks
+                    .iter()
+                    .map(WalletObservedBlock::height)
+                    .collect::<Vec<_>>();
+                let new = after.saturating_sub(before);
+                info!(
+                    target: TARGET,
+                    "observed blocks={new_blocks:?}, new transactions={new} total recorded \
+                    transactions={after}",
+                );
             }
-            let after = sink.len();
-            drop(sink);
-            let new_blocks = observed_blocks
-                .iter()
-                .map(WalletObservedBlock::height)
-                .collect::<Vec<_>>();
-            let new = after.saturating_sub(before);
-            info!(
-                target: TARGET,
-                "observed blocks={new_blocks:?}, new transactions={new} total recorded transactions={after}",
-            );
 
             Ok::<_, WalletBlockFeedTrackerError>(())
         };
