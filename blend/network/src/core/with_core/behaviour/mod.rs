@@ -963,12 +963,12 @@ where
         connection_id: ConnectionId,
         peer_id: PeerId,
         _: &Multiaddr,
-        _: &Multiaddr,
+        remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
         // If the new peer makes the set of established connections too large, do not
         // try to upgrade the connection.
         if self.negotiated_peers.len() >= *self.peering_degree.end() {
-            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} will not be upgraded since we are already at maximum peering capacity.");
+            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since we are already at maximum peering capacity.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
@@ -978,17 +978,17 @@ where
         // close one of the two connections depending on the comparison result of
         // local and remote peer IDs.
         if self.has_incoming_connection_with_peer(&peer_id) {
-            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} will not be upgraded since there is already an inbound connection established or pending.");
+            tracing::trace!(target: LOG_TARGET, "Inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since there is already an inbound connection established or pending.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
         Ok(if !self.is_network_large_enough() {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer_id:?} because membership size is too small.");
+            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
         } else if self.current_epoch_info.0.contains(&peer_id) {
             tracing::trace!(
                 target: LOG_TARGET,
-                "Upgrading inbound connection {connection_id:?} with core peer {peer_id:?}."
+                "Upgrading inbound connection {connection_id:?} with core peer {peer_id:?} with addr {remote_addr:?}."
             );
             self.connections_waiting_upgrade
                 .insert((peer_id, connection_id), Endpoint::Dialer);
@@ -998,7 +998,7 @@ where
                 (peer_id, connection_id),
             ))
         } else {
-            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?}.");
+            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
             Either::Right(DummyConnectionHandler)
         })
     }
@@ -1011,14 +1011,14 @@ where
         &mut self,
         connection_id: ConnectionId,
         peer_id: PeerId,
-        _: &Multiaddr,
+        remote_addr: &Multiaddr,
         _: Endpoint,
         _: PortUse,
     ) -> Result<THandler<Self>, ConnectionDenied> {
         // If the new peer makes the set of established connections too large, do not
         // try to upgrade the connection.
         if self.negotiated_peers.len() >= *self.peering_degree.end() {
-            tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} will not be upgraded since we are already at maximum peering capacity.");
+            tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since we are already at maximum peering capacity.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
@@ -1027,17 +1027,17 @@ where
         // Otherwise, we let the connection upgrade, and we will close one of the two
         // connections depending on the comparison result of local and remote peer IDs.
         if self.has_outgoing_connection_with_peer(&peer_id) {
-            tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} will not be upgraded since there is already an outbound connection established.");
+            tracing::trace!(target: LOG_TARGET, "Outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} will not be upgraded since there is already an outbound connection established.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
         Ok(if !self.is_network_large_enough() {
-            tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with peer {peer_id:?} because membership size is too small.");
+            tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with peer {peer_id:?} with addr {remote_addr:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
         } else if self.current_epoch_info.0.contains(&peer_id) {
             tracing::trace!(
                 target: LOG_TARGET,
-                "Upgrading outbound connection {connection_id:?} with core peer {peer_id:?}."
+                "Upgrading outbound connection {connection_id:?} with core peer {peer_id:?} with addr {remote_addr:?}."
             );
             self.connections_waiting_upgrade
                 .insert((peer_id, connection_id), Endpoint::Listener);
@@ -1047,7 +1047,7 @@ where
                 (peer_id, connection_id),
             ))
         } else {
-            tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?}.");
+            tracing::debug!(target: LOG_TARGET, "Denying outbound connection {connection_id:?} with edge peer {peer_id:?} with addr {remote_addr:?}.");
             Either::Right(DummyConnectionHandler)
         })
     }
@@ -1162,7 +1162,9 @@ where
                 ToBehaviour::HealthyPeer => {
                     self.handle_healthy_connection((peer_id, connection_id));
                 }
-                ToBehaviour::IOError(_) | ToBehaviour::DialUpgradeError(_) => {}
+                _ => {
+                    tracing::trace!(target: LOG_TARGET, "Unhandled connection handler event: {event:?} from peer {peer_id:?} on connection {connection_id:?}");
+                }
             },
         }
     }
