@@ -69,7 +69,7 @@
               pkgs.llvmPackages.libclang.lib
             ];
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-            LOGOS_BLOCKCHAIN_CIRCUITS = logos-blockchain-circuits.packages.${system}.default;
+            LBC_ROOT_DIR = logos-blockchain-circuits.packages.${system}.default;
           } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin {
             RUSTFLAGS = "-L ${pkgs.libiconv}/lib";
           };
@@ -119,7 +119,7 @@
             ];
             shellHook = ''
               export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
-              export LOGOS_BLOCKCHAIN_CIRCUITS=${logos-blockchain-circuits.packages.${system}.default}
+              export LBC_ROOT_DIR=${logos-blockchain-circuits.packages.${system}.default}
             '';
           };
         }
