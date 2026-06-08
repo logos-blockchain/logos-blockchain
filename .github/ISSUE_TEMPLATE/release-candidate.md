@@ -43,6 +43,7 @@ Most of the template content is the same or very similar to what is in `release.
 
 - [ ] Pull the new `HEAD`.
 - [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z-rc.N`
+- [ ] Re-generate the workspace `Cargo.lock` file with `cargo metadata > /dev/null`
 - [ ] Verify the HEAD of the release branch has green CI ✅
 - [ ] Tag the commit with `X.Y.Z-rc.N` and push the tag
 - [ ] Manually trigger the [ceremony tools Docker build workflow][build-logos-tools-docker-workflow] from the `HEAD` of the release branch (with the latest changes) specifying the `devnet` image tag.
