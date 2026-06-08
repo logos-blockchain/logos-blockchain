@@ -23,6 +23,10 @@ use crate::{
         wallet::{
             TARGET, WalletStateView,
             best_node::{BestNodeInfo, sanitize_best_node_info_for_group_with_feed},
+            feed::{
+                apply_observed_blocks_to_scanned_transaction_hashes,
+                apply_observed_hashes_to_scanned_transaction_hashes,
+            },
         },
         world::{CucumberWorld, WalletInfo},
     },
@@ -455,28 +459,10 @@ async fn observe_wallet_feed_batches(
 ) -> Result<WalletFeedStateResults, StepError> {
     let feed_result = world.with_wallet_feed_state_mut(|tracker, wallets| {
         let observed_blocks = tracker.apply_feed(wallets, feed, genesis_utxos)?;
-        if !observed_blocks.is_empty() {
-            let mut sink = world
-                .scanned_transaction_hashes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let before = sink.len();
-            for observed in &observed_blocks {
-                sink.extend(observed.transaction_hashes().iter().copied());
-            }
-            let after = sink.len();
-            drop(sink);
-            let new = after.saturating_sub(before);
-            let new_blocks = observed_blocks
-                .iter()
-                .map(WalletObservedBlock::height)
-                .collect::<Vec<_>>();
-            info!(
-                target: TARGET,
-                "observed blocks={new_blocks:?}, new transactions={new} total recorded \
-                transactions={after}",
-            );
-        }
+        apply_observed_blocks_to_scanned_transaction_hashes(
+            &world.scanned_transaction_hashes,
+            &observed_blocks,
+        );
         observed_wallet_results(tracker, &tracking_batches, observed_blocks)
     })?;
 
@@ -575,22 +561,11 @@ async fn backfill_wallet_feed_batch(
     let tracked_utxos = wallet_utxos.clone();
     let tip_string = tip.to_string();
 
-    if new_blocks > 0 {
-        let mut sink = world
-            .scanned_transaction_hashes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let before = sink.len();
-        sink.extend(transaction_hashes);
-        let after = sink.len();
-        drop(sink);
-        let new = after.saturating_sub(before);
-        info!(
-            target: TARGET,
-            "observed blocks={new_blocks}, new transactions={new} total recorded \
-            transactions={after}",
-        );
-    }
+    apply_observed_hashes_to_scanned_transaction_hashes(
+        &world.scanned_transaction_hashes,
+        &transaction_hashes,
+        Some(new_blocks),
+    );
 
     world
         .with_wallet_feed_state_mut(|tracker, wallets| {
@@ -897,28 +872,10 @@ fn update_wallet_feed_state(
     world
         .with_wallet_feed_state_mut(|tracker, wallets| {
             let result = tracker.apply_feed(wallets, feed, genesis_utxos);
-            if let Ok(observed_blocks) = result.as_ref()
-                && !observed_blocks.is_empty()
-            {
-                let mut sink = world
-                    .scanned_transaction_hashes
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let before = sink.len();
-                for observed_block in observed_blocks {
-                    sink.extend(observed_block.transaction_hashes().iter().copied());
-                }
-                let after = sink.len();
-                drop(sink);
-                let new_blocks = observed_blocks
-                    .iter()
-                    .map(WalletObservedBlock::height)
-                    .collect::<Vec<_>>();
-                let new = after.saturating_sub(before);
-                info!(
-                    target: TARGET,
-                    "observed blocks={new_blocks:?}, new transactions={new} total recorded \
-                    transactions={after}",
+            if let Ok(observed_blocks) = result.as_ref() {
+                apply_observed_blocks_to_scanned_transaction_hashes(
+                    &world.scanned_transaction_hashes,
+                    observed_blocks,
                 );
             }
             result

@@ -1,11 +1,11 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt,
     sync::{Arc, RwLock},
 };
 
 use async_trait::async_trait;
-use lb_core::mantle::Utxo;
+use lb_core::mantle::{TxHash, Utxo};
 use lb_testing_framework::{
     BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedObserver, NodeHttpClient,
     named_block_feed_sources,
@@ -146,28 +146,10 @@ impl WalletBlockFeedStateCollector {
                 tracker.apply_feed(&mut wallets, feed, &self.genesis_utxos)?
             };
 
-            if !observed_blocks.is_empty() {
-                let mut sink = self
-                    .scanned_transaction_hashes
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let before = sink.len();
-                for observed in &observed_blocks {
-                    sink.extend(observed.transaction_hashes().iter().copied());
-                }
-                let after = sink.len();
-                drop(sink);
-                let new_blocks = observed_blocks
-                    .iter()
-                    .map(WalletObservedBlock::height)
-                    .collect::<Vec<_>>();
-                let new = after.saturating_sub(before);
-                info!(
-                    target: TARGET,
-                    "observed blocks={new_blocks:?}, new transactions={new} total recorded \
-                    transactions={after}",
-                );
-            }
+            apply_observed_blocks_to_scanned_transaction_hashes(
+                &self.scanned_transaction_hashes,
+                &observed_blocks,
+            );
 
             Ok::<_, WalletBlockFeedTrackerError>(())
         };
@@ -222,5 +204,64 @@ impl SourceProvider<NodeHttpClient> for DynamicWalletBlockFeedSources {
         Ok(named_block_feed_sources(sources.iter().map(
             |(node_name, client)| (node_name.clone(), client.clone()),
         )))
+    }
+}
+
+/// Applies the transaction hashes from the observed blocks to the shared set of
+/// scanned transaction hashes, and logs the update.
+pub fn apply_observed_blocks_to_scanned_transaction_hashes(
+    scanned_transaction_hashes: &SharedScannedTransactionHashes,
+    observed_blocks: &[WalletObservedBlock],
+) {
+    if !observed_blocks.is_empty() {
+        let mut sink = scanned_transaction_hashes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = sink.len();
+        for observed in observed_blocks {
+            sink.extend(observed.transaction_hashes().iter().copied());
+        }
+        let total_transactions = sink.len();
+        drop(sink);
+        let new_transactions = total_transactions.saturating_sub(before);
+        let new_blocks = observed_blocks
+            .iter()
+            .map(WalletObservedBlock::height)
+            .collect::<Vec<_>>();
+        info!(
+            target: TARGET,
+            "observed blocks={new_blocks:?}, new transactions={new_transactions} total recorded \
+            transactions={total_transactions}",
+        );
+    }
+}
+
+/// Applies the transaction hashes from alist of provided transaction hashes to
+/// the shared set of scanned transaction hashes, and logs the update.
+pub fn apply_observed_hashes_to_scanned_transaction_hashes<S: ::std::hash::BuildHasher>(
+    scanned_transaction_hashes: &SharedScannedTransactionHashes,
+    transaction_hashes: &HashSet<TxHash, S>,
+    num_of_blocks: Option<usize>,
+) {
+    let mut sink = scanned_transaction_hashes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = sink.len();
+    sink.extend(transaction_hashes);
+    let after = sink.len();
+    drop(sink);
+    let new = after.saturating_sub(before);
+    if let Some(num) = num_of_blocks
+        && num > 0
+    {
+        info!(
+            target: TARGET,
+            "observed blocks={num}, new transactions={new} total recorded transactions={after}",
+        );
+    } else {
+        info!(
+            target: TARGET,
+            "new transactions={new} total recorded transactions={after}",
+        );
     }
 }
