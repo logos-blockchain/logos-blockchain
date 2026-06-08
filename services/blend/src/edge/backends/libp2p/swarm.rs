@@ -107,6 +107,9 @@ where
                 cfg.with_idle_connection_timeout(Duration::from_secs(1))
             })
             .build();
+
+        tracing::info!(target: LOG_TARGET, "Blend edge swarm started with local peer id: {:?}.", swarm.local_peer_id());
+
         let stream_control = swarm.behaviour().new_control();
 
         let replication_factor: NonZeroUsize = settings.replication_factor.try_into().unwrap();

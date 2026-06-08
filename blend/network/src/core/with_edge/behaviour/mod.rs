@@ -184,25 +184,25 @@ impl NetworkBehaviour for Behaviour {
         connection_id: ConnectionId,
         peer: PeerId,
         _: &Multiaddr,
-        _: &Multiaddr,
+        remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
         // If the new peer makes the set of incoming connections too large, do not try
         // to upgrade the connection.
         if self.upgraded_edge_peers.len() >= self.max_incoming_connections {
-            tracing::trace!(target: LOG_TARGET, "Connected peer {peer:?} on connection {connection_id:?} will not be upgraded since we are already at maximum incoming connection capacity.");
+            tracing::trace!(target: LOG_TARGET, "Connected peer {peer:?} with addr {remote_addr:?} on connection {connection_id:?} will not be upgraded since we are already at maximum incoming connection capacity.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
         // Allow only inbound connections from edge nodes, if the Blend network is large
         // enough.
         Ok(if !self.is_network_large_enough() {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} because membership size is too small.");
+            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} with addr {remote_addr:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
         } else if self.current_membership.contains(&peer) {
-            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?}.");
+            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?} with addr {remote_addr:?}.");
             Either::Right(DummyConnectionHandler)
         } else {
-            tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?}.");
+            tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?} with addr {remote_addr:?}.");
             Either::Left(ConnectionHandler::new(
                 self.connection_timeout,
                 self.protocol_name.clone(),
@@ -247,7 +247,9 @@ impl NetworkBehaviour for Behaviour {
             Either::Left(ToBehaviour::SubstreamOpened) => {
                 self.handle_negotiated_connection((peer_id, connection_id));
             }
-            Either::Left(_) | Either::Right(_) => {}
+            Either::Left(_) | Either::Right(_) => {
+                tracing::trace!(target: LOG_TARGET, "Unhandled connection handler event: {event:?} from peer {peer_id:?} on connection {connection_id:?}");
+            }
         }
     }
 

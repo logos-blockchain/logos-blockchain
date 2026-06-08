@@ -4230,7 +4230,6 @@ name = "logos-blockchain-c"
 version = "0.1.2"
 dependencies = [
  "cbindgen",
- "log",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",

@@ -8,7 +8,7 @@ use lb_node::cli::{EmbeddedInitArgs, InitArgs};
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
 
-use crate::{OperationStatus, api::types::config::Deployment};
+use crate::{OperationStatus, api::types::config::Deployment, logging};
 
 #[repr(C)]
 pub struct GenerateConfigArgs {
@@ -99,7 +99,7 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
     match run_result {
         Ok(()) => OperationStatus::Ok,
         Err(error) => {
-            log::error!("Error generating config: {error:?}");
+            logging::error!("generate_config_sync", "Error generating config: {error:?}");
             OperationStatus::ConfigurationError
         }
     }
