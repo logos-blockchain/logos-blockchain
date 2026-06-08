@@ -467,7 +467,10 @@ async fn observe_wallet_feed_batches(
             let after = sink.len();
             drop(sink);
             let new = after.saturating_sub(before);
-            let new_blocks = observed_blocks.iter().map(WalletObservedBlock::height).collect::<Vec<_>>();
+            let new_blocks = observed_blocks
+                .iter()
+                .map(WalletObservedBlock::height)
+                .collect::<Vec<_>>();
             info!(
                 target: TARGET,
                 "observed blocks={new_blocks:?}, new transactions={new} total recorded \
@@ -894,26 +897,29 @@ fn update_wallet_feed_state(
     world
         .with_wallet_feed_state_mut(|tracker, wallets| {
             let result = tracker.apply_feed(wallets, feed, genesis_utxos);
-            if let Ok(observed_blocks) = result.as_ref() {
-                if !observed_blocks.is_empty() {
-                    let mut sink = world
-                        .scanned_transaction_hashes
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    let before = sink.len();
-                    for observed_block in observed_blocks {
-                        sink.extend(observed_block.transaction_hashes().iter().copied());
-                    }
-                    let after = sink.len();
-                    drop(sink);
-                    let new_blocks = observed_blocks.iter().map(WalletObservedBlock::height).collect::<Vec<_>>();
-                    let new = after.saturating_sub(before);
-                    info!(
-                        target: TARGET,
-                        "observed blocks={new_blocks:?}, new transactions={new} total recorded \
-                        transactions={after}",
-                    );
+            if let Ok(observed_blocks) = result.as_ref()
+                && !observed_blocks.is_empty()
+            {
+                let mut sink = world
+                    .scanned_transaction_hashes
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let before = sink.len();
+                for observed_block in observed_blocks {
+                    sink.extend(observed_block.transaction_hashes().iter().copied());
                 }
+                let after = sink.len();
+                drop(sink);
+                let new_blocks = observed_blocks
+                    .iter()
+                    .map(WalletObservedBlock::height)
+                    .collect::<Vec<_>>();
+                let new = after.saturating_sub(before);
+                info!(
+                    target: TARGET,
+                    "observed blocks={new_blocks:?}, new transactions={new} total recorded \
+                    transactions={after}",
+                );
             }
             result
         })
