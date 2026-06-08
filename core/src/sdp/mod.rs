@@ -396,7 +396,7 @@ fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;

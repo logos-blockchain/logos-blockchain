@@ -18,7 +18,7 @@ use lb_core::{
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };
-use lb_groth16::{CompressedGroth16Proof, Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof, Fr};
 use lb_key_management_system_service::keys::{
     Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
 };

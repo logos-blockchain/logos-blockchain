@@ -30,7 +30,7 @@ pub struct PoQVerificationInputsMinusSigningKey {
 impl Default for PoQVerificationInputsMinusSigningKey {
     fn default() -> Self {
         use lb_core::crypto::ZkHash;
-        use lb_groth16::{Field as _, Fr};
+        use lb_groth16::{AdditiveGroup as _, Fr};
 
         Self {
             core: CoreInputs {

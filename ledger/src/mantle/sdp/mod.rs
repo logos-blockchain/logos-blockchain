@@ -561,7 +561,7 @@ mod tests {
 
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
-    use lb_groth16::{Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;

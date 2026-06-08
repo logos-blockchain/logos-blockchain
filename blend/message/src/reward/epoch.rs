@@ -163,7 +163,7 @@ pub fn activity_threshold(
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-    use lb_groth16::Field as _;
+    use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
