@@ -50,7 +50,12 @@
           pkgs = mkPkgs system;
           rustToolchain = pkgs.rust-bin.stable.${rustVersion}.default;
           craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
-          src = craneLib.cleanCargoSource ./.;
+          src = pkgs.lib.cleanSourceWith {
+            src = craneLib.path ./.;
+            filter = path: type:
+              (pkgs.lib.hasSuffix "nodes/node/binary/src/config/deployment/devnet/deployment.yaml" path) ||
+              (craneLib.filterCargoSources path type);
+          };
           crateName = craneLib.crateNameFromCargoToml { inherit src; };
 
           commonArgs = {
