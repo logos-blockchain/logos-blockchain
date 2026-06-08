@@ -46,15 +46,15 @@ use utoipa_swagger_ui::SwaggerUi;
 use super::handlers::{
     add_tx, blend_info, block, block_events, blocks_range_stream, blocks_stream,
     cryptarchia_headers, cryptarchia_info, cryptarchia_lib_stream, dial_peer, get_sdp_declarations,
-    immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view, transaction,
-    wallet,
+    immutable_blocks, libp2p_info, mantle_metrics, mantle_status, mempool_view, time_info,
+    transaction, wallet,
 };
 use crate::{
     BlendBroadcastSettings, BlendService, TracingService, WalletService,
     api::{
         handlers::{
-            channel, channel_deposit, leader_claim, post_activity, post_declaration,
-            post_set_declaration_id, post_withdrawal,
+            blend_join_network, channel, channel_deposit, leader_claim, post_activity,
+            post_declaration, post_set_declaration_id, post_withdrawal,
         },
         openapi::ApiDoc,
         tracing::reload_tracing_filter,
@@ -130,6 +130,7 @@ where
         + Clone
         + 'static
         + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + AsServiceId<crate::TimeService>
         + AsServiceId<BlockBroadcastService<RuntimeServiceId>>
         + AsServiceId<
             lb_network_service::NetworkService<
@@ -214,6 +215,10 @@ where
                 routing::get(cryptarchia_info::<RuntimeServiceId>),
             )
             .route(
+                paths::TIME_INFO,
+                routing::get(time_info::<RuntimeServiceId>),
+            )
+            .route(
                 paths::CRYPTARCHIA_HEADERS,
                 routing::get(cryptarchia_headers::<RuntimeServiceId>),
             )
@@ -232,6 +237,12 @@ where
             .route(
                 paths::BLEND_NETWORK_INFO,
                 routing::get(blend_info::<BlendService, BlendBroadcastSettings, RuntimeServiceId>),
+            )
+            .route(
+                paths::BLEND_JOIN_NETWORK,
+                routing::post(
+                    blend_join_network::<BlendService, BlendBroadcastSettings, RuntimeServiceId>,
+                ),
             )
             .route(
                 paths::MEMPOOL_ADD_TX,

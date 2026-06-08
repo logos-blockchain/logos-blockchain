@@ -343,6 +343,17 @@ mod tests {
             })
         }
 
+        async fn time_info(
+            &self,
+        ) -> Result<lb_common_http_client::TimeInfo, lb_common_http_client::Error> {
+            Ok(lb_common_http_client::TimeInfo {
+                slot_duration_ms: 1_000,
+                genesis_time_unix_ms: 0,
+                current_slot: 0,
+                current_epoch: 0,
+            })
+        }
+
         async fn channel_state(
             &self,
             _channel_id: ChannelId,

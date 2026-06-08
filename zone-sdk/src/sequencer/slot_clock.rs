@@ -30,19 +30,6 @@ impl SlotClock {
         }
     }
 
-    pub(super) fn from_observed_slot(observed_slot: Slot, slot_duration: Duration) -> Self {
-        let chain_start_time = SystemTime::now()
-            .checked_sub(duration_mul(slot_duration, slot_to_u64(observed_slot)))
-            .unwrap_or(SystemTime::UNIX_EPOCH);
-
-        Self {
-            slot_duration,
-            chain_start_time,
-            last_observed_slot: observed_slot,
-            last_observed_at: Instant::now(),
-        }
-    }
-
     pub(super) fn observe_slot(&mut self, observed_slot: Slot) {
         self.chain_start_time = SystemTime::now()
             .checked_sub(duration_mul(self.slot_duration, slot_to_u64(observed_slot)))

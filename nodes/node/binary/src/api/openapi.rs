@@ -8,6 +8,7 @@ use utoipa::OpenApi;
         crate::api::handlers::mantle_metrics,
         crate::api::handlers::mantle_status,
         crate::api::handlers::cryptarchia_info,
+        crate::api::handlers::time_info,
         crate::api::handlers::cryptarchia_headers,
         crate::api::handlers::cryptarchia_lib_stream,
         crate::api::handlers::libp2p_info,

@@ -1,4 +1,4 @@
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use lb_common_http_client::Slot;
 use lb_core::{
@@ -74,8 +74,6 @@ pub struct SequencerConfig {
     pub resubmit_interval: Duration,
     pub reconnect_delay: Duration,
     pub publish_channel_capacity: usize,
-    pub slot_duration: Duration,
-    pub chain_start_time: Option<SystemTime>,
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
 }
@@ -86,8 +84,6 @@ impl Default for SequencerConfig {
             resubmit_interval: DEFAULT_RESUBMIT_INTERVAL,
             reconnect_delay: DEFAULT_RECONNECT_DELAY,
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
-            slot_duration: Duration::from_secs(1),
-            chain_start_time: None,
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
         }

@@ -17,6 +17,7 @@ use lb_api_service::http::{
     libp2p, mantle, mempool,
     storage::StorageAdapter,
 };
+use lb_blend_service::message::ProxyServiceMessage;
 use lb_chain_broadcast_service::BlockBroadcastService;
 use lb_chain_leader_service::api::ChainLeaderServiceData;
 use lb_chain_service::{ConsensusMsg, Slot, api::CryptarchiaServiceApi};
@@ -30,7 +31,9 @@ use lb_core::{
     },
 };
 use lb_http_api_common::{
+    TimeInfo,
     bodies::{
+        blend::JoinBlendRequestBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
@@ -49,6 +52,7 @@ use lb_sdp_service::{
 use lb_storage_service::{
     StorageService, api::chain::StorageChainApi, backends::rocksdb::RocksBackend,
 };
+use lb_time_service::TimeServiceMessage;
 use lb_tx_service::{
     MempoolMsg, TxMempoolService, backend::Mempool,
     network::adapters::libp2p::Libp2pAdapter as MempoolNetworkAdapter,
@@ -63,14 +67,17 @@ use tokio::sync::oneshot;
 use tokio_stream::StreamExt as _;
 use tracing::debug;
 
-use crate::api::{
-    errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
-    openapi::schema,
-    queries::{BlockRangeQuery, BlocksStreamRequest},
-    responses::{self, overwatch::get_relay_or_500},
-    serializers::{
-        blocks::{ApiBlock, ApiProcessedBlockEvent},
-        transactions::ApiSignedTransactionRef,
+use crate::{
+    TimeService,
+    api::{
+        errors::{BlocksStreamHandlerError, BlocksStreamWindowError},
+        openapi::schema,
+        queries::{BlockRangeQuery, BlocksStreamRequest},
+        responses::{self, overwatch::get_relay_or_500},
+        serializers::{
+            blocks::{ApiBlock, ApiProcessedBlockEvent},
+            transactions::ApiSignedTransactionRef,
+        },
     },
 };
 
@@ -478,6 +485,45 @@ where
 
 #[utoipa::path(
     get,
+    path = paths::TIME_INFO,
+    responses(
+        (status = 200, description = "Query time service information", body = TimeInfo),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn time_info<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<TimeService>,
+{
+    let relay = match handle.relay::<TimeService>().await {
+        Ok(relay) => relay,
+        Err(error) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+        }
+    };
+    let (sender, receiver) = oneshot::channel();
+    if let Err((error, _)) = relay.send(TimeServiceMessage::Info { sender }).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+    }
+    match receiver.await {
+        Ok(Ok(service_info)) => {
+            let api_info = TimeInfo {
+                slot_duration_ms: service_info.slot_duration_ms,
+                genesis_time_unix_ms: service_info.genesis_time_unix_ms,
+                current_slot: u64::from(service_info.current_slot),
+                current_epoch: u32::from(service_info.current_epoch),
+            };
+            (StatusCode::OK, Json(api_info)).into_response()
+        }
+        Ok(Err(error)) => (StatusCode::INTERNAL_SERVER_ERROR, error).into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+    }
+}
+
+#[utoipa::path(
+    get,
     path = paths::CRYPTARCHIA_HEADERS,
     responses(
         (status = 200, description = "Query header ids", body = Vec<HeaderId>),
@@ -580,8 +626,11 @@ pub async fn blend_info<BlendService, BroadcastSettings, RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
 ) -> Response
 where
-    BlendService: ServiceData<Message = lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>>
-        + 'static,
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
+            >,
+        > + 'static,
     BroadcastSettings: Send + 'static,
     RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
 {
@@ -590,6 +639,35 @@ where
         BroadcastSettings,
         RuntimeServiceId,
     >(&handle))
+}
+
+#[utoipa::path(
+    post,
+    path = paths::BLEND_JOIN_NETWORK,
+    request_body = BlendJoinNetworkRequestBody,
+    responses(
+        (status = 200, description = "Join the blend network", body = Option<lb_core::sdp::DeclarationId>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn blend_join_network<BlendService, BroadcastSettings, RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Json(req): Json<JoinBlendRequestBody>,
+) -> Response
+where
+    BlendService: ServiceData<
+            Message = ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<BroadcastSettings, PeerId>,
+            >,
+        > + 'static,
+    BroadcastSettings: Send + 'static,
+    RuntimeServiceId: Debug + Sync + Display + 'static + AsServiceId<BlendService>,
+{
+    make_request_and_return_response!(blend::blend_join_network::<
+        BlendService,
+        BroadcastSettings,
+        RuntimeServiceId,
+    >(&handle, req.locator, req.locked_note_id))
 }
 
 #[utoipa::path(

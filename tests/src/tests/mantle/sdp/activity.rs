@@ -107,12 +107,16 @@ const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
 
 fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
+
+    // Set the epoch length not too long to speed up the test,
+    // but also not too short because we want blend nodes to collect blend tokens
+    // every epoch to keep their declarations alive.
     config.deployment.cryptarchia.epoch_config = EpochConfig {
         epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
         epoch_period_nonce_buffer: 1.try_into().unwrap(),
         epoch_period_nonce_stabilization: 1.try_into().unwrap(),
     };
-    config.deployment.cryptarchia.security_param = NonZero::new(2).unwrap();
+    config.deployment.cryptarchia.security_param = NonZero::new(4).unwrap();
     config.deployment.cryptarchia.slot_activation_coeff =
         NonNegativeRatio::new(1, 2.try_into().unwrap());
 
@@ -132,6 +136,19 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
         .expect("blend network params should exist");
     blend_params.inactivity_period = INACTIVITY_PERIOD;
     blend_params.retention_period = RETENTION_PERIOD;
+
+    // Shorten Blend delay to speed up the test
+    config
+        .deployment
+        .blend
+        .core
+        .scheduler
+        .delayer
+        .maximum_release_delay_in_rounds = 1.try_into().unwrap();
+    // Set num_blend_layers to NODE_COUNT (instead of 1) to increase
+    // the probability that all nodes can collect a blend token from
+    // a single blend message.
+    config.deployment.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
 
     config
 }

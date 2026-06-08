@@ -3,11 +3,10 @@ use std::path::PathBuf;
 use anyhow::{Context as _, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 use lb_common_http_client::{BasicAuthCredentials, CommonHttpClient};
-use lb_core::{
-    mantle::NoteId,
-    sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
+use lb_core::{mantle::NoteId, sdp::Locator};
+use lb_http_api_common::bodies::{
+    blend::JoinBlendRequestBody, wallet::balance::WalletBalanceResponseBody,
 };
-use lb_http_api_common::bodies::wallet::balance::WalletBalanceResponseBody;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::config::UserConfig;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -57,17 +56,14 @@ impl CliCommand {
 
 #[derive(Debug, Subcommand)]
 enum SdpSubCommand {
-    /// Post a Blend SDP declaration using values extracted from the user
-    /// config.
+    /// Post a Blend SDP declaration using the specified locator address and ID
+    /// of a note to lock.
     ///
-    /// The command derives the following from `--user-config-path`:
-    /// - `provider_id` (from Blend non-ephemeral signing key)
-    /// - `zk_id` (from Blend core ZK key)
-    /// - `locator` (from Blend core listening address, unless overridden by
-    ///   `--blend-addr`)
     ///
-    /// It then validates that `--locked-note-id` exists for that ZK key before
-    /// submitting the declaration.
+    /// The command validates that:
+    /// - the SDP funding key has non-zero balance
+    /// - `--locked-note-id` exists for the Blend ZK key before submitting the
+    ///   declaration.
     PostBlendDeclaration(PostBlendDeclarationArgs),
 }
 
@@ -85,13 +81,12 @@ struct PostBlendDeclarationArgs {
     #[arg(long, value_name = "USER_CONFIG_YAML")]
     user_config_path: PathBuf,
 
-    /// Address of the Blend service to use in the declaration that overrides
-    /// the one present in the config file. This is useful for the case in which
-    /// a node is listening on the `0.0.0.0` address, and the declaration needs
-    /// to be posted with the externally reachable address, since `0.0.0.0` is
-    /// not a valid `Locator` value.
+    /// Address of the Blend service to include in the declaration.
+    ///
+    /// This must be externally reachable, because listening addresses such as
+    /// `0.0.0.0` are not valid `Locator` values for declarations.
     #[arg(long, value_name = "BLEND_ADDR")]
-    blend_addr: Option<Locator>,
+    blend_addr: Locator,
 
     /// Note ID to lock for the Blend declaration (HEX-encoded field element).
     #[arg(long, value_name = "NOTE_ID_HEX", value_parser = parse_hex_serde::<NoteId>)]
@@ -144,92 +139,41 @@ async fn post_blend_declaration(
         CommonHttpClient::new(credentials)
     };
 
-    let ExtractedUserConfigValues {
-        provider_id,
-        zk_id,
-        locked_note_id,
-        locator,
-    } = extract_values(
-        &client,
-        node_address.clone(),
-        &user_config,
-        locked_note_id,
-        blend_addr,
-    )
-    .await
-    .with_context(|| "Failed to extract necessary values from user config")?;
-
-    let declaration = DeclarationMessage {
-        locators: locator.into(),
-        locked_note_id,
-        provider_id,
-        service_type: ServiceType::BlendNetwork,
-        zk_id,
-    };
+    validate_config_values(&client, node_address.clone(), &user_config, locked_note_id)
+        .await
+        .with_context(|| "Failed to validate values from user config")?;
 
     let declaration_id = client
-        .post_declaration(node_address, &declaration)
+        .join_blend_network(
+            &node_address,
+            JoinBlendRequestBody {
+                locator: blend_addr,
+                locked_note_id,
+            },
+        )
         .await
-        .context("Failed to post declaration")?;
+        .context("Failed to post Blend join network declaration")?;
 
     println!("Declaration posted successfully: {declaration_id}");
     Ok(())
 }
 
-struct ExtractedUserConfigValues {
-    provider_id: ProviderId,
-    zk_id: ZkPublicKey,
-    locked_note_id: NoteId,
-    locator: Locator,
-}
-
-async fn extract_values(
+async fn validate_config_values(
     client: &CommonHttpClient,
     node_address: Url,
     config: &UserConfig,
     locked_note_id: NoteId,
-    blend_address: Option<Locator>,
-) -> Result<ExtractedUserConfigValues> {
-    // Keep all config-derived declaration fields in one place so the CLI and
-    // node service remain aligned on identity/key source semantics.
-    let locator = if let Some(blend_address) = blend_address {
-        blend_address
-    } else {
-        extract_blend_locator(config)?
-    };
-
-    let provider_id = config
-        .blend_provider_id()
-        .map_err(|e| anyhow!(e))
-        .with_context(|| "Failed to extract provider ID from provided config.")?;
+) -> Result<()> {
+    let sdp_wallet_funding_pk = config.sdp.wallet.funding_pk;
+    verify_sdp_wallet_funding_pk_balance(client, node_address.clone(), sdp_wallet_funding_pk)
+        .await
+        .context("Failed to verify balance for SDP wallet funding key")?;
 
     let zk_id = extract_blend_zk_key(config)?;
 
     verify_locked_note_id_value(client, node_address, zk_id, locked_note_id).await?;
 
-    Ok(ExtractedUserConfigValues {
-        provider_id,
-        zk_id,
-        locked_note_id,
-        locator,
-    })
-}
-
-// Validate and return the Blend listening address from the provided config.
-fn extract_blend_locator(config: &UserConfig) -> Result<Locator> {
-    config
-        .blend
-        .core
-        .backend
-        .listening_address
-        .clone()
-        .try_into()
-        .map_err(|_| {
-            anyhow!(
-                "Blend listening address '{:?}' from config is not a valid locator",
-                config.blend.core.backend.listening_address
-            )
-        })
+    Ok(())
 }
 
 fn extract_blend_zk_key(config: &UserConfig) -> Result<ZkPublicKey> {
@@ -248,6 +192,25 @@ fn extract_blend_zk_key(config: &UserConfig) -> Result<ZkPublicKey> {
         );
     }
     Ok(zk_public_key)
+}
+
+async fn verify_sdp_wallet_funding_pk_balance(
+    client: &CommonHttpClient,
+    node_address: Url,
+    funding_pk: ZkPublicKey,
+) -> Result<()> {
+    let WalletBalanceResponseBody { balance, .. } = client
+        .get_wallet_balance(node_address, funding_pk, None)
+        .await
+        .context("Failed to fetch wallet balance for SDP wallet funding pk.")?;
+
+    // TODO: Strengthen this preflight check to verify fee sufficiency, not only
+    // non-zero balance.
+    if balance == 0 {
+        bail!("The provided SDP wallet funding key does not have any balance");
+    }
+
+    Ok(())
 }
 
 async fn verify_locked_note_id_value(

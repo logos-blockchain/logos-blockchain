@@ -229,9 +229,11 @@ impl<
     >
 where
     BlendService: ServiceData<
-            Message = lb_blend_service::message::ServiceMessage<
-                BlendService::BroadcastSettings,
-                BlendService::NodeId,
+            Message = lb_blend_service::message::ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<
+                    BlendService::BroadcastSettings,
+                    BlendService::NodeId,
+                >,
             >,
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
@@ -521,9 +523,11 @@ impl<
     >
 where
     BlendService: ServiceData<
-            Message = lb_blend_service::message::ServiceMessage<
-                BlendService::BroadcastSettings,
-                BlendService::NodeId,
+            Message = lb_blend_service::message::ProxyServiceMessage<
+                lb_blend_service::message::ServiceMessage<
+                    BlendService::BroadcastSettings,
+                    BlendService::NodeId,
+                >,
             >,
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send

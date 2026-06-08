@@ -806,6 +806,7 @@ mod tests {
     use futures::StreamExt as _;
     use lb_common_http_client::{
         ApiBlock, ApiHeader, BlockInfo, ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, State,
+        TimeInfo,
     };
     use lb_core::{
         header::{ContentId, HeaderId},
@@ -1087,6 +1088,15 @@ mod tests {
             })
         }
 
+        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
+            Ok(TimeInfo {
+                slot_duration_ms: 1_000,
+                genesis_time_unix_ms: 0,
+                current_slot: 0,
+                current_epoch: 0,
+            })
+        }
+
         async fn channel_state(
             &self,
             _channel_id: ChannelId,
@@ -1200,6 +1210,15 @@ mod tests {
                     height: 0,
                 },
                 mode: ChainServiceMode::Started(State::Online),
+            })
+        }
+
+        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
+            Ok(TimeInfo {
+                slot_duration_ms: 1_000,
+                genesis_time_unix_ms: 0,
+                current_slot: 0,
+                current_epoch: 0,
             })
         }
 

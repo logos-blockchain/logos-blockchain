@@ -40,7 +40,10 @@ use crate::{
                 create_and_submit_transaction_hashes, wait_for_transactions_inclusion,
             },
         },
-        utils::{blend_core_zk_pk_from_node_yaml, resolve_literal_or_env},
+        utils::{
+            blend_core_locator_from_node_yaml, blend_core_zk_pk_from_node_yaml,
+            resolve_literal_or_env,
+        },
         world::{
             CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec, NodeSnapshot,
             PublicCryptarchiaEndpointPeer,
@@ -1091,6 +1094,7 @@ async fn step_run_blend_sdp_declaration_cli(
     declarer_node_name: String,
 ) -> StepResult {
     let user_config_path = node_user_config_path(world, &declarer_node_name)?;
+    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
     let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
 
     let declarer_api_base_url = world
@@ -1152,6 +1156,8 @@ async fn step_run_blend_sdp_declaration_cli(
         .arg("post-blend-declaration")
         .arg("--user-config-path")
         .arg(user_config_path)
+        .arg("--blend-addr")
+        .arg(format!("{locator}"))
         .arg("--locked-note-id")
         .arg(locked_note_id)
         .arg("--node-address")
@@ -1168,6 +1174,76 @@ async fn step_run_blend_sdp_declaration_cli(
             ),
         });
     }
+
+    Ok(())
+}
+
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Required to be mutable by cucumber step function signature"
+)]
+#[then(expr = "I declare node {string} as blend core node via the API")]
+async fn step_run_blend_sdp_declaration_api(
+    world: &mut CucumberWorld,
+    step: &Step,
+    declarer_node_name: String,
+) -> StepResult {
+    let user_config_path = node_user_config_path(world, &declarer_node_name)?;
+    let locator = blend_core_locator_from_node_yaml(&user_config_path)?;
+    let blend_zk_pk = blend_zk_pk_for_node(world, &declarer_node_name)?;
+
+    let declarer_node_client = world
+        .nodes_info
+        .get(&declarer_node_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Node '{declarer_node_name}' not found in world state"),
+        })?
+        .started_node
+        .client
+        .clone();
+    let declarer_api_base_url = declarer_node_client.base_url().clone();
+
+    // Wait for the funded note locked on the Blend ZK key, querying the same
+    // node API that will process the join request.
+    let note_lookup_timeout = Duration::from_secs(30);
+    let note_lookup_started = Instant::now();
+    let mut last_lookup_error: Option<String>;
+    let locked_note_id = loop {
+        let Ok(wallet_balance) = CommonHttpClient::new(None)
+            .get_wallet_balance(declarer_api_base_url.clone(), blend_zk_pk, None)
+            .await
+        else {
+            continue;
+        };
+        if let Some(note_id) = wallet_balance.notes.keys().next().copied() {
+            break note_id;
+        }
+        last_lookup_error = Some("wallet has no notes yet".to_owned());
+
+        if note_lookup_started.elapsed() >= note_lookup_timeout {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "Timed out waiting for a funded note on Blend ZK key of '{declarer_node_name}' via '{}' (last error: {})",
+                    declarer_api_base_url,
+                    last_lookup_error.unwrap_or_else(|| "unknown".to_owned())
+                ),
+            });
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    };
+
+    let declaration_id = declarer_node_client
+        .join_blend_network(locator, locked_note_id)
+        .await
+        .inspect_err(|error| {
+            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+        })?;
+
+    info!(
+        target: TARGET,
+        "Node '{declarer_node_name}' joined blend core via API, declaration id: {declaration_id}"
+    );
 
     Ok(())
 }

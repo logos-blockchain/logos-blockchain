@@ -1,6 +1,10 @@
 use core::fmt::{self, Debug, Formatter};
 
 use lb_blend::message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader;
+use lb_core::{
+    mantle::NoteId,
+    sdp::{DeclarationId, Locator},
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -19,6 +23,21 @@ pub struct CoreInfo<NodeId> {
     /// Negotiated peers for the old epoch, if an epoch transition is in
     /// progress.
     pub old_epoch_peers: Option<Vec<NodeId>>,
+}
+
+pub enum ProxyServiceMessage<InnerMessage> {
+    Inner(InnerMessage),
+    JoinAsCore {
+        locator: Locator,
+        locked_note_id: NoteId,
+        reply: oneshot::Sender<Result<DeclarationId, lb_sdp_service::api::Error>>,
+    },
+}
+
+impl<InnerMessage> From<InnerMessage> for ProxyServiceMessage<InnerMessage> {
+    fn from(value: InnerMessage) -> Self {
+        Self::Inner(value)
+    }
 }
 
 /// A message that is handled by [`BlendService`].
