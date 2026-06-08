@@ -14,6 +14,7 @@ use crate::{
         types::{known_addresses::KnownAddresses, value::Value},
     },
     errors::OperationStatus,
+    logging,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
@@ -40,7 +41,7 @@ pub(crate) fn get_known_addresses_sync(
         )
         .await;
         api.get_known_addresses().await.map_err(|e| {
-            log::error!("{e:?}");
+            logging::error!("get_known_addresses_sync", "{e:?}");
             OperationStatus::NotFound
         })
     })
@@ -283,7 +284,7 @@ pub unsafe extern "C" fn get_balance(
         fr_from_bytes(wallet_address_bytes)
             .map(ZkPublicKey::new)
             .map_err(|error| {
-                log::error!("{error:?}");
+                logging::error!("get_balance_sync", "{error:?}");
                 OperationStatus::DynError
             })
     );
@@ -396,13 +397,16 @@ pub(crate) fn transfer_funds_sync(
             )
             .await
             .inspect_err(|error| {
-                log::error!("[transfer_funds_sync] Failed to transfer funds: {error}");
+                logging::error!("transfer_funds_sync", "Failed to transfer funds: {error}");
             })
             .map(|tip_response| tip_response.response)
             .map_err(|_| OperationStatus::DynError)?;
 
         if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
-            log::error!("[transfer_funds_sync] Failed to add transaction to mempool: {error}");
+            logging::error!(
+                "transfer_funds_sync",
+                "Failed to add transaction to mempool: {error}"
+            );
             return Err(OperationStatus::DynError);
         }
         Ok(signed_tx)
@@ -438,14 +442,17 @@ pub unsafe extern "C" fn transfer_funds(
     return_error_if_null_pointer!("transfer_funds", arguments);
     let arguments = unsafe { &*arguments };
     if let Err((error_message, status)) = unsafe { arguments.validate() } {
-        log::error!("[transfer_funds] {error_message} Exiting.");
+        logging::error!("transfer_funds", "{error_message} Exiting.");
         return FfiTransferFundsResult::err(status);
     }
 
     let node = unsafe { &*node };
     let tip = if arguments.optional_tip.is_null() {
         unwrap_or_return_error!(get_cryptarchia_info_sync(node), |_| {
-            log::error!("[transfer_funds] Failed to get cryptarchia info. Aborting.");
+            logging::error!(
+                "transfer_funds",
+                "Failed to get cryptarchia info. Aborting."
+            );
         })
         .cryptarchia_info
         .tip
@@ -490,7 +497,10 @@ pub unsafe extern "C" fn transfer_funds(
     ));
     let transaction_hash = transaction.hash().as_signing_bytes();
     let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        log::error!("[transfer_funds] Failed to convert transaction hash to array. Exiting.");
+        logging::error!(
+            "transfer_funds",
+            "Failed to convert transaction hash to array. Exiting."
+        );
         return FfiTransferFundsResult::err(OperationStatus::RuntimeError);
     };
     FfiTransferFundsResult::ok(transaction_hash_array)

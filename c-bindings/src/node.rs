@@ -4,7 +4,7 @@ use lb_node::RuntimeServiceId;
 use overwatch::overwatch::{Overwatch, OverwatchHandle};
 use tokio::runtime::{Handle, Runtime};
 
-use crate::errors::OperationStatus;
+use crate::{errors::OperationStatus, logging};
 
 // Define an opaque type for the complex Overwatch type
 type LogosBlockchainOverwatch = Overwatch<RuntimeServiceId>;
@@ -61,7 +61,7 @@ impl LogosBlockchainNode {
         let runtime_handle = self.get_runtime_handle();
         let overwatch_handle = self.get_overwatch_handle();
         if let Err(e) = runtime_handle.block_on(overwatch_handle.stop_all_services()) {
-            log::error!("Could not stop services: {e}");
+            logging::error!("stop", "Could not stop services: {e}");
             return OperationStatus::StopError;
         }
         OperationStatus::Ok
@@ -72,10 +72,16 @@ impl LogosBlockchainNode {
 impl Drop for LogosBlockchainNode {
     fn drop(&mut self) {
         if self.overwatch.is_null() {
-            log::error!("Attempted to drop a null overwatch pointer. This is a bug");
+            logging::error!(
+                "drop",
+                "Attempted to drop a null overwatch pointer. This is a bug"
+            );
         }
         if self.runtime.is_null() {
-            log::error!("Attempted to drop a null tokio runtime pointer. This is a bug");
+            logging::error!(
+                "drop",
+                "Attempted to drop a null tokio runtime pointer. This is a bug"
+            );
         }
         drop(unsafe { Box::from_raw(self.overwatch.cast::<LogosBlockchainOverwatch>()) });
         drop(unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) });

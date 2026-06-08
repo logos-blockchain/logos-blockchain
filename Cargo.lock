@@ -1034,6 +1034,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chkstk_stub"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "047f6ab2f3b9bcaf23b593d1580898e4244d27eadf1a1fae99212ee5735d3d1c"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1632,7 +1641,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.117",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4230,7 +4239,6 @@ name = "logos-blockchain-c"
 version = "0.1.2"
 dependencies = [
  "cbindgen",
- "log",
  "logos-blockchain-api-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
@@ -4389,8 +4397,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-build"
-version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
+version = "0.5.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.2#3a4bdb1e6b441c6b23e83c0641ff49c2b561f3e1"
 dependencies = [
  "dirs",
  "fd-lock",
@@ -4401,16 +4409,16 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-common"
-version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
+version = "0.5.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.2#3a4bdb1e6b441c6b23e83c0641ff49c2b561f3e1"
 dependencies = [
  "logos-blockchain-circuits-types",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-poc-sys"
-version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
+version = "0.5.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.2#3a4bdb1e6b441c6b23e83c0641ff49c2b561f3e1"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4419,8 +4427,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-pol-sys"
-version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
+version = "0.5.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.2#3a4bdb1e6b441c6b23e83c0641ff49c2b561f3e1"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4429,8 +4437,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-poq-sys"
-version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
+version = "0.5.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.2#3a4bdb1e6b441c6b23e83c0641ff49c2b561f3e1"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4441,22 +4449,13 @@ dependencies = [
 name = "logos-blockchain-circuits-prover"
 version = "0.1.2"
 dependencies = [
- "logos-blockchain-circuits-rapidsnark-sys",
- "tempfile",
-]
-
-[[package]]
-name = "logos-blockchain-circuits-rapidsnark-sys"
-version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
-dependencies = [
- "logos-blockchain-circuits-build",
+ "rust-rapidsnark",
 ]
 
 [[package]]
 name = "logos-blockchain-circuits-signature-sys"
-version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
+version = "0.5.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.2#3a4bdb1e6b441c6b23e83c0641ff49c2b561f3e1"
 dependencies = [
  "logos-blockchain-circuits-build",
  "logos-blockchain-circuits-common",
@@ -4465,8 +4464,8 @@ dependencies = [
 
 [[package]]
 name = "logos-blockchain-circuits-types"
-version = "0.5.1"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.1#523091e17c8f2280ecf5d598b5563f3465393ced"
+version = "0.5.2"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-circuits.git?tag=v0.5.2#3a4bdb1e6b441c6b23e83c0641ff49c2b561f3e1"
 dependencies = [
  "bytes",
  "libc",
@@ -4476,8 +4475,7 @@ dependencies = [
 name = "logos-blockchain-circuits-verifier"
 version = "0.1.2"
 dependencies = [
- "logos-blockchain-circuits-rapidsnark-sys",
- "tempfile",
+ "rust-rapidsnark",
 ]
 
 [[package]]
@@ -7364,6 +7362,18 @@ checksum = "5bcdef0be6fe7f6fa333b1073c949729274b05f123a0ad7efcb8efd878e5c3b1"
 dependencies = [
  "sha2",
  "walkdir",
+]
+
+[[package]]
+name = "rust-rapidsnark"
+version = "0.1.3"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git?rev=8f51c339fd4d4a3e30c361a20cc118ce20f9f39f#8f51c339fd4d4a3e30c361a20cc118ce20f9f39f"
+dependencies = [
+ "anyhow",
+ "cc",
+ "chkstk_stub",
+ "num-bigint",
+ "num-traits",
 ]
 
 [[package]]

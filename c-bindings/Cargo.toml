@@ -19,7 +19,6 @@ lb-node                       = { workspace = true }
 lb-sdp-service                = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-wallet-service             = { workspace = true }
-log                           = { workspace = true }
 multiaddr                     = { workspace = true }
 num-bigint                    = { workspace = true }
 overwatch                     = { workspace = true }

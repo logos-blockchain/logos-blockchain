@@ -163,12 +163,11 @@ lb-zksign                          = { default-features = false, package = "logo
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 lb_config                          = { default-features = false, package = "lb_config", path = "./tools/config" }
 lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
-lbc-poc-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", tag = "v0.5.1" }
-lbc-pol-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", tag = "v0.5.1" }
-lbc-poq-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", tag = "v0.5.1" }
-lbc-rapidsnark-sys                 = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-rapidsnark-sys", tag = "v0.5.1" }
-lbc-signature-sys                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", tag = "v0.5.1" }
-lbc-types                          = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", tag = "v0.5.1" }
+lbc-poc-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", tag = "v0.5.2" }
+lbc-pol-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", tag = "v0.5.2" }
+lbc-poq-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", tag = "v0.5.2" }
+lbc-signature-sys                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", tag = "v0.5.2" }
+lbc-types                          = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", tag = "v0.5.2" }
 lbp-error                          = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
 testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
 testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
@@ -259,6 +258,7 @@ reqwest                            = { default-features = false, version = "0.12
 rocksdb                            = { default-features = false, version = "0.24" }
 rpds                               = { default-features = false, version = "1" }
 rs-merkle-tree                     = { default-features = false, version = "0.1" }
+rust-rapidsnark                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "8f51c339fd4d4a3e30c361a20cc118ce20f9f39f" } # fix/static-linux-glibc-pie-compat
 serde                              = { default-features = false, version = "1.0" }
 serde-big-array                    = { default-features = false, version = "0.5" }
 serde_arrays                       = { default-features = false, version = "0.2.0" }
