@@ -86,7 +86,7 @@ jobs:
         run: rustup target add ${{ matrix.platform.target_triple }}
 
       - name: Build node binary
-        run: cargo build -p logos-blockchain-node --release --target ${{ matrix.platform.target_triple }}
+        run: cargo build -p logos-blockchain-node --release --locked --target ${{ matrix.platform.target_triple }}
 
       - name: Tar node binary
         run: tar -czf logos-blockchain-node-${{ matrix.platform.os }}-${{ matrix.platform.arch }}-${{ needs.configure-version.outputs.version }}.tar.gz -C target/${{ matrix.platform.target_triple }}/release logos-blockchain-node
