@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashSet};
 
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use serde::{Deserialize, Serialize};
@@ -90,17 +90,13 @@ impl ChannelMultiSigProof {
     /// (e.g.: signature verification, threshold requirements, index-to-key
     /// correspondence) must be checked separately.
     fn validate_well_formedness(signatures: &[IndexedSignature]) -> Result<(), Error> {
-        // `signatures` is sorted by index (see `normalize_signatures`), so any
-        // duplicate indices are adjacent and can be detected by comparing pairs.
-        if signatures
-            .windows(2)
-            .any(|pair| pair[0].channel_key_index == pair[1].channel_key_index)
-        {
-            let indices = signatures
-                .iter()
-                .map(|signature| signature.channel_key_index)
-                .collect::<Vec<_>>();
-            return Err(Error::DuplicateIndices(indices));
+        let mut seen = HashSet::with_capacity(signatures.len());
+        for sig in signatures {
+            if !seen.insert(sig.channel_key_index) {
+                return Err(Error::DuplicateIndices(
+                    signatures.iter().map(|s| s.channel_key_index).collect(),
+                ));
+            }
         }
         let max_signatures_allowed = usize::from(ChannelKeyIndex::MAX) + 1;
         if signatures.len() > max_signatures_allowed {
