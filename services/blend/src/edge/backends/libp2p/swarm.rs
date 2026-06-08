@@ -39,10 +39,6 @@ pub struct DialAttempt {
     attempt_number: NonZeroU64,
     /// The message to send once the peer is successfully dialed.
     message: EncapsulatedMessageWithVerifiedPublicHeader,
-    /// Peers that have already been tried and failed for this message delivery.
-    /// When all available peers have been tried, this set is cleared to allow
-    /// retrying from scratch.
-    failed_peers: HashSet<PeerId>,
 }
 
 #[cfg(test)]
@@ -180,28 +176,17 @@ where
     }
 
     fn handle_send_message_command(&mut self, msg: &EncapsulatedMessageWithVerifiedPublicHeader) {
-        self.dial_and_schedule_message(msg, HashSet::new());
+        self.dial_and_schedule_message(msg);
     }
 
     /// Schedule a dial with retries for a given message.
     ///
-    /// The peer to send the message to is chosen at random, excluding the peers
-    /// in `failed_peers`. If all available peers have already been tried, the
-    /// set is cleared and peers are chosen from scratch.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: Address this at some point."
-    )]
-    fn dial_and_schedule_message(
-        &mut self,
-        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
-        mut failed_peers: HashSet<PeerId>,
-    ) {
-        if failed_peers.len() == self.membership.size() {
-            debug!(target: LOG_TARGET, "All peers have been tried for message with ID {:?}. Clearing failed peers memory and retrying from scratch.", msg.id());
-            failed_peers.clear();
-        }
-        let peers = self.choose_peers_except(&failed_peers);
+    /// A single set of `replication_factor` peers is chosen at random for the
+    /// message. Each chosen peer is then retried with exponential backoff (see
+    /// [`Self::schedule_retry`]); if a peer is still unreachable after all
+    /// attempts, the message is dropped for that peer.
+    fn dial_and_schedule_message(&mut self, msg: &EncapsulatedMessageWithVerifiedPublicHeader) {
+        let peers = self.choose_peers();
         if peers.is_empty() {
             error!(target: LOG_TARGET, "No peers available to send the message to");
             return;
@@ -221,7 +206,6 @@ where
                 address,
                 attempt_number: 1.try_into().unwrap(),
                 message: msg.clone(),
-                failed_peers: failed_peers.clone(),
             });
 
             if let Err(e) = self.swarm.dial(opts) {
@@ -233,25 +217,24 @@ where
 
     /// Schedule a retry for a failed dial attempt with exponential backoff.
     ///
-    /// The dial attempt is removed from `pending_dials` and, if the maximum
-    /// number of attempts has not been reached, a delayed future is pushed
-    /// into `pending_retries`. When the future fires, the dial will be
-    /// re-attempted in `poll_next_and_match`.
-    ///
-    /// Returns `Some(DialAttempt)` if the maximum attempts have been exhausted,
-    /// `None` if a retry has been scheduled.
-    fn schedule_retry(
-        &mut self,
-        peer_id: PeerId,
-        connection_id: ConnectionId,
-    ) -> Option<DialAttempt> {
+    /// The dial attempt is removed from `pending_dials`. If the maximum number
+    /// of attempts has not been reached, a delayed future is pushed into
+    /// `pending_retries`; when it fires, the dial is re-attempted in
+    /// `poll_next_and_match`. Once all attempts are exhausted the message is
+    /// dropped: we do not fall back to a different peer.
+    fn schedule_retry(&mut self, peer_id: PeerId, connection_id: ConnectionId) {
         let dial_attempt = self
             .pending_dials
             .remove(&(peer_id, connection_id))
             .unwrap();
         let new_dial_attempt_number = dial_attempt.attempt_number.checked_add(1).unwrap();
         if new_dial_attempt_number > self.max_dial_attempts_per_connection {
-            return Some(dial_attempt);
+            error!(
+                target: LOG_TARGET,
+                "Giving up on message delivery: peer {peer_id:?} was not reachable after {} attempts. Dropping the message.",
+                self.max_dial_attempts_per_connection
+            );
+            return;
         }
         let delay = Duration::from_secs(1 << (new_dial_attempt_number.get() - 1));
         debug!(
@@ -269,13 +252,12 @@ where
                 },
             )
         }));
-        None
     }
 
-    fn choose_peers_except(&mut self, except: &HashSet<PeerId>) -> Vec<Node<PeerId>> {
+    fn choose_peers(&mut self) -> Vec<Node<PeerId>> {
         let peers_to_choose = self.membership.size().min(self.replication_factor.get());
         self.membership
-            .filter_and_choose_remote_nodes(&mut self.rng, peers_to_choose, except)
+            .filter_and_choose_remote_nodes(&mut self.rng, peers_to_choose, &HashSet::new())
             .cloned()
             .collect()
     }
@@ -368,11 +350,7 @@ where
         (peer_id, connection_id): (PeerId, ConnectionId),
     ) {
         error!(target: LOG_TARGET, "Failed to send message: {error} to peer {peer_id:?} on connection {connection_id:?}.");
-        // If the maximum attempt count was reached for this peer, try to schedule the
-        // message for a different peer, remembering all previously failed peers.
-        if let Some(dial_attempt) = self.schedule_retry(peer_id, connection_id) {
-            self.retry_with_different_peer(peer_id, dial_attempt);
-        }
+        self.schedule_retry(peer_id, connection_id);
     }
 
     fn handle_open_stream_failure(
@@ -381,11 +359,7 @@ where
         (peer_id, connection_id): (PeerId, ConnectionId),
     ) {
         error!(target: LOG_TARGET, "Failed to open stream to {peer_id}: {error}");
-        // If the maximum attempt count was reached for this peer, try to schedule the
-        // message for a different peer, remembering all previously failed peers.
-        if let Some(dial_attempt) = self.schedule_retry(peer_id, connection_id) {
-            self.retry_with_different_peer(peer_id, dial_attempt);
-        }
+        self.schedule_retry(peer_id, connection_id);
     }
 
     fn handle_outgoing_connection_error(
@@ -401,49 +375,12 @@ where
             return;
         };
 
-        // If the maximum attempt count was reached for this peer, try to schedule the
-        // message for a different peer, remembering all previously failed peers.
-        if let Some(dial_attempt) = self.schedule_retry(peer_id, connection_id) {
-            self.retry_with_different_peer(peer_id, dial_attempt);
-        }
-    }
-
-    /// After exhausting retries for a peer, add it to the failed peers set
-    /// and attempt the message with a different peer.
-    fn retry_with_different_peer(&mut self, failed_peer_id: PeerId, dial_attempt: DialAttempt) {
-        let DialAttempt {
-            message,
-            mut failed_peers,
-            ..
-        } = dial_attempt;
-        let is_peer_added = failed_peers.insert(failed_peer_id);
-        debug_assert!(
-            is_peer_added,
-            "Should only attempt a single batch of retries per peer."
-        );
-        self.dial_and_schedule_message(&message, failed_peers);
+        self.schedule_retry(peer_id, connection_id);
     }
 
     #[cfg(test)]
     pub fn send_message(&mut self, msg: &EncapsulatedMessageWithVerifiedPublicHeader) {
-        self.dial_and_schedule_message(msg, HashSet::new());
-    }
-
-    #[cfg(test)]
-    pub fn send_message_to_anyone_except(
-        &mut self,
-        peer_id: PeerId,
-        msg: &EncapsulatedMessageWithVerifiedPublicHeader,
-    ) {
-        self.dial_and_schedule_message(msg, HashSet::from([peer_id]));
-    }
-
-    #[cfg(test)]
-    pub fn failed_peers_for(&self, peer_id: &PeerId) -> Option<&HashSet<PeerId>> {
-        self.pending_dials
-            .iter()
-            .find(|((pid, _), _)| pid == peer_id)
-            .map(|(_, attempt)| &attempt.failed_peers)
+        self.dial_and_schedule_message(msg);
     }
 
     pub(super) async fn run(mut self) {
