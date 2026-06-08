@@ -27,31 +27,29 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Edit the name of this issue to use the actual version being released
 - [ ] Branch out from the latest `master` commit with a release branch named `release/X.Y.Z`. If this is not the first release candidate for this version, HARD reset the branch on top of `master` and force-push the new tip
 - [ ] If this is not the first release candidate for this version, post the link of the previous release candidate GH release and the previous release candidate checklist. E.g., for the `X.Y.Z-rc.2` candidate, post the checklist and GH release for `X.Y.Z-rc.1`
-- [ ] Change the devnet deployment settings to use the version number in ALL protocol names, e.g., `/logos-blockchain-devnet-X.Y.Z-rc.N/mempool/1.0.0`
-- [ ] Apply any other changes to the devnet deployment settings and push the changes. If a ceremony will be run, stuff like genesis block can be ignored since it will be overridden as the outcome of the ceremony.
 
 ## Devnet ceremony (optional, only whenever a devnet ceremony is required)
 
-- [ ] Manually trigger the [ceremony tools Docker build workflow][build-logos-tools-docker-workflow] from the `HEAD` of the release branch (with the latest changes) specifying the `devnet` image tag.
+- [ ] Update the <bla_bla_bla> file to change chain ID to be devnet/testnet and then version number, genesis time (10 min in the future), we don't change genesis_sources
+- [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch (with the latest changes) specifying the `devnet` image tag and the version e.g. `X.Y.Z-rc.N`.
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the workflow run to complete
-- [ ] Verify the right image with the right tag was pushed to the [GitHub container registry][logos-tools-image-container-registry]
+- [ ] Wait for the workflow run to complete. The workflow will create a new commit on the release branch with the updated deployment settings.
 - [ ] Checkout and hard reset the `devnet` branch to point to the latest commit on the current release branch
-- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -s -f compose.setup.yml compose.static.yml`
-- [ ] Push to `devnet` branch to trigger the ceremony and generate a new genesis state
-- [ ] Wait around 1 minute for deployment to be updated with the new changes and for the ceremony to happen. Until ready, you should see a `502` error while the containers restart when visiting [https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings](https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings)
-- [ ] Download the new deployment configuration from the link above
-- [ ] Copy-paste or attach the content of the deployment file to this issue for easier review
-- [ ] Override the existing devnet deployment settings with the generated ones on the release branch
-- [ ] Verify `git` shows a diff for the deployment file, specifically in the first operation of the genesis tx which includes the chain start time, otherwise it means something went wrong when downloading the new one from the deployment settings endpoint
+- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
+- [ ] Push to `devnet` branch to trigger the cleanup
+- [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings](https://devnet.blockchain.logos.co/web/cfgsync/deployment-settings) and make sure it's in setup mode.
 
 ## Release candidate publication
 
+- [ ] Pull the new `HEAD`.
 - [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z-rc.N`
 - [ ] Verify the HEAD of the release branch has green CI ✅
 - [ ] Tag the commit with `X.Y.Z-rc.N` and push the tag
+- [ ] Manually trigger the [ceremony tools Docker build workflow][build-logos-tools-docker-workflow] from the `HEAD` of the release branch (with the latest changes) specifying the `devnet` image tag.
+- [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z-rc.N` tag on GitHub with the `release-candidate` input to prepare the GitHub release draft with the build binaries
 - [ ] Post the link to the workflow run to this issue for easier review
+- [ ] Verify the right image with the right tag was pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release.
 - [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
 - [ ] Publish release
@@ -76,6 +74,7 @@ Most of the template content is the same or very similar to what is in `release.
 ---
 
 [logos-tools-image-container-registry]: https://github.com/logos-blockchain/logos-blockchain/pkgs/container/logos-blockchain
+[ceremony-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/genesis-ceremony.yml
 [build-logos-tools-docker-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/build-logos-tools.yml 
 [release-bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [devnet-deployment-section]: #devnet-deployment
