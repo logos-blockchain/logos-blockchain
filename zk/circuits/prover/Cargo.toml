@@ -10,7 +10,7 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-rust-rapidsnark = { workspace = true }
+rust-rapidsnark = { features = ["static-rapidsnark"], workspace = true }
 
 [lints]
 workspace = true

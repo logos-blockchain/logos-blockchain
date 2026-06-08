@@ -7367,7 +7367,7 @@ dependencies = [
 [[package]]
 name = "rust-rapidsnark"
 version = "0.1.3"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git?rev=035cca7d66844f3fdb66826601dcc2fbe117b235#035cca7d66844f3fdb66826601dcc2fbe117b235"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git?rev=8f51c339fd4d4a3e30c361a20cc118ce20f9f39f#8f51c339fd4d4a3e30c361a20cc118ce20f9f39f"
 dependencies = [
  "anyhow",
  "cc",
