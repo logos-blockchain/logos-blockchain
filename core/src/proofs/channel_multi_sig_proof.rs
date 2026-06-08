@@ -90,12 +90,17 @@ impl ChannelMultiSigProof {
     /// (e.g.: signature verification, threshold requirements, index-to-key
     /// correspondence) must be checked separately.
     fn validate_well_formedness(signatures: &[IndexedSignature]) -> Result<(), Error> {
-        let unique_indices = signatures
-            .iter()
-            .map(|signature| signature.channel_key_index)
-            .collect::<Vec<_>>();
-        if unique_indices.len() != signatures.len() {
-            return Err(Error::DuplicateIndices(unique_indices));
+        // `signatures` is sorted by index (see `normalize_signatures`), so any
+        // duplicate indices are adjacent and can be detected by comparing pairs.
+        if signatures
+            .windows(2)
+            .any(|pair| pair[0].channel_key_index == pair[1].channel_key_index)
+        {
+            let indices = signatures
+                .iter()
+                .map(|signature| signature.channel_key_index)
+                .collect::<Vec<_>>();
+            return Err(Error::DuplicateIndices(indices));
         }
         let max_signatures_allowed = usize::from(ChannelKeyIndex::MAX) + 1;
         if signatures.len() > max_signatures_allowed {
@@ -118,5 +123,50 @@ impl TryFrom<Vec<IndexedSignature>> for ChannelMultiSigProof {
 
     fn try_from(value: Vec<IndexedSignature>) -> Result<Self, Self::Error> {
         Self::new(value)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sig(byte: u8) -> Ed25519Signature {
+        Ed25519Signature::from_bytes(&[byte; 64])
+    }
+
+    #[test]
+    fn rejects_same_index_with_different_signatures() {
+        // Same index, distinct signatures: survives `dedup` (full-equality), so
+        // `validate_well_formedness` must reject it.
+        let signatures = vec![
+            IndexedSignature::new(0, sig(1)),
+            IndexedSignature::new(0, sig(2)),
+        ];
+        assert!(matches!(
+            ChannelMultiSigProof::new(signatures),
+            Err(Error::DuplicateIndices(_))
+        ));
+    }
+
+    #[test]
+    fn accepts_distinct_indices() {
+        let signatures = vec![
+            IndexedSignature::new(0, sig(1)),
+            IndexedSignature::new(1, sig(2)),
+        ];
+        let proof =
+            ChannelMultiSigProof::new(signatures).expect("distinct indices are well-formed");
+        assert_eq!(proof.signatures().len(), 2);
+    }
+
+    #[test]
+    fn deduplicates_identical_signatures() {
+        let signatures = vec![
+            IndexedSignature::new(0, sig(1)),
+            IndexedSignature::new(0, sig(1)),
+        ];
+        let proof =
+            ChannelMultiSigProof::new(signatures).expect("identical signatures are deduplicated");
+        assert_eq!(proof.signatures().len(), 1);
     }
 }
