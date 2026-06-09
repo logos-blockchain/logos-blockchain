@@ -4129,6 +4129,7 @@ version = "0.1.2"
 dependencies = [
  "cbindgen",
  "logos-blockchain-api-service",
+ "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
