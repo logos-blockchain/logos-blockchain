@@ -152,6 +152,8 @@ where
             })
             .build();
 
+        tracing::info!(target: LOG_TARGET, "Blend core swarm started with local peer id: {:?} and listening address: {listening_address:?}", swarm.local_peer_id());
+
         swarm.listen_on(listening_address).unwrap_or_else(|e| {
             panic!("Failed to listen on Blend network: {e:?}");
         });
@@ -270,6 +272,10 @@ where
         self.check_and_dial_new_peers_except(HashSet::from([peer_id]));
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this at some point."
+    )]
     fn handle_blend_core_behaviour_event(&mut self, blend_event: CoreToCoreEvent) {
         match blend_event {
             lb_blend::network::core::with_core::behaviour::Event::Message { message, sender, epoch } => {
@@ -312,7 +318,14 @@ where
                 }
             }
             lb_blend::network::core::with_core::behaviour::Event::OutboundConnectionUpgradeSucceeded(peer_id) => {
-                assert!(self.ongoing_dials.remove(&peer_id).is_some(), "Peer ID for a successfully upgraded connection must be present in storage");
+                // The peer is normally tracked in `ongoing_dials` (we dialed it),
+                // but it can legitimately be absent if its entry was cleared while
+                // this upgrade was in flight: e.g. an epoch rotation cleared the
+                // map (`StartNewEpoch`), or a sibling connection to the same peer
+                // resolved first (e.g., a different attempt was failed and we picked the same node again due to lack of alternatives).
+                if self.ongoing_dials.remove(&peer_id).is_none() {
+                    tracing::trace!(target: LOG_TARGET, "Outbound connection upgrade succeeded for peer {peer_id:?} that was no longer tracked in ongoing dials. Keeping the connection.");
+                }
             }
             lb_blend::network::core::with_core::behaviour::Event::InboundConnectionUpgradeFailed { peer, reason } => {
                 tracing::trace!(target: LOG_TARGET, "Inbound connection upgrade expectedly failed for {peer:?} with reason {reason:?}");
@@ -381,7 +394,7 @@ where
                 }
             }
             _ => {
-                tracing::trace!(target: LOG_TARGET, "Received event from blend network that will be ignored.");
+                tracing::trace!(target: LOG_TARGET, "Received event from blend network that will be ignored: {event:?}.");
             }
         }
     }

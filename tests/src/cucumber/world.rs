@@ -60,6 +60,7 @@ type ScenarioBuilderWith = ScenarioBuilder;
 type ConsensusLiveness = workloads::ConsensusLiveness;
 pub type SharedTrackedWallets = Arc<Mutex<TrackedWallets>>;
 pub type SharedWalletBlockFeedTracker = Arc<Mutex<WalletBlockFeedTracker>>;
+pub type SharedScannedTransactionHashes = Arc<Mutex<HashSet<TxHash>>>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeployerKind {
@@ -823,6 +824,9 @@ pub struct CucumberWorld {
     pub submitted_transactions: HashMap<String, TxHash>,
     /// Manual: Exact signed transactions prepared for later submission.
     pub prepared_transactions: HashMap<String, SignedMantleTx>,
+    /// Manual: Transaction hashes observed while wallet/block sync scanned
+    /// blocks.
+    pub scanned_transaction_hashes: SharedScannedTransactionHashes,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -981,6 +985,10 @@ impl Debug for CucumberWorld {
             .field("wallet_feed_tracker", &"WalletBlockFeedTracker")
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
+            .field(
+                "scanned_transaction_hashes",
+                &self.scanned_transaction_hashes_len(),
+            )
             .field("wallet_utxos_by_block", &wallet_utxo_snapshot_count)
             .field("wallet_pending_states", &wallet_pending_count)
             .field(
@@ -1261,6 +1269,7 @@ impl CucumberWorld {
         let feed = CucumberWalletBlockFeed::start(
             Arc::clone(&self.wallets),
             Arc::clone(&self.wallet_feed_tracker),
+            Arc::clone(&self.scanned_transaction_hashes),
             self.genesis_block_utxos.clone(),
         )
         .await
@@ -1743,6 +1752,27 @@ impl CucumberWorld {
         self.submitted_transactions.insert(alias, tx_hash);
     }
 
+    #[must_use]
+    pub fn scanned_transaction_hashes_len(&self) -> usize {
+        self.scanned_transaction_hashes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len()
+    }
+
+    pub fn missing_scanned_transaction_hashes(&self, expected: &HashSet<TxHash>) -> Vec<TxHash> {
+        let scanned_transaction_hashes = self
+            .scanned_transaction_hashes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+        expected
+            .iter()
+            .copied()
+            .filter(|hash| !scanned_transaction_hashes.contains(hash))
+            .collect()
+    }
+
     pub fn resolve_submitted_transaction(&self, alias: &str) -> Result<TxHash, StepError> {
         self.submitted_transactions
             .get(alias)
@@ -1860,6 +1890,10 @@ impl CucumberWorld {
         format!("{:?}", FullDebugInfo(self))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Debug output intentionally enumerates world state fields for diagnostics"
+    )]
     pub fn full_debug_info(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let wallet_diagnostics = self
             .wallet_diagnostics_for_debug()
@@ -1919,6 +1953,10 @@ impl CucumberWorld {
                 &wallet_accounts_display(&self.wallet_accounts),
             )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
+            .field(
+                "scanned_transaction_hashes",
+                &self.scanned_transaction_hashes_len(),
+            )
             .field(
                 "wallet_utxos_by_block",
                 &wallet_utxos_by_block_display(&wallet_diagnostics),

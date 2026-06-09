@@ -333,9 +333,10 @@ where
 /// the same [`FinalizedTx`] succeeded together on chain.
 ///
 /// The channel protocol guarantees a linear parent-child chain per channel
-/// within a block, so tx order already equals parent-chain order — do NOT
-/// add a topological sort here, it would mask any real protocol violation
-/// rather than fix it.
+/// within a block, so tx order already equals parent-chain order. We do NOT
+/// reorder — the trust assumption (each `ChannelInscribe`'s `parent` chains
+/// off the running tip) is asserted by [`extract_channel_tip_ops`], which
+/// every caller runs on the same `transactions` before this walker.
 ///
 /// Deposits without a matching event entry are skipped with a warning.
 fn extract_finalized_items(
@@ -352,6 +353,9 @@ fn extract_finalized_items(
         for op in tx.mantle_tx.ops() {
             match op {
                 Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                    // Chain order is asserted by `extract_channel_tip_ops`,
+                    // which runs on the same `transactions` before this
+                    // walker on every call site (live + backfill).
                     let info = InscriptionInfo {
                         tx_hash,
                         parent_msg: inscribe.parent,
@@ -362,9 +366,11 @@ fn extract_finalized_items(
                     ops.push(FinalizedOp::Inscription(info));
                 }
                 Op::ChannelConfig(config) if config.channel == channel_id => {
-                    // Synthetic entry — keeps `channel_tip` in sync when the
-                    // chain `ChannelConfig` resets it. Empty payload so
-                    // payload-keyed consumers ignore it naturally.
+                    // `ChannelConfig` has no parent on the wire — it
+                    // unconditionally overwrites the channel tip. Synthetic
+                    // entry below keeps `channel_tip` in sync; we set
+                    // parent_msg to the prior in-block tip so the value
+                    // remains coherent if a consumer inspects it.
                     let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
                     let info = InscriptionInfo {
                         tx_hash,
@@ -496,27 +502,32 @@ fn apply_backfilled_block(
 }
 
 /// Extract every op in a block that advances the channel's tip pointer, in
-/// parent→child chain order. Returns one [`InscriptionInfo`] per
-/// tip-advancing op — both real inscriptions (`ChannelInscribe`) and
-/// synthetic entries for `ChannelConfig` (which resets the tip per spec).
-/// The synthetic config entries carry an empty payload so payload-keyed
-/// consumers ignore them naturally.
+/// tx-then-op order. Returns one [`InscriptionInfo`] per tip-advancing op —
+/// both real inscriptions (`ChannelInscribe`) and synthetic entries for
+/// `ChannelConfig` (which resets the tip per spec). Synthetic config
+/// entries carry an empty payload so payload-keyed consumers ignore them
+/// naturally.
 ///
-/// Transactions in a block are not guaranteed to be in chain order, so we
-/// topologically sort by lineage. Callers (e.g. `channel_tip_at`) rely on
-/// `last()` being the chain tail.
+/// The ledger validates ops in tx-then-op order, with each `ChannelInscribe`
+/// requiring `parent == channel.tip_message` and each `ChannelConfig`
+/// unconditionally overwriting the tip. A block in which tip-advancing ops
+/// for one channel appear out of chain order would fail validation, so
+/// tx-then-op order is already chain order — callers (e.g. `channel_tip_at`)
+/// can rely on `last()` being the post-block tip. We verify this trust
+/// assumption with an inline assertion: each `ChannelInscribe`'s `parent`
+/// must equal the running in-block tip. A mismatch panics rather than
+/// silently re-deriving order, because the same node bug could produce an
+/// undetectable mis-ordering elsewhere.
 ///
-/// Panics if the tip-advancing ops for the channel in a single block do not
-/// form a single linear chain — that would be a protocol-level invariant
-/// violation.
+/// Same-block `ChannelConfig` replay (e.g. `[Inscribe, Config X, Inscribe,
+/// Config X]`) yields items with a repeated `this_msg = hash(X)`. That's
+/// the correct representation: at the ledger, the final tip is `hash(X)`,
+/// matching `items.last().this_msg`. The running tip stays at `hash(X)`
+/// after a repeat, so the inscription-chain assertion continues to verify
+/// subsequent entries. Downstream consumers that want unique-by-`this_msg`
+/// semantics dedup themselves.
 fn extract_channel_tip_ops(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<InscriptionInfo> {
-    // Also tracks ChannelConfig as a synthetic tip-update entry so the SDK's
-    // channel_tip stays in sync with the chain. Per spec, ChannelConfig sets
-    // `chan.tip_hash = hash(encode(config))`, replacing whatever was there.
-    // Synthetic entries have empty payload so app-layer consumers (which key
-    // off payload bytes) ignore them naturally.
     let mut items: Vec<InscriptionInfo> = Vec::new();
-    let mut last_in_block: Option<MsgId> = None;
     let hash_and_ops = txs
         .iter()
         .flat_map(|tx| std::iter::repeat(tx.mantle_tx.hash()).zip(tx.mantle_tx.ops().iter()));
@@ -524,55 +535,40 @@ fn extract_channel_tip_ops(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec
     for (tx_hash, op) in hash_and_ops {
         match op {
             Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
-                let info = InscriptionInfo {
+                if let Some(prev) = items.last() {
+                    assert_eq!(
+                        inscribe.parent, prev.this_msg,
+                        "block delivered inscription out of execution order: \
+                         inscribe.parent {:?} does not chain off the prior in-block tip {:?}",
+                        inscribe.parent, prev.this_msg
+                    );
+                }
+                items.push(InscriptionInfo {
                     tx_hash,
                     parent_msg: inscribe.parent,
                     this_msg: inscribe.id(),
                     payload: inscribe.inscription.clone(),
-                };
-                last_in_block = Some(info.this_msg);
-                items.push(info);
+                });
             }
             Op::ChannelConfig(config) if config.channel == channel_id => {
-                // Chain off the previous in-block tip (or root) so the
-                // topological sort below can stitch it into a single chain.
-                let parent_msg = last_in_block.unwrap_or_else(MsgId::root);
-                let info = InscriptionInfo {
+                // `ChannelConfig` has no parent on the wire — it unconditionally
+                // overwrites the channel tip. The `parent_msg` field below is
+                // unused by lineage walks for config entries; we set it to the
+                // prior in-block tip (or root) so the value remains coherent
+                // with surrounding entries if a consumer ever inspects it.
+                let parent_msg = items.last().map_or_else(MsgId::root, |prev| prev.this_msg);
+                items.push(InscriptionInfo {
                     tx_hash,
                     parent_msg,
                     this_msg: config.id(),
                     payload: [].into(),
-                };
-                last_in_block = Some(info.this_msg);
-                items.push(info);
+                });
             }
             _ => {}
         }
     }
 
-    if items.len() <= 1 {
-        return items;
-    }
-
-    let this_msgs: std::collections::HashSet<MsgId> = items.iter().map(|i| i.this_msg).collect();
-    let by_parent: HashMap<MsgId, &InscriptionInfo> =
-        items.iter().map(|i| (i.parent_msg, i)).collect();
-
-    // The chain root is the inscription whose parent is not produced
-    // within this same block.
-    let root = items
-        .iter()
-        .find(|i| !this_msgs.contains(&i.parent_msg))
-        .expect("inscriptions for a channel in a block must form a chain (no root found)");
-
-    let mut sorted = Vec::with_capacity(items.len());
-    sorted.push(root.clone());
-    let mut current = root.this_msg;
-    while let Some(next) = by_parent.get(&current).copied() {
-        sorted.push(next.clone());
-        current = next.this_msg;
-    }
-    sorted
+    items
 }
 
 /// True iff this tx contains any op that advances our channel's tip pointer
@@ -590,11 +586,13 @@ fn touches_channel_tip(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 mod tests {
     use lb_core::mantle::{
         MantleTx, Note,
+        channel::{SlotTimeframe, SlotTimeout},
         encoding::Ops,
         ledger::{Inputs, Outputs},
         ops::{
             OpId as _, OpProof,
             channel::{
+                config::{ChannelConfigOp, Keys},
                 deposit::{DepositOp, Metadata},
                 inscribe::InscriptionOp,
                 withdraw::ChannelWithdrawOp,
@@ -803,5 +801,245 @@ mod tests {
             }
             other => panic!("expected Withdraw, got {other:?}"),
         }
+    }
+
+    fn channel_config(channel_id: ChannelId) -> ChannelConfigOp {
+        let signer = Ed25519Key::from_bytes(&[0u8; 32]).public_key();
+        ChannelConfigOp {
+            channel: channel_id,
+            keys: Keys::try_from(vec![signer]).unwrap(),
+            posting_timeframe: SlotTimeframe::from(0u32),
+            posting_timeout: SlotTimeout::from(0u32),
+            configuration_threshold: 1,
+            withdraw_threshold: 1,
+        }
+    }
+
+    fn inscribe_op(channel_id: ChannelId, parent: MsgId, payload: &[u8]) -> InscriptionOp {
+        InscriptionOp {
+            channel_id,
+            inscription: Inscription::new_unchecked(payload.to_vec()),
+            parent,
+            signer: Ed25519Key::from_bytes(&[0u8; 32]).public_key(),
+        }
+    }
+
+    fn header_id(n: u8) -> HeaderId {
+        let mut bytes = [0u8; 32];
+        bytes[0] = n;
+        HeaderId::from(bytes)
+    }
+
+    fn dummy_pending_tx(seed: u8) -> SignedMantleTx {
+        let mantle_tx = MantleTx(
+            [Op::ChannelInscribe(InscriptionOp {
+                channel_id: [0u8; 32].into(),
+                inscription: Inscription::new_unchecked(vec![seed]),
+                parent: MsgId::root(),
+                signer: Ed25519Key::from_bytes(&[seed; 32]).public_key(),
+            })]
+            .into(),
+        );
+        SignedMantleTx::new_unverified(
+            mantle_tx,
+            vec![OpProof::Ed25519Sig(Ed25519Signature::zero())],
+        )
+    }
+
+    /// Run a synchronous callable on a background thread and bail out if it
+    /// doesn't return within `timeout`. Used so the toposort cycle hazard
+    /// surfaces as a clear test failure rather than hanging CI.
+    fn run_with_timeout<R: Send + 'static>(
+        timeout: std::time::Duration,
+        f: impl FnOnce() -> R + Send + 'static,
+    ) -> R {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            drop(tx.send(f()));
+        });
+        rx.recv_timeout(timeout)
+            .expect("extraction hung (suspected toposort cycle in extract_channel_tip_ops)")
+    }
+
+    #[test]
+    fn same_block_config_replay_interleaved_yields_correct_tip_and_pending_orphans() {
+        // Flow under test:
+        //   1. extract_channel_tip_ops on a block with same-block config replay
+        //   2. feed items into TxState::process_block
+        //   3. channel_tip_at must equal the replayed config id (ledger truth)
+        //   4. pending lineage anchored to a now-stale ancestor must be shed
+        //      off-branch; pending anchored to the new tip must stay.
+        //
+        // Block layout: [Inscribe I1 (parent=root), ChannelConfig X,
+        //                Inscribe I2 (parent=X), ChannelConfig X].
+        // At the ledger this validates left-to-right and the final
+        // channel.tip_message is hash(X) — the replay reset it.
+        let channel_id = ChannelId::from([0u8; 32]);
+        let config = channel_config(channel_id);
+        let config_id = config.id();
+        let i1 = inscribe_op(channel_id, MsgId::root(), b"i1");
+        let i1_id = i1.id();
+        let i2 = inscribe_op(channel_id, config_id, b"i2");
+
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(i1),
+            Op::ChannelConfig(config.clone()),
+            Op::ChannelInscribe(i2),
+            Op::ChannelConfig(config),
+        ]);
+        let tx_hash = tx.mantle_tx.hash();
+
+        // Stage pending inscriptions BEFORE driving the block through.
+        let genesis = header_id(0);
+        let block = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        // Pending chained from I1 — invalidated by the replay (tip moved off I1).
+        let pending_stale = dummy_pending_tx(1);
+        let pending_stale_hash = pending_stale.mantle_tx.hash();
+        state.submit_inscription(
+            pending_stale,
+            i1_id,
+            MsgId::from([99u8; 32]),
+            Inscription::new_unchecked(b"chained-from-i1".to_vec()),
+        );
+
+        // Pending chained from the config tip — should remain on-branch.
+        let pending_live = dummy_pending_tx(2);
+        let pending_live_hash = pending_live.mantle_tx.hash();
+        state.submit_inscription(
+            pending_live,
+            config_id,
+            MsgId::from([88u8; 32]),
+            Inscription::new_unchecked(b"chained-from-config".to_vec()),
+        );
+
+        // The flow: extract_channel_tip_ops -> process_block. The cycle in
+        // the current toposort surfaces here as a hang; the timeout wrapper
+        // converts that into a clear failure.
+        let extracted = run_with_timeout(std::time::Duration::from_secs(2), move || {
+            extract_channel_tip_ops(std::slice::from_ref(&tx), channel_id)
+        });
+        state.process_block(block, genesis, genesis, vec![tx_hash], extracted);
+
+        // Tip must match the ledger after the replay.
+        assert_eq!(
+            state.channel_tip_at(block),
+            config_id,
+            "channel tip after same-block replay must equal hash(X)"
+        );
+
+        // shed_off_branch_pending should drop the stale one but not the live one.
+        let shed = state.shed_off_branch_pending(block);
+        let shed_hashes: std::collections::HashSet<TxHash> =
+            shed.iter().map(PublishedTx::tx_hash).collect();
+        assert!(
+            shed_hashes.contains(&pending_stale_hash),
+            "pending chained from I1 must be shed (no longer reachable from tip)"
+        );
+        assert!(
+            !shed_hashes.contains(&pending_live_hash),
+            "pending chained from the config tip must remain on-branch"
+        );
+    }
+
+    #[test]
+    fn same_block_config_replay_adjacent_yields_correct_tip() {
+        // Simpler shape: [ChannelConfig X, ChannelConfig X] in one block.
+        // No cycle in the current toposort (parent keys are distinct because
+        // last_in_block differs) but exercises the duplicate-this_msg path.
+        let channel_id = ChannelId::from([0u8; 32]);
+        let config = channel_config(channel_id);
+        let config_id = config.id();
+
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelConfig(config.clone()),
+            Op::ChannelConfig(config),
+        ]);
+        let tx_hash = tx.mantle_tx.hash();
+
+        let genesis = header_id(0);
+        let block = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        let extracted = run_with_timeout(std::time::Duration::from_secs(2), move || {
+            extract_channel_tip_ops(std::slice::from_ref(&tx), channel_id)
+        });
+        state.process_block(block, genesis, genesis, vec![tx_hash], extracted);
+
+        assert_eq!(state.channel_tip_at(block), config_id);
+    }
+
+    #[test]
+    fn cross_block_config_replay_after_lib_advance_yields_correct_tip() {
+        // Case 1 across LIB-advance:
+        //   Block A: [ChannelConfig X]
+        //   LIB advances past A — block_inscriptions for A is pruned;
+        //                        finalized_msg becomes hash(X).
+        //   Block B: [ChannelConfig X] (same content, re-applied)
+        //
+        // Two checks:
+        //   - channel_tip_at(B) == config_id (tip stays correct after replay)
+        //   - pending whose parent is finalized_msg=hash(X) stays on-branch, because
+        //     the tip after B is still hash(X).
+        let channel_id = ChannelId::from([0u8; 32]);
+        let config = channel_config(channel_id);
+        let config_id = config.id();
+
+        let tx_a = unverified_tx_with_ops(vec![Op::ChannelConfig(config.clone())]);
+        let tx_a_hash = tx_a.mantle_tx.hash();
+        let tx_b = unverified_tx_with_ops(vec![Op::ChannelConfig(config)]);
+        let tx_b_hash = tx_b.mantle_tx.hash();
+
+        let genesis = header_id(0);
+        let block_a = header_id(1);
+        let block_b = header_id(2);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        // Process block A; LIB stays at genesis.
+        let extracted_a = extract_channel_tip_ops(std::slice::from_ref(&tx_a), channel_id);
+        state.process_block(block_a, genesis, genesis, vec![tx_a_hash], extracted_a);
+        assert_eq!(state.channel_tip_at(block_a), config_id);
+
+        // A dummy intermediate block to advance LIB past A. LIB advance to
+        // block_a finalizes the config and prunes A's block_inscriptions.
+        let block_intermediate = header_id(3);
+        state.process_block(block_intermediate, block_a, block_a, vec![], vec![]);
+
+        // Pending chained from the now-finalized config tip.
+        let pending = dummy_pending_tx(5);
+        let pending_hash = pending.mantle_tx.hash();
+        state.submit_inscription(
+            pending,
+            config_id,
+            MsgId::from([77u8; 32]),
+            Inscription::new_unchecked(b"after-finalized".to_vec()),
+        );
+
+        // Process block B carrying the replay.
+        let extracted_b = extract_channel_tip_ops(std::slice::from_ref(&tx_b), channel_id);
+        state.process_block(
+            block_b,
+            block_intermediate,
+            block_a,
+            vec![tx_b_hash],
+            extracted_b,
+        );
+
+        // Tip after the replay is still hash(X) — matches the ledger.
+        assert_eq!(
+            state.channel_tip_at(block_b),
+            config_id,
+            "channel tip after cross-block replay must equal hash(X)"
+        );
+
+        // Our pending's parent matches the new tip, so it should stay.
+        let shed = state.shed_off_branch_pending(block_b);
+        let shed_hashes: std::collections::HashSet<TxHash> =
+            shed.iter().map(PublishedTx::tx_hash).collect();
+        assert!(
+            !shed_hashes.contains(&pending_hash),
+            "pending chained from the (still-current) config tip must remain on-branch"
+        );
     }
 }
