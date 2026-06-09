@@ -270,6 +270,118 @@ async fn test_handle_incoming_blend_message() {
     );
 }
 
+/// Reproduces audit finding #1: two replicas of one data message panic the core
+/// service. The service emits `data_replication_factor + 1` copies, each with
+/// fresh random layers (distinct encapsulated IDs), but decapsulation yields
+/// the same inner `NetworkMessage` — and `ProcessedMessage` hashes on that
+/// content:
+///
+/// ```text
+///   replica A ─encap(rand)→ ID_a ─┐ swarm dedups on ID, so both pass
+///   replica B ─encap(rand)→ ID_b ─┘
+///                                  │  decapsulate at same final node
+///                                  ▼
+///        both → ProcessedMessage::Network(same bytes)   (Eq/Hash on content)
+///                                  │
+///                                  ▼  add_unsent_processed_message(..)
+///            A: Ok ──► inserted        B: Err ──► .expect(..) panics ✗
+/// ```
+///
+/// The `.expect("Swarm should bubble up unique messages only.")` at the second
+/// insert (`handle_decapsulated_incoming_message_from_current_epoch`) kills the
+/// task. Size-1 membership here forces local full decapsulation. When fixed
+/// (treat a duplicate as already-known), flip this `#[should_panic]` into a
+/// positive assertion that the second replica is handled gracefully.
+#[test_log::test(tokio::test)]
+#[should_panic(expected = "Swarm should bubble up unique messages only.")]
+async fn test_duplicate_decapsulated_replica_panics_core_service() {
+    let (_, _, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    // Size-1 membership: the only node is the local node, so every encapsulated
+    // message is fully decapsulated locally into its inner `NetworkMessage`.
+    let epoch = 0.into();
+    let minimal_network_size = 1;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        // data_replication_factor: the panic is independent of this value; the
+        // realistic trigger is the >1 replicas the service emits per message.
+        1,
+    );
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+    let mut processor = new_crypto_processor(
+        EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+
+    // One logical data message, serialized once...
+    let payload = NetworkMessage {
+        message: vec![],
+        broadcast_settings: (),
+    }
+    .to_bytes()
+    .expect("NetworkMessage serialization must succeed");
+
+    // ...encapsulated twice. Each call draws fresh randomness, so these are two
+    // distinct encapsulated messages (different identifiers) that the swarm
+    // would forward independently — exactly the replicas the service produces.
+    let replica_a = processor
+        .encapsulate_data_payload(&payload)
+        .await
+        .expect("encapsulation must succeed");
+    let replica_b = processor
+        .encapsulate_data_payload(&payload)
+        .await
+        .expect("encapsulation must succeed");
+    assert_ne!(
+        replica_a, replica_b,
+        "the two replicas must be distinct encapsulations (so the swarm does not dedup them)"
+    );
+
+    let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
+    let mut scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings,
+    );
+    let recovery_checkpoint = ServiceState::with_epoch(
+        epoch,
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info)),
+        None,
+        state_updater,
+    )
+    .unwrap();
+
+    // First replica: decapsulated and recorded as an unsent processed message.
+    let recovery_checkpoint = handle_incoming_blend_message(
+        (replica_a.into(), epoch),
+        &mut scheduler,
+        None,
+        &processor,
+        None,
+        recovery_checkpoint,
+    );
+
+    // Second replica: decapsulates to the *same* `ProcessedMessage::Network`.
+    // The insert into `unsent_processed_messages` returns `Err`, so the
+    // `.expect("Swarm should bubble up unique messages only.")` panics.
+    drop(handle_incoming_blend_message(
+        (replica_b.into(), epoch),
+        &mut scheduler,
+        None,
+        &processor,
+        None,
+        recovery_checkpoint,
+    ));
+}
+
 #[test_log::test(tokio::test)]
 async fn test_handle_incoming_blend_message_with_invalid_poq() {
     let (_, _, state_updater, _state_receiver) =
