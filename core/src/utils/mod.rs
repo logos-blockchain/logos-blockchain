@@ -1,5 +1,6 @@
 pub mod merkle;
 pub mod select;
+pub mod storage_bounded_vec;
 
 macro_rules! display_hex_bytes_newtype {
     ($newtype:ty) => {

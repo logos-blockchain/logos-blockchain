@@ -309,6 +309,9 @@ where
             let block = result?;
             let block: Self::Block =
                 Block::from_bytes(&block).map_err(|e| Box::new(e) as DynError)?;
+            let block = block
+                .try_into_bounded_block()
+                .map_err(|e| Box::new(e) as DynError)?;
             Ok((block.header().id(), block))
         });
 

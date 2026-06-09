@@ -17,7 +17,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, Error as BlockError, MAX_BLOCK_SIZE, MAX_BLOCK_TRANSACTIONS},
+    block::{Block, BlockTransactions, Error as BlockError},
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash, TxSelect,
@@ -776,30 +776,20 @@ where
 
 /// Select transactions for a block, truncating the stream at the first
 /// transaction that trips the block size or count limits.
-async fn txs_for_block<Tx, S>(mut txs: S) -> Vec<Tx>
+async fn txs_for_block<Tx, S>(mut txs: S) -> BlockTransactions<Tx>
 where
     Tx: StorageSize,
     S: futures::Stream<Item = Tx> + Unpin,
 {
-    let mut block_size: usize = 0;
-    let mut selected_txs = Vec::new();
+    let mut selected_txs = BlockTransactions::empty();
 
-    while selected_txs.len() < MAX_BLOCK_TRANSACTIONS {
+    loop {
         let Some(tx) = txs.next().await else {
             break;
         };
-
-        let tx_size = tx.storage_size();
-        let Some(next_block_size) = block_size.checked_add(tx_size) else {
-            break;
-        };
-
-        if next_block_size > MAX_BLOCK_SIZE {
+        if selected_txs.try_push(tx).is_err() {
             break;
         }
-
-        block_size = next_block_size;
-        selected_txs.push(tx);
     }
 
     selected_txs
@@ -822,21 +812,24 @@ mod tests {
 
     #[tokio::test]
     async fn block_tx_selection_respects_transaction_count_limit() {
-        let txs = stream::iter(vec![TestTx { size: 1 }; MAX_BLOCK_TRANSACTIONS + 1]);
+        let txs = stream::iter(vec![
+            TestTx { size: 1 };
+            BlockTransactions::<TestTx>::MAX_COUNT + 1
+        ]);
 
         let selected = txs_for_block(txs).await;
 
-        assert_eq!(selected.len(), MAX_BLOCK_TRANSACTIONS);
+        assert_eq!(selected.len(), BlockTransactions::<TestTx>::MAX_COUNT);
     }
 
     #[tokio::test]
     async fn block_tx_selection_respects_block_size_limit() {
         let txs = stream::iter(vec![
             TestTx {
-                size: MAX_BLOCK_SIZE / 2,
+                size: BlockTransactions::<TestTx>::MAX_SIZE / 2,
             },
             TestTx {
-                size: MAX_BLOCK_SIZE / 2,
+                size: BlockTransactions::<TestTx>::MAX_SIZE / 2,
             },
             TestTx { size: 1 },
         ]);
@@ -845,7 +838,7 @@ mod tests {
         let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
 
         assert_eq!(selected.len(), 2);
-        assert_eq!(selected_size, MAX_BLOCK_SIZE);
+        assert_eq!(selected_size, BlockTransactions::<TestTx>::MAX_SIZE);
     }
 
     #[tokio::test]
@@ -856,7 +849,7 @@ mod tests {
         let txs = stream::iter(vec![
             TestTx { size: 10 },
             TestTx {
-                size: MAX_BLOCK_SIZE,
+                size: BlockTransactions::<TestTx>::MAX_SIZE,
             },
             TestTx { size: 10 },
         ]);
@@ -864,7 +857,7 @@ mod tests {
         let selected = txs_for_block(txs).await;
 
         assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].storage_size(), 10);
+        assert_eq!(selected.as_slice()[0].storage_size(), 10);
     }
 
     #[tokio::test]
@@ -875,7 +868,7 @@ mod tests {
         // reaching here, but the prefix invariant must hold regardless.)
         let txs = stream::iter(vec![
             TestTx {
-                size: MAX_BLOCK_SIZE + 1,
+                size: BlockTransactions::<TestTx>::MAX_SIZE + 1,
             },
             TestTx { size: 1 },
         ]);

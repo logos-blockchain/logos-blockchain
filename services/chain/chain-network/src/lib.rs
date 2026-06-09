@@ -17,9 +17,10 @@ use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{Block, Proposal},
+    block::{Block, BlockTransactions, Proposal},
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},
+    utils::storage_bounded_vec::StorageBoundedError,
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
@@ -75,6 +76,8 @@ pub enum Error {
     Mempool(String),
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
+    #[error(transparent)]
+    StorageBoundedError(#[from] StorageBoundedError),
 }
 
 #[derive(Debug)]
@@ -822,7 +825,8 @@ where
         return Err(Error::MissingMempoolTransactions(missing_count));
     }
 
-    let reconstructed_transactions = mempool_response.into_found();
+    let reconstructed_transactions =
+        BlockTransactions::try_from_vec(mempool_response.into_found())?;
 
     let header = proposal.header().clone();
     let signature = *proposal.signature();
