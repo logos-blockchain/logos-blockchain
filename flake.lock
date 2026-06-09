@@ -20,11 +20,11 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1780697078,
-        "narHash": "sha256-kVY6HZzHZMlTj/iDzOaqz+0/hH1MqkuUM1uiShYZkwo=",
+        "lastModified": 1781004244,
+        "narHash": "sha256-zd4XYY+HPOMJXigHQDmXDvt7D1988YNPUwPPznhpFdA=",
         "owner": "logos-blockchain",
         "repo": "logos-blockchain-circuits",
-        "rev": "059bc01e17b3d09cacfbbc9ab587dbb2c1447eec",
+        "rev": "2846ee7a4cfa24458bb8063412ab2e753b344d2f",
         "type": "github"
       },
       "original": {

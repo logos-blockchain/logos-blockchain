@@ -11,8 +11,9 @@
 
     crane.url = "github:ipetkov/crane";
 
+    # Must stay in sync with the lbc-* tags in Cargo.toml.
     logos-blockchain-circuits = {
-      url = "github:logos-blockchain/logos-blockchain-circuits";
+      url = "github:logos-blockchain/logos-blockchain-circuits?tag=v0.5.1";
     };
   };
 
