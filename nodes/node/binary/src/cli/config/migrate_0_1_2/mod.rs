@@ -26,7 +26,7 @@ pub struct MigrateArgs {
     pub old_config: PathBuf,
 
     /// Path for the keystore file.
-    #[clap(long = "keystore")]
+    #[clap(long = "keystore", default_value = "keystore.yaml")]
     pub keystore: PathBuf,
 
     #[clap(flatten)]
