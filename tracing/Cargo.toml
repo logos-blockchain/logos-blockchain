@@ -20,27 +20,29 @@ ignored = [
 workspace = true
 
 [dependencies]
-opentelemetry = { default-features = false, version = "0.31" }
-opentelemetry-appender-tracing = { default-features = false, version = "0.31" }
-opentelemetry-http = { default-features = false, features = ["reqwest"], version = "0.31" }
-opentelemetry-otlp = { default-features = false, features = [
+flate2 = { features = ["rust_backend"], workspace = true }
+lb-log-targets = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
+opentelemetry-http = { features = ["reqwest"], workspace = true }
+opentelemetry-otlp = { features = [
   "grpc-tonic",
   "http",
   "http-proto",
   "logs",
   "metrics",
   "reqwest-client",
-], version = "0.31" }
-opentelemetry-semantic-conventions = "0.31"
-opentelemetry_sdk = { default-features = false, features = ["logs", "rt-tokio"], version = "0.31" }
+], workspace = true }
+opentelemetry-semantic-conventions = { workspace = true }
+opentelemetry_sdk = { features = ["logs", "rt-tokio"], workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tonic = { workspace = true }
 tracing = { workspace = true }
-tracing-appender = "0.2"
-tracing-gelf = "0.7"
-tracing-loki = { default-features = false, features = ["compat-0-2-1"], version = "0.2.5" }
-tracing-opentelemetry = { default-features = false, features = ["metrics"], version = "0.32.1" }
-tracing-subscriber = { default-features = false, features = ["env-filter", "std"], version = "0.3" }
-url = { default-features = false, features = ["serde"], version = "2" }
+tracing-appender = { workspace = true }
+tracing-gelf = { workspace = true }
+tracing-loki = { features = ["compat-0-2-1"], workspace = true }
+tracing-opentelemetry = { features = ["metrics"], workspace = true }
+tracing-subscriber = { features = ["env-filter", "std"], workspace = true }
+url = { features = ["serde"], workspace = true }

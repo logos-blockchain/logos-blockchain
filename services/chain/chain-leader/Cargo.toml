@@ -13,7 +13,7 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                      = "0.1"
+async-trait                      = { workspace = true }
 futures                          = { workspace = true }
 lb-blend-service                 = { workspace = true }
 lb-chain-network-service         = { workspace = true }
@@ -31,10 +31,10 @@ lb-wallet-service                = { workspace = true }
 overwatch                        = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
-thiserror                        = "1.0"
+thiserror                        = { workspace = true }
 tokio                            = { workspace = true }
 tracing                          = { workspace = true }
-tracing-futures                  = { default-features = false, version = "0.2" }
+tracing-futures                  = { workspace = true }
 
 [dev-dependencies]
 lb-groth16 = { workspace = true }

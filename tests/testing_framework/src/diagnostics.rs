@@ -283,7 +283,6 @@ impl DiagnosticSources {
 struct NodeDiagnostic {
     label: String,
     base_url: String,
-    testing_url: Option<String>,
     consensus: Result<ConsensusSnapshot, String>,
     network: Result<NetworkSnapshot, String>,
     blend: Result<Option<BlendSnapshot>, String>,
@@ -302,7 +301,6 @@ impl NodeDiagnostic {
         Self {
             label: format!("node-{index}"),
             base_url: client.base_url().to_string(),
-            testing_url: client.testing_url().map(ToString::to_string),
             consensus: consensus
                 .map(ConsensusSnapshot::from)
                 .map_err(|error| error.to_string()),
@@ -319,13 +317,8 @@ impl NodeDiagnostic {
     }
 
     fn render(&self, peer_labels: &BTreeMap<String, String>) -> String {
-        let testing_url = self
-            .testing_url
-            .clone()
-            .unwrap_or_else(|| "none".to_owned());
-
         format!(
-            "  {label} base_url={base_url} testing_url={testing_url}\n    consensus: {consensus}\n    network: {network}\n    blend: {blend}\n    mempool: {mempool}",
+            "  {label} base_url={base_url}\n    consensus: {consensus}\n    network: {network}\n    blend: {blend}\n    mempool: {mempool}",
             label = self.label,
             base_url = self.base_url,
             consensus = self.format_consensus(),
@@ -373,37 +366,42 @@ impl NodeDiagnostic {
 
     fn format_blend(&self, peer_labels: &BTreeMap<String, String>) -> String {
         match &self.blend {
-            Ok(Some(info)) => {
-                let current = info
-                    .current_session_peers
-                    .iter()
-                    .map(|(peer, healthy)| {
-                        let suffix = if *healthy { "healthy" } else { "unhealthy" };
-                        format!("{}:{suffix}", resolve_peer_label(peer_labels, peer))
-                    })
-                    .collect::<Vec<_>>();
-                let old = info.old_session_peers.as_ref().map_or_else(
-                    || "none".to_owned(),
-                    |peers| {
-                        peers
-                            .iter()
-                            .map(|peer| resolve_peer_label(peer_labels, peer))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    },
-                );
-
-                format!(
-                    "ok session_peers={} unhealthy={} old_session=[{}] current_session=[{}]",
-                    info.current_session_peers.len(),
-                    info.current_session_peers
+            Ok(Some(info)) => info.core_info.as_ref().map_or_else(|| format!(
+                    "ok node_id={} mode=edge",
+                    resolve_peer_label(peer_labels, &info.node_id)
+                ), |core_info| {
+                    let current = core_info
+                        .current_epoch_peers
                         .iter()
-                        .filter(|(_, healthy)| !healthy)
-                        .count(),
-                    old,
-                    current.join(", ")
-                )
-            }
+                        .map(|(peer, healthy)| {
+                            let suffix = if *healthy { "healthy" } else { "unhealthy" };
+                            format!("{}:{suffix}", resolve_peer_label(peer_labels, peer))
+                        })
+                        .collect::<Vec<_>>();
+                    let old = core_info.old_epoch_peers.as_ref().map_or_else(
+                        || "none".to_owned(),
+                        |peers| {
+                            peers
+                                .iter()
+                                .map(|peer| resolve_peer_label(peer_labels, peer))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        },
+                    );
+
+                    format!(
+                        "ok node_id={} mode=core epoch_peers={} unhealthy={} old_epoch=[{}] current_epoch=[{}]",
+                        resolve_peer_label(peer_labels, &info.node_id),
+                        core_info.current_epoch_peers.len(),
+                        core_info
+                            .current_epoch_peers
+                            .iter()
+                            .filter(|(_, healthy)| !healthy)
+                            .count(),
+                        old,
+                        current.join(", ")
+                    )
+                }),
             Ok(None) => "unavailable".to_owned(),
             Err(error) => format!("error={error}"),
         }
@@ -427,11 +425,11 @@ struct ConsensusSnapshot {
     mode: String,
 }
 
-impl From<lb_chain_service::CryptarchiaInfo> for ConsensusSnapshot {
-    fn from(value: lb_chain_service::CryptarchiaInfo) -> Self {
+impl From<lb_chain_service::ChainServiceInfo> for ConsensusSnapshot {
+    fn from(value: lb_chain_service::ChainServiceInfo) -> Self {
         Self {
-            height: value.height,
-            slot: value.slot.into_inner(),
+            height: value.cryptarchia_info.height,
+            slot: value.cryptarchia_info.slot.into_inner(),
             mode: format!("{:?}", value.mode),
         }
     }
@@ -469,31 +467,44 @@ impl From<lb_network_service::backends::libp2p::Libp2pInfo> for NetworkSnapshot 
 
 #[derive(Clone)]
 struct BlendSnapshot {
-    current_session_peers: Vec<(String, bool)>,
-    old_session_peers: Option<Vec<String>>,
+    node_id: String,
+    core_info: Option<BlendCoreSnapshot>,
+}
+
+#[derive(Clone)]
+struct BlendCoreSnapshot {
+    current_epoch_peers: Vec<(String, bool)>,
+    old_epoch_peers: Option<Vec<String>>,
 }
 
 impl From<BlendNetworkInfo<lb_network_service::backends::libp2p::PeerId>> for BlendSnapshot {
     fn from(value: BlendNetworkInfo<lb_network_service::backends::libp2p::PeerId>) -> Self {
-        let mut current_session_peers = value
-            .current_session_peers
-            .into_iter()
-            .map(|(peer, healthy)| (peer.to_string(), healthy))
-            .collect::<Vec<_>>();
-        current_session_peers.sort_by(|left, right| left.0.cmp(&right.0));
-
-        let old_session_peers = value.old_session_peers.map(|peers| {
-            let mut peers = peers
+        let core_info = value.core_info.map(|core_info| {
+            let mut current_epoch_peers = core_info
+                .current_epoch_peers
                 .into_iter()
-                .map(|peer| peer.to_string())
+                .map(|(peer, healthy)| (peer.to_string(), healthy))
                 .collect::<Vec<_>>();
-            peers.sort();
-            peers
+            current_epoch_peers.sort_by(|left, right| left.0.cmp(&right.0));
+
+            let old_epoch_peers = core_info.old_epoch_peers.map(|peers| {
+                let mut peers = peers
+                    .into_iter()
+                    .map(|peer| peer.to_string())
+                    .collect::<Vec<_>>();
+                peers.sort();
+                peers
+            });
+
+            BlendCoreSnapshot {
+                current_epoch_peers,
+                old_epoch_peers,
+            }
         });
 
         Self {
-            current_session_peers,
-            old_session_peers,
+            node_id: value.node_id.to_string(),
+            core_info,
         }
     }
 }
@@ -527,7 +538,7 @@ struct ClusterSummary {
     peer_range: String,
     connection_range: String,
     pending_total: u64,
-    blend_session_peer_range: String,
+    blend_epoch_peer_range: String,
     blend_unhealthy_total: usize,
     blend_transitioning_nodes: Vec<String>,
     mempool_pending_range: String,
@@ -536,6 +547,7 @@ struct ClusterSummary {
 }
 
 impl ClusterSummary {
+    #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     fn build(
         cluster_control_profile: &str,
         node_count: usize,
@@ -572,6 +584,12 @@ impl ClusterSummary {
             .filter_map(|node| match &node.blend {
                 Ok(Some(info)) => Some((&node.label, info)),
                 _ => None,
+            })
+            .collect::<Vec<_>>();
+        let blend_core_snapshots = blend_snapshots
+            .iter()
+            .filter_map(|(label, info)| {
+                info.core_info.as_ref().map(|core_info| (*label, core_info))
             })
             .collect::<Vec<_>>();
 
@@ -612,24 +630,24 @@ impl ClusterSummary {
                 .iter()
                 .map(|snapshot| u64::from(snapshot.n_pending_connections))
                 .sum(),
-            blend_session_peer_range: format_range_usize(
-                &blend_snapshots
+            blend_epoch_peer_range: format_range_usize(
+                &blend_core_snapshots
                     .iter()
-                    .map(|(_, info)| info.current_session_peers.len())
+                    .map(|(_, info)| info.current_epoch_peers.len())
                     .collect::<Vec<_>>(),
             ),
-            blend_unhealthy_total: blend_snapshots
+            blend_unhealthy_total: blend_core_snapshots
                 .iter()
                 .map(|(_, info)| {
-                    info.current_session_peers
+                    info.current_epoch_peers
                         .iter()
                         .filter(|(_, healthy)| !healthy)
                         .count()
                 })
                 .sum(),
-            blend_transitioning_nodes: blend_snapshots
+            blend_transitioning_nodes: blend_core_snapshots
                 .iter()
-                .filter(|(_, info)| info.old_session_peers.is_some())
+                .filter(|(_, info)| info.old_epoch_peers.is_some())
                 .map(|(label, _)| (*label).clone())
                 .collect(),
             mempool_pending_range: format_range_usize(
@@ -671,8 +689,8 @@ impl ClusterSummary {
                 self.peer_range, self.connection_range, self.pending_total
             ),
             format!(
-                "  blend session_peer_range={} unhealthy_total={} transitioning_nodes=[{}]",
-                self.blend_session_peer_range,
+                "  blend epoch_peer_range={} unhealthy_total={} transitioning_nodes=[{}]",
+                self.blend_epoch_peer_range,
                 self.blend_unhealthy_total,
                 self.blend_transitioning_nodes.join(", ")
             ),

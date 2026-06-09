@@ -56,7 +56,7 @@ impl Default for SwarmConfig {
     fn default() -> Self {
         Self {
             host: Ipv4Addr::UNSPECIFIED,
-            port: 0,
+            port: 3000,
             node_key: SecretKey::generate(),
             gossipsub: gossipsub::Config::default(),
             kademlia: kademlia::Config::default(),

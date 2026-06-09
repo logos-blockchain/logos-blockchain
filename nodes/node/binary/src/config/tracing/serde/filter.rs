@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use lb_tracing::filter::envfilter::{EnvFilterConfig, serde_filters};
+use lb_tracing::filter::envfilter::{EnvFilterConfig, serde_validated_filters};
 use lb_tracing_service::FilterLayerSettings;
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +27,6 @@ impl From<Layer> for FilterLayerSettings {
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct EnvConfig {
-    #[serde(with = "serde_filters")]
+    #[serde(with = "serde_validated_filters")]
     pub filters: HashMap<String, Level>,
 }

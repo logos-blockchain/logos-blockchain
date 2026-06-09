@@ -3,28 +3,30 @@ pub mod helpers;
 pub mod leader;
 pub mod sdp;
 
-use std::collections::HashMap;
-
 use lb_core::{
     crypto::ZkHasher,
+    events::Events,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         ledger::Operation as _,
         ops::{
             channel::{
-                inscribe::{InscriptionOp, InscriptionValidationContext},
-                set_keys::{SetKeysOp, SetKeysValidationContext},
+                config::{
+                    ChannelConfigExecutionContext, ChannelConfigOp, ChannelConfigValidationContext,
+                },
+                inscribe::{
+                    InscriptionExecutionContext, InscriptionOp, InscriptionValidationContext,
+                },
             },
             leader_claim::{LeaderClaimError, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
     },
-    sdp::{
-        Declaration, DeclarationId, ProviderId, ProviderInfo, ServiceType, SessionNumber,
-        locked_notes::LockedNotes,
-    },
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+    sdp::locked_notes::LockedNotes,
 };
+use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
@@ -66,10 +68,8 @@ impl LedgerState {
     pub fn new(config: &Config, epoch_state: &EpochState) -> Self {
         Self {
             channels: channel::Channels::new(),
-            sdp: sdp::SdpLedger::new().with_blend_service(
-                config.sdp_config.service_rewards_params.blend.clone(),
-                epoch_state,
-            ),
+            sdp: sdp::SdpLedger::new(epoch_state.epoch())
+                .with_blend_service(&config.sdp_config.service_rewards_params.blend, epoch_state),
             leaders: leader::LeaderState::new(),
         }
     }
@@ -79,21 +79,28 @@ impl LedgerState {
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
-    ) -> Result<Self, Error> {
-        let channels = channel::Channels::from_genesis(tx.genesis_inscription())?;
-        let sdp = sdp::SdpLedger::from_genesis(
+    ) -> Result<(Self, Events), Error> {
+        let mut tx_events = Events::new();
+
+        let (channels, events) = channel::Channels::from_genesis(tx.genesis_inscription())?;
+        tx_events.extend(events);
+
+        let (sdp, events) = sdp::SdpLedger::from_genesis(
             &config.sdp_config,
             utxo_tree,
             epoch_state,
-            tx.hash(),
             tx.sdp_declarations(),
         )?;
+        tx_events.extend(events);
 
-        Ok(Self {
-            channels,
-            sdp,
-            leaders: leader::LeaderState::new(),
-        })
+        Ok((
+            Self {
+                channels,
+                sdp,
+                leaders: leader::LeaderState::new(),
+            },
+            tx_events,
+        ))
     }
 
     #[must_use]
@@ -116,24 +123,6 @@ impl LedgerState {
         Self { channels, ..self }
     }
 
-    #[must_use]
-    pub fn active_session_providers(
-        &self,
-        service_type: ServiceType,
-    ) -> Option<HashMap<ProviderId, ProviderInfo>> {
-        self.sdp.active_session_providers(service_type)
-    }
-
-    #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, SessionNumber> {
-        self.sdp.active_sessions()
-    }
-
-    #[must_use]
-    pub fn sdp_declarations(&self) -> Vec<(DeclarationId, Declaration)> {
-        self.sdp.declarations()
-    }
-
     /// Get the root of the voucher commitments snapshot.
     #[must_use]
     pub const fn vouchers_snapshot_root(&self) -> RewardsRoot {
@@ -153,12 +142,15 @@ impl LedgerState {
 
     pub fn try_apply_header(
         mut self,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         voucher: VoucherCm,
         config: &Config,
     ) -> Result<(Self, Vec<Utxo>), Error> {
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
-        let (new_sdp, reward_utxos) = self.sdp.try_apply_header(&config.sdp_config, epoch_state)?;
+        let (new_sdp, reward_utxos) =
+            self.sdp
+                .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
         Ok((self, reward_utxos))
     }
@@ -168,41 +160,56 @@ impl LedgerState {
         inscription_op: &InscriptionOp,
         inscription_sig: &Ed25519Signature,
         tx_hash: TxHash,
-    ) -> Result<Self, Error> {
+        block_slot: Slot,
+    ) -> Result<(Self, Events), Error> {
         //validate the inscription
         inscription_op.validate(&InscriptionValidationContext {
             channels: &self.channels,
             tx_hash: &tx_hash,
             inscribe_sig: inscription_sig,
+            block_slot,
         })?;
 
         // Execute the inscription
-        self.channels = inscription_op.execute(self.channels).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
-        )?;
+        let (result, events) = inscription_op
+            .execute(InscriptionExecutionContext {
+                channels: self.channels,
+                block_slot,
+            })
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel inscribe message"),
+            )?;
+        self.channels = result.channels;
 
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn try_apply_channel_set_keys(
         mut self,
-        set_keys_op: &SetKeysOp,
-        set_keys_sig: &Ed25519Signature,
+        config_op: &ChannelConfigOp,
+        config_sigs: &ChannelMultiSigProof,
         tx_hash: &TxHash,
-    ) -> Result<Self, Error> {
+        block_slot: Slot,
+    ) -> Result<(Self, Events), Error> {
         // Validate the SetKeys
-        set_keys_op.validate(&SetKeysValidationContext {
+        config_op.validate(&ChannelConfigValidationContext {
             channels: &self.channels,
             tx_hash,
-            setkeys_sig: set_keys_sig,
+            config_sigs,
         })?;
 
         // Execute the SetKeys
-        self.channels = set_keys_op.execute(self.channels).inspect_err(
-            |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
-        )?;
+        let (result, events) = config_op
+            .execute(ChannelConfigExecutionContext {
+                channels: self.channels,
+                block_slot,
+            })
+            .inspect_err(
+                |err| error!(target: LOG_TARGET, %err, "failed to apply channel set-keys message"),
+            )?;
+        self.channels = result.channels;
 
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn try_apply_sdp_declaration(
@@ -213,8 +220,8 @@ impl LedgerState {
         utxo_tree: &UtxoTree,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
-        self.sdp = self
+    ) -> Result<(Self, Events), Error> {
+        let (result, events) = self
             .sdp
             .try_apply_sdp_declaration(
                 utxo_tree,
@@ -227,7 +234,8 @@ impl LedgerState {
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP declare message"),
             )?;
-        Ok(self)
+        self.sdp = result;
+        Ok((self, events))
     }
 
     pub fn try_apply_sdp_active(
@@ -236,8 +244,8 @@ impl LedgerState {
         sdp_active_zk_sig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
-        self.sdp = self
+    ) -> Result<(Self, Events), Error> {
+        let (result, events) = self
             .sdp
             .apply_active_msg(
                 sdp_active_op,
@@ -248,7 +256,8 @@ impl LedgerState {
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP active message"),
             )?;
-        Ok(self)
+        self.sdp = result;
+        Ok((self, events))
     }
 
     pub fn try_apply_sdp_withdraw(
@@ -257,8 +266,8 @@ impl LedgerState {
         sdp_withdraw_zk_sig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
-        self.sdp = self
+    ) -> Result<(Self, Events), Error> {
+        let (result, events) = self
             .sdp
             .apply_withdrawn_msg(
                 sdp_withdraw_op,
@@ -269,6 +278,7 @@ impl LedgerState {
             .inspect_err(
                 |err| error!(target: LOG_TARGET, %err, "failed to apply SDP withdraw message"),
             )?;
-        Ok(self)
+        self.sdp = result;
+        Ok((self, events))
     }
 }

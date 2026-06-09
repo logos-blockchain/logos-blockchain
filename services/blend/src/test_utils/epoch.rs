@@ -1,36 +1,12 @@
 use async_trait::async_trait;
 use futures::{Stream, future::ready, stream::once};
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
-use lb_chain_service::{Epoch, Slot};
-use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
-use lb_groth16::{Field as _, Fr};
-use lb_ledger::EpochState;
+use lb_chain_service::Epoch;
+use lb_core::crypto::ZkHash;
+use lb_groth16::Field as _;
 use overwatch::overwatch::OverwatchHandle;
 
-use crate::epoch_info::{ChainApi, PolEpochInfo, PolInfoProvider};
-
-pub fn default_epoch_state() -> EpochState {
-    use lb_ledger::UtxoTree;
-
-    EpochState {
-        epoch: 1.into(),
-        nonce: ZkHash::ZERO,
-        total_stake: 1_000,
-        utxos: UtxoTree::new(),
-        lottery_0: Fr::ZERO,
-        lottery_1: Fr::ZERO,
-    }
-}
-
-#[derive(Clone)]
-pub struct TestChainService;
-
-#[async_trait]
-impl<RuntimeServiceId> ChainApi<RuntimeServiceId> for TestChainService {
-    async fn get_epoch_state_for_slot(&self, _slot: Slot) -> Option<EpochState> {
-        Some(default_epoch_state())
-    }
-}
+use crate::epoch_info::{PolEpochInfo, PolInfoProvider};
 
 pub struct OncePolStreamProvider;
 
@@ -43,14 +19,6 @@ impl<RuntimeServiceId> PolInfoProvider<RuntimeServiceId> for OncePolStreamProvid
     ) -> Option<Self::Stream> {
         Some(Box::new(once(ready(PolEpochInfo {
             epoch: Epoch::new(0),
-            poq_public_inputs: LeaderPublic {
-                slot: 1,
-                latest_root: Fr::ZERO,
-                lottery_0: Fr::ZERO,
-                lottery_1: Fr::ZERO,
-                epoch_nonce: ZkHash::ZERO,
-                aged_root: ZkHash::ZERO,
-            },
             poq_private_inputs: ProofOfLeadershipQuotaInputs {
                 slot: 1,
                 note_value: 1,

@@ -1,9 +1,8 @@
-use lb_groth16::fr_from_bytes;
-
 use crate::{
     LogosBlockchainNode,
     api::free,
     errors::OperationStatus,
+    logging,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
@@ -12,13 +11,17 @@ use crate::{
 pub enum State {
     Bootstrapping = 0x0,
     Online = 0x1,
+    NotStarted = 0x2,
 }
 
-impl From<lb_cryptarchia_engine::State> for State {
-    fn from(value: lb_cryptarchia_engine::State) -> Self {
+impl From<lb_chain_service::ChainServiceMode> for State {
+    fn from(value: lb_chain_service::ChainServiceMode) -> Self {
         match value {
-            lb_cryptarchia_engine::State::Bootstrapping => Self::Bootstrapping,
-            lb_cryptarchia_engine::State::Online => Self::Online,
+            lb_chain_service::ChainServiceMode::AwaitingStart => Self::NotStarted,
+            lb_chain_service::ChainServiceMode::Started(inner_state) => match inner_state {
+                lb_chain_service::State::Bootstrapping => Self::Bootstrapping,
+                lb_chain_service::State::Online => Self::Online,
+            },
         }
     }
 }
@@ -43,13 +46,8 @@ pub type TxHash = Hash;
 /// This function is unsafe because it dereferences a raw pointer.
 /// The caller must ensure that the pointer is valid and points to a properly
 /// initialized `TxHash`.
-pub(crate) unsafe fn into_tx_hash(
-    tx_hash: *const TxHash,
-) -> Result<lb_core::mantle::TxHash, OperationStatus> {
-    let tx_hash = unsafe { *tx_hash };
-    fr_from_bytes(&tx_hash)
-        .map(lb_core::mantle::TxHash::from)
-        .map_err(|_| OperationStatus::ValidationError)
+pub(crate) unsafe fn into_tx_hash(tx_hash: *const TxHash) -> lb_core::mantle::TxHash {
+    lb_core::mantle::TxHash::from(unsafe { *tx_hash })
 }
 
 #[repr(C)]
@@ -61,13 +59,13 @@ pub struct CryptarchiaInfo {
     pub mode: State,
 }
 
-impl From<lb_chain_service::CryptarchiaInfo> for CryptarchiaInfo {
-    fn from(value: lb_chain_service::CryptarchiaInfo) -> Self {
+impl From<lb_chain_service::ChainServiceInfo> for CryptarchiaInfo {
+    fn from(value: lb_chain_service::ChainServiceInfo) -> Self {
         Self {
-            lib: value.lib.into(),
-            tip: value.tip.into(),
-            slot: u64::from(value.slot),
-            height: value.height,
+            lib: value.cryptarchia_info.lib.into(),
+            tip: value.cryptarchia_info.tip.into(),
+            slot: u64::from(value.cryptarchia_info.slot),
+            height: value.cryptarchia_info.height,
             mode: State::from(value.mode),
         }
     }
@@ -85,19 +83,24 @@ impl From<lb_chain_service::CryptarchiaInfo> for CryptarchiaInfo {
 ///
 /// # Returns
 ///
-/// A `Result` containing the [`CryptarchiaInfo`] on success, or an
+/// A `Result` containing the [`ChainServiceInfo`] on success, or an
 /// [`OperationStatus`] error on failure.
 pub(crate) fn get_cryptarchia_info_sync(
     node: &LogosBlockchainNode,
-) -> StatusResult<lb_chain_service::CryptarchiaInfo> {
+) -> StatusResult<lb_chain_service::ChainServiceInfo> {
     let runtime_handle = node.get_runtime_handle();
-    let Ok(cryptarchia_info) = runtime_handle.block_on(
-        lb_api_service::http::consensus::cryptarchia_info(node.get_overwatch_handle()),
-    ) else {
-        log::error!("[get_cryptarchia_info_sync] Failed to get cryptarchia info. Aborting.");
+
+    let Ok(info) = runtime_handle.block_on(lb_api_service::http::consensus::cryptarchia_info(
+        node.get_overwatch_handle(),
+    )) else {
+        logging::error!(
+            "get_cryptarchia_info_sync",
+            "Failed to get cryptarchia info."
+        );
         return Err(OperationStatus::RelayError);
     };
-    Ok(cryptarchia_info)
+
+    Ok(info)
 }
 
 pub type FfiCryptarchiaInfoResult = FfiStatusResult<*mut CryptarchiaInfo>;
@@ -131,8 +134,10 @@ pub unsafe extern "C" fn get_cryptarchia_info(
 ) -> FfiCryptarchiaInfoResult {
     return_error_if_null_pointer!("get_cryptarchia_info", node);
     let node = unsafe { &*node };
-    let cryptarchia_info = unwrap_or_return_error!(get_cryptarchia_info_sync(node));
-    FfiCryptarchiaInfoResult::from_value(CryptarchiaInfo::from(cryptarchia_info))
+    let service_info = unwrap_or_return_error!(get_cryptarchia_info_sync(node));
+    let c_info = CryptarchiaInfo::from(service_info);
+
+    FfiCryptarchiaInfoResult::from_value(c_info)
 }
 
 /// Frees the memory allocated for a [`CryptarchiaInfo`] struct.

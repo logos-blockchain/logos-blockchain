@@ -1,24 +1,28 @@
 pub mod rewards;
 
-use std::collections::HashMap;
+use std::{collections::HashMap, marker::PhantomData};
 
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
     block::BlockNumber,
+    events::Events,
     mantle::{
         NoteId, OpProof, TxHash, Utxo, Value,
-        ledger::Operation as _,
+        ledger::Operation,
         ops::sdp::{
             SDPActiveExecutionContext, SDPActiveOp, SDPActiveValidationContext,
             SDPDeclareExecutionContext, SDPDeclareOp, SDPDeclareValidationContext,
             SDPWithdrawExecutionContext, SDPWithdrawOp, SDPWithdrawValidationContext,
+            declare::SDPDeclareGenesisValidationContext,
         },
     },
     sdp::{
-        ActivityMetadata, Declaration, DeclarationId, MinStake, Nonce, ProviderId, ProviderInfo,
-        ServiceParameters, ServiceType, SessionNumber, locked_notes, locked_notes::LockedNotes,
+        ActivityMetadata, Declaration, DeclarationId, MinStake, Nonce, ProviderId,
+        ServiceParameters, ServiceType,
+        locked_notes::{self, LockedNotes},
     },
 };
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use rewards::{Error as RewardsError, Rewards};
 use tracing::warn;
@@ -35,13 +39,19 @@ enum Service {
 impl Service {
     fn try_apply_header(
         self,
-        block_number: BlockNumber,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         config: &ServiceParameters,
+        rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>) {
         match self {
             Self::BlendNetwork(state) => {
-                let (new_state, utxos) = state.try_apply_header(block_number, epoch_state, config);
+                let (new_state, utxos) = state.try_apply_header(
+                    last_epoch_state,
+                    epoch_state,
+                    config,
+                    &rewards_params.blend,
+                );
                 (Self::BlendNetwork(new_state), utxos)
             }
         }
@@ -50,19 +60,6 @@ impl Service {
     fn contains(&self, declaration_id: &DeclarationId) -> bool {
         match self {
             Self::BlendNetwork(state) => state.contains(declaration_id),
-        }
-    }
-
-    const fn active_session(&self) -> &SessionState {
-        match self {
-            Self::BlendNetwork(state) => &state.active,
-        }
-    }
-
-    #[cfg(test)]
-    const fn forming_session(&self) -> &SessionState {
-        match self {
-            Self::BlendNetwork(state) => &state.forming,
         }
     }
 
@@ -84,17 +81,23 @@ impl Service {
         }
     }
 
-    pub fn update_rewards(
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "TODO: enable this after making the `rewards` module stable"
+    )]
+    pub const fn update_rewards(
         &mut self,
-        provider_id: ProviderId,
-        metadata: &ActivityMetadata,
-        block_number: BlockNumber,
+        _provider_id: ProviderId,
+        _metadata: &ActivityMetadata,
+        _rewards_params: &ServiceRewardsParameters,
     ) -> Result<(), Error> {
         match self {
-            Self::BlendNetwork(state) => {
-                state.rewards = state
-                    .rewards
-                    .update_active(provider_id, metadata, block_number)?;
+            Self::BlendNetwork(_state) => {
+                // TODO: enable this after making the `rewards` module stable
+                // state.rewards =
+                //     state
+                //         .rewards
+                //         .update_active(provider_id, metadata, &rewards_params.blend)?;
                 Ok(())
             }
         }
@@ -132,12 +135,8 @@ pub enum Error {
     ServiceNotFound(ServiceType),
     #[error("Duplicate sdp declaration id: {0:?}")]
     DuplicateDeclaration(DeclarationId),
-    #[error("Active session for service {0:?} not found")]
-    ActiveSessionNotFound(ServiceType),
-    #[error("Forming session for service {0:?} not found")]
-    FormingSessionNotFound(ServiceType),
-    #[error("Session parameters for {0:?} not found")]
-    SessionParamsNotFound(ServiceType),
+    #[error("Epoch parameters for {0:?} not found")]
+    EpochParamsNotFound(ServiceType),
     #[error("Service parameters are missing for {0:?}")]
     ServiceParamsNotFound(ServiceType),
     #[error("Can't update genesis state during different block number")]
@@ -161,113 +160,70 @@ pub enum Error {
     SdpOp(#[from] lb_core::mantle::ops::sdp::SdpError),
 }
 
-// State at the beginning of this session
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct SessionState {
-    pub declarations: Declarations,
-    pub session_n: u64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ServiceState<R: Rewards> {
-    // state of declarations at block b
+    /// Declarations accumulated until the current block.
     declarations: Declarations,
-    // (current) active session
-    // snapshot of `declarations` at the start of block ((b // config.session_duration) - 1) *
-    // config.session_duration
-    active: SessionState,
-    // new forming session, overlaps with `declarations` until the next session boundary
-    // snapshot of `declarations` at the start of block (b // config.session_duration) *
-    // config.session_duration
-    forming: SessionState,
-    // rewards calculation and tracking for this service
-    pub rewards: R,
+    // TODO: enable this after making the `rewards` module stable
+    // Rewards calculation and tracking for this service
+    // pub rewards: R,
+    _phantom: PhantomData<R>,
 }
 
-impl SessionState {
-    fn update<R: Rewards>(
-        &self,
-        service_state: &ServiceState<R>,
-        block_number: u64,
-        config: &ServiceParameters,
-    ) -> Self {
-        if self.session_n.saturating_sub(1) * config.session_duration > block_number {
-            return Self {
-                session_n: self.session_n,
-                declarations: service_state.declarations.clone(),
-            };
-        }
-        self.clone()
-    }
-}
-
-const fn is_active(
-    declaration: &Declaration,
-    current_block: u64,
-    config: &ServiceParameters,
-) -> bool {
-    declaration.active
-        + (config.inactivity_period + config.retention_period) * config.session_duration
-        >= current_block
+fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServiceParameters) -> bool {
+    declaration.active + config.inactivity_period + config.retention_period >= current_epoch
 }
 
 impl<R: Rewards> ServiceState<R> {
     fn try_apply_header(
         mut self,
-        block_number: u64,
+        _last_epoch_state: &EpochState,
         epoch_state: &EpochState,
-        config: &ServiceParameters,
+        service_params: &ServiceParameters,
+        _rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
-        let current_session = config.session_for_block(block_number);
-        let reward_utxos;
+        // Remove expired declarations based on retention_period
+        self.declarations = self
+            .declarations
+            .iter()
+            .filter(|(_id, declaration)| {
+                let active = is_active(declaration, epoch_state.epoch(), service_params);
+                if !active {
+                    warn!(
+                        provider_id = ?declaration.provider_id,
+                        latest_active_epoch = ?declaration.active,
+                        current_epoch = ?epoch_state.epoch(),
+                        service_params = ?service_params,
+                        "removing declaration due to inactivity + retention + finalization_delay"
+                    );
+                }
+                active
+            })
+            .map(|(id, declaration)| (*id, declaration.clone()))
+            .collect();
 
-        // shift all session!
-        if current_session == self.active.session_n + 1 {
-            // Remove expired declarations based on retention_period
-            // This essentially duplicates the declaration set so it's only triggered at
-            // session boundaries
-            self.declarations = self
-                .declarations
-                .iter()
-                .filter(|(_id, declaration)| {
-                    let active = is_active(declaration, block_number, config);
-                    if !active {
-                        warn!(
-                            provider_id = ?declaration.provider_id,
-                            latest_active_block = declaration.active,
-                            current_block = block_number,
-                            "removing declaration due to inactivity+retention"
-                        );
-                    }
-                    active
-                })
-                .map(|(id, declaration)| (*id, declaration.clone()))
-                .collect();
-
-            // Update rewards with current session state and distribute rewards
-            (self.rewards, reward_utxos) =
-                self.rewards
-                    .update_session(&self.active, epoch_state, config);
-            self.active = self.forming.clone();
-            self.forming = SessionState {
-                declarations: self.declarations.clone(),
-                session_n: self.forming.session_n + 1,
-            };
-        } else {
-            assert!(
-                current_session < self.active.session_n + 1,
-                "Logos blockchain isn't ready for time travel yet"
-            );
-            self.rewards = self.rewards.update_epoch(epoch_state);
-            self.forming = self.forming.update(&self, block_number, config);
-            reward_utxos = Vec::new();
-        }
+        // Update rewards with current epoch state and distribute rewards
+        let reward_utxos = Vec::new();
+        // TODO: enable this after making the `rewards` module stable
+        // if last_epoch_state.epoch() < epoch_state.epoch() {
+        //     (self.rewards, reward_utxos) = self.rewards.update_epoch(
+        //         last_epoch_state,
+        //         epoch_state,
+        //         service_params,
+        //         rewards_params,
+        //     );
+        // }
 
         (self, reward_utxos)
     }
 
-    fn add_income(&mut self, income: Value) {
-        self.rewards = self.rewards.add_income(income);
+    #[expect(
+        clippy::unused_self,
+        reason = "TODO: enable this after making the `rewards` module stable"
+    )]
+    const fn add_income(&self, _income: Value) {
+        // TODO: enable this after making the `rewards` module stable
+        // self.rewards = self.rewards.add_income(income);
     }
 
     fn contains(&self, declaration_id: &DeclarationId) -> bool {
@@ -279,20 +235,21 @@ impl<R: Rewards> ServiceState<R> {
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
 /// since we keep a copy of this state for each block.
-#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SdpLedger {
     services: rpds::HashTrieMapSync<ServiceType, Service>,
     locked_notes: LockedNotes,
-    block_number: u64,
+    // The epoch when this ledger was created
+    epoch: Epoch,
 }
 
 impl SdpLedger {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(epoch: Epoch) -> Self {
         Self {
             services: rpds::HashTrieMapSync::new_sync(),
             locked_notes: LockedNotes::new(),
-            block_number: 0,
+            epoch,
         }
     }
 
@@ -300,87 +257,74 @@ impl SdpLedger {
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
-        tx_hash: TxHash,
         ops: impl Iterator<Item = (&'a SDPDeclareOp, &'a OpProof)> + 'a,
-    ) -> Result<Self, Error> {
-        let mut sdp = Self::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), epoch_state);
+    ) -> Result<(Self, Events), Error> {
+        let mut sdp = Self::new(epoch_state.epoch())
+            .with_blend_service(&config.service_rewards_params.blend, epoch_state);
 
-        for (op, proof) in ops {
-            let OpProof::ZkAndEd25519Sigs {
-                zk_sig,
-                ed25519_sig,
-            } = proof
-            else {
-                return Err(Error::InvalidProof);
-            };
-            sdp =
-                sdp.try_apply_sdp_declaration(utxo_tree, op, zk_sig, ed25519_sig, tx_hash, config)?;
+        let mut all_events = Events::new();
+        for (op, _) in ops {
+            let (result, events) = sdp.try_apply_genesis_sdp_declaration(utxo_tree, op, config)?;
+            sdp = result;
+            all_events.extend(events);
         }
 
-        let blend = sdp
-            .services
-            .get_mut(&ServiceType::BlendNetwork)
-            .expect("SDP initialized with Blend in this method");
-
-        let Service::BlendNetwork(state) = blend;
-        state.active.declarations = state.declarations.clone();
-        state.forming.declarations = state.declarations.clone();
-
-        Ok(sdp)
+        Ok((sdp, all_events))
     }
 
     #[must_use]
     pub fn with_blend_service(
         mut self,
-        rewards_settings: blend::RewardsParameters,
+        _rewards_settings: &blend::RewardsParameters,
         epoch_state: &EpochState,
     ) -> Self {
-        let service = Service::BlendNetwork(Self::new_service_state(blend::Rewards::new(
-            rewards_settings,
-            epoch_state,
-        )));
+        assert_eq!(
+            epoch_state.epoch, self.epoch,
+            "TODO: refactor to remove this assertion"
+        );
+        let service = Service::BlendNetwork(Self::new_service_state(
+            // TODO: enable this after making the `rewards` module stable
+            // blend::Rewards::new(
+            //     rewards_settings,
+            //     epoch_state,
+            // )
+        ));
         self.services = self.services.insert(ServiceType::BlendNetwork, service);
         self
     }
 
     #[must_use]
-    fn new_service_state<R: Rewards>(rewards: R) -> ServiceState<R> {
+    fn new_service_state<R: Rewards>(// TODO: enabled this after making the `rewards` module stable
+        //rewards: R
+    ) -> ServiceState<R> {
         ServiceState {
             declarations: rpds::RedBlackTreeMapSync::new_sync(),
-            active: SessionState {
-                declarations: rpds::RedBlackTreeMapSync::new_sync(),
-                session_n: 0,
-            },
-
-            forming: SessionState {
-                declarations: rpds::RedBlackTreeMapSync::new_sync(),
-                session_n: 1,
-            },
-            rewards,
+            _phantom: PhantomData,
         }
     }
 
     pub fn try_apply_header(
         &self,
         config: &Config,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
     ) -> Result<(Self, Vec<Utxo>), Error> {
-        let block_number = self.block_number + 1; // overflow?
         let mut all_reward_utxos = Vec::new();
 
         let services = self
             .services
             .iter()
             .map(|(service, service_state)| {
-                let config = config
+                let service_params = config
                     .service_params
                     .get(service)
-                    .ok_or(Error::SessionParamsNotFound(*service))?;
-                let (new_state, reward_utxos) =
-                    service_state
-                        .clone()
-                        .try_apply_header(block_number, epoch_state, config);
+                    .ok_or(Error::EpochParamsNotFound(*service))?;
+                let (new_state, reward_utxos) = service_state.clone().try_apply_header(
+                    last_epoch_state,
+                    epoch_state,
+                    service_params,
+                    &config.service_rewards_params,
+                );
                 all_reward_utxos.extend(reward_utxos);
                 Ok::<_, Error>((*service, new_state))
             })
@@ -388,12 +332,48 @@ impl SdpLedger {
 
         Ok((
             Self {
-                block_number,
+                epoch: epoch_state.epoch(),
                 services,
                 locked_notes: self.locked_notes.clone(),
             },
             all_reward_utxos,
         ))
+    }
+
+    pub fn try_apply_genesis_sdp_declaration(
+        mut self,
+        utxo_tree: &UtxoTree,
+        op: &SDPDeclareOp,
+        config: &Config,
+    ) -> Result<(Self, Events), Error> {
+        let Some(service_state) = self.services.get_mut(&op.service_type) else {
+            return Err(Error::ServiceNotFound(op.service_type));
+        };
+
+        // Validate SDP Declare
+        op.validate(&SDPDeclareGenesisValidationContext {
+            utxo_tree,
+            locked_notes: &self.locked_notes,
+            declarations: service_state.declarations(),
+            min_stake: &config.min_stake,
+        })?;
+
+        // Execute SDP Declare
+        let (result, events) =
+            <SDPDeclareOp as Operation<SDPDeclareGenesisValidationContext>>::execute(
+                op,
+                SDPDeclareExecutionContext {
+                    utxo_tree: utxo_tree.clone(),
+                    epoch: self.epoch,
+                    declarations: service_state.declarations_clone(),
+                    locked_notes: self.locked_notes.clone(),
+                    min_stake: config.min_stake,
+                },
+            )?;
+
+        self.locked_notes = result.locked_notes;
+        service_state.update_declarations(result.declarations);
+        Ok((self, events))
     }
 
     pub fn try_apply_sdp_declaration(
@@ -404,7 +384,7 @@ impl SdpLedger {
         ed25519_sig: &Ed25519Signature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
@@ -421,17 +401,20 @@ impl SdpLedger {
         })?;
 
         // Execute SDP Declare
-        let result = op.execute(SDPDeclareExecutionContext {
-            utxo_tree: utxo_tree.clone(),
-            block_number: self.block_number,
-            declarations: service_state.declarations_clone(),
-            locked_notes: self.locked_notes.clone(),
-            min_stake: config.min_stake,
-        })?;
+        let (result, events) = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
+            op,
+            SDPDeclareExecutionContext {
+                utxo_tree: utxo_tree.clone(),
+                epoch: self.epoch,
+                declarations: service_state.declarations_clone(),
+                locked_notes: self.locked_notes.clone(),
+                min_stake: config.min_stake,
+            },
+        )?;
 
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn apply_active_msg(
@@ -440,7 +423,7 @@ impl SdpLedger {
         zksig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
         let Some(service_state) = self.services.get_mut(&service) else {
             return Err(Error::ServiceNotFound(service));
@@ -454,8 +437,8 @@ impl SdpLedger {
         })?;
 
         // Execute SDP Active
-        let result = op.execute(SDPActiveExecutionContext {
-            block_number: self.block_number,
+        let (result, events) = op.execute(SDPActiveExecutionContext {
+            epoch: self.epoch,
             declarations: service_state.declarations_clone(),
         })?;
 
@@ -466,9 +449,9 @@ impl SdpLedger {
             .provider_id;
 
         service_state.update_declarations(result.declarations);
-        service_state.update_rewards(provider_id, &op.metadata, self.block_number)?;
+        service_state.update_rewards(provider_id, &op.metadata, &config.service_rewards_params)?;
 
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn apply_withdrawn_msg(
@@ -477,7 +460,7 @@ impl SdpLedger {
         zksig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<Self, Error> {
+    ) -> Result<(Self, Events), Error> {
         let (service, config) = self.get_service(&op.declaration_id, config)?;
         let Some(service_state) = self.services.get_mut(&service) else {
             return Err(Error::ServiceNotFound(service));
@@ -485,17 +468,16 @@ impl SdpLedger {
 
         // Validate SDP Withdraw
         op.validate(&SDPWithdrawValidationContext {
-            lock_period: &config.lock_period,
+            lock_period: config.lock_period,
             declarations: service_state.declarations(),
-            block_number: &self.block_number,
+            epoch: self.epoch,
             locked_notes: &self.locked_notes,
             tx_hash: &tx_hash,
             sdp_withdraw_sig: zksig,
         })?;
 
         // Execute SDP Withdraw
-        let result = op.execute(SDPWithdrawExecutionContext {
-            block_number: self.block_number,
+        let (result, events) = op.execute(SDPWithdrawExecutionContext {
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
         })?;
@@ -503,7 +485,7 @@ impl SdpLedger {
         self.locked_notes = result.locked_notes;
         service_state.update_declarations(result.declarations);
 
-        Ok(self)
+        Ok((self, events))
     }
 
     pub fn add_blend_income(&mut self, income: Value) {
@@ -519,48 +501,21 @@ impl SdpLedger {
         &self.locked_notes
     }
 
+    /// Declarations of all services, which have been accumulated until the
+    /// current block.
     #[must_use]
-    pub fn active_session_providers(
-        &self,
-        service_type: ServiceType,
-    ) -> Option<HashMap<ProviderId, ProviderInfo>> {
-        let service = self.services.get(&service_type)?;
-
-        let providers = service
-            .active_session()
-            .declarations
+    pub fn declarations(&self) -> lb_core::sdp::Declarations {
+        self.services
             .iter()
-            .map(|(_, declaration)| {
+            .map(|(service_type, service_state)| {
                 (
-                    declaration.provider_id,
-                    ProviderInfo {
-                        locators: declaration.locators.clone(),
-                        zk_id: declaration.zk_id,
-                    },
+                    *service_type,
+                    service_state
+                        .declarations()
+                        .iter()
+                        .map(|(declaration_id, declaration)| (*declaration_id, declaration.clone()))
+                        .collect(),
                 )
-            })
-            .collect();
-
-        Some(providers)
-    }
-
-    #[must_use]
-    pub fn active_sessions(&self) -> HashMap<ServiceType, SessionNumber> {
-        self.services
-            .iter()
-            .map(|(service_type, service)| (*service_type, service.active_session().session_n))
-            .collect()
-    }
-
-    #[must_use]
-    pub fn declarations(&self) -> Vec<(DeclarationId, Declaration)> {
-        self.services
-            .iter()
-            .flat_map(|(_, service_state)| {
-                service_state
-                    .declarations()
-                    .iter()
-                    .map(|(declaration_id, declaration)| (*declaration_id, declaration.clone()))
             })
             .collect()
     }
@@ -595,20 +550,6 @@ impl SdpLedger {
     }
 
     #[cfg(test)]
-    fn get_forming_session(&self, service_type: ServiceType) -> Option<&SessionState> {
-        self.services
-            .get(&service_type)
-            .map(Service::forming_session)
-    }
-
-    #[cfg(test)]
-    fn get_active_session(&self, service_type: ServiceType) -> Option<&SessionState> {
-        self.services
-            .get(&service_type)
-            .map(Service::active_session)
-    }
-
-    #[cfg(test)]
     fn get_declarations(&self, service_type: ServiceType) -> Option<&Declarations> {
         self.services.get(&service_type).map(Service::declarations)
     }
@@ -618,32 +559,24 @@ impl SdpLedger {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos};
+    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
     use lb_groth16::{Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::cryptarchia::tests::{utxo, utxo_with_sk};
+    use crate::cryptarchia::tests::utxo_with_sk;
 
-    fn setup() -> Config {
+    fn setup(service_params: ServiceParameters) -> Config {
         let mut params = HashMap::new();
-        params.insert(
-            ServiceType::BlendNetwork,
-            ServiceParameters {
-                inactivity_period: 1,
-                lock_period: 10,
-                retention_period: 1,
-                timestamp: 0,
-                session_duration: 10,
-            },
-        );
+        params.insert(ServiceType::BlendNetwork, service_params);
         Config {
             service_params: Arc::new(params),
             service_rewards_params: ServiceRewardsParameters {
                 blend: blend::RewardsParameters {
-                    rounds_per_session: NonZeroU64::new(10).unwrap(),
+                    rounds_per_epoch: NonZeroU64::new(10).unwrap(),
                     message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                     num_blend_layers: NonZeroU64::new(3).unwrap(),
                     minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -682,13 +615,28 @@ mod tests {
         config: &Config,
     ) -> Result<SdpLedger, Error> {
         let (note_sk, _) = utxo_with_sk();
-        let tx_hash = TxHash(Fr::from(0u8));
-        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_sk.clone()], &tx_hash.0).unwrap();
+        let tx_hash = TxHash([0u8; 32]);
+        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_sk.clone()], &tx_hash.to_fr()).unwrap();
 
         let signing_key = create_signing_key();
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
-        sdp_ledger.try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
+        sdp_ledger
+            .try_apply_sdp_declaration(utxos, op, &zk_sig, &ed25519_sig, tx_hash, config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
+    }
+
+    fn apply_active_with_dummies(
+        sdp_ledger: SdpLedger,
+        op: &SDPActiveOp,
+        zk_sk: ZkKey,
+        config: &Config,
+    ) -> Result<SdpLedger, Error> {
+        let tx_hash = TxHash([2u8; 32]);
+        let zk_sig = ZkKey::multi_sign(&[zk_sk], &tx_hash.to_fr()).unwrap();
+        sdp_ledger
+            .apply_active_msg(op, &zk_sig, tx_hash, config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
     fn apply_withdraw_with_dummies(
@@ -698,71 +646,164 @@ mod tests {
         zk_key: ZkKey,
         config: &Config,
     ) -> Result<SdpLedger, Error> {
-        let tx_hash = TxHash(Fr::from(1u8));
-        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.0).unwrap();
+        let tx_hash = TxHash([1u8; 32]);
+        let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.to_fr()).unwrap();
 
-        sdp_ledger.apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
+        sdp_ledger
+            .apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
+            .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
-    fn dummy_epoch_state() -> EpochState {
-        EpochState {
-            epoch: 0.into(),
+    fn dummy_epoch_state(epoch: Epoch, rewards_settings: &blend::RewardsParameters) -> EpochState {
+        let mut epoch_state = EpochState {
+            epoch,
             nonce: ZkHash::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
-        }
+            sdp: SdpLedger::new(epoch),
+        };
+
+        epoch_state.sdp = epoch_state
+            .sdp
+            .clone()
+            .with_blend_service(rewards_settings, &epoch_state);
+
+        epoch_state
     }
 
+    /// A provider that hasn't submit a new active message during
+    /// `inactivity_period + retention_period` epochs must be removed.
     #[test]
-    fn test_update_active_provider() {
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let utxo = utxo();
+    fn gc_inactive_declaration() {
+        let config = setup(ServiceParameters {
+            lock_period: 10.into(),
+            // Set inactivity/retention periods very short to check that
+            // declaration is NOT removed before an activity message is submitted.
+            inactivity_period: 1.into(),
+            retention_period: 1.into(),
+            epoch: 0.into(),
+        });
+
+        // Init ledger with no declaration
+        let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
+        let mut ledger = epoch0.sdp.clone();
+
+        // Move forward to the epoch 1
+        let mut last_epoch_state = epoch0.clone();
+        let new_epoch_state = EpochState {
+            epoch: 1.into(),
+            nonce: ZkHash::from(1),
+            ..epoch0
+        };
+        (ledger, _) = ledger
+            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+            .unwrap();
+        last_epoch_state = new_epoch_state;
+
+        // Add a declaration at epoch 1
+        let (_utxo_sk, utxo) = utxo_with_sk();
         let note_id = utxo.id();
         let signing_key = create_signing_key();
-        let zk_key = create_zk_key(0);
-
-        let op = &SDPDeclareOp {
-            service_type: service_a,
+        let zk_key = create_zk_key(1);
+        let declare_op = &SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
             locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
-        let declaration_id = op.id();
-
-        // Initialize ledger with service config
-        let epoch_state = dummy_epoch_state();
-        let sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // Apply declare at block 0
-        let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, op, &zk_key, &config).unwrap();
-
-        // Declaration is in service_state.declarations but not in sessions yet
-        let declarations = sdp_ledger.get_declarations(service_a).unwrap();
+        let declaration_id = declare_op.id();
+        let mut ledger = apply_declare_with_dummies(
+            &utxo_tree(vec![utxo]),
+            ledger,
+            declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
+        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
-        // Apply headers to reach block 10 (session boundary)
-        let mut sdp_ledger = sdp_ledger;
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        // Move forward to the epoch 4 where the provider can submit an activity
+        // message.
+        // (The provider is expected to provide the service from epoch 3)
+        for epoch in 2..=4 {
+            let new_epoch_state = EpochState {
+                epoch: epoch.into(),
+                nonce: ZkHash::from(epoch),
+                ..last_epoch_state.clone()
+            };
+            (ledger, _) = ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
         }
+        // Check that the declaration is still present.
+        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        assert!(declarations.contains_key(&declaration_id));
 
-        // At block 10, declaration enters forming session 2
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 2);
-        assert!(forming_session.declarations.contains_key(&declaration_id));
-        assert_eq!(forming_session.declarations.size(), 1);
+        // Submit an activity message at epoch 4
+        let active_op = SDPActiveOp {
+            declaration_id,
+            nonce: 1,
+            metadata: ActivityMetadata::Blend(Box::new(lb_core::sdp::blend::ActivityProof {
+                epoch: 3.into(), // proving activity from epoch 3
+                signing_key: signing_key.public_key(),
+                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]).into(),
+                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([1; _]).into(),
+            })),
+        };
+        let mut ledger = apply_active_with_dummies(ledger, &active_op, zk_key, &config).unwrap();
+        let declaration = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        assert_eq!(
+            declaration.get(&declaration_id).unwrap().active,
+            Epoch::new(4) // epoch when the activity message is submitted/accepted
+        );
+
+        // Move forward to the epoch 6. The declaration should be still present
+        // because the activity message was accepted at epoch 4.
+        for epoch in 5..=6 {
+            let new_epoch_state = EpochState {
+                epoch: epoch.into(),
+                nonce: ZkHash::from(epoch),
+                ..last_epoch_state.clone()
+            };
+            (ledger, _) = ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
+        }
+        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        assert!(declarations.contains_key(&declaration_id));
+
+        // Move forward to epoch 7 where declaration should be removed
+        // because no activity message has been submitted since epoch 4
+        let new_epoch_state = EpochState {
+            epoch: 7.into(),
+            nonce: ZkHash::from(7),
+            ..last_epoch_state.clone()
+        };
+        (ledger, _) = ledger
+            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+            .unwrap();
+        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        assert!(!declarations.contains_key(&declaration_id));
     }
 
     #[test]
     fn test_withdraw_provider() {
-        let config = setup();
+        let config = setup(ServiceParameters {
+            lock_period: 10.into(),
+            // inactivity/retention periods should be longer than lock period
+            // for this test to avoid the declaration being removed due to
+            // inacitivity before we can test the withdraw logic.
+            inactivity_period: 20.into(),
+            retention_period: 20.into(),
+            epoch: 0.into(),
+        });
+
         let service_a = ServiceType::BlendNetwork;
         let (utxo_sk, utxo) = utxo_with_sk();
         let note_id = utxo.id();
@@ -774,14 +815,13 @@ mod tests {
             locked_note_id: note_id,
             zk_id: zk_key.to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declaration_id = declare_op.id();
 
         // Initialize ledger with service config and declare
-        let epoch_state = dummy_epoch_state();
-        let sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
+        let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
+        let sdp_ledger = epoch0.sdp.clone();
 
         let utxo_tree = utxo_tree(vec![utxo]);
         let sdp_ledger =
@@ -792,10 +832,19 @@ mod tests {
         let declarations = sdp_ledger.get_declarations(service_a).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
-        // Move forward enough blocks to satisfy lock_period
+        // Move forward enough epochs to satisfy lock_period
         let mut sdp_ledger = sdp_ledger;
-        for _ in 0..11 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
+        let mut last_epoch_state = epoch0;
+        for epoch in 1..=11 {
+            let new_epoch_state = EpochState {
+                epoch: epoch.into(),
+                nonce: ZkHash::from(epoch),
+                ..last_epoch_state.clone()
+            };
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
         }
 
         // Withdraw the declaration
@@ -811,441 +860,5 @@ mod tests {
         let declarations = sdp_ledger.get_declarations(service_a).unwrap();
         assert!(!declarations.contains_key(&declaration_id));
         assert!(declarations.is_empty());
-    }
-
-    #[test]
-    fn test_promote_session_with_updated_provider() {
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let utxo = utxo();
-        let note_id = utxo.id();
-        let signing_key = create_signing_key();
-        let zk_key = create_zk_key(0);
-
-        let op = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: note_id,
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id = op.id();
-
-        // Initialize ledger with service config
-        let epoch_state = dummy_epoch_state();
-        let sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // Declare at block 0
-        let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, op, &zk_key, &config).unwrap();
-
-        // Apply headers to reach block 10 (session boundary for session_duration=10)
-        let mut sdp_ledger = sdp_ledger;
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // At block 10: active becomes session 1 (was empty forming), forming becomes
-        // session 2 (snapshot at block 10)
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 1);
-        assert!(active_session.declarations.is_empty()); // Active session 1 is empty
-
-        // Check forming session is now session 2 and contains declaration
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 2);
-        assert!(forming_session.declarations.contains_key(&declaration_id));
-
-        // Continue to block 20 to see declaration become active
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // At block 20: active becomes session 2 (with declaration)
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 2);
-        assert!(active_session.declarations.contains_key(&declaration_id));
-    }
-
-    #[test]
-    fn test_no_promotion() {
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-
-        // Initialize ledger with service config
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // Apply headers to reach block 9 (still in session 0, promotion happens at
-        // block 10)
-        for _ in 0..9 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // Check active session is still session 0 with no declarations
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 0);
-        assert!(active_session.declarations.is_empty());
-
-        // Check forming session is still session 1
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 1);
-    }
-
-    #[test]
-    fn test_promote_one_service() {
-        let config = setup();
-        let service = ServiceType::BlendNetwork; // session_duration = 10
-
-        // Initialize ledger with Blend service
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // Apply headers to reach block 10 (session boundary for BlendNetwork)
-        for _ in 0..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // Check BlendNetwork is promoted to session 1
-        let active_session = sdp_ledger.get_active_session(service).unwrap();
-        assert_eq!(active_session.session_n, 1);
-        let forming_session = sdp_ledger.get_forming_session(service).unwrap();
-        assert_eq!(forming_session.session_n, 2);
-    }
-
-    #[test]
-    fn test_new_declarations_becoming_active_after_session_boundary() {
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let signing_key = create_signing_key();
-        let zk_key = create_zk_key(0);
-
-        // Initialize ledger
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // SESSION 0: Add a declaration at block 5
-        for _ in 0..5 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        let utxo = utxo();
-        let declare_op = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo.id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id = declare_op.id();
-
-        let utxo_tree = utxo_tree(vec![utxo]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
-
-        // Move to block 9 (last block of session 0)
-        for _ in 6..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        assert_eq!(sdp_ledger.block_number, 9);
-
-        // Declaration is not in active or forming sessions yet
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 0);
-        assert!(!active_session.declarations.contains_key(&declaration_id));
-
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 1);
-        assert!(forming_session.declarations.is_empty());
-
-        // SESSION 1: Cross session boundary to block 10
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
-
-        // Active session 1 is empty (was the empty forming session 1)
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 1);
-        assert!(active_session.declarations.is_empty());
-
-        // Forming session 2 now has the declaration (snapshot from block 10)
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 2);
-        assert!(forming_session.declarations.contains_key(&declaration_id));
-
-        // SESSION 2: Cross to block 20
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 20);
-
-        // Now the declaration is active in session 2
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 2);
-        assert!(active_session.declarations.contains_key(&declaration_id));
-    }
-
-    #[test]
-    fn test_declaration_snapshot_timing() {
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let signing_key = create_signing_key();
-        let zk_key_1 = create_zk_key(1);
-
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // Add declaration at block 0
-        let utxo_1 = utxo();
-        let declare_op_1 = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo_1.id(),
-            zk_id: zk_key_1.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_1 = declare_op_1.id();
-
-        let utxo_tree_1 = utxo_tree(vec![utxo_1]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
-                .unwrap();
-
-        // Move to block 9 (last block before session boundary)
-        for _ in 1..10 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        // Save state at block 9
-        let sdp_ledger_block_9 = sdp_ledger.clone();
-
-        // Add another declaration at block 10 (after session boundary)
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
-
-        let zk_key_2 = create_zk_key(2);
-        let utxo_2 = utxo();
-        let declare_op_2 = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo_2.id(),
-            zk_id: zk_key_2.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_2 = declare_op_2.id();
-
-        let utxo_tree_2 = utxo_tree(vec![utxo_1, utxo_2]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
-                .unwrap();
-
-        // Jump to session 2 (block 20)
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-
-        // Active session (session 2) should contain both declarations
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert!(active_session.declarations.contains_key(&declaration_id_1));
-        assert!(!active_session.declarations.contains_key(&declaration_id_2));
-
-        // Now test from the block 9 state - jumping directly to block 20
-        let mut sdp_ledger_from_9 = sdp_ledger_block_9;
-        for _ in 10..20 {
-            (sdp_ledger_from_9, _) = sdp_ledger_from_9
-                .try_apply_header(&config, &epoch_state)
-                .unwrap();
-        }
-        (sdp_ledger_from_9, _) = sdp_ledger_from_9
-            .try_apply_header(&config, &epoch_state)
-            .unwrap();
-
-        // Active session should only contain declaration_id_1
-        // because declaration_id_2 was never added in this timeline
-        let active_session_from_9 = sdp_ledger_from_9.get_active_session(service_a).unwrap();
-        assert!(
-            active_session_from_9
-                .declarations
-                .contains_key(&declaration_id_1)
-        );
-        assert!(
-            !active_session_from_9
-                .declarations
-                .contains_key(&declaration_id_2)
-        );
-    }
-
-    #[test]
-    fn test_session_jump() {
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let signing_key = create_signing_key();
-        let zk_key = create_zk_key(0);
-
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // Add declaration at block 3
-        for _ in 0..3 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-
-        let utxo = utxo();
-        let declare_op = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo.id(),
-            zk_id: zk_key.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id = declare_op.id();
-
-        let utxo_tree = utxo_tree(vec![utxo]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
-
-        // Jump directly from block 3 to block 25 (skipping session 1 entirely)
-        for _ in 4..25 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 25);
-
-        // Declaration snapshots should be taken from the last known state
-        // Active session (session 2, which started at block 20) should contain the
-        // declaration
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 2);
-        assert!(active_session.declarations.contains_key(&declaration_id));
-
-        // Forming session (session 3) should also contain the declaration
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 3);
-        assert!(forming_session.declarations.contains_key(&declaration_id));
-    }
-
-    #[test]
-    #[expect(clippy::cognitive_complexity, reason = "sessions are complex :)")]
-    fn test_session_boundary() {
-        // Test a declaration at block 9 is available in session 2 but a declaration in
-        // block 10 is not
-        let config = setup();
-        let service_a = ServiceType::BlendNetwork;
-        let signing_key = create_signing_key();
-        let zk_key_1 = create_zk_key(1);
-
-        let epoch_state = dummy_epoch_state();
-        let mut sdp_ledger = SdpLedger::new()
-            .with_blend_service(config.service_rewards_params.blend.clone(), &epoch_state);
-
-        // Move to block 9 (last block of session 0)
-        for _ in 0..9 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        assert_eq!(sdp_ledger.block_number, 9);
-
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 0);
-        assert!(active_session.declarations.is_empty());
-
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 1);
-        assert!(forming_session.declarations.is_empty());
-
-        // Create first declaration at block 9
-        let utxo_1 = utxo();
-        let declare_op_1 = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo_1.id(),
-            zk_id: zk_key_1.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_1 = declare_op_1.id();
-
-        let utxo_tree_1 = utxo_tree(vec![utxo_1]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_1, sdp_ledger, declare_op_1, &zk_key_1, &config)
-                .unwrap();
-
-        // Cross to block 10 (session boundary - start of session 1)
-        // At this point, the snapshot for forming session 2 is taken
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 10);
-
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 1);
-        assert!(active_session.declarations.is_empty());
-
-        // Forming session 2 should contain declaration_1 (made at block 9)
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 2);
-        assert!(forming_session.declarations.contains_key(&declaration_id_1));
-
-        // Create second declaration at block 10 (first block of session 1)
-        let zk_key_2 = create_zk_key(2);
-        let utxo_2 = utxo();
-        let declare_op_2 = &SDPDeclareOp {
-            service_type: service_a,
-            locked_note_id: utxo_2.id(),
-            zk_id: zk_key_2.to_public_key(),
-            provider_id: ProviderId(signing_key.public_key()),
-            locators: Vec::new(),
-        };
-        let declaration_id_2 = declare_op_2.id();
-
-        let utxo_tree_2 = utxo_tree(vec![utxo_1, utxo_2]);
-        sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree_2, sdp_ledger, declare_op_2, &zk_key_2, &config)
-                .unwrap();
-
-        // Forming session 2 still only has declaration_1 (snapshot was already taken at
-        // block 10)
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 2);
-        assert!(forming_session.declarations.contains_key(&declaration_id_1));
-        assert!(!forming_session.declarations.contains_key(&declaration_id_2));
-
-        // Jump to block 20 (start of session 2)
-        for _ in 11..20 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 20);
-
-        // Active session 2 has declaration_1 (from block 9)
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 2);
-        assert!(active_session.declarations.contains_key(&declaration_id_1));
-        assert!(!active_session.declarations.contains_key(&declaration_id_2));
-
-        // Forming session 3 has both declarations (snapshot from block 20)
-        let forming_session = sdp_ledger.get_forming_session(service_a).unwrap();
-        assert_eq!(forming_session.session_n, 3);
-        assert!(forming_session.declarations.contains_key(&declaration_id_1));
-        assert!(forming_session.declarations.contains_key(&declaration_id_2));
-
-        // Jump to block 30 (start of session 3)
-        for _ in 21..30 {
-            (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        }
-        (sdp_ledger, _) = sdp_ledger.try_apply_header(&config, &epoch_state).unwrap();
-        assert_eq!(sdp_ledger.block_number, 30);
-
-        // Active session 3 now has both declarations
-        let active_session = sdp_ledger.get_active_session(service_a).unwrap();
-        assert_eq!(active_session.session_n, 3);
-        assert!(active_session.declarations.contains_key(&declaration_id_1));
-        assert!(active_session.declarations.contains_key(&declaration_id_2));
     }
 }

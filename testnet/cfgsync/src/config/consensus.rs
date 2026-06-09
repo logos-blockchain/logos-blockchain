@@ -1,13 +1,14 @@
 use std::time::Duration;
 
 use blake2::{Blake2b, Digest as _, digest::consts::U32};
-use lb_config::consensus::{GeneralConsensusConfig, create_base_consensus_material};
+use lb_config::consensus::{
+    GeneralConsensusConfig, create_base_consensus_material, create_genesis_block,
+};
 use lb_core::{
     block::genesis::GenesisBlock,
     mantle::{Note, Utxo},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
-use lb_tests::topology::configs::consensus::create_genesis_block;
 use num_bigint::BigUint;
 
 use crate::{Entropy, FaucetSettings};

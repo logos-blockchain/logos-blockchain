@@ -13,23 +13,23 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-stream               = { default-features = false, version = "0.3.6" }
-axum                       = { default-features = false, features = ["http2", "json", "tokio"], version = "0.8.7" }
-clap                       = { default-features = false, features = ["derive", "env", "std"], version = "4.5.13" }
+async-stream               = { workspace = true }
+axum                       = { features = ["http2", "json", "tokio"], workspace = true }
+clap                       = { features = ["derive", "env", "std"], workspace = true }
 futures                    = { workspace = true }
-hex                        = { default-features = false, features = ["alloc"], version = "0.4" }
+hex                        = { features = ["alloc"], workspace = true }
 lb-chain-broadcast-service = { workspace = true }
 lb-common-http-client      = { workspace = true }
 lb-core                    = { workspace = true }
 lb-demo-sequencer          = { workspace = true }
-owo-colors                 = { default-features = false, version = "4.2.3" }
-redb                       = { default-features = false, version = "3.1.0" }
+owo-colors                 = { workspace = true }
+redb                       = { workspace = true }
 reqwest                    = { features = ["json", "rustls-tls"], workspace = true }
 serde                      = { workspace = true }
 serde_json                 = { workspace = true }
 thiserror                  = { workspace = true }
 tokio                      = { workspace = true }
 tokio-stream               = { workspace = true }
-tokio-util                 = { default-features = false, version = "0.7" }
-tower-http                 = { features = ["cors"], version = "0.6.8" }
-url                        = { default-features = false, version = "2.5.4" }
+tokio-util                 = { workspace = true }
+tower-http                 = { features = ["cors"], workspace = true }
+url                        = { workspace = true }

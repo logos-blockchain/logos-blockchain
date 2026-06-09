@@ -1,14 +1,18 @@
+use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
-use tracing::info;
+use lb_log_targets::mantle;
+use tracing::debug;
 
 use super::{SDPActiveOp, SdpError};
 use crate::{
-    block::BlockNumber,
+    events::Events,
     mantle::{
         TxHash,
         ledger::{Declarations, Operation},
     },
 };
+
+const LOG_TARGET: &str = mantle::sdp::message::ACTIVE;
 
 pub struct SDPActiveValidationContext<'a> {
     pub declarations: &'a Declarations,
@@ -17,22 +21,18 @@ pub struct SDPActiveValidationContext<'a> {
 }
 
 pub struct SDPActiveExecutionContext {
-    pub block_number: BlockNumber,
+    pub epoch: Epoch,
     pub declarations: Declarations,
 }
 
-impl Operation for SDPActiveOp {
-    type ValidationContext<'a>
-        = SDPActiveValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
     type ExecutionContext<'a>
         = SDPActiveExecutionContext
     where
         Self: 'a;
     type Error = SdpError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &SDPActiveValidationContext<'_>) -> Result<(), Self::Error> {
         // Check the declaration exist
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
@@ -47,7 +47,7 @@ impl Operation for SDPActiveOp {
         }
 
         // Check the signature over the `zk_id`
-        if !ZkPublicKey::verify_multi(&[declaration.zk_id], &ctx.tx_hash.0, ctx.active_sig) {
+        if !ZkPublicKey::verify_multi(&[declaration.zk_id], &ctx.tx_hash.to_fr(), ctx.active_sig) {
             return Err(SdpError::InvalidZkSignature);
         }
 
@@ -58,21 +58,22 @@ impl Operation for SDPActiveOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         let declaration = ctx
             .declarations
             .get_mut(&self.declaration_id)
             .expect("The operation should have been validated");
 
-        declaration.active = ctx.block_number;
+        declaration.active = ctx.epoch;
         declaration.nonce = self.nonce;
-        info!(
+        debug!(
+            target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
-            active = declaration.active,
-            nonce = declaration.nonce,
+            active = ?declaration.active,
+            nonce = ?declaration.nonce,
             "updated declaration with active message"
         );
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }

@@ -4,11 +4,11 @@ use std::{
     str::FromStr as _,
 };
 
-use lb_node::config::InitArgs;
+use lb_node::cli::{EmbeddedInitArgs, InitArgs};
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
 
-use crate::{OperationStatus, api::types::config::Deployment};
+use crate::{OperationStatus, api::types::config::Deployment, logging};
 
 #[repr(C)]
 pub struct GenerateConfigArgs {
@@ -24,7 +24,7 @@ pub struct GenerateConfigArgs {
     pub state_path: *const c_char,
 }
 
-impl From<GenerateConfigArgs> for InitArgs {
+impl From<GenerateConfigArgs> for EmbeddedInitArgs {
     fn from(value: GenerateConfigArgs) -> Self {
         let mut init_args = Self::default();
 
@@ -92,13 +92,14 @@ impl From<GenerateConfigArgs> for InitArgs {
 }
 
 #[must_use]
-pub fn generate_config_sync(args: InitArgs) -> OperationStatus {
+pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
+    let init_args: InitArgs = args.into();
     let runtime = Runtime::new().expect("Failed to create Tokio runtime.");
-    let run_result = runtime.block_on(async move { lb_node::init::run(&args) });
+    let run_result = runtime.block_on(async move { lb_node::cli::config::init::run(init_args) });
     match run_result {
         Ok(()) => OperationStatus::Ok,
         Err(error) => {
-            log::error!("Error generating config: {error:?}");
+            logging::error!("generate_config_sync", "Error generating config: {error:?}");
             OperationStatus::ConfigurationError
         }
     }
@@ -122,6 +123,6 @@ pub fn generate_config_sync(args: InitArgs) -> OperationStatus {
 #[must_use]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn generate_user_config(args: GenerateConfigArgs) -> OperationStatus {
-    let init_args = InitArgs::from(args);
+    let init_args = EmbeddedInitArgs::from(args);
     generate_config_sync(init_args)
 }

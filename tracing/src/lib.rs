@@ -1,3 +1,4 @@
+mod compressed_appender;
 pub mod filter;
 pub mod logging;
 pub mod metrics;

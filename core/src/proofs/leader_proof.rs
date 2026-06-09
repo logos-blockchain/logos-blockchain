@@ -4,10 +4,12 @@ use std::sync::LazyLock;
 use ark_ff::{Field as _, PrimeField as _};
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_log_targets::proofs;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use lb_utxotree::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::error;
 
 use crate::{
     mantle::{
@@ -16,6 +18,8 @@ use crate::{
     },
     proofs::merkle::merkle_path_to_witness,
 };
+
+const LOG_TARGET: &str = proofs::LEADER;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Groth16LeaderProof {
@@ -52,7 +56,7 @@ impl Groth16LeaderProof {
         let start_t = std::time::Instant::now();
         let leader_key = witness.pk;
         let (proof, entropy_contribution) = Self::generate_proof(witness)?;
-        tracing::debug!("groth16 prover time: {:.2?}", start_t.elapsed(),);
+        tracing::debug!(target: LOG_TARGET, "groth16 prover time: {:.2?}", start_t.elapsed(),);
 
         Ok(Self {
             proof,
@@ -74,7 +78,7 @@ impl Groth16LeaderProof {
 
     fn generate_proof(private: LeaderPrivate) -> Result<(lb_pol::PoLProof, Fr), Error> {
         let (proof, verif_inputs) =
-            lb_pol::prove(&private.input.into()).map_err(Error::PoLProofFailed)?;
+            lb_pol::prove(private.input.into()).map_err(Error::PoLProofFailed)?;
         Ok((proof, verif_inputs.entropy_contribution.into_inner()))
     }
 
@@ -114,7 +118,10 @@ impl LeaderProof for Groth16LeaderProof {
                 leader_pk,
             ),
         )
-        .is_ok()
+        .unwrap_or_else(|e| {
+            error!(target: LOG_TARGET, "LeaderProof verification failed: {e:?}");
+            false
+        })
     }
 
     fn verify_genesis(&self) -> bool {

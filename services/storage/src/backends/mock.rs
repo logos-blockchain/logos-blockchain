@@ -6,19 +6,17 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use lb_cryptarchia_engine::Slot;
 use lb_core::{
-    block::{BlockNumber, SessionNumber},
+    block::BlockNumber,
     header::HeaderId,
     sdp::{Locator, ProviderId, ServiceType},
 };
+use lb_cryptarchia_engine::Slot;
 use overwatch::DynError;
 use thiserror::Error;
 
 use super::{StorageBackend, StorageTransaction};
-use crate::api::{
-    StorageBackendApi, chain::StorageChainApi, membership::StorageMembershipApi,
-};
+use crate::api::{StorageBackendApi, chain::StorageChainApi, membership::StorageMembershipApi};
 
 #[derive(Debug, Error)]
 #[error("Errors in MockStorage should not happen")]
@@ -78,6 +76,16 @@ impl StorageBackend for MockStorage {
     }
 
     async fn load_prefix(
+        &mut self,
+        _key: &[u8],
+        _start_key: Option<&[u8]>,
+        _end_key: Option<&[u8]>,
+        _limit: Option<NonZeroUsize>,
+    ) -> Result<Vec<Bytes>, <Self as StorageBackend>::Error> {
+        unimplemented!()
+    }
+
+    async fn load_prefix_reverse(
         &mut self,
         _key: &[u8],
         _start_key: Option<&[u8]>,
@@ -159,6 +167,14 @@ impl StorageChainApi for MockStorage {
     ) -> Result<Vec<HeaderId>, Self::Error> {
         unimplemented!()
     }
+
+    async fn scan_immutable_block_ids_reverse(
+        &mut self,
+        _slot_range: RangeInclusive<Slot>,
+        _limit: NonZeroUsize,
+    ) -> Result<Vec<HeaderId>, Self::Error> {
+        unimplemented!()
+    }
 }
 
 #[async_trait]
@@ -166,43 +182,11 @@ impl StorageBackendApi for MockStorage {}
 
 #[async_trait]
 impl StorageMembershipApi for MockStorage {
-    async fn save_active_session(
-        &mut self,
-        _service_type: ServiceType,
-        _session_id: SessionNumber,
-        _providers: &HashMap<ProviderId, BTreeSet<Locator>>,
-    ) -> Result<(), DynError> {
-        unimplemented!()
-    }
-
-    async fn load_active_session(
-        &mut self,
-        _service_type: ServiceType,
-    ) -> Result<Option<(SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>)>, DynError> {
-        unimplemented!()
-    }
-
     async fn save_latest_block(&mut self, _block_number: BlockNumber) -> Result<(), DynError> {
         unimplemented!()
     }
 
     async fn load_latest_block(&mut self) -> Result<Option<BlockNumber>, DynError> {
-        unimplemented!()
-    }
-
-    async fn save_forming_session(
-        &mut self,
-        _service_type: ServiceType,
-        _session_id: SessionNumber,
-        _providers: &HashMap<ProviderId, BTreeSet<Locator>>,
-    ) -> Result<(), DynError> {
-        unimplemented!()
-    }
-
-    async fn load_forming_session(
-        &mut self,
-        _service_type: ServiceType,
-    ) -> Result<Option<(SessionNumber, HashMap<ProviderId, BTreeSet<Locator>>)>, DynError> {
         unimplemented!()
     }
 }

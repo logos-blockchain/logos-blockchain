@@ -41,7 +41,7 @@ impl K8sDeployEnv for LbcEnv {
             .iter()
             .map(|node| NodeConfigPorts {
                 api: node.general.api_config.address.port(),
-                auxiliary: node.general.api_config.testing_http_address.port(),
+                auxiliary: node.general.api_config.address.port(),
             })
             .collect();
         PortSpecs { nodes }
@@ -211,10 +211,6 @@ fn build_node_values(kind: &'static str, index: usize, node: &NodePlan) -> NodeV
     NodeValues::new(
         vec![
             NodePortValues::tcp("http", node.general.api_config.address.port()),
-            NodePortValues::tcp(
-                "testing-http",
-                node.general.api_config.testing_http_address.port(),
-            ),
             NodePortValues::udp("swarm-udp", node.general.network_config.backend.swarm.port),
             NodePortValues::udp(
                 "blend-udp",

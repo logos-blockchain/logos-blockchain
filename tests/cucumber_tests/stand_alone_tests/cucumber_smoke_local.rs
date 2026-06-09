@@ -13,10 +13,6 @@ use logos_blockchain_tests::cucumber::{
 
 #[tokio::test]
 async fn cucumber_local_idle_smoke() {
-    // Required env vars (set on the command line when running this test):
-    // - `LOGOS_BLOCKCHAIN_NODE_BIN=...`
-    // - `RUST_LOG=info` (optional; better visibility)
-
     init_logging_defaults();
     init_node_log_dir_defaults(
         &DeployerKind::Local,

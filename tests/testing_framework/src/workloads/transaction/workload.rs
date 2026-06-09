@@ -11,9 +11,8 @@ use async_trait::async_trait;
 use lb_core::mantle::{
     GasCalculator as _, GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
     gas::MainnetGasConstants,
-    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
     ops::OpId as _,
-    tx::{MantleTxContext, MantleTxGasContext},
+    tx::{GasPrices, MantleTxContext, MantleTxGasContext},
     tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -193,7 +192,8 @@ impl<'a, E: LbcScenarioEnv> Submission<'a, E> {
     }
 
     async fn execute(mut self) -> Result<(), DynError> {
-        let gas_context = MantleTxGasContext::new(HashMap::new());
+        let gas_context =
+            MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         while let Some(input) = self.plan.pop_front() {
             submit_wallet_transaction(self.ctx, &input, gas_context.clone()).await?;
             if !self.interval.is_zero() {
@@ -285,11 +285,12 @@ fn build_wallet_transaction(
     };
 
     let provisional_tx = MantleTxBuilder::new(tx_context.clone())
-        .set_execution_gas_price(0.into())
-        .set_storage_gas_price(GENESIS_STORAGE_GAS_PRICE)
         .add_ledger_input(input.utxo)
+        .map_err(|err| format!("failed to add provisional input: {err}"))?
         .add_ledger_output(Note::new(input.utxo.note.value, receiver))
-        .build();
+        .map_err(|err| format!("failed to add provisional output: {err}"))?
+        .build()
+        .map_err(|err| format!("failed to build provisional tx: {err}"))?;
 
     let fee = provisional_tx
         .total_gas_cost::<MainnetGasConstants>(gas_context)?
@@ -302,15 +303,16 @@ fn build_wallet_transaction(
     })?;
 
     let tx = MantleTxBuilder::new(tx_context)
-        .set_execution_gas_price(0.into())
-        .set_storage_gas_price(GENESIS_STORAGE_GAS_PRICE)
         .add_ledger_input(input.utxo)
+        .map_err(|err| format!("failed to add input: {err}"))?
         .add_ledger_output(Note::new(output_value, receiver))
-        .build();
+        .map_err(|err| format!("failed to add output: {err}"))?
+        .build()
+        .map_err(|err| format!("failed to build tx: {err}"))?;
 
     let signature = ZkKey::multi_sign(
         slice::from_ref(&input.account.secret_key),
-        tx.hash().as_ref(),
+        &tx.hash().to_fr(),
     )
     .map_err(|err| format!("failed to sign transaction: {err}"))?;
 

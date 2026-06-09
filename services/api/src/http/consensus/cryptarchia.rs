@@ -1,7 +1,7 @@
 use std::fmt::{Debug, Display};
 
 use futures::{StreamExt as _, TryStreamExt as _};
-use lb_chain_service::{ConsensusMsg, CryptarchiaConsensus, CryptarchiaInfo};
+use lb_chain_service::{ChainServiceInfo, ConsensusMsg, CryptarchiaConsensus};
 use lb_core::{header::HeaderId, mantle::SignedMantleTx};
 use lb_ledger::LedgerState;
 use lb_storage_service::backends::rocksdb::RocksBackend;
@@ -16,7 +16,7 @@ pub type Cryptarchia<RuntimeServiceId> =
 
 pub async fn cryptarchia_info<RuntimeServiceId>(
     handle: &OverwatchHandle<RuntimeServiceId>,
-) -> Result<CryptarchiaInfo, DynError>
+) -> Result<ChainServiceInfo, DynError>
 where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
@@ -24,7 +24,9 @@ where
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
-        .send(ConsensusMsg::Info { tx: sender })
+        .send(ConsensusMsg::Info {
+            reply_channel: sender,
+        })
         .await
         .map_err(|(e, _)| e)?;
 
@@ -48,7 +50,7 @@ where
         .send(ConsensusMsg::GetHeaders {
             from_descendant,
             to_ancestor,
-            tx: sender,
+            reply_channel: sender,
         })
         .await
         .map_err(|(e, _)| e)?;
@@ -64,14 +66,16 @@ where
     RuntimeServiceId:
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
-    let info = cryptarchia_info(handle).await?;
+    let ChainServiceInfo {
+        cryptarchia_info, ..
+    } = cryptarchia_info(handle).await?;
 
     let relay = handle.relay().await?;
     let (sender, receiver) = oneshot::channel();
     relay
         .send(ConsensusMsg::GetLedgerState {
-            block_id: info.tip,
-            tx: sender,
+            block_id: cryptarchia_info.tip,
+            reply_channel: sender,
         })
         .await
         .map_err(|(e, _)| e)?;

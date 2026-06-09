@@ -1,12 +1,16 @@
 use lb_groth16::{Fr, serde::serde_fr};
+use lb_log_targets::proofs;
 use lb_mmr::MerklePath;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::error;
 
 use crate::{
     mantle::ops::leader_claim::{VoucherNullifier, VoucherSecret},
     proofs::merkle::mmr_path_to_witness,
 };
+
+const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct Groth16LeaderClaimProof {
@@ -25,7 +29,7 @@ impl Groth16LeaderClaimProof {
     pub fn prove(witness: LeaderClaimPrivate) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
         let (proof, voucher_nf) = Self::generate_proof(witness)?;
-        tracing::debug!("PoC groth16 prover time: {:.2?}", start_t.elapsed());
+        tracing::debug!(target: LOG_TARGET, "PoC groth16 prover time: {:.2?}", start_t.elapsed());
 
         Ok(Self {
             proof,
@@ -35,7 +39,7 @@ impl Groth16LeaderClaimProof {
 
     fn generate_proof(private: LeaderClaimPrivate) -> Result<(lb_poc::PoCProof, Fr), Error> {
         let (proof, verif_inputs) =
-            lb_poc::prove(&private.input.into()).map_err(Error::PoCProofFailed)?;
+            lb_poc::prove(private.input.into()).map_err(Error::PoCProofFailed)?;
         Ok((proof, verif_inputs.voucher_nullifier.into_inner()))
     }
 
@@ -67,7 +71,10 @@ impl LeaderClaimProof for Groth16LeaderClaimProof {
                 public_inputs.mantle_tx_hash,
             ),
         )
-        .is_ok()
+        .unwrap_or_else(|e| {
+            error!(target: LOG_TARGET, "Error verifying LeaderClaimProof: {e:?}");
+            false
+        })
     }
 
     fn voucher_nf(&self) -> &VoucherNullifier {

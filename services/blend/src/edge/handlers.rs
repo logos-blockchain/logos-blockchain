@@ -6,7 +6,7 @@ use lb_blend::{
     scheduling::{
         membership::Membership,
         message_blend::{
-            crypto::leader::send::SessionCryptographicProcessor,
+            crypto::leader::send::EpochCryptographicProcessor,
             provers::leader::LeaderProofsGenerator,
         },
     },
@@ -19,9 +19,22 @@ use rand::SeedableRng as _;
 use crate::edge::{LOG_TARGET, RunningSettings as Settings, backends::BlendBackend};
 
 pub struct MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId> {
-    cryptographic_processor: SessionCryptographicProcessor<NodeId, ProofsGenerator>,
+    cryptographic_processor: EpochCryptographicProcessor<NodeId, ProofsGenerator>,
     backend: Backend,
     _phantom: PhantomData<RuntimeServiceId>,
+}
+
+impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+    MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
+where
+    Backend: BlendBackend<NodeId, RuntimeServiceId>,
+    NodeId: Clone,
+    ProofsGenerator: LeaderProofsGenerator,
+{
+    #[cfg(test)]
+    pub const fn epoch(&self) -> Epoch {
+        self.cryptographic_processor.epoch()
+    }
 }
 
 impl<Backend, NodeId, ProofsGenerator, RuntimeServiceId>
@@ -73,7 +86,7 @@ where
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Self {
-        let cryptographic_processor = SessionCryptographicProcessor::new(
+        let cryptographic_processor = EpochCryptographicProcessor::new(
             settings.num_blend_layers,
             membership.clone(),
             public_info,

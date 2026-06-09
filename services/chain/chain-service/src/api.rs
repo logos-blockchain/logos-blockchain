@@ -1,14 +1,14 @@
 use std::pin::Pin;
 
 use futures::{Stream, TryStreamExt as _};
-use lb_core::{block::Block, header::HeaderId};
+use lb_core::{block::Block, events::Events, header::HeaderId};
 use lb_cryptarchia_engine::Slot;
 use lb_network_service::message::ChainSyncEvent;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use thiserror::Error;
 use tokio::sync::{broadcast, oneshot};
 
-use crate::{ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
+use crate::{ChainServiceInfo, ConsensusMsg, CryptarchiaInfo, LibUpdate, ProcessedBlockEvent};
 
 pub trait CryptarchiaServiceData:
     ServiceData<Message = ConsensusMsg<Self::Tx>> + Send + 'static
@@ -75,11 +75,11 @@ where
 
     /// Get the current consensus info including LIB, tip, slot, height, and
     /// mode
-    pub async fn info(&self) -> Result<CryptarchiaInfo, ApiError> {
-        let (tx, rx) = oneshot::channel();
+    pub async fn info(&self) -> Result<ChainServiceInfo, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::Info { tx })
+            .send(ConsensusMsg::Info { reply_channel })
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetInfo"))
@@ -134,13 +134,13 @@ where
         from_descendant: HeaderId,
         to_ancestor: HeaderId,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<HeaderId, ApiError>> + Send>>, ApiError> {
-        let (tx, rx) = oneshot::channel();
+        let (reply_channel, rx) = oneshot::channel();
 
         self.relay
             .send(ConsensusMsg::GetHeaders {
                 from_descendant: Some(from_descendant),
                 to_ancestor: Some(to_ancestor),
-                tx,
+                reply_channel,
             })
             .await
             .map_err(|(relay_error, _)| {
@@ -161,10 +161,13 @@ where
         &self,
         block_id: HeaderId,
     ) -> Result<Option<lb_ledger::LedgerState>, ApiError> {
-        let (tx, rx) = oneshot::channel();
+        let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetLedgerState { block_id, tx })
+            .send(ConsensusMsg::GetLedgerState {
+                block_id,
+                reply_channel,
+            })
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetLedgerState"))
@@ -180,10 +183,13 @@ where
         &self,
         slot: Slot,
     ) -> Result<Result<lb_ledger::EpochState, crate::Error>, ApiError> {
-        let (tx, rx) = oneshot::channel();
+        let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetEpochState { slot, tx })
+            .send(ConsensusMsg::GetEpochState {
+                slot,
+                reply_channel,
+            })
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetEpochState"))
@@ -204,10 +210,10 @@ where
         ),
         ApiError,
     > {
-        let (tx, rx) = oneshot::channel();
+        let (reply_channel, rx) = oneshot::channel();
 
         self.relay
-            .send(ConsensusMsg::GetEpochConfig { tx })
+            .send(ConsensusMsg::GetEpochConfig { reply_channel })
             .await
             .map_err(|(relay_error, _)| {
                 ApiError::CommsFailure(format!("{relay_error} while sending GetEpochConfig"))
@@ -218,19 +224,34 @@ where
         })
     }
 
+    pub async fn get_block_events(&self, id: HeaderId) -> Result<Option<Events>, ApiError> {
+        let (reply_channel, rx) = oneshot::channel();
+
+        self.relay
+            .send(ConsensusMsg::GetBlockEvents { id, reply_channel })
+            .await
+            .map_err(|(relay_error, _)| {
+                ApiError::CommsFailure(format!("{relay_error} while sending GetBlockEvents"))
+            })?;
+
+        rx.await.map_err(|relay_error| {
+            ApiError::CommsFailure(format!("{relay_error} while receiving GetBlockEvents"))
+        })
+    }
+
     /// Apply a block through the chain service,
     /// and return the tip and reorged txs if successful.
     pub async fn apply_block(
         &self,
         block: Block<Cryptarchia::Tx>,
     ) -> Result<(HeaderId, Vec<Cryptarchia::Tx>), ApiError> {
-        let (tx, rx) = oneshot::channel();
+        let (reply_channel, rx) = oneshot::channel();
 
         let boxed_block = Box::new(block);
         self.relay
             .send(ConsensusMsg::ApplyBlock {
                 block: boxed_block,
-                tx,
+                reply_channel,
             })
             .await
             .map_err(|(relay_error, _)| {

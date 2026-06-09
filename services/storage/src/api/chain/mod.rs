@@ -14,11 +14,14 @@ use futures::Stream;
 use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_cryptarchia_engine::Slot;
 
+use crate::api::backend::HeaderIdStream;
+
 #[async_trait]
 pub trait StorageChainApi {
     type Error: Error + Send + Sync + Debug + 'static;
     type Block: Send + Sync;
     type Tx: Send + Sync;
+    type Events: Send + Sync;
 
     async fn get_block(&mut self, header_id: HeaderId) -> Result<Option<Self::Block>, Self::Error>;
 
@@ -27,6 +30,7 @@ pub trait StorageChainApi {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
+        events: Self::Events,
     ) -> Result<(), Self::Error>;
 
     async fn remove_block(
@@ -38,6 +42,11 @@ pub trait StorageChainApi {
         &mut self,
         header_id: HeaderId,
     ) -> Result<Option<HeaderId>, Self::Error>;
+
+    async fn get_block_events(
+        &mut self,
+        header_id: HeaderId,
+    ) -> Result<Option<Self::Events>, Self::Error>;
 
     async fn store_immutable_block_ids(
         &mut self,
@@ -51,7 +60,13 @@ pub trait StorageChainApi {
         &mut self,
         slot_range: RangeInclusive<Slot>,
         limit: NonZeroUsize,
-    ) -> Result<Vec<HeaderId>, Self::Error>;
+    ) -> Result<HeaderIdStream, Self::Error>;
+
+    async fn scan_immutable_block_ids_reverse(
+        &mut self,
+        slot_range: RangeInclusive<Slot>,
+        limit: NonZeroUsize,
+    ) -> Result<HeaderIdStream, Self::Error>;
 
     async fn store_transactions(
         &mut self,

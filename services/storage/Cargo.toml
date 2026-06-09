@@ -13,16 +13,17 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait           = "0.1"
+async-trait           = { workspace = true }
 bytes                 = { features = ["serde"], workspace = true }
 futures               = { workspace = true }
 lb-core               = { workspace = true }
 lb-cryptarchia-engine = { workspace = true }
+lb-log-targets        = { workspace = true }
 lb-tracing            = { workspace = true }
 overwatch             = { workspace = true }
-rocksdb               = { default-features = false, features = ["bindgen-runtime"], optional = true, version = "0.24" }
+rocksdb               = { features = ["bindgen-runtime"], optional = true, workspace = true }
 serde                 = { workspace = true }
-thiserror             = "1.0"
+thiserror             = { workspace = true }
 tokio                 = { workspace = true }
 tracing               = { workspace = true }
 

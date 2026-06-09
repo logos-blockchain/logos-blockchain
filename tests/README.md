@@ -15,10 +15,8 @@ Ensure that the following are installed on your system:
 
 ### Using Rust `cargo test`
 
-Integration tests involving nodes run the binaries directly by spawning. Ensure the binaries are built and available in 
-your `target/debug` or `target/release` directory. You can build the project using:
-
-`cargo build` or `cargo build --release`
+Integration tests involving nodes run the binaries directly by spawning. Local test runs build the node binary through
+the testing framework before nodes are started. CI keeps using the binary built by the workflow before the test step.
 
 ## Setup and Usage (using Docker)
 
@@ -55,9 +53,23 @@ local setup.
 
 ## Setup and Usage (using `cargo test`)
 
-Where tests involve spawning node binaries, preference will be given to binaries corresponding to `USE_DEBUG_BINARIES` 
-and `USE_RELEASE_BINARIES` environment variables in the in `target/debug` and in `target/debug` paths respectively. If 
-neither are defined, preference will be given to debug binaries.
+Where tests involve spawning node binaries locally, the testing framework uses
+`LOGOS_BLOCKCHAIN_NODE_BIN` when it is set:
+
+```bash
+LOGOS_BLOCKCHAIN_NODE_BIN=/path/to/logos-blockchain-node cargo test ...
+```
+
+If `LOGOS_BLOCKCHAIN_NODE_BIN` is not set, local runs build the testing-featured
+release binary automatically:
+
+```bash
+cargo build --locked --release -p logos-blockchain-node --features testing
+```
+
+CI expects `target/release/logos-blockchain-node` to already exist, or
+`LOGOS_BLOCKCHAIN_NODE_BIN` to point at the prebuilt binary. It does not build
+node binaries inside the test process.
 
 ### 1. Run a specific test
 
@@ -66,20 +78,11 @@ _**MacOS or Linux**_
 ```bash
 cargo test --test test_cryptarchia_happy_path  two_nodes_happy -- --no-capture
 ```
-or 
-```bash
-USE_RELEASE_BINARIES=1 cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
-```
 
 _**Windows (PowerShell)**_
 
 ```pwsh
 cargo test --test test_cryptarchia_happy_path two_nodes_happy -- --no-capture
-```
-or
-```pwsh
-$env:USE_RELEASE_BINARIES="1"; cargo test --test test_cryptarchia_happy_path two_nodes_happy --release -- --no-capture
-
 ```
 
 ### 2. Run Tests with Debug Feature Flag
@@ -103,14 +106,41 @@ debug-only code paths to be enabled during the tests.
 To modify the tracing configuration when using `-F debug` flag go to `tests/src/topology/configs/tracing.rs`. If debug
 flag is not used, logs will be written into each nodes temporary directory.
 
-## Running Cucumber tests
+### E2E Artifact Location (nextest / cargo test)
 
-To run the Cucumber tests, ensure the binaries are built (debug or release) and the environment variables below point to 
-the corresponding binaries:
+Manual-cluster E2E tests create per-run directories (node configs, state, and default node log files)
+under the OS temporary directory by default.
+
+You can override this root directory with:
 
 ```text
-LOGOS_BLOCKCHAIN__NODE_BIN=/path-to/target/release/logos-blockchain-node
+E2E_TESTS_BASE_DIR_OVERRIDE=/absolute/or/relative/path
 ```
+
+You can force manual-cluster scenario directories to be kept even when tests pass:
+
+```text
+E2E_KEEP_LOGS=true
+```
+
+(`true`, `1`, `yes` are accepted.)
+
+For testing-framework tempdir behavior, you can also keep temp run directories with:
+
+```text
+TF_KEEP_LOGS=1
+```
+
+Optional stable node log output location:
+
+```text
+LOGOS_BLOCKCHAIN_LOG_DIR=/path/to/node-log-files
+```
+
+## Running Cucumber tests
+
+Local Cucumber tests use the same testing-framework binary provider as the direct e2e tests, so the node binary is built
+before local nodes are started. In CI, Cucumber uses the release binary built by the workflow before the Cucumber suite.
 
 Filtering based on tags can be done using the `--tags` option. For example, to run all tests tagged with `@normal_ci`, 
 use the following command:

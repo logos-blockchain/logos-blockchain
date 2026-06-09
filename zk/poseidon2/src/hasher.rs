@@ -28,15 +28,16 @@ impl Poseidon2Hasher {
         );
     }
 
-    pub fn update(&mut self, input: &[Fr]) {
+    fn update(&mut self, input: &[Fr]) {
         for fr in input {
             self.update_one(fr);
         }
         self.update_one(&Fr::ONE);
     }
 
-    /// Only use `compress` before `finalize` for poseidon2 without SAFE padding
-    pub fn compress(&mut self, inputs: &[Fr; 2]) {
+    /// Only use `compress` before `finalize` for poseidon2 compression without
+    /// padding
+    fn compress(&mut self, inputs: &[Fr; 2]) {
         self.state[0] += inputs[0];
         self.state[1] += inputs[1];
         Poseidon2Bn254::permute_mut::<jf_poseidon2::constants::bn254::Poseidon2ParamsBn3, 3>(
@@ -44,7 +45,7 @@ impl Poseidon2Hasher {
         );
     }
 
-    pub const fn finalize(self) -> Fr {
+    const fn finalize(self) -> Fr {
         self.state[0]
     }
 }
@@ -90,6 +91,14 @@ mod tests {
         let result = hasher.finalize();
         assert_eq!(result, expected);
     }
+
+    fn test_compresser(inputs: &[Fr; 2], expected: Fr) {
+        let mut hasher = Poseidon2Hasher::new();
+        hasher.compress(inputs);
+        let result = hasher.finalize();
+        assert_eq!(result, expected);
+    }
+
     #[test]
     fn test_hashes() {
         // 0
@@ -104,20 +113,69 @@ mod tests {
         )
         .unwrap();
         test_hasher(&[Fr::ONE], expected_one);
-        // 2
-        let expected_two = Fr::from_str(
-            "9632004710537414903275898870712812796867229507472840228295932832943785232633",
+        // 0, 0
+        let expected = Fr::from_str(
+            "14628790903668924121747280216643356178740756932733894594323650293252618457042",
         )
         .unwrap();
-        test_hasher(&[Fr::from(BigUint::from(2u8))], expected_two);
-        // 0, 1, 2
-        let expected_two = Fr::from_str(
-            "21739021971472524335152491270920095773040444510968189350907442466992269802900",
+        test_hasher(&[Fr::ZERO, Fr::ZERO], expected);
+        // 1, 2
+        let expected = Fr::from_str(
+            "14118544982895877636855211757199904519359053761360294109973292038354361461611",
         )
         .unwrap();
-        test_hasher(
-            &[Fr::ZERO, Fr::ONE, Fr::from(BigUint::from(2u8))],
-            expected_two,
-        );
+        test_hasher(&[Fr::ONE, Fr::from(BigUint::from(2u8))], expected);
+        // 2, 1
+        let expected = Fr::from_str(
+            "17303708087492456923876794017773991179968227132845592592623864164460458364283",
+        )
+        .unwrap();
+        test_hasher(&[Fr::from(BigUint::from(2u8)), Fr::ONE], expected);
+        // 1, 0, 0
+        let expected = Fr::from_str(
+            "8421738025868928791358153716794664271727148606331557350959968139012924692418",
+        )
+        .unwrap();
+        test_hasher(&[Fr::ONE, Fr::ZERO, Fr::ZERO], expected);
+        // 0, 0, 1
+        let expected = Fr::from_str(
+            "19071010037288550145243369517116292645821506141834920037435390558790324604368",
+        )
+        .unwrap();
+        test_hasher(&[Fr::ZERO, Fr::ZERO, Fr::ONE], expected);
+        // 0, 1, 0, 1
+        let expected = Fr::from_str(
+            "3427143977204509234202184342982950793741509606314919897018772479233527131453",
+        )
+        .unwrap();
+        test_hasher(&[Fr::ZERO, Fr::ONE, Fr::ZERO, Fr::ONE], expected);
+    }
+
+    #[test]
+    fn test_compression() {
+        // 0, 0
+        let expected = Fr::from_str(
+            "21177166670744647784289648293577786481357446166129397094207318338605633126018",
+        )
+        .unwrap();
+        test_compresser(&[Fr::ZERO, Fr::ZERO], expected);
+        // 1, 0
+        let expected = Fr::from_str(
+            "2820430044171165092709918704747590965614342875549110429217681435604321658469",
+        )
+        .unwrap();
+        test_compresser(&[Fr::ONE, Fr::ZERO], expected);
+        // 0, 1
+        let expected = Fr::from_str(
+            "15449469107951025862283679587511638593643295575495923463032662929748907033596",
+        )
+        .unwrap();
+        test_compresser(&[Fr::ZERO, Fr::ONE], expected);
+        // 1, 1
+        let expected = Fr::from_str(
+            "17847258390462923071212518425927834238796435801505415407318169918090986946609",
+        )
+        .unwrap();
+        test_compresser(&[Fr::ONE, Fr::ONE], expected);
     }
 }

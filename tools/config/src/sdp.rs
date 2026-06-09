@@ -14,7 +14,7 @@ pub struct GeneralSdpConfig {
 pub fn create_sdp_configs(genesis_tx: &GenesisTx, count: usize) -> Vec<GeneralSdpConfig> {
     let mut configs = genesis_tx
         .mantle_tx()
-        .ops
+        .ops()
         .iter()
         .filter_map(|op| match op {
             Op::SDPDeclare(decl) => Some(GeneralSdpConfig {

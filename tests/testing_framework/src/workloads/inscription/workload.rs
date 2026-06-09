@@ -9,10 +9,12 @@ use std::{
 use async_trait::async_trait;
 use lb_core::mantle::{
     MantleTx, SignedMantleTx, Transaction as _,
-    genesis_tx::GENESIS_STORAGE_GAS_PRICE,
     ops::{
         Op, OpProof,
-        channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+        channel::{
+            ChannelId, MsgId,
+            inscribe::{Inscription, InscriptionOp},
+        },
     },
     tx::TxHash,
 };
@@ -389,11 +391,7 @@ fn build_inscription_transaction(
     };
     let msg_id = op.id();
 
-    let mantle_tx = MantleTx {
-        ops: vec![Op::ChannelInscribe(op)],
-        storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-        execution_gas_price: 0.into(),
-    };
+    let mantle_tx = MantleTx([Op::ChannelInscribe(op)].into());
     let tx_hash = mantle_tx.hash();
 
     let ed25519_signature = channel
@@ -408,7 +406,7 @@ fn build_inscription_transaction(
     Ok((signed_tx, msg_id, tx_hash))
 }
 
-fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Vec<u8> {
+fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Inscription {
     let mut payload = format!(
         "tf-inscription:{:?}:{}",
         channel.channel_id, channel.next_nonce
@@ -421,7 +419,7 @@ fn build_payload(channel: &ChannelState, payload_bytes: usize) -> Vec<u8> {
         payload.truncate(payload_bytes);
     }
 
-    payload
+    Inscription::new_unchecked(payload)
 }
 
 async fn submit_transaction_via_cluster(

@@ -1,8 +1,10 @@
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Note, SignedMantleTx, TxHash, Value, ops::leader_claim::VoucherCm, tx::MantleTxContext,
-        tx_builder::MantleTxBuilder,
+        Note, SignedMantleTx, TxHash, Value,
+        ops::leader_claim::VoucherCm,
+        tx::MantleTxContext,
+        tx_builder::{MantleTxBuilder, TxBuilderError},
     },
 };
 use lb_key_management_system_service::keys::{
@@ -34,6 +36,8 @@ pub enum WalletApiError {
     RelayRecv(#[from] RecvError),
     #[error(transparent)]
     Wallet(#[from] WalletServiceError),
+    #[error(transparent)]
+    TxBuilderError(#[from] TxBuilderError),
 }
 
 impl From<(RelayError, WalletMsg)> for WalletApiError {
@@ -153,7 +157,7 @@ where
     ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
         let context = self.get_tx_context(tip).await?;
         let mantle_tx_builder =
-            MantleTxBuilder::new(context).add_ledger_output(Note::new(amount, recipient_pk));
+            MantleTxBuilder::new(context).add_ledger_output(Note::new(amount, recipient_pk))?;
         let funded_tx_builder = self
             .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks)
             .await?;
@@ -253,7 +257,7 @@ mod tests {
 
     use lb_core::mantle::{
         ops::channel::{ChannelId, ChannelKeyIndex},
-        tx::MantleTxGasContext,
+        tx::{GasPrices, MantleTxGasContext},
     };
     use overwatch::services::state::{NoOperator, NoState};
     use tokio::sync::mpsc;
@@ -294,6 +298,7 @@ mod tests {
         let expected_block_id = HeaderId::from([7u8; 32]);
         let expected_channel_id = ChannelId::from([9u8; 32]);
         let expected_threshold: ChannelKeyIndex = 2;
+        let expected_gas_prices = GasPrices::new(3, 7);
 
         let (msg_sender, mut msg_receiver) = mpsc::channel(1);
         tokio::spawn(async move {
@@ -303,6 +308,8 @@ mod tests {
                     let context = MantleTxContext {
                         gas_context: MantleTxGasContext::new(
                             std::iter::once((expected_channel_id, expected_threshold)).collect(),
+                            std::collections::HashMap::new(),
+                            expected_gas_prices,
                         ),
                         leader_reward_amount: 0,
                     };

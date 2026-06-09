@@ -1,101 +1,93 @@
-use lb_zone_sdk::{sequencer::SequencerCheckpoint, state::InscriptionInfo};
-use uuid::Uuid;
+use lb_core::mantle::ops::channel::MsgId;
+use lb_zone_sdk::sequencer::{InscriptionInfo, SequencerChannelView, SequencerCheckpoint};
 
-use crate::message::AppMessage;
+use crate::message::Msg;
 
-/// Trait for zone state management.
+/// Trait for the TUI's view of zone state.
 ///
-/// The sequencer surfaces chain events (reorgs, finalization); the application
-/// maintains its own view of the world by implementing this trait.
+/// The TUI feeds SDK events into this trait; the trait owns persistence.
+/// `InMemoryZoneState` is the demo implementation. A real sequencer would
+/// implement it over a DB so `published`/`adopted`/`finalized` survive
+/// restarts (the SDK's own checkpoint covers tx-level resume separately).
 ///
-/// A production implementation might use a database. This demo uses in-memory
-/// vecs.
-pub trait ZoneState {
-    /// Apply a message to the canonical (unfinalized) state.
-    fn apply(&mut self, msg: AppMessage);
+/// Three lists, each ordered by arrival:
+/// - `published`: our submissions, in submit order, until they finalize or get
+///   orphaned.
+/// - `adopted`: others' inscriptions on canonical, deduped by `msg_id` (reorgs
+///   can re-adopt the same one), in first-sighting order.
+/// - `finalized`: all inscriptions below LIB, in canonical order — the SDK
+///   delivers `finalized` on `BlocksProcessed`.
+///
+/// Replay-idempotent: `on_adopted` and `on_finalized` dedup by `msg_id`, so
+/// resuming from a persisted state and re-receiving backfill is harmless.
+pub trait ZoneState: Send {
+    fn on_adopted(&mut self, adopted: &[InscriptionInfo]);
+    /// Remove our orphaned entry from `published`. Caller is expected to
+    /// auto-republish via `sequencer.handle().publish`.
+    fn on_orphaned(&mut self, msg_id: &MsgId);
+    fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]);
 
-    /// Revert a message from canonical state (orphaned by reorg).
-    fn revert(&mut self, tx_uuid: &Uuid);
+    fn published(&self) -> &[Msg];
+    fn adopted(&self) -> &[Msg];
+    fn finalized(&self) -> &[Msg];
 
-    /// Check if a message with this `tx_uuid` exists in canonical or finalized
-    /// state.
-    fn contains(&self, tx_uuid: &Uuid) -> bool;
-
-    /// Move inscriptions to finalized state by their payload.
-    fn finalize(&mut self, payloads: &[Vec<u8>]);
-
-    /// Current canonical (unfinalized) messages.
-    fn canonical(&self) -> &[AppMessage];
-
-    /// Finalized messages (below LIB, immutable).
-    fn finalized(&self) -> &[AppMessage];
-
-    /// Save a sequencer checkpoint.
     fn save_checkpoint(&mut self, checkpoint: SequencerCheckpoint);
-
-    /// Load the last saved checkpoint.
     fn load_checkpoint(&self) -> Option<&SequencerCheckpoint>;
 }
 
 /// In-memory implementation of [`ZoneState`].
 #[derive(Default)]
 pub struct InMemoryZoneState {
-    canonical: Vec<AppMessage>,
-    finalized: Vec<AppMessage>,
+    published: Vec<Msg>,
+    adopted: Vec<Msg>,
+    finalized: Vec<Msg>,
     checkpoint: Option<SequencerCheckpoint>,
-}
-
-impl InMemoryZoneState {
-    /// Find a stored message by uuid in canonical or finalized. Used to
-    /// read back `is_ours` for a message we've seen before.
-    pub fn get(&self, tx_uuid: &Uuid) -> Option<&AppMessage> {
-        self.canonical
-            .iter()
-            .chain(self.finalized.iter())
-            .find(|m| &m.tx_uuid == tx_uuid)
-    }
+    channel_view: Option<SequencerChannelView>,
 }
 
 impl ZoneState for InMemoryZoneState {
-    fn apply(&mut self, msg: AppMessage) {
-        // Preserve `is_ours` on re-apply: if we already stored this uuid
-        // (e.g. optimistically on publish), do not overwrite with a
-        // chain-decoded copy whose `is_ours` is false.
-        if !self.contains(&msg.tx_uuid) {
-            self.canonical.push(msg);
-        }
-    }
-
-    fn revert(&mut self, tx_uuid: &Uuid) {
-        self.canonical.retain(|m| &m.tx_uuid != tx_uuid);
-    }
-
-    fn contains(&self, tx_uuid: &Uuid) -> bool {
-        self.canonical.iter().any(|m| &m.tx_uuid == tx_uuid)
-            || self.finalized.iter().any(|m| &m.tx_uuid == tx_uuid)
-    }
-
-    fn finalize(&mut self, payloads: &[Vec<u8>]) {
-        for payload in payloads {
-            if let Some(msg) = AppMessage::from_bytes(payload) {
-                // Move from canonical to finalized, preserving is_ours.
-                let existing = self
-                    .canonical
-                    .iter()
-                    .position(|m| m.tx_uuid == msg.tx_uuid)
-                    .map(|i| self.canonical.remove(i));
-                if !self.finalized.iter().any(|m| m.tx_uuid == msg.tx_uuid) {
-                    self.finalized.push(existing.unwrap_or(msg));
-                }
+    fn on_adopted(&mut self, adopted: &[InscriptionInfo]) {
+        for info in adopted {
+            if !self.adopted.iter().any(|m| m.msg_id == info.this_msg) {
+                self.adopted
+                    .push(Msg::from_payload(info.this_msg, &info.payload));
             }
         }
     }
 
-    fn canonical(&self) -> &[AppMessage] {
-        &self.canonical
+    fn on_orphaned(&mut self, msg_id: &MsgId) {
+        if let Some(i) = self.published.iter().position(|m| &m.msg_id == msg_id) {
+            self.published.remove(i);
+        }
     }
 
-    fn finalized(&self) -> &[AppMessage] {
+    fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]) {
+        for info in inscriptions {
+            if let Some(i) = self
+                .published
+                .iter()
+                .position(|m| m.msg_id == info.this_msg)
+            {
+                self.published.remove(i);
+            } else if let Some(i) = self.adopted.iter().position(|m| m.msg_id == info.this_msg) {
+                self.adopted.remove(i);
+            }
+            if !self.finalized.iter().any(|m| m.msg_id == info.this_msg) {
+                self.finalized
+                    .push(Msg::from_payload(info.this_msg, &info.payload));
+            }
+        }
+    }
+
+    fn published(&self) -> &[Msg] {
+        &self.published
+    }
+
+    fn adopted(&self) -> &[Msg] {
+        &self.adopted
+    }
+
+    fn finalized(&self) -> &[Msg] {
         &self.finalized
     }
 
@@ -108,49 +100,19 @@ impl ZoneState for InMemoryZoneState {
     }
 }
 
-/// Process a channel update event.
-///
-/// 1. Revert `orphaned` from state.
-/// 2. Apply `adopted` to state.
-/// 3. Re-publish each `invalidated` entry that is ours, not currently in state,
-///    and not in `pending`.
-pub fn resolve_conflicts(
-    state: &mut InMemoryZoneState,
-    orphaned: &[InscriptionInfo],
-    adopted: &[InscriptionInfo],
-    pending: &[InscriptionInfo],
-    invalidated: &[InscriptionInfo],
-) -> Vec<AppMessage> {
-    // Capture our messages from `invalidated` BEFORE reverting orphans —
-    // `is_ours` lives on the stored AppMessage and revert removes it.
-    let mut ours: Vec<AppMessage> = Vec::new();
-    for inv in invalidated {
-        if let Some(decoded) = AppMessage::from_bytes(&inv.payload)
-            && let Some(stored) = state.get(&decoded.tx_uuid)
-            && stored.is_ours
-        {
-            ours.push(stored.clone());
-        }
+impl InMemoryZoneState {
+    pub fn set_channel_view(&mut self, channel_view: SequencerChannelView) {
+        self.channel_view = Some(channel_view);
     }
 
-    for inv in orphaned {
-        if let Some(msg) = AppMessage::from_bytes(&inv.payload) {
-            state.revert(&msg.tx_uuid);
-        }
+    pub const fn channel_view(&self) -> Option<&SequencerChannelView> {
+        self.channel_view.as_ref()
     }
 
-    for adp in adopted {
-        if let Some(msg) = AppMessage::from_bytes(&adp.payload) {
-            state.apply(msg);
-        }
+    /// Record a tx we just published locally. Called at the publish-call
+    /// site so the local outbox stays in sync with what the SDK accepted.
+    pub fn on_published(&mut self, info: &InscriptionInfo) {
+        self.published
+            .push(Msg::from_payload(info.this_msg, &info.payload));
     }
-
-    let pending_uuids: std::collections::HashSet<Uuid> = pending
-        .iter()
-        .filter_map(|inv| AppMessage::from_bytes(&inv.payload).map(|m| m.tx_uuid))
-        .collect();
-
-    ours.into_iter()
-        .filter(|m| !state.contains(&m.tx_uuid) && !pending_uuids.contains(&m.tx_uuid))
-        .collect()
 }

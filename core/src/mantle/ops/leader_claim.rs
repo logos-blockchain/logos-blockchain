@@ -2,12 +2,13 @@ use std::sync::LazyLock;
 
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_poseidon2::{Fr, ZkHash};
+use lb_poseidon2::{Digest, Fr, ZkHash};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
     crypto::ZkHasher,
+    events::Events,
     mantle::{
         Note, TxHash, Utxo, Value,
         encoding::encode_leader_claim,
@@ -117,9 +118,10 @@ impl From<VoucherNullifier> for Fr {
 impl VoucherNullifier {
     #[must_use]
     pub fn from_secret(voucher_secret: VoucherSecret) -> Self {
-        let mut hash = ZkHasher::new();
-        hash.compress(&[*VOUCHER_NF, voucher_secret.into()]);
-        hash.finalize().into()
+        Self(<ZkHasher as Digest>::compress(&[
+            *VOUCHER_NF,
+            voucher_secret.into(),
+        ]))
     }
 }
 
@@ -137,9 +139,10 @@ impl VoucherCm {
 
     #[must_use]
     pub fn from_secret(voucher_secret: VoucherSecret) -> Self {
-        let mut hash = ZkHasher::new();
-        hash.compress(&[*REWARD_VOUCHER, voucher_secret.into()]);
-        hash.finalize().into()
+        Self(<ZkHasher as Digest>::compress(&[
+            *REWARD_VOUCHER,
+            voucher_secret.into(),
+        ]))
     }
 }
 
@@ -167,18 +170,14 @@ pub struct LeaderClaimExecutionContext {
     pub utxos: Utxos,
 }
 
-impl Operation for LeaderClaimOp {
-    type ValidationContext<'a>
-        = LeaderClaimValidationContext<'a>
-    where
-        Self: 'a;
+impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
     type ExecutionContext<'a>
         = LeaderClaimExecutionContext
     where
         Self: 'a;
     type Error = LeaderClaimError;
 
-    fn validate(&self, ctx: &Self::ValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &LeaderClaimValidationContext<'_>) -> Result<(), Self::Error> {
         // Check that the nullifier isn't in the set
         if ctx.nullifiers.contains(&self.voucher_nullifier) {
             return Err(LeaderClaimError::DuplicatedVoucherNullifier);
@@ -192,7 +191,7 @@ impl Operation for LeaderClaimOp {
         // Check the proof of claim
         if !ctx.proof_of_claim.verify(&LeaderClaimPublic {
             voucher_root: ctx.claimable_vouchers_root.0,
-            mantle_tx_hash: ctx.tx_hash.0,
+            mantle_tx_hash: ctx.tx_hash.to_fr(),
         }) {
             return Err(LeaderClaimError::InvalidPoC);
         }
@@ -203,7 +202,7 @@ impl Operation for LeaderClaimOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<Self::ExecutionContext<'_>, Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier);
 
@@ -214,7 +213,7 @@ impl Operation for LeaderClaimOp {
         // Remove the distributed rewards from the pool
         ctx.claimable_rewards -= ctx.reward_amount;
 
-        Ok(ctx)
+        Ok((ctx, Events::new()))
     }
 }
 
@@ -233,9 +232,9 @@ mod tests {
             .push_with_paths(voucher_cm, &mut [])
             .expect("MMR shouldn't be full");
         let voucher_root = RewardsRoot::from(mmr.frontier_root());
-        let tx_hash = TxHash::from(Fr::from(11u64));
+        let tx_hash = TxHash::from([11u8; 32]);
         let proof = Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
-            LeaderClaimPublic::new(voucher_root.into(), tx_hash.0),
+            LeaderClaimPublic::new(voucher_root.into(), tx_hash.to_fr()),
             &voucher_path,
             voucher_secret,
         ))

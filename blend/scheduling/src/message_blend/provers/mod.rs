@@ -1,9 +1,6 @@
 use ::core::num::NonZeroU64;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
-use lb_blend_proofs::{
-    quota::{VerifiedProofOfQuota, inputs::prove::public::CoreInputs},
-    selection::VerifiedProofOfSelection,
-};
+use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::UnsecuredEd25519Key;
 
@@ -31,12 +28,4 @@ pub struct ProofsGeneratorSettings {
     pub public_inputs: PoQVerificationInputsMinusSigningKey,
     pub encapsulation_layers: NonZeroU64,
     pub epoch: Epoch,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct NewCoreSessionPublicInputs {
-    pub session: u64,
-    pub local_node_index: usize,
-    pub membership_size: usize,
-    pub inputs: CoreInputs,
 }

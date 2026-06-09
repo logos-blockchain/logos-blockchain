@@ -1,4 +1,12 @@
-use lb_core::{header::HeaderId, mantle::gas::GasOverflow};
+use lb_core::{
+    header::HeaderId,
+    mantle::{
+        gas::GasOverflow,
+        ledger::{InputsError, OutputsError},
+        tx_builder::TxBuilderError,
+    },
+};
+use lb_utils::bounded_vec::BoundedError;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq, Eq)]
@@ -9,4 +17,18 @@ pub enum WalletError {
     InsufficientFunds { available: u64 },
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
+    #[error("Transaction builder error: {0}")]
+    TxBuilder(String),
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
+    #[error(transparent)]
+    InputsError(#[from] InputsError),
+    #[error(transparent)]
+    OutputsError(#[from] OutputsError),
+}
+
+impl From<TxBuilderError> for WalletError {
+    fn from(error: TxBuilderError) -> Self {
+        Self::TxBuilder(error.to_string())
+    }
 }

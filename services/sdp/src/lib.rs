@@ -1,17 +1,22 @@
 pub mod api;
 pub mod mempool;
 mod metrics;
+pub mod state;
 pub mod wallet;
 
 use std::{
     collections::BTreeSet,
     fmt::{Debug, Display},
+    path::PathBuf,
     pin::Pin,
 };
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
+use lb_chain_service::{
+    ChainServiceInfo,
+    api::{CryptarchiaServiceApi, CryptarchiaServiceData},
+};
 use lb_core::{
     block::BlockNumber,
     header::HeaderId,
@@ -22,19 +27,19 @@ use lb_core::{
     },
 };
 use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_services_utils::overwatch::{RecoveryOperator, recovery::backends::FileBackendSettings};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{
-        AsServiceId, ServiceCore, ServiceData,
-        state::{NoOperator, NoState},
-    },
+    services::{AsServiceId, ServiceCore, ServiceData},
 };
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use tokio::sync::oneshot;
 
 pub use crate::api::SdpServiceApi;
 use crate::{
     mempool::SdpMempoolAdapter,
+    state::{SdpState, SdpStateStorage},
     wallet::{SdpWalletAdapter, SdpWalletConfig},
 };
 
@@ -61,6 +66,18 @@ pub struct BlockEvent {
 
 pub type BlockUpdateStream = Pin<Box<dyn Stream<Item = BlockEvent> + Send + Sync + Unpin>>;
 
+#[derive(Debug, Error)]
+pub enum SdpError {
+    #[error("Declaration {0:?} not found in ledger")]
+    DeclarationNotFound(DeclarationId),
+
+    #[error("Ledger state not found for block {0:?}")]
+    LedgerStateNotFound(HeaderId),
+
+    #[error("Chain API error: {0}")]
+    ChainApi(#[from] DynError),
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct SdpSettings {
     /// Declaration ID for this node (set after posting declaration).
@@ -68,14 +85,22 @@ pub struct SdpSettings {
     /// will be fetched from the ledger.
     pub declaration_id: Option<DeclarationId>,
     pub wallet_config: SdpWalletConfig,
+    pub recovery_path: PathBuf,
+}
+
+impl FileBackendSettings for SdpSettings {
+    fn recovery_file(&self) -> &PathBuf {
+        &self.recovery_path
+    }
 }
 
 /// Runtime declaration info fetched from ledger on startup.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeDeclaration {
     pub id: DeclarationId,
     pub zk_id: ZkPublicKey,
     pub locked_note_id: NoteId,
+    pub nonce: u64,
 }
 
 pub enum SdpMessage {
@@ -89,36 +114,42 @@ pub enum SdpMessage {
     PostWithdrawal {
         declaration_id: DeclarationId,
     },
+    SetCurrentDeclarationId {
+        declaration_id: Option<DeclarationId>,
+        reply_channel: oneshot::Sender<Result<(), SdpError>>,
+    },
 }
 
-pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> {
+pub struct SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
+where
+    StateStorage: SdpStateStorage,
+{
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    /// Declaration ID from settings - will be resolved to full declaration on
-    /// `run()`.
     declaration_id: Option<DeclarationId>,
-    /// Runtime declaration info fetched from ledger (populated in `run()`).
-    current_declaration: Option<RuntimeDeclaration>,
-    nonce: u64,
     wallet_config: SdpWalletConfig,
-    _chain_service: std::marker::PhantomData<ChainService>,
+    _phantom: std::marker::PhantomData<(ChainService, StateStorage)>,
 }
 
-impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> ServiceData
-    for SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId> ServiceData
+    for SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
+where
+    StateStorage: SdpStateStorage,
 {
     type Settings = SdpSettings;
-    type State = NoState<Self::Settings>;
-    type StateOperator = NoOperator<Self::State>;
+    type State = SdpState;
+    type StateOperator = RecoveryOperator<StateStorage>;
     type Message = SdpMessage;
 }
 
 #[async_trait]
-impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId> ServiceCore<RuntimeServiceId>
-    for SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
+    ServiceCore<RuntimeServiceId>
+    for SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
+    StateStorage: SdpStateStorage + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
@@ -132,20 +163,23 @@ where
 {
     fn init(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-        _initial_state: Self::State,
+        initial_state: Self::State,
     ) -> Result<Self, DynError> {
         let settings = service_resources_handle
             .settings_handle
             .notifier()
             .get_updated_settings();
 
+        let declaration_id = initial_state
+            .updated
+            .and(initial_state.declaration_id)
+            .or(settings.declaration_id);
+
         Ok(Self {
-            declaration_id: settings.declaration_id,
-            current_declaration: None, // Will be fetched from ledger in run()
+            declaration_id,
             service_resources_handle,
-            nonce: 0, // Will be fetched from ledger in run()
             wallet_config: settings.wallet_config,
-            _chain_service: std::marker::PhantomData,
+            _phantom: std::marker::PhantomData,
         })
     }
 
@@ -172,7 +206,7 @@ where
         let chain_api: CryptarchiaServiceApi<ChainService, RuntimeServiceId> =
             CryptarchiaServiceApi::new(chain_relay);
 
-        self.try_restore_declaration_state(&chain_api).await;
+        self.validate_initial_declaration_status(&chain_api).await?;
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
@@ -219,6 +253,17 @@ where
                     )
                     .await;
                 }
+                SdpMessage::SetCurrentDeclarationId {
+                    declaration_id,
+                    reply_channel,
+                } => {
+                    self.handle_set_current_declaration_id(
+                        declaration_id,
+                        reply_channel,
+                        &chain_api,
+                    )
+                    .await;
+                }
             }
         }
 
@@ -226,12 +271,13 @@ where
     }
 }
 
-impl<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
-    SdpService<MempoolAdapter, WalletAdapter, ChainService, RuntimeServiceId>
+impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
+    SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
     MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
+    StateStorage: SdpStateStorage + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
         + AsServiceId<MempoolAdapter::MempoolService>
@@ -247,41 +293,27 @@ where
     /// If a `declaration_id` is configured, fetches the full declaration info
     /// (including current nonce) from the ledger. This ensures the service
     /// continues with the correct nonce after a restart.
-    async fn try_restore_declaration_state(
-        &mut self,
+    async fn try_fetch_runtime_declaration(
+        &self,
+        declaration_id: DeclarationId,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
-    ) {
-        let Some(declaration_id) = self.declaration_id else {
-            return;
-        };
-
-        match self
-            .fetch_declaration_from_ledger(chain_api, declaration_id)
-            .await
-        {
-            Ok(Some((declaration, nonce))) => {
-                tracing::info!(
-                    declaration_id = ?declaration_id,
-                    nonce = nonce,
-                    "Loaded declaration from ledger"
-                );
-                self.current_declaration = Some(declaration);
-                self.nonce = nonce;
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    declaration_id = ?declaration_id,
-                    "Declaration not found in ledger - may have been withdrawn or not yet confirmed"
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    declaration_id = ?declaration_id,
-                    error = ?e,
-                    "Failed to fetch declaration from ledger"
-                );
-            }
-        }
+    ) -> Result<RuntimeDeclaration, SdpError> {
+        self.fetch_declaration_from_ledger(chain_api, declaration_id)
+            .await?
+            .map_or_else(
+                || {
+                    tracing::warn!(?declaration_id, "Declaration not found in ledger");
+                    Err(SdpError::DeclarationNotFound(declaration_id))
+                },
+                |declaration| {
+                    tracing::info!(
+                        ?declaration.id,
+                        declaration.nonce,
+                        "Loaded declaration from ledger"
+                    );
+                    Ok(declaration)
+                },
+            )
     }
 
     /// Fetch declaration info from the ledger via chain service.
@@ -289,10 +321,12 @@ where
         &self,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
         declaration_id: DeclarationId,
-    ) -> Result<Option<(RuntimeDeclaration, u64)>, DynError> {
+    ) -> Result<Option<RuntimeDeclaration>, DynError> {
         // Get current chain info to find the tip
-        let info = chain_api.info().await?;
-        let tip = info.tip;
+        let ChainServiceInfo {
+            cryptarchia_info, ..
+        } = chain_api.info().await?;
+        let tip = cryptarchia_info.tip;
         tracing::debug!(
             "Fetching declaration state for {declaration_id:?} from ledger tip {tip:?}"
         );
@@ -308,14 +342,42 @@ where
             return Ok(None);
         };
 
-        Ok(Some((
-            RuntimeDeclaration {
-                id: declaration_id,
-                zk_id: declaration.zk_id,
-                locked_note_id: declaration.locked_note_id,
+        Ok(Some(RuntimeDeclaration {
+            id: declaration_id,
+            zk_id: declaration.zk_id,
+            locked_note_id: declaration.locked_note_id,
+            nonce: declaration.nonce,
+        }))
+    }
+
+    async fn validate_initial_declaration_status(
+        &self,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) -> Result<(), DynError> {
+        let Some(id) = self.declaration_id else {
+            return Ok(());
+        };
+
+        match self.try_fetch_runtime_declaration(id, chain_api).await {
+            Ok(_) => Ok(()),
+            Err(e) => match e {
+                SdpError::ChainApi(err) => {
+                    tracing::error!("Chain API error during declaration resolution: {err}");
+                    Err(err)
+                }
+                SdpError::DeclarationNotFound(id) => {
+                    tracing::warn!(
+                        declaration_id = ?id,
+                        "Declaration not found in ledger"
+                    );
+                    Ok(())
+                }
+                SdpError::LedgerStateNotFound(tip) => {
+                    tracing::error!("Could not find ledger state for tip {tip:?}");
+                    Err(format!("Missing ledger state at {tip:?}").into())
+                }
             },
-            declaration.nonce,
-        )))
+        }
     }
 
     #[expect(
@@ -323,7 +385,7 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn handle_post_declaration(
-        &self,
+        &mut self,
         declaration: Box<DeclarationMessage>,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
@@ -360,6 +422,11 @@ where
         } else {
             metrics::declaration_success_total();
         }
+
+        self.declaration_id = Some(declaration_id);
+        self.service_resources_handle
+            .state_updater
+            .update(Some(SdpState::from(self.declaration_id)));
     }
 
     #[expect(
@@ -367,21 +434,33 @@ where
         reason = "TODO: address this in a dedicated refactor"
     )]
     async fn handle_post_activity(
-        &mut self,
+        &self,
         metadata: ActivityMetadata,
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        // Check if we have a declaration_id
-        let Some(ref declaration) = self.current_declaration else {
+        let Some(declaration_id) = self.declaration_id else {
             tracing::error!("No declaration_id set. Cannot post activity without declaration.");
+            return;
+        };
+
+        let Ok(ref declaration) = self
+            .try_fetch_runtime_declaration(declaration_id, chain_api)
+            .await
+        else {
+            tracing::error!("Can't find declaration. Cannot post activity without declaration.");
+            return;
+        };
+
+        let Some(nonce) = declaration.nonce.checked_add(1) else {
+            tracing::error!("Can't bump nonce");
             return;
         };
 
         let active_message = ActiveMessage {
             declaration_id: declaration.id,
-            nonce: self.bump_nonce(),
+            nonce,
             metadata,
         };
 
@@ -422,17 +501,25 @@ where
         mempool_adapter: &MempoolAdapter,
         chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        if let Err(e) = self.validate_withdrawal(&declaration_id) {
-            tracing::error!("{}", e);
+        let Ok(ref declaration) = self
+            .try_fetch_runtime_declaration(declaration_id, chain_api)
+            .await
+        else {
+            tracing::error!("Can't find declaration. Cannot post activity without declaration.");
             metrics::withdrawal_validation_failures_total();
             return;
-        }
+        };
 
-        let declaration = self.current_declaration.as_ref().unwrap(); //unwrap is ok as it is validated above
+        let Some(nonce) = declaration.nonce.checked_add(1) else {
+            tracing::error!("Can't bump nonce");
+            metrics::withdrawal_validation_failures_total();
+            return;
+        };
+
         let withdraw_message = WithdrawMessage {
             declaration_id,
             locked_note_id: declaration.locked_note_id,
-            nonce: self.bump_nonce(),
+            nonce,
         };
 
         let Ok(tx_context) = self.get_tx_context(None, chain_api).await else {
@@ -461,22 +548,44 @@ where
 
         metrics::withdrawal_success_total();
 
-        self.current_declaration = None;
-        // TODO: how should we reset the nonce? shouldn't it be always with
-        // current_delcaration?
+        self.declaration_id = None;
+        self.service_resources_handle
+            .state_updater
+            .update(Some(SdpState::from(self.declaration_id)));
     }
 
-    fn validate_withdrawal(&self, declaration_id: &DeclarationId) -> Result<(), &'static str> {
-        let declaration = self
-            .current_declaration
-            .as_ref()
-            .ok_or("No declaration_id set. Cannot post withdrawal without declaration.")?;
+    async fn handle_set_current_declaration_id(
+        &mut self,
+        declaration_id: Option<DeclarationId>,
+        reply_channel: oneshot::Sender<Result<(), SdpError>>,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) {
+        let result = self
+            .validate_declaration_id(declaration_id, chain_api)
+            .await;
 
-        if *declaration_id != declaration.id {
-            return Err(
-                "Wrong declaration_id set. Cannot post withdrawal without proper declaration id.",
-            );
+        if let Err(e) = reply_channel.send(result) {
+            tracing::error!("Failed to send response for set declaration: {e:?}");
         }
+    }
+
+    async fn validate_declaration_id(
+        &mut self,
+        declaration_id: Option<DeclarationId>,
+        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
+    ) -> Result<(), SdpError> {
+        let validated_id = match declaration_id {
+            Some(id) => self
+                .try_fetch_runtime_declaration(id, chain_api)
+                .await
+                .map(|_| Some(id))?,
+            None => None,
+        };
+
+        self.declaration_id = validated_id;
+        self.service_resources_handle
+            .state_updater
+            .update(Some(SdpState::from(self.declaration_id)));
 
         Ok(())
     }
@@ -489,8 +598,10 @@ where
         if let Some(block_id) = block_id {
             Ok(block_id)
         } else {
-            let info = chain_api.info().await?;
-            Ok(info.tip)
+            let ChainServiceInfo {
+                cryptarchia_info, ..
+            } = chain_api.info().await?;
+            Ok(cryptarchia_info.tip)
         }
     }
 
@@ -504,16 +615,5 @@ where
             return Err(format!("Ledger state not found for block {block_id:?}").into());
         };
         Ok(ledger_state.tx_context())
-    }
-
-    /// Increments the nonce of the current declaration, and returns the
-    /// incremented nonce.
-    ///
-    /// Nonce must be incremented first because it is initialized to 0 with the
-    /// declaration, and each SDP message (activity or withdrawal) must have
-    /// nonce larger than the previous one.
-    const fn bump_nonce(&mut self) -> u64 {
-        self.nonce += 1;
-        self.nonce
     }
 }

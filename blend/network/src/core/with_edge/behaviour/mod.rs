@@ -10,6 +10,7 @@ use std::{
 use either::Either;
 use lb_blend_message::encap::validated::EncapsulatedMessageWithVerifiedSignature;
 use lb_blend_scheduling::{deserialize_encapsulated_message, membership::Membership};
+use lb_log_targets::blend;
 use libp2p::{
     Multiaddr, PeerId, StreamProtocol,
     core::{Endpoint, transport::PortUse},
@@ -27,7 +28,7 @@ mod handler;
 #[cfg(test)]
 mod tests;
 
-const LOG_TARGET: &str = "blend::network::core::edge::behaviour";
+const LOG_TARGET: &str = blend::network::core::edge::BEHAVIOUR;
 
 #[cfg_attr(
     test,
@@ -72,13 +73,13 @@ impl Behaviour {
     #[must_use]
     pub fn new(
         config: &Config,
-        current_session_info: Membership<PeerId>,
+        current_epoch_info: Membership<PeerId>,
         protocol_name: StreamProtocol,
     ) -> Self {
         Self {
             events: VecDeque::new(),
             waker: None,
-            current_membership: current_session_info,
+            current_membership: current_epoch_info,
             connection_timeout: config.connection_timeout,
             upgraded_edge_peers: HashSet::with_capacity(config.max_incoming_connections),
             max_incoming_connections: config.max_incoming_connections,
@@ -87,8 +88,8 @@ impl Behaviour {
         }
     }
 
-    pub(crate) fn start_new_session(&mut self, new_session_info: Membership<PeerId>) {
-        self.current_membership = new_session_info;
+    pub(crate) fn start_new_epoch(&mut self, new_epoch_info: Membership<PeerId>) {
+        self.current_membership = new_epoch_info;
         // Close all the connections without waiting for the transition period,
         // so that edge nodes can retry with the new membership.
         let peers = mem::take(&mut self.upgraded_edge_peers);
@@ -111,7 +112,7 @@ impl Behaviour {
 
     fn handle_negotiated_connection(&mut self, connection: (PeerId, ConnectionId)) {
         // We need to check if we still have available connection slots, as it
-        // is possible, especially upon session transition, that more
+        // is possible, especially upon epoch transition, that more
         // than the maximum allowed number of peers are trying to
         // connect to us. So once we stream is actually upgraded, we
         // downgrade it again if we do not have space left for it. This will
@@ -183,25 +184,25 @@ impl NetworkBehaviour for Behaviour {
         connection_id: ConnectionId,
         peer: PeerId,
         _: &Multiaddr,
-        _: &Multiaddr,
+        remote_addr: &Multiaddr,
     ) -> Result<THandler<Self>, ConnectionDenied> {
         // If the new peer makes the set of incoming connections too large, do not try
         // to upgrade the connection.
         if self.upgraded_edge_peers.len() >= self.max_incoming_connections {
-            tracing::trace!(target: LOG_TARGET, "Connected peer {peer:?} on connection {connection_id:?} will not be upgraded since we are already at maximum incoming connection capacity.");
+            tracing::trace!(target: LOG_TARGET, "Connected peer {peer:?} with addr {remote_addr:?} on connection {connection_id:?} will not be upgraded since we are already at maximum incoming connection capacity.");
             return Ok(Either::Right(DummyConnectionHandler));
         }
 
         // Allow only inbound connections from edge nodes, if the Blend network is large
         // enough.
         Ok(if !self.is_network_large_enough() {
-            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} because membership size is too small.");
+            tracing::debug!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with peer {peer:?} with addr {remote_addr:?} because membership size is too small.");
             Either::Right(DummyConnectionHandler)
         } else if self.current_membership.contains(&peer) {
-            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?}.");
+            tracing::trace!(target: LOG_TARGET, "Denying inbound connection {connection_id:?} with core peer {peer:?} with addr {remote_addr:?}.");
             Either::Right(DummyConnectionHandler)
         } else {
-            tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?}.");
+            tracing::debug!(target: LOG_TARGET, "Upgrading inbound connection {connection_id:?} with edge peer {peer:?} with addr {remote_addr:?}.");
             Either::Left(ConnectionHandler::new(
                 self.connection_timeout,
                 self.protocol_name.clone(),
@@ -246,7 +247,9 @@ impl NetworkBehaviour for Behaviour {
             Either::Left(ToBehaviour::SubstreamOpened) => {
                 self.handle_negotiated_connection((peer_id, connection_id));
             }
-            Either::Left(_) | Either::Right(_) => {}
+            Either::Left(_) | Either::Right(_) => {
+                tracing::trace!(target: LOG_TARGET, "Unhandled connection handler event: {event:?} from peer {peer_id:?} on connection {connection_id:?}");
+            }
         }
     }
 

@@ -20,7 +20,7 @@ pub use unique_persistent::{
 };
 
 pub static IS_DEBUG_TRACING: LazyLock<bool> = LazyLock::new(env::debug_tracing);
-pub const LOGOS_BLOCKCHAIN_LOG_LEVEL: &str = "LOGOS_BLOCKCHAIN_LOG_LEVEL";
+pub const LOG_LEVEL: &str = "LOG_LEVEL";
 
 pub use diagnostics::{
     FailureDiagnosticsExpectation, ScenarioRunDiagnosticsError, record_system_monitor_event,
@@ -28,11 +28,12 @@ pub use diagnostics::{
     unregister_system_monitor_output_file,
 };
 pub use framework::{
-    BlockFeed, BlockFeedExtensionFactory, BlockFeedObservation, BlockFeedObserver,
-    BlockFeedSnapshot, BlockFeedWaitError, BlockRecord, CoreBuilderExt, LbcComposeDeployer, LbcEnv,
-    LbcK8sDeployer, LbcK8sManualCluster, LbcLocalDeployer, LbcManualCluster, NodeHeadSnapshot,
-    ObservedBlock, ScenarioBuilder, ScenarioBuilderExt, block_feed_source_provider,
-    block_feed_sources, named_block_feed_sources,
+    BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedExtensionFactory,
+    BlockFeedObservation, BlockFeedObserver, BlockFeedSnapshot, BlockFeedWaitError, BlockRecord,
+    BoxedBlockFeedCollector, CoreBuilderExt, LbcComposeDeployer, LbcEnv, LbcK8sDeployer,
+    LbcK8sManualCluster, LbcLocalDeployer, LbcManualCluster, NodeHeadSnapshot, ObservedBlock,
+    ScenarioBuilder, ScenarioBuilderExt, block_feed_source_provider, block_feed_sources,
+    named_block_feed_sources,
 };
 // Required by reused node-test config modules importing from crate root.
 pub use node::configs::deployment::{DeploymentBuilder, TopologyConfig};

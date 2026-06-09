@@ -56,6 +56,17 @@ impl PoQWitnessInputs {
     }
 }
 
+impl TryFrom<PoQWitnessInputs> for lbc_poq_sys::PoqWitnessInput<'_> {
+    type Error = lbp_error::Error;
+
+    fn try_from(value: PoQWitnessInputs) -> Result<Self, Self::Error> {
+        let inputs_json: PoQInputsJson = value.into();
+        let inputs_str: String = serde_json::to_string(&inputs_json)?;
+        let witness_input = lbc_poq_sys::PoqWitnessInput::new(inputs_str)?;
+        Ok(witness_input)
+    }
+}
+
 #[derive(Serialize)]
 pub struct PoQInputsJson {
     #[serde(flatten)]
@@ -80,11 +91,10 @@ impl From<PoQWitnessInputs> for PoQInputsJson {
 }
 
 #[derive(Deserialize, Serialize)]
-pub struct PoQVerifierInputJson([Groth16InputDeser; 11]);
+pub struct PoQVerifierInputJson([Groth16InputDeser; 10]);
 
 pub struct PoQVerifierInput {
     pub key_nullifier: Groth16Input,
-    pub session: Groth16Input,
     pub core_quota: Groth16Input,
     pub leader_quota: Groth16Input,
     pub core_root: Groth16Input,
@@ -98,7 +108,6 @@ pub struct PoQVerifierInput {
 
 pub struct PoQVerifierInputData {
     pub key_nullifier: Fr,
-    pub session: u64,
     pub core_quota: u64,
     pub leader_quota: u64,
     pub core_root: Fr,
@@ -116,7 +125,6 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
     fn try_from(value: PoQVerifierInputJson) -> Result<Self, Self::Error> {
         let [
             key_nullifier,
-            session,
             core_quota,
             leader_quota,
             core_root,
@@ -129,7 +137,6 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
         ] = value.0;
         Ok(Self {
             key_nullifier: key_nullifier.try_into()?,
-            session: session.try_into()?,
             core_quota: core_quota.try_into()?,
             leader_quota: leader_quota.try_into()?,
             core_root: core_root.try_into()?,
@@ -145,10 +152,9 @@ impl TryFrom<PoQVerifierInputJson> for PoQVerifierInput {
 
 impl PoQVerifierInput {
     #[must_use]
-    pub const fn to_inputs(self) -> [Fr; 11] {
+    pub const fn to_inputs(self) -> [Fr; 10] {
         [
             self.key_nullifier.into_inner(),
-            self.session.into_inner(),
             self.core_quota.into_inner(),
             self.leader_quota.into_inner(),
             self.core_root.into_inner(),
@@ -175,7 +181,6 @@ impl From<PoQVerifierInputData> for PoQVerifierInput {
             pol_ledger_aged: value.pol_ledger_aged.into(),
             pol_t0: Groth16Input::new(value.lottery_0),
             pol_t1: Groth16Input::new(value.lottery_1),
-            session: Groth16Input::new(value.session.into()),
         }
     }
 }

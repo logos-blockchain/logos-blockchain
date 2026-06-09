@@ -7,6 +7,7 @@ use std::{
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
 use common_http_client::ApiBlock;
+use lb_chain_service::ChainServiceInfo;
 use lb_node::HeaderId;
 use testing_framework_core::observation::{
     ObservationBatch, ObservationConfig, ObservedSource, Observer,
@@ -245,7 +246,9 @@ impl BlockFeedState {
         &self,
         source: &ObservedSource<NodeHttpClient>,
     ) -> Result<Option<SourceHead>> {
-        let info = match source.source.consensus_info().await {
+        let ChainServiceInfo {
+            cryptarchia_info, ..
+        } = match source.source.consensus_info().await {
             Ok(info) => info,
             Err(error) => {
                 debug!(
@@ -259,15 +262,15 @@ impl BlockFeedState {
         };
 
         Ok(Some(SourceHead {
-            tip: info.tip,
-            tip_height: info.height,
+            tip: cryptarchia_info.tip,
+            tip_height: cryptarchia_info.height,
             snapshot: NodeHeadSnapshot {
                 node: source.name.clone(),
-                tip: info.tip,
-                slot: info.slot.into_inner(),
-                tip_height: Some(info.height),
-                lib: info.lib,
-                lib_height: self.heights.get(&info.lib).copied(),
+                tip: cryptarchia_info.tip,
+                slot: cryptarchia_info.slot.into_inner(),
+                tip_height: Some(cryptarchia_info.height),
+                lib: cryptarchia_info.lib,
+                lib_height: self.heights.get(&cryptarchia_info.lib).copied(),
             },
         }))
     }

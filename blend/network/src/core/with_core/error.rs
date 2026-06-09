@@ -6,8 +6,8 @@ pub enum SendError {
     NoPeers,
     /// The message being sent is a duplicate of a previous sent message.
     DuplicateMessage,
-    /// The session associated with the message being sent is invalid.
-    InvalidSession,
+    /// The epoch associated with the message being sent is invalid.
+    InvalidEpoch,
 }
 
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]

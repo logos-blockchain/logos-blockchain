@@ -10,16 +10,16 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-ark-ff       = { default-features = false, features = ["std"], version = "0.4" }
+ark-ff       = { features = ["std"], workspace = true }
 lb-groth16   = { workspace = true }
 lb-poseidon2 = { workspace = true }
-rpds         = { default-features = false, features = ["serde"], version = "1.1.1" }
+rpds         = { features = ["serde"], workspace = true }
 serde        = { features = ["derive"], workspace = true }
 thiserror    = { workspace = true }
 
 [dev-dependencies]
-proptest       = { default-features = false, features = ["std"], version = "1.0" }
-proptest-macro = "0.2"
+proptest       = { features = ["std"], workspace = true }
+proptest-macro = { workspace = true }
 
 [lints]
 workspace = true

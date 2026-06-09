@@ -44,7 +44,6 @@ pub(super) fn build_node_descriptor(
     environment.push(EnvEntry::new("CFG_HOST_IDENTIFIER", node_identifier(index)));
 
     let api_port = node.general.api_config.address.port();
-    let testing_port = node.general.api_config.testing_http_address.port();
 
     NodeDescriptor::with_loopback_ports(
         node_identifier(index),
@@ -52,7 +51,7 @@ pub(super) fn build_node_descriptor(
         vec![NODE_ENTRYPOINT.to_owned()],
         base_volumes(),
         default_extra_hosts(),
-        vec![api_port, testing_port],
+        vec![api_port],
         environment,
         platform,
     )
@@ -122,9 +121,9 @@ pub(super) fn resolve_bootstrap_image() -> (String, Option<String>) {
 }
 
 fn maybe_add_circuits_mount(mounts: &mut Vec<DockerVolumeMount>, env: &mut Vec<(String, String)>) {
-    let circuits_dir = env::var("LOGOS_BLOCKCHAIN_CIRCUITS_DOCKER")
+    let circuits_dir = env::var("LBC_ROOT_DIR_DOCKER")
         .ok()
-        .or_else(|| env::var("LOGOS_BLOCKCHAIN_CIRCUITS").ok());
+        .or_else(|| env::var("LBC_ROOT_DIR").ok());
 
     let Some(circuits_dir) = circuits_dir else {
         return;
@@ -162,22 +161,25 @@ fn default_extra_hosts() -> Vec<String> {
 
 fn base_environment(cfgsync_port: u16) -> Vec<EnvEntry> {
     let rust_log = env_value_or_default(tf_env::rust_log, "info");
-    let logos_blockchain_log_level =
-        env_value_or_default(tf_env::logos_blockchain_log_level, "info");
     let time_backend = env_value_or_default(tf_env::lb_time_service_backend, "monotonic");
     let cfgsync_host = env::var("LOGOS_BLOCKCHAIN_CFGSYNC_HOST")
         .unwrap_or_else(|_| String::from(DEFAULT_CFGSYNC_HOST));
 
-    vec![
+    let mut environment = vec![
         EnvEntry::new("RUST_LOG", rust_log),
-        EnvEntry::new("LOGOS_BLOCKCHAIN_LOG_LEVEL", logos_blockchain_log_level),
         EnvEntry::new("LOGOS_BLOCKCHAIN_TIME_BACKEND", time_backend),
         EnvEntry::new(
             "CFG_SERVER_ADDR",
             format!("http://{cfgsync_host}:{cfgsync_port}"),
         ),
         EnvEntry::new("OTEL_METRIC_EXPORT_INTERVAL", "5000"),
-    ]
+    ];
+
+    if let Some(log_level) = tf_env::log_level() {
+        environment.push(EnvEntry::new("LOG_LEVEL", log_level));
+    }
+
+    environment
 }
 
 fn env_value_or_default(getter: impl Fn() -> Option<String>, default: &'static str) -> String {

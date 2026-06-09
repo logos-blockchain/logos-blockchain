@@ -27,6 +27,16 @@ impl PoCWitnessInputs {
         }
     }
 }
+impl TryFrom<PoCWitnessInputs> for lbc_poc_sys::PocWitnessInput<'_> {
+    type Error = lbp_error::Error;
+
+    fn try_from(value: PoCWitnessInputs) -> Result<Self, Self::Error> {
+        let inputs_json: PoCInputsJson = value.into();
+        let inputs_str: String = serde_json::to_string(&inputs_json)?;
+        let witness_input = lbc_poc_sys::PocWitnessInput::new(inputs_str)?;
+        Ok(witness_input)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct PoCWitnessInputsData {
@@ -94,7 +104,7 @@ impl TryFrom<PoCVerifierInputJson> for PoCVerifierInput {
     type Error = <Groth16Input as TryFrom<Groth16InputDeser>>::Error;
 
     fn try_from(value: PoCVerifierInputJson) -> Result<Self, Self::Error> {
-        let [voucher_nullifier, voucher_root, mantle_tx_hash] = value.0;
+        let [voucher_nullifier, mantle_tx_hash, voucher_root] = value.0;
         Ok(Self {
             voucher_nullifier: voucher_nullifier.try_into()?,
             voucher_root: voucher_root.try_into()?,
@@ -108,8 +118,8 @@ impl PoCVerifierInput {
     pub const fn to_inputs(&self) -> [Fr; 3] {
         [
             self.voucher_nullifier.into_inner(),
-            self.voucher_root.into_inner(),
             self.mantle_tx_hash.into_inner(),
+            self.voucher_root.into_inner(),
         ]
     }
 

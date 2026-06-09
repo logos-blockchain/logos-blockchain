@@ -74,6 +74,12 @@ impl From<ServiceConfig> for NetworkConfig<Libp2pConfig> {
                             .swarm
                             .chain_sync
                             .peer_response_timeout,
+                        max_inbound_requests: value
+                            .user
+                            .backend
+                            .swarm
+                            .chain_sync
+                            .max_inbound_requests,
                     },
                     nat_config: value.user.backend.swarm.nat.into(),
                 },

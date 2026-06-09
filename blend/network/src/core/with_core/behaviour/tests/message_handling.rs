@@ -8,7 +8,7 @@ use test_log::test;
 use tokio::{select, time::sleep};
 
 use crate::core::{
-    tests::utils::{TestEncapsulatedMessage, TestEncapsulatedMessageWithSession, TestSwarm},
+    tests::utils::{TestEncapsulatedMessage, TestEncapsulatedMessageWithEpoch, TestSwarm},
     with_core::{
         behaviour::{
             Event, NegotiatedPeerState, SpamReason,
@@ -41,7 +41,7 @@ async fn message_sending_and_reception() {
     let test_message_id = test_message.id();
     dialing_swarm
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &test_message.as_ref().clone().into(),
         )
         .unwrap();
@@ -89,7 +89,7 @@ async fn message_sending_and_reception() {
     assert_eq!(
         dialing_swarm
             .behaviour_mut()
-            .publish_message_with_validated_signature_to_current_session(
+            .publish_message_with_validated_signature_to_current_epoch(
                 &test_message.as_ref().clone().into()
             ),
         Err(SendError::DuplicateMessage)
@@ -113,7 +113,7 @@ async fn undeserializable_message_received() {
 
     dialing_swarm
         .behaviour_mut()
-        .force_send_serialized_message_to_current_session_peer(
+        .force_send_serialized_message_to_current_epoch_peer(
             b"msg".to_vec(),
             *listening_swarm.local_peer_id(),
         )
@@ -163,7 +163,7 @@ async fn duplicate_message_received_from_same_peer() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     dialing_swarm
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &test_message.as_ref().clone().into(),
         )
         .unwrap();
@@ -190,7 +190,7 @@ async fn duplicate_message_received_from_same_peer() {
     // This is a duplicate message, so the listener will mark the dialer as spammy.
     dialing_swarm
         .behaviour_mut()
-        .force_send_message_to_current_session_peer(
+        .force_send_message_to_current_epoch_peer(
             &test_message.into_inner(),
             *listening_swarm.local_peer_id(),
         )
@@ -249,13 +249,13 @@ async fn duplicate_message_received_from_different_peers() {
     let test_message = TestEncapsulatedMessage::new(b"msg");
     dialing_swarm_1
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &test_message.as_ref().clone().into(),
         )
         .unwrap();
     dialing_swarm_2
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &test_message.as_ref().clone().into(),
         )
         .unwrap();
@@ -297,7 +297,7 @@ async fn invalid_signature_message_received() {
     let invalid_public_header_message = TestEncapsulatedMessage::new_with_invalid_signature(b"");
     dialing_swarm
         .behaviour_mut()
-        .force_send_message_to_current_session_peer(
+        .force_send_message_to_current_epoch_peer(
             &invalid_public_header_message.as_ref().clone(),
             *listening_swarm.local_peer_id(),
         )
@@ -348,7 +348,7 @@ async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
     // Node A forwards X to Node B. In Node A's cache X is now `Forwarded`.
     node_a
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &test_message.as_ref().clone().into(),
         )
         .unwrap();
@@ -371,7 +371,7 @@ async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
     // silently dropped - no event, no spam marking.
     node_b
         .behaviour_mut()
-        .force_send_message_to_current_session_peer(
+        .force_send_message_to_current_epoch_peer(
             &test_message.into_inner(),
             *node_a.local_peer_id(),
         )
@@ -408,7 +408,7 @@ async fn message_already_forwarded_silently_ignored_when_received_from_peer() {
 }
 
 #[test(tokio::test)]
-async fn duplicate_message_in_old_session_disconnects_peer_without_swarm_notification() {
+async fn duplicate_message_in_old_epoch_disconnects_peer_without_swarm_notification() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -425,7 +425,7 @@ async fn duplicate_message_in_old_session_disconnects_peer_without_swarm_notific
     // Sender publishes X. Receiver marks it as `Processed` in its cache.
     sender
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &test_message.as_ref().clone().into(),
         )
         .unwrap();
@@ -441,25 +441,25 @@ async fn duplicate_message_in_old_session_disconnects_peer_without_swarm_notific
         }
     }
 
-    // Receiver starts a new session. Sender's connection moves to the old
-    // session together with the existing message cache (which contains X as
+    // Receiver starts a new epoch. Sender's connection moves to the old
+    // epoch together with the existing message cache (which contains X as
     // `Processed`).
     let memberships = build_memberships(&[&sender, &receiver]);
     receiver
         .behaviour_mut()
-        .start_new_session((memberships[1].clone(), 1));
+        .start_new_epoch((memberships[1].clone(), 1.into()));
 
     // Wait long enough so that the connection monitor does not fire
     // `TooManyMessages` instead.
     sleep(Duration::from_secs(3)).await;
 
     // Sender sends X again, bypassing its own `Forwarded` guard. From
-    // receiver's point of view this arrives over the old-session connection.
-    // The old-session handler detects a duplicate from the same peer,
+    // receiver's point of view this arrives over the old-epoch connection.
+    // The old-epoch handler detects a duplicate from the same peer,
     // closes the connection, but must NOT emit a `PeerDisconnected` event.
     sender
         .behaviour_mut()
-        .force_send_message_to_current_session_peer(
+        .force_send_message_to_current_epoch_peer(
             &test_message.into_inner(),
             *receiver.local_peer_id(),
         )
@@ -488,16 +488,16 @@ async fn duplicate_message_in_old_session_disconnects_peer_without_swarm_notific
 
     assert!(
         connection_closed,
-        "Connection with spammy old-session peer must be closed"
+        "Connection with spammy old-epoch peer must be closed"
     );
     assert!(
         !peer_disconnected_event,
-        "No PeerDisconnected event must be emitted for a spammy old-session peer"
+        "No PeerDisconnected event must be emitted for a spammy old-epoch peer"
     );
 }
 
 #[test(tokio::test)]
-async fn undeserializable_message_in_old_session_closes_connection_without_swarm_notification() {
+async fn undeserializable_message_in_old_epoch_closes_connection_without_swarm_notification() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -509,17 +509,17 @@ async fn undeserializable_message_in_old_session_closes_connection_without_swarm
     receiver.listen().with_memory_addr_external().await;
     sender.connect_and_wait_for_upgrade(&mut receiver).await;
 
-    // Receiver starts a new session. Sender's connection moves to the old
-    // session.
+    // Receiver starts a new epoch. Sender's connection moves to the old
+    // epoch.
     let memberships = build_memberships(&[&sender, &receiver]);
     receiver
         .behaviour_mut()
-        .start_new_session((memberships[1].clone(), 1));
+        .start_new_epoch((memberships[1].clone(), 1.into()));
 
-    // Sender sends garbage data over the old-session connection.
+    // Sender sends garbage data over the old-epoch connection.
     sender
         .behaviour_mut()
-        .force_send_serialized_message_to_current_session_peer(
+        .force_send_serialized_message_to_current_epoch_peer(
             b"garbage".to_vec(),
             *receiver.local_peer_id(),
         )
@@ -547,16 +547,16 @@ async fn undeserializable_message_in_old_session_closes_connection_without_swarm
 
     assert!(
         connection_closed,
-        "Connection with spammy old-session peer must be closed"
+        "Connection with spammy old-epoch peer must be closed"
     );
     assert!(
         !peer_disconnected_event,
-        "No PeerDisconnected event must be emitted for a spammy old-session peer"
+        "No PeerDisconnected event must be emitted for a spammy old-epoch peer"
     );
 }
 
 #[test(tokio::test)]
-async fn spammy_old_session_peer_does_not_affect_current_session() {
+async fn spammy_old_epoch_peer_does_not_affect_current_epoch() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let mut sender = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -568,36 +568,36 @@ async fn spammy_old_session_peer_does_not_affect_current_session() {
     receiver.listen().with_memory_addr_external().await;
     sender.connect_and_wait_for_upgrade(&mut receiver).await;
 
-    // Receiver starts a new session. Sender's connection moves to the old
-    // session.
+    // Receiver starts a new epoch. Sender's connection moves to the old
+    // epoch.
     let memberships = build_memberships(&[&sender, &receiver]);
     receiver
         .behaviour_mut()
-        .start_new_session((memberships[1].clone(), 1));
+        .start_new_epoch((memberships[1].clone(), 1.into()));
 
-    // Re-connect for the new session.
+    // Re-connect for the new epoch.
     sender
         .behaviour_mut()
-        .start_new_session((memberships[0].clone(), 1));
+        .start_new_epoch((memberships[0].clone(), 1.into()));
     sender.connect_and_wait_for_upgrade(&mut receiver).await;
 
-    // Sender sends garbage over the old-session connection. This should
-    // close the old-session connection but NOT mark the peer as spammy in
-    // the current session.
+    // Sender sends garbage over the old-epoch connection. This should
+    // close the old-epoch connection but NOT mark the peer as spammy in
+    // the current epoch.
     sender
         .behaviour_mut()
-        .force_send_serialized_message_to_peer_at_session(
+        .force_send_serialized_message_to_peer_at_epoch(
             b"garbage".to_vec(),
             *receiver.local_peer_id(),
-            0,
+            0.into(),
         )
         .unwrap();
 
-    // Wait for the old-session connection to close.
+    // Wait for the old-epoch connection to close.
     loop {
         select! {
             () = sleep(Duration::from_secs(15)) => {
-                panic!("Timed out waiting for old-session connection to close");
+                panic!("Timed out waiting for old-epoch connection to close");
             }
             _ = sender.select_next_some() => {}
             event = receiver.select_next_some() => {
@@ -608,18 +608,18 @@ async fn spammy_old_session_peer_does_not_affect_current_session() {
         }
     }
 
-    // Now verify the current session connection is healthy by sending a
+    // Now verify the current epoch connection is healthy by sending a
     // valid message through it.
-    let test_message = TestEncapsulatedMessageWithSession::new(1, b"after-spam");
+    let test_message = TestEncapsulatedMessageWithEpoch::new(1.into(), b"after-spam");
     sender
         .behaviour_mut()
-        .publish_message_with_validated_header(test_message.clone(), 1)
+        .publish_message_with_validated_header(test_message.clone(), 1.into())
         .unwrap();
 
     loop {
         select! {
             () = sleep(Duration::from_secs(15)) => {
-                panic!("Timed out waiting for message on current session - current session connection was incorrectly affected by old session spam");
+                panic!("Timed out waiting for message on current epoch - current epoch connection was incorrectly affected by old epoch spam");
             }
             _ = sender.select_next_some() => {}
             event = receiver.select_next_some() => {
@@ -633,7 +633,7 @@ async fn spammy_old_session_peer_does_not_affect_current_session() {
 }
 
 #[test(tokio::test)]
-async fn duplicate_message_from_old_session_after_session_rotation_is_suppressed() {
+async fn duplicate_message_from_old_epoch_after_epoch_rotation_is_suppressed() {
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
     let mut sender_a = TestSwarm::new(&identities.next().unwrap(), |id| {
         BehaviourBuilder::new(id).with_membership(&nodes).build()
@@ -653,11 +653,11 @@ async fn duplicate_message_from_old_session_after_session_rotation_is_suppressed
     sender_b.connect_and_wait_for_upgrade(&mut receiver).await;
 
     // Sender A sends message X. Receiver processes it and stores X as
-    // `Processed` in its current-session message cache.
+    // `Processed` in its current-epoch message cache.
     let test_message = TestEncapsulatedMessage::new(b"msg");
     sender_a
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &test_message.as_ref().clone().into(),
         )
         .unwrap();
@@ -674,21 +674,21 @@ async fn duplicate_message_from_old_session_after_session_rotation_is_suppressed
         }
     }
 
-    // Receiver starts a new session. The message cache now containing X
-    // as `Processed` is transferred into the old session object,
+    // Receiver starts a new epoch. The message cache now containing X
+    // as `Processed` is transferred into the old epoch object,
     // alongside the connections to both sender_a and sender_b.
     let memberships = build_memberships(&[&sender_a, &sender_b, &receiver]);
     receiver
         .behaviour_mut()
-        .start_new_session((memberships[2].clone(), 1));
+        .start_new_epoch((memberships[2].clone(), 1.into()));
 
     // Sender B sends the identical message X through its (still-open)
     // connection to receiver. From receiver's point of view this connection
-    // now belongs to the old session. Because X is already in the transferred
+    // now belongs to the old epoch. Because X is already in the transferred
     // cache, receiver must NOT emit a second `Message` event.
     sender_b
         .behaviour_mut()
-        .publish_message_with_validated_signature_to_current_session(
+        .publish_message_with_validated_signature_to_current_epoch(
             &test_message.as_ref().clone().into(),
         )
         .unwrap();
@@ -709,6 +709,6 @@ async fn duplicate_message_from_old_session_after_session_rotation_is_suppressed
 
     assert!(
         !duplicate_message_received,
-        "Receiver must not re-emit a message that was already processed in the previous session"
+        "Receiver must not re-emit a message that was already processed in the previous epoch"
     );
 }

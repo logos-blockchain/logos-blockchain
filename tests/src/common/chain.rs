@@ -62,7 +62,7 @@ pub async fn wait_for_transactions_inclusion(
                 .consensus_info()
                 .await
                 .expect("fetching consensus info should succeed");
-            if consensus.height == 0 {
+            if consensus.cryptarchia_info.height == 0 {
                 sleep(Duration::from_millis(500)).await;
 
                 continue;
@@ -72,7 +72,7 @@ pub async fn wait_for_transactions_inclusion(
             let mut found = HashSet::new();
 
             let found = scan_chain_until(
-                consensus.tip,
+                consensus.cryptarchia_info.tip,
                 &mut scanned_blocks,
                 async |header_id| {
                     client

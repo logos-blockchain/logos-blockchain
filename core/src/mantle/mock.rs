@@ -4,13 +4,11 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
-use lb_groth16::Fr;
-use num_bigint::BigUint;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
     codec::SerializeOp as _,
-    mantle::{Transaction, TransactionHasher, TxHash},
+    mantle::{StorageSize, Transaction, TransactionHasher, TxHash},
 };
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize)]
@@ -44,8 +42,16 @@ impl<M: Serialize + DeserializeOwned + Clone> Transaction for MockTransaction<M>
     const HASHER: TransactionHasher<Self> = Self::id;
     type Hash = MockTxId;
 
-    fn as_signing_frs(&self) -> Vec<Fr> {
+    fn as_signing(&self) -> Vec<u8> {
         todo!()
+    }
+}
+
+impl<M: Serialize + DeserializeOwned + Clone> StorageSize for MockTransaction<M> {
+    fn storage_size(&self) -> usize {
+        self.to_bytes()
+            .expect("MockTransaction should be able to be serialized")
+            .len()
     }
 }
 
@@ -118,8 +124,6 @@ impl<M> From<&MockTransaction<M>> for MockTxId {
 
 impl From<MockTxId> for TxHash {
     fn from(id: MockTxId) -> Self {
-        let bytes = id.0;
-        let big_uint = BigUint::from_bytes_be(&bytes);
-        Self::from(big_uint)
+        id.0.into()
     }
 }

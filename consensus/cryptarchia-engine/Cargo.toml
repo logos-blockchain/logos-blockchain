@@ -21,7 +21,7 @@ lb-pol     = { workspace = true }
 lb-utils   = { features = ["time"], workspace = true }
 serde      = { workspace = true }
 serde_with = { features = ["macros"], workspace = true }
-thiserror  = "1"
+thiserror  = { workspace = true }
 time       = { workspace = true }
 tokio      = { features = ["time"], optional = true, workspace = true }
 tracing    = { workspace = true }

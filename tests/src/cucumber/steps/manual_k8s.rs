@@ -81,6 +81,7 @@ async fn step_k8s_manual_start_nodes_with_wallet_resources(
 ) -> StepResult {
     let table = step.table.as_ref().ok_or(StepError::MissingTable)?;
     verify_node_wallet_resources_table_indexes(table, &step.value)?;
+    world.ensure_wallet_block_feed().await?;
 
     let mut nodes_to_start: NodesToStartUnordered = HashMap::new();
     for row in table.rows.iter().skip(1) {
@@ -127,7 +128,7 @@ async fn step_k8s_manual_start_nodes_with_wallet_resources(
             })?;
 
         let wallet_info = build_user_wallets(world, &node_name, &wallet_start_info)?;
-        insert_started_node_info(world, &node_name, started_node, wallet_info);
+        insert_started_node_info(world, &node_name, started_node, wallet_info)?;
     }
 
     let cluster = world
@@ -164,5 +165,6 @@ async fn step_k8s_manual_node_has_peers(
 fn step_k8s_manual_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     stop_active_manual_cluster(world)?;
     world.k8s_manual_cluster = None;
+    world.reset_wallet_block_feed();
     Ok(())
 }

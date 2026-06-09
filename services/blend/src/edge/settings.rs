@@ -30,7 +30,7 @@ pub struct RunningBlendConfig<BackendSettings> {
 }
 
 impl<BackendSettings> RunningBlendConfig<BackendSettings> {
-    pub const fn session_leadership_quota(&self) -> u64 {
+    pub const fn epoch_leadership_quota(&self) -> u64 {
         let num_blend_layers = self.num_blend_layers.get();
         let additional_encapsulations = num_blend_layers
             .checked_mul(self.data_replication_factor)

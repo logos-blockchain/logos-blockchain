@@ -3,8 +3,11 @@ use core::fmt::{self, Debug, Formatter};
 use lb_key_management_system_keys::keys::{
     Ed25519Key, X25519PrivateKey, errors::KeyError, secured_key::SecureKeyOperator,
 };
+use lb_log_targets::kms;
 use tokio::sync::oneshot;
-use tracing::error;
+use tracing::debug;
+
+const LOG_TARGET: &str = kms::operators::ED25519;
 
 pub struct DeriveX25519Operator {
     response_channel: oneshot::Sender<X25519PrivateKey>,
@@ -26,7 +29,7 @@ impl SecureKeyOperator for DeriveX25519Operator {
         let _ = self
             .response_channel
             .send(x25519_secret_key)
-            .map_err(|_| error!("Error sending X25519 secret key."));
+            .map_err(|_| debug!(target: LOG_TARGET, "Error sending X25519 secret key."));
         Ok(())
     }
 }

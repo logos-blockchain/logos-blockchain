@@ -29,7 +29,6 @@
 mod chain_inputs;
 mod inputs;
 mod lottery;
-mod proving_key;
 mod verification_key;
 mod wallet_inputs;
 mod witness;
@@ -38,33 +37,22 @@ use std::error::Error;
 
 pub use chain_inputs::{PolChainInputs, PolChainInputsData};
 pub use inputs::{PolVerifierInput, PolWitnessInputs, PolWitnessInputsData};
-use lb_groth16::{
-    CompressedGroth16Proof, Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser,
-};
-use thiserror::Error;
+use lb_circuits_prover::Prover as _;
+use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
+use lb_log_targets::proofs;
 use tracing::error;
 pub use wallet_inputs::{
     AGED_NOTE_MERKLE_TREE_HEIGHT, LATEST_NOTE_MERKLE_TREE_HEIGHT, PolWalletInputs,
     PolWalletInputsData,
 };
-pub use witness::Witness;
 
+use crate::inputs::PolVerifierInputJson;
 pub use crate::lottery::{LotteryConstants, P};
-use crate::{inputs::PolVerifierInputJson, proving_key::POL_PROVING_KEY_PATH};
 
 pub type PoLProof = CompressedGroth16Proof;
+pub type ProveError = lbp_error::Error;
 
-#[derive(Debug, Error)]
-pub enum ProveError {
-    #[error(transparent)]
-    Io(std::io::Error),
-    #[error(transparent)]
-    Json(serde_json::Error),
-    #[error("Error parsing Groth16 input: {0:?}")]
-    Groth16JsonInput(<Groth16Input as TryFrom<Groth16InputDeser>>::Error),
-    #[error(transparent)]
-    Groth16JsonProof(<Groth16Proof as TryFrom<Groth16ProofJsonDeser>>::Error),
-}
+const LOG_TARGET: &str = proofs::POL;
 
 ///
 /// This function generates a proof for the given set of inputs.
@@ -85,18 +73,18 @@ pub enum ProveError {
 ///   witness or proving from contents.
 /// - Returns a `ProveError::Json` if there is an error during JSON
 ///   serialization or deserialization.
-pub fn prove(inputs: &PolWitnessInputs) -> Result<(PoLProof, PolVerifierInput), ProveError> {
-    let witness = witness::generate_witness(inputs).map_err(ProveError::Io)?;
-    let (proof, verifier_inputs) =
-        lb_circuits_prover::prover_from_contents(POL_PROVING_KEY_PATH.as_path(), witness.as_ref())
-            .map_err(ProveError::Io)?;
-    let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof).map_err(ProveError::Json)?;
-    let verifier_inputs: PolVerifierInputJson =
-        serde_json::from_slice(&verifier_inputs).map_err(ProveError::Json)?;
+pub fn prove(inputs: PolWitnessInputs) -> Result<(PoLProof, PolVerifierInput), ProveError> {
+    let witness = witness::generate_witness(inputs)?;
+    let result = lb_circuits_prover::Rapidsnark::prove(
+        lbc_pol_sys::artifacts::PROVING_KEY,
+        witness.as_ref(),
+    )?;
+    let proof: Groth16ProofJsonDeser = serde_json::from_str(&result.proof)?;
+    let verifier_inputs: PolVerifierInputJson = serde_json::from_str(&result.public_signals)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {
-            error!("Fatal CompressedGroth16Proof::try_from: {e}");
+            error!(target: LOG_TARGET, "Fatal CompressedGroth16Proof::try_from: {e}");
             // We panic here because this should never happen, and if it does, it's a
             // critical error that we want to be immediately visible during
             // development and testing.
@@ -275,7 +263,7 @@ mod tests {
         let witness_inputs =
             PolWitnessInputsData::from_chain_and_wallet_data(chain_data, wallet_data);
 
-        let (proof, inputs) = prove(&witness_inputs.into()).unwrap();
+        let (proof, inputs) = prove(witness_inputs.into()).unwrap();
         assert!(verify(&proof, &inputs).unwrap());
     }
 }

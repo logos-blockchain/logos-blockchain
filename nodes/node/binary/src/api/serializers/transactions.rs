@@ -1,4 +1,4 @@
-use lb_core::mantle::{MantleTx, Op, OpProof, SignedMantleTx, TxHash, gas::GasPrice};
+use lb_core::mantle::{MantleTx, OpProof, SignedMantleTx, TxHash, encoding::Ops};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -6,9 +6,8 @@ use serde::Serialize;
 pub struct ApiTransactionSerializer {
     #[serde(getter = "<MantleTx as lb_core::mantle::Transaction>::hash")]
     hash: TxHash,
-    ops: Vec<Op>,
-    execution_gas_price: GasPrice,
-    storage_gas_price: GasPrice,
+    #[serde(getter = "MantleTx::ops")]
+    ops: Ops,
 }
 
 #[derive(Serialize)]

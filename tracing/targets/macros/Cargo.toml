@@ -1,0 +1,21 @@
+[package]
+categories  = { workspace = true }
+description = { workspace = true }
+edition     = { workspace = true }
+keywords    = { workspace = true }
+license     = { workspace = true }
+name        = "logos-blockchain-log-targets-macros"
+readme      = { workspace = true }
+repository  = { workspace = true }
+version     = { workspace = true }
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = { features = ["proc-macro"], workspace = true }
+quote       = { workspace = true }
+syn         = { features = ["parsing", "printing", "proc-macro"], workspace = true }
+
+[lints]
+workspace = true

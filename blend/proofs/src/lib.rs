@@ -1,5 +1,6 @@
 use lb_blend_crypto::{ZkHash, ZkHasher};
 pub use lb_poq::CorePathAndSelectors;
+use lb_poseidon2::Digest;
 
 pub mod quota;
 pub mod selection;
@@ -13,9 +14,10 @@ where
     T: AsRef<[ZkHash]>,
 {
     fn hash(&self) -> ZkHash {
-        let mut hasher = ZkHasher::new();
-        hasher.update(self.as_ref());
-        hasher.finalize()
+        // let mut hasher = ZkHasher::new();
+        // hasher.update(self.as_ref());
+        // hasher.finalize();
+        <ZkHasher as Digest>::digest(self.as_ref())
     }
 }
 
@@ -25,16 +27,12 @@ trait ZkCompressExt {
 
 impl ZkCompressExt for [ZkHash; 2] {
     fn compress(&self) -> ZkHash {
-        let mut hasher = ZkHasher::new();
-        hasher.compress(self);
-        hasher.finalize()
+        <ZkHasher as Digest>::compress(self)
     }
 }
 
 impl ZkCompressExt for &[ZkHash; 2] {
     fn compress(&self) -> ZkHash {
-        let mut hasher = ZkHasher::new();
-        hasher.compress(self);
-        hasher.finalize()
+        <ZkHasher as Digest>::compress(self)
     }
 }

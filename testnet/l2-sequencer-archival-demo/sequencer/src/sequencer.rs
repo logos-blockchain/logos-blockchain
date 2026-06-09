@@ -1,13 +1,16 @@
 use std::{collections::HashSet, fs, io, path::Path, time::Duration};
 
-use lb_common_http_client::CommonHttpClient;
+use lb_common_http_client::{ChainServiceInfo, CommonHttpClient};
 use lb_core::{
     header::HeaderId,
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey, MsgId, inscribe::InscriptionOp},
+            channel::{
+                ChannelId, Ed25519PublicKey, MsgId,
+                inscribe::{Inscription, InscriptionOp},
+            },
         },
     },
 };
@@ -153,7 +156,7 @@ impl Sequencer {
     }
 
     /// Create and sign a transaction for inscribing data
-    fn create_inscribe_tx(&self, data: Vec<u8>, parent: MsgId) -> SignedMantleTx {
+    fn create_inscribe_tx(&self, data: Inscription, parent: MsgId) -> SignedMantleTx {
         let verifying_key_bytes = self.signing_key.public_key().to_bytes();
         let verifying_key =
             Ed25519PublicKey::from_bytes(&verifying_key_bytes).expect("valid ed25519 public key");
@@ -165,11 +168,7 @@ impl Sequencer {
             signer: verifying_key,
         };
 
-        let inscribe_tx = MantleTx {
-            ops: vec![Op::ChannelInscribe(inscribe_op)],
-            storage_gas_price: 0.into(),
-            execution_gas_price: 0.into(),
-        };
+        let inscribe_tx = MantleTx([Op::ChannelInscribe(inscribe_op)].into());
 
         let tx_hash = inscribe_tx.hash();
         let signature_bytes = self
@@ -206,7 +205,7 @@ impl Sequencer {
         block_id: HeaderId,
     ) -> bool {
         for tx in &block.transactions {
-            for op in &tx.mantle_tx.ops {
+            for op in tx.mantle_tx.ops() {
                 if let Op::ChannelInscribe(inscribe) = op {
                     tracing::debug!(
                         "Found inscription: channel={}, parent={}",
@@ -273,7 +272,7 @@ impl Sequencer {
     fn get_expected_inscription(tx: &SignedMantleTx) -> &InscriptionOp {
         let expected_op = tx
             .mantle_tx
-            .ops
+            .ops()
             .first()
             .expect("transaction should have at least one op");
 
@@ -289,19 +288,21 @@ impl Sequencer {
         expected: &InscriptionOp,
         checked_blocks: &mut HashSet<HeaderId>,
     ) -> Result<bool> {
-        let info = self
+        let ChainServiceInfo {
+            cryptarchia_info, ..
+        } = self
             .http_client
             .consensus_info(self.node_url.clone())
             .await?;
 
         tracing::debug!(
             "Polling: tip={}, height={}, checked_blocks={}",
-            info.tip,
-            info.height,
+            cryptarchia_info.tip,
+            cryptarchia_info.height,
             checked_blocks.len()
         );
 
-        self.check_blocks_for_inscription(expected, checked_blocks, info.tip)
+        self.check_blocks_for_inscription(expected, checked_blocks, cryptarchia_info.tip)
             .await
     }
 
@@ -500,8 +501,11 @@ impl Sequencer {
             transactions,
         };
 
-        let inscription_data = serde_json::to_vec(&block_data)
+        let raw_inscription_data = serde_json::to_vec(&block_data)
             .map_err(|e| SequencerError::Serialization(e.to_string()))?;
+        let inscription_data = Inscription::try_from(raw_inscription_data).map_err(|e| {
+            SequencerError::Serialization(format!("Failed to create inscription data: {e}"))
+        })?;
 
         info!(
             "BLOCK #{} (parent: #{}) posting to chain ({} tx)",
@@ -513,7 +517,7 @@ impl Sequencer {
         let parent = self.get_last_msg_id().await?;
         let tx = self.create_inscribe_tx(inscription_data, parent);
 
-        let new_msg_id = match tx.mantle_tx.ops.first() {
+        let new_msg_id = match tx.mantle_tx.ops().first() {
             Some(Op::ChannelInscribe(inscribe)) => inscribe.id(),
             _ => panic!("Expected ChannelInscribe op"),
         };

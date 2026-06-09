@@ -104,10 +104,10 @@ impl<Tx> Block<Tx> {
             });
         }
 
-        let acc_size: usize = transactions.iter().map(StorageSize::storage_size).sum();
-        if acc_size > MAX_BLOCK_SIZE {
+        let tx_size: usize = transactions.iter().map(StorageSize::storage_size).sum();
+        if tx_size > MAX_BLOCK_SIZE {
             return Err(Error::ContentTooBig {
-                count: acc_size,
+                count: tx_size,
                 max: MAX_BLOCK_SIZE,
             });
         }
@@ -171,9 +171,7 @@ impl<Tx> Block<Tx> {
     where
         Tx: Transaction<Hash = TxHash>,
     {
-        let tx_hashes: Vec<TxHash> = transactions.iter().map(Transaction::hash).collect();
-
-        let root_hash = merkle::calculate_merkle_root(&tx_hashes, None);
+        let root_hash = merkle::calculate_block_root(transactions);
         ContentId::from(root_hash)
     }
 
@@ -240,7 +238,6 @@ impl<Tx: Clone + Eq + Serialize + DeserializeOwned> TryFrom<Block<Tx>> for Bytes
 mod tests {
     use std::iter;
 
-    use ark_ff::Field as _;
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::UnsecuredZkKey;
     use lb_pol::LotteryConstants;
@@ -252,6 +249,7 @@ mod tests {
         crypto::ZkHasher,
         mantle::{
             MantleTx, TransactionHasher,
+            encoding::Ops,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
         },
@@ -324,13 +322,9 @@ mod tests {
     }
 
     fn create_tx(count: usize) -> Vec<MantleTx> {
-        iter::repeat_with(|| MantleTx {
-            ops: vec![],
-            execution_gas_price: 0.into(),
-            storage_gas_price: 0.into(),
-        })
-        .take(count)
-        .collect()
+        iter::repeat_with(|| MantleTx(Ops::new_unchecked(vec![])))
+            .take(count)
+            .collect()
     }
 
     #[test]
@@ -406,11 +400,11 @@ mod tests {
     #[derive(Clone, Copy, Debug)]
     pub struct TestMantleTx;
     impl Transaction for TestMantleTx {
-        const HASHER: TransactionHasher<Self> = |_tx| TxHash(Fr::ZERO);
+        const HASHER: TransactionHasher<Self> = |_tx| TxHash::from([0u8; 32]);
         type Hash = TxHash;
 
-        fn as_signing_frs(&self) -> Vec<Fr> {
-            vec![Fr::ZERO]
+        fn as_signing(&self) -> Vec<u8> {
+            vec![0u8]
         }
     }
 
@@ -418,51 +412,6 @@ mod tests {
         fn storage_size(&self) -> usize {
             usize::MAX
         }
-    }
-
-    #[derive(Clone, Copy, Debug)]
-    struct SizedTx {
-        id: u64,
-        size: usize,
-    }
-
-    impl Transaction for SizedTx {
-        const HASHER: TransactionHasher<Self> = |tx| TxHash(Fr::from(tx.id));
-        type Hash = TxHash;
-
-        fn as_signing_frs(&self) -> Vec<Fr> {
-            vec![Fr::from(self.id)]
-        }
-    }
-
-    impl StorageSize for SizedTx {
-        fn storage_size(&self) -> usize {
-            self.size
-        }
-    }
-
-    #[test]
-    fn test_block_aggregate_size_validation() {
-        let parent_block = [0u8; 32].into();
-        let slot = Slot::from(42u64);
-        let proof_of_leadership = create_proof();
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
-
-        let txs = vec![
-            SizedTx {
-                id: 1,
-                size: MAX_BLOCK_SIZE - 16,
-            },
-            SizedTx { id: 2, size: 32 },
-            SizedTx { id: 3, size: 32 },
-        ];
-
-        let result = Block::create(parent_block, slot, proof_of_leadership, txs, &signing_key);
-
-        assert!(
-            matches!(result, Err(Error::ContentTooBig { .. })),
-            "Block::create must error when aggregate tx size exceeds MAX_BLOCK_SIZE"
-        );
     }
 
     #[test]

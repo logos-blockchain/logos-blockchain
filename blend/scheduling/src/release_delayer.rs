@@ -6,15 +6,16 @@ use core::{
 use std::num::{NonZeroU64, NonZeroU128};
 
 use futures::{Stream, StreamExt as _};
+use lb_log_targets::blend;
 use tracing::trace;
 
 use crate::message_scheduler::round_info::Round;
 
-const LOG_TARGET: &str = "blend::scheduling::delay";
+const LOG_TARGET: &str = blend::scheduling::DELAY;
 
 /// A scheduler for delaying processed messages and batch them into release
 /// rounds, as per the specification.
-pub struct SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
+pub struct EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
     /// The maximum delay, in terms of rounds, between two consecutive release
     /// rounds.
     maximum_release_delay_in_rounds: NonZeroU64,
@@ -30,7 +31,7 @@ pub struct SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage> {
 }
 
 impl<RoundClock, Rng, ProcessedMessage>
-    SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>
+    EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>
 where
     Rng: rand::Rng,
 {
@@ -57,7 +58,7 @@ where
 }
 
 impl<RoundClock, Rng, ProcessedMessage>
-    SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>
+    EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>
 {
     #[cfg(test)]
     pub const fn with_test_values(
@@ -125,7 +126,7 @@ where
 }
 
 impl<RoundClock, Rng, ProcessedMessage> Stream
-    for SessionProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>
+    for EpochProcessedMessageDelayer<RoundClock, Rng, ProcessedMessage>
 where
     RoundClock: Stream<Item = Round> + Unpin,
     Rng: rand::Rng + Unpin,
@@ -178,11 +179,11 @@ mod tests {
     use rand::SeedableRng as _;
     use tokio_stream::iter;
 
-    use crate::release_delayer::SessionProcessedMessageDelayer;
+    use crate::release_delayer::EpochProcessedMessageDelayer;
 
     #[test]
     fn poll_none_on_unscheduled_round() {
-        let mut delayer = SessionProcessedMessageDelayer::<_, _, ()> {
+        let mut delayer = EpochProcessedMessageDelayer::<_, _, ()> {
             maximum_release_delay_in_rounds: NonZeroU64::new(3).expect("Non-zero usize"),
             next_release_round: 1u128.into(),
             rng: BlakeRng::from_entropy(),
@@ -198,7 +199,7 @@ mod tests {
 
     #[test]
     fn poll_empty_on_scheduled_round_with_empty_queue() {
-        let mut delayer = SessionProcessedMessageDelayer::<_, _, ()> {
+        let mut delayer = EpochProcessedMessageDelayer::<_, _, ()> {
             maximum_release_delay_in_rounds: NonZeroU64::new(3).expect("Non-zero usize"),
             next_release_round: 1u128.into(),
             rng: BlakeRng::from_entropy(),
@@ -215,7 +216,7 @@ mod tests {
 
     #[test]
     fn poll_non_empty_on_scheduled_round_with_non_empty_queue() {
-        let mut delayer = SessionProcessedMessageDelayer::<_, _, ()> {
+        let mut delayer = EpochProcessedMessageDelayer::<_, _, ()> {
             maximum_release_delay_in_rounds: NonZeroU64::new(3).expect("Non-zero usize"),
             next_release_round: 1u128.into(),
             rng: BlakeRng::from_entropy(),
@@ -235,7 +236,7 @@ mod tests {
 
     #[test]
     fn add_message_to_queue() {
-        let mut delayer = SessionProcessedMessageDelayer::<_, _, bool> {
+        let mut delayer = EpochProcessedMessageDelayer::<_, _, bool> {
             maximum_release_delay_in_rounds: NonZeroU64::new(3).expect("Non-zero usize"),
             next_release_round: 1u128.into(),
             rng: BlakeRng::from_entropy(),

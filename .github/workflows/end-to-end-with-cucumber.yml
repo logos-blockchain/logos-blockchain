@@ -45,11 +45,18 @@ jobs:
       # Heavy Rust e2e tests become less stable when nextest oversubscribes the
       # self-hosted runners. Keep these lanes single-job to reduce retries.
       E2E_NEXTEST_JOBS: 1
+      LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
 
     steps:
       # Remove any rustup override to ensure default toolchain is used
       - name: Disable rustup override
         run: rustup override unset || true
+
+      - name: Expose gmp to cargo (macOS runners)
+        if: runner.os == 'macOS'
+        run: |
+          echo "RUSTFLAGS=-C linker=rust-lld -L /run/current-system/sw/lib" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=/run/current-system/sw/lib" >> "$GITHUB_ENV"
 
       # Checkout the repository code
       # Notes:
@@ -63,12 +70,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      # Set up custom circuits required for tests
-      - name: Setup Circuits
-        uses: ./.github/actions/setup-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       # Set environment variables for circuits path - expand $HOME first since GitHub Actions env: blocks don't expand
       # shell variables
       - name: Set circuits path environment variable (new)
@@ -79,7 +80,7 @@ jobs:
         uses: ./.github/actions/prune-disk-space
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@5651179950649c44da31d346537e20c0534f0f25 # Version 2.49.35
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # Version 2.79.11
         with:
           tool: cargo-nextest
 
@@ -139,7 +140,8 @@ jobs:
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
-          path: tests/.run_*
+          path: tests/.e2e_artefacts
+          if-no-files-found: ignore
 
       # Run cucumber integration tests with environment variables for binaries and test params
       # Special exclusion tags (we want to run the rest of the tests and not fail the workflow):
@@ -155,6 +157,7 @@ jobs:
           suite_tag: "@smoke_ci"
           suite_name: smoke
           artifact_subdir: Smoke
+          max_concurrent_scenarios: "2"
 
       # Feature: Cryptarchia (@cryptarchia_ci)
       - name: Run cucumber suite - cryptarchia
@@ -165,6 +168,7 @@ jobs:
           suite_tag: "@cryptarchia_ci"
           suite_name: cryptarchia
           artifact_subdir: Cryptarchia
+          max_concurrent_scenarios: "2"
 
       # Feature: Blend (@blend_ci)
       - name: Run cucumber suite - blend
@@ -175,6 +179,7 @@ jobs:
           suite_tag: "@blend_ci"
           suite_name: blend
           artifact_subdir: Blend
+          max_concurrent_scenarios: "2"
 
       # Feature: Transactions (@transactions_ci)
       - name: Run cucumber suite - transactions
@@ -186,6 +191,40 @@ jobs:
           suite_name: transactions
           artifact_subdir: Transactions
           verbose_console: "true"
+          max_concurrent_scenarios: "2"
+
+      # Feature: Mempool (@mempool_ci)
+      - name: Run cucumber suite - mempool
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@mempool_ci"
+          suite_name: mempool
+          artifact_subdir: Mempool lifecycle
+          verbose_console: "true"
+
+      # Feature: Zone SDK (@zone_ci)
+      - name: Run cucumber suite - zone
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@zone_ci"
+          suite_name: zone
+          artifact_subdir: Zone
+          max_concurrent_scenarios: "2"
+
+      # Feature: CLI utility binary (@cli_ci)
+      - name: Run cucumber suite - CLI utilities
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 60
+        uses: ./.github/actions/run-cucumber-suite
+        with:
+          suite_tag: "@cli_ci"
+          suite_name: CLI
+          artifact_subdir: Cli
+          max_concurrent_scenarios: "2"
 
       # Always upload JUnit test results for reporting, even if tests fail
       - name: Upload cucumber JUnit results

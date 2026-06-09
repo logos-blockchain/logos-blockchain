@@ -6,6 +6,7 @@ use lb_ledger::LedgerState;
 use lb_wallet::{Vouchers, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use crate::{KeyId, WalletServiceError, WalletServiceSettings};
 
@@ -51,35 +52,52 @@ impl<'u> ServiceState<'u> {
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
     ) -> Self {
+        let RecoveryState {
+            next_new_voucher_index,
+            vouchers,
+            lib_wallet_state,
+        } = state;
         let known_keys = settings
             .known_keys
             .iter()
-            .map(|(key_id, pk)| (*pk, key_id.clone()));
+            .map(|(key_id, pk)| (*pk, key_id.clone()))
+            .collect::<Vec<_>>();
 
-        // Initialize [`Wallet`] either from the persisted [`WalletState`]
-        // or from the current chain's LIB ledger state.
-        let (wallet, wallet_lib) = match state.lib_wallet_state {
-            Some((persisted_lib, wallet_state)) => (
-                Wallet::from_lib_wallet_state(
-                    known_keys,
-                    state.vouchers,
-                    persisted_lib,
-                    wallet_state,
-                ),
-                persisted_lib,
+        let (wallet, should_update_recovery) = match lib_wallet_state {
+            Some((persisted_lib, wallet_state)) if persisted_lib == lib => (
+                Wallet::from_lib_wallet_state(known_keys, vouchers, persisted_lib, wallet_state),
+                false,
             ),
+            Some((persisted_lib, _)) => {
+                warn!(
+                    ?persisted_lib,
+                    chain_lib = ?lib,
+                    "Ignoring wallet recovery state from stale LIB"
+                );
+
+                (
+                    Wallet::from_lib_ledger_state(known_keys, vouchers, lib, lib_ledger),
+                    true,
+                )
+            }
             None => (
-                Wallet::from_lib_ledger_state(known_keys, state.vouchers, lib, lib_ledger),
-                lib,
+                Wallet::from_lib_ledger_state(known_keys, vouchers, lib, lib_ledger),
+                false,
             ),
         };
 
-        Self {
-            next_new_voucher_index: state.next_new_voucher_index,
+        let service_state = Self {
+            next_new_voucher_index,
             wallet,
-            lib: wallet_lib,
+            lib,
             updater,
+        };
+
+        if should_update_recovery {
+            service_state.update_state();
         }
+
+        service_state
     }
 
     pub const fn lib(&self) -> HeaderId {

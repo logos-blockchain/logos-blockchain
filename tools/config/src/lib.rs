@@ -4,6 +4,7 @@ pub mod consensus;
 pub mod deployment;
 pub mod kms;
 pub mod network;
+pub mod node;
 pub mod release;
 pub mod sdp;
 pub mod time;
@@ -142,7 +143,7 @@ pub fn create_general_configs_from_ids(
                 service_type: ServiceType::BlendNetwork,
                 provider_sk: private_key.clone(),
                 zk_sk: secret_zk_key.clone(),
-                locator: Locator(blend_conf.core.backend.listening_address.clone()),
+                locator: Locator::new_unchecked(blend_conf.core.backend.listening_address.clone()),
                 note: consensus_configs[i].blend_note.clone(),
             },
         )

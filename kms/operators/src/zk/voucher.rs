@@ -2,9 +2,12 @@ use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::{
     ZkKey, errors::KeyError, secured_key::SecureKeyOperator,
 };
+use lb_log_targets::kms;
 use lb_poseidon2::{Digest as _, Poseidon2Bn254Hasher as ZkHasher};
 use tokio::sync::oneshot;
-use tracing::error;
+use tracing::debug;
+
+const LOG_TARGET: &str = kms::operators::ZK_VOUCHER;
 
 /// Derives/returns a voucher secret from key and index.
 // TODO: Make this secure by embedding actual logic
@@ -33,7 +36,7 @@ impl SecureKeyOperator for UnsafeVoucherOperator {
     async fn execute(self: Box<Self>, key: &Self::Key) -> Result<(), Self::Error> {
         let voucher_secret = ZkHasher::digest(&[*key.as_fr(), self.index]);
         if self.result_channel.send(voucher_secret).is_err() {
-            error!("Failed to send voucher via channel");
+            debug!(target: LOG_TARGET, "Failed to send voucher via channel");
         }
         Ok(())
     }

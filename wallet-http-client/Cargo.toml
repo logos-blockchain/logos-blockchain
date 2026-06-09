@@ -18,4 +18,4 @@ lb-common-http-client         = { workspace = true }
 lb-core                       = { workspace = true }
 lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
-url                           = "2.5.7"
+url                           = { workspace = true }

@@ -1,4 +1,5 @@
 use lb_blend::scheduling::membership::Membership;
+use lb_chain_service::Epoch;
 use lb_libp2p::NetworkBehaviour;
 use libp2p::{PeerId, allow_block_list::BlockedPeers};
 
@@ -21,7 +22,7 @@ where
 {
     pub fn new(
         config: &BlendConfig<Libp2pBlendBackendSettings>,
-        current_membership_info: (Membership<PeerId>, u64),
+        current_membership_info: (Membership<PeerId>, Epoch),
     ) -> Self {
         let observation_window_interval_provider =
             ObservationWindowProvider::from((config, &current_membership_info.0));

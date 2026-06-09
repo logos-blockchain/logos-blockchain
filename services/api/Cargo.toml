@@ -12,11 +12,8 @@ version     = { workspace = true }
 [lints]
 workspace = true
 
-[package.metadata.cargo-machete]
-ignored = ["serde_json"]
-
 [dependencies]
-async-trait                = "0.1"
+async-trait                = { workspace = true }
 bytes                      = { workspace = true }
 futures                    = { workspace = true }
 lb-blend-service           = { workspace = true }
@@ -26,6 +23,7 @@ lb-chain-service           = { features = ["openapi"], workspace = true }
 lb-core                    = { workspace = true }
 lb-ledger                  = { workspace = true }
 lb-libp2p                  = { workspace = true }
+lb-log-targets             = { workspace = true }
 lb-network-service         = { features = ["openapi"], workspace = true }
 lb-sdp-service             = { workspace = true }
 lb-storage-service         = { features = ["rocksdb-backend"], workspace = true }
@@ -34,19 +32,11 @@ lb-tx-service              = { features = ["openapi"], workspace = true }
 overwatch                  = { workspace = true }
 serde                      = { workspace = true }
 serde_json                 = { workspace = true }
+thiserror                  = { workspace = true }
 tokio                      = { features = ["net"], workspace = true }
 tokio-stream               = { workspace = true }
-tracing                    = { default-features = false, version = "0.1" }
-
-# openapi related dependencies
-utoipa = { workspace = true }
-# XCompiling from Unix has issues downloading assets. Also, building with Nix can't download assets.
-utoipa-swagger-ui = { features = ["vendored"], workspace = true }
+tracing                    = { workspace = true }
 
 [dev-dependencies]
-axum              = { default-features = false, features = ["http1", "http2", "json", "query", "tokio"], version = "0.7.5" }
-hyper             = { default-features = false, version = "1.0" }
-reqwest           = { default-features = false, features = ["blocking"], workspace = true }
-serde             = { workspace = true }
-tracing           = { workspace = true }
-utoipa-swagger-ui = { default-features = false, features = ["axum"], workspace = true }
+serde   = { workspace = true }
+tracing = { workspace = true }

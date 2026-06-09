@@ -69,21 +69,23 @@ members = [
   "testnet/faucet",
   "testnet/l2-sequencer-archival-demo/archiver",
   "testnet/l2-sequencer-archival-demo/sequencer",
+  "testnet/tui-zone",
   "tests",
   "tests/testing_framework",
   "tools/blockchain-tools",
   "tools/config",
   "tracing",
+  "tracing/targets",
+  "tracing/targets/macros",
   "utils",
   "utxotree",
   "wallet",
   "wallet-http-client",
   "zk/circuits/prover",
-  "zk/circuits/utils",
   "zk/circuits/verifier",
-  "zk/circuits/witness-generator",
   "zk/groth16",
   "zk/poseidon2",
+  "zk/proofs/error",
   "zk/proofs/poc",
   "zk/proofs/pol",
   "zk/proofs/poq",
@@ -94,10 +96,12 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
-cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
-cfgsync-artifacts                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
-cfgsync-core                       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
+cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
+cfgsync-artifacts                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
+cfgsync-core                       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
+hasher                             = { default-features = false, version = "0.1.4" }
+jf-poseidon2                       = { default-features = false, git = "https://github.com/EspressoSystems/jellyfish.git", rev = "dc166cf0f803c3e5067f9dfcc21e3dade986a447" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
@@ -113,9 +117,9 @@ lb-chain-network-service           = { default-features = false, package = "logo
 lb-chain-service                   = { default-features = false, package = "logos-blockchain-chain-service", path = "./services/chain/chain-service" }
 lb-chain-service-common            = { default-features = false, package = "logos-blockchain-chain-service-common", path = "./services/chain/chain-common" }
 lb-circuits-prover                 = { default-features = false, package = "logos-blockchain-circuits-prover", path = "./zk/circuits/prover" }
-lb-circuits-utils                  = { default-features = false, package = "logos-blockchain-circuits-utils", path = "./zk/circuits/utils" }
 lb-circuits-verifier               = { default-features = false, package = "logos-blockchain-circuits-verifier", path = "./zk/circuits/verifier" }
 lb-common-http-client              = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
+lb-config                          = { default-features = false, package = "logos-blockchain-config", path = "./tools/config" }
 lb-core                            = { default-features = false, package = "logos-blockchain-core", path = "./core" }
 lb-cryptarchia-engine              = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
@@ -129,6 +133,8 @@ lb-key-management-system-operators = { default-features = false, package = "logo
 lb-key-management-system-service   = { default-features = false, package = "logos-blockchain-key-management-system-service", path = "./services/key-management-system" }
 lb-ledger                          = { default-features = false, package = "logos-blockchain-ledger", path = "./ledger" }
 lb-libp2p                          = { default-features = false, package = "logos-blockchain-libp2p", path = "./libp2p" }
+lb-log-targets                     = { default-features = false, package = "logos-blockchain-log-targets", path = "./tracing/targets" }
+lb-log-targets-macros              = { default-features = false, package = "logos-blockchain-log-targets-macros", path = "./tracing/targets/macros" }
 lb-mmr                             = { default-features = false, package = "logos-blockchain-mmr", path = "./mmr" }
 lb-network-service                 = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
 lb-node                            = { default-features = false, package = "logos-blockchain-node", path = "./nodes/node/binary" }
@@ -140,68 +146,162 @@ lb-sdp-service                     = { default-features = false, package = "logo
 lb-services-utils                  = { default-features = false, package = "logos-blockchain-services-utils", path = "./services/utils" }
 lb-storage-service                 = { default-features = false, package = "logos-blockchain-storage-service", path = "./services/storage" }
 lb-system-sig-service              = { default-features = false, package = "logos-blockchain-system-sig-service", path = "./services/system-sig" }
-lb-testing-framework               = { default-features = false, package = "testing_framework", path = "./tests/testing_framework" }
+lb-testing-framework               = { default-features = false, package = "testing-framework", path = "./tests/testing_framework" }
 lb-tests                           = { default-features = false, package = "logos-blockchain-tests", path = "./tests" }
 lb-time-service                    = { default-features = false, package = "logos-blockchain-time-service", path = "./services/time" }
 lb-tools                           = { default-features = false, package = "logos-blockchain-tools", path = "./tools/blockchain-tools" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
+lb-tui-zone                        = { default-features = false, package = "logos-blockchain-tui-zone", path = "./testnet/tui-zone" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
 lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
 lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "./utxotree" }
 lb-wallet                          = { default-features = false, package = "logos-blockchain-wallet", path = "./wallet" }
 lb-wallet-http-client              = { default-features = false, package = "logos-blockchain-wallet-http-client", path = "./wallet-http-client" }
 lb-wallet-service                  = { default-features = false, package = "logos-blockchain-wallet-service", path = "./services/wallet" }
-lb-witness-generator               = { default-features = false, package = "logos-blockchain-witness-generator", path = "./zk/circuits/witness-generator" }
 lb-zksign                          = { default-features = false, package = "logos-blockchain-zksign", path = "./zk/proofs/zksign" }
 lb-zone-sdk                        = { default-features = false, package = "logos-blockchain-zone-sdk", path = "./zone-sdk" }
 lb_config                          = { default-features = false, package = "lb_config", path = "./tools/config" }
 lb_network                         = { default-features = false, package = "logos-blockchain-network-service", path = "./services/network" }
-testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
-testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
-testing-framework-runner-k8s       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
-testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_04_23_4854942d" }
+lbc-poc-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poc-sys", tag = "v0.5.3" }
+lbc-pol-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-pol-sys", tag = "v0.5.3" }
+lbc-poq-sys                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-poq-sys", tag = "v0.5.3" }
+lbc-signature-sys                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", tag = "v0.5.3" }
+lbc-types                          = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", tag = "v0.5.3" }
+lbp-error                          = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
+testing-framework-core             = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
+testing-framework-runner-compose   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
+testing-framework-runner-k8s       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
+testing-framework-runner-local     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
 
 # External
-async-trait       = { default-features = false, version = "0.1" }
-blake2            = { default-features = false, version = "0.10" }
-bytes             = { default-features = false, version = "1.3" }
-cached            = { default-features = false, version = "0.55.1" }
-cfg-if            = { default-features = false, version = "1.0.4" }
-divan             = { default-features = false, version = "0.1" }
-ed25519-dalek     = { default-features = false, version = "2" }
-fork_stream       = { default-features = false, version = "0.1.0" }
-futures           = { default-features = false, version = "0.3.32" }
-futures-util      = { default-features = false, version = "0.3.32" }
-hex               = { default-features = false, version = "0.4" }
-kube              = { default-features = false, features = ["client", "rustls-tls"], version = "0.87" }
-libp2p            = { default-features = false, version = "0.55" }
-libp2p-stream     = { default-features = false, version = "0.3.0-alpha" }
-log               = { default-features = false, version = "0.4" }
-nutype            = { default-features = false, version = "0.6.2" }
-overwatch         = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
-overwatch-derive  = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
-rand              = { default-features = false, version = "0.8" }
-reqwest           = { default-features = false, version = "0.12" }
-serde             = { default-features = false, version = "1.0" }
-serde-big-array   = { default-features = false, version = "0.5" }
-serde_ignored     = { default-features = false, version = "0.1" }
-serde_json        = { default-features = false, version = "1.0" }
-serde_with        = { default-features = false, version = "3.14.0" }
-serde_yaml        = { default-features = false, version = "0.9.33" }
-subtle            = { default-features = false, version = "2.6.1" }
-tempfile          = { default-features = false, version = "3" }
-thiserror         = { default-features = false, version = "2.0" }
-time              = { default-features = false, version = "0.3" }
-tokio             = { default-features = false, version = "1" }
-tokio-stream      = { default-features = false, version = "0.1.18" }
-tonic             = { default-features = false, version = "0.14.5" }
-tracing           = { default-features = false, version = "0.1" }
-utoipa            = { default-features = false, version = "4.0" }
-utoipa-swagger-ui = { default-features = false, version = "7.0" }
-uuid              = { default-features = false, features = ["v4"], version = "1" }
-x25519-dalek      = { default-features = false, version = "2" }
-zeroize           = { default-features = false, version = "1" }
+anyhow                             = { default-features = false, version = "1" }
+ark-bn254                          = { default-features = false, version = "0.4" }
+ark-ec                             = { default-features = false, version = "0.4" }
+ark-ff                             = { default-features = false, version = "0.4" }
+ark-groth16                        = { default-features = false, version = "0.4" }
+ark-serialize                      = { default-features = false, version = "0.4.2" }
+astro-float                        = { default-features = false, version = "0.9" }
+async-ctrlc                        = { default-features = false, version = "1.2" }
+async-stream                       = { default-features = false, version = "0.3.6" }
+async-trait                        = { default-features = false, version = "0.1" }
+axum                               = { default-features = false, version = "0.7.5" }
+backon                             = { default-features = false, version = "1.3.0" }
+bincode                            = { default-features = false, version = "1.3" }
+blake2                             = { default-features = false, version = "0.10" }
+bytes                              = { default-features = false, version = "1.3" }
+cached                             = { default-features = false, version = "0.55.1" }
+cbindgen                           = { default-features = false, version = "0.29" }
+cfg-if                             = { default-features = false, version = "1.0.4" }
+chrono                             = { default-features = false, version = "0.4" }
+cipher                             = { default-features = false, version = "0.4" }
+clap                               = { default-features = false, version = "4" }
+color-eyre                         = { default-features = false, version = "0.6.0" }
+console-subscriber                 = { default-features = false, version = "0.4" }
+const-hex                          = { default-features = false, version = "1" }
+const-str                          = { default-features = false, version = "0.4.3" }
+cucumber                           = { default-features = false, version = "=0.22.0" }
+derivative                         = { default-features = false, version = "2" }
+dhat                               = { default-features = false, version = "0.3.3" }
+dirs                               = { default-features = false, version = "6.0" }
+divan                              = { default-features = false, version = "0.1" }
+ed25519                            = { default-features = false, version = "2.2.3" }
+ed25519-dalek                      = { default-features = false, version = "2" }
+either                             = { default-features = false, version = "1.15.0" }
+flate2                             = { default-features = false, version = "1.1.9" }
+fork_stream                        = { default-features = false, version = "0.1.0" }
+futures                            = { default-features = false, version = "0.3.32" }
+futures-timer                      = { default-features = false, version = "3.0.3" }
+futures-util                       = { default-features = false, version = "0.3.32" }
+generic-array                      = { default-features = false, version = "1.2" }
+hex                                = { default-features = false, version = "0.4" }
+http                               = { default-features = false, version = "1.3" }
+humantime                          = { default-features = false, version = "2.1" }
+hyper                              = { default-features = false, version = "1.0" }
+igd-next                           = { default-features = false, version = "0.16.1" }
+itertools                          = { default-features = false, version = "0.14" }
+kube                               = { default-features = false, version = "0.87" }
+libp2p                             = { default-features = false, version = "0.55" }
+libp2p-stream                      = { default-features = false, version = "0.3.0-alpha" }
+libp2p-swarm-test                  = { default-features = false, version = "0.5" }
+log                                = { default-features = false, version = "0.4" }
+multiaddr                          = { default-features = false, version = "0.18" }
+natpmp                             = { default-features = false, version = "0.5" }
+netdev                             = { default-features = false, version = "0.31" }
+nistrs                             = { default-features = false, version = "0.1.2" }
+nom                                = { default-features = false, version = "8" }
+num-bigint                         = { default-features = false, version = "0.4" }
+num-traits                         = { default-features = false, version = "0.2.19" }
+num_enum                           = { default-features = false, version = "0.7.4" }
+nutype                             = { default-features = false, version = "0.6.2" }
+opentelemetry                      = { default-features = false, version = "0.31" }
+opentelemetry-appender-tracing     = { default-features = false, version = "0.31" }
+opentelemetry-http                 = { default-features = false, version = "0.31" }
+opentelemetry-otlp                 = { default-features = false, version = "0.31" }
+opentelemetry-semantic-conventions = { default-features = false, version = "0.31" }
+opentelemetry_sdk                  = { default-features = false, version = "0.31" }
+overwatch                          = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
+overwatch-derive                   = { default-features = false, git = "https://github.com/logos-co/Overwatch", rev = "448c192" }
+owo-colors                         = { default-features = false, version = "4.2.3" }
+pprof                              = { default-features = false, version = "0.15" }
+proc-macro2                        = { default-features = false, version = "1" }
+proptest                           = { default-features = false, version = "1.0" }
+proptest-macro                     = { default-features = false, version = "0.2" }
+quickcheck                         = { default-features = false, version = "1.0" }
+quickcheck_macros                  = { default-features = false, version = "1.0" }
+quote                              = { default-features = false, version = "1" }
+rand                               = { default-features = false, version = "0.8" }
+rand_chacha                        = { default-features = false, version = "0.3" }
+rand_core                          = { default-features = false, version = "0.6.4" }
+redb                               = { default-features = false, version = "2.2" }
+reqwest                            = { default-features = false, version = "0.12" }
+rocksdb                            = { default-features = false, version = "0.24" }
+rpds                               = { default-features = false, version = "1" }
+rs-merkle-tree                     = { default-features = false, version = "0.1" }
+rust-rapidsnark                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git", rev = "8f51c339fd4d4a3e30c361a20cc118ce20f9f39f" } # fix/static-linux-glibc-pie-compat
+serde                              = { default-features = false, version = "1.0" }
+serde-big-array                    = { default-features = false, version = "0.5" }
+serde_arrays                       = { default-features = false, version = "0.2.0" }
+serde_ignored                      = { default-features = false, version = "0.1" }
+serde_json                         = { default-features = false, version = "1.0" }
+serde_path_to_error                = { default-features = false, version = "0.1" }
+serde_urlencoded                   = { default-features = false, version = "0.7.1" }
+serde_with                         = { default-features = false, version = "3.14.0" }
+serde_yaml                         = { default-features = false, version = "0.9.33" }
+serde_yml                          = { default-features = false, version = "0.0.12" }
+serial_test                        = { default-features = false, version = "3.1.1" }
+sntpc                              = { default-features = false, version = "0.5" }
+strum                              = { default-features = false, version = "0.27" }
+strum_macros                       = { default-features = false, version = "0.27.2" }
+subtle                             = { default-features = false, version = "2.6.1" }
+syn                                = { default-features = false, version = "2" }
+sysinfo                            = { default-features = false, version = "0.37" }
+tempfile                           = { default-features = false, version = "3" }
+test-log                           = { default-features = false, version = "0.2" }
+thiserror                          = { default-features = false, version = "2.0" }
+tikv-jemallocator                  = { default-features = false, version = "0.6" }
+time                               = { default-features = false, version = "0.3" }
+tokio                              = { default-features = false, version = "1" }
+tokio-stream                       = { default-features = false, version = "0.1.18" }
+tokio-util                         = { default-features = false, version = "0.7" }
+tonic                              = { default-features = false, version = "0.14.5" }
+tower                              = { default-features = false, version = "0.4" }
+tower-http                         = { default-features = false, version = "0.6.8" }
+tracing                            = { default-features = false, version = "0.1" }
+tracing-appender                   = { default-features = false, version = "0.2" }
+tracing-futures                    = { default-features = false, version = "0.2" }
+tracing-gelf                       = { default-features = false, version = "0.7" }
+tracing-loki                       = { default-features = false, version = "0.2.5" }
+tracing-opentelemetry              = { default-features = false, version = "0.32.1" }
+tracing-subscriber                 = { default-features = false, version = "0.3" }
+url                                = { default-features = false, version = "2" }
+utoipa                             = { default-features = false, version = "4.0" }
+utoipa-swagger-ui                  = { default-features = false, version = "7.0" }
+uuid                               = { default-features = false, version = "1" }
+validator                          = { default-features = false, version = "0.20.0" }
+x25519-dalek                       = { default-features = false, version = "2" }
+zerocopy                           = { default-features = false, version = "0.8.26" }
+zeroize                            = { default-features = false, version = "1" }
 
 [workspace.lints.clippy]
 
@@ -304,7 +404,6 @@ shadow_same                        = { level = "allow" }
 shadow_unrelated                   = { level = "allow" }
 tests_outside_test_module          = { level = "allow" }
 todo                               = { level = "allow" }
-unchecked_time_subtraction         = { level = "allow" }
 unimplemented                      = { level = "allow" }
 unreachable                        = { level = "allow" }
 unwrap_in_result                   = { level = "allow" }
@@ -321,8 +420,10 @@ unused_results            = { level = "allow" } # We have Clippy lints to warn o
 ambiguous_negative_literals   = { level = "warn" }
 closure_returning_async_block = { level = "warn" }
 deref_into_dyn_supertrait     = { level = "warn" }
+ffi_unwind_calls              = { level = "warn" }
 impl_trait_redundant_captures = { level = "warn" }
 let_underscore_drop           = { level = "warn" }
+linker_messages               = { level = "warn" }
 macro_use_extern_crate        = { level = "warn" }
 missing_unsafe_on_extern      = { level = "warn" }
 redundant_imports             = { level = "warn" }
@@ -340,12 +441,10 @@ unused_lifetimes              = { level = "warn" }
 unused_macro_rules            = { level = "warn" }
 unused_qualifications         = { level = "warn" }
 
-# TODO: Address these allow-by-default Rustc lints at some point. To allow them, move them to the list of explicitly allowed lints. To enforce them, move them to the list of explicitly warned ones.
+# TODO: Address these allow-by-default Rustc lints at some point. To allow them, simply remove them from this list. To enforce them, move them to the list of explicitly warned ones and mark them as "warn" level.
 absolute_paths_not_starting_with_crate = { level = "allow" }
 elided_lifetimes_in_paths              = { level = "allow" }
-ffi_unwind_calls                       = { level = "allow" }
 impl_trait_overcaptures                = { level = "allow" }
-linker_messages                        = { level = "allow" }
 missing_copy_implementations           = { level = "allow" }
 missing_debug_implementations          = { level = "allow" }
 missing_docs                           = { level = "allow" }

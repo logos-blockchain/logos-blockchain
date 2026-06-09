@@ -90,7 +90,7 @@ fn extract_l2_blocks(
         .flat_map(|tx| {
             let tx_hash = tx.mantle_tx.hash();
             tx.mantle_tx
-                .ops
+                .0
                 .iter()
                 .filter_map(|op| match op {
                     Op::ChannelInscribe(InscriptionOp {

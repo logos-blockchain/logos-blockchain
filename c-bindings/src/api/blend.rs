@@ -2,16 +2,16 @@ use std::ffi::c_char;
 
 use lb_core::{
     mantle::NoteId,
-    sdp::{self, DeclarationMessage, Locator, ProviderId, ServiceType},
+    sdp::{self, DeclarationMessage, Locator, Locators, ProviderId, ServiceType},
 };
 use lb_groth16::fr_from_bytes;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use multiaddr::Multiaddr;
 
 use crate::{
     LogosBlockchainNode,
     api::sdp::post_declaration_sync,
     errors::OperationStatus,
+    logging,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
@@ -33,7 +33,7 @@ unsafe fn parse_provider_id(ptr: *const u8) -> Result<ProviderId, OperationStatu
         .try_into()
         .expect("slice is exactly KEY_SIZE bytes");
     ProviderId::try_from(bytes).map_err(|_| {
-        log::error!("[blend_join_as_core_node] Invalid `provider_id` bytes.");
+        logging::error!("parse_provider_id", "Invalid `provider_id` bytes.");
         OperationStatus::ValidationError
     })
 }
@@ -41,7 +41,7 @@ unsafe fn parse_provider_id(ptr: *const u8) -> Result<ProviderId, OperationStatu
 unsafe fn parse_zk_id(ptr: *const u8) -> Result<ZkPublicKey, OperationStatus> {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, KEY_SIZE) };
     fr_from_bytes(bytes).map(ZkPublicKey::new).map_err(|_| {
-        log::error!("[blend_join_as_core_node] Invalid `zk_id` bytes.");
+        logging::error!("parse_zk_id", "Invalid `zk_id` bytes.");
         OperationStatus::ValidationError
     })
 }
@@ -49,31 +49,35 @@ unsafe fn parse_zk_id(ptr: *const u8) -> Result<ZkPublicKey, OperationStatus> {
 unsafe fn parse_locked_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus> {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, KEY_SIZE) };
     fr_from_bytes(bytes).map(NoteId).map_err(|_| {
-        log::error!("[blend_join_as_core_node] Invalid `locked_note_id` bytes.");
+        logging::error!("parse_locked_note_id", "Invalid `locked_note_id` bytes.");
         OperationStatus::ValidationError
     })
 }
 
-unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult<Vec<Locator>> {
+unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult<Locators> {
     let locator_ptrs = unsafe { std::slice::from_raw_parts(ptrs, len) };
     let mut parsed = Vec::with_capacity(len);
     for (i, &ptr) in locator_ptrs.iter().enumerate() {
         if ptr.is_null() {
-            log::error!("[blend_join_as_core_node] Null pointer at `locators[{i}]`.");
+            logging::error!("parse_locators", "Null pointer at `locators[{i}]`.");
             return Err(OperationStatus::NullPointer);
         }
         let c_str = unsafe { std::ffi::CStr::from_ptr(ptr) };
         let Ok(s) = c_str.to_str() else {
-            log::error!("[blend_join_as_core_node] `locators[{i}]` is not valid UTF-8.");
+            logging::error!("parse_locators", "`locators[{i}]` is not valid UTF-8.");
             return Err(OperationStatus::ValidationError);
         };
-        let Ok(addr) = s.parse::<Multiaddr>() else {
-            log::error!("[blend_join_as_core_node] `locators[{i}]` is not a valid multiaddr.");
+        let Ok(addr) = s.parse::<Locator>() else {
+            logging::error!("parse_locators", "`locators[{i}]` is not a valid locator.");
             return Err(OperationStatus::ValidationError);
         };
-        parsed.push(Locator(addr));
+        parsed.push(addr);
     }
-    Ok(parsed)
+    let Ok(locators) = parsed.try_into() else {
+        logging::error!("parse_locators", "Cannot use empty list of locators.");
+        return Err(OperationStatus::ValidationError);
+    };
+    Ok(locators)
 }
 
 /// Joins the Blend network as a core node by posting a service declaration.
@@ -86,7 +90,7 @@ unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult
 /// - `zk_id`: A non-null pointer to 32 bytes representing the ZK public key.
 /// - `locked_note_id`: A non-null pointer to 32 bytes representing the locked
 ///   note ID.
-/// - `locators`: A pointer to an array of multiaddr C strings. May be null if
+/// - `locators`: A pointer to an array of locator C strings. May be null if
 ///   `locators_len` is 0.
 /// - `locators_len`: Number of entries in the `locators` array.
 ///
@@ -131,7 +135,10 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     };
     post_declaration_sync(node, join_blend_as_core_node_message)
         .inspect_err(|(message, _operation_status)| {
-            log::error!("[blend_join_as_core_node] Failed to post declaration: {message}");
+            logging::error!(
+                "blend_join_as_core_node",
+                "Failed to post declaration: {message}"
+            );
         })
         .map_err(|(_message, operation_status)| operation_status)
         .map(DeclarationId::from)

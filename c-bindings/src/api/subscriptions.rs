@@ -7,13 +7,12 @@ use lb_node::{
     ApiStorageAdapter, RuntimeServiceId, SignedMantleTx, StorageService,
     generic_services::CryptarchiaService,
 };
-use log::warn;
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
     api::types::block::Block,
     callbacks::{BoxedCallback, CCallback, into_boxed_callback},
-    return_error_if_null_pointer,
+    logging, return_error_if_null_pointer,
 };
 
 pub fn subscribe_to_new_blocks_sync(
@@ -27,11 +26,17 @@ pub fn subscribe_to_new_blocks_sync(
             .relay::<CryptarchiaService<RuntimeServiceId>>()
             .await
         else {
-            log::error!("Failed to get relay to CryptarchiaService");
+            logging::error!(
+                "subscribe_to_new_blocks_sync",
+                "Failed to get relay to CryptarchiaService"
+            );
             return;
         };
         let Ok(storage_relay) = overwatch.relay::<StorageService>().await else {
-            log::error!("Failed to get relay to StorageService");
+            logging::error!(
+                "subscribe_to_new_blocks_sync",
+                "Failed to get relay to StorageService"
+            );
             return;
         };
         let api =
@@ -49,14 +54,24 @@ pub fn subscribe_to_new_blocks_sync(
                         if let Ok(Some(block)) = res {
                             callback_per_block(Block::from(block).as_ptr());
                         } else {
-                            log::error!("Failed to get block {:?} from storage", event.block_id);
+                            logging::error!(
+                                "subscribe_to_new_blocks_sync",
+                                "Failed to get block {:?} from storage",
+                                event.block_id
+                            );
                         }
                     }
-                    warn!("Block stream closed, subscription to new blocks ended.");
+                    logging::warning!(
+                        "subscribe_to_new_blocks_sync",
+                        "Block stream closed, subscription to new blocks ended."
+                    );
                 });
             }
             Err(e) => {
-                log::error!("Failed to subscribe to blocks: {e}");
+                logging::error!(
+                    "subscribe_to_new_blocks_sync",
+                    "Failed to subscribe to blocks: {e}"
+                );
             }
         }
     });

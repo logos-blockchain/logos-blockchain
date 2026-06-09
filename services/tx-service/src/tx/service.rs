@@ -13,7 +13,11 @@ use std::{
 };
 
 use futures::StreamExt as _;
-use lb_core::mantle::Transaction;
+use lb_core::{
+    block::MAX_BLOCK_SIZE,
+    mantle::{StorageSize, Transaction},
+};
+use lb_log_targets::mempool;
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_services_utils::{
     overwatch::{
@@ -27,7 +31,7 @@ use overwatch::{
     OpaqueServiceResourcesHandle,
     services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::oneshot;
 
 use crate::{
     MempoolMetrics, MempoolMsg, TransactionsByHashesResponse, backend,
@@ -36,6 +40,8 @@ use crate::{
     storage::MempoolStorageAdapter,
     tx::{settings::TxMempoolSettings, state::TxMempoolState},
 };
+
+const LOG_TARGET: &str = mempool::SERVICE;
 
 type MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId> =
     overwatch::services::state::StateUpdater<
@@ -158,7 +164,7 @@ where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
     <Pool as RecoverableMempool>::RecoveryState: Debug + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + Clone + Send + 'static,
+    Pool::Item: Transaction<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Settings: Clone + Sync + Send,
     NetworkAdapter:
         NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
@@ -183,6 +189,7 @@ where
         initial_state: Self::State,
     ) -> Result<Self, overwatch::DynError> {
         tracing::trace!(
+            target: LOG_TARGET,
             "Initializing TxMempoolService with initial state {:#?}",
             initial_state.pool
         );
@@ -236,11 +243,10 @@ where
 
         self.service_resources_handle.status_updater.notify_ready();
         tracing::info!(
+            target: LOG_TARGET,
             "Service '{}' is ready.",
             <RuntimeServiceId as AsServiceId<Self>>::SERVICE_ID
         );
-
-        let (tx_broadcast, _) = broadcast::channel::<Pool::Item>(1000);
 
         wait_until_services_are_ready!(
             &overwatch_handle,
@@ -249,13 +255,8 @@ where
         )
         .await?;
 
-        self.run_event_loop(
-            &mut pool,
-            network_service_relay,
-            &mut network_items,
-            &tx_broadcast,
-        )
-        .await
+        self.run_event_loop(&mut pool, network_service_relay, &mut network_items)
+            .await
     }
 }
 
@@ -264,7 +265,7 @@ impl<Pool, NetworkAdapter, RecoveryBackend, StorageAdapter, RuntimeServiceId>
 where
     Pool: MemPoolTrait<Storage = StorageAdapter> + RecoverableMempool + Send + Sync,
     StorageAdapter: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    Pool::Item: Transaction<Hash = Pool::Key> + Clone + Send + 'static,
+    Pool::Item: Transaction<Hash = Pool::Key> + StorageSize + Clone + Send + 'static,
     Pool::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + 'static,
@@ -278,7 +279,6 @@ where
             BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>,
         >,
         network_items: &mut Box<dyn futures::Stream<Item = (Pool::Key, Pool::Item)> + Unpin + Send>,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
     ) -> Result<(), overwatch::DynError>
     where
         Pool::Settings: Send + Sync,
@@ -296,10 +296,10 @@ where
                         .get_updated_settings()
                         .network_adapter;
 
-                    Self::handle_mempool_message(pool, relay_msg, network_service_relay.clone(), state_updater, settings, tx_broadcast).await;
+                    Self::handle_mempool_message(pool, relay_msg, network_service_relay.clone(), state_updater, settings).await;
                 }
                 Some((key, item)) = network_items.next() => {
-                    Self::handle_network_item(pool, key, item, tx_broadcast, &self.service_resources_handle.state_updater).await;
+                    Self::handle_network_item(pool, key, item, &self.service_resources_handle.state_updater).await;
                 }
             }
         }
@@ -311,7 +311,6 @@ where
         network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
         state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         settings: NetworkAdapter::Settings,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
@@ -330,7 +329,6 @@ where
                     network_relay,
                     state_updater,
                     settings,
-                    tx_broadcast,
                 )
                 .await;
             }
@@ -347,7 +345,7 @@ where
                 let result = Self::partition_transactions_by_availability(pool, hashes).await;
 
                 if let Err(_e) = reply_channel.send(result) {
-                    tracing::debug!("Failed to send transactions reply");
+                    tracing::debug!(target: LOG_TARGET, "Failed to send transactions reply");
                 }
             }
             MempoolMsg::Remove { ids } => {
@@ -362,19 +360,9 @@ where
             } => {
                 Self::handle_status_message(pool, &items, reply_channel);
             }
-            MempoolMsg::Subscribe { reply_channel } => {
-                let subscriber = tx_broadcast.subscribe();
-                if let Err(_e) = reply_channel.send(subscriber) {
-                    tracing::debug!("Failed to send subscriber");
-                }
-            }
         }
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "This helper needs both networking and storage handles; splitting it would obscure the call site."
-    )]
     async fn handle_add_message(
         pool: &mut Pool,
         key: Pool::Key,
@@ -383,11 +371,15 @@ where
         network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
         state_updater: MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
         settings: NetworkAdapter::Settings,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
+        if let Err(error) = Self::validate_item_for_mempool(&item) {
+            Self::handle_add_error(error, reply_channel);
+            return;
+        }
+
         let item_for_broadcast = item.clone();
 
         match pool.add_item(key, item).await {
@@ -399,7 +391,6 @@ where
                     network_relay,
                     item_for_broadcast,
                     reply_channel,
-                    tx_broadcast,
                 );
             }
             Err(MempoolError::ExistingItem) => {
@@ -410,7 +401,7 @@ where
                     adapter.send(item_for_broadcast).await;
                 });
                 if let Err(e) = reply_channel.send(Ok(())) {
-                    tracing::debug!("Failed to send add reply: {:?}", e);
+                    tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
                 }
             }
             Err(e) => Self::handle_add_error(e, reply_channel),
@@ -423,7 +414,7 @@ where
         reply_channel: oneshot::Sender<Pin<Box<dyn futures::Stream<Item = Pool::Item> + Send>>>,
     ) {
         let pending_items = pool.pending_item_count();
-        tracing::trace!(pending_items, "Handling mempool View message");
+        tracing::trace!(target: LOG_TARGET, pending_items, "Handling mempool View message");
 
         let items = pool
             .view(ancestor_hint)
@@ -431,7 +422,7 @@ where
             .unwrap_or_else(|_| Box::pin(futures::stream::iter(Vec::new())));
 
         if let Err(_e) = reply_channel.send(Box::pin(items)) {
-            tracing::debug!("Failed to send view reply");
+            tracing::debug!(target: LOG_TARGET, "Failed to send view reply");
         }
     }
 
@@ -442,7 +433,7 @@ where
         };
 
         if let Err(_e) = reply_channel.send(info) {
-            tracing::debug!("Failed to send metrics reply");
+            tracing::debug!(target: LOG_TARGET, "Failed to send metrics reply");
         }
     }
 
@@ -454,7 +445,7 @@ where
         let statuses = pool.status(items);
 
         if let Err(_e) = reply_channel.send(statuses) {
-            tracing::debug!("Failed to send status reply");
+            tracing::debug!(target: LOG_TARGET, "Failed to send status reply");
         }
     }
 
@@ -498,20 +489,16 @@ where
         network_relay: OutboundRelay<BackendNetworkMsg<NetworkAdapter::Backend, RuntimeServiceId>>,
         item_for_broadcast: Pool::Item,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
     ) {
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
 
-        let broadcast_clone = item_for_broadcast.clone();
         tokio::spawn(async move {
             let adapter = NetworkAdapter::new(settings, network_relay).await;
             adapter.send(item_for_broadcast).await;
         });
 
-        drop(tx_broadcast.send(broadcast_clone));
-
         if let Err(e) = reply_channel.send(Ok(())) {
-            tracing::debug!("Failed to send add reply: {:?}", e);
+            tracing::debug!(target: LOG_TARGET, "Failed to send add reply: {:?}", e);
         }
     }
 
@@ -519,31 +506,71 @@ where
         error: MempoolError,
         reply_channel: oneshot::Sender<Result<(), MempoolError>>,
     ) {
-        tracing::debug!("Could not add item to the pool: {}", error);
+        tracing::debug!(target: LOG_TARGET, "Could not add item to the pool: {}", error);
         if let Err(e) = reply_channel.send(Err(error)) {
-            tracing::debug!("Failed to send error reply: {:?}", e);
+            tracing::debug!(target: LOG_TARGET, "Failed to send error reply: {:?}", e);
         }
+    }
+
+    fn validate_item_for_mempool(item: &Pool::Item) -> Result<(), MempoolError> {
+        let size = item.storage_size();
+        if size > MAX_BLOCK_SIZE {
+            return Err(MempoolError::ItemTooLarge {
+                size,
+                max: MAX_BLOCK_SIZE,
+            });
+        }
+
+        Ok(())
     }
 
     async fn handle_network_item(
         pool: &mut Pool,
         key: Pool::Key,
         item: Pool::Item,
-        tx_broadcast: &broadcast::Sender<Pool::Item>,
         state_updater: &MempoolStateUpdater<Pool, NetworkAdapter, RuntimeServiceId>,
     ) where
         Pool::Settings: Send + Sync,
         NetworkAdapter::Settings: Send + Sync,
     {
-        if let Err(e) = pool.add_item(key, item.clone()).await {
-            tracing::debug!("could not add item to the pool due to: {e}");
+        if let Err(err) = Self::validate_item_for_mempool(&item) {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "could not add network item to the pool due to: {err}"
+            );
             return;
         }
 
-        drop(tx_broadcast.send(item));
+        if let Err(e) = pool.add_item(key, item).await {
+            Self::handle_network_add_error(e);
+            return;
+        }
 
-        tracing::trace!(counter.tx_mempool_pending_items = pool.pending_item_count());
+        tracing::trace!(
+            target: LOG_TARGET,
+            {
+                counter.tx_mempool_pending_items = pool.pending_item_count(),
+            },
+            "mempool pending items updated"
+        );
 
         state_updater.update(Some(<Pool as RecoverableMempool>::save(pool).into()));
+    }
+
+    fn handle_network_add_error(error: MempoolError) {
+        match error {
+            MempoolError::ExistingItem => {
+                tracing::trace!(
+                    target: LOG_TARGET,
+                    "network item already exists in the mempool"
+                );
+            }
+            err => {
+                tracing::debug!(
+                    target: LOG_TARGET,
+                    "could not add item to the pool due to: {err}"
+                );
+            }
+        }
     }
 }

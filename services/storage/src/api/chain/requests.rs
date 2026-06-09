@@ -13,7 +13,11 @@ use tokio::sync::oneshot::Sender;
 
 use crate::{
     StorageMsg, StorageServiceError,
-    api::{StorageApiRequest, StorageBackendApi, StorageOperation, chain::StorageChainApi},
+    api::{
+        StorageApiRequest, StorageBackendApi, StorageOperation,
+        backend::{streamed_immutable_block_ids_reverse_vec, streamed_immutable_block_ids_vec},
+        chain::StorageChainApi,
+    },
     backends::StorageBackend,
 };
 
@@ -26,6 +30,7 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: <Backend as StorageChainApi>::Block,
+        events: <Backend as StorageChainApi>::Events,
     },
     RemoveBlock {
         header_id: HeaderId,
@@ -35,6 +40,10 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         header_id: HeaderId,
         response_tx: Sender<Option<HeaderId>>,
     },
+    GetBlockEvents {
+        header_id: HeaderId,
+        response_tx: Sender<Option<Backend::Events>>,
+    },
     StoreImmutableBlockIds {
         ids: BTreeMap<Slot, HeaderId>,
     },
@@ -43,6 +52,11 @@ pub enum ChainApiRequest<Backend: StorageBackend> {
         response_tx: Sender<Option<HeaderId>>,
     },
     ScanImmutableBlockIds {
+        slot_range: RangeInclusive<Slot>,
+        limit: NonZeroUsize,
+        response_tx: Sender<Vec<HeaderId>>,
+    },
+    ScanImmutableBlockIdsReverse {
         slot_range: RangeInclusive<Slot>,
         limit: NonZeroUsize,
         response_tx: Sender<Vec<HeaderId>>,
@@ -73,7 +87,8 @@ where
                 header_id,
                 parent_id,
                 block,
-            } => handle_store_block(backend, header_id, parent_id, block).await,
+                events,
+            } => handle_store_block(backend, header_id, parent_id, block, events).await,
             Self::RemoveBlock {
                 header_id,
                 response_tx,
@@ -82,6 +97,10 @@ where
                 header_id,
                 response_tx,
             } => handle_get_block_parent(backend, header_id, response_tx).await,
+            Self::GetBlockEvents {
+                header_id,
+                response_tx,
+            } => handle_get_block_events(backend, header_id, response_tx).await,
             Self::StoreImmutableBlockIds { ids: block_ids } => {
                 handle_store_immutable_block_ids(backend, block_ids).await
             }
@@ -93,6 +112,14 @@ where
                 limit,
                 response_tx,
             } => handle_scan_immutable_block_ids(backend, slot_range, limit, response_tx).await,
+            Self::ScanImmutableBlockIdsReverse {
+                slot_range,
+                limit,
+                response_tx,
+            } => {
+                handle_scan_immutable_block_ids_reverse(backend, slot_range, limit, response_tx)
+                    .await
+            }
             Self::StoreTransactions { transactions } => {
                 handle_store_transactions(backend, transactions).await
             }
@@ -133,9 +160,10 @@ async fn handle_store_block<Backend: StorageBackend>(
     header_id: HeaderId,
     parent_id: HeaderId,
     block: Backend::Block,
+    events: Backend::Events,
 ) -> Result<(), StorageServiceError> {
     backend
-        .store_block(header_id, parent_id, block)
+        .store_block(header_id, parent_id, block, events)
         .await
         .map_err(|e| StorageServiceError::BackendError(e.into()))
 }
@@ -154,6 +182,27 @@ async fn handle_get_block_parent<Backend: StorageBackend>(
         return Err(StorageServiceError::ReplyError {
             message: format!(
                 "Failed to send reply for get block parent request by header_id: {header_id}"
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+async fn handle_get_block_events<Backend: StorageBackend>(
+    backend: &mut Backend,
+    header_id: HeaderId,
+    response_tx: Sender<Option<Backend::Events>>,
+) -> Result<(), StorageServiceError> {
+    let result = backend
+        .get_block_events(header_id)
+        .await
+        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
+
+    if response_tx.send(result).is_err() {
+        return Err(StorageServiceError::ReplyError {
+            message: format!(
+                "Failed to send reply for get block events request by header_id: {header_id}"
             ),
         });
     }
@@ -219,14 +268,27 @@ async fn handle_scan_immutable_block_ids<Backend: StorageBackend>(
     limit: NonZeroUsize,
     response_tx: Sender<Vec<HeaderId>>,
 ) -> Result<(), StorageServiceError> {
-    let result = backend
-        .scan_immutable_block_ids(slot_range, limit)
-        .await
-        .map_err(|e| StorageServiceError::BackendError(e.into()))?;
+    let result = streamed_immutable_block_ids_vec(backend, slot_range, limit).await?;
 
     if response_tx.send(result).is_err() {
         return Err(StorageServiceError::ReplyError {
             message: "Failed to send reply for scan_immutable_block_ids request".into(),
+        });
+    }
+
+    Ok(())
+}
+async fn handle_scan_immutable_block_ids_reverse<Backend: StorageBackend>(
+    backend: &mut Backend,
+    slot_range: RangeInclusive<Slot>,
+    limit: NonZeroUsize,
+    response_tx: Sender<Vec<HeaderId>>,
+) -> Result<(), StorageServiceError> {
+    let result = streamed_immutable_block_ids_reverse_vec(backend, slot_range, limit).await?;
+
+    if response_tx.send(result).is_err() {
+        return Err(StorageServiceError::ReplyError {
+            message: "Failed to send reply for scan_immutable_block_ids_reverse request".into(),
         });
     }
 
@@ -251,12 +313,14 @@ impl<Api: StorageBackend> StorageMsg<Api> {
         header_id: HeaderId,
         parent_id: HeaderId,
         block: <Api as StorageChainApi>::Block,
+        events: <Api as StorageChainApi>::Events,
     ) -> Self {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::StoreBlock {
                 header_id,
                 parent_id,
                 block,
+                events,
             }),
         }
     }
@@ -268,6 +332,19 @@ impl<Api: StorageBackend> StorageMsg<Api> {
     ) -> Self {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::GetBlockParent {
+                header_id,
+                response_tx,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn get_block_events_request(
+        header_id: HeaderId,
+        response_tx: Sender<Option<<Api as StorageChainApi>::Events>>,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Chain(ChainApiRequest::GetBlockEvents {
                 header_id,
                 response_tx,
             }),
@@ -315,6 +392,21 @@ impl<Api: StorageBackend> StorageMsg<Api> {
     ) -> Self {
         Self::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIds {
+                slot_range,
+                limit,
+                response_tx,
+            }),
+        }
+    }
+
+    #[must_use]
+    pub const fn scan_immutable_block_ids_request_reverse(
+        slot_range: RangeInclusive<Slot>,
+        limit: NonZeroUsize,
+        response_tx: Sender<Vec<HeaderId>>,
+    ) -> Self {
+        Self::Api {
+            request: StorageApiRequest::Chain(ChainApiRequest::ScanImmutableBlockIdsReverse {
                 slot_range,
                 limit,
                 response_tx,

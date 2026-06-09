@@ -1,4 +1,5 @@
 use core::fmt::{self, Debug, Formatter};
+use std::hash::{Hash, Hasher};
 
 use lb_groth16::Fr;
 use lb_zksign::ZkSignError;
@@ -66,6 +67,12 @@ impl ZkKey {
     #[must_use]
     pub const fn as_unsecured(&self) -> &UnsecuredZkKey {
         &self.0
+    }
+}
+
+impl Hash for ZkKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.to_public_key().hash(state);
     }
 }
 

@@ -1,4 +1,5 @@
 use core::fmt::{self, Debug, Formatter};
+use std::hash::{Hash, Hasher};
 
 use bytes::Bytes;
 use ed25519_dalek::SigningKey;
@@ -66,6 +67,12 @@ impl Ed25519Key {
     #[must_use]
     pub fn into_unsecured(self) -> UnsecuredEd25519Key {
         self.0.clone()
+    }
+}
+
+impl Hash for Ed25519Key {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.public_key().hash(state);
     }
 }
 

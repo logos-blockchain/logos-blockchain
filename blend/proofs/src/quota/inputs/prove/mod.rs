@@ -29,7 +29,6 @@ impl TryFrom<Inputs> for PoQWitnessInputs {
             core_root: value.public.core.zk_root,
             pol_epoch_nonce: value.public.leader.pol_epoch_nonce,
             pol_ledger_aged: value.public.leader.pol_ledger_aged,
-            session: value.public.session,
             lottery_0: value.public.leader.lottery_0,
             lottery_1: value.public.leader.lottery_1,
         };

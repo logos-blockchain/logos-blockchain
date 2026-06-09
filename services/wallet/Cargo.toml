@@ -10,12 +10,12 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-async-trait = "0.1"
-bytes       = "1.0"
+async-trait = { workspace = true }
+bytes       = { workspace = true }
 futures     = { workspace = true }
-hex         = "0.4"
+hex         = { workspace = true }
 serde       = { features = ["derive"], workspace = true }
-thiserror   = "1.0"
+thiserror   = { workspace = true }
 tokio       = { features = ["sync"], workspace = true }
 tracing     = { workspace = true }
 
@@ -25,6 +25,7 @@ lb-cryptarchia-engine            = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
+lb-log-targets                   = { workspace = true }
 lb-mmr                           = { workspace = true }
 lb-services-utils                = { workspace = true }
 lb-storage-service               = { workspace = true }

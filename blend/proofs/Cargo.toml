@@ -14,20 +14,21 @@ workspace = true
 
 [dependencies]
 ed25519-dalek   = { workspace = true }
-generic-array   = { default-features = false, version = "1.2" }
+generic-array   = { workspace = true }
 hex             = { workspace = true }
 lb-blend-crypto = { workspace = true }
 lb-groth16      = { workspace = true }
 lb-pol          = { workspace = true }
 lb-poq          = { workspace = true }
+lb-poseidon2    = { workspace = true }
 lb-utils        = { workspace = true }
-num-bigint      = { default-features = false, version = "0.4" }
+num-bigint      = { workspace = true }
 serde           = { workspace = true }
-thiserror       = "1"
+thiserror       = { workspace = true }
 zeroize         = { workspace = true }
 
 [dev-dependencies]
-const-hex                     = { default-features = false, version = "1.15.0" }
+const-hex                     = { workspace = true }
 lb-core                       = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 

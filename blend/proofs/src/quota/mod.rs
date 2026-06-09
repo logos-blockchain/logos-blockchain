@@ -210,7 +210,7 @@ impl PartialEq<ProofOfQuota> for VerifiedProofOfQuota {
 pub enum SelectionRandomnessSecretInput {
     Core {
         sk: ZkHash,
-        session_number: u64,
+        epoch_nonce: ZkHash,
     },
     Leadership {
         note_secret_key: ZkHash,
@@ -228,9 +228,7 @@ fn generate_secret_selection_randomness(
     key_index: u64,
 ) -> ZkHash {
     let (first_element, second_element) = match input {
-        SelectionRandomnessSecretInput::Core { sk, session_number } => {
-            (sk, (*session_number).into())
-        }
+        SelectionRandomnessSecretInput::Core { sk, epoch_nonce } => (sk, (*epoch_nonce)),
         SelectionRandomnessSecretInput::Leadership {
             note_secret_key,
             slot_number,

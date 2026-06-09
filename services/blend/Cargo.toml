@@ -13,19 +13,19 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-trait                      = "0.1"
+async-trait                      = { workspace = true }
 fork_stream                      = { workspace = true }
 futures                          = { workspace = true }
 hex                              = { workspace = true }
 lb-blend                         = { workspace = true }
-lb-chain-broadcast-service       = { workspace = true }
 lb-chain-service                 = { workspace = true }
 lb-core                          = { workspace = true }
 lb-cryptarchia-engine            = { workspace = true }
-lb-groth16                       = { default-features = false, workspace = true }
+lb-groth16                       = { workspace = true }
 lb-key-management-system-service = { features = ["unsafe"], workspace = true }
 lb-ledger                        = { workspace = true }
 lb-libp2p                        = { workspace = true }
+lb-log-targets                   = { workspace = true }
 lb-network-service               = { workspace = true }
 lb-poq                           = { workspace = true }
 lb-sdp-service                   = { workspace = true }
@@ -39,17 +39,17 @@ overwatch                        = { workspace = true }
 rand                             = { workspace = true }
 serde                            = { workspace = true }
 serde_with                       = { workspace = true }
-thiserror                        = { default-features = false, version = "1" }
+thiserror                        = { workspace = true }
 tokio                            = { workspace = true }
 tokio-stream                     = { workspace = true }
 tracing                          = { workspace = true }
 
 [dev-dependencies]
 lb-blend          = { features = ["unsafe-test-functions"], workspace = true }
-libp2p            = { default-features = false, features = ["plaintext", "tcp", "yamux"], workspace = true }
-libp2p-swarm-test = { default-features = false, version = "0.5.0" }
+libp2p            = { features = ["plaintext", "tcp", "yamux"], workspace = true }
+libp2p-swarm-test = { workspace = true }
 tempfile          = { workspace = true }
-test-log          = { default-features = false, features = ["trace"], version = "0.2.18" }
+test-log          = { features = ["trace"], workspace = true }
 
 [features]
 default = []

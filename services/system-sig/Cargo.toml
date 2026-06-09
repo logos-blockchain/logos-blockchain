@@ -13,7 +13,8 @@ version     = { workspace = true }
 workspace = true
 
 [dependencies]
-async-ctrlc = "1.2"
-async-trait = "0.1"
-overwatch   = { workspace = true }
-tracing     = { default-features = false, version = "0.1" }
+async-ctrlc    = { workspace = true }
+async-trait    = { workspace = true }
+lb-log-targets = { workspace = true }
+overwatch      = { workspace = true }
+tracing        = { workspace = true }
