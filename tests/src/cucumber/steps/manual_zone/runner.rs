@@ -25,7 +25,7 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 pub use lb_zone_sdk::sequencer::{
     AtomicWithdrawInfo, ChannelUpdate, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
-    InscriptionId, InscriptionInfo, OrphanedTx, PublishResult, PublishedTx, SequencerChannelView,
+    InscriptionId, InscriptionInfo, OrphanedTx, PendingTx, PublishResult, SequencerChannelView,
     SequencerCheckpoint, SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
 };
 use lb_zone_sdk::{adapter, sequencer::ZoneSequencer};
@@ -37,7 +37,7 @@ use tokio::{
 /// Inline policy executed on the drive task for each SDK event before the
 /// event is forwarded to test observers.
 ///
-/// Implementations may call `sequencer.handle().publish(...).await` to issue
+/// Implementations may call `sequencer.handle().publish(...)` to issue
 /// state changes; those land on the same task that produced the event,
 /// preserving observe-then-act ordering.
 pub trait Policy<Node>: Send + 'static
@@ -263,7 +263,7 @@ pub(super) async fn run<Node, P>(
             }
             cmd = cmd_rx.recv() => {
                 let Some(cmd) = cmd else { break; };
-                process_cmd(cmd, &mut sequencer).await;
+                process_cmd(cmd, &mut sequencer);
             }
         }
     }
@@ -302,7 +302,7 @@ where
     }
 }
 
-async fn process_cmd<Node>(cmd: Cmd, sequencer: &mut ZoneSequencer<Node>)
+fn process_cmd<Node>(cmd: Cmd, sequencer: &mut ZoneSequencer<Node>)
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
@@ -319,8 +319,7 @@ where
                 reply.send(
                     sequencer
                         .handle()
-                        .publish_atomic_withdraw(inscribe, withdraws)
-                        .await,
+                        .publish_atomic_withdraw(inscribe, withdraws),
                 ),
             );
         }

@@ -19,7 +19,7 @@ use super::{
     TARGET,
     state::{ChannelUpdateInfo, TxState},
     types::{
-        DepositInfo, Error, FinalizedOp, FinalizedTx, InscriptionInfo, OrphanedTx, PublishedTx,
+        DepositInfo, Error, FinalizedOp, FinalizedTx, InscriptionInfo, OrphanedTx, PendingTx,
         WithdrawInfo,
     },
 };
@@ -152,7 +152,7 @@ where
 
 /// Convert a shed pending entry into an [`OrphanedTx`] for surfacing to the
 /// consumer.
-pub(super) fn orphan_from_shed(entry: PublishedTx) -> OrphanedTx {
+pub(super) fn orphan_from_shed(entry: PendingTx) -> OrphanedTx {
     let info = entry.inscription();
     debug!(
         target: TARGET,
@@ -162,8 +162,8 @@ pub(super) fn orphan_from_shed(entry: PublishedTx) -> OrphanedTx {
         hex::encode(info.this_msg.as_ref()),
     );
     match entry {
-        PublishedTx::Inscription(i) => OrphanedTx::Inscription(i),
-        PublishedTx::AtomicWithdraw(a) => OrphanedTx::AtomicWithdraw(a),
+        PendingTx::Inscription(i) => OrphanedTx::Inscription(i),
+        PendingTx::AtomicWithdraw(a) => OrphanedTx::AtomicWithdraw(a),
     }
 }
 

@@ -37,14 +37,16 @@ pub struct SequencerCheckpoint {
 
 /// Result of a publish operation.
 ///
-/// `tx` carries the [`PublishedTx`] the caller just submitted —
-/// inscriptions or atomic-withdraw bundles. Consumers use this to record
-/// their local outbox and to dedup the same entry when it later shows up
-/// in [`ChannelUpdate::adopted`] (match by `this_msg`).
+/// `tx` carries the [`PendingTx`] the caller just enqueued — inscriptions or
+/// atomic-withdraw bundles. The tx has been accepted into the sequencer's
+/// pending set and the post is queued onto the drive loop's in-flight pool;
+/// it has not necessarily been delivered to the node yet. Consumers use this
+/// to record their local outbox and to dedup the same entry when it later
+/// shows up in [`ChannelUpdate::adopted`] (match by `this_msg`).
 #[derive(Debug, Clone)]
 pub struct PublishResult {
-    /// The submitted tx (inscription or atomic withdraw bundle).
-    pub tx: PublishedTx,
+    /// The enqueued tx (inscription or atomic withdraw bundle).
+    pub tx: PendingTx,
 }
 
 impl PublishResult {
@@ -306,13 +308,17 @@ pub struct DepositInfo {
     pub metadata: Metadata,
 }
 
-/// A tx surfaced by the SDK as a publish return value or in orphan payloads.
+/// A tx enqueued for posting and surfaced as a publish return value or in
+/// orphan payloads.
 ///
-/// Either our own publish (inscription / atomic withdraw bundle), or an
-/// observed deposit from a finalized L1 block. Returned from publish methods
-/// and carried by [`OrphanedTx`] / [`FinalizedOp`] adjacent contexts.
+/// Either our own pending publish (inscription / atomic withdraw bundle), or
+/// a pending bundle reconstructed on checkpoint resume. Returned from publish
+/// methods and carried by [`OrphanedTx`] adjacent contexts. The "pending"
+/// framing reflects that the tx has been accepted into local pending state
+/// and queued for posting, not that the node has accepted it yet — see
+/// [`PublishResult`].
 #[derive(Debug, Clone)]
-pub enum PublishedTx {
+pub enum PendingTx {
     /// A plain inscription published via `publish`.
     Inscription(InscriptionInfo),
     /// A bundled inscription+withdraw(s) published via
@@ -320,7 +326,7 @@ pub enum PublishedTx {
     AtomicWithdraw(AtomicWithdrawInfo),
 }
 
-impl PublishedTx {
+impl PendingTx {
     /// The tx hash for this entry.
     #[must_use]
     pub const fn tx_hash(&self) -> TxHash {

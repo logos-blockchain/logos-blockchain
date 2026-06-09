@@ -49,9 +49,9 @@ use tokio::{
 use tracing::warn;
 
 use super::runner::{
-    self, ChannelUpdate, Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx,
-    PublishResult, PublishedTx, SequencerChannelView, SequencerCheckpoint, SequencerClient,
-    SequencerConfig, TurnNotification, WithdrawArg,
+    self, ChannelUpdate, Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx, PendingTx,
+    PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerClient, SequencerConfig,
+    TurnNotification, WithdrawArg,
 };
 use crate::common::{
     chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
@@ -572,7 +572,7 @@ pub async fn wait_for_adopted_payload(
             for info in channel_update.adopted {
                 if info.payload.as_slice() == data {
                     return Ok(PublishResult {
-                        tx: PublishedTx::Inscription(info),
+                        tx: PendingTx::Inscription(info),
                     });
                 }
             }
@@ -616,7 +616,7 @@ pub async fn wait_for_adopted_payloads(
                     continue;
                 };
                 results[index] = Some(PublishResult {
-                    tx: PublishedTx::Inscription(info),
+                    tx: PendingTx::Inscription(info),
                 });
                 remaining -= 1;
                 if remaining == 0 {
@@ -1351,7 +1351,7 @@ pub async fn publish_atomic_zone_withdraw(
             message: error.to_string(),
         })?;
 
-    let PublishedTx::AtomicWithdraw(info) = result.tx else {
+    let PendingTx::AtomicWithdraw(info) = result.tx else {
         return Err(ZoneTestError::SubmitWithdraw {
             message: "publish_atomic_withdraw returned a non-AtomicWithdraw publish result"
                 .to_owned(),
@@ -1365,7 +1365,7 @@ pub async fn publish_atomic_zone_withdraw(
     Ok(ZoneAtomicWithdrawSubmission {
         withdraws: info.withdraws.iter().map(|w| w.op.clone()).collect(),
         publish: PublishResult {
-            tx: PublishedTx::AtomicWithdraw(info),
+            tx: PendingTx::AtomicWithdraw(info),
         },
     })
 }

@@ -22,8 +22,8 @@ use super::{
         find_own_key_index, prepare_tx, sign_tx,
     },
     types::{
-        AtomicWithdrawInfo, Error, InscriptionInfo, PublishResult, PublishedTx,
-        SequencerCheckpoint, WithdrawArg, WithdrawInfo,
+        AtomicWithdrawInfo, Error, InscriptionInfo, PendingTx, PublishResult, SequencerCheckpoint,
+        WithdrawArg, WithdrawInfo,
     },
     zone_sequencer::ZoneSequencer,
 };
@@ -66,14 +66,16 @@ impl<Node> SequencerHandle<'_, Node>
 where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
-    /// Publish an inscription to the zone's channel.
+    /// Enqueue an inscription onto the zone's channel.
     ///
-    /// Synchronously mutates state to enqueue the inscription as pending
-    /// and queues a `post_transaction` future into the drive loop's
-    /// in-flight pool — the post itself happens asynchronously when the
-    /// drive loop polls `next_event`. Returns the inscription id and the
-    /// checkpoint reflecting the new pending state so the caller can
-    /// persist outbox + checkpoint atomically.
+    /// Synchronously mutates state to record the inscription as pending and
+    /// queues a `post_transaction` future onto the drive loop's in-flight
+    /// pool — the post itself happens asynchronously the next time the drive
+    /// loop polls `next_event`. The returned [`PublishResult`] reflects this
+    /// queued state, not a network acknowledgement; the tx may not have
+    /// reached the node yet. The accompanying [`SequencerCheckpoint`]
+    /// captures the new pending state so the caller can persist outbox +
+    /// checkpoint atomically.
     ///
     /// Returns [`Error::Unavailable`] only if cold-start backfill is still
     /// in progress (the sequencer hasn't emitted [`super::Event::Ready`]
@@ -138,7 +140,7 @@ where
 
         Ok((
             PublishResult {
-                tx: PublishedTx::Inscription(info),
+                tx: PendingTx::Inscription(info),
             },
             checkpoint,
         ))
@@ -173,11 +175,13 @@ where
         Ok(sign_tx(tx.hash(), &self.sequencer.signing_key))
     }
 
-    /// Submit a [`SignedMantleTx`] that is associated with a [`MsgId`].
+    /// Enqueue a [`SignedMantleTx`] associated with a [`MsgId`] for posting.
     ///
-    /// Synchronously enqueues the tx as pending, queues a `post_transaction`
-    /// future for the drive loop's in-flight pool, and returns the publish
-    /// result + checkpoint reflecting the new pending state.
+    /// Synchronously records the tx as pending and queues a
+    /// `post_transaction` future onto the drive loop's in-flight pool — the
+    /// post runs the next time the drive loop polls `next_event`. The
+    /// returned [`PublishResult`] reflects the queued state, not a network
+    /// acknowledgement.
     pub fn submit_signed_tx(
         &mut self,
         tx: SignedMantleTx,
@@ -198,7 +202,7 @@ where
         );
 
         // Locate the inscription payload in the tx ops to populate
-        // `PublishedTx::Inscription`. Falls back to an empty payload if the
+        // `PendingTx::Inscription`. Falls back to an empty payload if the
         // tx carries no inscription op for our channel (e.g. a pure deposit
         // or admin tx submitted via this entry point).
         let payload = tx
@@ -226,7 +230,7 @@ where
 
         Ok((
             PublishResult {
-                tx: PublishedTx::Inscription(InscriptionInfo {
+                tx: PendingTx::Inscription(InscriptionInfo {
                     tx_hash: id,
                     parent_msg,
                     this_msg: msg_id,
@@ -247,9 +251,11 @@ where
     /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a
     /// single fixed sequencer at index 0.
     ///
-    /// Returns the publish result, the checkpoint reflecting the new pending
-    /// state, and the signed tx (for callers that want to observe
-    /// finalization via the event stream).
+    /// Enqueues the config tx onto the drive loop's in-flight pool — the
+    /// post runs the next time the drive loop polls `next_event`. The
+    /// returned [`PublishResult`] reflects the queued state, not a network
+    /// acknowledgement. The signed tx is also returned for callers that want
+    /// to observe finalization via the event stream.
     pub fn channel_config(
         &mut self,
         keys: Keys,
@@ -296,7 +302,7 @@ where
         // tx hash as `this_msg` so consumers can correlate via `tx_hash`.
         Ok((
             PublishResult {
-                tx: PublishedTx::Inscription(InscriptionInfo {
+                tx: PendingTx::Inscription(InscriptionInfo {
                     tx_hash,
                     parent_msg: self.sequencer.last_msg_id,
                     this_msg: self.sequencer.last_msg_id,
@@ -310,17 +316,21 @@ where
 
     /// Publish an atomic inscription+withdraw bundle.
     ///
-    /// The SDK queries channel state to fill withdraw nonces and locate its
-    /// own accredited-key index, selects the inscription's `parent_msg` from
-    /// the current canonical tip, builds the bundled `MantleTx`, signs locally
-    /// with the sequencer's key, and submits. Scoped to single-sequencer
-    /// (centralized) channels — only the sequencer's own signature is used.
+    /// Reads the current on-chain `withdraw_nonce` and this sequencer's
+    /// accredited-key index from cached channel state (kept fresh by the
+    /// drive loop). Selects the inscription's `parent_msg` from the current
+    /// canonical tip, builds the bundled `MantleTx`, signs locally with the
+    /// sequencer's key, and submits. Scoped to single-sequencer (centralized)
+    /// channels — only the sequencer's own signature is used.
     ///
-    /// Returns [`Error::Unavailable`] if cold-start backfill is still in
-    /// progress (see [`Self::publish`] for the latched readiness contract),
-    /// or if the channel's `withdraw_threshold > 1` (which would require
-    /// multi-sig orchestration this API doesn't support).
-    pub async fn publish_atomic_withdraw(
+    /// Returns [`Error::Unavailable`] only if cold-start backfill is still
+    /// in progress (see [`Self::publish`] for the latched readiness
+    /// contract). After the first `Ready`, builds from cached channel state
+    /// even mid-life reconnect and queues locally; the post fires once the
+    /// stream resumes and our turn is current. Returns [`Error::Network`] if
+    /// the channel's `withdraw_threshold > 1` (which would require multi-sig
+    /// orchestration this API doesn't support).
+    pub fn publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
@@ -333,29 +343,21 @@ where
             ));
         }
 
-        // Query channel state for the current on-chain `withdraw_nonce` and
-        // this sequencer's accredited-key index. Done before borrowing
-        // `self.sequencer.state` since `await` on a node method must not hold
-        // an `&Self` reference (forces `Self: Sync`).
-        let channel_state = self
-            .sequencer
-            .node
-            .channel_state(self.sequencer.channel_id)
-            .await
-            .map_err(|e| Error::Network(format!("channel_state query failed: {e}")))?
-            .ok_or_else(|| {
-                Error::Network(format!(
-                    "publish_atomic_withdraw requires channel state for {:?}",
-                    self.sequencer.channel_id
-                ))
-            })?;
+        // Use the cached channel state kept fresh by the drive loop — see
+        // `ensure_connected` for the staleness gate.
+        let channel_state = self.sequencer.channel_state.as_ref().ok_or_else(|| {
+            Error::Network(format!(
+                "publish_atomic_withdraw requires channel state for {:?}",
+                self.sequencer.channel_id
+            ))
+        })?;
         if channel_state.withdraw_threshold > 1 {
             return Err(Error::Network(format!(
                 "publish_atomic_withdraw requires withdraw_threshold == 1, got {}",
                 channel_state.withdraw_threshold
             )));
         }
-        let own_key_index = find_own_key_index(&channel_state, &self.sequencer.signing_key)?;
+        let own_key_index = find_own_key_index(channel_state, &self.sequencer.signing_key)?;
         let mut next_nonce = channel_state.withdrawal_nonce;
 
         let parent = self.compute_publish_parent();
@@ -426,7 +428,7 @@ where
 
         Ok((
             PublishResult {
-                tx: PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                tx: PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
                     tx_hash,
                     inscription: InscriptionInfo {
                         tx_hash,

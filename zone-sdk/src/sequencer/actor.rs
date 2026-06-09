@@ -92,6 +92,10 @@ where
     /// flips the sequencer to ready, emit `Ready` first and buffer the
     /// `BlocksProcessed` for the next drive turn.
     fn finish_block_processing(&mut self, result: BlockEventResult) -> Option<Event> {
+        // We just processed a live block end-to-end — cached `channel_state`,
+        // `current_tip`, and `lib_slot` reflect chain state up to this block,
+        // so callers may rely on them.
+        self.connected = true;
         let became_ready = self.maybe_signal_ready();
         let (channel_update, finalized) = self.apply_block_result(result);
 
@@ -143,13 +147,17 @@ where
         }
     }
 
-    /// Bookkeeping for a stream drop: clears turn-to-write so consumers
-    /// observing the watch don't see a stale "our turn" while disconnected.
-    /// Readiness stays latched true after the first cold-start completion —
-    /// in-memory state remains valid, publishes keep flowing, and any tx
-    /// invalidated during the disconnect surfaces as an orphan on the next
+    /// Bookkeeping for a stream drop: clears `connected` so operations that
+    /// depend on cached on-chain state (inscription turn check, atomic
+    /// withdraw nonce, channel config) fail-fast with `Error::Unavailable`
+    /// rather than building txs from stale state. Also clears turn-to-write
+    /// so consumers observing the watch don't see a stale "our turn" while
+    /// disconnected. Readiness stays latched true after the first cold-start
+    /// completion — in-memory state remains valid, and any tx invalidated
+    /// during the disconnect surfaces as an orphan on the next
     /// `BlocksProcessed` once the stream resumes.
-    fn handle_stream_drop(&self) {
+    fn handle_stream_drop(&mut self) {
+        self.connected = false;
         self.publish_turn_to_write(false);
     }
 
@@ -319,6 +327,9 @@ where
     }
 
     pub(super) fn can_publish_inscription_now(&self) -> bool {
+        if !self.connected {
+            return false;
+        }
         let Some(slot_clock) = &self.slot_clock else {
             return false;
         };

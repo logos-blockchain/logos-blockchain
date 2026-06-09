@@ -60,6 +60,16 @@ pub struct ZoneSequencer<Node> {
     // Block stream
     pub(super) blocks_stream: Option<BoxStream<ProcessedBlockEvent>>,
 
+    // True while the blocks stream is alive AND we have processed at least
+    // one event since (re)connecting — i.e. cached `channel_state` and
+    // `current_tip` reflect the latest block we observed. Cleared on stream
+    // drop; set on each successful `finish_block_processing`. Gates
+    // operations that depend on cached on-chain state (inscription turn
+    // check, atomic withdraw nonce, channel config) so they fail-fast with
+    // `Error::Unavailable` during reconnect rather than building txs from
+    // stale state.
+    pub(super) connected: bool,
+
     // Resubmission
     pub(super) resubmit_interval: tokio::time::Interval,
 
@@ -188,6 +198,7 @@ where
             channel_state: None,
             own_key_index: None,
             blocks_stream: None,
+            connected: false,
             resubmit_interval,
             in_flight: FuturesUnordered::new(),
             resubmit_active: Arc::new(AtomicBool::new(false)),
@@ -452,7 +463,7 @@ fn restored_pending_channel_tip(
 /// - Any `Op::ChannelWithdraw` targeting our channel → bundle. Restored via
 ///   `submit_atomic_withdraw` so `PendingInscription.withdraws` is repopulated
 ///   and orphan/finalize emit the correct
-///   [`super::types::PublishedTx::AtomicWithdraw`] /
+///   [`super::types::PendingTx::AtomicWithdraw`] /
 ///   [`super::types::OrphanedTx::AtomicWithdraw`] variant.
 /// - Only `Op::ChannelInscribe` for our channel → plain inscription.
 /// - Neither → treated as opaque (`submit_other`).
