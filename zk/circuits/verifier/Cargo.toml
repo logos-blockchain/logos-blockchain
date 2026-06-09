@@ -10,8 +10,7 @@ repository  = { workspace = true }
 version     = { workspace = true }
 
 [dependencies]
-lbc-rapidsnark-sys = { features = ["prebuilt"], workspace = true }
-tempfile           = { workspace = true }
+rust-rapidsnark = { features = ["static-rapidsnark"], workspace = true }
 
 [lints]
 workspace = true
