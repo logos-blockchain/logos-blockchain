@@ -411,7 +411,6 @@ fn record_wallet_submission(
 ) -> Result<(), StepError> {
     if let Some(cache) = in_memory_available_utxos {
         apply_submitted_inputs_to_utxo_cache(cache, signed_submission);
-        return Ok(());
     }
 
     let wallet_name = wallet.wallet_name.as_str();
