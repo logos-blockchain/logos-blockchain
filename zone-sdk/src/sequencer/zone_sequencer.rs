@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -84,6 +84,13 @@ pub struct ZoneSequencer<Node> {
     // Guard: only one broad sweep in flight at a time. Cleared by the
     // pushed future on completion via the captured `Arc`.
     pub(super) resubmit_active: Arc<AtomicBool>,
+
+    // Tx hashes currently inside a `post_batch` future in `in_flight`.
+    // `queue_publish_post` and `queue_resubmit_batch` insert before pushing;
+    // the `in_flight` completion handler removes for every batch entry
+    // (success or failure). `resubmit_pending` skips entries already in the
+    // set so the publish↔resubmit race can't double-post the same tx.
+    pub(super) posting: HashSet<TxHash>,
 
     // Buffered events — when one drive step produces multiple events.
     pub(super) buffered_events: VecDeque<Event>,
@@ -202,6 +209,7 @@ where
             resubmit_interval,
             in_flight: FuturesUnordered::new(),
             resubmit_active: Arc::new(AtomicBool::new(false)),
+            posting: HashSet::new(),
             buffered_events: VecDeque::new(),
             backfill_from: None,
             backfill_to: None,
@@ -353,12 +361,11 @@ where
                 self.resubmit_pending();
                 None
             }
-            Some(results) = self.in_flight.next(), if !self.in_flight.is_empty() => {
-                if let Some(state) = self.state.as_mut() {
-                    for (tx_hash, success) in results {
-                        if success {
-                            state.mark_pending_inscription_posted(&tx_hash);
-                        }
+            Some(results) = self.in_flight.next() => {
+                for (tx_hash, success) in results {
+                    self.posting.remove(&tx_hash);
+                    if success && let Some(state) = self.state.as_mut() {
+                        state.mark_pending_inscription_posted(&tx_hash);
                     }
                 }
                 None
@@ -374,7 +381,8 @@ where
     /// Push a single-tx publish post into `in_flight`. Used by
     /// `handle.publish` / `submit_signed_tx` / `channel_config` —
     /// independent user-initiated actions that can run concurrently.
-    pub(super) fn queue_publish_post(&self, tx_hash: TxHash, signed_tx: SignedMantleTx) {
+    pub(super) fn queue_publish_post(&mut self, tx_hash: TxHash, signed_tx: SignedMantleTx) {
+        self.posting.insert(tx_hash);
         self.in_flight.push(Box::pin(post_batch(
             self.node.clone(),
             vec![(tx_hash, signed_tx)],
@@ -385,9 +393,12 @@ where
     /// before pushing; the future clears it on completion. Caller must
     /// check `resubmit_active` first to avoid duplicate sweeps —
     /// `resubmit_pending` does this gate.
-    pub(super) fn queue_resubmit_batch(&self, batch: Vec<(TxHash, SignedMantleTx)>) {
+    pub(super) fn queue_resubmit_batch(&mut self, batch: Vec<(TxHash, SignedMantleTx)>) {
         if batch.is_empty() {
             return;
+        }
+        for (tx_hash, _) in &batch {
+            self.posting.insert(*tx_hash);
         }
         self.resubmit_active.store(true, Ordering::Relaxed);
         let node = self.node.clone();
@@ -405,7 +416,8 @@ where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
     let mut results = Vec::with_capacity(batch.len());
-    for (tx_hash, signed_tx) in batch {
+    let mut iter = batch.into_iter();
+    while let Some((tx_hash, signed_tx)) = iter.next() {
         match node.post_transaction(signed_tx).await {
             Ok(()) => results.push((tx_hash, true)),
             Err(e) => {
@@ -414,6 +426,12 @@ where
                 // next `resubmit_pending` tick retries.
                 warn!(target: TARGET, "Failed to post transaction {tx_hash:?}: {e}; aborting batch");
                 results.push((tx_hash, false));
+                // Include unattempted txs as failed so the completion
+                // handler can clear `posting` for the whole batch and the
+                // next `resubmit_pending` picks them up.
+                for (tx_hash, _) in iter {
+                    results.push((tx_hash, false));
+                }
                 return results;
             }
         }
@@ -439,7 +457,7 @@ fn restored_pending_channel_tip(
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     let mut parents = Vec::new();
-    let mut children = std::collections::HashSet::new();
+    let mut children = HashSet::new();
 
     for (_, tx) in pending_txs {
         for op in tx.mantle_tx.ops() {

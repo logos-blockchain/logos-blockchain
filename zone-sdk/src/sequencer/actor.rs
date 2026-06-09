@@ -242,7 +242,7 @@ where
         }
     }
 
-    pub(super) fn publish_channel_view(&self) {
+    pub(super) fn publish_channel_view(&mut self) {
         let view = self.channel_view();
         let turn_to_write = self.is_ready() && view.our_turn_to_write;
         // `send_replace` so the stored value stays current even with no
@@ -251,7 +251,7 @@ where
         self.publish_turn_to_write(turn_to_write);
     }
 
-    fn publish_turn_to_write(&self, turn_to_write: bool) {
+    fn publish_turn_to_write(&mut self, turn_to_write: bool) {
         let mut emitted: Option<TurnNotification> = None;
         let mut became_our_turn = false;
 
@@ -378,7 +378,7 @@ where
     /// Skips if a previous broad sweep is still in flight — guards against
     /// the 30s timer + turn-change handler firing close together and
     /// producing duplicate POSTs for the same pending set.
-    pub(super) fn resubmit_pending(&self) {
+    pub(super) fn resubmit_pending(&mut self) {
         if self
             .resubmit_active
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -393,39 +393,49 @@ where
             return;
         };
 
-        let Some(state) = self.state.as_ref() else {
-            self.publish_channel_view();
-            return;
+        let submit = {
+            let Some(state) = self.state.as_ref() else {
+                self.publish_channel_view();
+                return;
+            };
+
+            let can_publish_inscription = self.can_publish_inscription_now();
+            let pending = state.pending_txs(tip);
+            let max_depth = self.config.max_pending_publish_depth.max(1);
+
+            let mut submit = Vec::new();
+            let mut active_publish_count = state.posted_pending_publish_count();
+
+            for (id, signed_tx) in pending {
+                // Skip txs whose post is already in flight — guards the
+                // publish↔resubmit race that would otherwise re-queue the
+                // same tx while its first `post_batch` is still running.
+                if self.posting.contains(&id) {
+                    continue;
+                }
+
+                let pending_inscription_publish = state.pending_inscription(&id);
+                let is_inscription_publish = pending_inscription_publish.is_some();
+                if is_inscription_publish && !can_publish_inscription {
+                    continue;
+                }
+
+                let is_first_inscription_post =
+                    pending_inscription_publish.is_some_and(|pending| !pending.posted);
+                if is_inscription_publish
+                    && is_first_inscription_post
+                    && active_publish_count >= max_depth
+                {
+                    break;
+                }
+
+                if is_inscription_publish && is_first_inscription_post {
+                    active_publish_count = active_publish_count.saturating_add(1);
+                }
+                submit.push((id, signed_tx));
+            }
+            submit
         };
-
-        let can_publish_inscription = self.can_publish_inscription_now();
-        let pending = state.pending_txs(tip);
-        let max_depth = self.config.max_pending_publish_depth.max(1);
-
-        let mut submit = Vec::new();
-        let mut active_publish_count = state.posted_pending_publish_count();
-
-        for (id, signed_tx) in pending {
-            let pending_inscription_publish = state.pending_inscription(&id);
-            let is_inscription_publish = pending_inscription_publish.is_some();
-            if is_inscription_publish && !can_publish_inscription {
-                continue;
-            }
-
-            let is_first_inscription_post =
-                pending_inscription_publish.is_some_and(|pending| !pending.posted);
-            if is_inscription_publish
-                && is_first_inscription_post
-                && active_publish_count >= max_depth
-            {
-                break;
-            }
-
-            if is_inscription_publish && is_first_inscription_post {
-                active_publish_count = active_publish_count.saturating_add(1);
-            }
-            submit.push((id, signed_tx));
-        }
 
         if submit.is_empty() {
             self.publish_channel_view();
