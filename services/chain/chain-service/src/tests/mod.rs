@@ -244,6 +244,8 @@ async fn get_block_ids() {
 async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
     let (storage_tx, storage_rx) = mpsc::channel(10);
+    // Close the storage relay before processing so the initial StoreBlock request
+    // fails.
     drop(storage_rx);
     let (time_tx, _time_rx) = mpsc::channel(10);
     let relays =
@@ -301,16 +303,23 @@ async fn process_block_does_not_mutate_state_when_immutable_index_write_fails() 
     let (lib_tx, mut lib_rx) = broadcast::channel(10);
 
     let storage_task = tokio::spawn(async move {
-        let Some(StorageMsg::Api {
+        let Some(msg) = storage_rx.recv().await else {
+            return Err("expected store block request, storage channel closed");
+        };
+
+        let StorageMsg::Api {
             request: StorageApiRequest::Chain(ChainApiRequest::StoreBlock { response_tx, .. }),
-        }) = storage_rx.recv().await
+        } = msg
         else {
-            panic!("expected store block request");
+            return Err("expected store block request");
         };
 
         response_tx
             .send(Ok(()))
-            .expect("store block reply should be received");
+            .map_err(|_| "store block reply receiver dropped")?;
+
+        // Drop the receiver so the following immutable-index write fails at send time.
+        Ok(())
     });
 
     let (mut cryptarchia, block) = test_chain_with_next_block();
@@ -331,7 +340,10 @@ async fn process_block_does_not_mutate_state_when_immutable_index_write_fails() 
         &lib_tx,
     )
     .await;
-    storage_task.await.unwrap();
+    storage_task
+        .await
+        .expect("storage task should not panic")
+        .expect("storage task should handle initial StoreBlock request");
 
     match &result {
         Err(Error::Storage(_)) => {}
