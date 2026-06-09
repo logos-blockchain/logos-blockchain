@@ -66,7 +66,8 @@ pub struct OldSdpWallet {
     pub funding_pk: KeyId,
 }
 
-/// Holds the values of v0.1.2 configuration that should be transfered to a new config version.
+/// Holds the values of v0.1.2 configuration that should be transfered to a new
+/// config version.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OldConfig {
     pub network: OldNetworkConfig,
