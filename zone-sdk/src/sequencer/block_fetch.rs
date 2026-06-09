@@ -932,7 +932,7 @@ mod tests {
         // shed_off_branch_pending should drop the stale one but not the live one.
         let shed = state.shed_off_branch_pending(block);
         let shed_hashes: std::collections::HashSet<TxHash> =
-            shed.iter().map(PublishedTx::tx_hash).collect();
+            shed.iter().map(PendingTx::tx_hash).collect();
         assert!(
             shed_hashes.contains(&pending_stale_hash),
             "pending chained from I1 must be shed (no longer reachable from tip)"
@@ -1036,7 +1036,7 @@ mod tests {
         // Our pending's parent matches the new tip, so it should stay.
         let shed = state.shed_off_branch_pending(block_b);
         let shed_hashes: std::collections::HashSet<TxHash> =
-            shed.iter().map(PublishedTx::tx_hash).collect();
+            shed.iter().map(PendingTx::tx_hash).collect();
         assert!(
             !shed_hashes.contains(&pending_hash),
             "pending chained from the (still-current) config tip must remain on-branch"
