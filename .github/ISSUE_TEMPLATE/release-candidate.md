@@ -42,7 +42,7 @@ Most of the template content is the same or very similar to what is in `release.
 
 ## Release candidate preparation
 
-- [ ] Checkout the release branch, which should contain the bot generated commit updating the deployment settings as its `HEAD`
+- [ ] Checkout and pull the release branch, it should contain the bot generated commit updating the deployment settings as its `HEAD`
 - [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z-rc.N`
 - [ ] Re-generate the workspace `Cargo.lock` file with `cargo update -w`
 - [ ] Verify the `Cargo.lock` is now up to date with `cargo update -w --locked`
