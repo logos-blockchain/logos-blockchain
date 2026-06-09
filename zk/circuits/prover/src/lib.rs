@@ -1,3 +1,5 @@
 mod rapidsnark;
+mod traits;
 
-pub use rapidsnark::*;
+pub use rapidsnark::Rapidsnark;
+pub use traits::{ProofResult, Prover};

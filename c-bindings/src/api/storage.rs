@@ -6,6 +6,7 @@ use crate::{
     LogosBlockchainNode,
     api::cryptarchia::{HeaderId, TxHash, into_tx_hash},
     errors::OperationStatus,
+    logging,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
@@ -42,18 +43,18 @@ pub(crate) fn get_block_sync(
             lb_core::header::HeaderId::from(header_id),
         ))
         .map_err(|e| {
-            log::error!("[get_block_sync] Failed to get block: {e}");
+            logging::error!("get_block_sync", "Failed to get block: {e}");
             OperationStatus::RelayError
         })?
         .ok_or(OperationStatus::NotFound)?;
 
     let json = serde_json::to_string(&block).map_err(|e| {
-        log::error!("[get_block_sync] Failed to serialize block: {e}");
+        logging::error!("get_block_sync", "Failed to serialize block: {e}");
         OperationStatus::RuntimeError
     })?;
 
     CString::new(json).map_err(|e| {
-        log::error!("[get_block_sync] Failed to create CString: {e}");
+        logging::error!("get_block_sync", "Failed to create CString: {e}");
         OperationStatus::RuntimeError
     })
 }
@@ -131,18 +132,21 @@ pub(crate) fn get_transaction_sync(
             RuntimeServiceId,
         >(overwatch_handle, tx_hash))
         .map_err(|e| {
-            log::error!("[get_transaction_sync] Failed to get transaction: {e}");
+            logging::error!("get_transaction_sync", "Failed to get transaction: {e}");
             OperationStatus::RuntimeError
         })?
         .ok_or(OperationStatus::NotFound)?;
 
     let json = serde_json::to_string(&tx).map_err(|e| {
-        log::error!("[get_transaction_sync] Failed to serialize transaction: {e}");
+        logging::error!(
+            "get_transaction_sync",
+            "Failed to serialize transaction: {e}"
+        );
         OperationStatus::RuntimeError
     })?;
 
     CString::new(json).map_err(|e| {
-        log::error!("[get_transaction_sync] Failed to create CString: {e}");
+        logging::error!("get_transaction_sync", "Failed to create CString: {e}");
         OperationStatus::RuntimeError
     })
 }
@@ -223,17 +227,17 @@ pub(crate) fn get_blocks_sync(
             RuntimeServiceId,
         >(overwatch_handle, from_slot, to_slot))
         .map_err(|e| {
-            log::error!("[get_blocks_sync] Failed to get blocks: {e}");
+            logging::error!("get_blocks_sync", "Failed to get blocks: {e}");
             OperationStatus::RelayError
         })?;
 
     let json = serde_json::to_string(&blocks).map_err(|e| {
-        log::error!("[get_blocks_sync] Failed to serialize blocks: {e}");
+        logging::error!("get_blocks_sync", "Failed to serialize blocks: {e}");
         OperationStatus::RuntimeError
     })?;
 
     CString::new(json).map_err(|e| {
-        log::error!("[get_blocks_sync] Failed to create CString: {e}");
+        logging::error!("get_blocks_sync", "Failed to create CString: {e}");
         OperationStatus::RuntimeError
     })
 }
@@ -277,11 +281,11 @@ pub unsafe extern "C" fn get_blocks(
     return_error_if_null_pointer!("get_blocks", node);
 
     let Ok(from_slot) = usize::try_from(from_slot) else {
-        log::error!("[get_blocks] from_slot overflow");
+        logging::error!("get_blocks", "from_slot overflow");
         return FfiGetBlocksResult::err(OperationStatus::ValidationError);
     };
     let Ok(to_slot) = usize::try_from(to_slot) else {
-        log::error!("[get_blocks] to_slot overflow");
+        logging::error!("get_blocks", "to_slot overflow");
         return FfiGetBlocksResult::err(OperationStatus::ValidationError);
     };
 

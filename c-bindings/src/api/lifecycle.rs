@@ -14,6 +14,7 @@ use tokio::runtime::Runtime;
 use crate::{
     LogosBlockchainNode,
     errors::OperationStatus,
+    logging,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer,
 };
@@ -72,7 +73,7 @@ fn initialize_lb_node(
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
-        log::error!("Could not initialize Overwatch: {e}");
+        logging::error!("initialize_lb_node", "Could not initialize Overwatch: {e}");
         OperationStatus::InitializationError
     })?;
 
@@ -80,14 +81,14 @@ fn initialize_lb_node(
 
     runtime.block_on(async {
         let services_to_start = get_services_to_start(&app).await.map_err(|e| {
-            log::error!("Could not get services to start: {e}");
+            logging::error!("initialize_lb_node", "Could not get services to start: {e}");
             OperationStatus::InitializationError
         })?;
         app_handle
             .start_service_sequence(services_to_start)
             .await
             .map_err(|e| {
-                log::error!("Could not start services: {e}");
+                logging::error!("initialize_lb_node", "Could not start services: {e}");
                 OperationStatus::InitializationError
             })?;
         Ok(())
@@ -100,12 +101,15 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
     let user_config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
         .to_str()
         .map_err(|e| {
-            log::error!("Could not convert the config path to string: {e}");
+            logging::error!(
+                "get_user_config",
+                "Could not convert the config path to string: {e}"
+            );
             OperationStatus::InitializationError
         })?;
     deserialize_value_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Fail).map_err(
         |e| {
-            log::error!("Could not parse config file: {e}");
+            logging::error!("get_user_config", "Could not parse config file: {e}");
             OperationStatus::InitializationError
         },
     )
@@ -118,7 +122,10 @@ fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<Deployme
         let deployment_str = unsafe { std::ffi::CStr::from_ptr(deployment_arg) }
             .to_str()
             .map_err(|e| {
-                log::error!("Could not convert deployment to string: {e}");
+                logging::error!(
+                    "get_deployment_config",
+                    "Could not convert deployment to string: {e}"
+                );
                 OperationStatus::InitializationError
             })?;
         deployment_str.parse::<WellKnownDeployment>().map_or_else(
@@ -132,7 +139,10 @@ fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<Deployme
         DeploymentType::Custom(path) => {
             deserialize_value_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Fail)
                 .map_err(|e| {
-                    log::error!("Could not parse deployment file: {e}");
+                    logging::error!(
+                        "get_deployment_config",
+                        "Could not parse deployment file: {e}"
+                    );
                     OperationStatus::InitializationError
                 })
         }
@@ -207,11 +217,14 @@ mod test {
             let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
             let deployment_config_path = temp_dir.path().join("standalone-deployment-config.yaml");
 
+            let state_dir = temp_dir.path().join("state");
+            let state_dir = state_dir.display().to_string();
             let node_config = std::fs::read_to_string(STANDALONE_NODE_CONFIG_PATH.as_path())
                 .expect("Failed to read standalone node config")
                 .replace("./state/logs", &log_dir.to_string_lossy());
-            let node_config =
-                format!("{node_config}\napi:\n  backend:\n    listen_address: 127.0.0.1:0\n");
+            let node_config = format!(
+                "{node_config}\nstate:\n  base_folder: {state_dir}\napi:\n  backend:\n    listen_address: 127.0.0.1:0\n"
+            );
             std::fs::write(&node_config_path, node_config)
                 .expect("Failed to write isolated node config");
             std::fs::copy(

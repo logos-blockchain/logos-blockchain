@@ -59,6 +59,7 @@ fn test_blend_epoch_state(
 /// Check if incoming encapsulated messages are properly decapsulated and
 /// scheduled by [`handle_incoming_blend_message`].
 #[test_log::test(tokio::test)]
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 async fn test_handle_incoming_blend_message() {
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
@@ -427,6 +428,7 @@ async fn test_handle_epoch_transition_expired() {
 }
 
 #[test_log::test(tokio::test)]
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 async fn test_handle_epoch_event() {
     let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
@@ -690,6 +692,72 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
     .await;
 }
 
+async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> {
+    let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+    let epoch = 0.into();
+    let minimal_network_size = 2;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        0,
+    );
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+    let crypto_processor = new_crypto_processor(
+        EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+    let scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings(&settings.time, settings.num_blend_layers),
+    );
+    let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
+    let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
+        settings.clone(),
+        overwatch_handle.clone(),
+        (public_info.membership.clone(), public_info.epoch),
+        BlakeRng::from_entropy(),
+    );
+    let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
+
+    let secret_info = PolEpochInfo {
+        epoch: secret_epoch,
+        poq_private_inputs: dummy_pol_private_inputs(),
+    };
+
+    // Isolate the `set_epoch_private` calls made by `handle_epoch_event`.
+    reset_set_epoch_private_calls();
+    let _output = handle_epoch_event(
+        EpochEvent::NewEpoch(
+            CoreEpochInfo {
+                public: CoreEpochPublicInfo {
+                    epoch: epoch + 1,
+                    ..public_info.clone()
+                },
+                core_poq_generator: Some(()),
+            }
+            .into(),
+        ),
+        &settings,
+        crypto_processor,
+        scheduler,
+        public_info,
+        ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
+        &mut backend,
+        &sdp_relay,
+        Some(&secret_info),
+    )
+    .await;
+    recorded_set_epoch_private_calls()
+}
+
 /// On an epoch change, if secret `PoL` info for the *new* epoch is already
 /// available (`current_secret_info`), it must be applied to the *new*
 /// cryptographic generator via `set_epoch_private`. If the available secret
@@ -697,72 +765,6 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
 /// public-stream side of the public/secret out-of-order coordination.
 #[test_log::test(tokio::test)]
 async fn test_handle_epoch_event_applies_matching_secret_to_new_generator() {
-    async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> {
-        let (overwatch_handle, _overwatch_cmd_receiver, state_updater, _state_receiver) =
-            dummy_overwatch_resources::<(), (), RuntimeServiceId>();
-        let epoch = 0.into();
-        let minimal_network_size = 2;
-        let (membership, local_private_key) = new_membership(minimal_network_size);
-        let (settings, _recovery_file) = settings(
-            local_private_key.clone(),
-            u64::from(minimal_network_size).try_into().unwrap(),
-            (),
-            0,
-        );
-        let public_info = new_epoch_info(epoch, membership.clone(), &settings);
-        let crypto_processor = new_crypto_processor(
-            EpochCryptographicProcessorSettings {
-                non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
-                num_blend_layers: settings.num_blend_layers,
-            },
-            &public_info,
-            (),
-        );
-        let scheduler = EpochMessageScheduler::new(
-            scheduler_epoch_info(&public_info),
-            BlakeRng::from_entropy(),
-            scheduler_settings(&settings.time, settings.num_blend_layers),
-        );
-        let token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info));
-        let mut backend = <TestBlendBackend as BlendBackend<_, _, _>>::new(
-            settings.clone(),
-            overwatch_handle.clone(),
-            (public_info.membership.clone(), public_info.epoch),
-            BlakeRng::from_entropy(),
-        );
-        let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
-
-        let secret_info = PolEpochInfo {
-            epoch: secret_epoch,
-            poq_private_inputs: dummy_pol_private_inputs(),
-        };
-
-        // Isolate the `set_epoch_private` calls made by `handle_epoch_event`.
-        reset_set_epoch_private_calls();
-        let _output = handle_epoch_event(
-            EpochEvent::NewEpoch(
-                CoreEpochInfo {
-                    public: CoreEpochPublicInfo {
-                        epoch: epoch + 1,
-                        ..public_info.clone()
-                    },
-                    core_poq_generator: Some(()),
-                }
-                .into(),
-            ),
-            &settings,
-            crypto_processor,
-            scheduler,
-            public_info,
-            ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
-            &mut backend,
-            &sdp_relay,
-            Some(&secret_info),
-        )
-        .await;
-        recorded_set_epoch_private_calls()
-    }
-
     // Secret for the new epoch (1) is applied to the new generator.
     assert_eq!(
         transition_to_new_epoch_with_secret(1.into()).await,
@@ -922,6 +924,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
 /// it's still core. Also, check if it stops after the epoch transition period
 /// if it receives another new epoch that doesn't meet the core node
 /// conditions.
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 #[test_log::test(tokio::test)]
 async fn complete_old_epoch_after_main_loop_done() {
     let minimal_network_size = 2;
@@ -1068,6 +1071,7 @@ async fn complete_old_epoch_after_main_loop_done() {
 
 /// Check that the service handles a new epoch with empty providers (zk: None)
 /// without panicking. It should retire gracefully.
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 #[test_log::test(tokio::test)]
 async fn stop_on_empty_epoch() {
     let minimal_network_size = 2;
@@ -1203,6 +1207,7 @@ async fn stop_on_empty_epoch() {
 /// Check that the service handles a non-empty new epoch where the local node
 /// has no core path (`core_poq_generator = None`) without panicking. It should
 /// retire gracefully.
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 #[test_log::test(tokio::test)]
 async fn stop_on_non_empty_epoch_without_local_core_path() {
     let minimal_network_size = 2;
@@ -1339,6 +1344,7 @@ async fn stop_on_non_empty_epoch_without_local_core_path() {
 
 /// Verify that the proof generator produces proofs for the correct epoch,
 /// and that those proofs are only accepted by a verifier for the same epoch.
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 #[test_log::test(tokio::test)]
 async fn test_proof_generator_epoch_binding() {
     let epoch_0 = 0.into();
@@ -1488,6 +1494,7 @@ async fn test_proof_generator_epoch_binding() {
 /// When `initialize` receives a `last_saved_state` whose epoch matches the
 /// current membership epoch, the saved state is restored (e.g. `spent_quota`
 /// is preserved). When the epoch does not match, a fresh state is created.
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 #[test_log::test(tokio::test)]
 async fn test_initialize_recovers_matching_saved_state() {
     let minimal_network_size = 2;

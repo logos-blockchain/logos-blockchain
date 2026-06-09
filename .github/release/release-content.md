@@ -2,14 +2,7 @@
 
 ### 📦 Prerequisites
 
-1. Download and unzip the **circuits** for your architecture from the release artifacts.
-2. Rename the downloaded `logos-blockchain-circuits` to `.logos-blockchain-circuits` and move it to your home directory:
-
-   ```bash
-    mv logos-blockchain-circuits ~/.logos-blockchain-circuits
-   ```
-
-3. Download and unzip the **node binary** for your architecture:
+1. Download and unzip the **node binary** for your architecture:
 
    ```bash
     tar -xzf logos-blockchain-node-<arch>-<version>.tar.gz
@@ -124,9 +117,16 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
     * If this is a release candidate but not the first one that has a GH release, then the previous tag is the version of previous release candidate for this release, e.g., `0.1.3-rc.2` compares against `0.1.3-rc.1`
     * If this is an actual release, then the previous tag is the latest release, e.g., `0.1.3` compares against `0.1.2`
 - [ ] Verify binaries are present for **Mac** and **Linux**
-- [ ] Verify circuits of the expected version are present for **Mac** and **Linux**
 - [ ] Replace `{TODO}` peer IDs:
-    * For a release candidate (for devnet), copy-paste the new devnet addresses from the [devnet dashboard][devnet-dashboard]
+    * For a release candidate (for devnet), you must use:
+
+        ```
+            ./logos-blockchain-node init \
+                -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8 \
+                -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ \
+                -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf \
+                -p /ip4/65.108.203.235/udp/3003/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH
+        ```
     * For a release (for testnet), copy-paste the new testnet addresses from the [testnet dashboard][testnet-dashboard]
 - [ ] Delete this checklist and publish
 
