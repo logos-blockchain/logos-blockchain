@@ -6,7 +6,7 @@ mod config;
 pub mod cryptarchia;
 pub mod mantle;
 
-use std::{collections::HashMap, hash::Hash};
+use std::hash::Hash;
 
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
@@ -32,6 +32,7 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use mantle::LedgerState as MantleLedger;
+use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::mantle::helpers::MantleOperationVerificationHelper;
@@ -117,7 +118,7 @@ pub enum LedgerError<Id> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ledger<Id: Eq + Hash> {
-    states: HashMap<Id, LedgerState>,
+    states: HashTrieMapSync<Id, LedgerState>,
     config: Config,
 }
 
@@ -127,7 +128,7 @@ where
 {
     pub fn new(id: Id, state: LedgerState, config: Config) -> Self {
         Self {
-            states: std::iter::once((id, state)).collect(),
+            states: HashTrieMapSync::new_sync().insert(id, state),
             config,
         }
     }
@@ -164,7 +165,7 @@ where
 
     /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
     pub fn commit_update(&mut self, id: Id, state: LedgerState) {
-        self.states.insert(id, state);
+        self.states.insert_mut(id, state);
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -189,16 +190,7 @@ where
     ///
     /// `true` if the state was successfully removed, `false` otherwise.
     pub fn prune_state_at(&mut self, block: &Id) -> bool {
-        self.states.remove(block).is_some()
-    }
-
-    /// Shrinks the map of ledger states to free up memory that has been pruned
-    /// so far.
-    ///
-    /// This shouldn't be called frequently since the entire map is
-    /// reconstructed.
-    pub fn shrink(&mut self) {
-        self.states.shrink_to_fit();
+        self.states.remove_mut(block)
     }
 }
 
