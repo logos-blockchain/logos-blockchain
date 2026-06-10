@@ -63,7 +63,7 @@ enum PendingEvent {
     /// A retry's backoff has elapsed; the peer should be redialed.
     RetryReady {
         peer_id: PeerId,
-        dial_attempt: DialAttempt,
+        dial_attempt: Box<DialAttempt>,
     },
     /// An in-flight stream-open/send completed.
     Send(SendOutcome),
@@ -280,10 +280,10 @@ where
             tokio::time::sleep(delay).await;
             PendingEvent::RetryReady {
                 peer_id,
-                dial_attempt: DialAttempt {
+                dial_attempt: Box::new(DialAttempt {
                     attempt_number: new_dial_attempt_number,
                     ..dial_attempt
-                },
+                }),
             }
         }));
     }
@@ -449,7 +449,7 @@ where
             Some(event) = self.pending_events.next() => {
                 match event {
                     PendingEvent::RetryReady { peer_id, dial_attempt } => {
-                        self.handle_new_dial_retry(peer_id, dial_attempt);
+                        self.handle_new_dial_retry(peer_id, *dial_attempt);
                     }
                     PendingEvent::Send(outcome) => {
                         self.handle_send_outcome(&outcome);
@@ -479,6 +479,10 @@ where
 /// [`BlendSwarm::handle_connection_established`]) so that a peer which stalls
 /// stream negotiation only delays its own send rather than wedging the whole
 /// event loop.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: Address this at some point."
+)]
 async fn send_message_over_new_stream(
     mut stream_control: libp2p_stream::Control,
     protocol_name: StreamProtocol,
