@@ -267,7 +267,10 @@ where
             );
             return;
         }
-        let delay = Duration::from_secs(1 << (new_dial_attempt_number.get() - 1));
+        let delay = Duration::from_secs(
+            1u64.checked_shl((new_dial_attempt_number.get() - 1) as u32)
+                .unwrap_or(u64::MAX),
+        );
         debug!(
             target: LOG_TARGET,
             "Scheduling retry {new_dial_attempt_number} for peer {peer_id:?} in {} seconds",

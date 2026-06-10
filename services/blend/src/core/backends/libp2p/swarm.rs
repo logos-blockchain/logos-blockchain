@@ -559,7 +559,10 @@ where
             tracing::debug!(target: LOG_TARGET, "Maximum attempts ({}) reached for peer {peer_id:?}. Re-dialing stopped.", self.max_dial_attempts_per_connection);
             return EpochDialAttempt::OngoingEpoch(Some(dial_attempt));
         }
-        let delay = Duration::from_secs(1 << (new_attempt_number.get() - 1));
+        let delay = Duration::from_secs(
+            1u64.checked_shl((new_attempt_number.get() - 1) as u32)
+                .unwrap_or(u64::MAX),
+        );
         tracing::debug!(
             target: LOG_TARGET,
             "Scheduling retry {new_attempt_number} for peer {peer_id:?} in {} seconds.",
