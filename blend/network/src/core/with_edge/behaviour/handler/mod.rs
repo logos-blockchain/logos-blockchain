@@ -22,6 +22,9 @@ mod ready_to_receive;
 mod receiving;
 mod starting;
 
+#[cfg(test)]
+mod tests;
+
 const LOG_TARGET: &str = blend::network::core::handler::CORE_EDGE;
 
 type TimerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
@@ -181,71 +184,5 @@ impl libp2p::swarm::ConnectionHandler for ConnectionHandler {
         self.state = Some(new_state);
 
         poll_result
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use core::{
-        task::{Context, Poll},
-        time::Duration,
-    };
-
-    use futures::task::noop_waker_ref;
-    use libp2p::{StreamProtocol, swarm::ConnectionHandler as _};
-
-    use super::ConnectionHandler;
-
-    /// Reproduces audit finding #9: an edge connection that never opens its
-    /// inbound substream is never closed, leaking the connection.
-    ///
-    /// The handler starts in `Starting`, whose `poll` only stores the waker and
-    /// returns `Pending` — it never arms a timer. The `connection_timeout` is
-    /// consumed only when transitioning to `ReadyToReceive` on
-    /// `FullyNegotiatedInbound`. Meanwhile `connection_keep_alive()` returns
-    /// `true` for every state except `Dropped`, so the swarm keeps the
-    /// connection open. A peer that establishes the connection but never opens
-    /// the inbound substream therefore pins the handler in `Starting` forever.
-    /// The behaviour's `max_incoming_connections` cap only counts *upgraded*
-    /// peers (`upgraded_edge_peers`, populated on `SubstreamOpened`), so these
-    /// stuck connections bypass it entirely — an unbounded, remote-triggered
-    /// connection leak (FD/memory exhaustion).
-    ///
-    /// This is a characterization test: it asserts the *current, buggy*
-    /// behavior (still keep-alive, still `Pending` long after the timeout
-    /// has elapsed). When the bug is fixed (arm the timeout in `Starting`
-    /// as well), `poll` will yield `SubstreamClosed(Timeout)` and
-    /// `connection_keep_alive()` will drop — flipping both assertions,
-    /// which should then be updated to assert the correct behavior.
-    #[tokio::test]
-    async fn starting_state_without_inbound_substream_leaks_connection() {
-        // Short timeout so the test is fast. The state machine uses
-        // `futures_timer::Delay` (real wall-clock), not tokio's mock clock.
-        let connection_timeout = Duration::from_millis(50);
-        let mut handler =
-            ConnectionHandler::new(connection_timeout, StreamProtocol::new("/blend/edge/test"));
-
-        let mut cx = Context::from_waker(noop_waker_ref());
-
-        // Initial poll: nothing to do yet, and the connection is kept alive.
-        assert!(matches!(handler.poll(&mut cx), Poll::Pending));
-        assert!(handler.connection_keep_alive());
-
-        // Wait well past the connection timeout WITHOUT ever delivering a
-        // `FullyNegotiatedInbound` (the peer connected but never opened the
-        // inbound substream).
-        tokio::time::sleep(connection_timeout * 10).await;
-
-        // BUG: `Starting` never armed a timer, so the handler still reports
-        // keep-alive and emits no `SubstreamClosed(Timeout)`. The connection is
-        // leaked; a correct implementation would have closed it by now.
-        assert!(
-            matches!(handler.poll(&mut cx), Poll::Pending),
-            "Starting state should have timed out and emitted SubstreamClosed, but polls Pending forever"
-        );
-        assert!(
-            handler.connection_keep_alive(),
-            "Starting state keeps the connection alive even after the timeout elapsed -> leak"
-        );
     }
 }
