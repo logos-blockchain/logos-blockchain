@@ -1,6 +1,5 @@
 use core::{convert::Infallible, str::FromStr};
 use std::{
-    collections::HashSet,
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::PathBuf,
     time::Duration,
@@ -271,9 +270,10 @@ pub struct CryptarchiaArgs {
     )]
     pub cryptarchia_funding_pk: Option<ZkPublicKey>,
 
-    /// Overwrite IBD peer list with an empty list.
-    #[clap(long = "disable-ibd-peers", default_value_t = false)]
-    pub disable_ibd_peers: bool,
+    /// Enable Initial Block Download (IBD) using peers
+    /// passed via `--net-initial-peers`/`-p`.
+    #[clap(long = "ibd", default_value_t = false)]
+    pub ibd: bool,
 }
 
 #[derive(Parser, Debug, Default, Clone, Copy)]
@@ -544,18 +544,17 @@ pub fn update_blend(blend: &mut BlendConfig, blend_args: BlendArgs) {
     }
 }
 
-pub fn update_cryptarchia(cryptarchia: &mut CryptarchiaConfig, cryptarchia_args: CryptarchiaArgs) {
+pub const fn update_cryptarchia(
+    cryptarchia: &mut CryptarchiaConfig,
+    cryptarchia_args: CryptarchiaArgs,
+) {
     let CryptarchiaArgs {
         cryptarchia_funding_pk: funding_pk,
-        disable_ibd_peers,
+        ..
     } = cryptarchia_args;
 
     if let Some(pk) = funding_pk {
         cryptarchia.set_funding_pk(pk);
-    }
-
-    if disable_ibd_peers {
-        cryptarchia.network.bootstrap.ibd.peers = HashSet::new();
     }
 }
 
