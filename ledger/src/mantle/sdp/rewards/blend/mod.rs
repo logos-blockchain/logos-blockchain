@@ -270,7 +270,7 @@ mod tests {
         crypto::ZkHash,
         sdp::{ServiceType, blend},
     };
-    use lb_groth16::{Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey};
 
     use super::*;

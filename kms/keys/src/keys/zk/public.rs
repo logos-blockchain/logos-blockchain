@@ -1,4 +1,4 @@
-use lb_groth16::{Field as _, Fr, Groth16Input};
+use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input};
 use lb_log_targets::kms;
 use lb_zksign::{ZkSignError, ZkSignVerifierInputs};
 use num_bigint::BigUint;

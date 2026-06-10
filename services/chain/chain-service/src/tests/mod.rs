@@ -17,7 +17,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{EpochConfig, Slot};
 use lb_cryptarchia_sync::HeaderId;
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     LedgerState,

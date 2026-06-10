@@ -101,7 +101,7 @@ cfgsync-artifacts                  = { default-features = false, git = "https://
 cfgsync-core                       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 hasher                             = { default-features = false, version = "0.1.4" }
-jf-poseidon2                       = { default-features = false, git = "https://github.com/EspressoSystems/jellyfish.git", rev = "dc166cf0f803c3e5067f9dfcc21e3dade986a447" }
+jf-poseidon2                       = { default-features = false, git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa" }
 lb-api-service                     = { default-features = false, package = "logos-blockchain-api-service", path = "./services/api" }
 lb-blend                           = { default-features = false, package = "logos-blockchain-blend", path = "./blend/core" }
 lb-blend-crypto                    = { default-features = false, package = "logos-blockchain-blend-crypto", path = "./blend/crypto" }
@@ -176,11 +176,11 @@ testing-framework-runner-local     = { default-features = false, git = "https://
 
 # External
 anyhow                             = { default-features = false, version = "1" }
-ark-bn254                          = { default-features = false, version = "0.4" }
-ark-ec                             = { default-features = false, version = "0.4" }
-ark-ff                             = { default-features = false, version = "0.4" }
-ark-groth16                        = { default-features = false, version = "0.4" }
-ark-serialize                      = { default-features = false, version = "0.4.2" }
+ark-bn254                          = { default-features = false, version = "0.5" }
+ark-ec                             = { default-features = false, version = "0.5" }
+ark-ff                             = { default-features = false, version = "0.5" }
+ark-groth16                        = { default-features = false, version = "0.5" }
+ark-serialize                      = { default-features = false, version = "0.5" }
 astro-float                        = { default-features = false, version = "0.9" }
 async-ctrlc                        = { default-features = false, version = "1.2" }
 async-stream                       = { default-features = false, version = "0.3.6" }

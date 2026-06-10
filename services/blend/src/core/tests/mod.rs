@@ -11,7 +11,7 @@ use lb_blend::{
 };
 use lb_chain_service::Epoch;
 use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
-use lb_groth16::Field as _;
+use lb_groth16::AdditiveGroup as _;
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::CORE_MERKLE_TREE_HEIGHT;
 use lb_utils::blake_rng::BlakeRng;
