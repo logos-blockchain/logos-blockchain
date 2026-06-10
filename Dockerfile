@@ -31,7 +31,10 @@ LABEL maintainer="augustinas@status.im" \
     source="https://github.com/logos-blockchain/logos-blockchain" \
     description="Logos blockchain node image"
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl jq && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl jq && \
+    curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && \
+    chmod +x /usr/local/bin/yq && \
+    rm -rf /var/lib/apt/lists/*
 
 # Copies the entire cache dir.
 # We only need the circuits, but this is currently much simpler than just copying the circuits subdir.
