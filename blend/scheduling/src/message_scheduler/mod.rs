@@ -125,9 +125,9 @@ where
         // the recovery checkpoint. Re-queueing through `queue_data_message` also
         // keeps the new epoch's cover-traffic accounting consistent.
         let mut new_scheduler = Self::new(new_epoch_info, release_delayer.rng().clone(), settings);
-        data_messages
-            .into_iter()
-            .for_each(|message| new_scheduler.queue_data_message(message));
+        for message in data_messages {
+            new_scheduler.queue_data_message(message);
+        }
         (new_scheduler, OldEpochMessageScheduler(release_delayer))
     }
 
