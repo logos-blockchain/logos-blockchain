@@ -65,11 +65,11 @@ members = [
   "services/tx-service",
   "services/utils",
   "services/wallet",
-  "testnet/cfgsync",
-  "testnet/faucet",
-  "testnet/l2-sequencer-archival-demo/archiver",
-  "testnet/l2-sequencer-archival-demo/sequencer",
-  "testnet/tui-zone",
+  "deployment/cfgsync",
+  "deployment/faucet",
+  "deployment/l2-sequencer-archival-demo/archiver",
+  "deployment/l2-sequencer-archival-demo/sequencer",
+  "deployment/tui-zone",
   "tests",
   "tests/testing_framework",
   "tools/blockchain-tools",
@@ -110,7 +110,7 @@ lb-blend-network                   = { default-features = false, package = "logo
 lb-blend-proofs                    = { default-features = false, package = "logos-blockchain-blend-proofs", path = "./blend/proofs" }
 lb-blend-scheduling                = { default-features = false, package = "logos-blockchain-blend-scheduling", path = "./blend/scheduling" }
 lb-blend-service                   = { default-features = false, package = "logos-blockchain-blend-service", path = "./services/blend" }
-lb-cfgsync                         = { default-features = false, package = "logos-blockchain-cfgsync", path = "./testnet/cfgsync" }
+lb-cfgsync                         = { default-features = false, package = "logos-blockchain-cfgsync", path = "./deployment/cfgsync" }
 lb-chain-broadcast-service         = { default-features = false, package = "logos-blockchain-chain-broadcast-service", path = "./services/chain/broadcast-service" }
 lb-chain-leader-service            = { default-features = false, package = "logos-blockchain-chain-leader-service", path = "./services/chain/chain-leader" }
 lb-chain-network-service           = { default-features = false, package = "logos-blockchain-chain-network-service", path = "./services/chain/chain-network" }
@@ -123,8 +123,8 @@ lb-config                          = { default-features = false, package = "logo
 lb-core                            = { default-features = false, package = "logos-blockchain-core", path = "./core" }
 lb-cryptarchia-engine              = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
-lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./testnet/l2-sequencer-archival-demo/archiver" }
-lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./testnet/l2-sequencer-archival-demo/sequencer" }
+lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./deployment/l2-sequencer-archival-demo/archiver" }
+lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./deployment/l2-sequencer-archival-demo/sequencer" }
 lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
 lb-http-api-common                 = { default-features = false, package = "logos-blockchain-http-api-common", path = "./nodes/api-common" }
 lb-key-management-system-keys      = { default-features = false, package = "logos-blockchain-key-management-system-keys", path = "./kms/keys" }
@@ -152,7 +152,7 @@ lb-time-service                    = { default-features = false, package = "logo
 lb-tools                           = { default-features = false, package = "logos-blockchain-tools", path = "./tools/blockchain-tools" }
 lb-tracing                         = { default-features = false, package = "logos-blockchain-tracing", path = "./tracing" }
 lb-tracing-service                 = { default-features = false, package = "logos-blockchain-tracing-service", path = "./services/tracing" }
-lb-tui-zone                        = { default-features = false, package = "logos-blockchain-tui-zone", path = "./testnet/tui-zone" }
+lb-tui-zone                        = { default-features = false, package = "logos-blockchain-tui-zone", path = "./deployment/tui-zone" }
 lb-tx-service                      = { default-features = false, package = "logos-blockchain-tx-service", path = "./services/tx-service" }
 lb-utils                           = { default-features = false, package = "logos-blockchain-utils", path = "./utils" }
 lb-utxotree                        = { default-features = false, package = "logos-blockchain-utxotree", path = "./utxotree" }
