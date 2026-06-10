@@ -273,8 +273,8 @@ async fn test_handle_incoming_blend_message() {
 /// Regression test for audit finding #1: two replicas of one data message must
 /// not crash the core service. The service emits `data_replication_factor + 1`
 /// copies, each with fresh random layers (distinct encapsulated IDs), but
-/// decapsulation yields the same inner `NetworkMessage` — and `ProcessedMessage`
-/// hashes on that content:
+/// decapsulation yields the same inner `NetworkMessage` — and
+/// `ProcessedMessage` hashes on that content:
 ///
 /// ```text
 ///   replica A ─encap(rand)→ ID_a ─┐ swarm dedups on ID, so both pass
