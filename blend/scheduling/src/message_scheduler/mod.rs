@@ -77,9 +77,13 @@ where
         let cover_traffic = EpochCoverTraffic::new(
             crate::cover_traffic::Settings {
                 rounds_per_epoch: settings.rounds_per_epoch,
-                message_count: epoch_info
-                    .core_quota
-                    .div_ceil(settings.num_blend_layers.into()),
+                // Floor division: each cover message consumes `num_blend_layers`
+                // proofs from a hard cap of `core_quota`. Using `div_ceil` would
+                // schedule one extra emission whenever the quota is not an exact
+                // multiple of the layer count, and that last emission would fail
+                // with `NoMoreProofOfQuotas`. Flooring keeps the scheduled count
+                // within what the quota can actually satisfy.
+                message_count: epoch_info.core_quota / u64::from(settings.num_blend_layers),
             },
             rng.clone(),
             Box::new(round_clock.clone()) as RoundClock,
