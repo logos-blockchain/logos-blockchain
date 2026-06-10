@@ -135,7 +135,7 @@ logos-blockchain/
 ├── wallet/               Wallet logic (UTXO selection, key management)
 ├── zone-sdk/             SDK for building zone sequencers & indexers
 ├── c-bindings/           C-compatible dynamic library + header
-├── testnet/              Docker Compose testnets, faucet, L2 demo
+├── deployment/              Docker Compose testnets, faucet, L2 demo
 └── tests/                Integration & Cucumber BDD tests
 ```
 
@@ -157,11 +157,11 @@ cargo test -p logos-blockchain-tests
 ### Multi-Node Local Testnet
 
 ```bash
-cd testnet
+cd deployment
 docker compose up
 ```
 
-See [`testnet/README.md`](testnet/README.md) for details.
+See [`deployment/README.md`](deployment/README.md) for details.
 
 ### Join Existing Devnet
 
@@ -172,7 +172,7 @@ You can visit the [Devnet dashboard][devnet-dashboard] to get more info about th
 ### L2 Demo
 
 ```bash
-cd testnet/l2-sequencer-archival-demo
+cd deployment/l2-sequencer-archival-demo
 docker compose up
 # Web UI → http://localhost:8200
 ```
