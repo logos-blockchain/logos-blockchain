@@ -245,10 +245,21 @@ where
         Ok(Self {
             service_resources_handle,
             // We consume the serializable state into the state type we interact with in the
-            // service.
-            last_saved_state: recovery_initial_state.service_state.map(|s| {
-                s.try_into_state_with_state_updater(state_updater)
-                    .expect("Stored state should be valid")
+            // service. If the persisted state is inconsistent (e.g. an epoch
+            // mismatch from version skew or a partial write), discard it rather
+            // than panicking: `run` already falls back to a fresh state when
+            // none was recovered, which avoids a crash loop on every start.
+            last_saved_state: recovery_initial_state.service_state.and_then(|s| {
+                match s.try_into_state_with_state_updater(state_updater) {
+                    Ok(state) => Some(state),
+                    Err(error) => {
+                        tracing::error!(
+                            target: LOG_TARGET,
+                            "Discarding inconsistent recovery state and starting fresh: {error:?}"
+                        );
+                        None
+                    }
+                }
             }),
             _phantom: PhantomData,
         })
