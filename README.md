@@ -43,13 +43,14 @@ cargo test -p logos-blockchain-circuits-prover -p logos-blockchain-circuits-veri
 
 ### 2. Build
 
-**Note:** MacOS users may encounter linker warning messages due to a mismatch in C++ circuit binaries target version
-(14.0) and what the Rust compiler on MacOS guarantees (11.0). These warnings may be safely ignored as the binaries
-should still run correctly, but the better fix would be to compile the node for the same minimum target version as the
-circuits (14.0). To do this, set the `MACOSX_DEPLOYMENT_TARGET` environment variable to `14.0` before building:
+**Note:** MacOS users may encounter linker warning messages due to a mismatch in C++ binaries (e.g. circuit or 
+rapidsnark) target version (14.0 / 15.0) and what the Rust compiler on MacOS guarantees (11.0). These warnings may be 
+safely ignored as the binaries should still run correctly, but the better fix would be to compile the node for the 
+same minimum target version as the circuits (14.0). To do this, set the `MACOSX_DEPLOYMENT_TARGET` environment variable 
+to `15.0` before building:
 
 ```bash
-export MACOSX_DEPLOYMENT_TARGET=14.0
+export MACOSX_DEPLOYMENT_TARGET=15.0
 ```
 
 ```bash
