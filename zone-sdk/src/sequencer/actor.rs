@@ -14,7 +14,7 @@ use super::{
     state::{ChannelUpdateInfo, TxState},
     types::{
         ChannelUpdate, Error, Event, FinalizedTx, SequencerChannelView, SequencerCheckpoint,
-        TurnNotification,
+        TurnNotification, TxSource, TxStatus,
     },
     zone_sequencer::{ZoneSequencer, build_checkpoint},
 };
@@ -109,6 +109,8 @@ where
         // arrives.
         self.publish_channel_view();
 
+        self.queue_block_status_events(&channel_update, &finalized);
+
         let block_event = self
             .publish_checkpoint()
             .map(|checkpoint| Event::BlocksProcessed {
@@ -124,7 +126,10 @@ where
             return Some(self.emit_now(Event::Ready));
         }
 
-        block_event
+        if let Some(ev) = block_event {
+            self.buffered_events.push_back(ev);
+        }
+        self.buffered_events.pop_front()
     }
 
     /// If not yet ready and startup backfill is complete, mark ready. Returns
@@ -478,6 +483,35 @@ where
             },
         };
         (channel_update, result.finalized_items)
+    }
+
+    fn queue_block_status_events(
+        &mut self,
+        channel_update: &ChannelUpdate,
+        finalized: &[FinalizedTx],
+    ) {
+        for tx in &channel_update.orphaned {
+            let tx_hash = tx.tx_hash();
+            let source = self
+                .state
+                .as_ref()
+                .map_or(TxSource::Other, |state| state.tx_source(&tx_hash));
+            self.queue_tx_status(tx_hash, TxStatus::Orphaned(source));
+        }
+        for info in &channel_update.adopted {
+            let source = self
+                .state
+                .as_ref()
+                .map_or(TxSource::Other, |state| state.tx_source(&info.tx_hash));
+            self.queue_tx_status(info.tx_hash, TxStatus::OnChain(source));
+        }
+        for tx in finalized {
+            let source = self
+                .state
+                .as_ref()
+                .map_or(TxSource::Other, |state| state.tx_source(&tx.tx_hash));
+            self.queue_tx_status(tx.tx_hash, TxStatus::Finalized(source));
+        }
     }
 
     fn log_channel_update(update: &ChannelUpdateInfo) {

@@ -137,7 +137,7 @@ fn handle_event(
             }
             state.save_checkpoint(checkpoint);
         }
-        Event::TurnNotification { .. } => {}
+        Event::TxStatusChanged { .. } | Event::TurnNotification { .. } => {}
     }
 }
 

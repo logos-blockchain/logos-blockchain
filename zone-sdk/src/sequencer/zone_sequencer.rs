@@ -28,7 +28,7 @@ use super::{
     state::TxState,
     types::{
         Event, SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification,
-        WithdrawInfo,
+        TxStatus, WithdrawInfo,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -364,11 +364,14 @@ where
             Some(results) = self.in_flight.next() => {
                 for (tx_hash, success) in results {
                     self.posting.remove(&tx_hash);
-                    if success && let Some(state) = self.state.as_mut() {
-                        state.mark_pending_inscription_posted(&tx_hash);
+                    if success {
+                        if let Some(state) = self.state.as_mut() {
+                            state.mark_pending_inscription_posted(&tx_hash);
+                        }
+                        self.queue_tx_status(tx_hash, TxStatus::PendingMempool);
                     }
                 }
-                None
+                self.buffered_events.pop_front().map(|event| self.emit_now(event))
             }
         }
     }
@@ -376,6 +379,11 @@ where
     pub(super) fn emit_now(&self, event: Event) -> Event {
         drop(self.event_tx.send(event.clone()));
         event
+    }
+
+    pub(super) fn queue_tx_status(&mut self, tx_hash: TxHash, status: TxStatus) {
+        self.buffered_events
+            .push_back(Event::TxStatusChanged { tx_hash, status });
     }
 
     /// Push a single-tx publish post into `in_flight`. Used by

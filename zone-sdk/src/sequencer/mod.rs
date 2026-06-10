@@ -62,6 +62,7 @@ pub use handle::SequencerHandle;
 pub use types::{
     AtomicWithdrawInfo, ChannelUpdate, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
     InscriptionId, InscriptionInfo, OrphanedTx, PendingTx, PublishResult, SequencerChannelView,
-    SequencerCheckpoint, SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
+    SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, WithdrawArg,
+    WithdrawInfo,
 };
 pub use zone_sequencer::ZoneSequencer;

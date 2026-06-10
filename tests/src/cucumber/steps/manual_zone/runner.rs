@@ -26,7 +26,8 @@ use lb_key_management_system_service::keys::Ed25519Signature;
 pub use lb_zone_sdk::sequencer::{
     AtomicWithdrawInfo, ChannelUpdate, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
     InscriptionId, InscriptionInfo, OrphanedTx, PendingTx, PublishResult, SequencerChannelView,
-    SequencerCheckpoint, SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
+    SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, WithdrawArg,
+    WithdrawInfo,
 };
 use lb_zone_sdk::{adapter, sequencer::ZoneSequencer};
 use tokio::{

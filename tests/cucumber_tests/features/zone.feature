@@ -19,6 +19,11 @@ Feature: Zone SDK
       | MSG_3 | Third message  |
     Then all zone messages are safe in 120 seconds
     And all zone messages are finalized in 180 seconds
+    And sequencer "SEQ_A" emits the full transaction lifecycle for zone messages in 30 seconds:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
     And the zone indexer returns messages in this order:
       | alias |
       | MSG_1 |

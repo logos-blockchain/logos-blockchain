@@ -437,6 +437,25 @@ impl ZoneState {
             .collect()
     }
 
+    pub fn message_tx_hashes_for_aliases(
+        &self,
+        aliases: &[String],
+    ) -> Result<Vec<InscriptionId>, StepError> {
+        aliases
+            .iter()
+            .map(|alias| {
+                self.published_messages
+                    .get(alias)
+                    .and_then(|message| message.inscription_id)
+                    .ok_or(StepError::LogicalError {
+                        message: format!(
+                            "Zone message alias '{alias}' does not have a tracked tx hash"
+                        ),
+                    })
+            })
+            .collect()
+    }
+
     pub fn published_message_payloads(&self) -> Result<Vec<Inscription>, StepError> {
         self.message_payloads_for_aliases(&self.published_order)
     }

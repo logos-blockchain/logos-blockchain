@@ -22,6 +22,7 @@ use super::{
         wait_until_sorted_conflict_settles,
     },
     errors::{log_step_error, zone_step_error},
+    runner::{TxSource, TxStatus},
     support::{
         PublishDeadline, balance_update_payload, collect_indexed_messages,
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
@@ -29,7 +30,8 @@ use super::{
         wait_for_adopted_payloads, wait_for_channel_view, wait_for_deposit,
         wait_for_exact_indexed_payload_count, wait_for_finalized_deposit_via_sequencer,
         wait_for_finalized_withdraw_via_sequencer, wait_for_lib_advance,
-        wait_for_transactions_finalized, wait_for_turn_to_write, wait_for_withdraw,
+        wait_for_transactions_finalized, wait_for_turn_to_write, wait_for_tx_status_lifecycle,
+        wait_for_withdraw,
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
@@ -1071,6 +1073,34 @@ async fn step_all_zone_messages_are_finalized(
     wait_for_transactions_finalized(
         node_url,
         &inscription_ids,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
+}
+
+#[cucumber::then(
+    expr = "sequencer {string} emits the full transaction lifecycle for zone messages in {int} seconds:"
+)]
+async fn step_sequencer_emits_full_transaction_lifecycle(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let aliases = single_column_table(step, "alias", "zone message aliases")?;
+    let tx_hashes = log_step_error(step, world.zone.message_tx_hashes_for_aliases(&aliases))?;
+    let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+
+    wait_for_tx_status_lifecycle(
+        events,
+        &tx_hashes,
+        &[
+            TxStatus::AcceptedLocally,
+            TxStatus::PendingMempool,
+            TxStatus::OnChain(TxSource::Local),
+            TxStatus::Finalized(TxSource::Local),
+        ],
         Duration::from_secs(timeout_seconds),
     )
     .await

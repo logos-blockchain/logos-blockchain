@@ -51,7 +51,7 @@ use tracing::warn;
 use super::runner::{
     self, ChannelUpdate, Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx, PendingTx,
     PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerClient, SequencerConfig,
-    TurnNotification, WithdrawArg,
+    TurnNotification, TxStatus, WithdrawArg,
 };
 use crate::common::{
     chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
@@ -629,6 +629,40 @@ pub async fn wait_for_adopted_payloads(
     })
     .await
     .map_err(|_| ZoneTestError::PublishTimeout)?
+}
+
+pub async fn wait_for_tx_status_lifecycle(
+    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    tx_hashes: &[InscriptionId],
+    statuses: &[TxStatus],
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    let mut remaining: HashSet<(InscriptionId, TxStatus)> = tx_hashes
+        .iter()
+        .flat_map(|tx_hash| statuses.iter().map(move |status| (*tx_hash, *status)))
+        .collect();
+
+    timeout(duration, async {
+        while !remaining.is_empty() {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("event subscriber lagged by {n}, recovering");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(ZoneTestError::SequencerStopped);
+                }
+            };
+            let Event::TxStatusChanged { tx_hash, status } = event else {
+                continue;
+            };
+            remaining.remove(&(tx_hash, status));
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| ZoneTestError::IndexerTimeout)?
 }
 
 /// Waits until the subscribed channel view satisfies the supplied predicate.

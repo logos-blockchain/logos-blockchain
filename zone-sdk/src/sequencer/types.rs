@@ -83,6 +83,16 @@ pub enum OrphanedTx {
     AtomicWithdraw(AtomicWithdrawInfo),
 }
 
+impl OrphanedTx {
+    #[must_use]
+    pub const fn tx_hash(&self) -> TxHash {
+        match self {
+            Self::Inscription(i) => i.tx_hash,
+            Self::AtomicWithdraw(a) => a.tx_hash,
+        }
+    }
+}
+
 /// Configuration for the zone sequencer.
 #[derive(Clone)]
 pub struct SequencerConfig {
@@ -183,11 +193,44 @@ pub enum Event {
     /// catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
     /// `BlocksProcessed` once the stream resumes.
     Ready,
+    /// Transaction lifecycle status update.
+    TxStatusChanged {
+        /// Transaction hash whose lifecycle advanced.
+        tx_hash: TxHash,
+        /// New transaction status.
+        status: TxStatus,
+    },
     /// Turn-to-write status update for this sequencer.
     ///
     /// Emitted on the same change boundary as the `turn_to_write` watch
     /// channel (excluding `current_slot`-only updates).
     TurnNotification { notification: TurnNotification },
+}
+
+/// Local lifecycle status for a transaction submitted through the sequencer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TxStatus {
+    /// Accepted by the SDK and tracked locally.
+    AcceptedLocally,
+    /// Accepted by the node post API and expected to be in the mempool.
+    PendingMempool,
+    /// Observed in the canonical non-finalized chain.
+    OnChain(TxSource),
+    /// Previously tracked tx was invalidated by a canonical chain update.
+    Orphaned(TxSource),
+    /// Observed in finalized chain history.
+    Finalized(TxSource),
+}
+
+/// Whether an observed transaction originated from this sequencer runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TxSource {
+    /// The tx was accepted locally by this sequencer or restored from its
+    /// checkpoint.
+    Local,
+    /// The tx was observed on chain but is not known as local to this
+    /// sequencer.
+    Other,
 }
 
 /// Channel state delta from one [`Event::BlocksProcessed`].
