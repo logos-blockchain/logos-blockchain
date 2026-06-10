@@ -55,6 +55,7 @@ jobs:
       - name: Expose gmp to cargo (macOS runners)
         if: runner.os == 'macOS'
         run: |
+          echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
           echo "RUSTFLAGS=-C linker=rust-lld -L /run/current-system/sw/lib" >> "$GITHUB_ENV"
           echo "LIBRARY_PATH=/run/current-system/sw/lib" >> "$GITHUB_ENV"
 
