@@ -1,23 +1,25 @@
-use std::collections::VecDeque;
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use futures::{StreamExt as _, future::BoxFuture, stream::FuturesUnordered};
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTx, SignedMantleTx, Transaction as _,
-        channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        encoding::Ops,
-        ops::{
-            Op,
-            channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
-        },
+        Op, SignedMantleTx, Transaction as _,
+        channel::ChannelState,
+        ops::channel::{ChannelId, MsgId, inscribe::Inscription},
         tx::TxHash,
     },
 };
-use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
-use tokio::sync::{broadcast, mpsc, watch};
-use tracing::info;
+use lb_key_management_system_service::keys::Ed25519Key;
+use tokio::sync::{broadcast, watch};
+use tracing::{info, warn};
 
 use super::{
     TARGET,
@@ -25,80 +27,26 @@ use super::{
     slot_clock::SlotClock,
     state::TxState,
     types::{
-        Error, Event, InscriptionId, PublishResult, SequencerChannelView, SequencerCheckpoint,
-        SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
+        Event, SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification,
+        WithdrawInfo,
     },
 };
 use crate::{adapter, adapter::BoxStream};
 
-pub(super) enum ActorRequest {
-    /// Create/sign/submit a transaction with an inscription
-    PublishMessage { data: Inscription },
-    /// Build an unsigned tx for the given ops and an inscription
-    ///
-    /// Calling this multiple times without submitting the prepared txs via
-    /// `SubmitSignedTx` can cause parent msg ID conflicts, so ensure
-    /// prepared txs are submitted promptly. If additional prepares are
-    /// unavoidable, handle potential conflicts carefully.
-    PrepareTx {
-        ops: Ops,
-        msg: Inscription,
-        reply: tokio::sync::oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
-    },
-    /// Sign a tx using the sequencer's key
-    ///
-    /// Useful when signing tx built by other sequencers (e.g. withdraw).
-    SignTx {
-        tx_hash: TxHash,
-        reply: tokio::sync::oneshot::Sender<Result<Ed25519Signature, Error>>,
-    },
-    /// Submit a signed tx associated with a msg ID
-    SubmitSignedTx {
-        tx: SignedMantleTx,
-        msg_id: MsgId,
-        reply: tokio::sync::oneshot::Sender<Result<PublishResult, Error>>,
-    },
-    ChannelConfig {
-        keys: Keys,
-        posting_timeframe: SlotTimeframe,
-        posting_timeout: SlotTimeout,
-        configuration_threshold: u16,
-        withdraw_threshold: u16,
-        reply: tokio::sync::oneshot::Sender<Result<(SignedMantleTx, PublishResult), Error>>,
-    },
-    /// Publish an atomic inscription+withdraw bundle.
-    ///
-    /// SDK queries channel state to fill `withdraw_nonce`s and locate its own
-    /// accredited-key index, builds the `MantleTx`, signs locally, and submits.
-    /// Scoped to single-sequencer (centralized) channels — the sequencer's
-    /// own signature is the only one used. Fire-and-forget; the result is
-    /// delivered via `Event::Published`.
-    PublishAtomicWithdraw {
-        inscribe: Inscription,
-        withdraws: Vec<WithdrawArg>,
-    },
-}
-
-pub(super) enum InFlight {
-    SubmittedBatch {
-        results: Vec<(InscriptionId, Result<(), String>)>,
-    },
-}
-
 /// Zone sequencer.
 ///
-/// The caller drives execution by pumping [`Self::events`] in a loop. Publish
-/// and admin operations are submitted via the [`SequencerHandle`] returned
-/// from [`Self::init`], which can be cloned and used from any task.
+/// The caller drives execution by pumping [`Self::next_event`] or
+/// [`Self::events`] in a loop. Publish and admin operations go through a
+/// borrowing [`SequencerHandle`] obtained via [`Self::handle`] — the handle's
+/// `&mut self` borrow means it can only be used from the drive task, which
+/// removes any actor-vs-caller deadlock window and lets every state-mutating
+/// method return the resulting [`SequencerCheckpoint`] inline.
 pub struct ZoneSequencer<Node> {
     // Config
     pub(super) channel_id: ChannelId,
     pub(super) signing_key: Ed25519Key,
     pub(super) node: Node,
     pub(super) config: SequencerConfig,
-
-    // Actor channel for receiving requests from other tasks
-    pub(super) request_rx: mpsc::Receiver<ActorRequest>,
 
     // State
     pub(super) state: Option<TxState>,
@@ -112,12 +60,39 @@ pub struct ZoneSequencer<Node> {
     // Block stream
     pub(super) blocks_stream: Option<BoxStream<ProcessedBlockEvent>>,
 
+    // True while the blocks stream is alive AND we have processed at least
+    // one event since (re)connecting — i.e. cached `channel_state` and
+    // `current_tip` reflect the latest block we observed. Cleared on stream
+    // drop; set on each successful `finish_block_processing`. Gates
+    // operations that depend on cached on-chain state (inscription turn
+    // check, atomic withdraw nonce, channel config) so they fail-fast with
+    // `Error::Unavailable` during reconnect rather than building txs from
+    // stale state.
+    pub(super) connected: bool,
+
     // Resubmission
     pub(super) resubmit_interval: tokio::time::Interval,
-    pub(super) resubmit_active: bool,
-    pub(super) in_flight: FuturesUnordered<BoxFuture<'static, InFlight>>,
 
-    // Buffered events — when multiple events occur on the same block
+    // In-flight `post_transaction` batches. Publishes and broad sweeps push
+    // here; the drive loop polls `in_flight.next()` from `next_event` to
+    // drive batches to completion. Each future processes its batch
+    // sequentially (one HTTP at a time) and returns one `(tx_hash, success)`
+    // per tx. On `success`, `mark_pending_inscription_posted` is called; on
+    // failure the tx stays unposted for the next `resubmit_pending` tick.
+    pub(super) in_flight: FuturesUnordered<BoxFuture<'static, Vec<(TxHash, bool)>>>,
+
+    // Guard: only one broad sweep in flight at a time. Cleared by the
+    // pushed future on completion via the captured `Arc`.
+    pub(super) resubmit_active: Arc<AtomicBool>,
+
+    // Tx hashes currently inside a `post_batch` future in `in_flight`.
+    // `queue_publish_post` and `queue_resubmit_batch` insert before pushing;
+    // the `in_flight` completion handler removes for every batch entry
+    // (success or failure). `resubmit_pending` skips entries already in the
+    // set so the publish↔resubmit race can't double-post the same tx.
+    pub(super) posting: HashSet<TxHash>,
+
+    // Buffered events — when one drive step produces multiple events.
     pub(super) buffered_events: VecDeque<Event>,
 
     // Incremental backfill state — processes one batch per next_event() call
@@ -132,10 +107,11 @@ pub struct ZoneSequencer<Node> {
     // of `+1` we picked.
     pub(super) backfill_from_genesis: bool,
 
-    // Broadcast channel for events — handles subscribe to receive events
+    // Broadcast channel for events — late subscribers receive future events.
     pub(super) event_tx: broadcast::Sender<Event>,
 
-    // Readiness signal — set to true when connected and backfill is complete
+    // Readiness latch — set to true once on cold-start backfill completion,
+    // never flipped back. Mid-life reconnects don't affect it.
     pub(super) ready_tx: watch::Sender<bool>,
     pub(super) channel_view_tx: watch::Sender<SequencerChannelView>,
     pub(super) turn_to_write_tx: watch::Sender<TurnNotification>,
@@ -147,16 +123,13 @@ where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
     /// Create a new sequencer with default configuration.
-    ///
-    /// Returns the sequencer (drive via [`Self::events`]) and a handle (for
-    /// submitting requests from other tasks).
     #[must_use]
     pub fn init(
         channel_id: ChannelId,
         signing_key: Ed25519Key,
         node: Node,
         checkpoint: Option<SequencerCheckpoint>,
-    ) -> (Self, SequencerHandle<Node>) {
+    ) -> Self {
         Self::init_with_config(
             channel_id,
             signing_key,
@@ -168,11 +141,8 @@ where
 
     /// Create a new sequencer with custom configuration.
     ///
-    /// Returns immediately. The sequencer emits [`Event::Readiness`] with
-    /// `ready: true` once it has connected and completed backfill.
-    ///
-    /// Returns the sequencer (drive via [`Self::events`]) and a handle (for
-    /// submitting requests from other tasks).
+    /// Returns immediately. The sequencer emits [`Event::Ready`] once it
+    /// has connected and completed cold-start backfill.
     #[must_use]
     pub fn init_with_config(
         channel_id: ChannelId,
@@ -180,9 +150,7 @@ where
         node: Node,
         config: SequencerConfig,
         checkpoint: Option<SequencerCheckpoint>,
-    ) -> (Self, SequencerHandle<Node>) {
-        let (request_tx, request_rx) = mpsc::channel(config.publish_channel_capacity);
-
+    ) -> Self {
         let (state, lib_slot, last_msg_id, backfill_from_genesis) = if let Some(cp) = checkpoint {
             info!(target: TARGET,
                 "Restoring from checkpoint: {} pending txs, lib={:?}, lib_slot={:?}",
@@ -210,7 +178,7 @@ where
 
         let resubmit_interval = tokio::time::interval(config.resubmit_interval);
         let (event_tx, _) = broadcast::channel(256);
-        let (ready_tx, ready_rx) = watch::channel(false);
+        let (ready_tx, _ready_rx) = watch::channel(false);
         let (channel_view_tx, _) = watch::channel(SequencerChannelView::new(channel_id));
         let (turn_to_write_tx, _) = watch::channel(TurnNotification {
             our_turn_to_write: false,
@@ -224,14 +192,11 @@ where
             .map(|s| build_checkpoint(s, last_msg_id, lib_slot));
         let (checkpoint_tx, _) = watch::channel(initial_checkpoint);
 
-        let handle = SequencerHandle::new(request_tx, node.clone(), event_tx.clone(), ready_rx);
-
-        let sequencer = Self {
+        Self {
             channel_id,
             signing_key,
             node,
             config,
-            request_rx,
             state,
             current_tip: None,
             lib_slot,
@@ -240,9 +205,11 @@ where
             channel_state: None,
             own_key_index: None,
             blocks_stream: None,
+            connected: false,
             resubmit_interval,
-            resubmit_active: false,
             in_flight: FuturesUnordered::new(),
+            resubmit_active: Arc::new(AtomicBool::new(false)),
+            posting: HashSet::new(),
             buffered_events: VecDeque::new(),
             backfill_from: None,
             backfill_to: None,
@@ -252,14 +219,24 @@ where
             channel_view_tx,
             turn_to_write_tx,
             checkpoint_tx,
-        };
-
-        (sequencer, handle)
+        }
     }
 
-    /// Whether the sequencer is connected and ready to accept requests.
+    /// Obtain a borrowing handle for issuing commands to the sequencer.
     ///
-    /// Sync snapshot read. For change notifications, use
+    /// The handle's `&mut self` borrow means only the drive task can hold
+    /// one. Methods on the handle mutate state synchronously and return the
+    /// resulting [`SequencerCheckpoint`] inline, so the caller can persist
+    /// the publish + checkpoint atomically.
+    pub const fn handle(&mut self) -> SequencerHandle<'_, Node> {
+        SequencerHandle::new(self)
+    }
+
+    /// Whether the sequencer has completed cold-start backfill.
+    ///
+    /// Latched: returns `false` until the first [`Event::Ready`], then `true`
+    /// for the rest of the sequencer's lifetime — mid-life reconnects do not
+    /// flip this back. Sync snapshot read; for change notifications, use
     /// [`Self::subscribe_ready`].
     #[must_use]
     pub fn is_ready(&self) -> bool {
@@ -275,9 +252,12 @@ where
         self.checkpoint_tx.borrow().clone()
     }
 
-    /// Subscribe to readiness. Returns a [`watch::Receiver<bool>`] where the
-    /// first `.changed().await` returns immediately with the current value;
-    /// subsequent calls wait for the next change.
+    /// Subscribe to readiness. Returns a [`watch::Receiver<bool>`] that
+    /// transitions `false → true` exactly once on cold-start completion and
+    /// stays `true`. The first `.changed().await` returns immediately with
+    /// the current value (`false` if cold start is still in progress, `true`
+    /// once complete); after the latch flips, `.changed().await` never fires
+    /// again.
     #[must_use]
     pub fn subscribe_ready(&self) -> watch::Receiver<bool> {
         let mut rx = self.ready_tx.subscribe();
@@ -308,7 +288,7 @@ where
     /// Subscribe to persistence checkpoint changes. First `.changed().await`
     /// returns immediately with the current checkpoint (or `None` if no block
     /// has been processed yet); subsequent calls wait for the next checkpoint
-    /// advance (live blocks, backfill batches, state-mutating requests).
+    /// advance.
     #[must_use]
     pub fn subscribe_checkpoint(&self) -> watch::Receiver<Option<SequencerCheckpoint>> {
         let mut rx = self.checkpoint_tx.subscribe();
@@ -316,21 +296,23 @@ where
         rx
     }
 
+    /// Subscribe to the broadcast channel of events.
+    ///
+    /// Late subscribers see events emitted from this point on (not the
+    /// full history). The primary way to consume events is
+    /// [`Self::next_event`] / [`Self::events`] on the drive task; this
+    /// broadcast is for additional read-only observers.
+    #[must_use]
+    pub fn subscribe_events(&self) -> broadcast::Receiver<Event> {
+        self.event_tx.subscribe()
+    }
+
     /// Convert the sequencer into a [`futures::Stream`] of [`Event`]s.
     ///
-    /// This is the canonical drive method. The returned stream borrows `self`
-    /// mutably for its lifetime, so the typical pattern is to spawn the drive
-    /// task and use the [`SequencerHandle`] (returned from [`Self::init`])
-    /// for async commands from other tasks. Watch subscriptions
-    /// ([`Self::subscribe_ready`], etc.) obtained before the spawn keep
-    /// working from anywhere.
-    ///
-    /// Returns a pinned boxed stream, so callers can use it directly with
-    /// [`futures::StreamExt::next`] and [`tokio::select!`] without pinning it
-    /// themselves.
-    ///
-    /// The stream does not terminate on transient sequencer conditions.
-    /// Disconnects and recoveries surface as [`Event::Readiness`] transitions.
+    /// The returned stream borrows `self` mutably for its lifetime. For
+    /// drive loops that also need to call [`Self::handle`] in response to
+    /// events, prefer [`Self::next_event`] in a `tokio::select!` so the
+    /// borrow is released between turns.
     pub fn events(&mut self) -> impl futures::Stream<Item = Event> + Send + Unpin + '_ {
         Box::pin(futures::stream::unfold(self, async |seq| {
             // `next_event` can complete a drive step without emitting a public
@@ -347,10 +329,10 @@ where
 
     /// Drive the sequencer one step. Returns `None` when the step completed
     /// without emitting a public event (e.g. an empty backfill batch, a
-    /// failed reconnect attempt that already slept, a `PrepareTx` /
-    /// `SignTx` / `SubmitSignedTx` request handled via oneshot). Internal —
-    /// public callers use [`Self::events`], which loops on `None`.
-    pub(super) async fn next_event(&mut self) -> Option<Event> {
+    /// failed reconnect attempt that already slept, a periodic resubmit
+    /// tick). Designed for `tokio::select!` so the drive task can interleave
+    /// publish calls via [`Self::handle`] between turns.
+    pub async fn next_event(&mut self) -> Option<Event> {
         // Return buffered event from previous call if any.
         if let Some(event) = self.buffered_events.pop_front() {
             return Some(self.emit_now(event));
@@ -370,30 +352,22 @@ where
         let stream = self.blocks_stream.as_mut()?;
 
         tokio::select! {
-            // Biased: drain queued publish/sign requests before processing new
-            // block events. Prevents a race where a `ChannelUpdate`-triggered
-            // republish gets re-orphaned by a fresh block event arriving on
-            // the stream before the republish reaches the actor, which could
-            // cause duplicate work or duplicate inscriptions.
-            biased;
-            Some(request) = self.request_rx.recv() => {
-                self.handle_request(request)
-                    .await
-                    .map(|event| self.emit_now(event))
-            }
-            Some(inflight_result) = self.in_flight.next(), if !self.in_flight.is_empty() => {
-                let mut events = self.handle_inflight(inflight_result);
-                let first = events.pop_front();
-                self.buffered_events.extend(events);
-                first.map(|event| self.emit_now(event))
-            }
             maybe_event = stream.next() => {
                 self.handle_stream_item(maybe_event)
                     .await
                     .map(|event| self.emit_now(event))
             }
-            _ = self.resubmit_interval.tick(), if self.current_tip.is_some() && !self.resubmit_active => {
-                self.enqueue_pending_submit();
+            _ = self.resubmit_interval.tick(), if self.current_tip.is_some() => {
+                self.resubmit_pending();
+                None
+            }
+            Some(results) = self.in_flight.next() => {
+                for (tx_hash, success) in results {
+                    self.posting.remove(&tx_hash);
+                    if success && let Some(state) = self.state.as_mut() {
+                        state.mark_pending_inscription_posted(&tx_hash);
+                    }
+                }
                 None
             }
         }
@@ -403,6 +377,66 @@ where
         drop(self.event_tx.send(event.clone()));
         event
     }
+
+    /// Push a single-tx publish post into `in_flight`. Used by
+    /// `handle.publish` / `submit_signed_tx` / `channel_config` —
+    /// independent user-initiated actions that can run concurrently.
+    pub(super) fn queue_publish_post(&mut self, tx_hash: TxHash, signed_tx: SignedMantleTx) {
+        self.posting.insert(tx_hash);
+        self.in_flight.push(Box::pin(post_batch(
+            self.node.clone(),
+            vec![(tx_hash, signed_tx)],
+        )));
+    }
+
+    /// Push a broad-sweep batch into `in_flight`. Sets `resubmit_active`
+    /// before pushing; the future clears it on completion. Caller must
+    /// check `resubmit_active` first to avoid duplicate sweeps —
+    /// `resubmit_pending` does this gate.
+    pub(super) fn queue_resubmit_batch(&mut self, batch: Vec<(TxHash, SignedMantleTx)>) {
+        if batch.is_empty() {
+            return;
+        }
+        for (tx_hash, _) in &batch {
+            self.posting.insert(*tx_hash);
+        }
+        self.resubmit_active.store(true, Ordering::Relaxed);
+        let node = self.node.clone();
+        let flag = Arc::clone(&self.resubmit_active);
+        self.in_flight.push(Box::pin(async move {
+            let results = post_batch(node, batch).await;
+            flag.store(false, Ordering::Relaxed);
+            results
+        }));
+    }
+}
+
+async fn post_batch<Node>(node: Node, batch: Vec<(TxHash, SignedMantleTx)>) -> Vec<(TxHash, bool)>
+where
+    Node: adapter::Node + Clone + Send + Sync + 'static,
+{
+    let mut results = Vec::with_capacity(batch.len());
+    let mut iter = batch.into_iter();
+    while let Some((tx_hash, signed_tx)) = iter.next() {
+        match node.post_transaction(signed_tx).await {
+            Ok(()) => results.push((tx_hash, true)),
+            Err(e) => {
+                // Node looks unavailable — bail on the rest of the batch.
+                // Remaining txs stay `!posted` in `state.pending` and the
+                // next `resubmit_pending` tick retries.
+                warn!(target: TARGET, "Failed to post transaction {tx_hash:?}: {e}; aborting batch");
+                results.push((tx_hash, false));
+                // Include unattempted txs as failed so the completion
+                // handler can clear `posting` for the whole batch and the
+                // next `resubmit_pending` picks them up.
+                for (tx_hash, _) in iter {
+                    results.push((tx_hash, false));
+                }
+                return results;
+            }
+        }
+    }
+    results
 }
 
 pub(super) fn build_checkpoint(
@@ -423,7 +457,7 @@ fn restored_pending_channel_tip(
     channel_id: ChannelId,
 ) -> Option<MsgId> {
     let mut parents = Vec::new();
-    let mut children = std::collections::HashSet::new();
+    let mut children = HashSet::new();
 
     for (_, tx) in pending_txs {
         for op in tx.mantle_tx.ops() {
@@ -447,7 +481,7 @@ fn restored_pending_channel_tip(
 /// - Any `Op::ChannelWithdraw` targeting our channel → bundle. Restored via
 ///   `submit_atomic_withdraw` so `PendingInscription.withdraws` is repopulated
 ///   and orphan/finalize emit the correct
-///   [`super::types::PublishedTx::AtomicWithdraw`] /
+///   [`super::types::PendingTx::AtomicWithdraw`] /
 ///   [`super::types::OrphanedTx::AtomicWithdraw`] variant.
 /// - Only `Op::ChannelInscribe` for our channel → plain inscription.
 /// - Neither → treated as opaque (`submit_other`).

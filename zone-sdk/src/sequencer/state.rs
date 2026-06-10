@@ -10,7 +10,7 @@ use lb_core::{
 };
 use rpds::HashTrieSetSync;
 
-use super::types::{AtomicWithdrawInfo, InscriptionInfo, PublishedTx, WithdrawInfo};
+use super::types::{AtomicWithdrawInfo, InscriptionInfo, PendingTx, WithdrawInfo};
 
 /// Result of channel update detection — the linear block-level delta
 /// between two canonical chains.
@@ -34,7 +34,7 @@ pub struct ChannelUpdateInfo {
 ///
 /// `withdraws == None` is a plain inscription; `Some(_)` is an atomic
 /// inscription+withdraw bundle. The bundle nature lets us surface the right
-/// [`PublishedTx`] variant on finalize/adopt and re-prepare on orphan.
+/// [`PendingTx`] variant on finalize/adopt and re-prepare on orphan.
 #[derive(Debug, Clone)]
 pub struct PendingInscription {
     pub tx_hash: TxHash,
@@ -311,15 +311,6 @@ impl TxState {
         !self.pending.is_empty()
     }
 
-    /// Whether `msg_id` matches the `this_msg` of any inscription currently
-    /// in our outbox. Used to identify chain-observed inscriptions that
-    /// originated from this sequencer instance — robust to shared signing
-    /// keys (each instance's outbox is independent).
-    #[must_use]
-    pub fn outbox_contains(&self, msg_id: MsgId) -> bool {
-        self.pending.values().any(|p| p.this_msg == msg_id)
-    }
-
     /// Remove pending inscriptions whose lineage does NOT reach the current
     /// channel tip and that aren't already in a block on this branch.
     /// Returns the removed entries in **parent-before-child (BFS) order** so
@@ -327,10 +318,10 @@ impl TxState {
     /// in dependency order. Keeps `self.pending` linear.
     ///
     /// Bundle-aware: atomic inscription+withdraw bundles are returned as
-    /// [`PublishedTx::AtomicWithdraw`] so the caller can re-prepare them with
+    /// [`PendingTx::AtomicWithdraw`] so the caller can re-prepare them with
     /// fresh `parent_msg` + `withdraw_nonce`; plain inscriptions are returned
-    /// as [`PublishedTx::Inscription`].
-    pub fn shed_off_branch_pending(&mut self, tip: HeaderId) -> Vec<PublishedTx> {
+    /// as [`PendingTx::Inscription`].
+    pub fn shed_off_branch_pending(&mut self, tip: HeaderId) -> Vec<PendingTx> {
         if self.pending.is_empty() {
             return Vec::new();
         }
@@ -390,12 +381,12 @@ impl TxState {
                         .get(&tx_hash)
                         .and_then(|p| p.withdraws.as_ref())
                     {
-                        Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
+                        Some(withdraws) => PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
                             tx_hash,
                             inscription: info,
                             withdraws: withdraws.clone(),
                         }),
-                        None => PublishedTx::Inscription(info),
+                        None => PendingTx::Inscription(info),
                     };
                     ordered.push(entry);
                 }
@@ -423,7 +414,7 @@ impl TxState {
     /// Look up a pending inscription (or atomic-withdraw bundle) by tx hash.
     /// Used during finalization to capture bundle info (`withdraws`) before
     /// `remove_pending` strips the entry, so finalized events can surface the
-    /// correct [`PublishedTx`] variant.
+    /// correct [`PendingTx`] variant.
     #[must_use]
     pub fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
         self.pending.get(tx_hash)

@@ -14,7 +14,7 @@ use super::{
     block_fetch::fetch_and_process_blocks,
     slot_clock::SlotClock,
     state::TxState,
-    types::{Error, Event, FinalizedOp},
+    types::{ChannelUpdate, Error, Event, FinalizedOp},
     zone_sequencer::ZoneSequencer,
 };
 use crate::adapter;
@@ -102,20 +102,18 @@ where
 
         self.lib_slot = Slot::from(batch_end);
 
-        let checkpoint_event = self
-            .publish_checkpoint()
-            .map(|checkpoint| Event::Checkpoint { checkpoint });
+        let Some(checkpoint) = self.publish_checkpoint() else {
+            return Some(None);
+        };
 
-        if batch.items.is_empty() {
-            return checkpoint_event.map(Some);
-        }
-
-        let event = Event::TxsFinalized { items: batch.items };
-        drop(self.event_tx.send(event.clone()));
-        if let Some(cp) = checkpoint_event {
-            self.buffered_events.push_back(cp);
-        }
-        Some(Some(event))
+        Some(Some(Event::BlocksProcessed {
+            checkpoint,
+            channel_update: ChannelUpdate {
+                orphaned: Vec::new(),
+                adopted: Vec::new(),
+            },
+            finalized: batch.items,
+        }))
     }
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet

@@ -71,6 +71,12 @@ pub enum StepError {
     IoError(#[from] IoError),
     #[error("User configuration error: {0}")]
     UserConfigError(String),
+    #[error("Wallet does not have enough funds, available={available}")]
+    FundsDeficit {
+        available: u64,
+        num_utxos_required: usize,
+        value_per_utxos_required: u64,
+    },
 }
 
 pub type StepResult = Result<(), StepError>;

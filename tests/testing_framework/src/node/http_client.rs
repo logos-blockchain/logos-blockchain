@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, pin::Pin};
+use std::{net::SocketAddr, pin::Pin, time::Duration};
 
 use common_http_client::{
     ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
@@ -27,11 +27,14 @@ use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_tx_service::MempoolMetrics;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
+use tokio::time::timeout;
 
 #[derive(Clone)]
 pub struct NodeHttpClient {
     base_url: Url,
     http_client: CommonHttpClient,
+    /// Default timeout for all requests
+    timeout: Duration,
 }
 
 impl NodeHttpClient {
@@ -56,11 +59,16 @@ impl NodeHttpClient {
         Self {
             base_url,
             http_client: CommonHttpClient::new(basic_auth),
+            timeout: Duration::from_secs(15),
         }
     }
 
     pub async fn consensus_info(&self) -> Result<ChainServiceInfo, Error> {
-        self.http_client.consensus_info(self.base_url.clone()).await
+        self.with_timeout(
+            "Consensus info request",
+            self.http_client.consensus_info(self.base_url.clone()),
+        )
+        .await
     }
 
     pub async fn network_info(&self) -> Result<Libp2pInfo, Error> {
@@ -68,25 +76,33 @@ impl NodeHttpClient {
     }
 
     pub async fn block(&self, id: &HeaderId) -> Result<Option<ApiBlock>, Error> {
-        self.http_client
-            .get_block_by_id(self.base_url.clone(), *id)
-            .await
+        self.with_timeout(
+            "Get block by ID request",
+            self.http_client.get_block_by_id(self.base_url.clone(), *id),
+        )
+        .await
     }
 
     pub async fn blend_info(&self) -> Result<Option<BlendNetworkInfo<PeerId>>, Error> {
         let request_url = Self::join_path(&self.base_url, BLEND_NETWORK_INFO)?;
 
-        self.http_client
-            .get::<(), Option<BlendNetworkInfo<PeerId>>>(request_url, None)
-            .await
+        self.with_timeout(
+            "Blend info request",
+            self.http_client
+                .get::<(), Option<BlendNetworkInfo<PeerId>>>(request_url, None),
+        )
+        .await
     }
 
     pub async fn mantle_metrics(&self) -> Result<MempoolMetrics, Error> {
         let request_url = Self::join_path(&self.base_url, MANTLE_METRICS)?;
 
-        self.http_client
-            .get::<(), MempoolMetrics>(request_url, None)
-            .await
+        self.with_timeout(
+            "Mantle metrics request",
+            self.http_client
+                .get::<(), MempoolMetrics>(request_url, None),
+        )
+        .await
     }
 
     /// Opens a processed-block stream from the node HTTP API.
@@ -94,9 +110,12 @@ impl NodeHttpClient {
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = ProcessedBlockEvent> + Send + '_>>, Error> {
         let stream = self
-            .http_client
-            .get_blocks_stream(self.base_url.clone())
+            .with_timeout(
+                "Blocks stream request",
+                self.http_client.get_blocks_stream(self.base_url.clone()),
+            )
             .await?;
+
         Ok(Box::pin(stream))
     }
 
@@ -107,25 +126,34 @@ impl NodeHttpClient {
         params: BlocksStreamQuery,
     ) -> Result<Pin<Box<dyn Stream<Item = ProcessedBlockEvent> + Send + '_>>, Error> {
         let stream = self
-            .http_client
-            .get_blocks_range_stream(self.base_url.clone(), params)
+            .with_timeout(
+                "Blocks range stream request",
+                self.http_client
+                    .get_blocks_range_stream(self.base_url.clone(), params),
+            )
             .await?;
+
         Ok(Box::pin(stream))
     }
 
     pub async fn submit_transaction(&self, tx: &SignedMantleTx) -> Result<(), Error> {
-        self.http_client
-            .post_transaction(self.base_url.clone(), tx.clone())
-            .await
+        self.with_timeout(
+            "Submit transaction request",
+            self.http_client
+                .post_transaction(self.base_url.clone(), tx.clone()),
+        )
+        .await
     }
 
     pub async fn transfer_funds(
         &self,
         body: WalletTransferFundsRequestBody,
     ) -> Result<WalletTransferFundsResponseBody, Error> {
-        self.http_client
-            .transfer_funds(self.base_url.clone(), body)
-            .await
+        self.with_timeout(
+            "Transfer funds request",
+            self.http_client.transfer_funds(self.base_url.clone(), body),
+        )
+        .await
     }
 
     pub async fn get_sdp_declarations(&self) -> Result<Vec<Declaration>, Error> {
@@ -143,9 +171,12 @@ impl NodeHttpClient {
     pub async fn dial_peer(&self, addr: Multiaddr) -> Result<PeerId, Error> {
         let request_url = Self::join_path(&self.base_url, DIAL_PEER)?;
 
-        self.http_client
-            .post::<_, PeerId>(request_url, &DialPeerRequestBody { addr })
-            .await
+        self.with_timeout(
+            "Dial peer request",
+            self.http_client
+                .post::<_, PeerId>(request_url, &DialPeerRequestBody { addr }),
+        )
+        .await
     }
 
     #[must_use]
@@ -157,18 +188,37 @@ impl NodeHttpClient {
     async fn network_info_at(&self, base_url: Url) -> Result<Libp2pInfo, Error> {
         let request_url = Self::join_path(&base_url, NETWORK_INFO)?;
 
-        self.http_client
-            .get::<(), Libp2pInfo>(request_url, None)
-            .await
+        self.with_timeout(
+            "Network info request",
+            self.http_client.get::<(), Libp2pInfo>(request_url, None),
+        )
+        .await
     }
 
     /// Fetches testing-only SDP declarations from one explicit base URL.
     async fn get_sdp_declarations_at(&self, base_url: Url) -> Result<Vec<Declaration>, Error> {
         let request_url = Self::join_path(&base_url, MANTLE_SDP_DECLARATIONS)?;
 
-        self.http_client
-            .get::<(), Vec<Declaration>>(request_url, None)
+        self.with_timeout(
+            "SDP declarations request",
+            self.http_client
+                .get::<(), Vec<Declaration>>(request_url, None),
+        )
+        .await
+    }
+
+    async fn with_timeout<T, F>(&self, operation_name: &str, operation: F) -> Result<T, Error>
+    where
+        F: Future<Output = Result<T, Error>>,
+    {
+        let operation_timeout = self.timeout;
+        timeout(operation_timeout, operation)
             .await
+            .unwrap_or_else(|_| {
+                Err(Error::Server(format!(
+                    "{operation_name} timed out after {operation_timeout:?}"
+                )))
+            })
     }
 
     /// Joins one static API path against a base URL.

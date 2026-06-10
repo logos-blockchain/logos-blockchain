@@ -5230,7 +5230,6 @@ name = "logos-blockchain-tui-zone"
 version = "0.1.2"
 dependencies = [
  "clap",
- "futures",
  "hex",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",

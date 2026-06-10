@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZero, sync::Arc, time::Duration};
+use std::{collections::HashMap, num::NonZero, time::Duration};
 
 use cucumber::gherkin::Step;
 use futures::future::join_all;
@@ -10,18 +10,17 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
-    adapter::NodeHttpClient as ZoneNodeHttpClient,
-    indexer::ZoneIndexer,
-    sequencer::{Event, PublishResult, SequencerCheckpoint, SequencerHandle, ZoneSequencer},
+    adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer, sequencer::ZoneSequencer,
 };
 use tokio::{
-    sync::mpsc::Receiver,
+    sync::broadcast,
     task::JoinHandle,
     time::{error::Elapsed, timeout},
 };
 
 use super::{
     errors::{log_step_error, zone_step_error},
+    runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient},
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
         AtomicZoneDepositRequest, DiscardedPayloads, PublishDeadline, ZoneAccountBalances,
@@ -98,8 +97,9 @@ struct PublishedZoneMessage {
 
 struct StartedSequencerRuntime {
     task: JoinHandle<()>,
-    events: Option<Receiver<Event>>,
-    checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
+    client: SequencerClient<ZoneNodeHttpClient>,
+    events: broadcast::Receiver<Event>,
+    checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
@@ -222,7 +222,7 @@ pub(super) async fn submit_zone_channel_config(
     posting_timeframe: u32,
     posting_timeout: u32,
 ) -> StepResult {
-    let handle = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
+    let handle = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let mut ordered_aliases = vec![sequencer_alias.to_owned()];
 
     for alias in authorized_aliases {
@@ -243,7 +243,15 @@ pub(super) async fn submit_zone_channel_config(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let (result, finalized) = handle
+    let mut checkpoint_rx = world
+        .zone
+        .checkpoint_receiver(sequencer_alias)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Zone sequencer '{sequencer_alias}' has no checkpoint watch"),
+        })?;
+    checkpoint_rx.mark_unchanged();
+
+    let (result, post_call_checkpoint, _signed_tx) = handle
         .channel_config(
             Keys::new_unchecked(authorized_keys),
             posting_timeframe.into(),
@@ -256,27 +264,29 @@ pub(super) async fn submit_zone_channel_config(
             message: format!("Zone channel_config failed: {error}"),
         })?;
 
-    drop(finalized);
-
-    let mut checkpoint_rx = world
-        .zone
-        .checkpoint_receiver(sequencer_alias)
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("Zone sequencer '{sequencer_alias}' has no checkpoint watch"),
-        })?;
-    checkpoint_rx.mark_unchanged();
-    let checkpoint = timeout(
-        Duration::from_secs(30),
-        wait_for_checkpoint_with_tx(&mut checkpoint_rx, result.inscription_id),
-    )
-    .await
-    .map_err(|_| StepError::LogicalError {
-        message: format!(
-            "timed out waiting for sequencer '{sequencer_alias}' checkpoint to include {:?}",
-            result.inscription_id
-        ),
-    })?
-    .map_err(|message| StepError::LogicalError { message })?;
+    // Sanity-check the inline checkpoint already mentions our tx; the
+    // event-stream watcher below also catches it once the drive task
+    // re-publishes its checkpoint after the next block.
+    let tx_hash = result.inscription_id();
+    let checkpoint = if post_call_checkpoint
+        .pending_txs
+        .iter()
+        .any(|(hash, _)| *hash == tx_hash)
+    {
+        post_call_checkpoint
+    } else {
+        timeout(
+            Duration::from_secs(30),
+            wait_for_checkpoint_with_tx(&mut checkpoint_rx, tx_hash),
+        )
+        .await
+        .map_err(|_| StepError::LogicalError {
+            message: format!(
+                "timed out waiting for sequencer '{sequencer_alias}' checkpoint to include {tx_hash:?}",
+            ),
+        })?
+        .map_err(|message| StepError::LogicalError { message })?
+    };
 
     world
         .zone
@@ -284,7 +294,7 @@ pub(super) async fn submit_zone_channel_config(
     world
         .zone
         .remember_checkpoint(format!("{transaction_alias}_CHECKPOINT"), checkpoint);
-    world.remember_submitted_transaction(transaction_alias, result.inscription_id);
+    world.remember_submitted_transaction(transaction_alias, tx_hash);
 
     Ok(())
 }
@@ -323,7 +333,7 @@ pub(super) fn remember_published_zone_message(
     world.zone.remember_zone_message(
         message_alias,
         payload,
-        Some(result.inscription_id),
+        Some(result.inscription_id()),
         Some(sequencer_alias),
         checkpoint,
     );
@@ -430,7 +440,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
         step,
         sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
     )?;
-    let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
+    let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Mint {amount} to Alice"));
 
     let submission = submit_atomic_zone_deposit(
@@ -461,10 +471,10 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     record_zone_wallet_submission(
         world,
         &wallet.wallet_name,
-        submission.publish.inscription_id,
+        submission.publish.inscription_id(),
         submission.reserved_inputs,
     )?;
-    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id);
+    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id());
 
     Ok(())
 }
@@ -479,7 +489,7 @@ pub(super) async fn submit_zone_withdraw_transaction(
 ) -> StepResult {
     let wallet = log_step_error(step, resolve_zone_wallet(world, sequencer_alias))?;
     let public_key = log_step_error(step, wallet.public_key())?;
-    let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?;
+    let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Burn {amount}"));
 
     let submission = submit_zone_withdraw(
@@ -502,7 +512,7 @@ pub(super) async fn submit_zone_withdraw_transaction(
         inscription_data,
         &submission.publish,
     );
-    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id);
+    world.remember_submitted_transaction(transaction_alias, submission.publish.inscription_id());
 
     Ok(())
 }
@@ -537,13 +547,10 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
         .collect();
 
     let submission = {
-        let sequencer = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
-        let sequencer_events =
-            log_step_error(step, world.zone.sequencer_events_mut(sequencer_alias))?;
+        let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
 
         publish_atomic_zone_withdraw(
             &sequencer,
-            sequencer_events,
             public_key,
             outputs_per_arg,
             inscription_data.clone(),
@@ -577,7 +584,7 @@ pub(super) async fn publish_atomic_zone_withdraw_transaction(
         inscription_data,
         &submission.publish,
     );
-    world.remember_submitted_transaction(bundle_alias, submission.publish.inscription_id);
+    world.remember_submitted_transaction(bundle_alias, submission.publish.inscription_id());
 
     Ok(())
 }
@@ -613,22 +620,19 @@ pub(super) async fn publish_zone_messages(
 
     let published = {
         let sequencer =
-            log_step_error(step, world.zone.sequencer_handle(&sequencer_alias))?.clone();
-        let sequencer_events =
-            log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+            log_step_error(step, world.zone.sequencer_client(&sequencer_alias))?.clone();
 
         let publish_deadline = PublishDeadline::from_now(Duration::from_mins(3));
         let mut published = Vec::with_capacity(rows.len());
 
         for (alias, payload) in &rows {
-            let result =
-                publish_message_with_retry(&sequencer, sequencer_events, payload, publish_deadline)
-                    .await
-                    .map_err(|error| zone_step_error(step, &error))?;
+            let result = publish_message_with_retry(&sequencer, payload, publish_deadline)
+                .await
+                .map_err(|error| zone_step_error(step, &error))?;
 
             ensure_zone_transactions_included(
                 &node,
-                &[result.inscription_id],
+                &[result.inscription_id()],
                 Duration::from_mins(3),
             )
             .await
@@ -666,7 +670,7 @@ pub(super) async fn publish_zone_messages_concurrently(
     let handles = grouped
         .keys()
         .map(|sequencer_alias| {
-            log_step_error(step, world.zone.sequencer_handle(sequencer_alias))
+            log_step_error(step, world.zone.sequencer_client(sequencer_alias))
                 .map(|handle| (sequencer_alias.clone(), handle.clone()))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -679,7 +683,7 @@ pub(super) async fn publish_zone_messages_concurrently(
 
         async move {
             for payload in payloads {
-                handle.publish_message(payload).await.map_err(|error| {
+                handle.publish(payload).await.map_err(|error| {
                     StepError::LogicalError {
                         message: format!(
                             "Zone concurrent publish failed for sequencer '{sequencer_alias}': {error}"
@@ -755,7 +759,7 @@ async fn start_named_sequencer_with_config(
         world.zone_node_http_client_for_sequencer(&sequencer_alias),
     )?;
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&sequencer_alias))?;
-    let (sequencer, handle) = ZoneSequencer::init_with_config(
+    let sequencer = ZoneSequencer::init_with_config(
         world.zone.sequencer_channel_id(&sequencer_alias)?,
         signing_key,
         ZoneNodeHttpClient::new(CommonHttpClient::new(None), node_url),
@@ -763,7 +767,7 @@ async fn start_named_sequencer_with_config(
         checkpoint,
     );
 
-    let runtime = start_sequencer_runtime(sequencer, handle.clone(), mode);
+    let runtime = start_sequencer_runtime(sequencer, mode);
     let mut ready_rx = runtime.ready_rx.clone();
 
     if let Err(error) =
@@ -775,7 +779,7 @@ async fn start_named_sequencer_with_config(
 
     world.zone.set_sequencer_runtime(
         sequencer_alias,
-        handle,
+        runtime.client,
         runtime.task,
         runtime.events,
         runtime.checkpoint_rx,
@@ -836,62 +840,42 @@ async fn wait_for_sequencer_ready(
     })?
 }
 
+fn from_policy_runtime(
+    rt: super::support::PolicyRuntime,
+    discarded_payloads: Option<DiscardedPayloads>,
+) -> StartedSequencerRuntime {
+    StartedSequencerRuntime {
+        task: rt.task,
+        client: rt.client,
+        events: rt.events,
+        checkpoint_rx: rt.checkpoint_rx,
+        ready_rx: rt.ready_rx,
+        channel_view_rx: rt.channel_view_rx,
+        turn_to_write_rx: rt.turn_to_write_rx,
+        discarded_payloads,
+    }
+}
+
 fn start_sequencer_runtime(
     sequencer: ZoneSequencer<ZoneNodeHttpClient>,
-    handle: SequencerHandle<ZoneNodeHttpClient>,
     mode: DriveMode,
 ) -> StartedSequencerRuntime {
-    // Subscribe to all sequencer-side watch channels BEFORE moving the
-    // sequencer into the drive task. The receivers stay valid from any task
-    // and are stashed in the runtime for later access by step helpers.
-    let ready_rx = sequencer.subscribe_ready();
-    let channel_view_rx = sequencer.subscribe_channel_view();
-    let turn_to_write_rx = sequencer.subscribe_turn_to_write();
-
     match mode {
-        DriveMode::Passive { republish_orphans } => {
-            let (task, events, checkpoint_rx) =
-                start_sequencer_event_loop(sequencer, handle, republish_orphans);
-
-            StartedSequencerRuntime {
-                task,
-                events: Some(events),
-                checkpoint_rx: Some(checkpoint_rx),
-                ready_rx,
-                channel_view_rx,
-                turn_to_write_rx,
-                discarded_payloads: None,
-            }
-        }
-        DriveMode::Republish => StartedSequencerRuntime {
-            task: start_republish_policy(sequencer, handle),
-            events: None,
-            checkpoint_rx: None,
-            ready_rx,
-            channel_view_rx,
-            turn_to_write_rx,
-            discarded_payloads: None,
-        },
-        DriveMode::Sorted { discarded } => StartedSequencerRuntime {
-            task: start_sorted_conflict_policy(sequencer, handle, Arc::clone(&discarded)),
-            events: None,
-            checkpoint_rx: None,
-            ready_rx,
-            channel_view_rx,
-            turn_to_write_rx,
-            discarded_payloads: Some(discarded),
-        },
+        DriveMode::Passive { republish_orphans } => from_policy_runtime(
+            start_sequencer_event_loop(sequencer, republish_orphans),
+            None,
+        ),
+        DriveMode::Republish => from_policy_runtime(start_republish_policy(sequencer), None),
+        DriveMode::Sorted { discarded } => from_policy_runtime(
+            start_sorted_conflict_policy(sequencer, &discarded),
+            Some(discarded),
+        ),
         DriveMode::BalanceAware {
             initial_balances,
             planned_payloads,
-        } => StartedSequencerRuntime {
-            task: start_balance_aware_policy(sequencer, handle, initial_balances, planned_payloads),
-            events: None,
-            checkpoint_rx: None,
-            ready_rx,
-            channel_view_rx,
-            turn_to_write_rx,
-            discarded_payloads: None,
-        },
+        } => from_policy_runtime(
+            start_balance_aware_policy(sequencer, initial_balances, planned_payloads),
+            None,
+        ),
     }
 }

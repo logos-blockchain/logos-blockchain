@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use lb_common_http_client::ApiBlock;
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, Utxo},
+    mantle::{SignedMantleTx, Transaction as _, TxHash, Utxo},
 };
 use lb_testing_framework::{BlockFeed, BlockFeedObservation, BlockRecord};
 use thiserror::Error;
@@ -151,32 +151,12 @@ pub struct WalletObservedBlock {
     header_id: String,
     wallet_count: usize,
     transaction_count: usize,
+    transaction_hashes: Vec<TxHash>,
     observed_outputs: Vec<WalletObservedOutput>,
     observed_spends: Vec<WalletObservedSpend>,
 }
 
 impl WalletObservedBlock {
-    #[must_use]
-    fn new(
-        source_node_name: impl Into<String>,
-        height: u64,
-        header_id: impl Into<String>,
-        wallet_count: usize,
-        transaction_count: usize,
-        observed_outputs: Vec<WalletObservedOutput>,
-        observed_spends: Vec<WalletObservedSpend>,
-    ) -> Self {
-        Self {
-            source_node_name: source_node_name.into(),
-            height,
-            header_id: header_id.into(),
-            wallet_count,
-            transaction_count,
-            observed_outputs,
-            observed_spends,
-        }
-    }
-
     #[must_use]
     pub fn source_node_name(&self) -> &str {
         &self.source_node_name
@@ -195,6 +175,11 @@ impl WalletObservedBlock {
     #[must_use]
     pub const fn transaction_count(&self) -> usize {
         self.transaction_count
+    }
+
+    #[must_use]
+    pub fn transaction_hashes(&self) -> &[TxHash] {
+        &self.transaction_hashes
     }
 
     #[must_use]
@@ -585,15 +570,20 @@ impl WalletSourceTracker {
         self.applied_tip = Some(block.header.id);
         self.applied_height = Some(height);
 
-        WalletObservedBlock::new(
-            source_node_name,
+        WalletObservedBlock {
+            source_node_name: source_node_name.to_owned(),
             height,
             header_id,
-            self.chain_state.wallet_count(),
-            block.transactions.len(),
-            update.observed_outputs,
-            update.observed_spends,
-        )
+            wallet_count: self.chain_state.wallet_count(),
+            transaction_count: block.transactions.len(),
+            transaction_hashes: block
+                .transactions
+                .iter()
+                .map(SignedMantleTx::hash)
+                .collect(),
+            observed_outputs: update.observed_outputs,
+            observed_spends: update.observed_spends,
+        }
     }
 
     fn apply_block_transactions(

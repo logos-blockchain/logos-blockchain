@@ -1,11 +1,11 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashSet},
     fmt,
     sync::{Arc, RwLock},
 };
 
 use async_trait::async_trait;
-use lb_core::mantle::Utxo;
+use lb_core::mantle::{TxHash, Utxo};
 use lb_testing_framework::{
     BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedObserver, NodeHttpClient,
     named_block_feed_sources,
@@ -15,10 +15,16 @@ use testing_framework_core::{
     scenario::DynError,
 };
 use thiserror::Error;
+use tracing::info;
 
 use crate::{
-    common::wallet::WalletBlockFeedTrackerError,
-    cucumber::world::{SharedTrackedWallets, SharedWalletBlockFeedTracker},
+    common::wallet::{WalletBlockFeedTrackerError, WalletObservedBlock},
+    cucumber::{
+        TARGET,
+        world::{
+            SharedScannedTransactionHashes, SharedTrackedWallets, SharedWalletBlockFeedTracker,
+        },
+    },
 };
 
 #[derive(Debug, Error)]
@@ -40,6 +46,7 @@ impl CucumberWalletBlockFeed {
     pub async fn start(
         wallets: SharedTrackedWallets,
         tracker: SharedWalletBlockFeedTracker,
+        scanned_transaction_hashes: SharedScannedTransactionHashes,
         genesis_utxos: Vec<Utxo>,
     ) -> Result<Self, CucumberWalletBlockFeedError> {
         let provider = DynamicWalletBlockFeedSources::default();
@@ -55,6 +62,7 @@ impl CucumberWalletBlockFeed {
             vec![Box::new(WalletBlockFeedStateCollector::new(
                 wallets,
                 tracker,
+                scanned_transaction_hashes,
                 genesis_utxos,
             ))],
         );
@@ -101,6 +109,7 @@ enum WalletBlockFeedStateCollectorError {
 struct WalletBlockFeedStateCollector {
     wallets: SharedTrackedWallets,
     tracker: SharedWalletBlockFeedTracker,
+    scanned_transaction_hashes: SharedScannedTransactionHashes,
     genesis_utxos: Vec<Utxo>,
 }
 
@@ -108,11 +117,13 @@ impl WalletBlockFeedStateCollector {
     const fn new(
         wallets: SharedTrackedWallets,
         tracker: SharedWalletBlockFeedTracker,
+        scanned_transaction_hashes: SharedScannedTransactionHashes,
         genesis_utxos: Vec<Utxo>,
     ) -> Self {
         Self {
             wallets,
             tracker,
+            scanned_transaction_hashes,
             genesis_utxos,
         }
     }
@@ -122,20 +133,29 @@ impl WalletBlockFeedStateCollector {
         feed: &BlockFeed,
     ) -> Result<(), WalletBlockFeedStateCollectorError> {
         let update_result = {
-            let mut tracker = self
-                .tracker
-                .lock()
-                .map_err(|_| WalletBlockFeedStateCollectorError::TrackerLockPoisoned)?;
-            let mut wallets = self
-                .wallets
-                .lock()
-                .map_err(|_| WalletBlockFeedStateCollectorError::WalletLockPoisoned)?;
+            let observed_blocks = {
+                let mut tracker = self
+                    .tracker
+                    .lock()
+                    .map_err(|_| WalletBlockFeedStateCollectorError::TrackerLockPoisoned)?;
+                let mut wallets = self
+                    .wallets
+                    .lock()
+                    .map_err(|_| WalletBlockFeedStateCollectorError::WalletLockPoisoned)?;
 
-            tracker.apply_feed(&mut wallets, feed, &self.genesis_utxos)
+                tracker.apply_feed(&mut wallets, feed, &self.genesis_utxos)?
+            };
+
+            apply_observed_blocks_to_scanned_transaction_hashes(
+                &self.scanned_transaction_hashes,
+                &observed_blocks,
+            );
+
+            Ok::<_, WalletBlockFeedTrackerError>(())
         };
 
         match update_result {
-            Ok(_) => Ok(()),
+            Ok(()) => Ok(()),
             Err(error) if error.requires_direct_backfill() => Ok(()),
             Err(error) => Err(error.into()),
         }
@@ -184,5 +204,64 @@ impl SourceProvider<NodeHttpClient> for DynamicWalletBlockFeedSources {
         Ok(named_block_feed_sources(sources.iter().map(
             |(node_name, client)| (node_name.clone(), client.clone()),
         )))
+    }
+}
+
+/// Applies the transaction hashes from the observed blocks to the shared set of
+/// scanned transaction hashes, and logs the update.
+pub fn apply_observed_blocks_to_scanned_transaction_hashes(
+    scanned_transaction_hashes: &SharedScannedTransactionHashes,
+    observed_blocks: &[WalletObservedBlock],
+) {
+    if !observed_blocks.is_empty() {
+        let mut sink = scanned_transaction_hashes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = sink.len();
+        for observed in observed_blocks {
+            sink.extend(observed.transaction_hashes().iter().copied());
+        }
+        let total_transactions = sink.len();
+        drop(sink);
+        let new_transactions = total_transactions.saturating_sub(before);
+        let new_blocks = observed_blocks
+            .iter()
+            .map(WalletObservedBlock::height)
+            .collect::<Vec<_>>();
+        info!(
+            target: TARGET,
+            "observed blocks={new_blocks:?}, new transactions={new_transactions} total recorded \
+            transactions={total_transactions}",
+        );
+    }
+}
+
+/// Applies the transaction hashes from alist of provided transaction hashes to
+/// the shared set of scanned transaction hashes, and logs the update.
+pub fn apply_observed_hashes_to_scanned_transaction_hashes<S: ::std::hash::BuildHasher>(
+    scanned_transaction_hashes: &SharedScannedTransactionHashes,
+    transaction_hashes: &HashSet<TxHash, S>,
+    num_of_blocks: Option<usize>,
+) {
+    let mut sink = scanned_transaction_hashes
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let before = sink.len();
+    sink.extend(transaction_hashes);
+    let after = sink.len();
+    drop(sink);
+    let new = after.saturating_sub(before);
+    if let Some(num) = num_of_blocks
+        && num > 0
+    {
+        info!(
+            target: TARGET,
+            "observed blocks={num}, new transactions={new} total recorded transactions={after}",
+        );
+    } else {
+        info!(
+            target: TARGET,
+            "new transactions={new} total recorded transactions={after}",
+        );
     }
 }
