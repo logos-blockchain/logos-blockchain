@@ -1,7 +1,6 @@
-use serde::{Deserialize, Deserializer};
-
 use lb_key_management_system_service::{backend::preload::KeyId, keys::Ed25519Key};
 use lb_libp2p::ed25519::SecretKey;
+use serde::{Deserialize, Deserializer};
 
 pub use crate::config::{kms::serde::Config as KmsConfig, wallet::serde::Config as WalletConfig};
 use crate::{
