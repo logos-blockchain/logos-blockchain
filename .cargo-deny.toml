@@ -46,6 +46,7 @@ unused-allowed-license = "deny"
 [sources]
 allow-git = [
   "https://github.com/EspressoSystems/jellyfish.git",
+  "https://github.com/arkworks-rs/spongefish.git",
   "https://github.com/logos-blockchain/logos-blockchain-circuits.git",
   "https://github.com/logos-blockchain/logos-blockchain-rust-rapidsnark.git",
   "https://github.com/logos-blockchain/logos-blockchain-testing.git",
