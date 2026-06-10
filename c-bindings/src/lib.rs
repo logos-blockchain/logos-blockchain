@@ -6,6 +6,7 @@
 pub mod api;
 mod callbacks;
 mod errors;
+pub(crate) mod logging;
 mod macros;
 mod node;
 mod result;

@@ -1,6 +1,5 @@
 mod inputs;
 mod private;
-mod proving_key;
 mod public;
 mod verification_key;
 mod witness;
@@ -8,16 +7,14 @@ mod witness;
 use std::error::Error;
 
 pub use inputs::ZkSignWitnessInputs;
+use lb_circuits_prover::Prover as _;
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
 use lb_log_targets::proofs;
 pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
 use tracing::error;
 
-use crate::{
-    proving_key::ZKSIGN_PROVING_KEY_PATH,
-    public::{ZkSignVerifierInputsJson, ZkSignVerifierInputsJsonTryFromError},
-};
+use crate::public::{ZkSignVerifierInputsJson, ZkSignVerifierInputsJsonTryFromError};
 
 pub type ZkSignProof = CompressedGroth16Proof;
 
@@ -60,15 +57,15 @@ pub fn prove(
     inputs: ZkSignWitnessInputs,
 ) -> Result<(ZkSignProof, ZkSignVerifierInputs), ProveError> {
     let witness = witness::generate_witness(inputs)?;
-    let (proof, verifier_inputs) = lb_circuits_prover::prover_from_contents(
-        ZKSIGN_PROVING_KEY_PATH.as_path(),
+    let result = lb_circuits_prover::Rapidsnark::prove(
+        lbc_signature_sys::artifacts::PROVING_KEY,
         witness.as_ref(),
     )
     .map_err(lbp_error::Error::from)?;
     let proof: Groth16ProofJsonDeser =
-        serde_json::from_slice(&proof).map_err(lbp_error::Error::from)?;
+        serde_json::from_str(&result.proof).map_err(lbp_error::Error::from)?;
     let verifier_inputs: ZkSignVerifierInputsJson =
-        serde_json::from_slice(&verifier_inputs).map_err(lbp_error::Error::from)?;
+        serde_json::from_str(&result.public_signals).map_err(lbp_error::Error::from)?;
     let proof: Groth16Proof = proof
         .try_into()
         .map_err(lbp_error::Error::Groth16JsonProof)?;

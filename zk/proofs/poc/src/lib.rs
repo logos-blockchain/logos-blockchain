@@ -28,7 +28,6 @@
 
 mod chain_inputs;
 mod inputs;
-mod proving_key;
 mod verification_key;
 mod wallet_inputs;
 mod witness;
@@ -38,15 +37,13 @@ use std::error::Error;
 
 pub use chain_inputs::{PoCChainInputs, PoCChainInputsData};
 pub use inputs::{PoCWitnessInputs, PoCWitnessInputsData};
+use lb_circuits_prover::Prover as _;
 use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
 use lb_log_targets::proofs;
 use tracing::error;
 pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData};
 
-pub use crate::{
-    inputs::{PoCVerifierInput, PoCVerifierInputJson},
-    proving_key::POC_PROVING_KEY_PATH,
-};
+pub use crate::inputs::{PoCVerifierInput, PoCVerifierInputJson};
 
 pub type PoCProof = CompressedGroth16Proof;
 pub type ProveError = lbp_error::Error;
@@ -74,10 +71,12 @@ const LOG_TARGET: &str = proofs::POC;
 ///   serialization or deserialization.
 pub fn prove(inputs: PoCWitnessInputs) -> Result<(PoCProof, PoCVerifierInput), ProveError> {
     let witness = witness::generate_witness(inputs)?;
-    let (proof, verifier_inputs) =
-        lb_circuits_prover::prover_from_contents(POC_PROVING_KEY_PATH.as_path(), witness.as_ref())?;
-    let proof: Groth16ProofJsonDeser = serde_json::from_slice(&proof)?;
-    let verifier_inputs: PoCVerifierInputJson = serde_json::from_slice(&verifier_inputs)?;
+    let result = lb_circuits_prover::Rapidsnark::prove(
+        lbc_poc_sys::artifacts::PROVING_KEY,
+        witness.as_ref(),
+    )?;
+    let proof: Groth16ProofJsonDeser = serde_json::from_str(&result.proof)?;
+    let verifier_inputs: PoCVerifierInputJson = serde_json::from_str(&result.public_signals)?;
     let proof: Groth16Proof = proof.try_into().map_err(ProveError::Groth16JsonProof)?;
     Ok((
         CompressedGroth16Proof::try_from(&proof).unwrap_or_else(|e| {

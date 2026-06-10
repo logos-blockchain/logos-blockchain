@@ -1,7 +1,11 @@
 use std::net::Ipv4Addr;
 
 use color_eyre::eyre::{Result, bail, eyre};
-use lb_core::sdp::{Locator, Locators, ServiceType};
+use lb_core::{
+    mantle::NoteId,
+    sdp::{DeclarationId, DeclarationMessage, Locator, Locators, ProviderId, ServiceType},
+};
+use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, Protocol};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -27,6 +31,7 @@ struct BlendParticipationData {
     zk_id: ZkPublicKey,
     locators: Locators,
     service_type: ServiceType,
+    declaration_id: DeclarationId,
 }
 
 pub fn run(args: &ParticipateArgs) -> Result<()> {
@@ -79,14 +84,28 @@ fn build_blend_data(
     let listen_addr = &user_config.blend.core.backend.listening_address;
     let nat_config = &user_config.network.backend.swarm.nat;
     let locator_addr = resolve_locator_addr(listen_addr, nat_config, external_address)?;
-    let locator = Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?;
-
+    let locators = Locators::from(Locator::try_from(locator_addr).map_err(|e| eyre!("{e}"))?);
     let (_, blend_key) = keystore.get_zk(KeyTitle::BLEND_ZK)?;
+
+    // Declaration ID is not required when providing participation information for
+    // genesis ceremony, but it is still useful to have when configuring the
+    // node. SDP service configuration expects Declaration ID set in the config
+    // if a node is registered as an initial service provider.
+    let declaration_id = DeclarationMessage {
+        service_type: ServiceType::BlendNetwork,
+        locators: locators.clone(),
+        provider_id: ProviderId(provider_id),
+        zk_id: blend_key.to_public_key(),
+        locked_note_id: NoteId::from(Fr::ZERO),
+    }
+    .id();
+
     Ok(Some(BlendParticipationData {
         provider_id,
         zk_id: blend_key.to_public_key(),
-        locators: Locators::from(locator),
+        locators,
         service_type: ServiceType::BlendNetwork,
+        declaration_id,
     }))
 }
 

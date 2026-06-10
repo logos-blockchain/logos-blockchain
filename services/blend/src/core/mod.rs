@@ -1304,14 +1304,18 @@ where
     };
     state_updater.collect_current_epoch_tokens(blending_tokens.into_iter());
 
+    scheduler.schedule_processed_message(processed_message.clone());
     // We treat a partially or fully decapsulated message as a processed message,
     // and we schedule for its release at the next release round.
-    scheduler.schedule_processed_message(processed_message.clone());
-    assert_eq!(
-        state_updater.add_unsent_processed_message(processed_message.clone()),
-        Ok(()),
-        "There should not be another copy of the same locally-generated processed message: {processed_message:?}."
-    );
+    if state_updater
+        .add_unsent_processed_message(processed_message.clone())
+        .is_err()
+    {
+        tracing::warn!(
+            target: LOG_TARGET,
+            "There should not be another copy of the same locally-generated processed message: {processed_message:?}."
+        );
+    }
     state_updater.commit_changes()
 }
 
@@ -1513,10 +1517,15 @@ where
         cryptographic_processor,
     );
 
-    if let Some(processed_message) = maybe_processed_message {
-        state_updater
+    if let Some(processed_message) = maybe_processed_message
+        && state_updater
             .add_unsent_processed_message(processed_message)
-            .expect("Swarm should bubble up unique messages only.");
+            .is_err()
+    {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Dropping a duplicate decapsulated replica already pending release."
+        );
     }
 
     state_updater.collect_current_epoch_tokens(blending_tokens);

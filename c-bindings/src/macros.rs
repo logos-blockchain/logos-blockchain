@@ -8,16 +8,16 @@ use crate::{errors::OperationStatus, result::FfiResult};
 ///
 /// # Arguments
 ///
-/// - `$context`: A string literal describing where the error occurred, used in
+/// - `$scope`: A string literal describing where the error occurred, used in
 ///   the log message.
 /// - `$pointer`: The pointer expression to check.
 #[macro_export]
 macro_rules! return_error_if_null_pointer {
-    ($context:literal, $pointer:expr) => {
+    ($scope:literal, $pointer:expr) => {
         if $pointer.is_null() {
-            log::error!(
-                "[{}] Received a null `{}` pointer. Exiting.",
-                $context,
+            $crate::logging::error!(
+                $scope,
+                "Received a null `{}` pointer.",
                 stringify!($pointer)
             );
             return <_ as $crate::macros::FfiReturn>::from_operation_status(

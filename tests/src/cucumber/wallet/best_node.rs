@@ -3,6 +3,7 @@ use std::{collections::HashMap, time::Duration};
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
 use lb_testing_framework::{BlockFeed, NodeHttpClient, is_truthy_env};
+use rand::seq::SliceRandom as _;
 use tokio::{
     task::JoinSet,
     time::{Instant, sleep, timeout},
@@ -53,6 +54,26 @@ impl BestNodeInfo {
             .get(wallet_node)
             .and_then(|group| self.best_nodes.get(group.as_str()))
             .or_else(|| self.best_nodes.get(""))
+    }
+
+    /// Return the best node for the group in which `wallet_name` resides.
+    pub fn best_node_for_wallet<'a>(
+        &'a self,
+        world: &'a CucumberWorld,
+        wallet_name: &str,
+    ) -> Result<String, StepError> {
+        let wallet_node_name = world.resolve_wallet_node_name(wallet_name)?;
+        let Some(node) = self.for_wallet_node(&wallet_node_name, &world.node_to_group) else {
+            return Err(StepError::LogicalError {
+                message: format!("Best node for '{wallet_name}' not found in world state"),
+            });
+        };
+        let Some(node_info) = world.nodes_info.get(&node.node_name) else {
+            return Err(StepError::LogicalError {
+                message: format!("Best node '{}' not found in world state", node.node_name),
+            });
+        };
+        Ok(node_info.name.clone())
     }
 }
 
@@ -237,6 +258,19 @@ pub async fn get_best_node_info(
     world: &CucumberWorld,
     wallet_name: &str,
 ) -> Result<BestNodeInfo, StepError> {
+    let wallet = world.resolve_wallet(wallet_name)?;
+    determine_best_node(world, &wallet.node_name).await
+}
+
+/// Get best-node info for a random wallet's fork group. All wallets in the list
+/// should be in the same form group.
+pub async fn get_best_node_info_choose(
+    world: &CucumberWorld,
+    wallet_names: &[String],
+) -> Result<BestNodeInfo, StepError> {
+    let wallet_name = wallet_names
+        .choose(&mut rand::thread_rng())
+        .expect("'wallet_names' cannot be empty");
     let wallet = world.resolve_wallet(wallet_name)?;
     determine_best_node(world, &wallet.node_name).await
 }
@@ -528,18 +562,18 @@ fn select_best_snapshot_index(
     snapshots: &[NodeConsensusSnapshot],
     majority_group: &[usize],
 ) -> Option<usize> {
-    majority_group
+    let best_height = majority_group
+        .iter()
+        .map(|idx| snapshots[*idx].consensus.height)
+        .max()?;
+
+    let best_candidates = majority_group
         .iter()
         .copied()
-        .max_by(|left_idx, right_idx| {
-            let left = &snapshots[*left_idx];
-            let right = &snapshots[*right_idx];
+        .filter(|idx| snapshots[*idx].consensus.height == best_height)
+        .collect::<Vec<_>>();
 
-            left.consensus
-                .height
-                .cmp(&right.consensus.height)
-                .then_with(|| right.node_name.cmp(&left.node_name))
-        })
+    best_candidates.choose(&mut rand::thread_rng()).copied()
 }
 
 fn normalize_header_id_str(header_id: &str) -> String {

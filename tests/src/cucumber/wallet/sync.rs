@@ -23,10 +23,19 @@ use crate::{
         wallet::{
             TARGET, WalletStateView,
             best_node::{BestNodeInfo, sanitize_best_node_info_for_group_with_feed},
+            feed::{
+                apply_observed_blocks_to_scanned_transaction_hashes,
+                apply_observed_hashes_to_scanned_transaction_hashes,
+            },
         },
         world::{CucumberWorld, WalletInfo},
     },
 };
+
+pub struct FreshWalletAvailableState {
+    pub observation: WalletStateView,
+    pub available_utxos: Vec<Utxo>,
+}
 
 pub async fn sync_available_utxos_for_user_wallets(
     world: &mut CucumberWorld,
@@ -50,9 +59,8 @@ pub async fn observe_available_utxos_for_user_wallets(
 pub async fn sync_available_utxos_for_funding_wallets(
     world: &mut CucumberWorld,
     step: &str,
-    best_node_info: Option<&BestNodeInfo>,
 ) -> Result<WalletUtxos, StepError> {
-    observe_available_utxos_for_funding_wallets(world, step, best_node_info).await
+    observe_available_utxos_for_funding_wallets(world, step, None).await
 }
 
 pub async fn observe_available_utxos_for_funding_wallets(
@@ -171,6 +179,7 @@ pub async fn sync_wallet_balance(
     step: &str,
     wallet_name: &str,
     wallet_state_type: WalletOutputState,
+    _best_node_info: Option<&BestNodeInfo>,
 ) -> Result<WalletBalance, StepError> {
     observe_wallet_balance(world, step, wallet_name, wallet_state_type).await
 }
@@ -193,6 +202,21 @@ pub async fn sync_wallet_state_from_feed(
     wallet_pk: ZkPublicKey,
 ) -> Result<WalletStateView, StepError> {
     observe_wallet_state(world, wallet_name, wallet_node_name, wallet_pk).await
+}
+
+pub async fn sync_wallet_available_state(
+    world: &mut CucumberWorld,
+    wallet_name: &str,
+    wallet_node_name: &str,
+    wallet_pk: ZkPublicKey,
+) -> Result<FreshWalletAvailableState, StepError> {
+    let observation = observe_wallet_state(world, wallet_name, wallet_node_name, wallet_pk).await?;
+    let available_utxos = observation.clone().into_available_utxos();
+
+    Ok(FreshWalletAvailableState {
+        observation,
+        available_utxos,
+    })
 }
 
 pub async fn observe_wallet_state(
@@ -435,7 +459,10 @@ async fn observe_wallet_feed_batches(
 ) -> Result<WalletFeedStateResults, StepError> {
     let feed_result = world.with_wallet_feed_state_mut(|tracker, wallets| {
         let observed_blocks = tracker.apply_feed(wallets, feed, genesis_utxos)?;
-
+        apply_observed_blocks_to_scanned_transaction_hashes(
+            &world.scanned_transaction_hashes,
+            &observed_blocks,
+        );
         observed_wallet_results(tracker, &tracking_batches, observed_blocks)
     })?;
 
@@ -522,7 +549,7 @@ async fn backfill_wallet_feed_batch(
         node.started_node.client.clone(),
         tip,
     );
-    let wallet_utxos =
+    let (wallet_utxos, transaction_hashes, new_blocks) =
         wallet_utxos_from_chain(&mut source, tracking_batch.wallet_keys(), genesis_utxos)
             .await
             .map_err(|error| StepError::LogicalError {
@@ -533,6 +560,12 @@ async fn backfill_wallet_feed_batch(
     let observed_utxos = wallet_utxos.clone();
     let tracked_utxos = wallet_utxos.clone();
     let tip_string = tip.to_string();
+
+    apply_observed_hashes_to_scanned_transaction_hashes(
+        &world.scanned_transaction_hashes,
+        &transaction_hashes,
+        Some(new_blocks),
+    );
 
     world
         .with_wallet_feed_state_mut(|tracker, wallets| {
@@ -838,7 +871,14 @@ fn update_wallet_feed_state(
 ) -> Result<Result<(), WalletBlockFeedTrackerError>, StepError> {
     world
         .with_wallet_feed_state_mut(|tracker, wallets| {
-            tracker.apply_feed(wallets, feed, genesis_utxos)
+            let result = tracker.apply_feed(wallets, feed, genesis_utxos);
+            if let Ok(observed_blocks) = result.as_ref() {
+                apply_observed_blocks_to_scanned_transaction_hashes(
+                    &world.scanned_transaction_hashes,
+                    observed_blocks,
+                );
+            }
+            result
         })
         .map(|result| result.map(|_| ()))
 }
@@ -847,13 +887,12 @@ fn log_wallet_observed_block(block: &WalletObservedBlock) {
     if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
         info!(
             target: TARGET,
-            "Evaluating block {height} for {} wallets on `{}`: {header_id}, \
-            transactions len: {}",
+            "Evaluating block {} for {} wallets on `{}`: {}, transactions len: {}",
+            block.height(),
             block.wallet_count(),
             block.source_node_name(),
+            block.header_id(),
             block.transaction_count(),
-            height = block.height(),
-            header_id = block.header_id(),
         );
     }
 
