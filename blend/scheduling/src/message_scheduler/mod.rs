@@ -196,51 +196,42 @@ where
             Poll::Ready(Some(new_round)) => new_round,
         };
         trace!(target: LOG_TARGET, "New round {new_round} started.");
-        let data_messages_to_release = take(data_messages);
 
         // We poll the sub-stream and return the right result accordingly.
         let cover_traffic_output = cover_traffic.poll_next_unpin(cx);
         let release_delayer_output = release_delayer.poll_next_unpin(cx);
 
-        let round_info = match (
-            cover_traffic_output,
-            release_delayer_output,
-            data_messages_to_release,
-        ) {
+        // Determine the release type without consuming `data_messages` yet, so the
+        // early-return arms below cannot drop already-taken data messages.
+        let release_type = match (cover_traffic_output, release_delayer_output) {
+            // Bubble up `Poll::Ready(None)` if any sub-stream returns it.
+            (Poll::Ready(None), _) | (_, Poll::Ready(None)) => return Poll::Ready(None),
             // If none of the sub-streams is ready, we return `Ready` if we have data messages to
             // release at this round. Else, we return `Pending`.
-            (Poll::Pending, Poll::Pending, data_messages) => {
+            (Poll::Pending, Poll::Pending) => {
                 if data_messages.is_empty() {
                     // Awake to trigger a new round clock tick.
                     cx.waker().wake_by_ref();
                     return Poll::Pending;
                 }
-                RoundInfo {
-                    data_messages,
-                    release_type: None,
-                }
+                None
             }
-            // Bubble up `Poll::Ready(None)` if any sub-stream returns it.
-            (Poll::Ready(None), _, _) | (_, Poll::Ready(None), _) => return Poll::Ready(None),
-            // Data and cover messages, no processed messages.
-            (Poll::Ready(Some(())), Poll::Pending, data_messages) => RoundInfo {
-                data_messages,
-                release_type: Some(RoundReleaseType::OnlyCoverMessage),
-            },
-            // Data and processed messages, no cover message.
-            (Poll::Pending, Poll::Ready(Some(processed_messages)), data_messages) => RoundInfo {
-                data_messages,
-                release_type: Some(RoundReleaseType::OnlyProcessedMessages(processed_messages)),
-            },
-            // Data, cover, and processed messages.
-            (Poll::Ready(Some(())), Poll::Ready(Some(processed_messages)), data_messages) => {
-                RoundInfo {
-                    data_messages,
-                    release_type: Some(RoundReleaseType::ProcessedAndCoverMessages(
-                        processed_messages,
-                    )),
-                }
+            // Cover message, no processed messages.
+            (Poll::Ready(Some(())), Poll::Pending) => Some(RoundReleaseType::OnlyCoverMessage),
+            // Processed messages, no cover message.
+            (Poll::Pending, Poll::Ready(Some(processed_messages))) => {
+                Some(RoundReleaseType::OnlyProcessedMessages(processed_messages))
             }
+            // Cover and processed messages.
+            (Poll::Ready(Some(())), Poll::Ready(Some(processed_messages))) => Some(
+                RoundReleaseType::ProcessedAndCoverMessages(processed_messages),
+            ),
+        };
+
+        // Safe to take now: every path from here on emits the data messages.
+        let round_info = RoundInfo {
+            data_messages: take(data_messages),
+            release_type,
         };
         trace!(
             target: LOG_TARGET,
