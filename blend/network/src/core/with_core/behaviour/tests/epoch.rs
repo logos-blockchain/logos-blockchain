@@ -85,14 +85,12 @@ async fn publish_message() {
     );
 }
 
-/// Reproduces audit finding #2: a `FullyNegotiated` event that races an epoch
-/// transition panics the blend swarm task.
+/// Regression test for audit finding #2: a `FullyNegotiated` event that races
+/// an epoch transition must be ignored, not panic the blend swarm task.
 ///
 /// Handler→behaviour events are delivered asynchronously, so a handler can emit
 /// `FullyNegotiated` *before* `start_new_epoch` clears
-/// `connections_waiting_upgrade`, with the event delivered *after*.
-/// `handle_negotiated_connection` then looks up an entry that is no longer
-/// there and `panic!`s:
+/// `connections_waiting_upgrade`, with the event delivered *after*:
 ///
 /// ```text
 ///   handler.poll() ──emit FullyNegotiated(conn)──┐  (queued toward swarm)
@@ -102,16 +100,16 @@ async fn publish_message() {
 ///                                                 ▼
 ///   swarm delivers FullyNegotiated(conn) ─► on_connection_handler_event
 ///     └─ handle_negotiated_connection(conn)
-///          └─ waiting.remove(conn) == None ─► .unwrap_or_else(panic!) ✗
+///          └─ waiting.remove(conn) == None ─► ignored (no panic) ✓
 /// ```
 ///
 /// This drives the behaviour at the `NetworkBehaviour` API level to land it in
 /// exactly that post-race state deterministically: accept an inbound connection
 /// (which inserts into `connections_waiting_upgrade`), run `start_new_epoch`
-/// (which empties the map), then deliver the in-flight `FullyNegotiated`.
+/// (which empties the map), then deliver the in-flight `FullyNegotiated`. The
+/// stale event must be dropped silently, leaving no negotiated peer behind.
 #[test(tokio::test)]
-#[should_panic(expected = "not found in map of waiting connections")]
-async fn fully_negotiated_racing_epoch_transition_panics() {
+async fn fully_negotiated_racing_epoch_transition_is_ignored() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
     let local_identity = identities.next().unwrap();
     // The remote must be a core member so the inbound connection is upgraded
@@ -146,11 +144,19 @@ async fn fully_negotiated_racing_epoch_transition_panics() {
     );
 
     // The previously-emitted `FullyNegotiated` is now delivered. The connection
-    // is no longer in the map, so `handle_negotiated_connection` panics.
+    // is no longer pending upgrade, so the stale event must be ignored instead
+    // of panicking the swarm task.
     behaviour.on_connection_handler_event(
         peer_id,
         connection_id,
         Either::Left(ToBehaviour::FullyNegotiated),
+    );
+
+    // The stale event left no trace: the peer was not promoted to a negotiated
+    // peer in the new epoch.
+    assert!(
+        !behaviour.negotiated_peers.contains_key(&peer_id),
+        "A stale FullyNegotiated must not promote the peer in the new epoch"
     );
 }
 
