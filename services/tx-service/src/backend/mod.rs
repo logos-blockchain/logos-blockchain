@@ -3,6 +3,7 @@ pub mod pool;
 use std::pin::Pin;
 
 use futures::Stream;
+use lb_utils::storage_bounded_vec::ElementSize;
 pub use pool::{Mempool, PoolRecoveryState};
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +22,7 @@ pub enum MempoolError {
 #[async_trait::async_trait]
 pub trait MemPool {
     type Settings: Send;
-    type Item: Send;
+    type Item: Send + ElementSize;
     type Key: Send + Sync + Clone + Ord;
     type BlockId: Send;
     type Storage: Send;

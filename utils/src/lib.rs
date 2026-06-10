@@ -3,6 +3,7 @@ pub mod fisheryates;
 pub mod math;
 pub mod net;
 pub mod noop_service;
+pub mod storage_bounded_vec;
 pub mod types;
 pub mod yaml;
 

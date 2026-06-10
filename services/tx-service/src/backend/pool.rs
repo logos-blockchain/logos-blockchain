@@ -9,6 +9,7 @@ use std::{
 use async_trait::async_trait;
 use futures::Stream;
 use lb_log_targets::mempool;
+use lb_utils::storage_bounded_vec::ElementSize;
 use serde::{Deserialize, Serialize};
 
 use super::Status;
@@ -61,7 +62,7 @@ impl<BlockId, Item, Key, Storage, RuntimeServiceId> MemPool
     for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
 where
     Key: Hash + Eq + Ord + Clone + Send + Sync + 'static,
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + ElementSize,
     BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Storage:
         MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item> + Send + Sync + 'static,
@@ -182,7 +183,7 @@ impl<BlockId, Item, Key, Storage, RuntimeServiceId> RecoverableMempool
     for Mempool<BlockId, Item, Key, Storage, RuntimeServiceId>
 where
     Key: Hash + Eq + Ord + Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
-    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
+    Item: Clone + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de> + ElementSize,
     BlockId: Hash + Eq + Copy + Send + Sync + 'static + Serialize + for<'de> Deserialize<'de>,
     Storage:
         MempoolStorageAdapter<RuntimeServiceId, Key = Key, Item = Item> + Send + Sync + 'static,

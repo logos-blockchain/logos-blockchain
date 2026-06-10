@@ -6,6 +6,7 @@ use core::fmt::Debug;
 use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
+use lb_utils::storage_bounded_vec::{ElementSize, StorageBoundedError, StorageBoundedVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -13,10 +14,7 @@ use crate::{
     header::{ContentId, Header, HeaderId},
     mantle::{StorageSize, Transaction, TxHash},
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
-    utils::{
-        merkle,
-        storage_bounded_vec::{StorageBoundedError, StorageBoundedVec},
-    },
+    utils::merkle,
 };
 
 pub const MAX_BLOCK_TRANSACTIONS: usize = 1024;
@@ -98,7 +96,7 @@ impl<Tx> Block<Tx> {
         signing_key: &Ed25519Key,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
     {
         let expected_public_key = proof_of_leadership.leader_key();
         let actual_public_key = signing_key.public_key();
@@ -125,7 +123,7 @@ impl<Tx> Block<Tx> {
         signature: Ed25519Signature,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
     {
         let block = Self {
             header,
@@ -139,7 +137,7 @@ impl<Tx> Block<Tx> {
 
     fn verify_internal(&self) -> Result<(), Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
     {
         // 1. Block root matches transactions merkle hash
         let calculated_content_id = Self::calculate_content_id(&self.transactions);
@@ -164,7 +162,7 @@ impl<Tx> Block<Tx> {
     /// validation before returning the block.
     pub fn try_into_bounded_block(self) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
+        Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
     {
         let Self {
             header,
@@ -264,12 +262,6 @@ mod tests {
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
-
-    impl StorageSize for MantleTx {
-        fn storage_size(&self) -> usize {
-            0
-        }
-    }
 
     pub fn create_proof() -> Groth16LeaderProof {
         let leader_sk = UnsecuredZkKey::zero();
@@ -418,6 +410,12 @@ mod tests {
 
     #[derive(Clone, Copy, Debug)]
     pub struct TestMantleTx<const SIZE: usize>;
+
+    impl<const SIZE: usize> ElementSize for TestMantleTx<SIZE> {
+        fn element_size(&self) -> usize {
+            SIZE
+        }
+    }
 
     impl<const SIZE: usize> Transaction for TestMantleTx<SIZE> {
         const HASHER: TransactionHasher<Self> = |_tx| TxHash::from([0u8; 32]);

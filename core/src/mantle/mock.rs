@@ -4,6 +4,7 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
+use lb_utils::storage_bounded_vec::ElementSize;
 use serde::{Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -52,6 +53,12 @@ impl<M: Serialize + DeserializeOwned + Clone> StorageSize for MockTransaction<M>
         self.to_bytes()
             .expect("MockTransaction should be able to be serialized")
             .len()
+    }
+}
+
+impl<M: Serialize + DeserializeOwned + Clone> ElementSize for MockTransaction<M> {
+    fn element_size(&self) -> usize {
+        self.storage_size()
     }
 }
 

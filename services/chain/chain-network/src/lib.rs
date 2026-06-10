@@ -20,7 +20,6 @@ use lb_core::{
     block::{Block, BlockTransactions, Proposal},
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},
-    utils::storage_bounded_vec::StorageBoundedError,
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
@@ -31,6 +30,7 @@ use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
+use lb_utils::storage_bounded_vec::{ElementSize, StorageBoundedError};
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -809,7 +809,7 @@ async fn reconstruct_block_from_proposal<Item>(
     mempool: &MempoolAdapter<Item>,
 ) -> Result<Block<Item>, Error>
 where
-    Item: AuthenticatedMantleTx<Hash = TxHash> + Clone + Send + Sync + 'static,
+    Item: AuthenticatedMantleTx<Hash = TxHash> + ElementSize + Clone + Send + Sync + 'static,
 {
     let mempool_hashes: Vec<TxHash> = proposal.mempool_transactions().to_vec();
     let mempool_response = mempool

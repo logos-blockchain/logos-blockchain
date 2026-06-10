@@ -1,11 +1,14 @@
 use core::slice::Iter;
 use std::vec::IntoIter;
 
-use lb_utils::bounded_vec::{BoundedError, BoundedVec};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::mantle::StorageSize;
+use crate::bounded_vec::{BoundedError, BoundedVec};
+
+pub trait ElementSize {
+    fn element_size(&self) -> usize;
+}
 
 #[derive(Debug, Error, Eq, PartialEq, Clone)]
 pub enum StorageBoundedError {
@@ -20,7 +23,7 @@ pub enum StorageBoundedError {
 /// `StorageBoundedVec<T, MIN_COUNT, MAX_COUNT, MAX_SIZE>` ensures that:
 /// - the number of items is in range `[MIN_COUNT, MAX_COUNT]`, and
 /// - the total storage size, calculated as the sum of all items'
-///   [`StorageSize::storage_size`] values, does not exceed `MAX_SIZE`.
+///   [`ElementSize::storage_size`] values, does not exceed `MAX_SIZE`.
 ///
 /// If `T` is a mutable type and has been mutated out-of-band, the size
 /// invariant can be refreshed by calling `try_refresh_total_storage_size`,
@@ -44,7 +47,7 @@ pub enum StorageBoundedError {
     try_from = "Vec<T>",
     bound(
         serialize = "T: Clone + Serialize",
-        deserialize = "T: Deserialize<'de> + StorageSize"
+        deserialize = "T: Deserialize<'de> + ElementSize"
     )
 )]
 pub struct StorageBoundedVec<
@@ -84,7 +87,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
     /// size.
     pub fn try_from_vec(items: Vec<T>) -> Result<Self, StorageBoundedError>
     where
-        T: StorageSize,
+        T: ElementSize,
     {
         let items = BoundedVec::<T, MIN_COUNT, MAX_COUNT>::try_from(items)?;
         let total_size = Self::validate_total_size(items.as_slice())?;
@@ -129,7 +132,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
     /// if `T` is a mutable type and has been mutated out-of-band.
     pub fn try_refresh_total_storage_size(&mut self) -> Result<usize, StorageBoundedError>
     where
-        T: StorageSize,
+        T: ElementSize,
     {
         let total = Self::validate_total_size(self.items.as_slice())?;
         self.total_cached_size = total;
@@ -144,7 +147,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
     /// Try to push an item while maintaining both count and size constraints.
     pub fn try_push(&mut self, item: T) -> Result<(), StorageBoundedError>
     where
-        T: StorageSize,
+        T: ElementSize,
     {
         if self.len() >= MAX_COUNT {
             return Err(StorageBoundedError::BoundedError(
@@ -155,7 +158,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
             ));
         }
 
-        let item_size = item.storage_size();
+        let item_size = item.element_size();
         let new_total = self.total_cached_size.checked_add(item_size).ok_or(
             StorageBoundedError::ContentTooBig {
                 size: usize::MAX,
@@ -178,33 +181,33 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
 
     pub fn try_pop(&mut self) -> Result<Option<T>, StorageBoundedError>
     where
-        T: StorageSize,
+        T: ElementSize,
     {
         let Some(item) = self.items.try_pop()? else {
             return Ok(None);
         };
 
-        self.total_cached_size -= item.storage_size();
+        self.total_cached_size -= item.element_size();
         Ok(Some(item))
     }
 
     pub fn try_remove(&mut self, index: usize) -> Result<T, StorageBoundedError>
     where
-        T: StorageSize,
+        T: ElementSize,
     {
         let item = self.items.try_remove(index)?;
-        self.total_cached_size -= item.storage_size();
+        self.total_cached_size -= item.element_size();
         Ok(item)
     }
 
     fn validate_total_size(items: &[T]) -> Result<usize, StorageBoundedError>
     where
-        T: StorageSize,
+        T: ElementSize,
     {
         let mut total = 0usize;
 
         for item in items {
-            total = total.checked_add(item.storage_size()).ok_or(
+            total = total.checked_add(item.element_size()).ok_or(
                 StorageBoundedError::ContentTooBig {
                     size: usize::MAX,
                     max: MAX_SIZE,
@@ -226,7 +229,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
 impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize> TryFrom<Vec<T>>
     for StorageBoundedVec<T, MIN_COUNT, MAX_COUNT, MAX_SIZE>
 where
-    T: StorageSize,
+    T: ElementSize,
 {
     type Error = StorageBoundedError;
 
@@ -238,7 +241,7 @@ where
 impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize> TryFrom<&[T]>
     for StorageBoundedVec<T, MIN_COUNT, MAX_COUNT, MAX_SIZE>
 where
-    T: Clone + StorageSize,
+    T: Clone + ElementSize,
 {
     type Error = StorageBoundedError;
 
@@ -250,7 +253,7 @@ where
 impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize, const N: usize>
     TryFrom<&[T; N]> for StorageBoundedVec<T, MIN_COUNT, MAX_COUNT, MAX_SIZE>
 where
-    T: Clone + StorageSize,
+    T: Clone + ElementSize,
 {
     type Error = StorageBoundedError;
 
@@ -305,7 +308,7 @@ pub type NonEmptyStorageBoundedVec<T, const MAX_COUNT: usize, const MAX_SIZE: us
 mod tests {
     // Runtime unit tests cannot assert that an API does not exist. To lock in
     // the absence of `DerefMut`, an `into_bounded` escape hatch, or construction
-    // with non-`StorageSize` types, use compile-fail tests such as
+    // with non-`ElementSize` types, use compile-fail tests such as
     // `trybuild`. Adding public methods that just call `unimplemented!` would
     // still expose those APIs and weaken the type's contract.
 
@@ -317,8 +320,8 @@ mod tests {
         size: usize,
     }
 
-    impl StorageSize for TestItem {
-        fn storage_size(&self) -> usize {
+    impl ElementSize for TestItem {
+        fn element_size(&self) -> usize {
             self.size
         }
     }

@@ -17,6 +17,7 @@ use lb_network_service::{
     },
     message::{ChainSyncEvent, NetworkMsg},
 };
+use lb_utils::storage_bounded_vec::ElementSize;
 use overwatch::{
     DynError,
     services::{ServiceData, relay::OutboundRelay},
@@ -94,6 +95,7 @@ where
     ) -> Result<BlockDownloadStream<Tx>, DynError>
     where
         Tx: AuthenticatedMantleTx
+            + ElementSize
             + Serialize
             + DeserializeOwned
             + Clone
@@ -175,7 +177,15 @@ where
 #[async_trait::async_trait]
 impl<Tx, RuntimeServiceId> NetworkAdapter<RuntimeServiceId> for LibP2pAdapter<Tx, RuntimeServiceId>
 where
-    Tx: AuthenticatedMantleTx + Serialize + DeserializeOwned + Clone + Eq + Send + Sync + 'static,
+    Tx: AuthenticatedMantleTx
+        + ElementSize
+        + Serialize
+        + DeserializeOwned
+        + Clone
+        + Eq
+        + Send
+        + Sync
+        + 'static,
 {
     type Backend = Libp2p;
     type Settings = LibP2pAdapterSettings;

@@ -36,6 +36,7 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
+use lb_utils::storage_bounded_vec::ElementSize;
 use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -778,7 +779,7 @@ where
 /// transaction that trips the block size or count limits.
 async fn txs_for_block<Tx, S>(mut txs: S) -> BlockTransactions<Tx>
 where
-    Tx: StorageSize,
+    Tx: StorageSize + ElementSize,
     S: futures::Stream<Item = Tx> + Unpin,
 {
     let mut selected_txs = BlockTransactions::empty();
@@ -807,6 +808,12 @@ mod tests {
     impl StorageSize for TestTx {
         fn storage_size(&self) -> usize {
             self.size
+        }
+    }
+
+    impl ElementSize for TestTx {
+        fn element_size(&self) -> usize {
+            self.storage_size()
         }
     }
 
