@@ -17,10 +17,10 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, Error as BlockError, MAX_BLOCK_SIZE, MAX_BLOCK_TRANSACTIONS},
+    block::{Block, Error as BlockError},
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash, TxSelect,
+        AuthenticatedMantleTx, SignedMantleTx, Transaction, TxHash, TxSelect,
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
@@ -658,7 +658,7 @@ where
         }
 
         let valid_tx_stream = stream::iter(valid_txs);
-        let txs = txs_for_block(tx_selector.select_tx_from(valid_tx_stream)).await;
+        let txs: Vec<_> = tx_selector.select_tx_from(valid_tx_stream).collect().await;
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
@@ -771,117 +771,5 @@ where
             .await?
             .ok_or(Error::LedgerStateNotFound(tip))?;
         Ok((tip, ledger_state))
-    }
-}
-
-/// Select transactions for a block, truncating the stream at the first
-/// transaction that trips the block size or count limits.
-async fn txs_for_block<Tx, S>(mut txs: S) -> Vec<Tx>
-where
-    Tx: StorageSize,
-    S: futures::Stream<Item = Tx> + Unpin,
-{
-    let mut block_size: usize = 0;
-    let mut selected_txs = Vec::new();
-
-    while selected_txs.len() < MAX_BLOCK_TRANSACTIONS {
-        let Some(tx) = txs.next().await else {
-            break;
-        };
-
-        let tx_size = tx.storage_size();
-        let Some(next_block_size) = block_size.checked_add(tx_size) else {
-            break;
-        };
-
-        if next_block_size > MAX_BLOCK_SIZE {
-            break;
-        }
-
-        block_size = next_block_size;
-        selected_txs.push(tx);
-    }
-
-    selected_txs
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Clone)]
-    struct TestTx {
-        size: usize,
-    }
-
-    impl StorageSize for TestTx {
-        fn storage_size(&self) -> usize {
-            self.size
-        }
-    }
-
-    #[tokio::test]
-    async fn block_tx_selection_respects_transaction_count_limit() {
-        let txs = stream::iter(vec![TestTx { size: 1 }; MAX_BLOCK_TRANSACTIONS + 1]);
-
-        let selected = txs_for_block(txs).await;
-
-        assert_eq!(selected.len(), MAX_BLOCK_TRANSACTIONS);
-    }
-
-    #[tokio::test]
-    async fn block_tx_selection_respects_block_size_limit() {
-        let txs = stream::iter(vec![
-            TestTx {
-                size: MAX_BLOCK_SIZE / 2,
-            },
-            TestTx {
-                size: MAX_BLOCK_SIZE / 2,
-            },
-            TestTx { size: 1 },
-        ]);
-
-        let selected = txs_for_block(txs).await;
-        let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
-
-        assert_eq!(selected.len(), 2);
-        assert_eq!(selected_size, MAX_BLOCK_SIZE);
-    }
-
-    #[tokio::test]
-    async fn block_tx_selection_stops_at_first_transaction_that_does_not_fit() {
-        // The middle transaction does not fit alongside the first, so selection
-        // must stop there and must not pull the third (which would fit on its
-        // own) ahead of it — doing so could drop a dependency of the third.
-        let txs = stream::iter(vec![
-            TestTx { size: 10 },
-            TestTx {
-                size: MAX_BLOCK_SIZE,
-            },
-            TestTx { size: 10 },
-        ]);
-
-        let selected = txs_for_block(txs).await;
-
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].storage_size(), 10);
-    }
-
-    #[tokio::test]
-    async fn block_tx_selection_stops_at_leading_oversized_transaction() {
-        // A transaction larger than the whole block can never fit. Selection
-        // stops at it rather than skipping past to later transactions, which may
-        // depend on it. (In practice such transactions are filtered out before
-        // reaching here, but the prefix invariant must hold regardless.)
-        let txs = stream::iter(vec![
-            TestTx {
-                size: MAX_BLOCK_SIZE + 1,
-            },
-            TestTx { size: 1 },
-        ]);
-
-        let selected = txs_for_block(txs).await;
-
-        assert!(selected.is_empty());
     }
 }

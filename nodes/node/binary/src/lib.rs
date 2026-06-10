@@ -57,8 +57,6 @@ pub use crate::{
     config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
 };
 
-pub const MB16: usize = 1024 * 1024 * 16;
-
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 
 pub(crate) type NetworkService =
