@@ -4,11 +4,10 @@ use core::{
 };
 
 use futures::{StreamExt as _, task::noop_waker_ref};
+use lb_cryptarchia_engine::Epoch;
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 use tokio_stream::iter;
-
-use lb_cryptarchia_engine::Epoch;
 
 use crate::{
     cover_traffic::EpochCoverTraffic,
