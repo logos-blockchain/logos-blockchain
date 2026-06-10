@@ -915,14 +915,22 @@ mod tests {
         async fn store_block_only(&self, block: &Block<SignedMantleTx>, header_id: HeaderId) {
             let parent_id = block.header().parent();
             let store_result: Result<_, _> = block.clone().try_into();
+            let (sender, receiver) = oneshot::channel();
+
             self.storage_relay
                 .send(StorageMsg::store_block_request(
                     header_id,
                     parent_id,
                     store_result.unwrap(),
                     Events::new().try_into().unwrap(),
+                    sender,
                 ))
                 .await
+                .expect("Failed to store block");
+
+            receiver
+                .await
+                .expect("Failed to receive store block response")
                 .expect("Failed to store block");
         }
 
@@ -934,13 +942,20 @@ mod tests {
         ) {
             // Store block
             self.store_block_only(block, header_id).await;
+            let (sender, receiver) = oneshot::channel();
 
             // Mark as immutable
             self.storage_relay
                 .send(StorageMsg::store_immutable_block_ids_request(
                     BTreeMap::from([(slot, header_id)]),
+                    sender,
                 ))
                 .await
+                .expect("Failed to store immutable block id");
+
+            receiver
+                .await
+                .expect("Failed to receive store immutable block id response")
                 .expect("Failed to store immutable block id");
         }
 
