@@ -11,9 +11,7 @@ use libp2p::{
     core::upgrade::ReadyUpgrade,
     swarm::{
         ConnectionHandlerEvent, ConnectionId, SubstreamProtocol,
-        handler::{
-            ConnectionEvent, DialUpgradeError, FullyNegotiatedInbound, FullyNegotiatedOutbound,
-        },
+        handler::{ConnectionEvent, FullyNegotiatedInbound, FullyNegotiatedOutbound},
     },
 };
 
@@ -138,8 +136,6 @@ pub enum ToBehaviour {
     /// Emitted at most once per connection, on the first successful upgrade
     /// of either the inbound or outbound substream.
     FullyNegotiated,
-    /// An outbound substream was failed to be upgraded for the blend protocol.
-    DialUpgradeError(DialUpgradeError<(), ReadyUpgrade<StreamProtocol>>),
     /// A message has been received from the connection.
     Message(Vec<u8>),
     /// Notifying that the peer is detected as spammy.
@@ -405,8 +401,6 @@ where
             }
             ConnectionEvent::DialUpgradeError(e) => {
                 tracing::error!(target: LOG_TARGET, "DialUpgradeError for connection {:?}: {:?}", self.connection_details, e);
-                self.pending_events_to_behaviour
-                    .push_back(ToBehaviour::DialUpgradeError(e));
                 self.close_substreams();
             }
             event => {
