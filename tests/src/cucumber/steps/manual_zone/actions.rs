@@ -49,7 +49,7 @@ use crate::{
                 },
             },
         },
-        wallet::sync::sync_available_utxos_for_wallet,
+        wallet::sync::current_available_utxos_for_wallet,
         world::{CucumberWorld, WalletInfo},
     },
 };
@@ -398,7 +398,7 @@ pub(super) async fn submit_zone_deposit_transaction(
     let public_key = log_step_error(step, wallet.public_key())?;
     let available_utxos = log_step_error(
         step,
-        sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
     )?;
     let ZoneDeposit {
         deposit,
@@ -438,7 +438,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     let public_key = log_step_error(step, wallet.public_key())?;
     let available_utxos = log_step_error(
         step,
-        sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
     )?;
     let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Mint {amount} to Alice"));

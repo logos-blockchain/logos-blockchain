@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     env,
     fmt::Debug,
+    hash::BuildHasher,
     num::NonZero,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -48,7 +49,7 @@ use crate::{
             set_default_env,
         },
         error::{StepError, StepResult},
-        fee_reserve::ScenarioFeeState,
+        fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
         steps::manual_zone::runner::{Event, InscriptionId, SequencerCheckpoint, SequencerClient},
         utils::{make_builder, shared_host_bin_path},
         wallet::feed::{CucumberWalletBlockFeed, CucumberWalletBlockFeedError},
@@ -1367,15 +1368,29 @@ impl CucumberWorld {
                 continue;
             }
 
+            let group_key = self
+                .node_to_group
+                .get(&source_node_name)
+                .cloned()
+                .unwrap_or_default();
+
             let mut wallet_keys = TrackedWalletKeysBySource::new();
             for (wallet_name, public_key) in wallets {
-                wallet_keys.add_wallet(&source_node_name, wallet_name, public_key);
+                wallet_keys.add_wallet(&group_key, wallet_name, public_key);
             }
 
-            tracking_batches.extend(wallet_keys.batches().map(|source_wallet_keys| {
+            if let Some(fee_wallet_account) = self.fee_state.wallet_account.clone() {
+                wallet_keys.add_wallet(
+                    &group_key,
+                    SCENARIO_FEE_ACCOUNT_NAME,
+                    fee_wallet_account.public_key(),
+                );
+            }
+
+            tracking_batches.extend(wallet_keys.batches().map(|wallet_keys_for_group| {
                 WalletFeedTrackingBatch::new(
                     source_node_name.clone(),
-                    source_wallet_keys.wallet_keys().iter().cloned(),
+                    wallet_keys_for_group.wallet_keys().iter().cloned(),
                 )
             }));
         }
@@ -1760,7 +1775,10 @@ impl CucumberWorld {
             .len()
     }
 
-    pub fn missing_scanned_transaction_hashes(&self, expected: &HashSet<TxHash>) -> Vec<TxHash> {
+    pub fn missing_scanned_transaction_hashes<S: BuildHasher>(
+        &self,
+        expected: &HashSet<TxHash, S>,
+    ) -> Vec<TxHash> {
         let scanned_transaction_hashes = self
             .scanned_transaction_hashes
             .lock()
