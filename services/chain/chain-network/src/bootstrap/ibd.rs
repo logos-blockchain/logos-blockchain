@@ -425,11 +425,11 @@ pub enum Error {
 mod tests {
     use std::{
         collections::HashMap,
-        iter::empty,
         num::{NonZero, NonZeroU64},
         sync::Arc,
     };
 
+    use lb_chain_service::testing::genesis_utxo;
     use lb_core::{
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -1109,7 +1109,7 @@ mod tests {
         let ledger_config = ledger_config();
         lb_chain_service::Cryptarchia::from_lib(
             [GENESIS_ID; 32].into(),
-            LedgerState::from_utxos(empty(), &ledger_config),
+            LedgerState::from_utxos([genesis_utxo()], &ledger_config),
             [GENESIS_ID; 32].into(),
             ledger_config,
             lb_cryptarchia_engine::State::Bootstrapping,
@@ -1120,21 +1120,17 @@ mod tests {
 
     #[must_use]
     fn ledger_config() -> lb_ledger::Config {
-        let epoch_config = EpochConfig {
-            epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
-            epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
-            epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
-        };
-        let consensus_config = lb_cryptarchia_engine::Config::new(
-            NonZero::new(1).unwrap(),
-            NonNegativeRatio::new(1, 10.try_into().unwrap()),
-            1f64.try_into().expect("1 > 0"),
-        );
-        let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
-
         lb_ledger::Config {
-            epoch_config,
-            consensus_config,
+            epoch_config: EpochConfig {
+                epoch_stake_distribution_stabilization: NonZero::new(1).unwrap(),
+                epoch_period_nonce_buffer: NonZero::new(1).unwrap(),
+                epoch_period_nonce_stabilization: NonZero::new(1).unwrap(),
+            },
+            consensus_config: lb_cryptarchia_engine::Config::new(
+                NonZero::new(1).unwrap(),
+                NonNegativeRatio::new(1, 10.try_into().unwrap()),
+                1f64.try_into().expect("1 > 0"),
+            ),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
                     [(
@@ -1150,7 +1146,7 @@ mod tests {
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
-                        rounds_per_epoch: epoch_length.try_into().unwrap(),
+                        rounds_per_epoch: NonZeroU64::new(10).unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),

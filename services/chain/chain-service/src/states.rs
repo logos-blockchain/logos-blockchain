@@ -119,6 +119,7 @@ mod tests {
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
 
     use super::*;
+    use crate::testing::genesis_utxo;
 
     #[test]
     #[expect(clippy::too_many_lines, reason = "Test function")]
@@ -131,16 +132,12 @@ mod tests {
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
         );
-        let epoch_config = lb_cryptarchia_engine::EpochConfig {
-            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-            epoch_period_nonce_buffer: 1.try_into().unwrap(),
-            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-        };
-        let epoch_length =
-            epoch_config.epoch_length(cryptarchia_engine_config.base_period_length());
-
         let ledger_config = lb_ledger::Config {
-            epoch_config,
+            epoch_config: lb_cryptarchia_engine::EpochConfig {
+                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+                epoch_period_nonce_buffer: 1.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+            },
             consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
@@ -157,7 +154,7 @@ mod tests {
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
-                        rounds_per_epoch: epoch_length.try_into().unwrap(),
+                        rounds_per_epoch: NonZeroU64::new(10).unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -227,7 +224,7 @@ mod tests {
         // Empty ledger state.
         let ledger_state = lb_ledger::Ledger::new(
             cryptarchia_engine.lib(),
-            LedgerState::from_utxos([], &ledger_config),
+            LedgerState::from_utxos([genesis_utxo()], &ledger_config),
             ledger_config,
         );
 
@@ -258,23 +255,18 @@ mod tests {
     #[expect(clippy::too_many_lines, reason = "Test function")]
     fn restore_preserves_info() {
         let genesis_header_id: HeaderId = [0; 32].into();
-
         let security_param: NonZero<u32> = 2.try_into().unwrap();
         let cryptarchia_engine_config = lb_cryptarchia_engine::Config::new(
             security_param,
             NonNegativeRatio::new(1, 10.try_into().unwrap()),
             1f64.try_into().expect("1 > 0"),
         );
-        let epoch_config = lb_cryptarchia_engine::EpochConfig {
-            epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
-            epoch_period_nonce_buffer: 1.try_into().unwrap(),
-            epoch_period_nonce_stabilization: 1.try_into().unwrap(),
-        };
-        let epoch_length =
-            epoch_config.epoch_length(cryptarchia_engine_config.base_period_length());
-
         let ledger_config = lb_ledger::Config {
-            epoch_config,
+            epoch_config: lb_cryptarchia_engine::EpochConfig {
+                epoch_stake_distribution_stabilization: 1.try_into().unwrap(),
+                epoch_period_nonce_buffer: 1.try_into().unwrap(),
+                epoch_period_nonce_stabilization: 1.try_into().unwrap(),
+            },
             consensus_config: cryptarchia_engine_config.clone(),
             sdp_config: lb_ledger::mantle::sdp::Config {
                 service_params: Arc::new(
@@ -291,7 +283,7 @@ mod tests {
                 ),
                 service_rewards_params: ServiceRewardsParameters {
                     blend: rewards::blend::RewardsParameters {
-                        rounds_per_epoch: epoch_length.try_into().unwrap(),
+                        rounds_per_epoch: NonZeroU64::new(10).unwrap(),
                         message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
                         num_blend_layers: NonZeroU64::new(3).unwrap(),
                         minimum_network_size: NonZeroU64::new(1).unwrap(),
@@ -339,7 +331,7 @@ mod tests {
             consensus: engine.clone(),
             ledger: lb_ledger::Ledger::new(
                 lib_id,
-                LedgerState::from_utxos([], &ledger_config),
+                LedgerState::from_utxos([genesis_utxo()], &ledger_config),
                 ledger_config.clone(),
             ),
             genesis_id: genesis_header_id,
