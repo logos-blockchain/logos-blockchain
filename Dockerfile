@@ -31,7 +31,7 @@ LABEL maintainer="augustinas@status.im" \
     source="https://github.com/logos-blockchain/logos-blockchain" \
     description="Logos blockchain node image"
 
-RUN apt-get update && apt-get install -y --no-install-recommends curl jq yq && \
+RUN apt-get update && apt-get install -y --no-install-recommends curl yq && \
     rm -rf /var/lib/apt/lists/*
 
 # Copies the entire cache dir.
