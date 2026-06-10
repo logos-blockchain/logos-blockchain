@@ -15,6 +15,11 @@
     logos-blockchain-circuits = {
       url = "github:logos-blockchain/logos-blockchain-circuits?tag=v0.5.1";
     };
+
+    # Must stay in sync with the rust-rapidsnark rev in Cargo.toml.
+    rust-rapidsnark = {
+      url = "github:logos-blockchain/logos-blockchain-rust-rapidsnark/e91187f8ccb5bbfc7bb00dac88169112428da78f";
+    };
   };
 
   outputs =
@@ -23,6 +28,7 @@
       rust-overlay,
       crane,
       logos-blockchain-circuits,
+      rust-rapidsnark,
       ...
     }:
     let
@@ -30,7 +36,7 @@
         "x86_64-linux"
         "aarch64-linux"
         "aarch64-darwin"
-        "x86_64-windows"
+        "x86_64-darwin"
       ];
 
       forAll = nixpkgs.lib.genAttrs systems;
@@ -76,6 +82,7 @@
             ];
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             LBC_ROOT_DIR = logos-blockchain-circuits.packages.${system}.default;
+            RAPIDSNARK_LIB_DIR = rust-rapidsnark.packages.${system}.rapidsnark;
           } // pkgs.lib.optionalAttrs pkgs.stdenv.isDarwin {
             RUSTFLAGS = "-L ${pkgs.libiconv}/lib";
           };
@@ -126,6 +133,7 @@
             shellHook = ''
               export LIBCLANG_PATH="${pkgs.llvmPackages.libclang.lib}/lib"
               export LBC_ROOT_DIR=${logos-blockchain-circuits.packages.${system}.default}
+              export RAPIDSNARK_LIB_DIR=${rust-rapidsnark.packages.${system}.rapidsnark}
             '';
           };
         }

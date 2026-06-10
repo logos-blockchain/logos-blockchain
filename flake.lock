@@ -65,12 +65,29 @@
         "type": "github"
       }
     },
+    "nixpkgs_3": {
+      "locked": {
+        "lastModified": 1767313136,
+        "narHash": "sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-25.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
     "root": {
       "inputs": {
         "crane": "crane",
         "logos-blockchain-circuits": "logos-blockchain-circuits",
         "nixpkgs": "nixpkgs_2",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay",
+        "rust-rapidsnark": "rust-rapidsnark"
       }
     },
     "rust-overlay": {
@@ -91,6 +108,25 @@
         "owner": "oxalica",
         "repo": "rust-overlay",
         "rev": "40b0a3a193e0840c76174b4a322874c8f6dd0a63",
+        "type": "github"
+      }
+    },
+    "rust-rapidsnark": {
+      "inputs": {
+        "nixpkgs": "nixpkgs_3"
+      },
+      "locked": {
+        "lastModified": 1781090841,
+        "narHash": "sha256-A1wVkHRw3/xpV30JUgWxvfW5PgcyrxQxk7b4So5vXNs=",
+        "owner": "logos-blockchain",
+        "repo": "logos-blockchain-rust-rapidsnark",
+        "rev": "e91187f8ccb5bbfc7bb00dac88169112428da78f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "logos-blockchain",
+        "repo": "logos-blockchain-rust-rapidsnark",
+        "rev": "e91187f8ccb5bbfc7bb00dac88169112428da78f",
         "type": "github"
       }
     }
