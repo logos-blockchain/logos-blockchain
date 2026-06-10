@@ -74,7 +74,7 @@ impl OldEpoch {
             self.negotiated_peers.iter(),
             &mut self.events,
             &mut self.message_cache,
-            self.waker.take(),
+            &mut self.waker,
         )
     }
 
@@ -100,7 +100,7 @@ impl OldEpoch {
                 .filter(|(peer_id, _)| **peer_id != except),
             &mut self.events,
             &mut self.message_cache,
-            self.waker.take(),
+            &mut self.waker,
         )
     }
 
@@ -152,7 +152,7 @@ impl OldEpoch {
             &mut self.message_cache,
             from_peer_id,
             &mut self.events,
-            self.waker.take(),
+            &mut self.waker,
             self.epoch,
         ).inspect_err(|receive_error| {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with spammy peer.");

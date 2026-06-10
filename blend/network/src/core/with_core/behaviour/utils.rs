@@ -28,7 +28,7 @@ pub fn forward_validated_message_and_update_cache<'epoch, PeerConnections>(
     peer_connections: PeerConnections,
     events_queue: &'epoch mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     message_cache: &'epoch mut MessageCache,
-    waker: Option<Waker>,
+    waker: &mut Option<Waker>,
 ) -> Result<(), SendError>
 where
     PeerConnections: Iterator<Item = (&'epoch PeerId, &'epoch ConnectionId)>,
@@ -54,7 +54,7 @@ where
     });
 
     message_cache.mark_message_as_forwarded(message);
-    if let Some(waker) = waker {
+    if let Some(waker) = waker.take() {
         waker.wake();
     }
     Ok(())
@@ -74,7 +74,7 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
     message_cache: &mut MessageCache,
     sender: PeerId,
     events_queue: &mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
-    waker: Option<Waker>,
+    waker: &mut Option<Waker>,
     epoch: Epoch,
 ) -> Result<(), ReceiveError> {
     // Deserialize the message.
@@ -106,7 +106,7 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
         sender,
         epoch,
     }));
-    if let Some(waker) = waker {
+    if let Some(waker) = waker.take() {
         waker.wake();
     }
 
