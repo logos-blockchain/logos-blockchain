@@ -270,11 +270,11 @@ async fn test_handle_incoming_blend_message() {
     );
 }
 
-/// Reproduces audit finding #1: two replicas of one data message panic the core
-/// service. The service emits `data_replication_factor + 1` copies, each with
-/// fresh random layers (distinct encapsulated IDs), but decapsulation yields
-/// the same inner `NetworkMessage` — and `ProcessedMessage` hashes on that
-/// content:
+/// Regression test for audit finding #1: two replicas of one data message must
+/// not crash the core service. The service emits `data_replication_factor + 1`
+/// copies, each with fresh random layers (distinct encapsulated IDs), but
+/// decapsulation yields the same inner `NetworkMessage` — and `ProcessedMessage`
+/// hashes on that content:
 ///
 /// ```text
 ///   replica A ─encap(rand)→ ID_a ─┐ swarm dedups on ID, so both pass
@@ -284,17 +284,15 @@ async fn test_handle_incoming_blend_message() {
 ///        both → ProcessedMessage::Network(same bytes)   (Eq/Hash on content)
 ///                                  │
 ///                                  ▼  add_unsent_processed_message(..)
-///            A: Ok ──► inserted        B: Err ──► .expect(..) panics ✗
+///            A: Ok ──► inserted        B: Err ──► dropped as duplicate ✓
 /// ```
 ///
-/// The `.expect("Swarm should bubble up unique messages only.")` at the second
-/// insert (`handle_decapsulated_incoming_message_from_current_epoch`) kills the
-/// task. Size-1 membership here forces local full decapsulation. When fixed
-/// (treat a duplicate as already-known), flip this `#[should_panic]` into a
-/// positive assertion that the second replica is handled gracefully.
+/// `handle_decapsulated_incoming_message_from_current_epoch` now treats a
+/// duplicate insert as already-known rather than asserting uniqueness, so the
+/// second replica is dropped gracefully and exactly one copy stays pending
+/// release. Size-1 membership here forces local full decapsulation.
 #[test_log::test(tokio::test)]
-#[should_panic(expected = "Swarm should bubble up unique messages only.")]
-async fn test_duplicate_decapsulated_replica_panics_core_service() {
+async fn test_duplicate_decapsulated_replica_handled_gracefully() {
     let (_, _, state_updater, _state_receiver) =
         dummy_overwatch_resources::<(), (), RuntimeServiceId>();
 
@@ -368,18 +366,28 @@ async fn test_duplicate_decapsulated_replica_panics_core_service() {
         None,
         recovery_checkpoint,
     );
+    assert_eq!(
+        recovery_checkpoint.unsent_processed_messages().len(),
+        1,
+        "the first replica must be recorded as an unsent processed message"
+    );
 
     // Second replica: decapsulates to the *same* `ProcessedMessage::Network`.
-    // The insert into `unsent_processed_messages` returns `Err`, so the
-    // `.expect("Swarm should bubble up unique messages only.")` panics.
-    drop(handle_incoming_blend_message(
+    // The insert into `unsent_processed_messages` returns `Err`, but it is now
+    // treated as a known duplicate instead of panicking the task.
+    let recovery_checkpoint = handle_incoming_blend_message(
         (replica_b.into(), epoch),
         &mut scheduler,
         None,
         &processor,
         None,
         recovery_checkpoint,
-    ));
+    );
+    assert_eq!(
+        recovery_checkpoint.unsent_processed_messages().len(),
+        1,
+        "the duplicate replica must be dropped, leaving exactly one pending message"
+    );
 }
 
 #[test_log::test(tokio::test)]

@@ -1513,10 +1513,15 @@ where
         cryptographic_processor,
     );
 
-    if let Some(processed_message) = maybe_processed_message {
-        state_updater
+    if let Some(processed_message) = maybe_processed_message
+        && state_updater
             .add_unsent_processed_message(processed_message)
-            .expect("Swarm should bubble up unique messages only.");
+            .is_err()
+    {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Dropping a duplicate decapsulated replica already pending release."
+        );
     }
 
     state_updater.collect_current_epoch_tokens(blending_tokens);
