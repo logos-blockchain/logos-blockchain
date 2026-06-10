@@ -269,7 +269,10 @@ where
         }
         let delay = Duration::from_secs(
             1u64.checked_shl((new_dial_attempt_number.get() - 1) as u32)
-                .unwrap_or(u64::MAX),
+                .unwrap_or_else(|| {
+                    tracing::warn!(target: LOG_TARGET, "Shift overflow when calculating delay for peer {peer_id:?}. Using maximum delay.");
+                    u64::MAX
+                }),
         );
         debug!(
             target: LOG_TARGET,
