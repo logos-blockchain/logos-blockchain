@@ -109,10 +109,22 @@ where
         new_epoch_info: EpochInfo,
         settings: Settings,
     ) -> (Self, OldEpochMessageScheduler<Rng, ProcessedMessage>) {
-        (
-            Self::new(new_epoch_info, self.release_delayer.rng().clone(), settings),
-            OldEpochMessageScheduler(self.release_delayer),
-        )
+        let Self {
+            release_delayer,
+            data_messages,
+            ..
+        } = self;
+        // Data messages queued in the current epoch but not yet released must be
+        // carried over to the new epoch's scheduler. Otherwise they would be
+        // silently dropped here (the `OldEpochMessageScheduler` only releases
+        // processed messages), and only re-sent on a full service restart from
+        // the recovery checkpoint. Re-queueing through `queue_data_message` also
+        // keeps the new epoch's cover-traffic accounting consistent.
+        let mut new_scheduler = Self::new(new_epoch_info, release_delayer.rng().clone(), settings);
+        data_messages
+            .into_iter()
+            .for_each(|message| new_scheduler.queue_data_message(message));
+        (new_scheduler, OldEpochMessageScheduler(release_delayer))
     }
 
     /// Notify the cover message submodule that a new data message has been
