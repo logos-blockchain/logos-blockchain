@@ -3,22 +3,8 @@
     reason = "`ZoneSequencer`'s public API lives in zone_sequencer.rs; internal handlers live here."
 )]
 
-use std::collections::VecDeque;
-
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
-use lb_core::mantle::{
-    MantleTx, SignedMantleTx, Transaction as _,
-    channel::ChannelState,
-    encoding::Ops,
-    ops::{
-        Op,
-        channel::{
-            MsgId,
-            inscribe::{Inscription, InscriptionOp},
-            withdraw::ChannelWithdrawOp,
-        },
-    },
-};
+use lb_core::mantle::channel::ChannelState;
 use tracing::{debug, error, warn};
 
 use super::{
@@ -26,16 +12,11 @@ use super::{
     block_fetch::{BlockEventResult, handle_block_event, orphan_from_shed},
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
-    tx_builder::{
-        build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
-        find_own_key_index, prepare_tx, sign_tx,
-    },
     types::{
-        AtomicWithdrawInfo, Error, Event, InscriptionId, InscriptionInfo, PublishResult,
-        PublishedTx, SequencerChannelView, SequencerCheckpoint, TurnNotification, WithdrawArg,
-        WithdrawInfo,
+        ChannelUpdate, Error, Event, FinalizedTx, SequencerChannelView, SequencerCheckpoint,
+        TurnNotification,
     },
-    zone_sequencer::{ActorRequest, InFlight, ZoneSequencer, build_checkpoint},
+    zone_sequencer::{ZoneSequencer, build_checkpoint},
 };
 use crate::adapter;
 
@@ -44,11 +25,9 @@ where
     Node: adapter::Node + Clone + Send + Sync + 'static,
 {
     /// Handle a single item from the blocks stream. `None` means the stream
-    /// disconnected; any other value is processed as a block event.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
+    /// disconnected; any other value is processed as a block event and
+    /// produces an [`Event::BlocksProcessed`] carrying the checkpoint, the
+    /// optional `ChannelUpdate`, and the block's finalized txs.
     pub(super) async fn handle_stream_item(
         &mut self,
         maybe_event: Option<ProcessedBlockEvent>,
@@ -56,11 +35,28 @@ where
         let Some(block_event) = maybe_event else {
             warn!(target: TARGET, "Blocks stream disconnected, will reconnect on next call");
             self.blocks_stream = None;
-            return self.signal_not_ready();
+            self.handle_stream_drop();
+            return None;
         };
 
-        let result = match handle_block_event(
-            &block_event,
+        if let Ok(result) = self.process_block_event(&block_event).await {
+            self.finish_block_processing(result)
+        } else {
+            self.handle_stream_drop();
+            None
+        }
+    }
+
+    /// Ingest one live block event into local state. On any per-block error
+    /// (block processing, channel-state refresh) the stream is dropped so
+    /// the reconnect path retries the same event, and `Err(())` is returned
+    /// — the caller maps that to `handle_stream_drop`.
+    async fn process_block_event(
+        &mut self,
+        block_event: &ProcessedBlockEvent,
+    ) -> Result<BlockEventResult, ()> {
+        let result = handle_block_event(
+            block_event,
             &mut self.state,
             &mut self.current_tip,
             &mut self.lib_slot,
@@ -68,53 +64,67 @@ where
             &self.node,
         )
         .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                error!(
-                    target: TARGET,
-                    "Block event processing failed; dropping stream so reconnect retries: {e}"
-                );
-                self.blocks_stream = None;
-                return self.signal_not_ready();
-            }
-        };
+        .map_err(|e| {
+            error!(
+                target: TARGET,
+                "Block event processing failed; dropping stream so reconnect retries: {e}"
+            );
+            self.blocks_stream = None;
+        })?;
 
         if let Some(slot_clock) = self.slot_clock.as_mut() {
             slot_clock.observe_slot(block_event.tip_slot);
         }
 
-        if let Err(err) = self.refresh_channel_state().await {
+        self.refresh_channel_state().await.map_err(|err| {
             error!(
                 target: TARGET,
                 "Failed to refresh channel state after block; dropping stream so reconnect retries: {err}"
             );
             self.blocks_stream = None;
-            return self.signal_not_ready();
-        }
+        })?;
 
+        Ok(result)
+    }
+
+    /// Convert a successfully-ingested block into the public event. Handles
+    /// the readiness-transition special case: when this is the block that
+    /// flips the sequencer to ready, emit `Ready` first and buffer the
+    /// `BlocksProcessed` for the next drive turn.
+    fn finish_block_processing(&mut self, result: BlockEventResult) -> Option<Event> {
+        // We just processed a live block end-to-end — cached `channel_state`,
+        // `current_tip`, and `lib_slot` reflect chain state up to this block,
+        // so callers may rely on them.
+        self.connected = true;
         let became_ready = self.maybe_signal_ready();
-        let mut events = self.apply_block_result(result);
+        let (channel_update, finalized) = self.apply_block_result(result);
 
-        self.enqueue_pending_submit();
+        // Failed posts (still `!posted`) get retried by the turn-change
+        // handler and the `resubmit_interval` self-heal tick. Don't queue
+        // unconditionally on every block.
+        //
+        // Refresh the channel view so `our_turn_to_write` re-evaluates
+        // against the just-advanced slot clock — the turn-change handler
+        // inside relies on this to fire `resubmit_pending` when our turn
+        // arrives.
+        self.publish_channel_view();
 
-        if let Some(checkpoint) = self.publish_checkpoint() {
-            events.push_back(Event::Checkpoint { checkpoint });
-        }
+        let block_event = self
+            .publish_checkpoint()
+            .map(|checkpoint| Event::BlocksProcessed {
+                checkpoint,
+                channel_update,
+                finalized,
+            });
 
         if became_ready {
-            // Preserve the existing public event contract: when readiness transitions,
-            // Ready is emitted first. Any block-derived events and any Published event
-            // produced by queue draining are buffered and emitted on subsequent
-            // next_event() calls.
-            self.buffered_events.extend(events);
-            return Some(self.emit_now(Event::Readiness { ready: true }));
+            if let Some(ev) = block_event {
+                self.buffered_events.push_back(ev);
+            }
+            return Some(self.emit_now(Event::Ready));
         }
 
-        let event = events.pop_front()?;
-        self.buffered_events.extend(events);
-
-        Some(event)
+        block_event
     }
 
     /// If not yet ready and startup backfill is complete, mark ready. Returns
@@ -126,7 +136,7 @@ where
 
         if self.backfill_from.is_none() && self.backfill_to.is_none() {
             debug!(target: TARGET, "Sequencer ready (backfill complete, first block processed)");
-            let _ = self.ready_tx.send(true);
+            self.ready_tx.send_replace(true);
             true
         } else {
             debug!(target: TARGET,
@@ -137,29 +147,24 @@ where
         }
     }
 
-    /// Flip readiness to `false` and, if that was an actual transition (was
-    /// previously `true`), surface [`Event::Readiness`] so the consumer's
-    /// drive loop learns about the disconnect on the event stream. Returns
-    /// `None` when readiness was already `false` (no spurious event).
-    fn signal_not_ready(&self) -> Option<Event> {
-        let mut transitioned = false;
-        self.ready_tx.send_if_modified(|current| {
-            if *current {
-                *current = false;
-                transitioned = true;
-                true
-            } else {
-                false
-            }
-        });
+    /// Bookkeeping for a stream drop: clears `connected` so operations that
+    /// depend on cached on-chain state (inscription turn check, atomic
+    /// withdraw nonce, channel config) fail-fast with `Error::Unavailable`
+    /// rather than building txs from stale state. Also clears turn-to-write
+    /// so consumers observing the watch don't see a stale "our turn" while
+    /// disconnected. Readiness stays latched true after the first cold-start
+    /// completion — in-memory state remains valid, and any tx invalidated
+    /// during the disconnect surfaces as an orphan on the next
+    /// `BlocksProcessed` once the stream resumes.
+    fn handle_stream_drop(&mut self) {
+        self.connected = false;
         self.publish_turn_to_write(false);
-        transitioned.then(|| self.emit_now(Event::Readiness { ready: false }))
     }
 
     /// Build the current checkpoint from internal state and publish it to the
     /// `checkpoint_tx` watch channel. Returns the built checkpoint (or `None`
     /// if state isn't initialised yet) so callers can reuse it to construct
-    /// the matching [`Event::Checkpoint`].
+    /// the matching [`Event::BlocksProcessed`].
     pub(super) fn publish_checkpoint(&self) -> Option<SequencerCheckpoint> {
         let checkpoint = self
             .state
@@ -237,7 +242,7 @@ where
         }
     }
 
-    pub(super) fn publish_channel_view(&self) {
+    pub(super) fn publish_channel_view(&mut self) {
         let view = self.channel_view();
         let turn_to_write = self.is_ready() && view.our_turn_to_write;
         // `send_replace` so the stored value stays current even with no
@@ -246,8 +251,9 @@ where
         self.publish_turn_to_write(turn_to_write);
     }
 
-    fn publish_turn_to_write(&self, turn_to_write: bool) {
+    fn publish_turn_to_write(&mut self, turn_to_write: bool) {
         let mut emitted: Option<TurnNotification> = None;
+        let mut became_our_turn = false;
 
         self.turn_to_write_tx.send_if_modified(|current| {
             let new = self.turn_notification(turn_to_write);
@@ -256,6 +262,7 @@ where
                 || current.ends_at_slot != new.ends_at_slot
                 || current.turn_to_write_slots != new.turn_to_write_slots;
 
+            became_our_turn = !current.our_turn_to_write && new.our_turn_to_write;
             *current = new.clone();
             if changed {
                 emitted = Some(new);
@@ -264,6 +271,12 @@ where
             changed
         });
 
+        if became_our_turn {
+            // Drain whatever accumulated while not-our-turn (turn-gated
+            // publishes were skipped) and refresh mempool for any posted
+            // tx that may have been evicted. Idempotent via mempool dedup.
+            self.resubmit_pending();
+        }
         if let Some(notification) = emitted {
             drop(self.event_tx.send(Event::TurnNotification { notification }));
         }
@@ -313,7 +326,10 @@ where
             .map(|idx| idx as u16)
     }
 
-    fn can_publish_inscription_now(&self) -> bool {
+    pub(super) fn can_publish_inscription_now(&self) -> bool {
+        if !self.connected {
+            return false;
+        }
         let Some(slot_clock) = &self.slot_clock else {
             return false;
         };
@@ -352,12 +368,23 @@ where
         turn_end_slot.saturating_sub(slot_to_u64(current_slot)) >= min_remaining
     }
 
-    /// Enqueue pending signed txs for posting. Channel inscriptions are posted
-    /// only while the round-robin gate is open. First-time publish posts are
-    /// bounded by `max_pending_publish_depth`; already-posted pending txs
-    /// may still be reposted for mempool recovery.
-    pub(super) fn enqueue_pending_submit(&mut self) {
-        if self.resubmit_active || !self.in_flight.is_empty() {
+    /// Re-post pending txs that aren't safe at the current tip by pushing
+    /// a `post_transaction` batch into `in_flight_resubmit`. The drive
+    /// loop's `next_event` arm drains it and marks successful posts;
+    /// failures stay unposted for the next tick. Inscription publishes
+    /// are gated by the round-robin window; first-time posts are bounded
+    /// by `max_pending_publish_depth`.
+    ///
+    /// Skips if a previous broad sweep is still in flight — guards against
+    /// the 30s timer + turn-change handler firing close together and
+    /// producing duplicate POSTs for the same pending set.
+    pub(super) fn resubmit_pending(&mut self) {
+        if self
+            .resubmit_active
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            debug!(target: TARGET, "Skipping resubmit; previous broad sweep still in flight");
+            self.publish_channel_view();
             return;
         }
 
@@ -366,142 +393,91 @@ where
             return;
         };
 
-        let Some(state) = self.state.as_ref() else {
-            self.publish_channel_view();
-            return;
+        let submit = {
+            let Some(state) = self.state.as_ref() else {
+                self.publish_channel_view();
+                return;
+            };
+
+            let can_publish_inscription = self.can_publish_inscription_now();
+            let pending = state.pending_txs(tip);
+            let max_depth = self.config.max_pending_publish_depth.max(1);
+
+            let mut submit = Vec::new();
+            let mut active_publish_count = state.posted_pending_publish_count();
+
+            for (id, signed_tx) in pending {
+                // Skip txs whose post is already in flight — guards the
+                // publish↔resubmit race that would otherwise re-queue the
+                // same tx while its first `post_batch` is still running.
+                if self.posting.contains(&id) {
+                    continue;
+                }
+
+                let pending_inscription_publish = state.pending_inscription(&id);
+                let is_inscription_publish = pending_inscription_publish.is_some();
+                if is_inscription_publish && !can_publish_inscription {
+                    continue;
+                }
+
+                let is_first_inscription_post =
+                    pending_inscription_publish.is_some_and(|pending| !pending.posted);
+                if is_inscription_publish
+                    && is_first_inscription_post
+                    && active_publish_count >= max_depth
+                {
+                    break;
+                }
+
+                if is_inscription_publish && is_first_inscription_post {
+                    active_publish_count = active_publish_count.saturating_add(1);
+                }
+                submit.push((id, signed_tx));
+            }
+            submit
         };
-
-        let can_publish_inscription = self.can_publish_inscription_now();
-        let pending = state.pending_txs(tip);
-        let mut submit = Vec::new();
-        let mut active_publish_count = state.posted_pending_publish_count();
-        let max_depth = self.config.max_pending_publish_depth.max(1);
-
-        for (id, signed_tx) in pending {
-            let pending_inscription_publish = state.pending_inscription(&id);
-            let is_inscription_publish = pending_inscription_publish.is_some();
-            if is_inscription_publish && !can_publish_inscription {
-                continue;
-            }
-
-            let is_first_inscription_post =
-                pending_inscription_publish.is_some_and(|pending| !pending.posted);
-            if is_inscription_publish
-                && is_first_inscription_post
-                && active_publish_count >= max_depth
-            {
-                break;
-            }
-
-            if is_inscription_publish && is_first_inscription_post {
-                active_publish_count = active_publish_count.saturating_add(1);
-            }
-            submit.push((id, signed_tx));
-        }
 
         if submit.is_empty() {
             self.publish_channel_view();
             return;
         }
 
-        debug!(target: TARGET, "Submitting {} pending transaction(s)", submit.len());
-        let node = self.node.clone();
-        self.resubmit_active = true;
-        self.in_flight.push(Box::pin(async move {
-            let mut results = Vec::with_capacity(submit.len());
-            for (id, tx) in submit {
-                let result = node
-                    .post_transaction(tx)
-                    .await
-                    .map_err(|err| err.to_string());
-                results.push((id, result));
-            }
-            InFlight::SubmittedBatch { results }
-        }));
-        self.publish_channel_view();
-    }
-
-    pub(super) fn handle_inflight(&mut self, event: InFlight) -> VecDeque<Event> {
-        self.resubmit_active = false;
-        let mut events = VecDeque::new();
-
-        match event {
-            InFlight::SubmittedBatch { results } => {
-                for (id, result) in results {
-                    if let Err(err) = result {
-                        warn!(target: TARGET, "Failed to submit pending transaction {}: {err}", hex::encode(id.0));
-                        continue;
-                    }
-
-                    let first_post = self
-                        .state
-                        .as_mut()
-                        .is_some_and(|state| state.mark_pending_inscription_posted(&id));
-                    if first_post && let Some(event) = self.published_event(id) {
-                        events.push_back(event);
-                    }
-                }
-            }
-        }
+        debug!(target: TARGET, "Queueing {} pending transaction(s) for resubmit", submit.len());
+        self.queue_resubmit_batch(submit);
 
         self.publish_channel_view();
-        events
-    }
-
-    fn published_event(&self, id: InscriptionId) -> Option<Event> {
-        let state = self.state.as_ref()?;
-        let pending = state.pending_inscription(&id)?;
-        let info = InscriptionInfo {
-            tx_hash: pending.tx_hash,
-            parent_msg: pending.parent_msg,
-            this_msg: pending.this_msg,
-            payload: pending.payload.clone(),
-        };
-        let tx = match pending.withdraws.clone() {
-            Some(withdraws) => PublishedTx::AtomicWithdraw(AtomicWithdrawInfo {
-                tx_hash: pending.tx_hash,
-                inscription: info,
-                withdraws,
-            }),
-            None => PublishedTx::Inscription(info),
-        };
-
-        Some(Event::Published { tx: Box::new(tx) })
     }
 
     /// Process a `BlockEventResult`: apply channel updates to local state and
-    /// return the resulting block-derived events in emission order.
-    ///
-    /// This does not broadcast or buffer events. The caller owns event-delivery
-    /// policy because block processing may be combined with readiness
-    /// transitions and queued publish draining.
-    fn apply_block_result(&mut self, result: BlockEventResult) -> VecDeque<Event> {
-        if let Some(update) = result.channel_update.as_ref() {
-            Self::log_channel_update(update);
+    /// return the resulting channel-update + finalized-tx delta. When the tip
+    /// did not change, returns an empty [`ChannelUpdate`] (both vecs empty) —
+    /// internally we still skip the orphan/adopted computation in that case
+    /// via `block_fetch::handle_block_event`'s `Option` short-circuit.
+    fn apply_block_result(
+        &mut self,
+        result: BlockEventResult,
+    ) -> (ChannelUpdate, Vec<FinalizedTx>) {
+        let channel_update = match result.channel_update {
+            Some(update) => {
+                Self::log_channel_update(&update);
 
-            let has_pending = self
-                .state
-                .as_ref()
-                .is_some_and(TxState::has_pending_inscriptions);
+                let has_pending = self
+                    .state
+                    .as_ref()
+                    .is_some_and(TxState::has_pending_inscriptions);
 
-            if !update.orphaned.is_empty() || !has_pending {
-                self.last_msg_id = update.new_channel_tip;
+                if !update.orphaned.is_empty() || !has_pending {
+                    self.last_msg_id = update.new_channel_tip;
+                }
+
+                self.build_channel_update(update)
             }
-        }
-
-        let mut events = VecDeque::new();
-
-        if let Some(update) = result.channel_update {
-            events.push_back(self.build_channel_event(update));
-        }
-
-        if !result.finalized_items.is_empty() {
-            events.push_back(Event::TxsFinalized {
-                items: result.finalized_items,
-            });
-        }
-
-        events
+            None => ChannelUpdate {
+                orphaned: Vec::new(),
+                adopted: Vec::new(),
+            },
+        };
+        (channel_update, result.finalized_items)
     }
 
     fn log_channel_update(update: &ChannelUpdateInfo) {
@@ -529,275 +505,26 @@ where
         }
     }
 
-    /// Build the `ChannelUpdate` event. `orphaned` contains only our own
-    /// pending whose original signed tx is permanently invalid — items the
-    /// SDK has given up on (parent slot claimed by a competing inscription,
-    /// or parent transitively off canonical). Block-delta orphans whose
+    /// Build the [`ChannelUpdate`]. `orphaned` contains only our own pending
+    /// whose original signed tx is permanently invalid — items the SDK has
+    /// given up on (parent slot claimed by a competing inscription, or
+    /// parent transitively off canonical). Block-delta orphans whose
     /// original tx is still valid (the SDK keeps retrying them) are not
-    /// surfaced. `adopted` is filtered against our internal outbox (by
-    /// `this_msg`) to exclude inscriptions this instance submitted —
-    /// consumers learn about those via `Event::Published`. This outbox match
-    /// works under shared-signing-key deployments: each sequencer instance
-    /// only tracks what it itself submitted.
-    fn build_channel_event(&mut self, u: ChannelUpdateInfo) -> Event {
+    /// surfaced. `adopted` is the raw block-delta — consumers dedupe by
+    /// `this_msg` against the outbox they built from their own publish-call
+    /// return values.
+    fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
         let orphaned = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
             _ => Vec::new(),
         };
-        let adopted: Vec<InscriptionInfo> = match self.state.as_ref() {
-            Some(s) => u
-                .adopted
-                .into_iter()
-                .filter(|i| !s.outbox_contains(i.this_msg))
-                .collect(),
-            None => u.adopted,
-        };
-
         let typed_orphaned = orphaned.into_iter().map(orphan_from_shed).collect();
 
-        Event::ChannelUpdate {
+        ChannelUpdate {
             orphaned: typed_orphaned,
-            adopted,
+            adopted: u.adopted,
         }
     }
-
-    pub(super) async fn handle_request(&mut self, request: ActorRequest) -> Option<Event> {
-        if !self.is_ready() {
-            reject_not_ready(request);
-            return None;
-        }
-
-        let event = match request {
-            ActorRequest::PublishMessage { data } => self.handle_publish(data),
-            ActorRequest::PrepareTx { ops, msg, reply } => {
-                let result = prepare_tx(
-                    ops,
-                    self.channel_id,
-                    &self.signing_key,
-                    msg,
-                    self.last_msg_id,
-                );
-                // do not update last_msg_id since tx is not submitted yet
-                drop(reply.send(Ok(result)));
-                None
-            }
-            ActorRequest::SignTx { tx_hash, reply } => {
-                let signature = sign_tx(tx_hash, &self.signing_key);
-                drop(reply.send(Ok(signature)));
-                None
-            }
-            ActorRequest::SubmitSignedTx { tx, msg_id, reply } => {
-                // Safe to unwrap — is_ready() guarantees state is initialized
-                let s = self.state.as_mut().unwrap();
-                let result = submit_signed_tx(s, tx, msg_id, &mut self.last_msg_id);
-                drop(reply.send(Ok(result)));
-                None
-            }
-            ActorRequest::ChannelConfig {
-                keys,
-                posting_timeframe,
-                posting_timeout,
-                configuration_threshold,
-                withdraw_threshold,
-                reply,
-            } => {
-                // Safe to unwrap — is_ready() guarantees state is initialized
-                let s = self.state.as_mut().unwrap();
-                let signed_tx = create_channel_config_tx(
-                    self.channel_id,
-                    &[&self.signing_key],
-                    keys,
-                    posting_timeframe,
-                    posting_timeout,
-                    configuration_threshold,
-                    withdraw_threshold,
-                );
-                s.submit_other(signed_tx.clone());
-                let result = PublishResult {
-                    inscription_id: signed_tx.mantle_tx.hash(),
-                };
-                drop(reply.send(Ok((signed_tx, result))));
-                self.publish_channel_view();
-                None
-            }
-            ActorRequest::PublishAtomicWithdraw {
-                inscribe,
-                withdraws,
-            } => match self
-                .handle_publish_atomic_withdraw(inscribe, withdraws)
-                .await
-            {
-                Ok(event) => event,
-                Err(e) => {
-                    warn!(target: TARGET, "publish_atomic_withdraw failed: {e}");
-                    None
-                }
-            },
-        };
-        // After handling a request, publish the latest checkpoint so callers
-        // observing via `handle.subscribe_checkpoint()` / `handle.checkpoint()`
-        // see post-request state without waiting for the next block. Cheap
-        // even on no-op requests (`PrepareTx` / `SignTx`).
-        drop(self.publish_checkpoint());
-        event
-    }
-
-    fn handle_publish(&mut self, data: Inscription) -> Option<Event> {
-        self.build_pending_publish(data);
-        self.enqueue_pending_submit();
-        None
-    }
-
-    fn build_pending_publish(&mut self, data: Inscription) -> InscriptionId {
-        let parent = {
-            let state = self.state.as_mut().unwrap();
-            if let Some(tip) = self.current_tip {
-                state.publish_parent(tip)
-            } else {
-                self.last_msg_id
-            }
-        };
-        let (signed_tx, new_msg_id) =
-            create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
-        let id = signed_tx.mantle_tx.hash();
-
-        debug!(target: TARGET,
-            "Prepared publish: payload={:?}, parent={}, msg_id={}, tx={}",
-            String::from_utf8_lossy(&data),
-            hex::encode(parent.as_ref()),
-            hex::encode(new_msg_id.as_ref()),
-            hex::encode(id.0),
-        );
-
-        let state = self.state.as_mut().unwrap();
-        state.submit_inscription(signed_tx, parent, new_msg_id, data);
-        self.last_msg_id = new_msg_id;
-
-        id
-    }
-
-    /// Build, sign, and submit an atomic inscription+withdraw bundle.
-    ///
-    /// Scoped to centralized single-sequencer channels — the sequencer's own
-    /// signature is the only signature used. Errors early if the channel's
-    /// `withdraw_threshold > 1`, which would require multi-sig orchestration
-    /// not supported by this API.
-    async fn handle_publish_atomic_withdraw(
-        &mut self,
-        inscribe: Inscription,
-        withdraws: Vec<WithdrawArg>,
-    ) -> Result<Option<Event>, Error> {
-        if withdraws.is_empty() {
-            return Err(Error::Network(
-                "publish_atomic_withdraw requires at least one withdraw".into(),
-            ));
-        }
-
-        // Query channel state for the current on-chain `withdraw_nonce` and
-        // this sequencer's accredited-key index. Done before borrowing
-        // `self.state` since `await` on a node method must not hold a `&Self`
-        // reference (forces `Self: Sync`).
-        let channel_state = self
-            .node
-            .channel_state(self.channel_id)
-            .await
-            .map_err(|e| Error::Network(format!("channel_state query failed: {e}")))?
-            .ok_or_else(|| {
-                Error::Network(format!(
-                    "publish_atomic_withdraw requires channel state for {:?}",
-                    self.channel_id
-                ))
-            })?;
-        if channel_state.withdraw_threshold > 1 {
-            return Err(Error::Network(format!(
-                "publish_atomic_withdraw requires withdraw_threshold == 1, got {}",
-                channel_state.withdraw_threshold
-            )));
-        }
-        let own_key_index = find_own_key_index(&channel_state, &self.signing_key)?;
-        let mut next_nonce = channel_state.withdrawal_nonce;
-
-        // Safe to unwrap — is_ready() guarantees state is initialized
-        let s = self.state.as_ref().unwrap();
-        let parent = if let Some(tip) = self.current_tip {
-            s.publish_parent(tip)
-        } else {
-            self.last_msg_id
-        };
-
-        let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
-        let mut withdraw_ops = Vec::with_capacity(withdraws.len());
-        for arg in withdraws {
-            let op = ChannelWithdrawOp {
-                channel_id: self.channel_id,
-                outputs: arg.outputs,
-                withdraw_nonce: next_nonce,
-            };
-            withdraw_ops.push(op.clone());
-            ops.push(Op::ChannelWithdraw(op));
-            next_nonce = next_nonce
-                .checked_add(1)
-                .ok_or_else(|| Error::Network("withdraw nonce overflow".into()))?;
-        }
-
-        let inscription_op = InscriptionOp {
-            channel_id: self.channel_id,
-            inscription: inscribe.clone(),
-            parent,
-            signer: self.signing_key.public_key(),
-        };
-        let msg_id = inscription_op.id();
-        ops.push(Op::ChannelInscribe(inscription_op));
-
-        let tx = MantleTx(Ops::try_from(ops).map_err(|e| {
-            Error::Network(format!("atomic withdraw bundle exceeds op limit: {e:?}"))
-        })?);
-        let own_sig = sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs = build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig)?;
-        let signed_tx = SignedMantleTx::new(tx, ops_proofs)
-            .map_err(|e| Error::Network(format!("signed tx assembly failed: {e:?}")))?;
-
-        // Safe to unwrap — is_ready() guarantees state is initialized
-        let s = self.state.as_mut().unwrap();
-
-        let tx_hash = signed_tx.mantle_tx.hash();
-        let withdraw_infos: Vec<WithdrawInfo> = withdraw_ops
-            .into_iter()
-            .map(|op| WithdrawInfo { tx_hash, op })
-            .collect();
-        s.submit_atomic_withdraw(signed_tx, parent, msg_id, inscribe, withdraw_infos);
-        self.last_msg_id = msg_id;
-
-        self.enqueue_pending_submit();
-        Ok(None)
-    }
-}
-
-fn reject_not_ready(request: ActorRequest) {
-    let err = || Error::Unavailable {
-        reason: "sequencer not yet ready",
-    };
-    match request {
-        ActorRequest::PublishMessage { .. } | ActorRequest::PublishAtomicWithdraw { .. } => {
-            warn!(target: TARGET, "Publish dropped: sequencer not yet ready");
-        }
-        ActorRequest::ChannelConfig { reply, .. } => drop(reply.send(Err(err()))),
-        ActorRequest::PrepareTx { reply, .. } => drop(reply.send(Err(err()))),
-        ActorRequest::SignTx { reply, .. } => drop(reply.send(Err(err()))),
-        ActorRequest::SubmitSignedTx { reply, .. } => drop(reply.send(Err(err()))),
-    }
-}
-
-fn submit_signed_tx(
-    state: &mut TxState,
-    tx: SignedMantleTx,
-    msg_id: MsgId,
-    last_msg_id: &mut MsgId,
-) -> PublishResult {
-    let id = tx.mantle_tx.hash();
-    state.submit_other(tx);
-    *last_msg_id = msg_id;
-    PublishResult { inscription_id: id }
 }
 
 #[cfg(test)]
@@ -811,11 +538,18 @@ mod tests {
     use lb_core::{
         header::{ContentId, HeaderId},
         mantle::{
-            Note, Utxo,
+            MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo,
+            encoding::Ops,
             ledger::{Inputs, Outputs},
             ops::{
                 OpProof,
-                channel::{ChannelId, config::Keys, deposit::DepositOp},
+                channel::{
+                    ChannelId, MsgId,
+                    config::Keys,
+                    deposit::DepositOp,
+                    inscribe::{Inscription, InscriptionOp},
+                    withdraw::ChannelWithdrawOp,
+                },
             },
         },
         proofs::leader_proof::Groth16LeaderProof,
@@ -827,10 +561,7 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::{
-        super::{
-            types::{FinalizedOp, FinalizedTx},
-            zone_sequencer::restore_pending_tx,
-        },
+        super::{types::FinalizedOp, zone_sequencer::restore_pending_tx},
         *,
     };
     use crate::{ZoneMessage, adapter::BoxStream};
@@ -867,14 +598,11 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
         let (node, mut posted_txs) = MockNode::new();
-        let (mut sequencer, handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
 
         // Drive sequencer until ready
         loop {
-            if matches!(
-                sequencer.next_event().await,
-                Some(Event::Readiness { ready: true })
-            ) {
+            if matches!(sequencer.next_event().await, Some(Event::Ready)) {
                 break;
             }
         }
@@ -887,18 +615,14 @@ mod tests {
             metadata: b"to Alice".into(),
         };
 
-        // Prepare a `MantleTx` — drive sequencer concurrently to process the request
-        let prepare_fut = handle.prepare_tx(
-            [Op::ChannelDeposit(deposit_op.clone())].into(),
-            b"Mint 10 to Alice".into(),
-        );
-        tokio::pin!(prepare_fut);
-        let (tx, msg_id, inscription_sig) = loop {
-            tokio::select! {
-                result = &mut prepare_fut => break result.unwrap(),
-                _ = sequencer.next_event() => {}
-            }
-        };
+        // Build a `MantleTx` via the handle
+        let (tx, msg_id, inscription_sig) = sequencer
+            .handle()
+            .prepare_tx(
+                [Op::ChannelDeposit(deposit_op.clone())].into(),
+                b"Mint 10 to Alice".into(),
+            )
+            .unwrap();
         assert_eq!(tx.ops().len(), 2);
         assert_eq!(&tx.ops()[0], &Op::ChannelDeposit(deposit_op));
         assert!(matches!(&tx.ops()[1], &Op::ChannelInscribe(_)));
@@ -916,18 +640,25 @@ mod tests {
         )
         .unwrap();
 
-        // Submit the signed tx — drive sequencer concurrently to process
-        let submit_fut = handle.submit_signed_tx(signed_tx.clone(), msg_id);
-        tokio::pin!(submit_fut);
-        let result = loop {
-            tokio::select! {
-                result = &mut submit_fut => break result.unwrap(),
-                _ = sequencer.next_event() => {}
-            }
-        };
-        assert_eq!(result.inscription_id, signed_tx.mantle_tx.hash());
-        assert_eq!(sequencer.checkpoint().unwrap().last_msg_id, msg_id);
-        assert_eq!(posted_txs.recv().await.unwrap(), signed_tx);
+        // Submit via the handle (mutates state + queues post to in_flight).
+        let (result, checkpoint) = sequencer
+            .handle()
+            .submit_signed_tx(signed_tx.clone(), msg_id)
+            .unwrap();
+        assert_eq!(result.inscription_id(), signed_tx.mantle_tx.hash());
+        assert_eq!(checkpoint.last_msg_id, msg_id);
+
+        // The post lives in `in_flight` until the drive loop polls it.
+        // Drive `next_event` concurrently with the recv so the post future
+        // runs and MockNode delivers to `posted_txs`.
+        tokio::select! {
+            tx = posted_txs.recv() => assert_eq!(tx.unwrap(), signed_tx),
+            () = async {
+                loop {
+                    drop(sequencer.next_event().await);
+                }
+            } => unreachable!(),
+        }
     }
 
     #[derive(Clone)]
@@ -1314,7 +1045,7 @@ mod tests {
 
     /// Cold start with a channel inscription at slot 0 (genesis): the
     /// sequencer must include that slot in its initial backfill and emit it
-    /// in `Event::TxsFinalized`. Regression guard for the off-by-one fix
+    /// in a `Finalized` state change. Regression guard for the off-by-one fix
     /// where `backfill_from = lib_slot + 1` silently skipped genesis.
     #[tokio::test]
     async fn cold_start_backfills_genesis_slot() {
@@ -1375,13 +1106,15 @@ mod tests {
             live_block,
             channel_state,
         };
-        let (mut sequencer, _handle) = ZoneSequencer::init(channel_id, sequencer_key, node, None);
+        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key, node, None);
 
         let mut finalized_items: Vec<FinalizedTx> = Vec::new();
         loop {
             match sequencer.next_event().await {
-                Some(Event::Readiness { ready: true }) => break,
-                Some(Event::TxsFinalized { items }) => finalized_items.extend(items),
+                Some(Event::Ready) => break,
+                Some(Event::BlocksProcessed { finalized, .. }) => {
+                    finalized_items.extend(finalized);
+                }
                 Some(_) | None => {}
             }
         }

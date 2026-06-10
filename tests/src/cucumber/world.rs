@@ -27,11 +27,7 @@ use lb_testing_framework::{
     BlockFeed, LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
 };
-use lb_zone_sdk::{
-    adapter::NodeHttpClient as ZoneNodeHttpClient,
-    indexer::ZoneIndexer,
-    sequencer::{Event, InscriptionId, SequencerCheckpoint, SequencerHandle},
-};
+use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
 use reqwest::Url;
 use testing_framework_core::scenario::{
     NodeControlCapability, PeerSelection, Scenario, StartedNode,
@@ -53,6 +49,7 @@ use crate::{
         },
         error::{StepError, StepResult},
         fee_reserve::ScenarioFeeState,
+        steps::manual_zone::runner::{Event, InscriptionId, SequencerCheckpoint, SequencerClient},
         utils::{make_builder, shared_host_bin_path},
         wallet::feed::{CucumberWalletBlockFeed, CucumberWalletBlockFeedError},
     },
@@ -153,14 +150,20 @@ pub struct ZoneSequencerIdentity {
 }
 
 pub struct ZoneSequencerRuntime {
-    handle: SequencerHandle<ZoneNodeHttpClient>,
+    client: SequencerClient<ZoneNodeHttpClient>,
     task: JoinHandle<()>,
-    events: Option<tokio::sync::mpsc::Receiver<Event>>,
-    checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
+    events: tokio::sync::broadcast::Receiver<Event>,
+    checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
     discarded_payloads: Option<ZoneDiscardedPayloads>,
+}
+
+impl ZoneSequencerRuntime {
+    fn abort_tasks(&self) {
+        self.task.abort();
+    }
 }
 
 #[derive(Clone, Copy, Default)]
@@ -476,11 +479,10 @@ impl ZoneState {
         &self,
         sequencer_alias: &str,
     ) -> Result<SequencerCheckpoint, StepError> {
-        if let Some(Some(checkpoint)) = self
+        if let Some(checkpoint) = self
             .runtimes
             .get(sequencer_alias)
-            .and_then(|runtime| runtime.checkpoint_rx.as_ref())
-            .map(|rx| rx.borrow().clone())
+            .and_then(|runtime| runtime.checkpoint_rx.borrow().clone())
         {
             return Ok(checkpoint);
         }
@@ -502,8 +504,7 @@ impl ZoneState {
     ) -> Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>> {
         self.runtimes
             .get(sequencer_alias)
-            .and_then(|runtime| runtime.checkpoint_rx.as_ref())
-            .cloned()
+            .map(|runtime| runtime.checkpoint_rx.clone())
     }
 
     pub fn resolve_checkpoint(
@@ -528,23 +529,23 @@ impl ZoneState {
     pub fn set_sequencer_runtime(
         &mut self,
         alias: String,
-        sequencer_handle: SequencerHandle<ZoneNodeHttpClient>,
+        sequencer_client: SequencerClient<ZoneNodeHttpClient>,
         sequencer_task: JoinHandle<()>,
-        sequencer_events: Option<tokio::sync::mpsc::Receiver<Event>>,
-        checkpoint_rx: Option<tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>>,
+        sequencer_events: tokio::sync::broadcast::Receiver<Event>,
+        checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
         ready_rx: tokio::sync::watch::Receiver<bool>,
         channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
         discarded_payloads: Option<ZoneDiscardedPayloads>,
     ) {
         if let Some(runtime) = self.runtimes.remove(&alias) {
-            runtime.task.abort();
+            runtime.abort_tasks();
         }
 
         self.runtimes.insert(
             alias,
             ZoneSequencerRuntime {
-                handle: sequencer_handle,
+                client: sequencer_client,
                 task: sequencer_task,
                 events: sequencer_events,
                 checkpoint_rx,
@@ -599,18 +600,18 @@ impl ZoneState {
             message: format!("Zone sequencer '{alias}' is not running"),
         })?;
 
-        runtime.task.abort();
+        runtime.abort_tasks();
 
         Ok(())
     }
 
-    pub fn sequencer_handle(
+    pub fn sequencer_client(
         &self,
         alias: &str,
-    ) -> Result<&SequencerHandle<ZoneNodeHttpClient>, StepError> {
+    ) -> Result<&SequencerClient<ZoneNodeHttpClient>, StepError> {
         self.runtimes
             .get(alias)
-            .map(|runtime| &runtime.handle)
+            .map(|runtime| &runtime.client)
             .ok_or(StepError::LogicalError {
                 message: format!("Zone sequencer '{alias}' is not running"),
             })
@@ -619,12 +620,12 @@ impl ZoneState {
     pub fn sequencer_events_mut(
         &mut self,
         alias: &str,
-    ) -> Result<&mut tokio::sync::mpsc::Receiver<Event>, StepError> {
+    ) -> Result<&mut tokio::sync::broadcast::Receiver<Event>, StepError> {
         self.runtimes
             .get_mut(alias)
-            .and_then(|runtime| runtime.events.as_mut())
+            .map(|runtime| &mut runtime.events)
             .ok_or(StepError::LogicalError {
-                message: format!("Zone sequencer '{alias}' does not expose events"),
+                message: format!("Zone sequencer '{alias}' is not running"),
             })
     }
 
@@ -691,7 +692,7 @@ impl ZoneState {
 
     fn abort_all_runtimes(&mut self) {
         for (_, runtime) in self.runtimes.drain() {
-            runtime.task.abort();
+            runtime.abort_tasks();
         }
     }
 
