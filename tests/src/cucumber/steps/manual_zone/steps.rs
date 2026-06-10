@@ -25,11 +25,11 @@ use super::{
     support::{
         PublishDeadline, balance_update_payload, collect_indexed_messages,
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
-        parse_balance_payload, publish_message_with_retry, wait_for_channel_view, wait_for_deposit,
+        parse_balance_payload, publish_message_with_retry, wait_for_adopted_payload,
+        wait_for_adopted_payloads, wait_for_channel_view, wait_for_deposit,
         wait_for_exact_indexed_payload_count, wait_for_finalized_deposit_via_sequencer,
         wait_for_finalized_withdraw_via_sequencer, wait_for_lib_advance,
-        wait_for_published_payload, wait_for_published_payloads, wait_for_transactions_finalized,
-        wait_for_turn_to_write, wait_for_withdraw,
+        wait_for_transactions_finalized, wait_for_turn_to_write, wait_for_withdraw,
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
@@ -268,10 +268,10 @@ async fn step_publish_single_zone_message_for_sequencer(
 ) -> StepResult {
     let _ = step;
     let payload = make_inscription(&data);
-    let handle = world.zone.sequencer_handle(&sequencer_alias)?.clone();
+    let handle = world.zone.sequencer_client(&sequencer_alias)?.clone();
 
     handle
-        .publish_message(payload.clone())
+        .publish(payload.clone())
         .await
         .map_err(|error| StepError::LogicalError {
             message: format!(
@@ -317,7 +317,7 @@ async fn step_publish_single_zone_message_for_sequencer_on_turn(
     data: String,
 ) -> StepResult {
     let payload = make_inscription(&data);
-    let handle = world.zone.sequencer_handle(&sequencer_alias)?.clone();
+    let handle = world.zone.sequencer_client(&sequencer_alias)?.clone();
     let mut view_rx = world.zone.sequencer_channel_view_rx(&sequencer_alias)?;
 
     wait_for_channel_view(&mut view_rx, Duration::from_mins(3), |view| {
@@ -328,17 +328,13 @@ async fn step_publish_single_zone_message_for_sequencer_on_turn(
     .await
     .map_err(|error| zone_step_error(step, &error))?;
 
-    let published = {
-        let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-        publish_message_with_retry(
-            &handle,
-            events,
-            &payload,
-            PublishDeadline::from_now(Duration::from_mins(3)),
-        )
-        .await
-        .map_err(|error| zone_step_error(step, &error))?
-    };
+    let published = publish_message_with_retry(
+        &handle,
+        &payload,
+        PublishDeadline::from_now(Duration::from_mins(3)),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
 
     remember_published_zone_message(world, &sequencer_alias, message_alias, payload, &published);
 
@@ -352,11 +348,11 @@ async fn step_publish_zone_messages_to_queue_for_sequencer(
     sequencer_alias: String,
 ) -> StepResult {
     let rows = zone_message_rows(step)?;
-    let handle = world.zone.sequencer_handle(&sequencer_alias)?.clone();
+    let handle = world.zone.sequencer_client(&sequencer_alias)?.clone();
 
     for (message_alias, payload) in rows {
         handle
-            .publish_message(payload.clone())
+            .publish(payload.clone())
             .await
             .map_err(|error| StepError::LogicalError {
                 message: format!(
@@ -892,7 +888,7 @@ async fn wait_for_sequencing_state(
     pending_publish_txs: usize,
     timeout_seconds: u64,
 ) -> StepResult {
-    let _handle = log_step_error(step, world.zone.sequencer_handle(sequencer_alias))?.clone();
+    let _handle = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?.clone();
     let mut view_rx = log_step_error(step, world.zone.sequencer_channel_view_rx(sequencer_alias))?;
 
     wait_for_channel_view(
@@ -957,7 +953,7 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
 
     let published = {
         let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-        wait_for_published_payloads(events, &payloads, Duration::from_secs(timeout_seconds))
+        wait_for_adopted_payloads(events, &payloads, Duration::from_secs(timeout_seconds))
             .await
             .map_err(|error| zone_step_error(step, &error))?
     };
@@ -1013,7 +1009,7 @@ async fn step_sequencer_publishes_immediately_while_in_turn(
     let payload = message_payload(world, &message_alias)?;
     let published = {
         let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-        wait_for_published_payload(events, &payload, Duration::from_secs(timeout_seconds))
+        wait_for_adopted_payload(events, &payload, Duration::from_secs(timeout_seconds))
             .await
             .map_err(|error| zone_step_error(step, &error))?
     };

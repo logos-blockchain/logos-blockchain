@@ -3,28 +3,33 @@ use core::{
     time::Duration,
 };
 
+use futures::FutureExt as _;
 use futures_timer::Delay;
 use libp2p::swarm::handler::FullyNegotiatedInbound;
 
 use crate::core::with_edge::behaviour::handler::{
     ConnectionEvent, ConnectionState, FailureReason, LOG_TARGET, PollResult, StateTrait,
-    dropped::DroppedState, ready_to_receive::ReadyToReceiveState,
+    TimerFuture, dropped::DroppedState, ready_to_receive::ReadyToReceiveState,
 };
 
 /// Entrypoint to start receiving a single message from an edge node.
 pub struct StartingState {
-    /// Time after which the connection will be closed. It is started as soon as
-    /// the inbound stream is negotiated.
-    connection_timeout: Duration,
+    /// Timer armed as soon as this state is entered. It bounds the *total* time
+    /// budget to receive a message: if it elapses before the inbound stream is
+    /// negotiated, the connection is closed so it cannot be leaked by a peer
+    /// that connects but never opens the substream. Once negotiated, the same
+    /// timer is handed over to `ReadyToReceive`, so the deadline is not reset
+    /// by the state transition.
+    timeout_timer: TimerFuture,
     /// The waker to wake when we need to force a new round of polling to
     /// progress the state machine.
     waker: Option<Waker>,
 }
 
 impl StartingState {
-    pub const fn new(connection_timeout: Duration) -> Self {
+    pub fn new(connection_timeout: Duration) -> Self {
         Self {
-            connection_timeout,
+            timeout_timer: Box::pin(Delay::new(connection_timeout)),
             waker: None,
         }
     }
@@ -48,12 +53,8 @@ impl StateTrait for StartingState {
                 ..
             }) => {
                 tracing::trace!(target: LOG_TARGET, "Transitioning from `Starting` to `ReadyToReceive`.");
-                ReadyToReceiveState::new(
-                    Box::pin(Delay::new(self.connection_timeout)),
-                    inbound_stream,
-                    self.waker.take(),
-                )
-                .into()
+                ReadyToReceiveState::new(self.timeout_timer, inbound_stream, self.waker.take())
+                    .into()
             }
             ConnectionEvent::ListenUpgradeError(error) => {
                 tracing::trace!(target: LOG_TARGET, "Inbound upgrade error: {error:?}");
@@ -67,8 +68,17 @@ impl StateTrait for StartingState {
         }
     }
 
-    // No state machine changes in here.
+    // If the timer elapses before the inbound stream is negotiated, moves the
+    // state machine to `DroppedState` with a timeout error so the connection is
+    // closed. Otherwise it just stores the waker and stays in `Starting`.
     fn poll(mut self, cx: &mut Context<'_>) -> PollResult<ConnectionState> {
+        if self.timeout_timer.poll_unpin(cx).is_ready() {
+            tracing::debug!(target: LOG_TARGET, "Timeout reached without negotiating the inbound stream. Closing the connection.");
+            return (
+                Poll::Pending,
+                DroppedState::new(Some(FailureReason::Timeout), Some(cx.waker().clone())).into(),
+            );
+        }
         self.waker = Some(cx.waker().clone());
         (Poll::Pending, self.into())
     }

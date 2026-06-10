@@ -245,11 +245,11 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     pub(crate) fn start_new_epoch(&mut self, new_epoch_info: (Membership<PeerId>, Epoch)) {
         let current_epoch_number = self.current_epoch_info.1;
 
-        // Close any connections that were still waiting to be upgraded. Without
-        // this, a late `FullyNegotiated` event from one of those handlers would
-        // violate the invariant that every upgraded connection is present in
-        // `connections_waiting_upgrade` at the moment `handle_negotiated_connection`
-        // runs.
+        // Close any connections that were still waiting to be upgraded: they
+        // belong to the epoch we are leaving and must not be carried over. A
+        // `FullyNegotiated` event for one of these may still be in flight from
+        // its handler; `handle_negotiated_connection` ignores such stale events
+        // since the entry is no longer pending here.
         let pending_upgrades = mem::take(&mut self.connections_waiting_upgrade);
         for (connection, _) in pending_upgrades {
             self.close_connection(connection);
@@ -471,19 +471,26 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
     /// connection and only for connections we chose to upgrade (i.e. handlers
     /// returned from the `Either::Left` branch of
     /// [`Self::handle_established_inbound_connection`]
-    /// [`Self::handle_established_outbound_connection`]), so the entry must be
-    /// present. Pending entries are proactively closed on epoch transition to
-    /// preserve this invariant.
+    /// [`Self::handle_established_outbound_connection`]).
     ///
-    /// # Panics
-    ///
-    /// If the specified connection is not present in the map of connections
-    /// waiting to be upgraded.
+    /// Handler -> behaviour events are delivered asynchronously, so a handler
+    /// can emit `FullyNegotiated` for a pending connection just before
+    /// [`Self::start_new_epoch`] clears `connections_waiting_upgrade`, with the
+    /// event delivered just after. In that case the entry is no longer pending
+    /// (the connection is being closed by the epoch transition), so we simply
+    /// ignore the stale event rather than acting on a connection that no longer
+    /// belongs to the current epoch.
     fn handle_negotiated_connection(&mut self, (peer_id, connection_id): (PeerId, ConnectionId)) {
-        let new_connection_peer_role = self
+        let Some(new_connection_peer_role) = self
             .connections_waiting_upgrade
             .remove(&(peer_id, connection_id))
-            .unwrap_or_else(|| panic!("Negotiated connection ({peer_id:?}, {connection_id:?}) not found in map of waiting connections."));
+        else {
+            tracing::debug!(
+                target: LOG_TARGET,
+                "Ignoring FullyNegotiated for connection ({peer_id:?}, {connection_id:?}) no longer pending upgrade (likely raced an epoch transition)."
+            );
+            return;
+        };
 
         if self.negotiated_peers.contains_key(&peer_id) {
             self.handle_negotiated_connection_for_existing_peer(

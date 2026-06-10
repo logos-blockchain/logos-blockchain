@@ -108,6 +108,7 @@ async fn submit_inscription_transaction(
         &wallet_name,
         transaction_intent,
         None,
+        None,
     )
     .await;
     let prepared = prepared.inspect_err(|e| {
@@ -120,6 +121,7 @@ async fn submit_inscription_transaction(
         &step.value,
         prepared,
         vec![inscription_signature_proof(tx_hash, &signing_key)],
+        None,
         None,
     )
     .await;

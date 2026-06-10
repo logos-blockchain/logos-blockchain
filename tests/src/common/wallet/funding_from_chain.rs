@@ -1,5 +1,7 @@
+use std::collections::HashSet;
+
 use lb_common_http_client::{ApiBlock, Error as HttpClientError};
-use lb_core::mantle::Utxo;
+use lb_core::mantle::{TxHash, Utxo};
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
 use thiserror::Error;
 
@@ -49,7 +51,8 @@ where
     let wallet_id = WalletId::from(account.label.clone());
     let tracked_wallet = TrackedWalletKeys::new(wallet_id.clone(), [account.public_key()]);
 
-    let wallet_utxos = wallet_utxos_from_chain(source, &[tracked_wallet], genesis_utxos).await?;
+    let (wallet_utxos, _, _) =
+        wallet_utxos_from_chain(source, &[tracked_wallet], genesis_utxos).await?;
     let available_utxos = wallet_utxos
         .get(wallet_id.as_str())
         .cloned()
@@ -62,7 +65,10 @@ pub async fn wallet_utxos_from_chain<BlockSource>(
     source: &mut BlockSource,
     tracked_wallets: &[TrackedWalletKeys],
     genesis_utxos: &[Utxo],
-) -> Result<WalletUtxos, WalletFundingSourceFromChainError<BlockSource::Error>>
+) -> Result<
+    (WalletUtxos, HashSet<TxHash>, usize),
+    WalletFundingSourceFromChainError<BlockSource::Error>,
+>
 where
     BlockSource: WalletChainSource,
 {
@@ -77,12 +83,19 @@ where
 
     chain_state.seed_genesis_utxos(genesis_utxos);
     tail_blocks.reverse();
+    let tail_blocks_len = tail_blocks.len();
 
+    let mut transactions_hashes = HashSet::new();
     for block in tail_blocks {
         apply_block_transactions(&mut chain_state, &block);
+        transactions_hashes.extend(block.transactions.iter().map(lb_node::Transaction::hash));
     }
 
-    Ok(chain_state.into_wallet_utxos())
+    Ok((
+        chain_state.into_wallet_utxos(),
+        transactions_hashes,
+        tail_blocks_len,
+    ))
 }
 
 async fn fetch_block<BlockSource>(

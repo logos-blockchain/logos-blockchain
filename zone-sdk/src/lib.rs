@@ -13,14 +13,14 @@
 //!
 //! # Quick start (sequencer)
 //!
-//! The sequencer is the actor: it drives the event stream and exposes sync
-//! state (snapshots + watch subscriptions). The handle is the cloneable async
-//! command surface for publish / sign / submit / channel-config. Subscribe
-//! to whatever state you'll observe from other tasks before spawning the
-//! drive task; the receivers stay valid afterwards.
+//! The sequencer is owned by a single drive task. State-mutating commands go
+//! through a borrowing handle obtained via
+//! [`sequencer::ZoneSequencer::handle`]; every publish returns the resulting
+//! [`sequencer::SequencerCheckpoint`] inline so the caller can persist outbox +
+//! checkpoint atomically. Read-only observers (other tasks) get cloneable watch
+//! receivers from the subscribe methods.
 //!
-//! ```no_run
-//! use futures::StreamExt as _;
+//! ```ignore
 //! use lb_zone_sdk::{
 //!     CommonHttpClient,
 //!     adapter::NodeHttpClient,
@@ -30,37 +30,24 @@
 //! # use lb_key_management_system_service::keys::Ed25519Key;
 //! # async fn run(channel_id: ChannelId, signing_key: Ed25519Key) {
 //! let node = NodeHttpClient::new(CommonHttpClient::new(None), "http://localhost:8080".parse().unwrap());
-//! let (sequencer, handle) = ZoneSequencer::init(channel_id, signing_key, node, None);
+//! let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, None);
 //!
-//! // Subscribe to anything you'll observe from other tasks. The first
-//! // `.changed().await` on each receiver returns immediately with the
-//! // current value; subsequent calls wait for the next change.
-//! let mut ready_rx      = sequencer.subscribe_ready();
-//! let mut checkpoint_rx = sequencer.subscribe_checkpoint();
+//! // Other tasks observe via cloneable watch receivers (subscribe before
+//! // moving the sequencer into its drive task).
+//! let _ready_rx      = sequencer.subscribe_ready();
+//! let _checkpoint_rx = sequencer.subscribe_checkpoint();
 //!
-//! // Drive task owns the sequencer:
-//! tokio::spawn(async move {
-//!     let mut sequencer = sequencer;
-//!     let mut events = sequencer.events();
-//!     while let Some(event) = events.next().await {
-//!         match event {
-//!             Event::Readiness { ready }                 => { let _ = ready; }
-//!             Event::TxsFinalized { items }              => { let _ = items; }
-//!             Event::ChannelUpdate { orphaned, adopted } => { let _ = (orphaned, adopted); }
-//!             Event::Published { tx }                    => { let _ = tx; }
-//!             Event::Checkpoint { checkpoint }           => { let _ = checkpoint; }
-//!             Event::TurnNotification { notification }   => { let _ = notification; }
-//!         }
+//! loop {
+//!     tokio::select! {
+//!         Some(ev) = sequencer.next_event() => match ev {
+//!             Event::BlocksProcessed { checkpoint, channel_update, finalized } => {
+//!                 let _ = (checkpoint, channel_update, finalized);
+//!             }
+//!             Event::Ready                             => {}
+//!             Event::TurnNotification { notification } => { let _ = notification; }
+//!         },
 //!     }
-//! });
-//!
-//! // From any other task: async commands via the handle, current state via
-//! // the receivers you subscribed to above.
-//! ready_rx.changed().await.ok();        // returns immediately with current value
-//! if *ready_rx.borrow() {
-//!     handle.publish_message(b"hello"[..].try_into().unwrap()).await.ok();
 //! }
-//! let _last_cp = checkpoint_rx.borrow().clone();
 //! # }
 //! ```
 //!

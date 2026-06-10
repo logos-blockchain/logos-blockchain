@@ -2,181 +2,243 @@ use lb_core::mantle::{
     MantleTx, SignedMantleTx, Transaction as _,
     channel::{SlotTimeframe, SlotTimeout},
     encoding::Ops,
-    ops::channel::{MsgId, config::Keys, inscribe::Inscription},
+    ops::{
+        Op,
+        channel::{
+            MsgId,
+            config::Keys,
+            inscribe::{Inscription, InscriptionOp},
+            withdraw::ChannelWithdrawOp,
+        },
+    },
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
-use tokio::sync::{broadcast, mpsc, watch};
-use tracing::{info, warn};
+use tracing::{debug, info};
 
 use super::{
     TARGET,
-    types::{Error, Event, PublishResult, WithdrawArg},
-    zone_sequencer::ActorRequest,
+    tx_builder::{
+        build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
+        find_own_key_index, prepare_tx, sign_tx,
+    },
+    types::{
+        AtomicWithdrawInfo, Error, InscriptionInfo, PendingTx, PublishResult, SequencerCheckpoint,
+        WithdrawArg, WithdrawInfo,
+    },
+    zone_sequencer::ZoneSequencer,
 };
 use crate::adapter;
 
-/// Handle for issuing commands to the sequencer from other tasks.
+/// Drive-loop handle for issuing commands to the sequencer.
 ///
-/// Cheap to clone; safe to share across tasks. Holds only the async command
-/// surface — sync queries and watch subscriptions live on
-/// [`ZoneSequencer`](super::ZoneSequencer) itself.
+/// Obtained via [`ZoneSequencer::handle`]. Because the handle holds a `&mut`
+/// borrow of the sequencer, only the drive task can hold one — the borrow
+/// checker enforces "drive-loop only," which removes any actor-vs-caller
+/// deadlock window and lets every state-mutating method return the resulting
+/// [`SequencerCheckpoint`] inline so the caller can persist outbox + checkpoint
+/// atomically.
 ///
-/// # Method shapes
-///
-/// - **Fire-and-forget** ([`Self::publish_message`],
-///   [`Self::publish_atomic_withdraw`]): queue a request via mpsc and return as
-///   soon as it's queued. Safe to call from anywhere, including inside the
-///   drive task.
-/// - **Reply-awaiting** ([`Self::prepare_tx`], [`Self::sign_tx`],
-///   [`Self::submit_signed_tx`], [`Self::channel_config`]): queue a request and
-///   await a reply from the drive loop. Calling these from *inside* the drive
-///   task will deadlock — the drive loop produces the reply, but it's blocked
-///   on you.
-#[derive(Clone)]
-pub struct SequencerHandle<Node> {
-    request_tx: mpsc::Sender<ActorRequest>,
-    node: Node,
-    event_tx: broadcast::Sender<Event>,
-    // Private: used only by the fire-and-forget publish methods for a
-    // cheap synchronous "is the sequencer ready?" precondition that avoids
-    // queueing a request the actor would reject. Not exposed.
-    ready_rx: watch::Receiver<bool>,
+/// Pattern:
+/// ```ignore
+/// loop {
+///     tokio::select! {
+///         Some(msg) = ui_rx.recv() => {
+///             let (result, cp) = sequencer.handle().publish(msg)?;
+///             db.tx(|t| { t.outbox(result); t.save_checkpoint(cp); });
+///         }
+///         Some(ev) = sequencer.next_event() => {
+///             handle_event(ev, &mut sequencer, &mut db).await;
+///         }
+///     }
+/// }
+/// ```
+pub struct SequencerHandle<'a, Node> {
+    sequencer: &'a mut ZoneSequencer<Node>,
 }
 
-impl<Node> SequencerHandle<Node> {
-    pub(super) const fn new(
-        request_tx: mpsc::Sender<ActorRequest>,
-        node: Node,
-        event_tx: broadcast::Sender<Event>,
-        ready_rx: watch::Receiver<bool>,
-    ) -> Self {
-        Self {
-            request_tx,
-            node,
-            event_tx,
-            ready_rx,
-        }
+impl<'a, Node> SequencerHandle<'a, Node> {
+    pub(super) const fn new(sequencer: &'a mut ZoneSequencer<Node>) -> Self {
+        Self { sequencer }
     }
 }
 
-impl<Node> SequencerHandle<Node>
+impl<Node> SequencerHandle<'_, Node>
 where
-    Node: adapter::Node + Sync,
+    Node: adapter::Node + Clone + Send + Sync + 'static,
 {
-    /// Publish an inscription to the zone's channel.
+    /// Enqueue an inscription onto the zone's channel.
     ///
-    /// Fire-and-forget: the inscription is queued for processing by the
-    /// sequencer's event loop. The result (inscription ID) is delivered via
-    /// [`Event::Published`] once the tx is created and posted to the network.
+    /// Synchronously mutates state to record the inscription as pending and
+    /// queues a `post_transaction` future onto the drive loop's in-flight
+    /// pool — the post itself happens asynchronously the next time the drive
+    /// loop polls `next_event`. The returned [`PublishResult`] reflects this
+    /// queued state, not a network acknowledgement; the tx may not have
+    /// reached the node yet. The accompanying [`SequencerCheckpoint`]
+    /// captures the new pending state so the caller can persist outbox +
+    /// checkpoint atomically.
     ///
-    /// Returns [`Error::Unavailable`] if the sequencer is not ready (cold
-    /// start before the first live block, or mid-reconnect after a stream
-    /// drop). Consumers driving the event loop can wait for the next
-    /// [`Event::Readiness`] with `ready: true` and retry. To wait
-    /// asynchronously, subscribe via
-    /// [`ZoneSequencer::subscribe_ready`](super::ZoneSequencer::subscribe_ready).
-    pub async fn publish_message(&self, data: Inscription) -> Result<(), Error> {
-        if !*self.ready_rx.borrow() {
-            return Err(Error::Unavailable {
-                reason: "sequencer not yet ready",
-            });
+    /// Returns [`Error::Unavailable`] only if cold-start backfill is still
+    /// in progress (the sequencer hasn't emitted [`super::Event::Ready`]
+    /// yet). After the first `Ready`, publishes are always accepted:
+    /// during a mid-life reconnect the tx is queued locally and posted
+    /// when the stream resumes (or when our turn comes back). To wait for
+    /// readiness asynchronously, subscribe via
+    /// [`ZoneSequencer::subscribe_ready`].
+    pub fn publish(
+        &mut self,
+        data: Inscription,
+    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+        self.ensure_ready()?;
+
+        let parent = self.compute_publish_parent();
+        let (signed_tx, new_msg_id) = create_inscribe_tx(
+            self.sequencer.channel_id,
+            &self.sequencer.signing_key,
+            data.clone(),
+            parent,
+        );
+        let id = signed_tx.mantle_tx.hash();
+
+        debug!(target: TARGET,
+            "Prepared publish: payload={:?}, parent={}, msg_id={}, tx={}",
+            String::from_utf8_lossy(&data),
+            hex::encode(parent.as_ref()),
+            hex::encode(new_msg_id.as_ref()),
+            hex::encode(id.0),
+        );
+
+        let info = InscriptionInfo {
+            tx_hash: id,
+            parent_msg: parent,
+            this_msg: new_msg_id,
+            payload: data.clone(),
+        };
+
+        // Safe to unwrap — ensure_ready() guarantees state is initialized.
+        let state = self.sequencer.state.as_mut().unwrap();
+        state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
+        self.sequencer.last_msg_id = new_msg_id;
+
+        // Queue the post into the in-flight batch pool only if it's our
+        // turn — otherwise the tx sits in `state.pending` as `!posted` and
+        // is drained by `submit_unposted_inscriptions` on the next turn-
+        // change. Failure of the immediate post is handled the same way:
+        // tx stays `!posted` and the `resubmit_interval` self-heal tick (or
+        // the next turn-change) re-queues.
+        if self.sequencer.can_publish_inscription_now() {
+            self.sequencer.queue_publish_post(id, signed_tx);
         }
-        self.request_tx
-            .send(ActorRequest::PublishMessage { data })
-            .await
-            .map_err(|_| Error::Unavailable {
-                reason: "sequencer channel closed",
-            })
+
+        self.sequencer.publish_channel_view();
+
+        let checkpoint = self
+            .sequencer
+            .publish_checkpoint()
+            .ok_or(Error::Unavailable {
+                reason: "checkpoint unavailable",
+            })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::Inscription(info),
+            },
+            checkpoint,
+        ))
     }
 
     /// Build a [`MantleTx`] for the given ops and an inscription message,
     /// without submitting it.
     ///
     /// The returned [`MantleTx`] should be signed by all parties and submitted
-    /// via [`Self::submit_signed_tx`].
-    pub async fn prepare_tx(
-        &self,
+    /// via [`Self::submit_signed_tx`]. Does not mutate sequencer state.
+    pub fn prepare_tx(
+        &mut self,
         ops: Ops,
         data: Inscription,
     ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::PrepareTx {
+        self.ensure_ready()?;
+        Ok(prepare_tx(
             ops,
-            msg: data,
-            reply: reply_tx,
-        };
-
-        self.request_tx
-            .send(request)
-            .await
-            .map_err(|_| Error::Unavailable {
-                reason: "actor channel closed",
-            })?;
-
-        reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "actor dropped reply",
-        })?
+            self.sequencer.channel_id,
+            &self.sequencer.signing_key,
+            data,
+            self.sequencer.last_msg_id,
+        ))
     }
 
     /// Sign a [`MantleTx`] using the sequencer's key.
     ///
-    /// Useful when signing tx built by other sequencers (e.g. withdraw).
-    pub async fn sign_tx(&self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::SignTx {
-            tx_hash: tx.hash(),
-            reply: reply_tx,
-        };
-
-        self.request_tx
-            .send(request)
-            .await
-            .map_err(|_| Error::Unavailable {
-                reason: "actor channel closed",
-            })?;
-
-        let result = reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "actor dropped reply",
-        })??;
-
-        Ok(result)
+    /// Useful when signing tx built by other sequencers (e.g. withdraw). Does
+    /// not mutate sequencer state.
+    pub fn sign_tx(&mut self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+        self.ensure_ready()?;
+        Ok(sign_tx(tx.hash(), &self.sequencer.signing_key))
     }
 
-    /// Submit a [`SignedMantleTx`] that is associated with a [`MsgId`]
-    pub async fn submit_signed_tx(
-        &self,
+    /// Enqueue a [`SignedMantleTx`] associated with a [`MsgId`] for posting.
+    ///
+    /// Synchronously records the tx as pending and queues a
+    /// `post_transaction` future onto the drive loop's in-flight pool — the
+    /// post runs the next time the drive loop polls `next_event`. The
+    /// returned [`PublishResult`] reflects the queued state, not a network
+    /// acknowledgement.
+    pub fn submit_signed_tx(
+        &mut self,
         tx: SignedMantleTx,
         msg_id: MsgId,
-    ) -> Result<PublishResult, Error> {
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::SubmitSignedTx {
-            tx: tx.clone(),
-            msg_id,
-            reply: reply_tx,
-        };
+    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+        self.ensure_ready()?;
 
-        self.request_tx
-            .send(request)
-            .await
-            .map_err(|_| Error::Unavailable {
-                reason: "actor channel closed",
-            })?;
-
-        let result = reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "actor dropped reply",
-        })??;
+        // Safe to unwrap — ensure_ready() guarantees state is initialized.
+        let state = self.sequencer.state.as_mut().unwrap();
+        let id = tx.mantle_tx.hash();
+        state.submit_other(tx.clone());
+        let parent_msg = self.sequencer.last_msg_id;
+        self.sequencer.last_msg_id = msg_id;
 
         info!(target: TARGET,
             "Submitted tx including inscription {:?}",
-            result.inscription_id
+            id
         );
 
-        // Post to network (best effort, will be resubmitted if needed)
-        if let Err(e) = self.node.post_transaction(tx).await {
-            warn!(target: TARGET, "Failed to post transaction: {e}");
-        }
+        // Locate the inscription payload in the tx ops to populate
+        // `PendingTx::Inscription`. Falls back to an empty payload if the
+        // tx carries no inscription op for our channel (e.g. a pure deposit
+        // or admin tx submitted via this entry point).
+        let payload = tx
+            .mantle_tx
+            .ops()
+            .iter()
+            .find_map(|op| match op {
+                Op::ChannelInscribe(i) if i.channel_id == self.sequencer.channel_id => {
+                    Some(i.inscription.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| Inscription::new_unchecked(Vec::new()));
 
-        Ok(result)
+        // Queue the post into the in-flight batch pool; the drive loop will
+        // drain it.
+        self.sequencer.queue_publish_post(id, tx);
+
+        let checkpoint = self
+            .sequencer
+            .publish_checkpoint()
+            .ok_or(Error::Unavailable {
+                reason: "checkpoint unavailable",
+            })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::Inscription(InscriptionInfo {
+                    tx_hash: id,
+                    parent_msg,
+                    this_msg: msg_id,
+                    payload,
+                }),
+            },
+            checkpoint,
+        ))
     }
 
     /// Update the channel's config.
@@ -189,106 +251,216 @@ where
     /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a
     /// single fixed sequencer at index 0.
     ///
-    /// Returns the publish result (with checkpoint) and a future that
-    /// resolves when the transaction is finalized.
-    pub async fn channel_config(
-        &self,
+    /// Enqueues the config tx onto the drive loop's in-flight pool — the
+    /// post runs the next time the drive loop polls `next_event`. The
+    /// returned [`PublishResult`] reflects the queued state, not a network
+    /// acknowledgement. The signed tx is also returned for callers that want
+    /// to observe finalization via the event stream.
+    pub fn channel_config(
+        &mut self,
         keys: Keys,
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         withdraw_threshold: u16,
-    ) -> Result<(PublishResult, impl Future<Output = Result<(), Error>>), Error> {
-        // Subscribe BEFORE submitting to avoid missing finalization events.
-        let mut event_rx = self.event_tx.subscribe();
+    ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
+        self.ensure_ready()?;
 
-        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
-        let request = ActorRequest::ChannelConfig {
+        let signed_tx = create_channel_config_tx(
+            self.sequencer.channel_id,
+            &[&self.sequencer.signing_key],
             keys,
             posting_timeframe,
             posting_timeout,
             configuration_threshold,
             withdraw_threshold,
-            reply: reply_tx,
-        };
-
-        self.request_tx
-            .send(request)
-            .await
-            .map_err(|_| Error::Unavailable {
-                reason: "sequencer channel closed",
-            })?;
-
-        let (signed_tx, publish_result) = reply_rx.await.map_err(|_| Error::Unavailable {
-            reason: "sequencer dropped reply",
-        })??;
-
+        );
         let tx_hash = signed_tx.mantle_tx.hash();
+
+        // Safe to unwrap — ensure_ready() guarantees state is initialized.
+        let state = self.sequencer.state.as_mut().unwrap();
+        state.submit_other(signed_tx.clone());
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
 
-        // Post to network (best effort, will be resubmitted if needed)
-        if let Err(e) = self.node.post_transaction(signed_tx).await {
-            warn!(target: TARGET, "Failed to post channel_config transaction: {e}");
-        }
+        // Queue the post into the in-flight batch pool; the drive loop will
+        // drain it.
+        self.sequencer
+            .queue_publish_post(tx_hash, signed_tx.clone());
 
-        let finalized = async move {
-            loop {
-                match event_rx.recv().await {
-                    Ok(Event::TxsFinalized { ref items })
-                        if items.iter().any(|i| i.tx_hash == tx_hash) =>
-                    {
-                        return Ok(());
-                    }
-                    Ok(_) => {}
-                    Err(_) => {
-                        return Err(Error::Unavailable {
-                            reason: "sequencer stopped",
-                        });
-                    }
-                }
-            }
-        };
+        self.sequencer.publish_channel_view();
 
-        Ok((publish_result, finalized))
+        let checkpoint = self
+            .sequencer
+            .publish_checkpoint()
+            .ok_or(Error::Unavailable {
+                reason: "checkpoint unavailable",
+            })?;
+
+        // Channel-config txs don't carry an inscription payload — surface
+        // them as an inscription entry with an empty payload, sharing the
+        // tx hash as `this_msg` so consumers can correlate via `tx_hash`.
+        Ok((
+            PublishResult {
+                tx: PendingTx::Inscription(InscriptionInfo {
+                    tx_hash,
+                    parent_msg: self.sequencer.last_msg_id,
+                    this_msg: self.sequencer.last_msg_id,
+                    payload: Inscription::new_unchecked(Vec::new()),
+                }),
+            },
+            checkpoint,
+            signed_tx,
+        ))
     }
 
     /// Publish an atomic inscription+withdraw bundle.
     ///
-    /// The SDK queries channel state to fill withdraw nonces and locate its
-    /// own accredited-key index, selects the inscription's `parent_msg` from
-    /// the current canonical tip, builds the bundled `MantleTx`, signs locally
-    /// with the sequencer's key, and submits. Scoped to single-sequencer
-    /// (centralized) channels — only the sequencer's own signature is used.
+    /// Reads the current on-chain `withdraw_nonce` and this sequencer's
+    /// accredited-key index from cached channel state (kept fresh by the
+    /// drive loop). Selects the inscription's `parent_msg` from the current
+    /// canonical tip, builds the bundled `MantleTx`, signs locally with the
+    /// sequencer's key, and submits. Scoped to single-sequencer (centralized)
+    /// channels — only the sequencer's own signature is used.
     ///
-    /// Fire-and-forget: the bundle is queued for processing by the sequencer's
-    /// event loop. The result is delivered via
-    /// [`Event::Published`] (`PublishedTx::AtomicWithdraw` variant). Safe to
-    /// call from the drive task itself (e.g. an orphan re-publish handler)
-    /// because it does not await an actor reply.
-    ///
-    /// Returns [`Error::Unavailable`] if the sequencer is not ready (cold
-    /// start before the first live block, or mid-reconnect after a stream
-    /// drop). Consumers driving the event loop can wait for the next
-    /// [`Event::Readiness`] with `ready: true` and retry.
-    pub async fn publish_atomic_withdraw(
-        &self,
+    /// Returns [`Error::Unavailable`] only if cold-start backfill is still
+    /// in progress (see [`Self::publish`] for the latched readiness
+    /// contract). After the first `Ready`, builds from cached channel state
+    /// even mid-life reconnect and queues locally; the post fires once the
+    /// stream resumes and our turn is current. Returns [`Error::Network`] if
+    /// the channel's `withdraw_threshold > 1` (which would require multi-sig
+    /// orchestration this API doesn't support).
+    pub fn publish_atomic_withdraw(
+        &mut self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
-    ) -> Result<(), Error> {
-        if !*self.ready_rx.borrow() {
+    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+        self.ensure_ready()?;
+
+        if withdraws.is_empty() {
+            return Err(Error::Network(
+                "publish_atomic_withdraw requires at least one withdraw".into(),
+            ));
+        }
+
+        // Use the cached channel state kept fresh by the drive loop — see
+        // `ensure_connected` for the staleness gate.
+        let channel_state = self.sequencer.channel_state.as_ref().ok_or_else(|| {
+            Error::Network(format!(
+                "publish_atomic_withdraw requires channel state for {:?}",
+                self.sequencer.channel_id
+            ))
+        })?;
+        if channel_state.withdraw_threshold > 1 {
+            return Err(Error::Network(format!(
+                "publish_atomic_withdraw requires withdraw_threshold == 1, got {}",
+                channel_state.withdraw_threshold
+            )));
+        }
+        let own_key_index = find_own_key_index(channel_state, &self.sequencer.signing_key)?;
+        let mut next_nonce = channel_state.withdrawal_nonce;
+
+        let parent = self.compute_publish_parent();
+
+        let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
+        let mut withdraw_ops = Vec::with_capacity(withdraws.len());
+        for arg in withdraws {
+            let op = ChannelWithdrawOp {
+                channel_id: self.sequencer.channel_id,
+                outputs: arg.outputs,
+                withdraw_nonce: next_nonce,
+            };
+            withdraw_ops.push(op.clone());
+            ops.push(Op::ChannelWithdraw(op));
+            next_nonce = next_nonce
+                .checked_add(1)
+                .ok_or_else(|| Error::Network("withdraw nonce overflow".into()))?;
+        }
+
+        let inscription_op = InscriptionOp {
+            channel_id: self.sequencer.channel_id,
+            inscription: inscribe.clone(),
+            parent,
+            signer: self.sequencer.signing_key.public_key(),
+        };
+        let msg_id = inscription_op.id();
+        ops.push(Op::ChannelInscribe(inscription_op));
+
+        let tx = MantleTx(Ops::try_from(ops).map_err(|e| {
+            Error::Network(format!("atomic withdraw bundle exceeds op limit: {e:?}"))
+        })?);
+        let own_sig = sign_tx(tx.hash(), &self.sequencer.signing_key);
+        let ops_proofs = build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig)?;
+        let signed_tx = SignedMantleTx::new(tx, ops_proofs)
+            .map_err(|e| Error::Network(format!("signed tx assembly failed: {e:?}")))?;
+
+        let tx_hash = signed_tx.mantle_tx.hash();
+        let withdraw_infos: Vec<WithdrawInfo> = withdraw_ops
+            .into_iter()
+            .map(|op| WithdrawInfo { tx_hash, op })
+            .collect();
+
+        // Safe to unwrap — ensure_ready() guarantees state is initialized.
+        let state = self.sequencer.state.as_mut().unwrap();
+        state.submit_atomic_withdraw(
+            signed_tx.clone(),
+            parent,
+            msg_id,
+            inscribe.clone(),
+            withdraw_infos.clone(),
+        );
+        self.sequencer.last_msg_id = msg_id;
+
+        // Queue the post only if it's our turn — see `publish` for the
+        // turn-gate rationale.
+        if self.sequencer.can_publish_inscription_now() {
+            self.sequencer.queue_publish_post(tx_hash, signed_tx);
+        }
+
+        self.sequencer.publish_channel_view();
+
+        let checkpoint = self
+            .sequencer
+            .publish_checkpoint()
+            .ok_or(Error::Unavailable {
+                reason: "checkpoint unavailable",
+            })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
+                    tx_hash,
+                    inscription: InscriptionInfo {
+                        tx_hash,
+                        parent_msg: parent,
+                        this_msg: msg_id,
+                        payload: inscribe,
+                    },
+                    withdraws: withdraw_infos,
+                }),
+            },
+            checkpoint,
+        ))
+    }
+
+    fn ensure_ready(&self) -> Result<(), Error> {
+        if !self.sequencer.is_ready() {
             return Err(Error::Unavailable {
                 reason: "sequencer not yet ready",
             });
         }
-        self.request_tx
-            .send(ActorRequest::PublishAtomicWithdraw {
-                inscribe,
-                withdraws,
-            })
-            .await
-            .map_err(|_| Error::Unavailable {
-                reason: "sequencer channel closed",
-            })
+        if self.sequencer.state.is_none() {
+            return Err(Error::Unavailable {
+                reason: "sequencer state not initialized",
+            });
+        }
+        Ok(())
+    }
+
+    fn compute_publish_parent(&self) -> MsgId {
+        let state = self.sequencer.state.as_ref().unwrap();
+        self.sequencer
+            .current_tip
+            .map_or(self.sequencer.last_msg_id, |tip| state.publish_parent(tip))
     }
 }
