@@ -229,7 +229,7 @@ impl From<EmbeddedInitArgs> for InitArgs {
                 .expect("Valid multiaddr structure"),
         );
 
-        init_args.cryptarchia.disable_ibd_peers = !args.ibd;
+        init_args.cryptarchia.ibd = args.ibd;
         init_args.api.addr = Some(args.http_addr);
         init_args.state.path.clone_from(&args.state_path);
 
