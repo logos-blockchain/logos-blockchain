@@ -225,23 +225,23 @@ impl<R: Rewards> ServiceState<R> {
     /// Garbage collect declarations that have been withdrawn or inactive,
     /// if the retention period has passed.
     fn gc_declarations(&mut self, epoch: Epoch, service_params: &ServiceParameters) {
-        self.declarations = self
+        let expired: Vec<DeclarationId> = self
             .declarations
             .iter()
-            .filter(|(_id, declaration)| {
-                let expired = Self::is_expired(declaration, epoch, service_params);
-                if expired {
-                    warn!(
-                        ?declaration,
-                        ?epoch,
-                        ?service_params,
-                        "removing an expired declaration"
-                    );
-                }
-                !expired
+            .filter(|(_id, declaration)| Self::is_expired(declaration, epoch, service_params))
+            .map(|(id, declaration)| {
+                warn!(
+                    ?declaration,
+                    ?epoch,
+                    ?service_params,
+                    "removing an expired declaration"
+                );
+                *id
             })
-            .map(|(id, declaration)| (*id, declaration.clone()))
             .collect();
+        for id in &expired {
+            self.declarations.remove_mut(id);
+        }
     }
 
     /// Returns true if the declaration has been withdrawn or inactive,
