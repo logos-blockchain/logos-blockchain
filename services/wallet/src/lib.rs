@@ -16,8 +16,9 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
-        gas::MainnetGasConstants,
+        AuthenticatedMantleTx, Note, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
+        Utxo, Value,
+        gas::{GasCost, GasOverflow, MainnetGasConstants},
         ledger::Inputs,
         ops::{
             channel::{ChannelId, config::ChannelConfigOp, inscribe::InscriptionOp},
@@ -105,11 +106,23 @@ pub enum WalletServiceError {
     #[error(transparent)]
     TxBuilder(#[from] TxBuilderError),
 
+    #[error(transparent)]
+    GasOverflow(#[from] GasOverflow),
+
+    #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
+    TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
+
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
+    #[error("No claimable voucher found")]
+    NoClaimableVoucher,
+
     #[error("Voucher not found for the nullifier")]
     VoucherNotFound(VoucherNullifier),
+
+    #[error("Claim reservation not found for voucher nullifier {0:?}")]
+    ClaimReservationNotFound(VoucherNullifier),
 
     #[error("Merkle path not found for voucher_cm: {0:?}")]
     VoucherMerklePathNotFound(VoucherCm),
@@ -134,6 +147,14 @@ pub enum WalletMsg {
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
+    },
+    BuildLeaderClaimTx {
+        tip: HeaderId,
+        rewards_root: RewardsRoot,
+        reward_amount: Value,
+        funding_pk: ZkPublicKey,
+        max_tx_fee: GasCost,
+        resp_tx: Sender<Result<TipResponse<SignedMantleTx>, WalletServiceError>>,
     },
     SignTx {
         tip: Option<HeaderId>,
@@ -187,10 +208,17 @@ pub struct UtxoWithKeyId {
     pub key_id: KeyId,
 }
 
-#[derive(Debug)]
-pub struct VoucherCommitmentAndNullifier {
-    pub commitment: VoucherCm,
-    pub nullifier: VoucherNullifier,
+struct BuiltLeaderClaimTx {
+    signed_tx: SignedMantleTx,
+    voucher_nullifier: VoucherNullifier,
+}
+
+struct LeaderClaimTxRequest {
+    tip: HeaderId,
+    rewards_root: RewardsRoot,
+    reward_amount: Value,
+    funding_pk: ZkPublicKey,
+    max_tx_fee: GasCost,
 }
 
 #[derive(Debug)]
@@ -212,6 +240,7 @@ impl WalletMsg {
             | Self::GetClaimableVoucher { tip, .. }
             | Self::GetClaimableVouchers { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
+            Self::BuildLeaderClaimTx { tip, .. } => Some(*tip),
             Self::SignTxWithEd25519 { .. }
             | Self::SignTxWithZk { .. }
             | Self::GenerateNewVoucherSecret { .. }
@@ -431,6 +460,16 @@ where
         }
     }
 
+    async fn ledger_state_at(
+        tip: HeaderId,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) -> Result<LedgerState, WalletServiceError> {
+        cryptarchia
+            .get_ledger_state(tip)
+            .await?
+            .ok_or(WalletServiceError::LedgerStateNotFound(tip))
+    }
+
     #[expect(clippy::too_many_lines, reason = "TODO: Address this at some point.")]
     #[expect(
         clippy::cognitive_complexity,
@@ -498,6 +537,51 @@ where
                     debug!(target: LOG_TARGET, "Failed to respond to FundTx");
                 }
             }
+            WalletMsg::BuildLeaderClaimTx {
+                tip,
+                rewards_root,
+                reward_amount,
+                funding_pk,
+                max_tx_fee,
+                resp_tx,
+            } => {
+                let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
+                    Ok(ledger) => ledger,
+                    Err(err) => {
+                        Self::send_err(resp_tx, err);
+                        return;
+                    }
+                };
+                let request = LeaderClaimTxRequest {
+                    tip,
+                    rewards_root,
+                    reward_amount,
+                    funding_pk,
+                    max_tx_fee,
+                };
+                let response = Self::build_leader_claim_tx(request, ledger, state, kms).await;
+
+                match response {
+                    Ok(built_tx) => {
+                        let voucher_nullifier = built_tx.voucher_nullifier;
+                        if resp_tx
+                            .send(Ok(TipResponse {
+                                tip,
+                                response: built_tx.signed_tx,
+                            }))
+                            .is_err()
+                        {
+                            state.release_claim_reservation(voucher_nullifier);
+                            debug!(target: LOG_TARGET, "Failed to respond to BuildLeaderClaimTx");
+                        }
+                    }
+                    Err(err) => {
+                        if resp_tx.send(Err(err)).is_err() {
+                            debug!(target: LOG_TARGET, "Failed to respond to BuildLeaderClaimTx");
+                        }
+                    }
+                }
+            }
             WalletMsg::SignTx {
                 tip,
                 tx_builder,
@@ -511,14 +595,10 @@ where
                     }
                 };
 
-                let ledger = match cryptarchia.get_ledger_state(tip).await {
-                    Ok(Some(ledger)) => ledger,
-                    Ok(None) => {
-                        Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
-                        return;
-                    }
+                let ledger = match Self::ledger_state_at(tip, cryptarchia).await {
+                    Ok(ledger) => ledger,
                     Err(err) => {
-                        Self::send_err(resp_tx, WalletServiceError::from(err));
+                        Self::send_err(resp_tx, err);
                         return;
                     }
                 };
@@ -922,10 +1002,12 @@ where
             }
         };
 
-        // Get the ledger state at the specified tip
-        let Ok(Some(ledger_state)) = cryptarchia.get_ledger_state(tip).await else {
-            Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(tip));
-            return;
+        let ledger_state = match Self::ledger_state_at(tip, cryptarchia).await {
+            Ok(ledger_state) => ledger_state,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
         };
 
         let wallet_state = match wallet.wallet_state_at(tip) {
@@ -1010,45 +1092,62 @@ where
             .into()
     }
 
-    async fn get_claimable_voucher(
-        tip: Option<HeaderId>,
-        resp_tx: Sender<
-            Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>,
-        >,
-        wallet: &Wallet,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    ) {
-        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
-            Ok(tip) => tip,
-            Err(err) => {
-                Self::send_err(resp_tx, err);
-                return;
-            }
-        };
+    async fn build_leader_claim_tx(
+        request: LeaderClaimTxRequest,
+        ledger: LedgerState,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<BuiltLeaderClaimTx, WalletServiceError> {
+        let voucher_nullifier = Self::reserve_claimable_voucher(state, request.tip)
+            .ok_or(WalletServiceError::NoClaimableVoucher)?;
 
-        let voucher = Self::find_claimable_voucher(wallet, tip);
-        if resp_tx
-            .send(Ok(TipResponse {
-                tip,
-                response: voucher,
-            }))
-            .is_err()
-        {
-            debug!(target: LOG_TARGET, "Failed to respond to GetClaimableVoucher");
+        let result =
+            Self::build_reserved_leader_claim_tx(request, voucher_nullifier, ledger, state, kms)
+                .await;
+
+        if result.is_err() {
+            state.release_claim_reservation(voucher_nullifier);
         }
+
+        result.map(|signed_tx| BuiltLeaderClaimTx {
+            signed_tx,
+            voucher_nullifier,
+        })
     }
 
-    fn find_claimable_voucher(
-        wallet: &Wallet,
+    fn reserve_claimable_voucher(
+        state: &mut ServiceState<'_>,
         tip: HeaderId,
-    ) -> Option<VoucherCommitmentAndNullifier> {
-        for (nf, cm) in wallet.voucher_commitments_and_nullifiers() {
-            if let Ok(Some(_)) = wallet.voucher_path_snapshot(tip, cm) {
-                return Some(VoucherCommitmentAndNullifier {
-                    commitment: *cm,
-                    nullifier: *nf,
-                });
-            }
+    ) -> Option<VoucherNullifier> {
+        let vouchers: Vec<_> = state
+            .wallet()
+            .voucher_commitments_and_nullifiers()
+            .map(|(nf, cm)| (*nf, *cm))
+            .collect();
+
+        let (available_voucher, pending_count) =
+            Self::find_available_voucher(&vouchers, state, tip);
+
+        if let Some((nf, cm)) = available_voucher {
+            state.reserve_claim(nf);
+
+            debug!(
+                target: LOG_TARGET,
+                ?nf,
+                ?cm,
+                "Found and reserved claimable voucher"
+            );
+
+            return Some(nf);
+        }
+
+        if pending_count > 0 {
+            debug!(
+                target: LOG_TARGET,
+                "No available vouchers: {}/{} are pending",
+                pending_count,
+                vouchers.len()
+            );
         }
         None
     }
@@ -1095,6 +1194,84 @@ where
                     })
             })
             .collect()
+    }
+
+    async fn build_reserved_leader_claim_tx(
+        request: LeaderClaimTxRequest,
+        voucher_nullifier: VoucherNullifier,
+        ledger: LedgerState,
+        state: &mut ServiceState<'_>,
+        kms: &KmsServiceApi<Kms, RuntimeServiceId>,
+    ) -> Result<SignedMantleTx, WalletServiceError> {
+        let tx_builder = MantleTxBuilder::new(ledger.tx_context())
+            .push_op(Op::LeaderClaim(LeaderClaimOp {
+                rewards_root: request.rewards_root,
+                voucher_nullifier,
+                pk: request.funding_pk,
+            }))?
+            .add_ledger_output(Note::new(request.reward_amount, request.funding_pk))?;
+
+        let excluded_notes = state.pending_claim_funding_notes();
+        let funded_tx_builder = state.wallet().fund_tx_excluding::<MainnetGasConstants>(
+            request.tip,
+            &tx_builder,
+            request.funding_pk,
+            [request.funding_pk],
+            excluded_notes,
+        )?;
+
+        let funding_notes = funded_tx_builder
+            .ledger_inputs()
+            .iter()
+            .map(Utxo::id)
+            .collect::<Vec<_>>();
+
+        state.reserve_claim_funding_notes(voucher_nullifier, funding_notes)?;
+
+        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
+        debug!(
+            target: LOG_TARGET,
+            net_balance = funded_tx_builder.net_balance(),
+            gas_cost = ?tx_fee,
+            reward_amount = request.reward_amount,
+            n_inputs = funded_tx_builder.ledger_inputs().len(),
+            "leader claim tx builder state after funding"
+        );
+
+        if tx_fee > request.max_tx_fee {
+            return Err(WalletServiceError::TxFeeExceedsMaxFee {
+                max_fee: request.max_tx_fee,
+                tx_fee,
+            });
+        }
+
+        Self::sign_tx(funded_tx_builder, request.tip, ledger, kms, state.wallet()).await
+    }
+
+    fn find_available_voucher(
+        vouchers: &[(VoucherNullifier, VoucherCm)],
+        state: &mut ServiceState<'_>,
+        tip: HeaderId,
+    ) -> (Option<(VoucherNullifier, VoucherCm)>, usize) {
+        let mut pending_count = 0;
+
+        for &(nf, cm) in vouchers {
+            if state.is_claim_pending(&nf) {
+                pending_count += 1;
+                trace!(
+                    target: LOG_TARGET,
+                    ?nf,
+                    "Skipping pending voucher"
+                );
+                continue;
+            }
+
+            if let Ok(Some(_)) = state.wallet().voucher_path_snapshot(tip, &cm) {
+                return (Some((nf, cm)), pending_count);
+            }
+        }
+
+        (None, pending_count)
     }
 
     async fn backfill_if_not_in_sync(
@@ -1206,21 +1383,27 @@ where
     ) {
         log_lib_update(lib_update);
 
+        let claimed_nullifiers = Self::collect_claimed_nullifiers_from_blocks(
+            lib_update.pruned_blocks.immutable_blocks.values(),
+            storage_adapter,
+        )
+        .await;
+
+        for nullifier in &claimed_nullifiers {
+            state.release_claim_reservation(*nullifier);
+        }
+
         state.advance_lib(
             lib_update.new_lib,
             lib_update.pruned_blocks.all(),
-            Self::collect_claimed_nullifiers_from_blocks(
-                lib_update.pruned_blocks.immutable_blocks.values(),
-                storage_adapter,
-            )
-            .await,
+            claimed_nullifiers,
         );
     }
 
     async fn collect_claimed_nullifiers_from_blocks(
         blocks: impl Iterator<Item = &HeaderId>,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
-    ) -> impl IntoIterator<Item = VoucherNullifier> {
+    ) -> Vec<VoucherNullifier> {
         let immutable_blocks: Vec<Block<Tx>> = futures::stream::iter(blocks)
             .filter_map(async |header_id| storage_adapter.get_block(header_id).await)
             .collect::<Vec<_>>()
@@ -1241,7 +1424,7 @@ where
                 }
             })
             .collect();
-        claimed_nullifiers.into_iter()
+        claimed_nullifiers
     }
 
     #[expect(
@@ -1346,14 +1529,10 @@ where
             }
         };
 
-        let ledger_state = match cryptarchia.get_ledger_state(block_id).await {
-            Ok(Some(ledger_state)) => ledger_state,
-            Ok(None) => {
-                Self::send_err(resp_tx, WalletServiceError::LedgerStateNotFound(block_id));
-                return;
-            }
+        let ledger_state = match Self::ledger_state_at(block_id, cryptarchia).await {
+            Ok(ledger_state) => ledger_state,
             Err(err) => {
-                Self::send_err(resp_tx, WalletServiceError::from(err));
+                Self::send_err(resp_tx, err);
                 return;
             }
         };
