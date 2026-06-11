@@ -37,8 +37,6 @@ pub struct MinStake {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
-    /// Minimum epochs during which a declaration cannot be withdrawn
-    pub lock_period: NumberOfEpochs,
     /// Maximum epochs during which an activity message must be sent
     pub inactivity_period: NumberOfEpochs,
     /// Epochs after which a declaration can be safely deleted by Garbage
@@ -248,7 +246,7 @@ pub struct ProviderInfo {
     pub zk_id: ZkPublicKey,
 }
 
-const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
+pub const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
 
 impl Declaration {
     #[must_use]
