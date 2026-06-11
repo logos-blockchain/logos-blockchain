@@ -281,36 +281,22 @@ impl From<LeaderPrivate> for lb_pol::PolWitnessInputsData {
 }
 
 mod proof_serde {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserializer, Serializer};
 
+    // Hex string for human-readable formats; a fixed-size 128-byte array
+    // (no length prefix) for binary formats like bincode.
     pub fn serialize<S>(item: &lb_pol::PoLProof, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let bytes = item.to_bytes();
-        if serializer.is_human_readable() {
-            serializer.serialize_str(&hex::encode(bytes))
-        } else {
-            serializer.serialize_bytes(&bytes)
-        }
+        lb_utils::serde::serialize_bytes_array(item.to_bytes(), serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<lb_pol::PoLProof, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let proof_array: [u8; 128] = if deserializer.is_human_readable() {
-            let s = String::deserialize(deserializer)?;
-            hex::decode(s)
-                .map_err(serde::de::Error::custom)?
-                .try_into()
-                .map_err(|_| serde::de::Error::custom("Expected exactly 128 bytes"))?
-        } else {
-            let proof_bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-            proof_bytes
-                .try_into()
-                .map_err(|_| serde::de::Error::custom("Expected exactly 128 bytes"))?
-        };
+        let proof_array = lb_utils::serde::deserialize_bytes_array::<128, D>(deserializer)?;
         Ok(lb_pol::PoLProof::from_bytes(&proof_array))
     }
 }

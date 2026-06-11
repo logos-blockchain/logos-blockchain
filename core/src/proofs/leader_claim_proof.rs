@@ -141,23 +141,22 @@ impl From<LeaderClaimPrivate> for lb_poc::PoCWitnessInputsData {
 }
 
 mod proof_serde {
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserializer, Serializer};
 
+    // Hex string for human-readable formats; a fixed-size 128-byte array
+    // (no length prefix) for binary formats like bincode.
     pub fn serialize<S>(item: &lb_poc::PoCProof, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        serializer.serialize_bytes(&item.to_bytes())
+        lb_utils::serde::serialize_bytes_array(item.to_bytes(), serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<lb_poc::PoCProof, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let proof_bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
-        let proof_array: [u8; 128] = proof_bytes
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("Expected exactly 128 bytes"))?;
+        let proof_array = lb_utils::serde::deserialize_bytes_array::<128, D>(deserializer)?;
         Ok(lb_poc::PoCProof::from_bytes(&proof_array))
     }
 }

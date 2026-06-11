@@ -218,7 +218,7 @@ mod tests {
             ),
             EpochRandomness::from(Fr::ZERO),
         );
-        assert_eq!(maybe_distance, Some(8.into()));
+        assert_eq!(maybe_distance, Some(6.into()));
 
         let maybe_distance = evaluation.evaluate(
             &BlendingToken::new(
