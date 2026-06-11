@@ -127,7 +127,7 @@ async fn test_handle_incoming_blend_message() {
 
     // Creates a new processor/scheduler/token_collector with the new epoch
     // number.
-    epoch += 1;
+    epoch = epoch.strict_add(1.into());
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut new_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
@@ -225,7 +225,7 @@ async fn test_handle_incoming_blend_message() {
 
     // Check that a message built with a future epoch cannot be
     // decapsulated by either processor, and thus not scheduled.
-    epoch += 1;
+    epoch = epoch.strict_add(1.into());
     let mut future_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -505,7 +505,7 @@ async fn test_handle_epoch_transition_expired() {
     // Create token collector and collect a token.
     let mut token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info))
         .rotate_epoch(&reward_epoch_info(&new_epoch_info(
-            epoch + 1,
+            epoch.strict_add(1.into()),
             membership.clone(),
             &settings,
         )))
@@ -592,7 +592,7 @@ async fn test_handle_epoch_event() {
         EpochEvent::NewEpoch(
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
-                    epoch: epoch + 1,
+                    epoch: epoch.strict_add(1.into()),
                     ..public_info.clone()
                 },
                 core_poq_generator: Some(()),
@@ -620,7 +620,7 @@ async fn test_handle_epoch_event() {
     else {
         panic!("expected Transitioning output");
     };
-    assert_eq!(new_crypto_processor.epoch(), epoch + 1);
+    assert_eq!(new_crypto_processor.epoch(), epoch.strict_add(1.into()));
     assert_eq!(old_crypto_processor.epoch(), epoch);
     assert_eq!(
         new_scheduler.release_delayer().unreleased_messages().len(),
@@ -630,7 +630,7 @@ async fn test_handle_epoch_event() {
         old_scheduler.release_delayer().unreleased_messages().len(),
         0
     );
-    assert_eq!(new_epoch_info.epoch, epoch + 1);
+    assert_eq!(new_epoch_info.epoch, epoch.strict_add(1.into()));
     assert!(
         new_recovery_checkpoint
             .clone()
@@ -661,8 +661,8 @@ async fn test_handle_epoch_event() {
     else {
         panic!("expected TransitionCompleted output");
     };
-    assert_eq!(current_crypto_processor.epoch(), epoch + 1);
-    assert_eq!(current_epoch_info.epoch, epoch + 1);
+    assert_eq!(current_crypto_processor.epoch(), epoch.strict_add(1.into()));
+    assert_eq!(current_epoch_info.epoch, epoch.strict_add(1.into()));
     assert!(
         new_recovery_checkpoint
             .clone()
@@ -683,7 +683,7 @@ async fn test_handle_epoch_event() {
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
                     membership: new_membership(minimal_network_size - 1).0,
-                    epoch: epoch + 2,
+                    epoch: epoch.strict_add(2.into()),
                     ..current_epoch_info.clone()
                 },
                 core_poq_generator: Some(()),
@@ -707,7 +707,7 @@ async fn test_handle_epoch_event() {
     else {
         panic!("expected Retiring output");
     };
-    assert_eq!(old_crypto_processor.epoch(), epoch + 1);
+    assert_eq!(old_crypto_processor.epoch(), epoch.strict_add(1.into()));
 }
 
 /// On an epoch change where the membership actually changes (and the local node
@@ -755,7 +755,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
 
     // The new epoch has a *different* (larger) membership; `new_membership`
     // always includes the local node, so the node stays part of the core.
-    let new_epoch = epoch + 1;
+    let new_epoch = epoch.strict_add(1.into());
     let new_membership = new_membership(minimal_network_size + 1).0;
     assert_ne!(
         new_membership.size(),
@@ -858,7 +858,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         EpochEvent::NewEpoch(
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
-                    epoch: epoch + 1,
+                    epoch: epoch.strict_add(1.into()),
                     ..public_info.clone()
                 },
                 core_poq_generator: Some(()),
@@ -942,7 +942,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
     // Handle a NewEpoch(Empty) event - empty membership triggers Retiring.
-    let empty_epoch = epoch + 1;
+    let empty_epoch = epoch.strict_add(1.into());
     let output = handle_epoch_event(
         EpochEvent::NewEpoch((empty_epoch, ZkHash::from(1)).into()),
         &settings,
@@ -1011,7 +1011,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         EpochEvent::NewEpoch(
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
-                    epoch: epoch + 1,
+                    epoch: epoch.strict_add(1.into()),
                     ..public_info.clone()
                 },
                 core_poq_generator: None,

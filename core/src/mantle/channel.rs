@@ -191,8 +191,9 @@ impl ChannelState {
     // Returns the new sequencer index and its starting slot
     #[must_use]
     pub fn round_robin(&self, block_slot: Slot) -> (u16, Slot) {
-        let elapsed_slot_since_last_tip = (block_slot - self.tip_slot).into_inner();
-        let tip_sequencer_duration = (block_slot - self.tip_sequencer_starting_slot).into_inner();
+        let elapsed_slot_since_last_tip = (block_slot.saturating_sub(self.tip_slot)).into_inner();
+        let tip_sequencer_duration =
+            (block_slot.saturating_sub(self.tip_sequencer_starting_slot)).into_inner();
         let posting_timeframe = u64::from(self.posting_timeframe.0);
         let posting_timeout = u64::from(self.posting_timeout.0);
         let num_sequencers = self.accredited_keys.len() as u64; // bounded by ChannelKeyIndex::MAX
@@ -213,10 +214,14 @@ impl ChannelState {
         // Starting slot mirrors the same priority.
         let starting_slot = sequencers_timed_out
             .filter(|_| is_timed_out)
-            .map(|sequencers_timed_out| self.tip_slot + sequencers_timed_out * posting_timeout)
+            .map(|sequencers_timed_out| {
+                self.tip_slot
+                    .strict_add((sequencers_timed_out * posting_timeout).into())
+            })
             .or_else(|| {
                 timeframe_elapsed.map(|timeframe_elapsed| {
-                    self.tip_sequencer_starting_slot + timeframe_elapsed * posting_timeframe
+                    self.tip_sequencer_starting_slot
+                        .strict_add((timeframe_elapsed * posting_timeframe).into())
                 })
             })
             .unwrap_or(self.tip_sequencer_starting_slot);

@@ -256,9 +256,12 @@ impl<R: Rewards> ServiceState<R> {
     ) -> bool {
         let withdrawn = declaration
             .withdrawn
-            .is_some_and(|withdrawn| withdrawn + config.retention_period < current_epoch);
-        let inactive =
-            declaration.active + config.inactivity_period + config.retention_period < current_epoch;
+            .is_some_and(|withdrawn| withdrawn.strict_add(config.retention_period) < current_epoch);
+        let inactive = declaration
+            .active
+            .strict_add(config.inactivity_period)
+            .strict_add(config.retention_period)
+            < current_epoch;
         withdrawn || inactive
     }
 
@@ -925,7 +928,9 @@ mod tests {
             .get(&ServiceType::BlendNetwork)
             .unwrap()
             .retention_period;
-        let target_epoch = withdrawn_epoch + retention_period + Epoch::new(1);
+        let target_epoch = withdrawn_epoch
+            .strict_add(retention_period)
+            .strict_add(Epoch::new(1));
         for epoch in (withdrawn_epoch.into_inner() + 1)..target_epoch.into_inner() {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             (sdp_ledger, _) = sdp_ledger

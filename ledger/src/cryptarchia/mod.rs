@@ -240,7 +240,7 @@ impl LedgerState {
                 next_epoch_state,
                 ..self
             })
-        } else if new_epoch == current_epoch + 1 {
+        } else if new_epoch == current_epoch.strict_add(1.into()) {
             // case 2)
 
             // infer new total stake
@@ -272,7 +272,7 @@ impl LedgerState {
                 ..next_epoch_state
             };
             let next_epoch_state = EpochState {
-                epoch: new_epoch + 1,
+                epoch: new_epoch.strict_add(1.into()),
                 nonce: self.nonce,
                 utxos: self.utxos.clone(),
                 total_stake,
@@ -345,7 +345,7 @@ impl LedgerState {
                 sdp: sdp.clone(),
             };
             let next_epoch_state = EpochState {
-                epoch: new_epoch + 1,
+                epoch: new_epoch.strict_add(1.into()),
                 nonce: self.nonce,
                 utxos: self.utxos.clone(),
                 total_stake,
@@ -1384,13 +1384,13 @@ pub mod tests {
         let ledger_state = ledger.state(&genesis).unwrap().clone();
         let ledger_config = ledger.config();
 
-        let slot = Slot::genesis() + 10;
+        let slot = Slot::genesis().strict_add(10.into());
         let ledger_state2 = ledger_state
             .cryptarchia_ledger
             .update_epoch_state::<HeaderId>(slot, &SdpLedger::new(0.into()), ledger_config)
             .expect("Ledger needs to move forward");
 
-        let slot2 = Slot::genesis() + 1;
+        let slot2 = Slot::genesis().strict_add(1.into());
         let update_epoch_err = ledger_state2
             .update_epoch_state::<HeaderId>(slot2, &SdpLedger::new(0.into()), ledger_config)
             .err();
@@ -1408,7 +1408,7 @@ pub mod tests {
         let utxo = utxo();
         let (ledger, genesis) = ledger(&[utxo], config());
         let ledger_state = ledger.state(&genesis).unwrap().clone().cryptarchia_ledger;
-        let slot = Slot::genesis() + 1;
+        let slot = Slot::genesis().strict_add(1.into());
         let proof = DummyProof {
             public: LeaderPublic {
                 aged_root: Fr::from(0u8), // Invalid aged root
@@ -1433,7 +1433,7 @@ pub mod tests {
         let utxo = utxo();
         let (ledger, genesis) = ledger(&[utxo], config());
         let ledger_state = ledger.state(&genesis).unwrap().clone().cryptarchia_ledger;
-        let slot = Slot::genesis() + 1;
+        let slot = Slot::genesis().strict_add(1.into());
         let proof = DummyProof {
             public: LeaderPublic {
                 aged_root: ledger_state.aged_utxos().root(),

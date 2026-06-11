@@ -48,7 +48,7 @@ use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
 
-const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
+const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 
 /// High-level SDP flow covered by this E2E:
 /// - submit a `Declare` transaction backed by an unused genesis note and wait

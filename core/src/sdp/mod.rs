@@ -3,7 +3,6 @@ pub mod locked_notes;
 
 use core::{
     fmt::{self, Display, Formatter},
-    ops::{Add, Sub},
     str::FromStr,
 };
 use std::{collections::HashMap, hash::Hash};
@@ -46,51 +45,7 @@ pub struct ServiceParameters {
     pub epoch: Epoch,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NumberOfEpochs(Epoch);
-
-impl NumberOfEpochs {
-    #[must_use]
-    pub const fn new(epoch: Epoch) -> Self {
-        Self(epoch)
-    }
-}
-
-impl From<u32> for NumberOfEpochs {
-    fn from(value: u32) -> Self {
-        Self(value.into())
-    }
-}
-
-impl From<NumberOfEpochs> for u32 {
-    fn from(this: NumberOfEpochs) -> Self {
-        this.0.into_inner()
-    }
-}
-
-impl Add for NumberOfEpochs {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl Add<NumberOfEpochs> for Epoch {
-    type Output = Self;
-
-    fn add(self, rhs: NumberOfEpochs) -> Self::Output {
-        self + rhs.0
-    }
-}
-
-impl Sub<NumberOfEpochs> for Epoch {
-    type Output = Self;
-
-    fn sub(self, rhs: NumberOfEpochs) -> Self::Output {
-        self - rhs.0
-    }
-}
+pub type NumberOfEpochs = Epoch;
 
 // TODO: Check spec for max limit once we migrate the SDP Declare op to use the
 // `NomEncode` and `NomDecode` traits.
@@ -258,7 +213,7 @@ impl Declaration {
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
             created: epoch,
-            active: epoch + SNAPSHOT_FINALIZATION_DELAY,
+            active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
             withdrawn: None,
             nonce: 0,
         }

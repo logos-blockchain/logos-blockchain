@@ -70,8 +70,10 @@ async fn sdp_blend_activity() {
     // Wait past the point where declarations would be removed if no activity
     // proofs were submitted.
     let initial_active_epoch = declarations.values().next().unwrap().active;
-    let survival_epochs =
-        initial_active_epoch + INACTIVITY_PERIOD + RETENTION_PERIOD + Epoch::new(2); // +1 margin
+    let survival_epochs = initial_active_epoch
+        .strict_add(INACTIVITY_PERIOD)
+        .strict_add(RETENTION_PERIOD)
+        .strict_add(Epoch::new(2)); // +1 margin
     let survival_slots = Slot::new(u64::from(u32::from(survival_epochs)) * slots_per_epoch);
     wait_for_nodes_tip_slot(
         &[&node0.client, &node1.client],
@@ -102,8 +104,8 @@ async fn sdp_blend_activity() {
     }
 }
 
-const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
-const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
+const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
+const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 
 fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);

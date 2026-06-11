@@ -24,8 +24,9 @@ pub fn slot_timer(
         Pin::new(Box::new(
             IntervalStream::new(SlotTimer::new(slot_config).slot_interval(datetime))
                 .zip(futures::stream::iter(std::iter::successors(
-                    Some(current_slot + 1), // +1 because `slot_interval` ticks from the next slot
-                    |&slot| Some(slot + 1),
+                    Some(current_slot.strict_add(1.into())), /* +1 because `slot_interval` ticks
+                                                              * from the next slot */
+                    |&slot| Some(slot.strict_add(1.into())),
                 )))
                 .map(move |(_, slot)| new_slot_tick(slot, epoch_config, base_period_length)),
         )),
@@ -61,12 +62,12 @@ mod tests {
         // The first tick will be the next slot after the timer was created.
         let tick = timer.next().await;
         // Slots should increment by 1 for each tick.
-        expected_slot = expected_slot + 1;
+        expected_slot = expected_slot.strict_add(1.into());
         assert_eq!(tick.unwrap().slot, expected_slot);
 
         // Slots should increment by 1 for each tick.
         let tick = timer.next().await;
-        expected_slot = expected_slot + 1;
+        expected_slot = expected_slot.strict_add(1.into());
         assert_eq!(tick.unwrap().slot, expected_slot);
     }
 

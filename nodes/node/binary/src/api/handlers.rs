@@ -109,7 +109,7 @@ fn next_blocks_stream_cursor(
     } else if boundary_slot >= slot_to {
         None
     } else {
-        Some(boundary_slot + 1)
+        Some(boundary_slot.strict_add(1.into()))
     }
 }
 

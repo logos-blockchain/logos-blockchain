@@ -110,7 +110,7 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
         // withdrawal because SDP uses the snapshot from `SNAPSHOT_FINALIZATION_DELAY`
         // epochs ago.
         // The note will be unlocked once the withdrawn epoch set here is reached.
-        declaration.withdrawn = Some(ctx.epoch + sdp::SNAPSHOT_FINALIZATION_DELAY);
+        declaration.withdrawn = Some(ctx.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
         declaration.nonce = self.nonce;
 
         debug!(

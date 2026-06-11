@@ -917,7 +917,7 @@ pub mod tests {
 
         let slot = Slot::genesis();
 
-        assert_eq!(slot + 10u64, Slot::from(10));
+        assert_eq!(slot.strict_add(10.into()), Slot::from(10));
 
         let id_100 = hash(&100u64);
 
@@ -1197,7 +1197,7 @@ pub mod tests {
             .receive_block(
                 hash(&100u64),
                 cryptarchia.lib(),
-                cryptarchia.lib_branch().slot + 1,
+                cryptarchia.lib_branch().slot.strict_add(1.into()),
             )
             .expect("test block to be applied successfully.");
         assert_eq!(cryptarchia.lib(), hash(&7u64));
@@ -1233,7 +1233,7 @@ pub mod tests {
             .receive_block(
                 hash(&102u64),
                 cryptarchia.tip(),
-                cryptarchia.tip_branch().slot + 1,
+                cryptarchia.tip_branch().slot.strict_add(1.into()),
             )
             .expect("test block to be applied successfully.");
         assert_eq!(cryptarchia.lib(), hash(&8u64));

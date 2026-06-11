@@ -53,8 +53,8 @@ const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
 const EPOCH_PERIOD_NONCE_BUFFER: u8 = 3;
 const EPOCH_PERIOD_NONCE_STABILIZATION: u8 = 4;
 
-const SDP_INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
-const SDP_RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
+const SDP_INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
+const SDP_RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 const SDP_EPOCH: Epoch = Epoch::new(0);
 const MIN_STAKE_THRESHOLD: u64 = 1;
 const MIN_STAKE_TIMESTAMP: u64 = 0;
