@@ -226,7 +226,7 @@ impl ChannelState {
 
 #[cfg(test)]
 mod tests {
-    use ark_ff::Field as _;
+    use ark_ff::AdditiveGroup as _;
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
     use lb_utils::blake_rng::RngCore as _;

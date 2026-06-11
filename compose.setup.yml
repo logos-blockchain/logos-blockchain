@@ -8,7 +8,7 @@ services:
     volumes:
       - node-data:/node-data
       - ./nodes/node/binary/src/config/deployment/devnet/deployment.yaml:/deployment.yaml
-      - ./testnet:/etc/logos-blockchain
+      - ./deployment:/etc/logos-blockchain
     ports:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/cleanup_node_data.sh
@@ -25,9 +25,9 @@ services:
       - ENV_TITLE_STRING=${ENV_TITLE_STRING}
     volumes:
       - node-data:/node-data
-      - ./testnet/nginx/setup.conf:/etc/nginx/nginx.conf
-      - ./testnet/nginx/static/setup:/usr/share/nginx/html_template
-      - ./testnet/scripts/setup_nginx.sh:/etc/setup_nginx.sh
+      - ./deployment/nginx/setup.conf:/etc/nginx/nginx.conf
+      - ./deployment/nginx/static/setup:/usr/share/nginx/html_template
+      - ./deployment/scripts/setup_nginx.sh:/etc/setup_nginx.sh
     entrypoint: /etc/setup_nginx.sh
 
 volumes:

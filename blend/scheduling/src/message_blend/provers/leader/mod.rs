@@ -103,7 +103,7 @@ fn create_proof_stream(
             // The logic on how these indices are mapped to each message + encapsulation
             // layer is out of scope for this component, and will be up to the
             // message scheduler.
-            let message_release_index = current_index % message_quota;
+            let message_release_index = current_index.checked_rem(message_quota).expect("Message quota cannot be zero.");
             let private_inputs = private_inputs.clone();
 
             // Spawn eagerly here (outside `async move`) so the blocking task starts as

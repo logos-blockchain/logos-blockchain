@@ -22,7 +22,7 @@ RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:$PATH"
 
 # Build Frontend Webapp
-WORKDIR /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp
+WORKDIR /logos-blockchain/deployment/l2-sequencer-archival-demo/webapp
 RUN bun install --frozen-lockfile
 RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run build
 
@@ -60,11 +60,11 @@ COPY --from=builder /logos-blockchain/target/release/logos-blockchain-demo-archi
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-faucet /usr/bin/
 
 # Copy Frontend & Nginx config
-COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
-COPY --from=builder /logos-blockchain/testnet/l2-sequencer-archival-demo/nginx/nginx.conf /etc/nginx/nginx.conf
+COPY --from=builder /logos-blockchain/deployment/l2-sequencer-archival-demo/webapp/dist /var/www/l2-demo
+COPY --from=builder /logos-blockchain/deployment/l2-sequencer-archival-demo/nginx/nginx.conf /etc/nginx/nginx.conf
 
 # Copy Scripts
-COPY --from=builder /logos-blockchain/testnet/scripts /opt/scripts
+COPY --from=builder /logos-blockchain/deployment/scripts /opt/scripts
 
 EXPOSE 80 3000 8000 8080 8090 9000 18080 60000
 ENTRYPOINT ["/usr/bin/logos-blockchain-node"]

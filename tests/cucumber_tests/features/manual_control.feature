@@ -81,6 +81,7 @@ Feature: Manual control of transactions
       | 9             | 3           | 1000000      |
       | 10            | 3           | 1000000      |
     And I have a cluster with capacity of 10 nodes
+    And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
 #    And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
     And I start nodes with wallet resources:

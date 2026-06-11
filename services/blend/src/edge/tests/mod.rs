@@ -6,7 +6,7 @@ use lb_blend::{
 };
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use tokio::time::sleep;
 
 use crate::{

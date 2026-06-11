@@ -4,6 +4,7 @@ pub mod withdraw;
 
 pub use active::{SDPActiveExecutionContext, SDPActiveValidationContext};
 pub use declare::{SDPDeclareExecutionContext, SDPDeclareValidationContext};
+use lb_cryptarchia_engine::Epoch;
 use thiserror::Error;
 pub use withdraw::{SDPWithdrawExecutionContext, SDPWithdrawValidationContext};
 
@@ -44,14 +45,19 @@ pub enum SdpError {
     #[error("Sdp declaration id not found: {0:?}")]
     DeclarationNotFound(DeclarationId),
     #[error(
+        "Sdp declaration has been already withdrawn: {declaration_id:?} at epoch {withdrawn_epoch:?}"
+    )]
+    DeclarationWithdrawn {
+        declaration_id: DeclarationId,
+        withdrawn_epoch: Epoch,
+    },
+    #[error(
         "Invalid sdp message nonce: message_nonce={message_nonce:?}, declaration_nonce={declaration_nonce:?}"
     )]
     InvalidNonce {
         message_nonce: Nonce,
         declaration_nonce: Nonce,
     },
-    #[error("Locked period did not pass yet")]
-    WithdrawalWhileLocked,
     #[error("Note is not locked: {0:?}")]
     NoteNotLocked(NoteId),
     #[error("Note {note_id:?} not locked for {service_type:?}")]

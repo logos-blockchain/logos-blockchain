@@ -17,7 +17,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{EpochConfig, Slot};
 use lb_cryptarchia_sync::HeaderId;
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     LedgerState,
@@ -245,7 +245,6 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
     service_params.insert(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
-            lock_period: 10.into(),
             inactivity_period: 1.into(),
             retention_period: 1.into(),
             epoch: 0.into(),

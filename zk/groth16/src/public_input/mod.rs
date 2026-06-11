@@ -55,7 +55,7 @@ impl From<&Input<Bn254>> for InputDeser {
 
 #[cfg(test)]
 mod tests {
-    use ark_ff::Field as _;
+    use ark_ff::AdditiveGroup as _;
 
     use super::*;
     #[test]

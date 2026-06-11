@@ -14,7 +14,10 @@ use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
 use crate::{
-    cli::keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
+    cli::{
+        config::migrate_0_1_2,
+        keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
+    },
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
         LogArgs, NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, update_api, update_blend,
@@ -115,6 +118,9 @@ pub enum Command {
     UpdateConfig(Box<UpdateArgs>),
     /// Migrates a new user config with generated keys
     MigrateConfig(Box<MigrateArgs>),
+    /// Migrates 0.1.2 config to a new user config
+    #[command(name = "migrate-from-0.1.2")]
+    Migrate0_1_2(Box<migrate_0_1_2::MigrateArgs>),
     /// Generate a new key of type.
     GenerateKey(Box<GenerateKeyArgs>),
     /// Add a key of type to a keystore.
@@ -223,7 +229,7 @@ impl From<EmbeddedInitArgs> for InitArgs {
                 .expect("Valid multiaddr structure"),
         );
 
-        init_args.cryptarchia.disable_ibd_peers = !args.ibd;
+        init_args.cryptarchia.ibd = args.ibd;
         init_args.api.addr = Some(args.http_addr);
         init_args.state.path.clone_from(&args.state_path);
 

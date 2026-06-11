@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use lb_groth16::{Field as _, Fr, fr_from_bytes_unchecked};
+use lb_groth16::{AdditiveGroup as _, Field as _, Fr, fr_from_bytes_unchecked};
 use lb_poseidon2::{Digest, Poseidon2Bn254Hasher};
 use lb_zksign::{ZkSignError, ZkSignPrivateKeysData, ZkSignWitnessInputs};
 use num_bigint::BigUint;

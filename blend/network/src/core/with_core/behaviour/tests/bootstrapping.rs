@@ -517,6 +517,7 @@ async fn concurrent_same_direction_connections_between_peers() {
     }
 }
 
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 #[test(tokio::test)]
 async fn concurrent_reverse_connections_between_peers() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);

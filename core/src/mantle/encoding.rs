@@ -749,7 +749,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
 mod tests {
     use std::{collections::HashMap, panic};
 
-    use ark_ff::Field as _;
+    use ark_ff::AdditiveGroup as _;
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::bounded_vec::BoundedError;

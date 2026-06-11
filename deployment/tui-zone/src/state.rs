@@ -16,15 +16,14 @@ use crate::message::Msg;
 /// - `adopted`: others' inscriptions on canonical, deduped by `msg_id` (reorgs
 ///   can re-adopt the same one), in first-sighting order.
 /// - `finalized`: all inscriptions below LIB, in canonical order — the SDK
-///   delivers `TxsFinalized` per block.
+///   delivers `finalized` on `BlocksProcessed`.
 ///
 /// Replay-idempotent: `on_adopted` and `on_finalized` dedup by `msg_id`, so
 /// resuming from a persisted state and re-receiving backfill is harmless.
 pub trait ZoneState: Send {
-    fn on_published(&mut self, info: &InscriptionInfo);
     fn on_adopted(&mut self, adopted: &[InscriptionInfo]);
     /// Remove our orphaned entry from `published`. Caller is expected to
-    /// auto-republish via `handle.publish_message`.
+    /// auto-republish via `sequencer.handle().publish`.
     fn on_orphaned(&mut self, msg_id: &MsgId);
     fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]);
 
@@ -47,11 +46,6 @@ pub struct InMemoryZoneState {
 }
 
 impl ZoneState for InMemoryZoneState {
-    fn on_published(&mut self, info: &InscriptionInfo) {
-        self.published
-            .push(Msg::from_payload(info.this_msg, &info.payload));
-    }
-
     fn on_adopted(&mut self, adopted: &[InscriptionInfo]) {
         for info in adopted {
             if !self.adopted.iter().any(|m| m.msg_id == info.this_msg) {
@@ -113,5 +107,12 @@ impl InMemoryZoneState {
 
     pub const fn channel_view(&self) -> Option<&SequencerChannelView> {
         self.channel_view.as_ref()
+    }
+
+    /// Record a tx we just published locally. Called at the publish-call
+    /// site so the local outbox stays in sync with what the SDK accepted.
+    pub fn on_published(&mut self, info: &InscriptionInfo) {
+        self.published
+            .push(Msg::from_payload(info.this_msg, &info.payload));
     }
 }

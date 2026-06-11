@@ -1,5 +1,7 @@
-use std::num::NonZero;
+use std::{collections::HashSet, num::NonZero};
 
+use hex::ToHex as _;
+use lb_core::{codec::SerializeOp as _, mantle::TxHash};
 use tracing::warn;
 
 pub use crate::cucumber::wallet::{
@@ -10,12 +12,13 @@ pub use crate::cucumber::wallet::{
     parse_wallet_output_state,
     submissions::{
         create_and_submit_transaction, create_and_submit_transaction_hashes,
-        wait_for_transactions_inclusion, wait_for_wallet_submitted_transactions_inclusion,
+        create_and_submit_transaction_hashes_with_utxo_cache, wait_for_transactions_inclusion,
+        wait_for_wallet_submitted_transactions_inclusion,
     },
     sync::{
         sync_available_utxos_for_all_wallets, sync_available_utxos_for_funding_wallets,
         sync_available_utxos_for_user_wallets, sync_available_utxos_for_wallet,
-        sync_available_utxos_for_wallets, sync_wallet_balance,
+        sync_wallet_available_state, sync_wallet_balance,
     },
 };
 pub(crate) use crate::cucumber::wallet::{
@@ -74,5 +77,30 @@ pub(crate) fn request_faucet_funds(
         world.faucet_task_handles = Some(vec![faucet_task.spawn(1000, step)]);
     }
 
+    Ok(())
+}
+
+pub(crate) fn tx_hash_hex(tx_hash: TxHash) -> String {
+    tx_hash
+        .to_bytes()
+        .expect("is valid")
+        .to_ascii_lowercase()
+        .encode_hex::<String>()
+}
+
+pub(crate) fn extend_tx_hash_set<'a, I>(
+    hash_set: &mut HashSet<TxHash>,
+    hashes: I,
+) -> Result<(), StepError>
+where
+    I: IntoIterator<Item = &'a TxHash>,
+{
+    for hash in hashes {
+        if !hash_set.insert(*hash) {
+            return Err(StepError::LogicalError {
+                message: format!("Duplicate transaction hash: {}", tx_hash_hex(*hash)),
+            });
+        }
+    }
     Ok(())
 }
