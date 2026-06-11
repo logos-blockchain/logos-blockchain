@@ -5,9 +5,9 @@
 # They are killed after `period * terminate-after`.
 
 [[profile.default.overrides]]
-filter = "not package(logos-blockchain-tests)"
+filter       = "not package(logos-blockchain-tests)"
 slow-timeout = { period = "30s", terminate-after = 3 }
 
 [[profile.default.overrides]]
-filter = "package(logos-blockchain-tests)"
+filter       = "package(logos-blockchain-tests)"
 slow-timeout = { period = "2m", terminate-after = 5 }
