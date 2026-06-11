@@ -216,7 +216,8 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
     {
         let item = self.items.try_remove(index)?;
 
-        self.storage_size = self.storage_size
+        self.storage_size = self
+            .storage_size
             .checked_sub(item.element_size())
             .ok_or(StorageBoundedError::SizeUnderflow)?;
 

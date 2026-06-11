@@ -198,6 +198,15 @@ impl<Tx> Block<Tx> {
             transactions,
         } = self;
 
+        if header.slot() == Slot::from(0) {
+            // Genesis block: skip non-genesis bounded + signature validation.
+            return Ok(Self {
+                header,
+                signature,
+                transactions,
+            });
+        }
+
         let txs = BlockTransactions::try_from_vec(transactions)?;
         Self::reconstruct(header, txs, signature)
     }
