@@ -19,7 +19,7 @@ use crate::{
         nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
-            channel::{ChannelId, Ed25519PublicKey},
+            channel::Ed25519PublicKey,
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
@@ -81,25 +81,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     let (input, ops) = NomOps::decode(input)?;
 
     Ok((input, MantleTx(ops)))
-}
-
-// ==============================================================================
-// Channel Operation Decoders
-// ==============================================================================
-
-pub(crate) fn decode_channel_withdraw(input: &[u8]) -> IResult<&[u8], ChannelWithdrawOp> {
-    // ChannelWithdraw = ChannelId Amount
-    let (input, channel_id) = map(decode_hash32, ChannelId::from).parse(input)?;
-    let (input, outputs) = decode_outputs(input)?;
-    let (input, withdraw_nonce) = decode_uint32(input)?;
-    Ok((
-        input,
-        ChannelWithdrawOp {
-            channel_id,
-            outputs,
-            withdraw_nonce,
-        },
-    ))
 }
 
 // ==============================================================================
@@ -449,7 +430,7 @@ use crate::{
     mantle::{
         Utxo,
         ledger::{Inputs, Outputs},
-        ops::channel::{ChannelKeyIndex, withdraw::ChannelWithdrawOp},
+        ops::channel::ChannelKeyIndex,
         tx::MantleTxGasContext,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
@@ -523,15 +504,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
             .into_iter()
             .chain(encode_uint16(signature.channel_key_index))
     }));
-    bytes
-}
-
-#[must_use]
-pub fn encode_channel_withdraw(op: &ChannelWithdrawOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(op.channel_id.as_ref()));
-    bytes.extend(encode_outputs(op.outputs.as_ref()));
-    bytes.extend(encode_uint32(op.withdraw_nonce));
     bytes
 }
 
@@ -760,9 +732,10 @@ mod tests {
         mantle::{
             Transaction as _,
             ops::channel::{
-                MsgId,
+                ChannelId, MsgId,
                 config::{ChannelConfigOp, Keys},
                 inscribe::{self, Inscription, InscriptionOp},
+                withdraw::ChannelWithdrawOp,
             },
             tx::GasPrices,
         },
