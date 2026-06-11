@@ -21,15 +21,6 @@ struct ZkNode<NodeId> {
 
 /// Build [`MembershipInfo`] from the SDP membership snapshot frozen into
 /// `epoch_state`.
-///
-/// This is the chain-derived replacement for the pushed [`ActiveProviders`]
-/// broadcast: the membership for the epoch is read from `EpochState.sdp`
-/// instead of a broadcast stream.
-///
-/// Note: this intentionally duplicates the node/Merkle construction in
-/// `Adapter::subscribe` rather than sharing it, because the broadcast
-/// `subscribe` path is slated for removal once this becomes the membership
-/// source; sharing logic with code about to be deleted is not worth the churn.
 #[must_use]
 pub fn membership_info_from_epoch_state<NodeId>(
     epoch_state: &EpochState,
