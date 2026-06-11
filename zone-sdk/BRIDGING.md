@@ -1,28 +1,28 @@
 # Bridging Assets Between the Bedrock and a Zone
 
-A user guide for zone developers using the Zone SDK to move tokens between the Logos blockchain (Bedrock) and a zone over a channel.
+A user guide for zone developers using the Zone SDK to move tokens between the Logos Blockchain and a zone over a channel.
 
 
 ## What "bridging" means here
 
-A **channel** on Bedrock is both the message log a zone publishes to *and* the bridge between Bedrock-side balances and zone-side balances. Each channel carries an on-chain balance ([`ChannelState.balance`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#22b261aa09df8289a3f281de4aa8fdca)); deposits credit it, withdrawals debit it. The zone is free to define how that balance maps to its own internal accounts — the SDK only surfaces the on-chain events.
+A **channel** on Logos Blockchain is both the message log a zone publishes to *and* the bridge between Logos Blockchain-side balances and Zone-side balances. Each channel carries an on-chain balance ([`ChannelState.balance`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#22b261aa09df8289a3f281de4aa8fdca)); deposits credit it, withdrawals debit it. The zone is free to define how that balance maps to its own internal accounts — the SDK only surfaces the on-chain events.
 
 Two directions:
 
-- **Deposit** (Bedrock -> zone). A user spends notes on Bedrock into a channel via [`ChannelDeposit`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#80b261aa09df8353814a81efe0fbd8ed). The channel balance grows. The zone sequencer observes the finalized deposit and credits the user inside the zone according to `ChannelDeposit.metadata`.
-- **Withdraw** (zone -> Bedrock). The zone sequencer submits [`ChannelWithdraw`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#cd7261aa09df83dd98b3017dafc37e87), signed by [`ChannelState.withdraw_threshold`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#22b261aa09df8289a3f281de4aa8fdca) accredited keys. The channel balance shrinks and fresh notes appear on Bedrock for the recipients named in `ChannelWithdraw.outputs`.
+- **Deposit** (Blockchain -> Zone). A user deposits notes into a channel via [`ChannelDeposit`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#80b261aa09df8353814a81efe0fbd8ed). The channel balance grows. The zone sequencer observes the finalized deposit and credits the user inside the zone according to `ChannelDeposit.metadata`.
+- **Withdraw** (Zone -> Blockchain). The zone sequencer submits [`ChannelWithdraw`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#cd7261aa09df83dd98b3017dafc37e87), signed by [`ChannelState.withdraw_threshold`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#22b261aa09df8289a3f281de4aa8fdca) accredited keys. The channel balance shrinks and fresh notes appear on the Blockchain for the recipients named in `ChannelWithdraw.outputs`.
 
 The Zone SDK is the client library for *zone-side* code: sequencers issuing withdraws and observing deposits, indexers replaying the message log.
 
 
 ## Creating a channel
 
-Channels are not deployed by a separate transaction; Bedrock creates them just-in-time on the first operation that references a previously unseen [`ChannelId`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#22b261aa09df8289a3f281de4aa8fdca). A `ChannelId` is a 32-byte identifier chosen by the creator. Whoever signs that first operation becomes the sole accredited key, and the channel starts with `configuration_threshold = 1`, `withdraw_threshold = 1`, and `balance = 0`.
+Channels are not deployed by a separate transaction; Channels are created just-in-time on the first operation that references a previously unseen [`ChannelId`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#22b261aa09df8289a3f281de4aa8fdca). A `ChannelId` is a 32-byte identifier chosen by the creator. Whoever signs that first operation becomes the sole accredited key, and the channel starts with `configuration_threshold = 1`, `withdraw_threshold = 1`, and `balance = 0`.
 
 From the Zone SDK, the steps are:
 
 1. Pick a `ChannelId` and a sequencer `Ed25519Key`.
-2. Initialize a `ZoneSequencer`, drive it (see the SDK overview for the drive-loop pattern and the `Event::Ready` readiness contract), and publish the first inscription (e.g., a zone genesis block) via `sequencer.handle().publish(..)`. Bedrock creates the channel automatically, naming this sequencer as the sole accredited key.
+2. Initialize a `ZoneSequencer`, drive it (see the SDK overview for the drive-loop pattern and the `Event::Ready` readiness contract), and publish the first inscription (e.g., a zone genesis block) via `sequencer.handle().publish(..)`. On the Blockchain, Channels are crated automatically, naming this sequencer as the sole accredited key.
 3. (Optional) Reconfigure the channel with a [`ChannelConfig`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#f96261aa09df826a93d801db1e432a54) operation by calling `sequencer.handle().channel_config(..)`.
 
 ```rust
@@ -87,11 +87,11 @@ if let Event::BlocksProcessed { finalized, .. } = event {
 ```
 
 
-## Withdrawals: zone -> Bedrock
+## Withdrawals: Zone -> Blockchain
 
-A withdraw is initiated *inside the zone* and lands on Bedrock as a signed [`ChannelWithdraw`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#5de261aa09df8321b05401f2e8dea08b) operation.
+A withdraw is initiated *inside the zone* and lands on-chain as a signed [`ChannelWithdraw`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#5de261aa09df8321b05401f2e8dea08b) operation.
 
-The `ChannelWithdraw` specifies the `channel`, the `outputs` (new notes to mint on Bedrock), and the `withdraw_nonce` that must match `ChannelState.withdrawal_nonce` for replay protection.
+The `ChannelWithdraw` specifies the `channel`, the `outputs` (new notes to mint on-chain), and the `withdraw_nonce` that must match `ChannelState.withdrawal_nonce` for replay protection.
 
 The `ChannelWithdrawOpProof` carries `ChannelState.withdraw_threshold` signatures from distinct `ChannelState.accredited_keys`.
 
@@ -213,7 +213,7 @@ The finalization pattern is the same as in the single-sig case: `Event::BlocksPr
 
 ### Reorgs and republish
 
-If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the SDK reports it via the `channel_update` field of `Event::BlocksProcessed`, with the abandoned tx in `channel_update.orphaned`. The original signed transaction is no longer valid. The consumer decides whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`s reconstructed from the bundle; the SDK refills the inscription parent and the `withdraw_nonce` from current Bedrock state.
+If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the SDK reports it via the `channel_update` field of `Event::BlocksProcessed`, with the abandoned tx in `channel_update.orphaned`. The original signed transaction is no longer valid. The consumer decides whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`s reconstructed from the bundle; the SDK refills the inscription parent and the `withdraw_nonce` from current on-chain state.
 
 ```rust
 use lb_zone_sdk::sequencer::{Event, OrphanedTx, WithdrawArg};
