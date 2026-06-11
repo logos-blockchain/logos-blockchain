@@ -11,7 +11,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::LowerBoundedVec;
+use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
 use nom::{IResult, Parser as _, bytes::complete::take};
 use serde::{Deserialize, Serialize};
@@ -97,9 +97,7 @@ pub struct InactivityPeriodTooSmall {
     pub period: NumberOfEpochs,
 }
 
-// TODO: Check spec for max limit once we migrate the SDP Declare op to use the
-// `NomEncode` and `NomDecode` traits.
-pub type Locators = LowerBoundedVec<Locator, 1>;
+pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
@@ -115,6 +113,16 @@ impl Locator {
     pub fn into_inner(self) -> Multiaddr {
         self.0
     }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl AsRef<Multiaddr> for Locator {
@@ -123,10 +131,22 @@ impl AsRef<Multiaddr> for Locator {
     }
 }
 
+impl AsRef<[u8]> for Locator {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
 impl TryFrom<Multiaddr> for Locator {
     type Error = String;
 
     fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
+        if value.len() > MAX_LOCATOR_BYTE_SIZE {
+            return Err(format!(
+                "Locator multiaddr must not exceed {MAX_LOCATOR_BYTE_SIZE} bytes: {value}"
+            ));
+        }
+
         for protocol in &value {
             match protocol {
                 Protocol::Ip4(ip) if ip.is_unspecified() => {
@@ -149,6 +169,30 @@ impl TryFrom<Multiaddr> for Locator {
         }
 
         Ok(Self(value))
+    }
+}
+
+impl TryFrom<Vec<u8>> for Locator {
+    type Error = String;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let multiaddr =
+            Multiaddr::try_from(value).map_err(|e| format!("Invalid multiaddr: {e}"))?;
+        Self::try_from(multiaddr)
+    }
+}
+
+impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for Locator {
+    type Error = String;
+
+    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
+        const {
+            assert!(
+                MAX <= MAX_LOCATOR_BYTE_SIZE,
+                "Max size cannot be more than the maximum allowed byte size for a locator."
+            );
+        }
+        Self::try_from(value.into_inner())
     }
 }
 
@@ -183,10 +227,38 @@ impl AsRef<str> for ServiceType {
     }
 }
 
-impl From<ServiceType> for usize {
-    fn from(service_type: ServiceType) -> Self {
-        match service_type {
-            ServiceType::BlendNetwork => 0,
+impl TryFrom<u8> for ServiceType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::BlendNetwork),
+            _ => Err(()),
+        }
+    }
+}
+
+impl AsRef<u8> for ServiceType {
+    fn as_ref(&self) -> &u8 {
+        match self {
+            Self::BlendNetwork => &0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod service_type_tests {
+    use strum::IntoEnumIterator as _;
+
+    use crate::sdp::ServiceType;
+
+    #[test]
+    // We make sure the two directions never diverge.
+    fn u8_roundtrip() {
+        for service_type in ServiceType::iter() {
+            let encoded: &u8 = service_type.as_ref();
+            let decoded = ServiceType::try_from(*encoded).expect("valid byte");
+            assert_eq!(service_type, decoded);
         }
     }
 }
@@ -327,6 +399,9 @@ impl TryFrom<Declarations> for Bytes {
         this.to_bytes()
     }
 }
+
+pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
+pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DeclarationMessage {

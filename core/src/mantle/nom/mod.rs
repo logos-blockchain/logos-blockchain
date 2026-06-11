@@ -1,4 +1,5 @@
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use nom::{
     IResult, Parser as _,
     combinator::{map, map_res},
@@ -12,6 +13,7 @@ pub mod array;
 pub use self::array::NomArray;
 pub mod bounded_vec;
 pub use self::bounded_vec::NomBoundedVec;
+pub mod sdp;
 
 pub trait NomEncode {
     // TODO: This could be turned into a `BoundedVec<u8, MAX_BYTES>` if we are
@@ -136,5 +138,19 @@ impl NomDecode for Ed25519PublicKey {
             Self::from_bytes(&key_bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
         })
         .parse(bytes)
+    }
+}
+
+impl NomEncode for ZkPublicKey {
+    fn encode(&self) -> Vec<u8> {
+        self.as_fr().encode()
+    }
+}
+
+impl NomDecode for ZkPublicKey {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        map_res(Fr::decode, Self::try_from).parse(bytes)
     }
 }

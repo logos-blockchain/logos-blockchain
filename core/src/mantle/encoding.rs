@@ -1,14 +1,13 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 use lb_utils::bounded_vec::UpperBoundedVec;
-use multiaddr::Multiaddr;
 use nom::{
     IResult, Parser as _,
     bytes::complete::take,
     combinator::{map, map_res},
     error::{Error, ErrorKind},
-    multi::{count, length_count},
-    number::complete::{le_u16, le_u32, le_u64, u8 as decode_u8},
+    multi::length_count,
+    number::complete::{le_u16, le_u32, le_u64},
     sequence::pair,
 };
 use time::OffsetDateTime;
@@ -19,14 +18,13 @@ use crate::{
         nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
-            channel::Ed25519PublicKey,
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
-            sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+            sdp::{SDPActiveOp, SDPWithdrawOp},
             transfer::TransferOp,
         },
     },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
-    sdp::{ActivityMetadata, DeclarationId, Locator, ProviderId, ServiceType},
+    sdp::{ActivityMetadata, DeclarationId},
 };
 
 // ==============================================================================
@@ -43,9 +41,6 @@ use crate::{
 // Maximum memory allocation size allowed for SDP activity metadata.
 // Protects against unbounded allocation in `decode_sdp_active`
 const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 230; // `ActiveMessage` has a fixed size of 230 bytes
-
-// Maximum byte size allowed for a locator in SDPDeclare operations.
-const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
@@ -86,54 +81,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
 // ==============================================================================
 // SDP Operation Decoders
 // ==============================================================================
-
-pub(crate) fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
-    // SDPDeclare = ServiceType LocatorCount *Locator ProviderId ZkId LockedNoteId
-    let (input, service_type_byte) = decode_byte(input)?;
-    let service_type = match service_type_byte {
-        0 => ServiceType::BlendNetwork,
-        _ => return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
-    };
-    let (input, locator_count) = decode_byte(input)?;
-
-    let (input, multiaddrs) = count(decode_locator, locator_count as usize).parse(input)?;
-    let locators = multiaddrs
-        .into_iter()
-        .map(Locator::try_from)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?
-        .try_into()
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
-    let (input, provider_key) = decode_ed25519_public_key(input)?;
-    let provider_id = ProviderId(provider_key);
-    let (input, zk_fr) = decode_field_element(input)?;
-    let zk_id = ZkPublicKey::new(zk_fr);
-    let (input, locked_note_id) = map(decode_field_element, NoteId).parse(input)?;
-
-    Ok((
-        input,
-        SDPDeclareOp {
-            service_type,
-            locators,
-            provider_id,
-            zk_id,
-            locked_note_id,
-        },
-    ))
-}
-
-fn decode_locator(input: &[u8]) -> IResult<&[u8], Multiaddr> {
-    // Locator = 2Byte *BYTE
-    let (input, len_bytes) = take(2usize).parse(input)?;
-    let len = u16::from_le_bytes([len_bytes[0], len_bytes[1]]) as usize;
-    if len > LOCATOR_BYTES_SIZE_LIMIT {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::LengthValue)));
-    }
-    map_res(take(len), |bytes: &[u8]| {
-        Multiaddr::try_from(bytes.to_vec()).map_err(|_| Error::new(bytes, ErrorKind::Fail))
-    })
-    .parse(input)
-}
 
 pub(crate) fn decode_sdp_withdraw(input: &[u8]) -> IResult<&[u8], SDPWithdrawOp> {
     // SDPWithdraw = DeclarationId Nonce LockedNoteId
@@ -308,18 +255,6 @@ pub(crate) fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> 
     map(decode_field_element, ZkPublicKey::new).parse(input)
 }
 
-const ED25519_PK_BYTES: usize = 32;
-pub(crate) fn decode_ed25519_public_key(input: &[u8]) -> IResult<&[u8], Ed25519PublicKey> {
-    // Ed25519PublicKey = 32BYTE
-    map_res(
-        decode_array::<ED25519_PK_BYTES>,
-        |bytes: [u8; ED25519_PK_BYTES]| {
-            Ed25519PublicKey::from_bytes(&bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
-        },
-    )
-    .parse(input)
-}
-
 const ED25519_SIG_BYTES: usize = 64;
 fn decode_ed25519_signature(input: &[u8]) -> IResult<&[u8], Ed25519Signature> {
     // Ed25519Signature = 64BYTE
@@ -403,11 +338,6 @@ pub(crate) fn decode_uint64(input: &[u8]) -> IResult<&[u8], u64> {
     le_u64(input)
 }
 
-fn decode_byte(input: &[u8]) -> IResult<&[u8], u8> {
-    // Byte = OCTET
-    decode_u8(input)
-}
-
 pub(crate) fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTime> {
     // Timestamp = UINT64
     map_res(decode_uint64, |ts| {
@@ -478,10 +408,6 @@ fn encode_ed25519_signature(sig: &Ed25519Signature) -> Vec<u8> {
     sig.to_bytes().to_vec()
 }
 
-pub(crate) fn encode_ed25519_public_key(key: &Ed25519PublicKey) -> Vec<u8> {
-    key.to_bytes().to_vec()
-}
-
 fn encode_zk_signature(sig: &ZkSignature) -> Vec<u8> {
     // ZkSignature wraps ZkSignProof which is CompressedGroth16Proof
     encode_groth16_proof(sig.as_proof())
@@ -504,48 +430,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
             .into_iter()
             .chain(encode_uint16(signature.channel_key_index))
     }));
-    bytes
-}
-
-/// Encode SDP operations
-fn encode_locator(locator: &Multiaddr) -> Vec<u8> {
-    let locator_bytes = locator.to_vec();
-    assert!(
-        locator_bytes.len() <= LOCATOR_BYTES_SIZE_LIMIT,
-        "Fatal error in 'encode_locator' - {} locator bytes clipped to \
-            {LOCATOR_BYTES_SIZE_LIMIT}",
-        locator_bytes.len()
-    );
-    let mut bytes = Vec::new();
-    bytes.extend((locator_bytes.len() as u16).to_le_bytes());
-    bytes.extend(locator_bytes);
-    bytes
-}
-
-pub(crate) fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
-    assert!(
-        u8::try_from(op.locators.len()).is_ok(),
-        "Fatal error in 'encode_sdp_declare' - {} locators clipped to {}",
-        op.locators.len(),
-        u8::MAX
-    );
-    let mut bytes = Vec::new();
-    // ServiceType
-    let service_type_byte = match op.service_type {
-        ServiceType::BlendNetwork => 0u8,
-    };
-    bytes.extend(encode_byte(service_type_byte));
-    // Locators
-    bytes.extend(encode_byte(op.locators.len() as u8));
-    for locator in &op.locators {
-        bytes.extend(encode_locator(locator.as_ref()));
-    }
-    // ProviderId
-    bytes.extend(encode_ed25519_public_key(&op.provider_id.0));
-    // ZkId
-    bytes.extend(encode_field_element(op.zk_id.as_fr()));
-    // LockedNoteId
-    bytes.extend(encode_field_element(op.locked_note_id.as_ref()));
     bytes
 }
 
@@ -737,21 +621,25 @@ mod tests {
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::bounded_vec::BoundedError;
+    use multiaddr::Multiaddr;
     use num_bigint::BigUint;
 
     use super::*;
     use crate::{
         mantle::{
             Transaction as _,
-            ops::channel::{
-                ChannelId, MsgId,
-                config::{ChannelConfigOp, Keys},
-                inscribe::{self, Inscription, InscriptionOp},
-                withdraw::ChannelWithdrawOp,
+            ops::{
+                channel::{
+                    ChannelId, MsgId,
+                    config::{ChannelConfigOp, Keys},
+                    inscribe::{self, Inscription, InscriptionOp},
+                    withdraw::ChannelWithdrawOp,
+                },
+                sdp::SDPDeclareOp,
             },
             tx::GasPrices,
         },
-        sdp::blend::ActivityProof,
+        sdp::{Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId, ServiceType, blend::ActivityProof},
     };
 
     fn dbg_test_vector(actual: &str, expected: &str) {
@@ -796,7 +684,7 @@ mod tests {
 
         // Test Byte
         let data = encode_byte(0xAB);
-        let (remaining, value) = decode_byte(&data).unwrap();
+        let (remaining, value) = u8::decode(&data).unwrap();
         assert_eq!(value, 0xAB);
         assert!(remaining.is_empty());
 
@@ -1805,26 +1693,6 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_reject_excessive_sdp_declare() {
-        let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
-        let sdp_declare_op = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locators: vec![Locator::new_unchecked(locator); u8::MAX as usize + 1]
-                .try_into()
-                .unwrap(), /* excessive locator count */
-            provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
-            zk_id: ZkKey::zero().to_public_key(),
-            locked_note_id: NoteId(BigUint::from(111u64).into()),
-        };
-
-        // Should panic
-        let result = panic::catch_unwind(|| {
-            encode_sdp_declare(&sdp_declare_op);
-        });
-        assert!(result.is_err(), "Should reject excessive output count");
-    }
-
-    #[test]
     fn test_encode_reject_excessive_sdp_active() {
         let blend_proof = ActivityProof {
             epoch: u32::MAX.into(),
@@ -1855,20 +1723,20 @@ mod tests {
         // LocatorCount (1 byte) - just 1 locator
         malicious_input.push(1);
 
-        let oversized_len = (LOCATOR_BYTES_SIZE_LIMIT + 1) as u16;
+        let oversized_len = (MAX_LOCATOR_BYTE_SIZE + 1) as u16;
         malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
 
         // Add the oversized data
-        malicious_input.extend_from_slice(&vec![0x01; LOCATOR_BYTES_SIZE_LIMIT + 1]);
+        malicious_input.extend_from_slice(&vec![0x01; MAX_LOCATOR_BYTE_SIZE + 1]);
 
         // ... rest of SDPDeclare fields ...
 
-        let result = decode_sdp_declare(&malicious_input);
+        let result = SDPDeclareOp::decode(&malicious_input);
         if let Err(nom::Err::Error(ref e)) = result {
             assert_eq!(
                 e.code,
-                ErrorKind::LengthValue,
-                "Should reject at `LOCATOR_BYTES_SIZE_LIMIT + 1`"
+                ErrorKind::TooLarge,
+                "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`"
             );
         } else {
             panic!("Should reject oversized locator");
@@ -1886,20 +1754,20 @@ mod tests {
         // LocatorCount (1 byte) - just 1 locator
         malicious_input.push(1);
 
-        let oversized_len = (LOCATOR_BYTES_SIZE_LIMIT) as u16;
+        let oversized_len = MAX_LOCATOR_BYTE_SIZE as u16;
         malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
 
         // Add the oversized data
-        malicious_input.extend_from_slice(&vec![0x01; LOCATOR_BYTES_SIZE_LIMIT]);
+        malicious_input.extend_from_slice(&vec![0x01; MAX_LOCATOR_BYTE_SIZE]);
 
         // ... rest of SDPDeclare fields ...
 
-        let result = decode_sdp_declare(&malicious_input);
+        let result = SDPDeclareOp::decode(&malicious_input);
         if let Err(nom::Err::Error(ref e)) = result {
             assert_ne!(
                 e.code,
                 ErrorKind::LengthValue,
-                "Should not reject at `LOCATOR_BYTES_SIZE_LIMIT`"
+                "Should not reject at `MAX_LOCATOR_BYTE_SIZE`"
             );
         }
         assert!(result.is_err(), "Should reject invalid declaration");
@@ -1918,11 +1786,11 @@ mod tests {
             locked_note_id: NoteId(BigUint::from(111u64).into()),
         };
 
-        let encoded = encode_sdp_declare(&op);
-        let result = decode_sdp_declare(&encoded);
+        let encoded = op.encode();
+        let result = SDPDeclareOp::decode(&encoded);
 
         match result {
-            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::Fail),
+            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::MapRes),
             _ => panic!("Expected Verify error for invalid locator"),
         }
     }
