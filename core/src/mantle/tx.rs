@@ -14,7 +14,10 @@ use crate::{
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         channel::Channels,
-        encoding::{Ops, decode_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
+        encoding::{
+            Ops, decode_mantle_tx, decode_signed_mantle_tx, encode_mantle_tx,
+            encode_signed_mantle_tx,
+        },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ops::{
@@ -301,7 +304,7 @@ impl From<SignedMantleTx> for MantleTx {
 // confirmation.
 // TODO: Split entity into a system that allows for verification in different
 // stages.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SignedMantleTx {
     pub mantle_tx: MantleTx,
     // TODO: make this more efficient
@@ -643,19 +646,48 @@ impl StorageSize for SignedMantleTx {
     }
 }
 
+impl Serialize for SignedMantleTx {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            #[derive(Serialize)]
+            pub struct SignedMantleTxHelper<'a> {
+                pub mantle_tx: &'a MantleTx,
+                pub ops_proofs: &'a [OpProof],
+            }
+            SignedMantleTxHelper {
+                mantle_tx: &self.mantle_tx,
+                ops_proofs: &self.ops_proofs,
+            }
+            .serialize(serializer)
+        } else {
+            encode_signed_mantle_tx(self).serialize(serializer)
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for SignedMantleTx {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Deserialize)]
-        struct SignedMantleTxHelper {
-            mantle_tx: MantleTx,
-            ops_proofs: Vec<OpProof>,
-        }
+        if deserializer.is_human_readable() {
+            #[derive(Deserialize)]
+            struct SignedMantleTxHelper {
+                mantle_tx: MantleTx,
+                ops_proofs: Vec<OpProof>,
+            }
 
-        let helper = SignedMantleTxHelper::deserialize(deserializer)?;
-        Self::new(helper.mantle_tx, helper.ops_proofs).map_err(serde::de::Error::custom)
+            let helper = SignedMantleTxHelper::deserialize(deserializer)?;
+            Self::new(helper.mantle_tx, helper.ops_proofs).map_err(serde::de::Error::custom)
+        } else {
+            let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
+            decode_signed_mantle_tx(bytes.as_slice())
+                .map(|(_, tx)| tx)
+                .map_err(serde::de::Error::custom)
+        }
     }
 }
 
