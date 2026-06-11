@@ -585,10 +585,9 @@ mod tests {
     use futures::StreamExt as _;
     use lb_core::{
         block::BlockTransactions,
-        codec::DeserializeOp as _,
         crypto::ZkHasher,
         events::Events,
-        mantle::{Note, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm},
+        mantle::{MantleTx, Note, SignedMantleTx, ledger::Utxo, ops::leader_claim::VoucherCm},
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };
     use lb_cryptarchia_engine::Config;
@@ -975,7 +974,7 @@ mod tests {
             if let Some(ProviderResponse::Available(mut stream)) = rx.recv().await {
                 while let Some(res) = &stream.next().await {
                     if let Ok(bytes) = &res {
-                        let block: Block<()> = Block::from_bytes(bytes).unwrap();
+                        let block: Block<MantleTx> = Block::try_from(bytes.clone()).unwrap();
                         blocks.push(block.header().id());
                     } else {
                         break;
@@ -1019,7 +1018,7 @@ mod tests {
                     }
                     ProviderResponse::Available(mut stream) => match stream.next().await {
                         Some(Ok(bytes)) => {
-                            let block: Block<()> = Block::from_bytes(&bytes).unwrap();
+                            let block: Block<MantleTx> = Block::try_from(bytes).unwrap();
                             (
                                 false,
                                 format!("Available(first_block={:?})", block.header().id()),

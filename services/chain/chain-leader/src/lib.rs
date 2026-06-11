@@ -821,22 +821,25 @@ mod tests {
     async fn block_tx_selection_respects_transaction_count_limit() {
         let txs = stream::iter(vec![
             TestTx { size: 1 };
-            BlockTransactions::<TestTx>::MAX_COUNT + 1
+            BlockTransactions::<TestTx>::bounds().max_count + 1
         ]);
 
         let selected = txs_for_block(txs).await;
 
-        assert_eq!(selected.len(), BlockTransactions::<TestTx>::MAX_COUNT);
+        assert_eq!(
+            selected.len(),
+            BlockTransactions::<TestTx>::bounds().max_count
+        );
     }
 
     #[tokio::test]
     async fn block_tx_selection_respects_block_size_limit() {
         let txs = stream::iter(vec![
             TestTx {
-                size: BlockTransactions::<TestTx>::MAX_SIZE / 2,
+                size: BlockTransactions::<TestTx>::bounds().max_size / 2,
             },
             TestTx {
-                size: BlockTransactions::<TestTx>::MAX_SIZE / 2,
+                size: BlockTransactions::<TestTx>::bounds().max_size / 2,
             },
             TestTx { size: 1 },
         ]);
@@ -845,7 +848,10 @@ mod tests {
         let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
 
         assert_eq!(selected.len(), 2);
-        assert_eq!(selected_size, BlockTransactions::<TestTx>::MAX_SIZE);
+        assert_eq!(
+            selected_size,
+            BlockTransactions::<TestTx>::bounds().max_size
+        );
     }
 
     #[tokio::test]
@@ -856,7 +862,7 @@ mod tests {
         let txs = stream::iter(vec![
             TestTx { size: 10 },
             TestTx {
-                size: BlockTransactions::<TestTx>::MAX_SIZE,
+                size: BlockTransactions::<TestTx>::bounds().max_size,
             },
             TestTx { size: 10 },
         ]);
@@ -875,7 +881,7 @@ mod tests {
         // reaching here, but the prefix invariant must hold regardless.)
         let txs = stream::iter(vec![
             TestTx {
-                size: BlockTransactions::<TestTx>::MAX_SIZE + 1,
+                size: BlockTransactions::<TestTx>::bounds().max_size + 1,
             },
             TestTx { size: 1 },
         ]);

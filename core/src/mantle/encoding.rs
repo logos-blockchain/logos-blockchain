@@ -678,7 +678,8 @@ fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     }
 }
 
-fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
+#[must_use]
+pub fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
     let mut bytes = Vec::new();
     for (proof, op) in proofs.iter().zip(ops.iter()) {
         bytes.extend(encode_op_proof(proof, op));

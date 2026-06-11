@@ -50,11 +50,39 @@ pub struct References {
     pub mempool_transactions: Vec<TxHash>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Block<Tx> {
     header: Header,
     signature: Ed25519Signature,
     transactions: Vec<Tx>,
+}
+
+#[derive(Deserialize)]
+struct RawBlock<Tx> {
+    header: Header,
+    signature: Ed25519Signature,
+    transactions: Vec<Tx>,
+}
+
+impl<'de, Tx> Deserialize<'de> for Block<Tx>
+where
+    Tx: Clone + Eq + Deserialize<'de> + Transaction<Hash = TxHash> + StorageSize + ElementSize,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawBlock::<Tx>::deserialize(deserializer)?;
+        let block = Self {
+            header: raw.header,
+            signature: raw.signature,
+            transactions: raw.transactions,
+        };
+
+        block
+            .try_into_bounded_block()
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl Proposal {
@@ -160,7 +188,7 @@ impl<Tx> Block<Tx> {
     ///
     /// This enforces transaction count, storage-size, block-root, and signature
     /// validation before returning the block.
-    pub fn try_into_bounded_block(self) -> Result<Self, Error>
+    fn try_into_bounded_block(self) -> Result<Self, Error>
     where
         Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
     {
@@ -225,11 +253,23 @@ impl<Tx> Block<Tx> {
     }
 }
 
-impl<Tx: Clone + Eq + Serialize + DeserializeOwned> TryFrom<Bytes> for Block<Tx> {
+impl<
+    Tx: Clone
+        + Eq
+        + Serialize
+        + DeserializeOwned
+        + Transaction<Hash = TxHash>
+        + StorageSize
+        + ElementSize,
+> TryFrom<Bytes> for Block<Tx>
+{
     type Error = crate::codec::Error;
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
-        Self::from_bytes(&bytes)
+        let block = Self::from_bytes(&bytes)?;
+        block
+            .try_into_bounded_block()
+            .map_err(|e| crate::codec::Error::Deserialize(Box::new(e)))
     }
 }
 
@@ -473,5 +513,18 @@ mod tests {
             }
             other @ StorageBoundedError::BoundedError(_) => panic!("unexpected error: {other:?}"),
         }
+    }
+
+    #[test]
+    fn global_block_limits_are_reflective_in_block_transaction_bounds() {
+        assert_eq!(BlockTransactions::<MantleTx>::bounds().min_count, 0);
+        assert_eq!(
+            BlockTransactions::<MantleTx>::bounds().max_count,
+            MAX_BLOCK_TRANSACTIONS
+        );
+        assert_eq!(
+            BlockTransactions::<MantleTx>::bounds().max_size,
+            MAX_BLOCK_SIZE
+        );
     }
 }

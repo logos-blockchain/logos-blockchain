@@ -1,16 +1,20 @@
 use lb_groth16::Fr;
+use lb_utils::storage_bounded_vec::ElementSize;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
+use super::{GenesisTx as _, OpProof, SignedMantleTx, StorageSize, ops::sdp::SDPDeclareOp};
 use crate::{
+    block::MAX_BLOCK_SIZE,
+    codec::SerializeOp as _,
     crypto::{Digest as _, Hasher},
     mantle::{
         MantleTx, Transaction, TransactionHasher, TxHash,
         encoding::{
             decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
-            encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
+            encode_field_element, encode_mantle_tx, encode_string, encode_uint64,
+            encode_unix_timestamp,
         },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{
@@ -42,6 +46,24 @@ pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(0);
 pub struct GenesisTx {
     tx: SignedMantleTx,
     cryptarchia_parameter: CryptarchiaParameter,
+}
+
+impl StorageSize for GenesisTx {
+    fn storage_size(&self) -> usize {
+        let mut bytes = Vec::new();
+        bytes.extend(encode_mantle_tx(self.mantle_tx()));
+        let ops_proofs_size = self.tx.ops_proofs.bytes_size().unwrap_or_default() as usize;
+        bytes.resize(bytes.len() + ops_proofs_size, 0);
+        bytes.extend(self.cryptarchia_parameter().encode());
+        // Clamp at MAX_BLOCK_SIZE to keep sizing bounded for genesis deserialization.
+        bytes.len().min(MAX_BLOCK_SIZE)
+    }
+}
+
+impl ElementSize for GenesisTx {
+    fn element_size(&self) -> usize {
+        self.storage_size()
+    }
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]

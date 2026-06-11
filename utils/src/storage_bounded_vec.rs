@@ -18,6 +18,16 @@ pub enum StorageBoundedError {
     ContentTooBig { size: usize, max: usize },
 }
 
+/// Static bounds for a [`StorageBoundedVec`].
+pub struct StorageBoundedVecBounds {
+    /// Minimum number of items (inclusive).
+    pub min_count: usize,
+    /// Maximum number of items (inclusive).
+    pub max_count: usize,
+    /// Maximum total storage size in bytes, calculated as the sum of all items.
+    pub max_size: usize,
+}
+
 /// A vector bounded by both item count and total storage size.
 ///
 /// `StorageBoundedVec<T, MIN_COUNT, MAX_COUNT, MAX_SIZE>` ensures that:
@@ -57,15 +67,21 @@ pub struct StorageBoundedVec<
     const MAX_SIZE: usize,
 > {
     items: BoundedVec<T, MIN_COUNT, MAX_COUNT>,
-    total_cached_size: usize,
+    storage_size: usize,
 }
 
 impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
     StorageBoundedVec<T, MIN_COUNT, MAX_COUNT, MAX_SIZE>
 {
-    pub const MIN_COUNT: usize = MIN_COUNT;
-    pub const MAX_COUNT: usize = MAX_COUNT;
-    pub const MAX_SIZE: usize = MAX_SIZE;
+    /// Returns the static bounds of the type.
+    #[must_use]
+    pub const fn bounds() -> StorageBoundedVecBounds {
+        StorageBoundedVecBounds {
+            min_count: MIN_COUNT,
+            max_count: MAX_COUNT,
+            max_size: MAX_SIZE,
+        }
+    }
 
     /// Construct an empty storage-bounded vector.
     #[must_use]
@@ -79,7 +95,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
 
         Self {
             items: BoundedVec::empty(),
-            total_cached_size: 0,
+            storage_size: 0,
         }
     }
 
@@ -94,7 +110,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
 
         Ok(Self {
             items,
-            total_cached_size: total_size,
+            storage_size: total_size,
         })
     }
 
@@ -135,13 +151,13 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
         T: ElementSize,
     {
         let total = Self::validate_total_size(self.items.as_slice())?;
-        self.total_cached_size = total;
+        self.storage_size = total;
         Ok(total)
     }
 
     #[must_use]
     pub const fn cached_total_storage_size(&self) -> usize {
-        self.total_cached_size
+        self.storage_size
     }
 
     /// Try to push an item while maintaining both count and size constraints.
@@ -159,12 +175,13 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
         }
 
         let item_size = item.element_size();
-        let new_total = self.total_cached_size.checked_add(item_size).ok_or(
-            StorageBoundedError::ContentTooBig {
-                size: usize::MAX,
-                max: MAX_SIZE,
-            },
-        )?;
+        let new_total =
+            self.storage_size
+                .checked_add(item_size)
+                .ok_or(StorageBoundedError::ContentTooBig {
+                    size: usize::MAX,
+                    max: MAX_SIZE,
+                })?;
 
         if new_total > MAX_SIZE {
             return Err(StorageBoundedError::ContentTooBig {
@@ -174,7 +191,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
         }
 
         self.items.try_push(item)?;
-        self.total_cached_size = new_total;
+        self.storage_size = new_total;
 
         Ok(())
     }
@@ -187,7 +204,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
             return Ok(None);
         };
 
-        self.total_cached_size -= item.element_size();
+        self.storage_size -= item.element_size();
         Ok(Some(item))
     }
 
@@ -196,7 +213,7 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
         T: ElementSize,
     {
         let item = self.items.try_remove(index)?;
-        self.total_cached_size -= item.element_size();
+        self.storage_size -= item.element_size();
         Ok(item)
     }
 
@@ -335,9 +352,9 @@ mod tests {
 
     #[test]
     fn constants_reflect_generic_parameters() {
-        assert_eq!(TestStorageBoundedVec::MIN_COUNT, 2);
-        assert_eq!(TestStorageBoundedVec::MAX_COUNT, 4);
-        assert_eq!(TestStorageBoundedVec::MAX_SIZE, 100);
+        assert_eq!(TestStorageBoundedVec::bounds().min_count, 2);
+        assert_eq!(TestStorageBoundedVec::bounds().max_count, 4);
+        assert_eq!(TestStorageBoundedVec::bounds().max_size, 100);
     }
 
     #[test]
