@@ -285,7 +285,7 @@ impl CryptarchiaParameter {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::Field as _;
+    use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 

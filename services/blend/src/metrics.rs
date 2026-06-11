@@ -60,6 +60,12 @@ mod imp {
             message_type = message_type.to_str()
         );
     }
+
+    /// Reports incoming messages that were dropped before the event loop could
+    /// process them because the consumer lagged behind the broadcast producer.
+    pub fn inbound_messages_dropped(count: u64) {
+        lb_tracing::increase_counter_u64!(blend_inbound_messages_dropped_total, count);
+    }
 }
 
 pub use imp::*;

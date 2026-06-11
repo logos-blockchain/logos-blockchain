@@ -11,8 +11,9 @@ use test_log::test;
 use tokio::time;
 
 use crate::{
-    edge::backends::libp2p::tests::utils::{
-        SwarmBuilder as EdgeSwarmBuilder, TestSwarm as EdgeTestSwarm,
+    edge::backends::libp2p::{
+        swarm::Command,
+        tests::utils::{SwarmBuilder as EdgeSwarmBuilder, TestSwarm as EdgeTestSwarm},
     },
     test_utils::TestEncapsulatedMessage,
 };
@@ -129,4 +130,49 @@ async fn edge_redial_uses_exponential_backoff() {
         .await;
     let second_backoff = before_third_error.elapsed();
     assert!(second_backoff >= time::Duration::from_secs(4));
+}
+
+/// A send that never completes (e.g. a peer that accepted the connection but
+/// never finished stream negotiation) must not wedge the event loop: work
+/// queued behind it should still be processed.
+///
+/// This guards the fix that moved the stream-open/send chain off the `select!`
+/// loop into the `pending_events` queue. Previously the chain was awaited
+/// inline, so a single unresponsive peer stalled command and retry handling
+/// until restart.
+#[test(tokio::test)]
+async fn stalled_send_does_not_block_command_processing() {
+    let peer_id = PeerId::random();
+    let address: Multiaddr = Protocol::Memory(0).into();
+
+    let EdgeTestSwarm {
+        mut swarm,
+        command_sender,
+    } = EdgeSwarmBuilder::new(Membership::new_without_local(from_ref(&Node {
+        address,
+        id: peer_id,
+        public_key: UnsecuredEd25519Key::generate_with_blake_rng().public_key(),
+    })))
+    .build();
+
+    // Simulate an in-flight send that will never resolve, occupying the
+    // pending-events queue indefinitely.
+    swarm.push_stalled_send();
+
+    // A send command arrives while that send is stuck.
+    let message = TestEncapsulatedMessage::new(b"test-payload");
+    command_sender
+        .send(Command::SendMessage(message.clone()))
+        .await
+        .unwrap();
+
+    // A single loop iteration must pick up the command (and schedule a dial)
+    // rather than blocking behind the stalled send.
+    swarm.poll_next().await;
+
+    assert_eq!(
+        swarm.pending_dials().len(),
+        1,
+        "The command should be processed even though a send is stalled"
+    );
 }

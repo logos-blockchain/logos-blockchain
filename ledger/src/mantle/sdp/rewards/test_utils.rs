@@ -8,7 +8,7 @@ use lb_core::{
     },
 };
 use lb_cryptarchia_engine::Epoch;
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
 use rpds::HashTrieMapSync;

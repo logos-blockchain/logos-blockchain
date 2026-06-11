@@ -1,6 +1,7 @@
 pub mod init;
 pub mod keystore;
 pub mod migrate;
+pub mod migrate_0_1_2;
 pub mod update;
 
 use std::io::Write as _;

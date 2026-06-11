@@ -1,4 +1,4 @@
-use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
+use lb_groth16::{AdditiveGroup as _, Field as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::Serialize;
 
 pub const VOUCHER_MERKLE_TREE_HEIGHT: usize = 32;

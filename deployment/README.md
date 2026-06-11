@@ -1,6 +1,6 @@
-# Docker Compose Testnet for Logos Blockchain
+# Docker Compose Deployment for Logos Blockchain
 
-The Logos blockchain Docker Compose Testnet contains four distinct service types:
+The Logos blockchain Docker Compose deployment contains four distinct service types:
 
 - **Logos Blockchain Node Services**: Multiple dynamically spawned Logos blockchain nodes that synchronizes their configuration via cfgsync utility.
 
@@ -14,7 +14,7 @@ docker compose build
 
 ## Configuring
 
-Configuration of the Docker testnet is accomplished using the `.env` file. An example configuration can be found in `.env.example`.
+Configuration of the Docker deployment is accomplished using the `.env` file. An example configuration can be found in `.env.example`.
 
 To adjust the count of Logos blockchain nodes, modify the variable:
 
@@ -24,7 +24,7 @@ DOCKER_COMPOSE_LIBP2P_REPLICAS=100
 
 ## Running
 
-Initiate the testnet by executing the following command:
+Initiate the deployment by executing the following command:
 
 ```bash
 docker compose up
@@ -42,7 +42,7 @@ Followed by:
 docker compose logs -f logos-blockchain-node
 ```
 
-## Using testnet
+## Using deployment
 
 Bootstrap node is accessible from the host via `3000` and `18080` ports. To expose other Logos blockchain nodes, please update `logos-blockchain-node` service in the `compose.yml` file with this configuration:
 

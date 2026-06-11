@@ -721,7 +721,7 @@ pub mod tests {
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };
     use lb_cryptarchia_engine::EpochConfig;
-    use lb_groth16::Field as _;
+    use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey};
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
     use num_bigint::BigUint;

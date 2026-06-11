@@ -1,7 +1,7 @@
 version: '3.8'
 
 include:
-  - testnet/compose.tracing.yml
+  - deployment/compose.tracing.yml
 
 services:
 
@@ -25,7 +25,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./deployment:/etc/logos-blockchain
     depends_on:
       - grafana
     ports:
@@ -37,7 +37,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./deployment:/etc/logos-blockchain
     environment:
       - FAUCET_PORT=18090
       - NODE_API_ADDR=http://logos_blockchain_node_0:${NODE0_API_PORT}
@@ -48,7 +48,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./deployment:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -72,7 +72,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./deployment:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -96,7 +96,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./deployment:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -120,7 +120,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain-node:${NODE_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./testnet:/etc/logos-blockchain
+      - ./deployment:/etc/logos-blockchain
     depends_on:
       - cfgsync
     environment:
@@ -153,9 +153,9 @@ services:
       - ENV_TITLE_STRING=${ENV_TITLE_STRING}
     volumes:
       - node-data:/node-data
-      - ./testnet/nginx/run.conf:/etc/nginx/nginx.conf
-      - ./testnet/nginx/static/run:/usr/share/nginx/html_template
-      - ./testnet/scripts/run_nginx.sh:/etc/run_nginx.sh
+      - ./deployment/nginx/run.conf:/etc/nginx/nginx.conf
+      - ./deployment/nginx/static/run:/usr/share/nginx/html_template
+      - ./deployment/scripts/run_nginx.sh:/etc/run_nginx.sh
     entrypoint: /etc/run_nginx.sh
 
   # L2 Sequencer Demo Services

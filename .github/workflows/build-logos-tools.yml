@@ -68,7 +68,7 @@ jobs:
         uses: docker/build-push-action@84ad562665bb303b549fec655d1b64f9945f3f91 # Version 6.15.0
         with:
           context: .
-          file: ./testnet/Dockerfile
+          file: ./deployment/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true

@@ -1,8 +1,11 @@
 use core::time::Duration;
 
+use either::Either;
 use futures::StreamExt as _;
+use lb_blend_scheduling::membership::Membership;
 use lb_cryptarchia_engine::Epoch;
-use lb_libp2p::SwarmEvent;
+use lb_libp2p::{NetworkBehaviour as _, SwarmEvent};
+use libp2p::{Multiaddr, swarm::ConnectionId};
 use libp2p_swarm_test::SwarmExt as _;
 use test_log::test;
 use tokio::{select, time::sleep};
@@ -12,6 +15,7 @@ use crate::core::{
     with_core::{
         behaviour::{
             Event,
+            handler::ToBehaviour,
             tests::utils::{
                 BehaviourBuilder, SwarmExt as _, build_memberships, new_nodes_with_empty_address,
             },
@@ -78,6 +82,81 @@ async fn publish_message() {
             .behaviour_mut()
             .publish_message_with_validated_header(test_message.clone(), 1.into()),
         Err(SendError::DuplicateMessage)
+    );
+}
+
+/// Regression test for audit finding #2: a `FullyNegotiated` event that races
+/// an epoch transition must be ignored, not panic the blend swarm task.
+///
+/// Handler→behaviour events are delivered asynchronously, so a handler can emit
+/// `FullyNegotiated` *before* `start_new_epoch` clears
+/// `connections_waiting_upgrade`, with the event delivered *after*:
+///
+/// ```text
+///   handler.poll() ──emit FullyNegotiated(conn)──┐  (queued toward swarm)
+///                                                 │
+///   service loop: StartNewEpoch                   │
+///     └─ start_new_epoch() ─ mem::take(waiting) ──┤  conn entry now gone
+///                                                 ▼
+///   swarm delivers FullyNegotiated(conn) ─► on_connection_handler_event
+///     └─ handle_negotiated_connection(conn)
+///          └─ waiting.remove(conn) == None ─► ignored (no panic) ✓
+/// ```
+///
+/// This drives the behaviour at the `NetworkBehaviour` API level to land it in
+/// exactly that post-race state deterministically: accept an inbound connection
+/// (which inserts into `connections_waiting_upgrade`), run `start_new_epoch`
+/// (which empties the map), then deliver the in-flight `FullyNegotiated`. The
+/// stale event must be dropped silently, leaving no negotiated peer behind.
+#[test(tokio::test)]
+async fn fully_negotiated_racing_epoch_transition_is_ignored() {
+    let (mut identities, nodes) = new_nodes_with_empty_address(2);
+    let local_identity = identities.next().unwrap();
+    // The remote must be a core member so the inbound connection is upgraded
+    // (and thus recorded in `connections_waiting_upgrade`).
+    let peer_id = nodes[1].id;
+
+    let mut behaviour = BehaviourBuilder::new(&local_identity)
+        .with_membership(&nodes)
+        .build();
+
+    // A connection is established and we choose to upgrade it: this records an
+    // entry in `connections_waiting_upgrade`, and the handler will (eventually)
+    // emit `FullyNegotiated` for it.
+    let connection_id = ConnectionId::new_unchecked(0);
+    let addr = Multiaddr::empty();
+    let _handler = behaviour
+        .handle_established_inbound_connection(connection_id, peer_id, &addr, &addr)
+        .expect("inbound connection with a core peer should be accepted");
+    assert!(
+        behaviour
+            .connections_waiting_upgrade
+            .contains_key(&(peer_id, connection_id)),
+        "the established connection must be pending upgrade"
+    );
+
+    // The epoch transition fires while the handler's `FullyNegotiated` is still
+    // in flight. `start_new_epoch` clears the pending-upgrade map.
+    behaviour.start_new_epoch((Membership::new_without_local(&[]), Epoch::new(1)));
+    assert!(
+        behaviour.connections_waiting_upgrade.is_empty(),
+        "start_new_epoch must clear the pending-upgrade map"
+    );
+
+    // The previously-emitted `FullyNegotiated` is now delivered. The connection
+    // is no longer pending upgrade, so the stale event must be ignored instead
+    // of panicking the swarm task.
+    behaviour.on_connection_handler_event(
+        peer_id,
+        connection_id,
+        Either::Left(ToBehaviour::FullyNegotiated),
+    );
+
+    // The stale event left no trace: the peer was not promoted to a negotiated
+    // peer in the new epoch.
+    assert!(
+        !behaviour.negotiated_peers.contains_key(&peer_id),
+        "A stale FullyNegotiated must not promote the peer in the new epoch"
     );
 }
 

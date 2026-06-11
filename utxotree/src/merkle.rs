@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, OnceLock},
 };
 
-use ark_ff::Field;
+use ark_ff::AdditiveGroup;
 use lb_groth16::serde::serde_fr;
 use lb_poseidon2::{Digest, Fr};
 use rpds::RedBlackTreeSetSync;
@@ -12,7 +12,7 @@ use crate::CompressedUtxoTree;
 
 const TREE_HEIGHT_EXCEPT_ROOT: usize = 32;
 
-const EMPTY_VALUE: Fr = <Fr as Field>::ZERO;
+const EMPTY_VALUE: Fr = <Fr as AdditiveGroup>::ZERO;
 
 fn empty_subtree_root<Hash: Digest>(height: usize) -> Fr {
     static PRECOMPUTED_EMPTY_ROOTS: OnceLock<[Fr; TREE_HEIGHT_EXCEPT_ROOT + 1]> = OnceLock::new();
