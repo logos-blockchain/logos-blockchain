@@ -303,23 +303,36 @@ async fn process_block_does_not_mutate_state_when_immutable_index_write_fails() 
     let (lib_tx, mut lib_rx) = broadcast::channel(10);
 
     let storage_task = tokio::spawn(async move {
-        let Some(msg) = storage_rx.recv().await else {
-            return Err("expected store block request, storage channel closed");
-        };
+        while let Some(msg) = storage_rx.recv().await {
+            match msg {
+                StorageMsg::Api {
+                    request:
+                        StorageApiRequest::Chain(ChainApiRequest::StoreBlock { response_tx, .. }),
+                } => {
+                    response_tx
+                        .send(Ok(()))
+                        .map_err(|_| "store block reply receiver dropped")?;
+                }
+                StorageMsg::Api {
+                    request:
+                        StorageApiRequest::Chain(ChainApiRequest::StoreImmutableBlockIds {
+                            response_tx,
+                            ..
+                        }),
+                } => {
+                    response_tx
+                        .send(Err(
+                            "StoreImmutableBlockIds is rejected by this test".to_owned()
+                        ))
+                        .map_err(|_| "immutable index reply receiver dropped")?;
 
-        let StorageMsg::Api {
-            request: StorageApiRequest::Chain(ChainApiRequest::StoreBlock { response_tx, .. }),
-        } = msg
-        else {
-            return Err("expected store block request");
-        };
+                    return Ok(());
+                }
+                _ => return Err("unexpected storage request"),
+            }
+        }
 
-        response_tx
-            .send(Ok(()))
-            .map_err(|_| "store block reply receiver dropped")?;
-
-        // Drop the receiver so the following immutable-index write fails at send time.
-        Ok(())
+        Err("expected immutable index write request, storage channel closed")
     });
 
     let (mut cryptarchia, block) = test_chain_with_next_block();
@@ -343,7 +356,7 @@ async fn process_block_does_not_mutate_state_when_immutable_index_write_fails() 
     storage_task
         .await
         .expect("storage task should not panic")
-        .expect("storage task should handle initial StoreBlock request");
+        .expect("storage task should reject immutable index write");
 
     match &result {
         Err(Error::Storage(_)) => {}
@@ -369,14 +382,8 @@ fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx>) {
         Slot::genesis(),
         0,
     );
-    let block = try_build_block(
-        &cryptarchia,
-        cryptarchia.tip(),
-        utxo,
-        &zk_key,
-        Slot::genesis() + 1,
-    )
-    .unwrap();
+    let block =
+        try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, Slot::new(1)).unwrap();
 
     (cryptarchia, block)
 }
