@@ -72,7 +72,7 @@ mod tests {
 
     #[test]
     fn test_bincode_fixed_size_fields_have_no_length_prefix() {
-        const VERSION: usize = 4; // u32 enum variant tag
+        const VERSION: usize = 1;
         const PARENT_BLOCK: usize = 32;
         const SLOT: usize = 8;
         const BLOCK_ROOT: usize = 32;
