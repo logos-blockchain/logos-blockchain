@@ -16,6 +16,8 @@ pub enum StorageBoundedError {
     BoundedError(#[from] BoundedError),
     #[error("Total storage size {size} exceeds maximum of {max} bytes")]
     ContentTooBig { size: usize, max: usize },
+    #[error("Removal of an element resulted in a size less than 0 bytes")]
+    SizeUnderflow,
 }
 
 /// Static bounds for a [`StorageBoundedVec`].
@@ -213,7 +215,11 @@ impl<T, const MIN_COUNT: usize, const MAX_COUNT: usize, const MAX_SIZE: usize>
         T: ElementSize,
     {
         let item = self.items.try_remove(index)?;
-        self.storage_size -= item.element_size();
+
+        self.storage_size = self.storage_size
+            .checked_sub(item.element_size())
+            .ok_or(StorageBoundedError::SizeUnderflow)?;
+
         Ok(item)
     }
 

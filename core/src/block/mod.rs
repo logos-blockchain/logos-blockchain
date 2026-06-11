@@ -511,7 +511,7 @@ mod tests {
                 assert_eq!(size, MAX_BLOCK_SIZE + 1);
                 assert_eq!(max, MAX_BLOCK_SIZE);
             }
-            other @ StorageBoundedError::BoundedError(_) => panic!("unexpected error: {other:?}"),
+            other => panic!("unexpected error: {other:?}"),
         }
     }
 
