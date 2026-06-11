@@ -22,8 +22,8 @@ Channels are not deployed by a separate transaction; Bedrock creates them just-i
 From the Zone SDK, the steps are:
 
 1. Pick a `ChannelId` and a sequencer `Ed25519Key`.
-2. Initialize a `ZoneSequencer` with both, then publish the first inscription (e.g., a zone genesis block) via `handle.publish_message(..)`. Bedrock creates the channel automatically, naming this sequencer as the sole accredited key.
-3. (Optional) Reconfigure the channel with a [`ChannelConfig`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#f96261aa09df826a93d801db1e432a54) operation by calling `handle.channel_config(..)`.
+2. Initialize a `ZoneSequencer`, drive it (see the SDK overview for the drive-loop pattern and the `Event::Ready` readiness contract), and publish the first inscription (e.g., a zone genesis block) via `sequencer.handle().publish(..)`. Bedrock creates the channel automatically, naming this sequencer as the sole accredited key.
+3. (Optional) Reconfigure the channel with a [`ChannelConfig`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#f96261aa09df826a93d801db1e432a54) operation by calling `sequencer.handle().channel_config(..)`.
 
 ```rust
 use lb_zone_sdk::{
@@ -34,12 +34,14 @@ let node = NodeHttpClient::new(
     CommonHttpClient::new(None),
     "http://localhost:8080".parse()?,
 );
-let (sequencer, handle) =
-    ZoneSequencer::init(channel_id, signing_key, node, None);
+let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, None);
 
-// Publishing the first inscription creates the channel just-in-time.
-handle.publish_message(genesis_zone_block).await?;
+// Inside the drive task, once `Event::Ready` has fired:
+// publishing the first inscription creates the channel just-in-time.
+let (result, checkpoint) = sequencer.handle().publish(genesis_zone_block)?;
 ```
+
+`publish` returns synchronously after enqueueing the tx into the sequencer's pending set; the post hits the node the next time the drive loop polls `next_event`. The returned `(PublishResult, SequencerCheckpoint)` carries everything you need to persist this publish into your outbox alongside the resulting checkpoint.
 
 ### The bridging-related fields in channel state
 
@@ -63,25 +65,21 @@ The operation is proven with a `ZkSignature` over the consumed notes. On-chain e
 
 ### What the zone sequencer sees
 
-The Zone SDK surfaces every finalized deposit on your channel as a `FinalizedOp::Deposit(DepositInfo)` inside `Event::TxsFinalized`.
+The Zone SDK surfaces every finalized deposit on your channel as a `FinalizedOp::Deposit(DepositInfo)` inside the `finalized` field of `Event::BlocksProcessed`.
 
-This event only fires for transactions in finalized (irreversible) blocks. Therefore, deposits surfaced here cannot be re-orged off the chain.
+`BlocksProcessed` fires per ingested block (live or backfill) and only carries finalized items at or below LIB, so deposits surfaced here cannot be re-orged off the chain.
 
 ```rust
-use futures::StreamExt as _;
-use lb_zone_sdk::sequencer::{Event, FinalizedOp, ZoneSequencer};
+use lb_zone_sdk::sequencer::{Event, FinalizedOp};
 
-let mut events = sequencer.events();
-while let Some(event) = events.next().await {
-    if let Event::TxsFinalized { items } = event {
-        for tx in items {
-            for op in tx.ops {
-                if let FinalizedOp::Deposit(deposit) = op {
-                    println!(
-                        "Deposit of {} with metadata {:?}",
-                        deposit.amount, deposit.metadata,
-                    );
-                }
+if let Event::BlocksProcessed { finalized, .. } = event {
+    for tx in finalized {
+        for op in tx.ops {
+            if let FinalizedOp::Deposit(deposit) = op {
+                println!(
+                    "Deposit of {} with metadata {:?}",
+                    deposit.amount, deposit.metadata,
+                );
             }
         }
     }
@@ -99,32 +97,56 @@ The `ChannelWithdrawOpProof` carries `ChannelState.withdraw_threshold` signature
 
 ### Single-sequencer zones
 
-Currently, the Zone SDK supports the withdrawal API only for single-sequencer zones (`ChannelState.withdraw_threshold == 1`).
-```rust
-use lb_zone_sdk::sequencer::WithdrawArg;
-use lb_core::mantle::ledger::Outputs;
+Currently, the Zone SDK supports the bundled withdrawal API only for single-sequencer zones (`ChannelState.withdraw_threshold == 1`). You describe *what* to withdraw via a `WithdrawArg` — just the recipient `Outputs`. The SDK fills in the `channel_id` and reads the current `withdraw_nonce` and this sequencer's accredited-key index from cached channel state.
 
-// Build the withdraw arguments with the intended outputs.
+```rust
+use lb_core::mantle::{Note, ledger::Outputs};
+use lb_zone_sdk::sequencer::WithdrawArg;
+
 let withdraw = WithdrawArg {
-    outputs: Outputs::from(vec![
-        // Note { pk: recipient, value: 50, .. }
-    ]),
+    outputs: Outputs::new([Note::new(50, recipient_pk)]),
 };
 
-// Submit a transaction with the withdraw operation and
-// an accompanying inscription (e.g., zone block).
-handle
-    .publish_atomic_withdraw(
-        inscription_payload,   // the zone block this withdraw goes with
-        vec![withdraw],
-    )
-    .await?;
+// Inside the drive task: submit the inscription bundled with the withdraw.
+let (result, checkpoint) = sequencer.handle().publish_atomic_withdraw(
+    inscription_payload,   // the zone block this withdraw goes with
+    vec![withdraw],
+)?;
 ```
+
 Because the inscription and the withdraw share one transaction, they adopt/orphan/finalize as a unit — the zone block recording the withdraw and the on-chain debit cannot drift apart.
+
+#### Observing the result
+
+`publish_atomic_withdraw` returns the `PublishResult` synchronously. For a single-sig bundle, `PublishResult.tx` is a `PendingTx::AtomicWithdraw(AtomicWithdrawInfo)` carrying the inscription and the bundled withdraw ops. Persist it immediately as your outbox.
+
+The same tx later resurfaces in `Event::BlocksProcessed.finalized` once the block containing it finalizes. Because it's a bundle, **both** the inscription and the withdraw appear in the same `tx.ops` — match the `tx_hash` against your outbox and iterate both ops:
+
+```rust
+use lb_zone_sdk::sequencer::{Event, FinalizedOp};
+
+if let Event::BlocksProcessed { finalized, .. } = event {
+    for tx in finalized {
+        for op in tx.ops {
+            match op {
+                FinalizedOp::Inscription(info) => {
+                    // The zone block carried with the withdraw.
+                    println!("Inscribed {:?} in tx {:?}", info.this_msg, info.tx_hash);
+                }
+                FinalizedOp::Withdraw(withdrawal) => {
+                    // The on-chain debit.
+                    println!("Withdrawn {:?} in tx {:?}", withdrawal.op, withdrawal.tx_hash);
+                }
+                FinalizedOp::Deposit(_) => {}
+            }
+        }
+    }
+}
+```
 
 ### Multi-sequencer zones
 
-When `withdraw_threshold > 1`, no single sequencer can authorize a withdraw alone. The Zone SDK exposes the lower-level building blocks for threshold coordination:
+When `withdraw_threshold > 1`, no single sequencer can authorize a withdraw alone. The Zone SDK exposes the lower-level building blocks for threshold coordination, and the proposing sequencer builds the `ChannelWithdrawOp` itself (instead of `WithdrawArg`) because it needs to commit to a specific `withdraw_nonce` before sharing the unsigned tx with the rest of the committee.
 
 - `handle.prepare_tx(ops, inscription)` — build the unsigned `MantleTx` for arbitrary `ops` (including `ChannelWithdraw`) and return it plus this sequencer's own signature.
 - `handle.sign_tx(&tx)` — sign a transaction prepared elsewhere, e.g. one proposed by another committee member.
@@ -132,35 +154,44 @@ When `withdraw_threshold > 1`, no single sequencer can authorize a withdraw alon
 
 The committee transport (how proposals and signatures are exchanged) is outside the Zone SDK's scope.
 
-```rust
-use lb_core::mantle::{Op, SignedMantleTx, ops::channel::withdraw::ChannelWithdrawOp};
-use lb_core::proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature};
-use lb_zone_sdk::sequencer::OpProof;
+The proposing sequencer needs the current `withdraw_nonce` and its own accredited-key index. Both are surfaced on the sequencer's channel-view watch:
 
-// 1. The proposing sequencer builds the unsigned transaction and returns
-//    it plus this sequencer's own signature.
+```rust
+use lb_core::mantle::{
+    Op, SignedMantleTx,
+    ops::{OpProof, channel::withdraw::ChannelWithdrawOp},
+};
+use lb_core::proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature};
+
+// 1. Read current nonce + this sequencer's accredited-key index from
+//    the channel view. Both are kept fresh by the drive loop.
+let view = sequencer.subscribe_channel_view().borrow().clone();
+let withdraw_nonce = view
+    .channel
+    .as_ref()
+    .ok_or("channel state not yet available")?
+    .withdrawal_nonce;
+let own_key_index = view.own_key_index.ok_or("not an accredited key")?;
+
+// 2. Build the unsigned tx and get this sequencer's own signature back.
 let withdraw = ChannelWithdrawOp {
     channel_id,
-    outputs: outputs.clone(),
-    withdraw_nonce: current_channel_state.withdrawal_nonce,
+    outputs,
+    withdraw_nonce,
 };
-let (tx, msg_id, own_sig) = handle
-    .prepare_tx(
-        [Op::ChannelWithdraw(withdraw)].into(),
-        inscription_payload,
-    )
-    .await?;
+let (tx, msg_id, own_sig) = sequencer.handle().prepare_tx(
+    [Op::ChannelWithdraw(withdraw)].into(),
+    inscription_payload,
+)?;
 
-// 2. Every other accredited signer signs `tx` with their own key and
-//    returns the signature plus their accredited-key index. Transport
-//    is application-defined.
+// 3. Hand `tx` to the other accredited signers and collect their
+//    `IndexedSignature`s. Transport is application-defined.
 let signatures: Vec<IndexedSignature> = collect_signatures_from_committee(
     &tx,
     IndexedSignature::new(own_key_index, own_sig.clone()),
 ).await?;
 
-// 3. Once `withdraw_threshold` signatures are gathered, assemble the
-//    proof and submit.
+// 4. Assemble the threshold proof and submit.
 let withdraw_proof = ChannelMultiSigProof::new(signatures)?;
 let signed_tx = SignedMantleTx::new(
     tx,
@@ -169,63 +200,40 @@ let signed_tx = SignedMantleTx::new(
         OpProof::Ed25519Sig(own_sig),
     ],
 )?;
-handle.submit_signed_tx(signed_tx, msg_id).await?;
+let (result, checkpoint) = sequencer
+    .handle()
+    .submit_signed_tx(signed_tx, msg_id)?;
 ```
 
-### Observing your own withdraws
+#### Observing the result
 
-Withdraws you publish surface twice on the event stream:
+`submit_signed_tx` returns the `PublishResult` synchronously. Unlike the single-sig flow, the SDK treats the caller-built tx as opaque, so `PublishResult.tx` is `PendingTx::Inscription(InscriptionInfo)` regardless of the underlying ops — the bundle structure is not reconstructed in the result. Persist it as your outbox using the returned `tx_hash` to identify the bundle.
 
-1. `Event::Published { tx: PublishedTx::AtomicWithdraw(..) }` — as soon as the transaction is submitted, only if the transaction was submitted by `publish_atomic_withdraw` (single-sequencer zones).
-2. `Event::TxsFinalized { items }` containing the matching `tx_hash` with `FinalizedOp::Withdraw` entries, as soon as the block containing the transaction is finalized.
-
-Withdraws submitted by low-level APIs (multi-sequencer zones) only surface in `Event::TxsFinalized`.
-
-```rust
-use futures::StreamExt as _;
-use lb_zone_sdk::sequencer::{Event, FinalizedOp, ZoneSequencer};
-
-let mut events = sequencer.events();
-while let Some(event) = events.next().await {
-    if let Event::TxsFinalized { items } = event {
-        for tx in items {
-            for op in tx.ops {
-                if let FinalizedOp::Withdraw(withdrawal) = op {
-                    println!(
-                        "Withdrawn {:?} in tx {:?}",
-                        withdrawal.op, withdrawal.tx_hash,
-                    );
-                }
-            }
-        }
-    }
-}
-```
+The finalization pattern is the same as in the single-sig case: `Event::BlocksProcessed.finalized` carries `FinalizedOp::Inscription` and `FinalizedOp::Withdraw` for the bundle in one `tx.ops`. Match by `tx_hash` and iterate both ops as shown above.
 
 ### Reorgs and republish
 
-If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the Zone SDK fires `Event::ChannelUpdate { orphaned, adopted }` with the abandoned tx in `orphaned`. The original signed transaction is no longer valid. The user must decide whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`; the Zone SDK refills the inscription parent and the withdrawal nonce from current Bedrock state.
+If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the SDK reports it via the `channel_update` field of `Event::BlocksProcessed`, with the abandoned tx in `channel_update.orphaned`. The original signed transaction is no longer valid. The consumer decides whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`s reconstructed from the bundle; the SDK refills the inscription parent and the `withdraw_nonce` from current Bedrock state.
 
 ```rust
-use futures::StreamExt as _;
 use lb_zone_sdk::sequencer::{Event, OrphanedTx, WithdrawArg};
 
-let mut events = sequencer.events();
-while let Some(event) = events.next().await {
-    if let Event::ChannelUpdate { orphaned, .. } = event {
-        for tx in orphaned {
-            if let OrphanedTx::AtomicWithdraw(info) = tx {
-                let withdraws = info
-                    .withdraws
-                    .into_iter()
-                    .map(|w| WithdrawArg { outputs: w.op.outputs })
-                    .collect();
-                handle
-                    .publish_atomic_withdraw(info.inscription.payload, withdraws)
-                    .await
-                    .ok();
-            }
+if let Event::BlocksProcessed { channel_update, .. } = event {
+    for tx in channel_update.orphaned {
+        if let OrphanedTx::AtomicWithdraw(info) = tx {
+            let withdraws = info
+                .withdraws
+                .into_iter()
+                .map(|w| WithdrawArg { outputs: w.op.outputs })
+                .collect();
+            let (result, checkpoint) = sequencer.handle().publish_atomic_withdraw(
+                info.inscription.payload,
+                withdraws,
+            )?;
+            // Persist `result` + `checkpoint` exactly as on the original publish.
         }
     }
 }
 ```
+
+The reorg-aware recovery path for multi-sig is **not** supported by the SDK at the moment and is planned for a future release.
