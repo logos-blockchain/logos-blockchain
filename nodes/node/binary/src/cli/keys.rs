@@ -103,27 +103,31 @@ pub struct AddKeyArgs {
         long = "zk",
         value_parser = parse_hex_zk_key
     )]
-    pub zk_key: Option<UnsecuredZkKey>,
+    zk_key: Option<UnsecuredZkKey>,
 
     #[clap(
         long = "ed25519",
         value_parser = parse_hex_ed25519_key
     )]
-    pub ed25519_key: Option<UnsecuredEd25519Key>,
+    ed25519_key: Option<UnsecuredEd25519Key>,
 }
 
 impl AddKeyArgs {
     /// Creates arguments programmatically (e.g. from the c-bindings crate).
     /// `auto_approve` skips interactive prompts.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         user_config: PathBuf,
         keystore: PathBuf,
         key_title: Option<String>,
-        ed25519_key: Option<UnsecuredEd25519Key>,
-        zk_key: Option<UnsecuredZkKey>,
+        key: &Key,
         auto_approve: bool,
     ) -> Self {
+        let (ed25519_key, zk_key) = match key {
+            Key::Ed25519(key) => (Some(key.clone().into_unsecured()), None),
+            Key::Zk(key) => (None, Some(key.clone().into_unsecured())),
+        };
+
         Self {
             user_config,
             keystore,
@@ -131,6 +135,21 @@ impl AddKeyArgs {
             key_title,
             zk_key,
             ed25519_key,
+        }
+    }
+
+    /// Returns the key provided via the `--ed25519`/`--zk` flags as a [`Key`],
+    /// validating that exactly one was given.
+    pub fn key(&self) -> Result<Key> {
+        match (&self.ed25519_key, &self.zk_key) {
+            (Some(ed_secret), None) => Ok(Ed25519Key::from(ed_secret.clone()).into()),
+            (None, Some(zk_secret)) => Ok(ZkKey::from(zk_secret.clone()).into()),
+            (Some(_), Some(_)) => Err(color_eyre::eyre::eyre!(
+                "Please provide either --ed25519 or --zk, not both."
+            )),
+            (None, None) => Err(color_eyre::eyre::eyre!(
+                "You must provide a key via --ed25519 or --zk."
+            )),
         }
     }
 }
@@ -295,13 +314,14 @@ pub fn run_generate_key(args: GenerateKeyArgs) -> Result<()> {
 }
 
 pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
+    let key = args.key()?;
+
     let AddKeyArgs {
         user_config: user_config_path,
         keystore: keystore_path,
         yes: auto_approve,
         key_title,
-        zk_key,
-        ed25519_key,
+        ..
     } = args;
 
     let (mut user_config, mut keystore) =
@@ -310,27 +330,6 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
     let user_key_title = key_title
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
-
-    let key: Key = match (ed25519_key, zk_key) {
-        (Some(ed_secret), None) => {
-            let ed_key = Ed25519Key::from(ed_secret);
-            Key::Ed25519(ed_key)
-        }
-        (None, Some(zk_sercret)) => {
-            let zk_key = ZkKey::from(zk_sercret);
-            Key::Zk(zk_key)
-        }
-        (Some(_), Some(_)) => {
-            return Err(color_eyre::eyre::eyre!(
-                "Please provide either --ed25519 or --zk, not both."
-            ));
-        }
-        (None, None) => {
-            return Err(color_eyre::eyre::eyre!(
-                "You must provide a key via --ed25519 or --zk."
-            ));
-        }
-    };
 
     keystore.set(user_key_title.clone(), key);
 

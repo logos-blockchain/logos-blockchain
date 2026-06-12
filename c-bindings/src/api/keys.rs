@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString, c_char};
 
-use lb_key_management_system_keys::keys::{UnsecuredEd25519Key, UnsecuredZkKey};
+use lb_key_management_system_keys::keys::{Ed25519Key, Key, UnsecuredEd25519Key, ZkKey};
 use lb_node::cli::keys::{
     AddKeyArgs, GenerateKeyArgs, KeyType as NodeKeyType, RemoveKeyArgs, run_add_key, run_remove_key,
 };
@@ -140,8 +140,8 @@ pub unsafe extern "C" fn add_key(
 
     let key_hex = unsafe { CStr::from_ptr(key_hex) }.to_string_lossy();
 
-    let (ed25519_key, zk_key) = match parse_key_hex(key_type, &key_hex) {
-        Ok(keys) => keys,
+    let key = match parse_key_hex(key_type, &key_hex) {
+        Ok(key) => key,
         Err(error) => {
             logging::error!("add_key", "Invalid key: {error}");
             return OperationStatus::ValidationError;
@@ -152,8 +152,7 @@ pub unsafe extern "C" fn add_key(
         unsafe { cstr_to_path(user_config_path) },
         unsafe { cstr_to_path(keystore_path) },
         unsafe { key_title_from_ptr(key_title) },
-        ed25519_key,
-        zk_key,
+        &key,
         true,
     );
 
@@ -166,12 +165,8 @@ pub unsafe extern "C" fn add_key(
     }
 }
 
-/// Parses a hex-encoded secret key into the optional key pair expected by
-/// [`AddKeyArgs`].
-fn parse_key_hex(
-    key_type: KeyType,
-    key_hex: &str,
-) -> Result<(Option<UnsecuredEd25519Key>, Option<UnsecuredZkKey>), String> {
+/// Parses a hex-encoded secret key of the given type into a [`Key`].
+fn parse_key_hex(key_type: KeyType, key_hex: &str) -> Result<Key, String> {
     match key_type {
         KeyType::Ed25519 => {
             let secret_key = lb_node::config::parse_hex_ed25519_key(key_hex)?;
@@ -179,11 +174,11 @@ fn parse_key_hex(
                 .as_ref()
                 .try_into()
                 .map_err(|_| "Invalid ed25519 secret key length".to_owned())?;
-            Ok((Some(UnsecuredEd25519Key::from_bytes(&bytes)), None))
+            Ok(Ed25519Key::from(UnsecuredEd25519Key::from_bytes(&bytes)).into())
         }
         KeyType::Zk => {
             let zk_key = lb_node::config::parse_hex_zk_key(key_hex)?;
-            Ok((None, Some(zk_key)))
+            Ok(ZkKey::from(zk_key).into())
         }
     }
 }
