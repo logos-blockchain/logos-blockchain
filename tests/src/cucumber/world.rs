@@ -190,6 +190,7 @@ pub struct ZoneState {
     saved_checkpoints: HashMap<String, SequencerCheckpoint>,
     latest_checkpoints: HashMap<String, SequencerCheckpoint>,
     sequencer_startups: HashMap<String, ZoneSequencerStartup>,
+    observed_mempool_pending: HashMap<String, HashSet<InscriptionId>>,
     sorted_total_payloads: Option<usize>,
     sorted_expected_by_sequencer: Option<HashMap<String, Vec<Inscription>>>,
 }
@@ -457,6 +458,28 @@ impl ZoneState {
                     })
             })
             .collect()
+    }
+
+    pub fn record_mempool_pending(
+        &mut self,
+        sequencer_alias: impl Into<String>,
+        tx_hashes: impl IntoIterator<Item = InscriptionId>,
+    ) {
+        self.observed_mempool_pending
+            .entry(sequencer_alias.into())
+            .or_default()
+            .extend(tx_hashes);
+    }
+
+    #[must_use]
+    pub fn has_observed_mempool_pending(
+        &self,
+        sequencer_alias: &str,
+        tx_hash: &InscriptionId,
+    ) -> bool {
+        self.observed_mempool_pending
+            .get(sequencer_alias)
+            .is_some_and(|observed| observed.contains(tx_hash))
     }
 
     pub fn published_message_payloads(&self) -> Result<Vec<Inscription>, StepError> {

@@ -153,6 +153,10 @@ where
     /// `current_tip` stays None so the first live block event emits everything
     /// from LIB up to the new tip as `adopted`. On reconnect this is a no-op
     /// once both `state` and `slot_clock` are initialized.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: address this in a dedicated refactor"
+    )]
     async fn init_state_if_needed(&mut self) -> bool {
         if self.state.is_some() && self.slot_clock.is_some() {
             return true;
