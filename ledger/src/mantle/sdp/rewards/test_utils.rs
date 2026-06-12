@@ -98,3 +98,21 @@ pub fn create_service_parameters() -> ServiceParameters {
         epoch: 0.into(),
     }
 }
+
+#[expect(dead_code, reason = "test utility, not yet called by any test")]
+pub fn dummy_epoch_state() -> EpochState {
+    dummy_epoch_state_with(0, 0)
+}
+
+#[expect(dead_code, reason = "test utility, not yet called by any test")]
+pub fn dummy_epoch_state_with(epoch: u32, nonce: u64) -> EpochState {
+    EpochState {
+        epoch: epoch.into(),
+        nonce: Fr::from(BigUint::from(nonce)),
+        utxos: UtxoTree::default(),
+        total_stake: NonZeroU64::new(1).unwrap(),
+        lottery_0: Fr::ZERO,
+        lottery_1: Fr::ZERO,
+        sdp: SdpLedger::new(epoch.into()),
+    }
+}
