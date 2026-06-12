@@ -64,11 +64,6 @@ const fn slots_from_duration(elapsed: Duration, slot_duration: Duration) -> u64 
     }
 }
 
-fn duration_mul(duration: Duration, n: u64) -> Duration {
-    let nanos = duration.as_nanos().saturating_mul(u128::from(n));
-    Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
-}
-
 pub(super) const fn slot_to_u64(slot: Slot) -> u64 {
     slot.into_inner()
 }
