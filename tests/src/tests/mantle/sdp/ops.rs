@@ -213,7 +213,7 @@ async fn sdp_ops_e2e() {
     // Wait for the snapshot finalization delay and the retention period to pass.
     wait_for_tip_slot(
         &node0,
-        (u64::from((withdraw_epoch + RETENTION_PERIOD + Epoch::new(1)).into_inner())
+        (u64::from((withdraw_epoch.strict_add(RETENTION_PERIOD).strict_add(Epoch::new(1))).into_inner())
             * slots_per_epoch)
             .into(),
         Duration::from_mins(3),
