@@ -49,7 +49,9 @@ use crate::{
         },
         error::{StepError, StepResult},
         fee_reserve::ScenarioFeeState,
-        steps::manual_zone::runner::{Event, InscriptionId, SequencerCheckpoint, SequencerClient},
+        steps::manual_zone::runner::{
+            Event, InscriptionId, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
+        },
         utils::{make_builder, shared_host_bin_path},
         wallet::feed::{CucumberWalletBlockFeed, CucumberWalletBlockFeedError},
     },
@@ -157,6 +159,7 @@ pub struct ZoneSequencerRuntime {
     ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
+    tx_status_rx: Option<tokio::sync::broadcast::Receiver<TxStatusUpdate>>,
     discarded_payloads: Option<ZoneDiscardedPayloads>,
 }
 
@@ -526,6 +529,24 @@ impl ZoneState {
             .map(|runtime| runtime.checkpoint_rx.clone())
     }
 
+    pub fn take_sequencer_tx_status_rx(
+        &mut self,
+        sequencer_alias: &str,
+    ) -> Result<tokio::sync::broadcast::Receiver<TxStatusUpdate>, StepError> {
+        self.runtimes
+            .get_mut(sequencer_alias)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone sequencer '{sequencer_alias}' is not running"),
+            })?
+            .tx_status_rx
+            .take()
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!(
+                    "Zone sequencer '{sequencer_alias}' tx-status receiver was already consumed"
+                ),
+            })
+    }
+
     pub fn resolve_checkpoint(
         &self,
         alias: impl AsRef<str>,
@@ -555,6 +576,7 @@ impl ZoneState {
         ready_rx: tokio::sync::watch::Receiver<bool>,
         channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
+        tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
         discarded_payloads: Option<ZoneDiscardedPayloads>,
     ) {
         if let Some(runtime) = self.runtimes.remove(&alias) {
@@ -571,6 +593,7 @@ impl ZoneState {
                 ready_rx,
                 channel_view_rx,
                 turn_to_write_rx,
+                tx_status_rx: Some(tx_status_rx),
                 discarded_payloads,
             },
         );

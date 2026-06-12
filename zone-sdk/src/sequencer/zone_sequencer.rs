@@ -28,7 +28,7 @@ use super::{
     state::TxState,
     types::{
         Event, SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification,
-        TxStatus, WithdrawInfo,
+        TxSource, TxStatus, TxStatusUpdate, WithdrawInfo,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -116,6 +116,7 @@ pub struct ZoneSequencer<Node> {
     pub(super) channel_view_tx: watch::Sender<SequencerChannelView>,
     pub(super) turn_to_write_tx: watch::Sender<TurnNotification>,
     pub(super) checkpoint_tx: watch::Sender<Option<SequencerCheckpoint>>,
+    pub(super) tx_status_tx: broadcast::Sender<TxStatusUpdate>,
 }
 
 impl<Node> ZoneSequencer<Node>
@@ -170,6 +171,7 @@ where
             for (_hash, tx) in pending_txs {
                 restore_pending_tx(&mut tx_state, tx, channel_id);
             }
+            tx_state.prune_local_tx_tracking(config.max_local_tx_tracking);
             (Some(tx_state), lib_slot, last_msg_id, false)
         } else {
             info!(target: TARGET, "Starting fresh (no checkpoint)");
@@ -191,6 +193,7 @@ where
             .as_ref()
             .map(|s| build_checkpoint(s, last_msg_id, lib_slot));
         let (checkpoint_tx, _) = watch::channel(initial_checkpoint);
+        let (tx_status_tx, _) = broadcast::channel(256);
 
         Self {
             channel_id,
@@ -219,6 +222,7 @@ where
             channel_view_tx,
             turn_to_write_tx,
             checkpoint_tx,
+            tx_status_tx,
         }
     }
 
@@ -294,6 +298,12 @@ where
         let mut rx = self.checkpoint_tx.subscribe();
         rx.mark_changed();
         rx
+    }
+
+    /// Subscribe to tx-status changes.
+    #[must_use]
+    pub fn subscribe_tx_status(&self) -> broadcast::Receiver<TxStatusUpdate> {
+        self.tx_status_tx.subscribe()
     }
 
     /// Subscribe to the broadcast channel of events.
@@ -382,8 +392,26 @@ where
     }
 
     pub(super) fn queue_tx_status(&mut self, tx_hash: TxHash, status: TxStatus) {
-        self.buffered_events
-            .push_back(Event::TxStatusChanged { tx_hash, status });
+        let update = TxStatusUpdate { tx_hash, status };
+        drop(self.tx_status_tx.send(update));
+        if matches!(status, TxStatus::PendingMempool) {
+            self.buffered_events
+                .push_back(Event::MempoolPending(tx_hash));
+        }
+        if let Some(state) = self.state.as_mut() {
+            match status {
+                TxStatus::AcceptedLocally => {
+                    state.prune_local_tx_tracking(self.config.max_local_tx_tracking);
+                }
+                TxStatus::Orphaned(TxSource::Local) | TxStatus::Finalized(TxSource::Local) => {
+                    state.remove_local_tx(&tx_hash);
+                }
+                TxStatus::PendingMempool
+                | TxStatus::OnChain(_)
+                | TxStatus::Orphaned(TxSource::Other)
+                | TxStatus::Finalized(TxSource::Other) => {}
+            }
+        }
     }
 
     /// Push a single-tx publish post into `in_flight`. Used by

@@ -1090,10 +1090,13 @@ async fn step_sequencer_emits_full_transaction_lifecycle(
 ) -> StepResult {
     let aliases = single_column_table(step, "alias", "zone message aliases")?;
     let tx_hashes = log_step_error(step, world.zone.message_tx_hashes_for_aliases(&aliases))?;
-    let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
+    let mut tx_status_rx = log_step_error(
+        step,
+        world.zone.take_sequencer_tx_status_rx(&sequencer_alias),
+    )?;
 
     wait_for_tx_status_lifecycle(
-        events,
+        &mut tx_status_rx,
         &tx_hashes,
         &[
             TxStatus::AcceptedLocally,

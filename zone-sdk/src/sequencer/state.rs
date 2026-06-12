@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use lb_core::{
     header::HeaderId,
@@ -54,9 +54,9 @@ pub struct TxState {
     pending_by_parent: HashMap<MsgId, Vec<TxHash>>,
     /// Non-inscription pending txs (e.g. `set_keys`).
     pending_other: HashMap<TxHash, SignedMantleTx>,
-    /// Tx hashes accepted locally by this sequencer runtime or restored from
-    /// its checkpoint.
-    local_txs: HashSet<TxHash>,
+    /// Bounded insertion-ordered tx hashes accepted locally by this sequencer
+    /// runtime or restored from its checkpoint.
+    local_txs: VecDeque<TxHash>,
     /// Per-block cumulative safe sets.
     block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
     /// Block parent relationships for pruning.
@@ -78,7 +78,7 @@ impl TxState {
             pending: HashMap::new(),
             pending_by_parent: HashMap::new(),
             pending_other: HashMap::new(),
-            local_txs: HashSet::new(),
+            local_txs: VecDeque::new(),
             block_states,
             parent_map: HashMap::new(),
             current_lib: lib,
@@ -126,7 +126,7 @@ impl TxState {
         withdraws: Option<Vec<WithdrawInfo>>,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
-        self.local_txs.insert(tx_hash);
+        self.track_local_tx(tx_hash);
         self.pending_by_parent
             .entry(parent_msg)
             .or_default()
@@ -148,8 +148,24 @@ impl TxState {
     /// Submit a non-inscription tx for tracking (e.g. `set_keys`).
     pub fn submit_other(&mut self, signed_tx: SignedMantleTx) {
         let tx_hash = signed_tx.mantle_tx.hash();
-        self.local_txs.insert(tx_hash);
+        self.track_local_tx(tx_hash);
         self.pending_other.insert(tx_hash, signed_tx);
+    }
+
+    fn track_local_tx(&mut self, tx_hash: TxHash) {
+        if !self.local_txs.contains(&tx_hash) {
+            self.local_txs.push_back(tx_hash);
+        }
+    }
+
+    pub fn prune_local_tx_tracking(&mut self, max_tracked: usize) {
+        while self.local_txs.len() > max_tracked {
+            self.local_txs.pop_front();
+        }
+    }
+
+    pub fn remove_local_tx(&mut self, tx_hash: &TxHash) {
+        self.local_txs.retain(|tracked| tracked != tx_hash);
     }
 
     /// Process a new block. Finalization is handled by backfill ground
@@ -597,7 +613,7 @@ impl TxState {
     /// Returns inscriptions in BFS order (parents before children).
     pub(crate) fn collect_pending_suffix(&self, from_msg: MsgId) -> Vec<InscriptionInfo> {
         let mut suffix = Vec::new();
-        let mut queue = std::collections::VecDeque::new();
+        let mut queue = VecDeque::new();
         queue.push_back(from_msg);
 
         while let Some(current) = queue.pop_front() {

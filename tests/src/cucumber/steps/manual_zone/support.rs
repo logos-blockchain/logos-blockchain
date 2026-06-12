@@ -51,7 +51,7 @@ use tracing::warn;
 use super::runner::{
     self, ChannelUpdate, Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx, PendingTx,
     PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerClient, SequencerConfig,
-    TurnNotification, TxStatus, WithdrawArg,
+    TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
 };
 use crate::common::{
     chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
@@ -172,6 +172,7 @@ pub struct PolicyRuntime {
     pub ready_rx: tokio::sync::watch::Receiver<bool>,
     pub channel_view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
     pub turn_to_write_rx: tokio::sync::watch::Receiver<TurnNotification>,
+    pub tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
 }
 
 fn to_policy_runtime(rt: runner::Runtime<ZoneNodeHttpClient>) -> PolicyRuntime {
@@ -183,6 +184,7 @@ fn to_policy_runtime(rt: runner::Runtime<ZoneNodeHttpClient>) -> PolicyRuntime {
         ready_rx: rt.ready_rx,
         channel_view_rx: rt.channel_view_rx,
         turn_to_write_rx: rt.turn_to_write_rx,
+        tx_status_rx: rt.tx_status_rx,
     }
 }
 
@@ -632,7 +634,7 @@ pub async fn wait_for_adopted_payloads(
 }
 
 pub async fn wait_for_tx_status_lifecycle(
-    events: &mut tokio::sync::broadcast::Receiver<Event>,
+    tx_status_rx: &mut tokio::sync::broadcast::Receiver<TxStatusUpdate>,
     tx_hashes: &[InscriptionId],
     statuses: &[TxStatus],
     duration: Duration,
@@ -644,20 +646,20 @@ pub async fn wait_for_tx_status_lifecycle(
 
     timeout(duration, async {
         while !remaining.is_empty() {
-            let event = match events.recv().await {
-                Ok(event) => event,
+            let update = match tx_status_rx.recv().await {
+                Ok(update) => update,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("event subscriber lagged by {n}, recovering");
+                    warn!("tx-status subscriber lagged by {n}, recovering");
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
-            let Event::TxStatusChanged { tx_hash, status } = event else {
-                continue;
-            };
-            remaining.remove(&(tx_hash, status));
+            remaining.remove(&(update.tx_hash, update.status));
+            if remaining.is_empty() {
+                return Ok(());
+            }
         }
         Ok(())
     })

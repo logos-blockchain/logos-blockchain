@@ -18,6 +18,7 @@ use lb_core::{
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+const DEFAULT_MAX_LOCAL_TX_TRACKING: usize = 1_000;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -101,6 +102,7 @@ pub struct SequencerConfig {
     pub publish_channel_capacity: usize,
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
+    pub max_local_tx_tracking: usize,
 }
 
 impl Default for SequencerConfig {
@@ -111,6 +113,7 @@ impl Default for SequencerConfig {
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
+            max_local_tx_tracking: DEFAULT_MAX_LOCAL_TX_TRACKING,
         }
     }
 }
@@ -193,13 +196,9 @@ pub enum Event {
     /// catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
     /// `BlocksProcessed` once the stream resumes.
     Ready,
-    /// Transaction lifecycle status update.
-    TxStatusChanged {
-        /// Transaction hash whose lifecycle advanced.
-        tx_hash: TxHash,
-        /// New transaction status.
-        status: TxStatus,
-    },
+    /// Transaction was accepted by the node post API and is expected to be in
+    /// the mempool.
+    MempoolPending(TxHash),
     /// Turn-to-write status update for this sequencer.
     ///
     /// Emitted on the same change boundary as the `turn_to_write` watch
@@ -220,6 +219,13 @@ pub enum TxStatus {
     Orphaned(TxSource),
     /// Observed in finalized chain history.
     Finalized(TxSource),
+}
+
+/// Status update for a single transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TxStatusUpdate {
+    pub tx_hash: TxHash,
+    pub status: TxStatus,
 }
 
 /// Whether an observed transaction originated from this sequencer runtime.
