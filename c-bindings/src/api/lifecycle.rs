@@ -177,6 +177,8 @@ pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationS
 mod test {
     use std::{ffi::CString, path::PathBuf, sync::LazyLock};
 
+    use lb_node::UserConfig;
+    use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
     use tempfile::TempDir;
 
     use crate::api::lifecycle::{start_lb_node, stop_node};
@@ -217,15 +219,20 @@ mod test {
             let node_config_path = temp_dir.path().join("standalone-node-config.yaml");
             let deployment_config_path = temp_dir.path().join("standalone-deployment-config.yaml");
 
-            let state_dir = temp_dir.path().join("state");
-            let state_dir = state_dir.display().to_string();
-            let node_config = std::fs::read_to_string(STANDALONE_NODE_CONFIG_PATH.as_path())
-                .expect("Failed to read standalone node config")
-                .replace("./state/logs", &log_dir.to_string_lossy());
-            let node_config = format!(
-                "{node_config}\nstate:\n  base_folder: {state_dir}\napi:\n  backend:\n    listen_address: 127.0.0.1:0\n"
-            );
-            std::fs::write(&node_config_path, node_config)
+            let state_dir_path = temp_dir.path().join("state");
+            let mut node_config = deserialize_value_at_path::<UserConfig>(
+                STANDALONE_NODE_CONFIG_PATH.as_path(),
+                OnUnknownKeys::Fail,
+            )
+            .expect("Standalone user config should deserialize");
+            node_config.state.base_folder = state_dir_path;
+            node_config.api.backend.listen_address = "127.0.0.1:0"
+                .parse()
+                .expect("Local address should be correct");
+
+            let node_config_yaml = serde_yaml::to_string(&node_config)
+                .expect("Standalone node config should be written to file");
+            std::fs::write(&node_config_path, node_config_yaml)
                 .expect("Failed to write isolated node config");
             std::fs::copy(
                 STANDALONE_DEPLOYMENT_CONFIG_PATH.as_path(),

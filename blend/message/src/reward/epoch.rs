@@ -163,7 +163,7 @@ pub fn activity_threshold(
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-    use lb_groth16::Field as _;
+    use lb_groth16::AdditiveGroup as _;
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;
@@ -218,7 +218,7 @@ mod tests {
             ),
             EpochRandomness::from(Fr::ZERO),
         );
-        assert_eq!(maybe_distance, Some(8.into()));
+        assert_eq!(maybe_distance, Some(6.into()));
 
         let maybe_distance = evaluation.evaluate(
             &BlendingToken::new(

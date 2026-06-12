@@ -6,7 +6,7 @@ use core::{
 
 use futures::{Stream, StreamExt as _};
 use lb_log_targets::blend;
-use tracing::trace;
+use tracing::{trace, warn};
 
 use crate::message_scheduler::round_info::Round;
 
@@ -48,14 +48,16 @@ where
     ) -> Self {
         trace!(target: LOG_TARGET, "Creating new cover message scheduler with {rounds_per_epoch} total rounds.");
 
-        assert!(
-            message_count <= rounds_per_epoch.get(),
-            "The number of messages to emit must be at most the total number of rounds."
-        );
+        let effective_message_count = if message_count <= rounds_per_epoch.get() {
+            message_count
+        } else {
+            warn!(target: LOG_TARGET, "The number of messages to emit ({message_count}) is greater than the total number of rounds ({rounds_per_epoch}), so it will be capped to {rounds_per_epoch}.");
+            rounds_per_epoch.get()
+        };
 
         Self {
             round_clock,
-            remaining_messages: message_count,
+            remaining_messages: effective_message_count,
             remaining_rounds: NonZeroU128::from(rounds_per_epoch).get().into(),
             unprocessed_data_messages: 0,
             rng,
@@ -197,13 +199,16 @@ pub struct Settings {
 
 #[cfg(test)]
 mod tests {
-    use core::task::{Context, Poll};
+    use core::{
+        num::NonZeroU64,
+        task::{Context, Poll},
+    };
 
     use futures::{StreamExt as _, io::empty, task::noop_waker_ref};
     use rand::rngs::OsRng;
     use tokio_stream::iter;
 
-    use crate::cover_traffic::EpochCoverTraffic;
+    use crate::cover_traffic::{EpochCoverTraffic, Settings};
 
     #[tokio::test]
     async fn no_emission_on_empty_schedule() {
@@ -300,6 +305,23 @@ mod tests {
         assert_eq!(cover_message_count, 1);
         // Check that the number of processed messages has been consumed.
         assert_eq!(scheduler.unprocessed_data_messages, 0);
+    }
+
+    #[test]
+    fn message_count_is_capped_to_rounds_per_epoch() {
+        // When the requested message count exceeds the total number of rounds,
+        // the scheduler must not panic and should instead cap the number of
+        // messages to emit to the number of available rounds.
+        let scheduler = EpochCoverTraffic::new(
+            Settings {
+                rounds_per_epoch: NonZeroU64::new(3).expect("3 is non-zero"),
+                message_count: 10,
+            },
+            OsRng,
+            empty(),
+        );
+
+        assert_eq!(scheduler.remaining_messages, 3);
     }
 
     #[test]

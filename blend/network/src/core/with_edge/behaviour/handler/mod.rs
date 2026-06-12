@@ -22,6 +22,9 @@ mod ready_to_receive;
 mod receiving;
 mod starting;
 
+#[cfg(test)]
+mod tests;
+
 const LOG_TARGET: &str = blend::network::core::handler::CORE_EDGE;
 
 type TimerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;

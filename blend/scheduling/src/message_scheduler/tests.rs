@@ -4,6 +4,7 @@ use core::{
 };
 
 use futures::{StreamExt as _, task::noop_waker_ref};
+use lb_cryptarchia_engine::Epoch;
 use lb_utils::blake_rng::BlakeRng;
 use rand::SeedableRng as _;
 use tokio_stream::iter;
@@ -11,7 +12,8 @@ use tokio_stream::iter;
 use crate::{
     cover_traffic::EpochCoverTraffic,
     message_scheduler::{
-        EpochMessageScheduler,
+        EpochMessageScheduler, Settings,
+        epoch_info::EpochInfo,
         round_info::{Round, RoundInfo, RoundReleaseType},
     },
     release_delayer::EpochProcessedMessageDelayer,
@@ -237,4 +239,34 @@ async fn round_change() {
         }))
     );
     assert!(scheduler.data_messages.is_empty());
+}
+
+#[tokio::test]
+async fn rotate_epoch_carries_over_queued_data_messages() {
+    let rng = BlakeRng::from_entropy();
+    let rounds = [Round::from(0)];
+    let scheduler = EpochMessageScheduler::<_, (), u32>::with_test_values(
+        EpochCoverTraffic::with_test_values(Box::new(iter(rounds)), 0, 1.into(), rng.clone(), 0),
+        EpochProcessedMessageDelayer::with_test_values(
+            NonZeroU64::try_from(1).unwrap(),
+            1u128.into(),
+            rng,
+            Box::new(iter(rounds)),
+            vec![],
+        ),
+        Box::new(iter(rounds)),
+        // Data messages queued in the current epoch but not yet released.
+        vec![1, 2],
+    );
+
+    // Rotating into a new epoch must not silently drop the queued data messages.
+    let (new_scheduler, _old_scheduler) = scheduler.rotate_epoch(
+        EpochInfo {
+            core_quota: 1,
+            epoch: Epoch::new(0),
+        },
+        Settings::default(),
+    );
+
+    assert_eq!(new_scheduler.data_messages, vec![1, 2]);
 }

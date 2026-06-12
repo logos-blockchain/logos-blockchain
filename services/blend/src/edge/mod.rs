@@ -371,6 +371,12 @@ where
                     handler.handle_message_to_blend(message.clone()).await;
                 }
             }
+            else => {
+                // All input streams have terminated (e.g. disorderly shutdown).
+                // Exit cleanly instead of letting `select!` panic.
+                debug!(target: LOG_TARGET, "All input streams terminated, edge service shutting down.");
+                return Ok(());
+            }
         }
     }
 }

@@ -17,7 +17,7 @@ use lb_core::{
 };
 use lb_cryptarchia_engine::{EpochConfig, Slot};
 use lb_cryptarchia_sync::HeaderId;
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 use lb_ledger::{
     LedgerState,
@@ -82,7 +82,7 @@ fn cryptarchia_switch_to_online() {
         assert!(reorged_blocks.is_empty());
 
         block_ids.push(block.header().id());
-        slot = block.header().slot() + 1;
+        slot = block.header().slot().strict_add(1.into());
     }
 
     // Now, the chain is [G, B1, B2, B3].
@@ -142,7 +142,7 @@ async fn get_block_ids() {
     );
 
     // Add 2 blocks (not finalized yet since k=3)
-    let mut slot = Slot::genesis() + 1;
+    let mut slot = Slot::genesis().strict_add(1.into());
     let mut block_ids = vec![genesis_id];
     for _ in 0..2 {
         let block = try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, slot).unwrap();
@@ -159,7 +159,7 @@ async fn get_block_ids() {
         .await
         .unwrap();
         block_ids.push(block.header().id());
-        slot = block.header().slot() + 1;
+        slot = block.header().slot().strict_add(1.into());
     }
 
     // get_block_ids when all blocks are in memory.
@@ -206,7 +206,7 @@ async fn get_block_ids() {
         .await
         .unwrap();
         block_ids.push(block.header().id());
-        slot = block.header().slot() + 1;
+        slot = block.header().slot().strict_add(1.into());
     }
 
     // All blocks are loaded from memory + storage.
@@ -245,7 +245,6 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
     service_params.insert(
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
-            lock_period: 10.into(),
             inactivity_period: 1.into(),
             retention_period: 1.into(),
             epoch: 0.into(),

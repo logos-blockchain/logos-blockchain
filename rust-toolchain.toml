@@ -1,7 +1,7 @@
 [toolchain]
 # Keep this version in sync also in the following places:
 # * flake.nix
-# * testnet/Dockerfile
+# * deployment/Dockerfile
 # * tests/testing_framework/assets/runtime/Dockerfile.node
 # * tests/testing_framework/assets/runtime/Dockerfile.cfgsync
 # Also, update the version of the nightly toolchain to the latest nightly of the new version specified in the following places:

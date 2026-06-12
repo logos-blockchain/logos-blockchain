@@ -4,7 +4,7 @@ use blake2::Digest as _;
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub const BEDROCK_VERSION: u8 = 1;
 
@@ -43,7 +43,7 @@ impl Debug for Nonce {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Copy, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Copy)]
 #[repr(u8)]
 pub enum Version {
     Bedrock = BEDROCK_VERSION,
@@ -53,6 +53,61 @@ impl Version {
     #[must_use]
     pub const fn as_byte(self) -> u8 {
         self as u8
+    }
+}
+
+impl TryFrom<u8> for Version {
+    type Error = std::io::Error;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            BEDROCK_VERSION => Ok(Self::Bedrock),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid version [{value}]"),
+            )),
+        }
+    }
+}
+
+impl TryFrom<&str> for Version {
+    type Error = std::io::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value.to_lowercase().as_str() {
+            "bedrock" => Ok(Self::Bedrock),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Invalid version [{value}]"),
+            )),
+        }
+    }
+}
+
+impl Serialize for Version {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if serializer.is_human_readable() {
+            serializer.serialize_str(format!("{self:?}").as_str())
+        } else {
+            serializer.serialize_u8(self.as_byte())
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Version {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        if deserializer.is_human_readable() {
+            let s = String::deserialize(deserializer)?;
+            Self::try_from(s.as_str()).map_err(serde::de::Error::custom)
+        } else {
+            Self::try_from(<u8>::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+        }
     }
 }
 

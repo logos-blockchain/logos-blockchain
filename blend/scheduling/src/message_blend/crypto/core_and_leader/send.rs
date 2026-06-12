@@ -207,7 +207,7 @@ mod test {
     };
     use lb_core::crypto::ZkHash;
     use lb_cryptarchia_engine::Epoch;
-    use lb_groth16::{Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
     use lb_key_management_system_keys::keys::{ED25519_PUBLIC_KEY_SIZE, Ed25519PublicKey};
     use libp2p::PeerId;
     use multiaddr::Multiaddr;

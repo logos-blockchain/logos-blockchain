@@ -6,7 +6,7 @@ use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInput
 use lb_chain_service::Epoch;
 use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
 use lb_cryptarchia_engine::Slot;
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_ledger::{EpochState, mantle::sdp::SdpLedger};
 use overwatch::overwatch::OverwatchHandle;
 

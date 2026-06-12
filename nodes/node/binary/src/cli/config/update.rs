@@ -140,7 +140,9 @@ fn update_cryptarchia_config(
         .expect("Cryptarchia funding key set by default");
     cryptarchia_config.set_funding_pk(cryptarchia_funding_key.to_public_key());
 
-    if let Some(initial_peers) = initial_peers {
+    if cryptarchia_args.ibd
+        && let Some(initial_peers) = initial_peers
+    {
         cryptarchia_config.network.bootstrap.ibd.peers = initial_peers
             .iter()
             .filter_map(|addr| match addr.iter().last() {

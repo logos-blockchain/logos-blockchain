@@ -14,7 +14,7 @@ use lb_core::{
     codec::SerializeOp as _, crypto::ZkHash, proofs::leader_proof::LeaderPublic,
     sdp::ActivityMetadata,
 };
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::CORE_MERKLE_TREE_HEIGHT;
 use lb_utils::blake_rng::BlakeRng;
@@ -130,7 +130,7 @@ async fn test_handle_incoming_blend_message() {
 
     // Creates a new processor/scheduler/token_collector with the new epoch
     // number.
-    epoch += 1;
+    epoch = epoch.strict_add(1.into());
     let public_info = new_epoch_info(epoch, membership.clone(), &settings);
     let mut new_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
@@ -228,7 +228,7 @@ async fn test_handle_incoming_blend_message() {
 
     // Check that a message built with a future epoch cannot be
     // decapsulated by either processor, and thus not scheduled.
-    epoch += 1;
+    epoch = epoch.strict_add(1.into());
     let mut future_processor = new_crypto_processor(
         EpochCryptographicProcessorSettings {
             non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
@@ -270,6 +270,126 @@ async fn test_handle_incoming_blend_message() {
             .tokens()
             .len(),
         1
+    );
+}
+
+/// Regression test for audit finding #1: two replicas of one data message must
+/// not crash the core service. The service emits `data_replication_factor + 1`
+/// copies, each with fresh random layers (distinct encapsulated IDs), but
+/// decapsulation yields the same inner `NetworkMessage` — and
+/// `ProcessedMessage` hashes on that content:
+///
+/// ```text
+///   replica A ─encap(rand)→ ID_a ─┐ swarm dedups on ID, so both pass
+///   replica B ─encap(rand)→ ID_b ─┘
+///                                  │  decapsulate at same final node
+///                                  ▼
+///        both → ProcessedMessage::Network(same bytes)   (Eq/Hash on content)
+///                                  │
+///                                  ▼  add_unsent_processed_message(..)
+///            A: Ok ──► inserted        B: Err ──► dropped as duplicate ✓
+/// ```
+///
+/// `handle_decapsulated_incoming_message_from_current_epoch` now treats a
+/// duplicate insert as already-known rather than asserting uniqueness, so the
+/// second replica is dropped gracefully and exactly one copy stays pending
+/// release. Size-1 membership here forces local full decapsulation.
+#[test_log::test(tokio::test)]
+async fn test_duplicate_decapsulated_replica_handled_gracefully() {
+    let (_, _, state_updater, _state_receiver) =
+        dummy_overwatch_resources::<(), (), RuntimeServiceId>();
+
+    // Size-1 membership: the only node is the local node, so every encapsulated
+    // message is fully decapsulated locally into its inner `NetworkMessage`.
+    let epoch = 0.into();
+    let minimal_network_size = 1;
+    let (membership, local_private_key) = new_membership(minimal_network_size);
+    let (settings, _recovery_file) = settings(
+        local_private_key.clone(),
+        u64::from(minimal_network_size).try_into().unwrap(),
+        (),
+        // data_replication_factor: the panic is independent of this value; the
+        // realistic trigger is the >1 replicas the service emits per message.
+        1,
+    );
+    let public_info = new_epoch_info(epoch, membership.clone(), &settings);
+    let mut processor = new_crypto_processor(
+        EpochCryptographicProcessorSettings {
+            non_ephemeral_encryption_key: settings.non_ephemeral_signing_key.derive_x25519(),
+            num_blend_layers: settings.num_blend_layers,
+        },
+        &public_info,
+        (),
+    );
+
+    // One logical data message, serialized once...
+    let payload = NetworkMessage {
+        message: vec![],
+        broadcast_settings: (),
+    }
+    .to_bytes()
+    .expect("NetworkMessage serialization must succeed");
+
+    // ...encapsulated twice. Each call draws fresh randomness, so these are two
+    // distinct encapsulated messages (different identifiers) that the swarm
+    // would forward independently — exactly the replicas the service produces.
+    let replica_a = processor
+        .encapsulate_data_payload(&payload)
+        .await
+        .expect("encapsulation must succeed");
+    let replica_b = processor
+        .encapsulate_data_payload(&payload)
+        .await
+        .expect("encapsulation must succeed");
+    assert_ne!(
+        replica_a, replica_b,
+        "the two replicas must be distinct encapsulations (so the swarm does not dedup them)"
+    );
+
+    let scheduler_settings = scheduler_settings(&timing_settings(), settings.num_blend_layers);
+    let mut scheduler = EpochMessageScheduler::new(
+        scheduler_epoch_info(&public_info),
+        BlakeRng::from_entropy(),
+        scheduler_settings,
+    );
+    let recovery_checkpoint = ServiceState::with_epoch(
+        epoch,
+        EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info)),
+        None,
+        state_updater,
+    )
+    .unwrap();
+
+    // First replica: decapsulated and recorded as an unsent processed message.
+    let recovery_checkpoint = handle_incoming_blend_message(
+        (replica_a.into(), epoch),
+        &mut scheduler,
+        None,
+        &processor,
+        None,
+        recovery_checkpoint,
+    );
+    assert_eq!(
+        recovery_checkpoint.unsent_processed_messages().len(),
+        1,
+        "the first replica must be recorded as an unsent processed message"
+    );
+
+    // Second replica: decapsulates to the *same* `ProcessedMessage::Network`.
+    // The insert into `unsent_processed_messages` returns `Err`, but it is now
+    // treated as a known duplicate instead of panicking the task.
+    let recovery_checkpoint = handle_incoming_blend_message(
+        (replica_b.into(), epoch),
+        &mut scheduler,
+        None,
+        &processor,
+        None,
+        recovery_checkpoint,
+    );
+    assert_eq!(
+        recovery_checkpoint.unsent_processed_messages().len(),
+        1,
+        "the duplicate replica must be dropped, leaving exactly one pending message"
     );
 }
 
@@ -388,7 +508,7 @@ async fn test_handle_epoch_transition_expired() {
     // Create token collector and collect a token.
     let mut token_collector = EpochBlendingTokenCollector::new(&reward_epoch_info(&public_info))
         .rotate_epoch(&reward_epoch_info(&new_epoch_info(
-            epoch + 1,
+            epoch.strict_add(1.into()),
             membership.clone(),
             &settings,
         )))
@@ -475,7 +595,7 @@ async fn test_handle_epoch_event() {
         EpochEvent::NewEpoch(
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
-                    epoch: epoch + 1,
+                    epoch: epoch.strict_add(1.into()),
                     ..public_info.clone()
                 },
                 core_poq_generator: Some(()),
@@ -503,7 +623,7 @@ async fn test_handle_epoch_event() {
     else {
         panic!("expected Transitioning output");
     };
-    assert_eq!(new_crypto_processor.epoch(), epoch + 1);
+    assert_eq!(new_crypto_processor.epoch(), epoch.strict_add(1.into()));
     assert_eq!(old_crypto_processor.epoch(), epoch);
     assert_eq!(
         new_scheduler.release_delayer().unreleased_messages().len(),
@@ -513,7 +633,7 @@ async fn test_handle_epoch_event() {
         old_scheduler.release_delayer().unreleased_messages().len(),
         0
     );
-    assert_eq!(new_epoch_info.epoch, epoch + 1);
+    assert_eq!(new_epoch_info.epoch, epoch.strict_add(1.into()));
     assert!(
         new_recovery_checkpoint
             .clone()
@@ -544,8 +664,8 @@ async fn test_handle_epoch_event() {
     else {
         panic!("expected TransitionCompleted output");
     };
-    assert_eq!(current_crypto_processor.epoch(), epoch + 1);
-    assert_eq!(current_epoch_info.epoch, epoch + 1);
+    assert_eq!(current_crypto_processor.epoch(), epoch.strict_add(1.into()));
+    assert_eq!(current_epoch_info.epoch, epoch.strict_add(1.into()));
     assert!(
         new_recovery_checkpoint
             .clone()
@@ -566,7 +686,7 @@ async fn test_handle_epoch_event() {
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
                     membership: new_membership(minimal_network_size - 1).0,
-                    epoch: epoch + 2,
+                    epoch: epoch.strict_add(2.into()),
                     ..current_epoch_info.clone()
                 },
                 core_poq_generator: Some(()),
@@ -590,7 +710,7 @@ async fn test_handle_epoch_event() {
     else {
         panic!("expected Retiring output");
     };
-    assert_eq!(old_crypto_processor.epoch(), epoch + 1);
+    assert_eq!(old_crypto_processor.epoch(), epoch.strict_add(1.into()));
 }
 
 /// On an epoch change where the membership actually changes (and the local node
@@ -638,7 +758,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
 
     // The new epoch has a *different* (larger) membership; `new_membership`
     // always includes the local node, so the node stays part of the core.
-    let new_epoch = epoch + 1;
+    let new_epoch = epoch.strict_add(1.into());
     let new_membership = new_membership(minimal_network_size + 1).0;
     assert_ne!(
         new_membership.size(),
@@ -742,7 +862,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         EpochEvent::NewEpoch(
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
-                    epoch: epoch + 1,
+                    epoch: epoch.strict_add(1.into()),
                     ..public_info.clone()
                 },
                 core_poq_generator: Some(()),
@@ -826,7 +946,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
     let (sdp_relay, _sdp_relay_receiver) = sdp_relay();
 
     // Handle a NewEpoch(Empty) event - empty membership triggers Retiring.
-    let empty_epoch = epoch + 1;
+    let empty_epoch = epoch.strict_add(1.into());
     let output = handle_epoch_event(
         EpochEvent::NewEpoch((empty_epoch, ZkHash::from(1)).into()),
         &settings,
@@ -895,7 +1015,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         EpochEvent::NewEpoch(
             CoreEpochInfo {
                 public: CoreEpochPublicInfo {
-                    epoch: epoch + 1,
+                    epoch: epoch.strict_add(1.into()),
                     ..public_info.clone()
                 },
                 core_poq_generator: None,

@@ -41,6 +41,7 @@ impl Service {
         self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
+        locked_notes: &mut LockedNotes,
         config: &ServiceParameters,
         rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>) {
@@ -49,6 +50,7 @@ impl Service {
                 let (new_state, utxos) = state.try_apply_header(
                     last_epoch_state,
                     epoch_state,
+                    locked_notes,
                     config,
                     &rewards_params.blend,
                 );
@@ -170,51 +172,97 @@ struct ServiceState<R: Rewards> {
     _phantom: PhantomData<R>,
 }
 
-fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServiceParameters) -> bool {
-    declaration.active + config.inactivity_period + config.retention_period >= current_epoch
-}
-
 impl<R: Rewards> ServiceState<R> {
     fn try_apply_header(
         mut self,
-        _last_epoch_state: &EpochState,
+        last_epoch_state: &EpochState,
         epoch_state: &EpochState,
+        locked_notes: &mut LockedNotes,
         service_params: &ServiceParameters,
         _rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>) {
-        // Remove expired declarations based on retention_period
-        self.declarations = self
-            .declarations
-            .iter()
-            .filter(|(_id, declaration)| {
-                let active = is_active(declaration, epoch_state.epoch(), service_params);
-                if !active {
-                    warn!(
-                        provider_id = ?declaration.provider_id,
-                        latest_active_epoch = ?declaration.active,
-                        current_epoch = ?epoch_state.epoch(),
-                        service_params = ?service_params,
-                        "removing declaration due to inactivity + retention + finalization_delay"
-                    );
-                }
-                active
-            })
-            .map(|(id, declaration)| (*id, declaration.clone()))
-            .collect();
-
-        // Update rewards with current epoch state and distribute rewards
         let reward_utxos = Vec::new();
-        // TODO: enable this after making the `rewards` module stable
-        // if last_epoch_state.epoch() < epoch_state.epoch() {
-        //     (self.rewards, reward_utxos) = self.rewards.update_epoch(
-        //         last_epoch_state,
-        //         epoch_state,
-        //         service_params,
-        //         rewards_params,
-        //     );
-        // }
+
+        if last_epoch_state.epoch() < epoch_state.epoch() {
+            // Unlock notes from withdrawn declarations if possible
+            self.unlock_notes_from_withdrawn_declarations(locked_notes, epoch_state.epoch());
+
+            // Garbage collect declarations
+            self.gc_declarations(epoch_state.epoch(), service_params);
+
+            // Update rewards with current epoch state and distribute rewards
+            // TODO: enable this after making the `rewards` module stable
+            // if last_epoch_state.epoch() < epoch_state.epoch() {
+            //     (self.rewards, reward_utxos) = self.rewards.update_epoch(
+            //         last_epoch_state,
+            //         epoch_state,
+            //         service_params,
+            //         rewards_params,
+            //     );
+            // }
+        }
 
         (self, reward_utxos)
+    }
+
+    /// Unlock notes from withdrawn declarations whose withdrawn epoch has been
+    /// reached.
+    fn unlock_notes_from_withdrawn_declarations(
+        &self,
+        locked_notes: &mut LockedNotes,
+        epoch: Epoch,
+    ) {
+        self.declarations.iter().for_each(|(_, declaration)| {
+            if let Some(withdrawn) = declaration.withdrawn
+                && epoch >= withdrawn
+                && locked_notes
+                    .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
+            {
+                locked_notes
+                    .unlock(declaration.service_type, &declaration.locked_note_id)
+                    .expect("unlocking note from withdrawn declaraion must be successful if it hasn't been unlocked yet");
+            }
+        });
+    }
+
+    /// Garbage collect declarations that have been withdrawn or inactive,
+    /// if the retention period has passed.
+    fn gc_declarations(&mut self, epoch: Epoch, service_params: &ServiceParameters) {
+        let expired: Vec<DeclarationId> = self
+            .declarations
+            .iter()
+            .filter(|(_id, declaration)| Self::is_expired(declaration, epoch, service_params))
+            .map(|(id, declaration)| {
+                warn!(
+                    ?declaration,
+                    ?epoch,
+                    ?service_params,
+                    "removing an expired declaration"
+                );
+                *id
+            })
+            .collect();
+        for id in &expired {
+            self.declarations.remove_mut(id);
+        }
+    }
+
+    /// Returns true if the declaration has been withdrawn or inactive,
+    /// and if the retention period has passed.
+    fn is_expired(
+        declaration: &Declaration,
+        current_epoch: Epoch,
+        config: &ServiceParameters,
+    ) -> bool {
+        let withdrawn = declaration
+            .withdrawn
+            .is_some_and(|withdrawn| withdrawn.strict_add(config.retention_period) < current_epoch);
+        let inactive = declaration
+            .active
+            .strict_add(config.inactivity_period)
+            .strict_add(config.retention_period)
+            < current_epoch;
+        withdrawn || inactive
     }
 
     #[expect(
@@ -310,6 +358,7 @@ impl SdpLedger {
         epoch_state: &EpochState,
     ) -> Result<(Self, Vec<Utxo>), Error> {
         let mut all_reward_utxos = Vec::new();
+        let mut locked_notes = self.locked_notes().clone();
 
         let services = self
             .services
@@ -322,6 +371,7 @@ impl SdpLedger {
                 let (new_state, reward_utxos) = service_state.clone().try_apply_header(
                     last_epoch_state,
                     epoch_state,
+                    &mut locked_notes,
                     service_params,
                     &config.service_rewards_params,
                 );
@@ -334,7 +384,7 @@ impl SdpLedger {
             Self {
                 epoch: epoch_state.epoch(),
                 services,
-                locked_notes: self.locked_notes.clone(),
+                locked_notes,
             },
             all_reward_utxos,
         ))
@@ -434,6 +484,7 @@ impl SdpLedger {
             declarations: service_state.declarations(),
             tx_hash: &tx_hash,
             active_sig: zksig,
+            epoch: self.epoch,
         })?;
 
         // Execute SDP Active
@@ -461,14 +512,13 @@ impl SdpLedger {
         tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Events), Error> {
-        let (service, config) = self.get_service(&op.declaration_id, config)?;
+        let (service, _) = self.get_service(&op.declaration_id, config)?;
         let Some(service_state) = self.services.get_mut(&service) else {
             return Err(Error::ServiceNotFound(service));
         };
 
         // Validate SDP Withdraw
         op.validate(&SDPWithdrawValidationContext {
-            lock_period: config.lock_period,
             declarations: service_state.declarations(),
             epoch: self.epoch,
             locked_notes: &self.locked_notes,
@@ -480,6 +530,7 @@ impl SdpLedger {
         let (result, events) = op.execute(SDPWithdrawExecutionContext {
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
+            epoch: self.epoch,
         })?;
 
         self.locked_notes = result.locked_notes;
@@ -561,7 +612,7 @@ mod tests {
 
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
-    use lb_groth16::{Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
     use num_bigint::BigUint;
@@ -673,12 +724,19 @@ mod tests {
         epoch_state
     }
 
+    fn next_epoch_state(epoch: Epoch, last_epoch_state: EpochState) -> EpochState {
+        EpochState {
+            epoch,
+            nonce: ZkHash::from(epoch.into_inner()),
+            ..last_epoch_state
+        }
+    }
+
     /// A provider that hasn't submit a new active message during
     /// `inactivity_period + retention_period` epochs must be removed.
     #[test]
     fn gc_inactive_declaration() {
         let config = setup(ServiceParameters {
-            lock_period: 10.into(),
             // Set inactivity/retention periods very short to check that
             // declaration is NOT removed before an activity message is submitted.
             inactivity_period: 1.into(),
@@ -692,11 +750,7 @@ mod tests {
 
         // Move forward to the epoch 1
         let mut last_epoch_state = epoch0.clone();
-        let new_epoch_state = EpochState {
-            epoch: 1.into(),
-            nonce: ZkHash::from(1),
-            ..epoch0
-        };
+        let new_epoch_state = next_epoch_state(1.into(), epoch0);
         (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
@@ -730,11 +784,7 @@ mod tests {
         // message.
         // (The provider is expected to provide the service from epoch 3)
         for epoch in 2..=4 {
-            let new_epoch_state = EpochState {
-                epoch: epoch.into(),
-                nonce: ZkHash::from(epoch),
-                ..last_epoch_state.clone()
-            };
+            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
@@ -765,11 +815,7 @@ mod tests {
         // Move forward to the epoch 6. The declaration should be still present
         // because the activity message was accepted at epoch 4.
         for epoch in 5..=6 {
-            let new_epoch_state = EpochState {
-                epoch: epoch.into(),
-                nonce: ZkHash::from(epoch),
-                ..last_epoch_state.clone()
-            };
+            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
@@ -778,13 +824,21 @@ mod tests {
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
+        // Before moving to epoch 7 where declaration will be removed,
+        // applying another header within the same epoch 6 must be a no-op
+        // (GC and unlock are gated to epoch transitions only).
+        let ledger_before = ledger.clone();
+        (ledger, _) = ledger
+            .try_apply_header(&config, &last_epoch_state, &last_epoch_state)
+            .unwrap();
+        assert_eq!(
+            ledger, ledger_before,
+            "within-epoch try_apply_header must not change ledger state"
+        );
+
         // Move forward to epoch 7 where declaration should be removed
         // because no activity message has been submitted since epoch 4
-        let new_epoch_state = EpochState {
-            epoch: 7.into(),
-            nonce: ZkHash::from(7),
-            ..last_epoch_state.clone()
-        };
+        let new_epoch_state = next_epoch_state(7.into(), last_epoch_state.clone());
         (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
@@ -792,11 +846,65 @@ mod tests {
         assert!(!declarations.contains_key(&declaration_id));
     }
 
+    /// Regression test: the per-epoch membership build must not panic on an
+    /// SDP snapshot that contains two declarations with the same `zk_id`.
+    ///
+    /// `DeclarationId = Hash(service || provider_id || zk_id || locators)`
+    /// does not bind `zk_id` uniqueness (the SDP spec explicitly permits
+    /// duplicates), so two declarations with the *same* `zk_id` but
+    /// *different* locators (hence different `DeclarationId`s) can both be on
+    /// chain. `membership_info_from_epoch_state` (and, once rewards are
+    /// re-enabled, `providers_and_zk_root` inside `try_apply_header`) feed
+    /// their `zk_id`s into `sort_nodes_and_build_merkle_tree(..).expect(..)`,
+    /// which used to return `Err(DuplicateKey)` on the collision and so
+    /// panicked every Blend node at the epoch boundary. The builder now
+    /// reduces duplicate keys to a single leaf, so the build succeeds.
+    #[test]
+    fn membership_merkle_build_tolerates_duplicate_zk_ids() {
+        use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
+
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let (_sk_a, utxo_a) = utxo_with_sk();
+        let (_sk_b, utxo_b) = utxo_with_sk();
+
+        // Two declarations sharing the SAME zk_id, differing only in locators
+        // (and locked note) -> distinct DeclarationIds, identical zk_id.
+        let declare_a = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_a.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declare_b = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_b.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        assert_ne!(declare_a.id(), declare_b.id());
+        assert_eq!(declare_a.zk_id, declare_b.zk_id);
+
+        // Exactly what `membership_info_from_epoch_state` does with the
+        // snapshot: build the core-membership Merkle tree keyed by each
+        // declaration's zk_id. Production `.expect()`s this result.
+        let mut zk_ids = vec![declare_a.zk_id.into_inner(), declare_b.zk_id.into_inner()];
+        let result = sort_nodes_and_build_merkle_tree(&mut zk_ids, |zk_id| *zk_id);
+
+        assert!(
+            result.is_ok(),
+            "membership Merkle build must not error (and thus `.expect()`-panic) \
+             on duplicate zk_ids: {:?}",
+            result.err()
+        );
+    }
+
     #[test]
     fn test_withdraw_provider() {
         let config = setup(ServiceParameters {
-            lock_period: 10.into(),
-            // inactivity/retention periods should be longer than lock period
+            // inactivity/retention periods should be long enough
             // for this test to avoid the declaration being removed due to
             // inacitivity before we can test the withdraw logic.
             inactivity_period: 20.into(),
@@ -829,23 +937,7 @@ mod tests {
                 .unwrap();
 
         // Verify declaration is present
-        let declarations = sdp_ledger.get_declarations(service_a).unwrap();
-        assert!(declarations.contains_key(&declaration_id));
-
-        // Move forward enough epochs to satisfy lock_period
-        let mut sdp_ledger = sdp_ledger;
-        let mut last_epoch_state = epoch0;
-        for epoch in 1..=11 {
-            let new_epoch_state = EpochState {
-                epoch: epoch.into(),
-                nonce: ZkHash::from(epoch),
-                ..last_epoch_state.clone()
-            };
-            (sdp_ledger, _) = sdp_ledger
-                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-                .unwrap();
-            last_epoch_state = new_epoch_state;
-        }
+        assert!(sdp_ledger.get_declaration(&declaration_id).is_some());
 
         // Withdraw the declaration
         let withdraw_op = &SDPWithdrawOp {
@@ -856,9 +948,65 @@ mod tests {
         let sdp_ledger =
             apply_withdraw_with_dummies(sdp_ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
 
-        // Verify declaration is removed
-        let declarations = sdp_ledger.get_declarations(service_a).unwrap();
-        assert!(!declarations.contains_key(&declaration_id));
-        assert!(declarations.is_empty());
+        let withdrawn_epoch = sdp_ledger.get_declaration(&declaration_id)
+            .expect("declaration must still exist even after withdrawal because GC shouldn't remove it immediately")
+            .withdrawn
+            .expect("withdraw epoch must be set after withdraw tx is accepted");
+
+        // Move forward epochs until withdrawn_epoch is reached,
+        // and check that the note has been unlocked.
+        let mut sdp_ledger = sdp_ledger;
+        let mut last_epoch_state = epoch0;
+        for epoch in 1..=withdrawn_epoch.into_inner() {
+            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
+        }
+        assert!(
+            sdp_ledger.get_declaration(&declaration_id).is_some(),
+            "declaration must still exist because GC shouldn't remove it until snapshot_finalization + retention_period has passed"
+        );
+        assert!(
+            !sdp_ledger
+                .locked_notes()
+                .is_locked_for_service(&declare_op.locked_note_id, &ServiceType::BlendNetwork),
+            "the provider's note must be unlocked once withdrawn_epoch is reached"
+        );
+
+        // Move forward epochs just before the `snapshot_finalization +
+        // retention_period` has elapsed, and check that the declaration hasn't
+        // been removed yet (boundary check).
+        let retention_period = config
+            .service_params
+            .get(&ServiceType::BlendNetwork)
+            .unwrap()
+            .retention_period;
+        let target_epoch = withdrawn_epoch
+            .strict_add(retention_period)
+            .strict_add(Epoch::new(1));
+        for epoch in (withdrawn_epoch.into_inner() + 1)..target_epoch.into_inner() {
+            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
+        }
+        assert!(
+            sdp_ledger.get_declaration(&declaration_id).is_some(),
+            "declaration must still exist because GC shouldn't remove it until snapshot_finalization + retention_period has passed"
+        );
+
+        // Move forward one more epoch. Now, `snapshot_finalization + retention_period`
+        // has passed. Check that the declaration has been removed.
+        let new_epoch_state = next_epoch_state(target_epoch, last_epoch_state.clone());
+        (sdp_ledger, _) = sdp_ledger
+            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+            .unwrap();
+        assert!(
+            sdp_ledger.get_declaration(&declaration_id).is_none(),
+            "declaration should have been removed"
+        );
     }
 }

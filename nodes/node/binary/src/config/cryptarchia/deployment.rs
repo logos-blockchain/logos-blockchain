@@ -87,7 +87,6 @@ pub struct SdpConfig {
 // The same as `lb_core::sdp::ServiceParameters`.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServiceParameters {
-    pub lock_period: NumberOfEpochs,
     pub inactivity_period: NumberOfEpochs,
     pub retention_period: NumberOfEpochs,
     pub epoch: Epoch,

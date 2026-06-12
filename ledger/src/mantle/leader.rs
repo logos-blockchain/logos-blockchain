@@ -211,7 +211,7 @@ impl LeaderState {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
     use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;

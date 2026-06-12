@@ -37,7 +37,7 @@ Each component is a standalone service that can be run independently or via Dock
 Copy the example environment file and fill in your credentials.
 
 ```bash
-cp testnet/l2-sequencer-archival-demo/.env.example testnet/l2-sequencer-archival-demo/.env
+cp deployment/l2-sequencer-archival-demo/.env.example deployment/l2-sequencer-archival-demo/.env
 
 ```
 
@@ -47,7 +47,7 @@ The simplest way to run the entire stack is using our prebuilt images.
 
 ```bash
 # Navigate to the demo directory
-cd testnet/l2-sequencer-archival-demo
+cd deployment/l2-sequencer-archival-demo
 
 # Start all services
 docker compose up

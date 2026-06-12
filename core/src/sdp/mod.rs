@@ -3,7 +3,6 @@ pub mod locked_notes;
 
 use core::{
     fmt::{self, Display, Formatter},
-    ops::{Add, Sub},
     str::FromStr,
 };
 use std::{collections::HashMap, hash::Hash};
@@ -37,8 +36,6 @@ pub struct MinStake {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
-    /// Minimum epochs during which a declaration cannot be withdrawn
-    pub lock_period: NumberOfEpochs,
     /// Maximum epochs during which an activity message must be sent
     pub inactivity_period: NumberOfEpochs,
     /// Epochs after which a declaration can be safely deleted by Garbage
@@ -48,51 +45,7 @@ pub struct ServiceParameters {
     pub epoch: Epoch,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NumberOfEpochs(Epoch);
-
-impl NumberOfEpochs {
-    #[must_use]
-    pub const fn new(epoch: Epoch) -> Self {
-        Self(epoch)
-    }
-}
-
-impl From<u32> for NumberOfEpochs {
-    fn from(value: u32) -> Self {
-        Self(value.into())
-    }
-}
-
-impl From<NumberOfEpochs> for u32 {
-    fn from(this: NumberOfEpochs) -> Self {
-        this.0.into_inner()
-    }
-}
-
-impl Add for NumberOfEpochs {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl Add<NumberOfEpochs> for Epoch {
-    type Output = Self;
-
-    fn add(self, rhs: NumberOfEpochs) -> Self::Output {
-        self + rhs.0
-    }
-}
-
-impl Sub<NumberOfEpochs> for Epoch {
-    type Output = Self;
-
-    fn sub(self, rhs: NumberOfEpochs) -> Self::Output {
-        self - rhs.0
-    }
-}
+pub type NumberOfEpochs = Epoch;
 
 // TODO: Check spec for max limit once we migrate the SDP Declare op to use the
 // `NomEncode` and `NomDecode` traits.
@@ -248,7 +201,7 @@ pub struct ProviderInfo {
     pub zk_id: ZkPublicKey,
 }
 
-const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
+pub const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
 
 impl Declaration {
     #[must_use]
@@ -260,7 +213,7 @@ impl Declaration {
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
             created: epoch,
-            active: epoch + SNAPSHOT_FINALIZATION_DELAY,
+            active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
             withdrawn: None,
             nonce: 0,
         }
@@ -396,7 +349,7 @@ fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;

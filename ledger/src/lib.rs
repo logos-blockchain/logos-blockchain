@@ -30,7 +30,7 @@ use lb_core::{
     proofs::leader_proof,
 };
 use lb_cryptarchia_engine::Slot;
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use mantle::LedgerState as MantleLedger;
 use thiserror::Error;
 
