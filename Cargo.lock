@@ -5000,6 +5000,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "logos-blockchain-wallet",

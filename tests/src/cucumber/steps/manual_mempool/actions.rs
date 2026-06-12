@@ -1,5 +1,14 @@
+use std::{
+    collections::BTreeSet,
+    fs, io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
 use lb_core::mantle::{SignedMantleTx, Transaction as _, TxHash};
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_tx_service::{backend::PoolRecoveryState, tx::state::TxMempoolState};
+use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
 use crate::{
@@ -12,9 +21,12 @@ use crate::{
             SignedUserWalletSubmission, prepare_user_wallet_transaction_submission,
             record_signed_user_wallet_submission, sign_prepared_user_wallet_transaction,
         },
-        world::CucumberWorld,
+        world::{CucumberWorld, NodeInfo},
     },
 };
+
+const RECOVERY_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
+const RECOVERY_FLUSH_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub async fn prepare_transfer_transaction(
     world: &mut CucumberWorld,
@@ -106,6 +118,106 @@ pub async fn try_submit_invalid_transaction(
     }
 
     Ok(())
+}
+
+pub async fn wait_for_mempool_recovery_flush(
+    world: &CucumberWorld,
+    node_name: &str,
+    transaction_alias: &str,
+) -> Result<(), StepError> {
+    let node_info = world
+        .nodes_info
+        .get(node_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Node `{node_name}` is not started"),
+        })?;
+    let tx_hash = world.resolve_submitted_transaction(transaction_alias)?;
+
+    let pending_hashes = collect_pending_mempool_hashes(node_info).await?;
+
+    if !pending_hashes.contains(&tx_hash) {
+        return Err(StepError::LogicalError {
+            message: format!(
+                "Transaction `{transaction_alias}` ({tx_hash:?}) is not pending in node `{node_name}` mempool"
+            ),
+        });
+    }
+
+    let recovery_file = mempool_recovery_file(node_info);
+    wait_for_transaction_in_recovery_file(node_name, transaction_alias, tx_hash, recovery_file)
+        .await
+}
+
+async fn collect_pending_mempool_hashes(
+    node_info: &NodeInfo,
+) -> Result<BTreeSet<TxHash>, StepError> {
+    Ok(node_info
+        .started_node
+        .client
+        .test_mempool_view()
+        .await?
+        .into_iter()
+        .collect())
+}
+
+fn mempool_recovery_file(node_info: &NodeInfo) -> PathBuf {
+    node_info
+        .runtime_dir
+        .join("recovery")
+        .join("mempool")
+        .join("recovery.json")
+}
+
+async fn wait_for_transaction_in_recovery_file(
+    node_name: &str,
+    transaction_alias: &str,
+    tx_hash: TxHash,
+    recovery_file: PathBuf,
+) -> Result<(), StepError> {
+    let wait_result = timeout(RECOVERY_FLUSH_TIMEOUT, async {
+        loop {
+            let recovered_hashes = read_recovered_mempool_pending_hashes(&recovery_file)?;
+
+            if recovered_hashes
+                .as_ref()
+                .is_some_and(|hashes| hashes.contains(&tx_hash))
+            {
+                return Ok(());
+            }
+
+            sleep(RECOVERY_FLUSH_POLL_INTERVAL).await;
+        }
+    })
+    .await;
+
+    wait_result.unwrap_or_else(
+        |_| Err(StepError::Timeout {
+            message: format!(
+                "Timed out waiting for node `{node_name}` to flush transaction `{transaction_alias}` ({tx_hash:?}) to '{}'",
+                recovery_file.display()
+            ),
+        }),
+    )
+}
+
+fn read_recovered_mempool_pending_hashes(
+    recovery_file: &Path,
+) -> Result<Option<BTreeSet<TxHash>>, StepError> {
+    let contents = match fs::read_to_string(recovery_file) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+
+    let recovery_state: TxMempoolState<PoolRecoveryState<TxHash>, (), ()> =
+        serde_json::from_str(&contents).map_err(|error| StepError::LogicalError {
+            message: format!(
+                "Failed to parse mempool recovery file '{}': {error}",
+                recovery_file.display()
+            ),
+        })?;
+
+    Ok(recovery_state.pool().map(|pool| pool.pending_items.clone()))
 }
 
 fn wallet_transaction_error(error: &WalletTransactionError) -> StepError {
