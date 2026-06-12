@@ -31,9 +31,6 @@ impl SlotClock {
     }
 
     pub(super) fn observe_slot(&mut self, observed_slot: Slot) {
-        self.chain_start_time = SystemTime::now()
-            .checked_sub(duration_mul(self.slot_duration, slot_to_u64(observed_slot)))
-            .unwrap_or(self.chain_start_time);
         self.last_observed_slot = observed_slot;
         self.last_observed_at = Instant::now();
     }
