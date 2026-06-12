@@ -290,6 +290,21 @@ pub struct UpdateArgs {
     state: StateArgs,
 }
 
+impl UpdateArgs {
+    /// Creates arguments programmatically (e.g. from the c-bindings crate),
+    /// leaving all config overrides at their defaults. `auto_approve` skips
+    /// interactive prompts.
+    #[must_use]
+    pub fn new(user_config: PathBuf, keystore: PathBuf, auto_approve: bool) -> Self {
+        Self {
+            user_config,
+            keystore,
+            yes: auto_approve,
+            ..Default::default()
+        }
+    }
+}
+
 // Custom default implementation to require keystore path initialized from clap.
 impl Default for UpdateArgs {
     fn default() -> Self {
@@ -338,6 +353,25 @@ pub struct MigrateArgs {
 
     #[clap(flatten)]
     state: StateArgs,
+}
+
+impl MigrateArgs {
+    /// Creates arguments programmatically (e.g. from the c-bindings crate),
+    /// leaving all config overrides at their defaults.
+    #[must_use]
+    pub fn new(output: PathBuf, keystore: PathBuf) -> Self {
+        Self {
+            output,
+            keystore,
+            log: LogArgs::default(),
+            network: NetworkArgs::default(),
+            blend: BlendArgs::default(),
+            cryptarchia: CryptarchiaArgs::default(),
+            sdp: SdpArgs::default(),
+            api: ApiArgs::default(),
+            state: StateArgs::default(),
+        }
+    }
 }
 
 impl From<MigrateArgs> for InitArgs {

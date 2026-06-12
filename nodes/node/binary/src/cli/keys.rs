@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, ValueEnum};
 use color_eyre::eyre::Result;
-use lb_key_management_system_service::keys::{
-    Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey,
+use lb_key_management_system_service::{
+    backend::preload::KeyId,
+    keys::{Ed25519Key, Key, UnsecuredEd25519Key, UnsecuredZkKey, ZkKey},
 };
 use thiserror::Error;
 
@@ -60,6 +61,27 @@ pub struct GenerateKeyArgs {
     key_type: KeyType,
 }
 
+impl GenerateKeyArgs {
+    /// Creates arguments programmatically (e.g. from the c-bindings crate).
+    /// `auto_approve` skips interactive prompts.
+    #[must_use]
+    pub const fn new(
+        user_config: PathBuf,
+        keystore: PathBuf,
+        key_type: KeyType,
+        key_title: Option<String>,
+        auto_approve: bool,
+    ) -> Self {
+        Self {
+            user_config,
+            keystore,
+            yes: auto_approve,
+            key_title,
+            key_type,
+        }
+    }
+}
+
 #[derive(Parser, Debug)]
 pub struct AddKeyArgs {
     /// Path for the user config file.
@@ -88,6 +110,29 @@ pub struct AddKeyArgs {
         value_parser = parse_hex_ed25519_key
     )]
     pub ed25519_key: Option<UnsecuredEd25519Key>,
+}
+
+impl AddKeyArgs {
+    /// Creates arguments programmatically (e.g. from the c-bindings crate).
+    /// `auto_approve` skips interactive prompts.
+    #[must_use]
+    pub const fn new(
+        user_config: PathBuf,
+        keystore: PathBuf,
+        key_title: Option<String>,
+        ed25519_key: Option<UnsecuredEd25519Key>,
+        zk_key: Option<UnsecuredZkKey>,
+        auto_approve: bool,
+    ) -> Self {
+        Self {
+            user_config,
+            keystore,
+            yes: auto_approve,
+            key_title,
+            zk_key,
+            ed25519_key,
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -122,15 +167,29 @@ pub struct RemoveKeyArgs {
     pub key_title: String,
 }
 
-pub fn run_generate_key(args: GenerateKeyArgs) -> Result<()> {
-    let GenerateKeyArgs {
-        user_config: user_config_path,
-        keystore: keystore_path,
-        key_title,
-        key_type,
-        yes: auto_approve,
-    } = args;
+impl RemoveKeyArgs {
+    /// Creates arguments programmatically (e.g. from the c-bindings crate).
+    /// `auto_approve` skips interactive prompts.
+    #[must_use]
+    pub const fn new(
+        user_config: PathBuf,
+        keystore: PathBuf,
+        key_title: String,
+        auto_approve: bool,
+    ) -> Self {
+        Self {
+            user_config,
+            keystore,
+            yes: auto_approve,
+            key_title,
+        }
+    }
+}
 
+fn load_user_config_and_keystore(
+    user_config_path: &Path,
+    keystore_path: &Path,
+) -> Result<(UserConfig, Keystore)> {
     if !user_config_path.exists() {
         return Err(KeysError::UserFileDoesNotExist.into());
     }
@@ -139,39 +198,98 @@ pub fn run_generate_key(args: GenerateKeyArgs) -> Result<()> {
         return Err(KeysError::KeystoreFileDoesNotExist.into());
     }
 
-    let user_config_yaml = std::fs::read_to_string(&user_config_path)?;
-    let mut user_config: UserConfig = serde_yaml::from_str(&user_config_yaml)?;
+    let user_config_yaml = std::fs::read_to_string(user_config_path)?;
+    let user_config = serde_yaml::from_str(&user_config_yaml)?;
 
-    let keystore_yaml = std::fs::read_to_string(&keystore_path)?;
-    let mut keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
+    let keystore_yaml = std::fs::read_to_string(keystore_path)?;
+    let keystore = serde_yaml::from_str(&keystore_yaml)?;
+
+    Ok((user_config, keystore))
+}
+
+fn persist_user_config_and_keystore(
+    user_config: &mut UserConfig,
+    keystore: &Keystore,
+    user_config_path: &Path,
+    keystore_path: &Path,
+) -> Result<()> {
+    update_user_config(user_config, keystore, UpdateArgs::default());
+
+    let user_config_yaml = serde_yaml::to_string(user_config)?;
+    std::fs::write(user_config_path, &user_config_yaml)?;
+
+    let keystore_yaml = serde_yaml::to_string(keystore)?;
+    std::fs::write(keystore_path, &keystore_yaml)?;
+
+    Ok(())
+}
+
+fn generate_key_into_keystore(
+    keystore: &mut Keystore,
+    key_title: String,
+    key_type: &KeyType,
+) -> (KeyId, Key) {
+    match key_type {
+        KeyType::Ed25519 => {
+            let (id, secret_key) = keystore.generate_ed25519(key_title);
+            (id, Ed25519Key::from(secret_key).into())
+        }
+        KeyType::Zk => {
+            let (id, secret_key) = keystore.generate_zk(key_title);
+            (id, ZkKey::from(secret_key).into())
+        }
+    }
+}
+
+/// Generates a new key, persists it to the keystore and user config, and
+/// returns the new key's [`KeyId`]. Non-interactive.
+pub fn generate_key(args: GenerateKeyArgs) -> Result<KeyId> {
+    let GenerateKeyArgs {
+        user_config: user_config_path,
+        keystore: keystore_path,
+        key_title,
+        key_type,
+        ..
+    } = args;
+
+    let (mut user_config, mut keystore) =
+        load_user_config_and_keystore(&user_config_path, &keystore_path)?;
 
     let user_key_title = key_title
         .as_ref()
         .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
 
-    let (key_id, key): (_, Key) = match key_type {
-        KeyType::Ed25519 => {
-            let (id, secret_key) = keystore.generate_ed25519(user_key_title);
-            (id, Ed25519Key::from(secret_key).into())
-        }
-        KeyType::Zk => {
-            let (id, secret_key) = keystore.generate_zk(user_key_title);
-            (id, ZkKey::from(secret_key).into())
-        }
-    };
+    let (key_id, _) = generate_key_into_keystore(&mut keystore, user_key_title, &key_type);
 
-    if !auto_approve && confirm_overwrite("Write key to keystore?")? {
-        update_user_config(&mut user_config, &keystore, UpdateArgs::default());
+    persist_user_config_and_keystore(
+        &mut user_config,
+        &keystore,
+        &user_config_path,
+        &keystore_path,
+    )?;
 
-        let user_config_yaml = serde_yaml::to_string(&user_config)?;
-        std::fs::write(&user_config_path, &user_config_yaml)?;
+    Ok(key_id)
+}
 
-        let keystore_yaml = serde_yaml::to_string(&keystore)?;
-        std::fs::write(&keystore_path, &keystore_yaml)?;
-    } else {
+pub fn run_generate_key(args: GenerateKeyArgs) -> Result<()> {
+    if args.yes || confirm_overwrite("Write key to keystore?")? {
+        let key_id = generate_key(args)?;
         println!("KeyID: {key_id}");
-        println!("Key: {key:?}");
+        return Ok(());
     }
+
+    // Declined: generate and show the key without persisting it.
+    let (_, mut keystore) = load_user_config_and_keystore(&args.user_config, &args.keystore)?;
+
+    let user_key_title = args
+        .key_title
+        .as_ref()
+        .map_or_else(|| next_user_key_title(&keystore), Clone::clone);
+
+    let (key_id, key) = generate_key_into_keystore(&mut keystore, user_key_title, &args.key_type);
+
+    println!("KeyID: {key_id}");
+    println!("Key: {key:?}");
 
     Ok(())
 }
@@ -186,19 +304,8 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
         ed25519_key,
     } = args;
 
-    if !user_config_path.exists() {
-        return Err(KeysError::UserFileDoesNotExist.into());
-    }
-
-    if !keystore_path.exists() {
-        return Err(KeysError::KeystoreFileDoesNotExist.into());
-    }
-
-    let user_config_yaml = std::fs::read_to_string(&user_config_path)?;
-    let mut user_config: UserConfig = serde_yaml::from_str(&user_config_yaml)?;
-
-    let keystore_yaml = std::fs::read_to_string(&keystore_path)?;
-    let mut keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
+    let (mut user_config, mut keystore) =
+        load_user_config_and_keystore(&user_config_path, &keystore_path)?;
 
     let user_key_title = key_title
         .as_ref()
@@ -228,13 +335,12 @@ pub fn run_add_key(args: AddKeyArgs) -> Result<()> {
     keystore.set(user_key_title.clone(), key);
 
     if auto_approve || confirm_overwrite(&format!("Add key '{user_key_title}' to keystore?"))? {
-        update_user_config(&mut user_config, &keystore, UpdateArgs::default());
-
-        let user_config_yaml = serde_yaml::to_string(&user_config)?;
-        std::fs::write(&user_config_path, &user_config_yaml)?;
-
-        let keystore_yaml = serde_yaml::to_string(&keystore)?;
-        std::fs::write(&keystore_path, &keystore_yaml)?;
+        persist_user_config_and_keystore(
+            &mut user_config,
+            &keystore,
+            &user_config_path,
+            &keystore_path,
+        )?;
 
         println!("Successfully added key '{user_key_title}' to files.");
     } else {
@@ -252,19 +358,8 @@ pub fn run_remove_key(args: RemoveKeyArgs) -> Result<()> {
         key_title,
     } = args;
 
-    if !user_config_path.exists() {
-        return Err(KeysError::UserFileDoesNotExist.into());
-    }
-
-    if !keystore_path.exists() {
-        return Err(KeysError::KeystoreFileDoesNotExist.into());
-    }
-
-    let user_config_yaml = std::fs::read_to_string(&user_config_path)?;
-    let mut user_config: UserConfig = serde_yaml::from_str(&user_config_yaml)?;
-
-    let keystore_yaml = std::fs::read_to_string(&keystore_path)?;
-    let mut keystore: Keystore = serde_yaml::from_str(&keystore_yaml)?;
+    let (mut user_config, mut keystore) =
+        load_user_config_and_keystore(&user_config_path, &keystore_path)?;
 
     let title_key = KeyTitle::from(key_title.clone());
 
@@ -279,13 +374,12 @@ pub fn run_remove_key(args: RemoveKeyArgs) -> Result<()> {
     {
         keystore.remove(title_key);
 
-        update_user_config(&mut user_config, &keystore, UpdateArgs::default());
-
-        let user_config_yaml = serde_yaml::to_string(&user_config)?;
-        std::fs::write(&user_config_path, &user_config_yaml)?;
-
-        let keystore_yaml = serde_yaml::to_string(&keystore)?;
-        std::fs::write(&keystore_path, &keystore_yaml)?;
+        persist_user_config_and_keystore(
+            &mut user_config,
+            &keystore,
+            &user_config_path,
+            &keystore_path,
+        )?;
 
         println!("Successfully removed key '{key_title}' from files.");
     } else {
