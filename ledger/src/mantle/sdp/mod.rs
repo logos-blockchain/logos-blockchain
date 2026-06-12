@@ -846,6 +846,61 @@ mod tests {
         assert!(!declarations.contains_key(&declaration_id));
     }
 
+    /// Regression test: the per-epoch membership build must not panic on an
+    /// SDP snapshot that contains two declarations with the same `zk_id`.
+    ///
+    /// `DeclarationId = Hash(service || provider_id || zk_id || locators)`
+    /// does not bind `zk_id` uniqueness (the SDP spec explicitly permits
+    /// duplicates), so two declarations with the *same* `zk_id` but
+    /// *different* locators (hence different `DeclarationId`s) can both be on
+    /// chain. `membership_info_from_epoch_state` (and, once rewards are
+    /// re-enabled, `providers_and_zk_root` inside `try_apply_header`) feed
+    /// their `zk_id`s into `sort_nodes_and_build_merkle_tree(..).expect(..)`,
+    /// which used to return `Err(DuplicateKey)` on the collision and so
+    /// panicked every Blend node at the epoch boundary. The builder now
+    /// reduces duplicate keys to a single leaf, so the build succeeds.
+    #[test]
+    fn membership_merkle_build_tolerates_duplicate_zk_ids() {
+        use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
+
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let (_sk_a, utxo_a) = utxo_with_sk();
+        let (_sk_b, utxo_b) = utxo_with_sk();
+
+        // Two declarations sharing the SAME zk_id, differing only in locators
+        // (and locked note) -> distinct DeclarationIds, identical zk_id.
+        let declare_a = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_a.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declare_b = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_b.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        assert_ne!(declare_a.id(), declare_b.id());
+        assert_eq!(declare_a.zk_id, declare_b.zk_id);
+
+        // Exactly what `membership_info_from_epoch_state` does with the
+        // snapshot: build the core-membership Merkle tree keyed by each
+        // declaration's zk_id. Production `.expect()`s this result.
+        let mut zk_ids = vec![declare_a.zk_id.into_inner(), declare_b.zk_id.into_inner()];
+        let result = sort_nodes_and_build_merkle_tree(&mut zk_ids, |zk_id| *zk_id);
+
+        assert!(
+            result.is_ok(),
+            "membership Merkle build must not error (and thus `.expect()`-panic) \
+             on duplicate zk_ids: {:?}",
+            result.err()
+        );
+    }
+
     #[test]
     fn test_withdraw_provider() {
         let config = setup(ServiceParameters {
