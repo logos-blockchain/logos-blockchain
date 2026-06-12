@@ -1119,37 +1119,28 @@ where
         state: &mut ServiceState<'_>,
         tip: HeaderId,
     ) -> Option<VoucherNullifier> {
-        let vouchers: Vec<_> = state
-            .wallet()
-            .voucher_commitments_and_nullifiers()
-            .map(|(nf, cm)| (*nf, *cm))
-            .collect();
+        match state.find_available_claimable_voucher(tip) {
+            (Some(voucher), _) => {
+                state.reserve_claim(voucher.nullifier);
 
-        let (available_voucher, pending_count) =
-            Self::find_available_voucher(&vouchers, state, tip);
+                debug!(
+                    target: LOG_TARGET,
+                    nf = ?voucher.nullifier,
+                    cm = ?voucher.commitment,
+                    "Found and reserved claimable voucher"
+                );
 
-        if let Some((nf, cm)) = available_voucher {
-            state.reserve_claim(nf);
-
-            debug!(
-                target: LOG_TARGET,
-                ?nf,
-                ?cm,
-                "Found and reserved claimable voucher"
-            );
-
-            return Some(nf);
+                Some(voucher.nullifier)
+            }
+            (None, pending_count) if pending_count > 0 => {
+                debug!(
+                    target: LOG_TARGET,
+                    "No available vouchers: {pending_count} are pending"
+                );
+                None
+            }
+            (None, _) => None,
         }
-
-        if pending_count > 0 {
-            debug!(
-                target: LOG_TARGET,
-                "No available vouchers: {}/{} are pending",
-                pending_count,
-                vouchers.len()
-            );
-        }
-        None
     }
 
     async fn get_claimable_vouchers(
@@ -1246,32 +1237,6 @@ where
         }
 
         Self::sign_tx(funded_tx_builder, request.tip, ledger, kms, state.wallet()).await
-    }
-
-    fn find_available_voucher(
-        vouchers: &[(VoucherNullifier, VoucherCm)],
-        state: &mut ServiceState<'_>,
-        tip: HeaderId,
-    ) -> (Option<(VoucherNullifier, VoucherCm)>, usize) {
-        let mut pending_count = 0;
-
-        for &(nf, cm) in vouchers {
-            if state.is_claim_pending(&nf) {
-                pending_count += 1;
-                trace!(
-                    target: LOG_TARGET,
-                    ?nf,
-                    "Skipping pending voucher"
-                );
-                continue;
-            }
-
-            if let Ok(Some(_)) = state.wallet().voucher_path_snapshot(tip, &cm) {
-                return (Some((nf, cm)), pending_count);
-            }
-        }
-
-        (None, pending_count)
     }
 
     async fn backfill_if_not_in_sync(

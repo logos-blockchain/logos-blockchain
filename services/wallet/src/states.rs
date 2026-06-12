@@ -12,7 +12,7 @@ use lb_core::{
 };
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
-use lb_wallet::{Vouchers, WalletBlock, WalletError, WalletState};
+use lb_wallet::{KnownVoucher, Vouchers, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -134,6 +134,8 @@ pub struct RecoveryState {
     /// [`WalletState`] at the last known LIB.
     /// `None` on fresh start; populated after the first LIB update.
     lib_wallet_state: Option<(HeaderId, WalletState)>,
+    // After restart we cannot know whether a reserved claim was submitted,
+    // accepted, or dropped, so recovering it could block usable vouchers/notes.
     #[serde(skip)]
     pending_claims: PendingClaims,
 }
@@ -240,16 +242,38 @@ impl<'u> ServiceState<'u> {
         &self.wallet
     }
 
+    pub fn find_available_claimable_voucher(
+        &mut self,
+        tip: HeaderId,
+    ) -> (Option<KnownVoucher>, usize) {
+        let wallet_state = &self.wallet;
+        let pending_claims = &mut self.pending_claims;
+        let mut pending_count = 0;
+
+        let available_voucher = wallet_state
+            .voucher_commitments_and_nullifiers()
+            .find(|voucher| {
+                if pending_claims.is_reserved(&voucher.nullifier) {
+                    pending_count += 1;
+
+                    return false;
+                }
+
+                matches!(
+                    wallet_state.voucher_path_snapshot(tip, &voucher.commitment),
+                    Ok(Some(_))
+                )
+            });
+
+        (available_voucher, pending_count)
+    }
+
     pub fn reserve_claim(&mut self, nullifier: VoucherNullifier) {
         self.pending_claims.reserve(nullifier);
     }
 
     pub fn release_claim_reservation(&mut self, nullifier: VoucherNullifier) {
         self.pending_claims.release(nullifier);
-    }
-
-    pub fn is_claim_pending(&mut self, nullifier: &VoucherNullifier) -> bool {
-        self.pending_claims.is_reserved(nullifier)
     }
 
     pub fn reserve_claim_funding_notes(
