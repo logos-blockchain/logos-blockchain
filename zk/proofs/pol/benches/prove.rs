@@ -1,4 +1,4 @@
-use std::str::FromStr as _;
+use std::{num::NonZero, str::FromStr as _};
 
 use lb_groth16::Fr;
 use lb_utils::math::NonNegativeRatio;
@@ -19,7 +19,7 @@ fn main() {
 fn make_inputs() -> PolWitnessInputs {
     let (lottery_0, lottery_1) =
         LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-            .compute_lottery_values(5000);
+            .compute_lottery_values(NonZero::new(5000).unwrap());
 
     let chain_data = PolChainInputsData {
         slot_number: 135,

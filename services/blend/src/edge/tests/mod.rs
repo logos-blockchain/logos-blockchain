@@ -5,7 +5,7 @@ use lb_blend::{
     scheduling::membership::Membership,
 };
 use lb_chain_service::Epoch;
-use lb_core::crypto::ZkHash;
+use lb_core::{crypto::ZkHash, proofs::leader_proof::LeaderPublic};
 use lb_groth16::{Field as _, Fr};
 use tokio::time::sleep;
 
@@ -109,6 +109,7 @@ async fn run_fails_if_local_is_core_in_new_membership() {
 fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
     PolEpochInfo {
         epoch,
+        poq_public_inputs: LeaderPublic::new(Fr::ZERO, Fr::ZERO, Fr::ZERO, 0, Fr::ZERO, Fr::ZERO),
         poq_private_inputs: ProofOfLeadershipQuotaInputs {
             slot: 1,
             note_value: 1,

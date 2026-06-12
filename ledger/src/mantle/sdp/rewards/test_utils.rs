@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+use std::{marker::PhantomData, num::NonZeroU64};
 
 use lb_core::{
     mantle::Note,
@@ -59,7 +59,7 @@ pub fn create_epoch_state(
         epoch,
         nonce,
         utxos: UtxoTree::default(),
-        total_stake: 0,
+        total_stake: NonZeroU64::new((provider_ids.len() as u64 * 100).max(1)).unwrap(),
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
         sdp: SdpLedger::new(epoch),

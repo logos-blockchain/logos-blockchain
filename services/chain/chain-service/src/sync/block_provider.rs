@@ -580,7 +580,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZero};
+    use std::{
+        collections::BTreeMap,
+        num::{NonZero, NonZeroU64},
+    };
 
     use futures::StreamExt as _;
     use lb_core::{
@@ -1038,7 +1041,7 @@ mod tests {
             let (lottery_0, lottery_1) = cryptarchia
                 .config()
                 .lottery_constants()
-                .compute_lottery_values(1000);
+                .compute_lottery_values(NonZeroU64::new(1000).unwrap());
 
             // We grind the nonce here to find a winning PoL
             let public_inputs = {

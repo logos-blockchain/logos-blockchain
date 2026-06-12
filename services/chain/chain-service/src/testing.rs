@@ -6,7 +6,7 @@ use lb_core::mantle::{
 use lb_key_management_system_keys::keys::ZkKey;
 use num_bigint::BigUint;
 
-/// Chain should start with `total_stake` ≥ 1
+#[must_use]
 pub fn genesis_utxo() -> Utxo {
     let zk_sk = ZkKey::from(BigUint::from(1u64));
     let transfer = TransferOp::new(

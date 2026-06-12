@@ -6,7 +6,7 @@ mod config;
 pub mod cryptarchia;
 pub mod mantle;
 
-use std::{collections::HashMap, hash::Hash};
+use std::{collections::HashMap, hash::Hash, num::NonZeroU128};
 
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
@@ -303,7 +303,9 @@ impl LedgerState {
         let sum_fees = self.cryptarchia_ledger.get_summed_fees();
         let a_numerator = STAKE_TARGET
             .saturating_add(FEE_AVG_NUM.saturating_mul(sum_fees))
-            .saturating_sub(u128::from(self.cryptarchia_ledger.epoch_state.total_stake))
+            .saturating_sub(
+                NonZeroU128::from(self.cryptarchia_ledger.epoch_state.total_stake).into(),
+            )
             .min(A_SCALE);
 
         let reward_numerator = INFLATION_NUMERATOR * a_numerator

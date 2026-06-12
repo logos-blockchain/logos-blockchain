@@ -1,4 +1,4 @@
-use std::str::FromStr as _;
+use std::{num::NonZero, str::FromStr as _};
 
 use lb_pol::LotteryConstants;
 use lb_utils::math::NonNegativeRatio;
@@ -14,7 +14,7 @@ fn main() {
 
 fn lottery() -> (lb_groth16::Fr, lb_groth16::Fr) {
     LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-        .compute_lottery_values(5000)
+        .compute_lottery_values(NonZero::new(5000).unwrap())
 }
 
 fn common_data_core() -> PoQCommonInputsData {

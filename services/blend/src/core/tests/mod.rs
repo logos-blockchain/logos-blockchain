@@ -10,8 +10,11 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
-use lb_groth16::Field as _;
+use lb_core::{
+    codec::SerializeOp as _, crypto::ZkHash, proofs::leader_proof::LeaderPublic,
+    sdp::ActivityMetadata,
+};
+use lb_groth16::{Field as _, Fr};
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::CORE_MERKLE_TREE_HEIGHT;
 use lb_utils::blake_rng::BlakeRng;
@@ -729,6 +732,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
 
     let secret_info = PolEpochInfo {
         epoch: secret_epoch,
+        poq_public_inputs: LeaderPublic::new(Fr::ZERO, Fr::ZERO, Fr::ZERO, 0, Fr::ZERO, Fr::ZERO),
         poq_private_inputs: dummy_pol_private_inputs(),
     };
 

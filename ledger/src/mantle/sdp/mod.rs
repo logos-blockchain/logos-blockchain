@@ -659,7 +659,7 @@ mod tests {
             epoch,
             nonce: ZkHash::ZERO,
             utxos: UtxoTree::default(),
-            total_stake: 100,
+            total_stake: NonZeroU64::new(100).unwrap(),
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
             sdp: SdpLedger::new(epoch),

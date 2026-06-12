@@ -1,7 +1,10 @@
 mod block_density;
 mod stake;
 
-use std::sync::{Arc, LazyLock};
+use std::{
+    num::NonZeroU64,
+    sync::{Arc, LazyLock},
+};
 
 use derivative::Derivative;
 use lb_core::{
@@ -66,7 +69,7 @@ pub struct EpochState {
     /// (in practice, this is equivalent to the utxos the are spendable at the
     /// beginning of the epoch)
     pub utxos: UtxoTree,
-    pub total_stake: Value,
+    pub total_stake: NonZeroU64,
     /// Lottery values computed based on `total_stake`
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_0: Fr,
@@ -127,7 +130,7 @@ impl EpochState {
     }
 
     #[must_use]
-    pub const fn total_stake(&self) -> Value {
+    pub const fn total_stake(&self) -> NonZeroU64 {
         self.total_stake
     }
 
@@ -607,13 +610,14 @@ impl LedgerState {
             .into_iter()
             .map(|utxo| (utxo.id(), utxo))
             .collect::<UtxoTree>();
-        let total_stake = utxos
+        let total_stake_raw = utxos
             .utxos()
             .iter()
             .filter(|(_, (utxo, _))| config.faucet_pk.is_none_or(|fpk| utxo.note.pk != fpk))
             .map(|(_, (utxo, _))| utxo.note.value)
-            .sum::<Value>()
-            .max(1); // TODO: Change total_stake to NonZeroU64: https://github.com/logos-blockchain/logos-blockchain/issues/2166
+            .sum::<Value>();
+        let total_stake = NonZeroU64::new(total_stake_raw)
+            .expect("genesis must have at least one non-faucet UTXO with positive stake");
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);
@@ -705,7 +709,7 @@ impl core::fmt::Debug for LedgerState {
 
 #[cfg(test)]
 pub mod tests {
-    use std::num::{NonZero, NonZeroU64};
+    use std::num::NonZero;
 
     use lb_core::{
         crypto::{Digest as _, Hasher},
@@ -924,7 +928,8 @@ pub mod tests {
     #[must_use]
     pub fn genesis_state(utxos: &[Utxo]) -> LedgerState {
         let config = config();
-        let total_stake = utxos.iter().map(|u| u.note.value).sum();
+        let total_stake = NonZeroU64::new(utxos.iter().map(|u| u.note.value).sum())
+            .expect("test genesis must have positive total stake");
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);
@@ -1315,7 +1320,7 @@ pub mod tests {
             .cryptarchia_ledger
             .epoch_state
             .total_stake;
-        assert_eq!(ts_genesis, 10_000);
+        assert_eq!(ts_genesis.get(), 10_000);
 
         // Epoch 0 ----------------------------------
         // Produce 3 blocks in the slot window [0, 59]
@@ -1773,7 +1778,8 @@ pub mod tests {
         assert_eq!(epoch_1_state.epoch, 1);
         // With 0 density and LEARNING_RATE=1, total stake drops to minimum (1)
         assert_eq!(
-            epoch_1_state.total_stake, 1,
+            epoch_1_state.total_stake.get(),
+            1,
             "Total stake should drop to minimum for empty epochs"
         );
 
@@ -1784,7 +1790,8 @@ pub mod tests {
             .expect("Should synthesize epoch state for skipped epoch");
         assert_eq!(epoch_2_state.epoch, 2);
         assert_eq!(
-            epoch_2_state.total_stake, 1,
+            epoch_2_state.total_stake.get(),
+            1,
             "Total stake should remain at minimum"
         );
 
@@ -1926,7 +1933,7 @@ pub mod tests {
     #[test]
     fn test_execution_market_update() {
         // Create a base ledger first
-        let mut ledger = LedgerState::from_utxos([], &config(), Fr::ZERO);
+        let mut ledger = LedgerState::from_utxos([utxo()], &config(), Fr::ZERO);
 
         // 1) G_avg = (1_700_000 + 9*1_596_680)/10 = 1_607_012
         // price = 10_000 * (11_176_760 + 1_607_012) / 12_773_440 = 10_008
