@@ -10,7 +10,8 @@ use crate::{
         MantleTx, Transaction, TransactionHasher, TxHash,
         encoding::{
             decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
-            encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
+            encode_field_element, encode_signed_mantle_tx, encode_string, encode_uint64,
+            encode_unix_timestamp,
         },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{
@@ -62,6 +63,15 @@ pub enum Error {
     InvalidCryptarchiaParameter(String),
     #[error("Too many operations in genesis transaction: {count}")]
     TooManyOps { count: usize },
+    #[error(
+        "Genesis transaction has a different number of operations ({ops_count}) and proofs ({proofs_count})"
+    )]
+    ProofCountMismatch {
+        ops_count: usize,
+        proofs_count: usize,
+    },
+    #[error("Genesis transaction has an operation paired with a proof of the wrong type")]
+    MismatchedProofType,
 }
 
 impl GenesisTx {
@@ -96,6 +106,9 @@ impl GenesisTx {
             _ => return Err(Error::MissingTransferAndInscription),
         };
 
+        // Each op must be paired with a proof of the matching variant even for Genesis
+        valid_op_proof_types(&signed_mantle_tx)?;
+
         Ok(Self {
             tx: signed_mantle_tx,
             cryptarchia_parameter,
@@ -125,6 +138,38 @@ fn valid_cryptarchia_inscription(
     }
 
     CryptarchiaParameter::decode(inscription.inscription.as_ref())
+}
+
+// Validate that every operation is paired with a proof of the correct variant.
+//
+// Genesis proofs carry zero/placeholder values that we deliberately do not
+// verify here, but the (op, proof) variant pairing must still be well-formed.
+// Rather than maintain a separate copy of the pairing rules, we reuse the
+// binary encoder as the single source of truth: `encode_signed_mantle_tx` can
+// only encode a proof that matches its operation, and panics otherwise.
+// Round-tripping the transaction through it rejects a malformed genesis config
+// at load time instead of panicking later when the block is encoded for the
+// wire or storage.
+fn valid_op_proof_types(signed_tx: &SignedMantleTx) -> Result<(), Error> {
+    let ops_count = signed_tx.mantle_tx.ops().len();
+    let proofs_count = signed_tx.ops_proofs.len();
+    if ops_count != proofs_count {
+        return Err(Error::ProofCountMismatch {
+            ops_count,
+            proofs_count,
+        });
+    }
+
+    // Suppress the panic hook around the encode so a rejected config does not
+    // print a panic trace, then restore the previous hook.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let encoded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        encode_signed_mantle_tx(signed_tx)
+    }));
+    std::panic::set_hook(default_hook);
+
+    encoded.map(drop).map_err(|_| Error::MismatchedProofType)
 }
 
 impl Transaction for GenesisTx {
@@ -285,8 +330,8 @@ impl CryptarchiaParameter {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::AdditiveGroup as _;
-    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey};
+    use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof};
+    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature};
     use num_bigint::BigUint;
 
     use super::*;
@@ -338,6 +383,20 @@ mod tests {
     // Helper function to create a test note
     fn create_test_note(value: Value) -> Note {
         Note::new(value, ZkPublicKey::from(BigUint::from(123u64)))
+    }
+
+    fn placeholder_proof(op: &Op) -> OpProof {
+        match op {
+            Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
+                CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+            )),
+            Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
+                zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                ed25519_sig: Ed25519Signature::zero(),
+            },
+            other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
+        }
     }
 
     // Helper function to create a basic signed transaction
@@ -511,8 +570,7 @@ mod tests {
 
         // Execute all test cases
         for (ops, expected_err) in test_cases {
-            let ops_proofs =
-                vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); ops.len()];
+            let ops_proofs = ops.iter().map(placeholder_proof).collect::<Vec<_>>();
             let tx = create_tx(ops, ops_proofs);
             let result = GenesisTx::from_tx(tx);
             match expected_err {
@@ -520,6 +578,31 @@ mod tests {
                 None => assert!(result.is_ok()),
             }
         }
+    }
+
+    #[test]
+    fn test_genesis_op_proof_type_mismatch() {
+        let inscription_op = inscription_op(
+            ChannelId::from([0; 32]),
+            &cryptarchia_param(),
+            MsgId::root(),
+            Ed25519PublicKey::from_bytes(&[0; 32]).unwrap(),
+        );
+        let utxo = Utxo::new([0u8; 32], 0, create_test_note(1000));
+        let verifying_key = Ed25519PublicKey::from_bytes(&[0; 32]).unwrap();
+        let sdp_op = sdp_declare_op(utxo, 0, verifying_key);
+
+        // SDPDeclare requires a `ZkAndEd25519Sigs` proof, an `Ed25519Sig` is the
+        // wrong variant and must be rejected
+        let tx = create_tx(
+            vec![Op::ChannelInscribe(inscription_op), Op::SDPDeclare(sdp_op)],
+            vec![
+                OpProof::Ed25519Sig(Ed25519Signature::zero()),
+                OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            ],
+        );
+
+        assert_eq!(GenesisTx::from_tx(tx), Err(Error::MismatchedProofType));
     }
 
     #[test]
