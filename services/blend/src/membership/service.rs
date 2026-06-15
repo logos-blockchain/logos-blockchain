@@ -33,7 +33,7 @@ where
     let mut nodes: Vec<ZkNode<NodeId>> = epoch_state
         .active_declarations
         .for_service(&ServiceType::BlendNetwork)
-        .into_iter()
+        .iter()
         .flat_map(|declarations| declarations.values())
         .filter_map(|declaration| {
             let provider_info = ProviderInfo {
