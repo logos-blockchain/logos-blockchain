@@ -621,32 +621,44 @@ pub fn encode_transfer_op(op: &TransferOp) -> Vec<u8> {
     bytes
 }
 
+// Check if proofs correspond to ops
+#[must_use]
+pub const fn proof_matches(proof: &OpProof, op: &Op) -> bool {
+    matches!(
+        (proof, op),
+        (OpProof::Ed25519Sig(_), Op::ChannelInscribe(_))
+            | (
+                OpProof::ChannelMultiSigProof(_),
+                Op::ChannelWithdraw(_) | Op::ChannelConfig(_)
+            )
+            | (OpProof::ZkAndEd25519Sigs { .. }, Op::SDPDeclare(_))
+            | (
+                OpProof::ZkSig(_),
+                Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
+            )
+            | (OpProof::PoC(_), Op::LeaderClaim(_))
+    )
+}
+
 /// Encode proofs
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
-    match (proof, op) {
-        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_)) => encode_ed25519_signature(sig),
-        (OpProof::ChannelMultiSigProof(proof), Op::ChannelWithdraw(_) | Op::ChannelConfig(_)) => {
-            encode_channel_multi_sig_proof(proof)
-        }
-        (
+    if proof_matches(proof, op) {
+        match proof {
+            OpProof::Ed25519Sig(sig) => encode_ed25519_signature(sig),
+            OpProof::ChannelMultiSigProof(proof) => encode_channel_multi_sig_proof(proof),
             OpProof::ZkAndEd25519Sigs {
                 zk_sig,
                 ed25519_sig,
-            },
-            Op::SDPDeclare(_),
-        ) => {
-            let mut bytes = encode_zk_signature(zk_sig);
-            bytes.extend(encode_ed25519_signature(ed25519_sig));
-            bytes
+            } => {
+                let mut bytes = encode_zk_signature(zk_sig);
+                bytes.extend(encode_ed25519_signature(ed25519_sig));
+                bytes
+            }
+            OpProof::ZkSig(sig) => encode_zk_signature(sig),
+            OpProof::PoC(poc) => encode_poc(poc),
         }
-        (
-            OpProof::ZkSig(sig),
-            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
-        ) => encode_zk_signature(sig),
-        (OpProof::PoC(poc), Op::LeaderClaim(_)) => encode_poc(poc),
-        _ => {
-            panic!("Mismatch between proof type and operation type");
-        }
+    } else {
+        panic!("Mismatch between proof type and operation type");
     }
 }
 
