@@ -11,6 +11,7 @@ version     = { workspace = true }
 
 [dependencies]
 lb-api-service                = { workspace = true }
+lb-chain-leader-service       = { workspace = true }
 lb-chain-service              = { workspace = true }
 lb-core                       = { workspace = true }
 lb-groth16                    = { workspace = true }

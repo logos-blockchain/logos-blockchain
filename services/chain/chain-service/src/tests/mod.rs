@@ -25,6 +25,7 @@ use lb_ledger::{
 };
 use lb_storage_service::{
     StorageMsg, StorageService,
+    api::{StorageApiRequest, chain::requests::ChainApiRequest},
     backends::{
         StorageBackend as _,
         rocksdb::{RocksBackend, RocksBackendSettings},
@@ -237,6 +238,154 @@ async fn get_block_ids() {
         stream.next().await.unwrap(),
         Err(Error::ParentIdNotFound(_))
     ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn process_block_does_not_mutate_state_when_storage_send_fails() {
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    // Close the storage relay before processing so the initial StoreBlock request
+    // fails.
+    drop(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays =
+        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
+            OutboundRelay::new(broadcast_tx),
+            OutboundRelay::new(storage_tx),
+            OutboundRelay::new(time_tx),
+        )
+        .await;
+    let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
+    let (lib_tx, mut lib_rx) = broadcast::channel(10);
+
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let initial_info = cryptarchia.info();
+    let block_slot = block.header().slot();
+
+    let result = CryptarchiaConsensus::<
+        _,
+        RocksBackend,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::process_block(
+        &mut cryptarchia,
+        block,
+        block_slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await;
+
+    match &result {
+        Err(Error::Storage(_)) => {}
+        Err(e) => panic!("expected storage error, got {e:?}"),
+        Ok(_) => panic!("expected storage error, got Ok"),
+    }
+    assert_eq!(cryptarchia.info(), initial_info);
+    assert!(new_block_rx.try_recv().is_err());
+    assert!(lib_rx.try_recv().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn process_block_does_not_mutate_state_when_immutable_index_write_fails() {
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, mut storage_rx) = mpsc::channel(10);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays =
+        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
+            OutboundRelay::new(broadcast_tx),
+            OutboundRelay::new(storage_tx),
+            OutboundRelay::new(time_tx),
+        )
+        .await;
+    let (new_block_tx, mut new_block_rx) = broadcast::channel(10);
+    let (lib_tx, mut lib_rx) = broadcast::channel(10);
+
+    let storage_task = tokio::spawn(async move {
+        while let Some(msg) = storage_rx.recv().await {
+            match msg {
+                StorageMsg::Api {
+                    request:
+                        StorageApiRequest::Chain(ChainApiRequest::StoreBlock { response_tx, .. }),
+                } => {
+                    response_tx
+                        .send(Ok(()))
+                        .map_err(|_| "store block reply receiver dropped")?;
+                }
+                StorageMsg::Api {
+                    request:
+                        StorageApiRequest::Chain(ChainApiRequest::StoreImmutableBlockIds {
+                            response_tx,
+                            ..
+                        }),
+                } => {
+                    response_tx
+                        .send(Err(
+                            "StoreImmutableBlockIds is rejected by this test".to_owned()
+                        ))
+                        .map_err(|_| "immutable index reply receiver dropped")?;
+
+                    return Ok(());
+                }
+                _ => return Err("unexpected storage request"),
+            }
+        }
+
+        Err("expected immutable index write request, storage channel closed")
+    });
+
+    let (mut cryptarchia, block) = test_chain_with_next_block();
+    let initial_info = cryptarchia.info();
+    let block_slot = block.header().slot();
+
+    let result = CryptarchiaConsensus::<
+        _,
+        RocksBackend,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::process_block(
+        &mut cryptarchia,
+        block,
+        block_slot,
+        &relays,
+        &new_block_tx,
+        &lib_tx,
+    )
+    .await;
+    storage_task
+        .await
+        .expect("storage task should not panic")
+        .expect("storage task should reject immutable index write");
+
+    match &result {
+        Err(Error::Storage(_)) => {}
+        Err(e) => panic!("expected storage error, got {e:?}"),
+        Ok(_) => panic!("expected storage error, got Ok"),
+    }
+    assert_eq!(cryptarchia.info(), initial_info);
+    assert!(new_block_rx.try_recv().is_err());
+    assert!(lib_rx.try_recv().is_err());
+}
+
+fn test_chain_with_next_block() -> (Cryptarchia, Block<SignedMantleTx>) {
+    let k = 3.try_into().unwrap();
+    let config = ledger_config(k);
+    let genesis_id = [0; 32].into();
+    let (zk_key, utxo) = utxo();
+    let cryptarchia = Cryptarchia::from_lib(
+        genesis_id,
+        LedgerState::from_utxos([utxo], &config),
+        genesis_id,
+        config,
+        lb_cryptarchia_engine::State::Online,
+        Slot::genesis(),
+        0,
+    );
+    let block =
+        try_build_block(&cryptarchia, cryptarchia.tip(), utxo, &zk_key, Slot::new(1)).unwrap();
+
+    (cryptarchia, block)
 }
 
 #[must_use]

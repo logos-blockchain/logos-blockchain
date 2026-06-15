@@ -30,7 +30,6 @@ cryptarchia:
   sdp_config:
     service_params:
       BN:
-        lock_period: 10
         inactivity_period: 1
         retention_period: 1
         epoch: 0
@@ -56,4 +55,3 @@ time:
   slot_duration: '1.000000000'
 mempool:
   pubsub_topic: /logos-blockchain-standalone-local/mempool/1.0.0
-

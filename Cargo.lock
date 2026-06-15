@@ -4129,6 +4129,7 @@ version = "0.1.2"
 dependencies = [
  "cbindgen",
  "logos-blockchain-api-service",
+ "logos-blockchain-chain-leader-service",
  "logos-blockchain-chain-service",
  "logos-blockchain-core",
  "logos-blockchain-groth16",
@@ -5000,6 +5001,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
  "logos-blockchain-wallet",

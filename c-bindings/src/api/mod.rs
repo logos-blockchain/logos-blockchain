@@ -2,6 +2,7 @@ pub mod blend;
 pub mod config;
 pub mod cryptarchia;
 pub mod keys;
+pub mod leader;
 pub mod lifecycle;
 pub(crate) mod memory;
 pub mod peer;

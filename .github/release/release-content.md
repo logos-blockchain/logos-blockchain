@@ -13,7 +13,7 @@
 Generate a default configuration by connecting to the bootstrap peers:
 
 ```bash
-./logos-blockchain-node init \
+./logos-blockchain-node init-config \
     -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/{TODO} \
     -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/{TODO} \
     -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/{TODO} \
@@ -121,7 +121,7 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
     * For a release candidate (for devnet), you must use:
 
         ```
-            ./logos-blockchain-node init \
+            ./logos-blockchain-node init-config \
                 -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8 \
                 -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ \
                 -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf \

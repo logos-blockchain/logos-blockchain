@@ -361,7 +361,7 @@ pub fn build_user_wallets(
     Ok(wallet_info)
 }
 
-pub fn insert_started_node_info<S: BuildHasher>(
+pub async fn insert_started_node_info<S: BuildHasher>(
     world: &mut CucumberWorld,
     logical_node_name: &str,
     started_node: StartedNode<LbcEnv>,
@@ -386,7 +386,9 @@ pub fn insert_started_node_info<S: BuildHasher>(
             immediate_start: world.network_immediate_start(logical_node_name),
         },
     );
-    world.register_wallet_block_feed_source(logical_node_name, client)?;
+    world
+        .register_wallet_block_feed_source(logical_node_name, client)
+        .await?;
 
     Ok(())
 }

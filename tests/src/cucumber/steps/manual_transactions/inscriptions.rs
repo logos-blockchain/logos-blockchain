@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use cucumber::{gherkin::Step, when};
 use lb_core::mantle::ops::channel::inscribe::Inscription;
@@ -21,6 +21,7 @@ use crate::{
                 prepare_user_wallet_transaction_submission, submit_prepared_user_wallet_transaction,
             },
         },
+        wallet::checks::wait_for_observed_transaction_hashes,
         world::{CucumberWorld, WalletType},
     },
 };
@@ -108,7 +109,6 @@ async fn submit_inscription_transaction(
         &wallet_name,
         transaction_intent,
         None,
-        None,
     )
     .await;
     let prepared = prepared.inspect_err(|e| {
@@ -141,10 +141,6 @@ async fn submit_inscription_transaction(
 
 #[cucumber::when(expr = "transaction {string} is included on node {string} in {int} seconds")]
 #[cucumber::then(expr = "transaction {string} is included on node {string} in {int} seconds")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
 async fn step_transaction_is_included_on_node(
     world: &mut CucumberWorld,
     step: &Step,
@@ -164,13 +160,20 @@ async fn step_transaction_is_included_on_node(
         wait_for_transactions_inclusion(&node, &[tx_hash], Duration::from_secs(timeout_seconds))
             .await;
 
-    if included {
-        Ok(())
-    } else {
-        Err(StepError::LogicalError {
+    if !included {
+        return Err(StepError::LogicalError {
             message: format!(
                 "Transaction `{transaction_alias}` was not included on node `{node_name}` within {timeout_seconds} seconds"
             ),
-        })
+        });
     }
+
+    let expected_hashes = HashSet::from([tx_hash]);
+    wait_for_observed_transaction_hashes(
+        world,
+        &step.value,
+        &expected_hashes,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
 }
