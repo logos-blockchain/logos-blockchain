@@ -29,11 +29,11 @@ const NODE_COUNT: usize = 2;
 /// End-to-end test for blend SDP activity proofs:
 ///
 /// 1. Spawn two validators with blend declarations in the genesis transaction.
-/// 2. Wait long enough that declarations would be removed if no activity
-///    message was submitted during `inactivity_period + retention_period`
-///    epochs.
-/// 3. Verify that both declarations are still present, proving that the nodes
-///    automatically submitted valid activity messages that the ledger accepted.
+/// 2. Wait past `inactivity_period` so that any activity messages produced by
+///    the nodes have to refresh the `active` field on the declarations.
+/// 3. Verify that each declaration's `active` epoch has advanced past its
+///    initial value, proving that the nodes automatically submitted valid
+///    activity messages that the ledger accepted.
 #[tokio::test]
 async fn sdp_blend_activity() {
     let slots_per_epoch = Arc::new(AtomicU64::new(0));
@@ -67,33 +67,23 @@ async fn sdp_blend_activity() {
         declarations.len()
     );
 
-    // Wait past the point where declarations would be removed if no activity
-    // proofs were submitted.
+    // Wait past `inactivity_period` so any activity messages produced by the
+    // nodes have to refresh the `active` field on the declarations.
     let initial_active_epoch = declarations.values().next().unwrap().active;
-    let survival_epochs = initial_active_epoch
+    let target_epoch = initial_active_epoch
         .strict_add(INACTIVITY_PERIOD)
-        .strict_add(RETENTION_PERIOD)
         .strict_add(Epoch::new(2)); // +1 margin
-    let survival_slots = Slot::new(u64::from(u32::from(survival_epochs)) * slots_per_epoch);
+    let target_slot = Slot::new(u64::from(u32::from(target_epoch)) * slots_per_epoch);
     wait_for_nodes_tip_slot(
         &[&node0.client, &node1.client],
-        survival_slots,
+        target_slot,
         Duration::from_secs(500),
     )
     .await;
 
-    // Declarations must still be present — this proves that activity messages were
-    // submitted/accepted, keeping the declarations alive.
+    // Each declaration's `active` epoch must have advanced past its initial
+    // value, proving activity messages were submitted and accepted.
     let declarations_after = wait_for_declarations(&node0.client, Duration::from_secs(30)).await;
-
-    // Check if at least one declaration is still present because blocks may have
-    // been produced by only one nodes by coincidence
-    assert!(
-        !declarations_after.is_empty(),
-        "At least one blend declaration should survive past the inactivity window. Activity proofs may not have been submitted/accepted"
-    );
-
-    // Check that the declarations have the refreshed `active` epoch number.
     for (provider_id, declaration) in declarations {
         let old_active = declaration.active;
         let new_active = declarations_after.get(&provider_id).unwrap().active;
@@ -105,7 +95,6 @@ async fn sdp_blend_activity() {
 }
 
 const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
-const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 
 fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
@@ -127,8 +116,8 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
         Ordering::Relaxed,
     );
 
-    // Set small inactivity/retention periods so that declarations are removed
-    // quickly if no activity proofs are submitted.
+    // Set a small inactivity period so the inactivity window is short enough
+    // for the test to observe `active` being refreshed quickly.
     let blend_params = config
         .deployment
         .cryptarchia
@@ -137,7 +126,6 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
         .get_mut(&ServiceType::BlendNetwork)
         .expect("blend network params should exist");
     blend_params.inactivity_period = INACTIVITY_PERIOD.try_into().unwrap();
-    blend_params.retention_period = RETENTION_PERIOD;
 
     // Shorten Blend delay to speed up the test
     config

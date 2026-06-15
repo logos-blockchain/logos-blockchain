@@ -61,7 +61,6 @@ impl ServiceConfig {
                                 service_type,
                                 ServiceParameters {
                                     inactivity_period: service_params.inactivity_period,
-                                    retention_period: service_params.retention_period,
                                     epoch: service_params.epoch,
                                 },
                             )
