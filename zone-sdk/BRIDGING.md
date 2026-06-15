@@ -22,7 +22,7 @@ Channels are not deployed by a separate transaction; Channels are created just-i
 From the Zone SDK, the steps are:
 
 1. Pick a `ChannelId` and a sequencer `Ed25519Key`.
-2. Initialize a `ZoneSequencer`, drive it (see the SDK overview for the drive-loop pattern and the `Event::Ready` readiness contract), and publish the first inscription (e.g., a zone genesis block) via `sequencer.handle().publish(..)`. On the Blockchain, Channels are crated automatically, naming this sequencer as the sole accredited key.
+2. Initialize a `ZoneSequencer`, drive it (see the SDK overview for the drive-loop pattern and the `Event::Ready` readiness contract), and publish the first inscription (e.g., a zone genesis block) via `sequencer.handle().publish(..)`. On the Blockchain, Channels are created automatically, naming this sequencer as the sole accredited key.
 3. (Optional) Reconfigure the channel with a [`ChannelConfig`](https://app.notion.com/p/nomos-tech/1-5-0-Mantle-33d261aa09df8051b0d0cd4d5ddade85?source=copy_link#f96261aa09df826a93d801db1e432a54) operation by calling `sequencer.handle().channel_config(..)`.
 
 ```rust
