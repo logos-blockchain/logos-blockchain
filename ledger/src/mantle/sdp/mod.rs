@@ -259,7 +259,7 @@ impl<R: Rewards> ServiceState<R> {
             .is_some_and(|withdrawn| withdrawn.strict_add(config.retention_period) < current_epoch);
         let inactive = declaration
             .active
-            .strict_add(config.inactivity_period)
+            .strict_add(config.inactivity_period.into_inner())
             .strict_add(config.retention_period)
             < current_epoch;
         withdrawn || inactive
@@ -283,7 +283,10 @@ impl<R: Rewards> ServiceState<R> {
 /// an activity message has been accepted within `inactivity_period` epochs,
 /// and its withdrawal (if any) has not yet taken effect.
 fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServiceParameters) -> bool {
-    declaration.active.strict_add(config.inactivity_period) >= current_epoch
+    declaration
+        .active
+        .strict_add(config.inactivity_period.into_inner())
+        >= current_epoch
         && declaration
             .withdrawn
             .is_none_or(|withdrawn| withdrawn > current_epoch)
@@ -784,7 +787,7 @@ mod tests {
         // Long retention so GC never runs in the window we test, short
         // inactivity so the declaration goes inactive quickly.
         let config = setup(ServiceParameters {
-            inactivity_period: 1.into(),
+            inactivity_period: 2.try_into().unwrap(),
             retention_period: 100.into(),
             epoch: 0.into(),
         });
@@ -821,11 +824,11 @@ mod tests {
         )
         .unwrap();
 
-        // Advance to epoch 5 without an activity message; GC won't fire
-        // (retention=100), but the declaration is inactive past epoch 4
-        // (active=3, inactivity=1 -> 3+1 < 5).
+        // Advance to epoch 6 without an activity message; GC won't fire
+        // (retention=100), but the declaration is inactive past epoch 5
+        // (active=3, inactivity=2 -> 3+2 < 6).
         let mut ledger = ledger;
-        for epoch in 2..=5 {
+        for epoch in 2..=6 {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
@@ -835,10 +838,10 @@ mod tests {
 
         // The declaration is still present in the live ledger (no GC)
         assert!(ledger.get_declaration(&declaration_id).is_some());
-        // but active_declarations at epoch 5 must filter it out.
+        // but active_declarations at epoch 6 must filter it out.
         assert!(
             ledger
-                .active_declarations(5.into(), &config.service_params)
+                .active_declarations(6.into(), &config.service_params)
                 .for_service(&ServiceType::BlendNetwork)
                 .is_none_or(|m| !m.contains_key(&declaration_id)),
             "inactive declaration must be excluded from the active-declarations snapshot"
@@ -851,7 +854,7 @@ mod tests {
     #[test]
     fn active_declarations_includes_genesis_at_epochs_0_and_1() {
         let config = setup(ServiceParameters {
-            inactivity_period: 1.into(),
+            inactivity_period: 2.try_into().unwrap(),
             retention_period: 1.into(),
             epoch: 0.into(),
         });
@@ -902,7 +905,7 @@ mod tests {
         // Long inactivity/retention so the only filter that fires in this test
         // is the withdrawn-effective-epoch check.
         let config = setup(ServiceParameters {
-            inactivity_period: 100.into(),
+            inactivity_period: 100.try_into().unwrap(),
             retention_period: 100.into(),
             epoch: 0.into(),
         });
@@ -989,7 +992,7 @@ mod tests {
         let config = setup(ServiceParameters {
             // Set inactivity/retention periods very short to check that
             // declaration is NOT removed before an activity message is submitted.
-            inactivity_period: 1.into(),
+            inactivity_period: 2.try_into().unwrap(),
             retention_period: 1.into(),
             epoch: 0.into(),
         });
@@ -1062,9 +1065,9 @@ mod tests {
             Epoch::new(4) // epoch when the activity message is submitted/accepted
         );
 
-        // Move forward to the epoch 6. The declaration should be still present
+        // Move forward to the epoch 7. The declaration should be still present
         // because the activity message was accepted at epoch 4.
-        for epoch in 5..=6 {
+        for epoch in 5..=7 {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
@@ -1074,8 +1077,8 @@ mod tests {
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
-        // Before moving to epoch 7 where declaration will be removed,
-        // applying another header within the same epoch 6 must be a no-op
+        // Before moving to epoch 8 where declaration will be removed,
+        // applying another header within the same epoch 7 must be a no-op
         // (GC and unlock are gated to epoch transitions only).
         let ledger_before = ledger.clone();
         (ledger, _) = ledger
@@ -1086,9 +1089,9 @@ mod tests {
             "within-epoch try_apply_header must not change ledger state"
         );
 
-        // Move forward to epoch 7 where declaration should be removed
+        // Move forward to epoch 8 where declaration should be removed
         // because no activity message has been submitted since epoch 4
-        let new_epoch_state = next_epoch_state(7.into(), last_epoch_state.clone());
+        let new_epoch_state = next_epoch_state(8.into(), last_epoch_state.clone());
         (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
@@ -1157,7 +1160,7 @@ mod tests {
             // inactivity/retention periods should be long enough
             // for this test to avoid the declaration being removed due to
             // inacitivity before we can test the withdraw logic.
-            inactivity_period: 20.into(),
+            inactivity_period: 20.try_into().unwrap(),
             retention_period: 20.into(),
             epoch: 0.into(),
         });

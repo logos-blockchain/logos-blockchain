@@ -834,7 +834,7 @@ pub mod tests {
         }
     }
 
-    fn update_ledger(
+    pub fn update_ledger(
         ledger: &mut Ledger<HeaderId>,
         parent: HeaderId,
         slot: impl Into<Slot>,
@@ -905,7 +905,7 @@ pub mod tests {
         service_params.insert(
             ServiceType::BlendNetwork,
             ServiceParameters {
-                inactivity_period: 1.into(),
+                inactivity_period: 2.try_into().unwrap(),
                 retention_period: 1.into(),
                 epoch: 0.into(),
             },
@@ -1011,7 +1011,8 @@ pub mod tests {
         }
     }
 
-    fn ledger(utxos: &[Utxo], config: Config) -> (Ledger<HeaderId>, HeaderId) {
+    #[must_use]
+    pub fn ledger(utxos: &[Utxo], config: Config) -> (Ledger<HeaderId>, HeaderId) {
         let genesis_state = genesis_state(utxos);
         (
             Ledger::new([0; 32], full_ledger_state(genesis_state, &config), config),
@@ -1019,7 +1020,7 @@ pub mod tests {
         )
     }
 
-    fn apply_and_add_utxo(
+    pub fn apply_and_add_utxo(
         ledger: &mut Ledger<HeaderId>,
         parent: HeaderId,
         slot: impl Into<Slot>,
@@ -1040,7 +1041,7 @@ pub mod tests {
         id
     }
 
-    fn apply_and_add_utxo_and_declaration(
+    pub fn apply_and_add_utxo_and_declaration(
         ledger: &mut Ledger<HeaderId>,
         parent: HeaderId,
         slot: impl Into<Slot>,
@@ -1048,7 +1049,7 @@ pub mod tests {
         utxo_add: Utxo,
         sdp_utxo: Utxo,
         sdp_note_sk: ZkKey,
-    ) -> (HeaderId, SDPDeclareOp) {
+    ) -> (HeaderId, SDPDeclareOp, ZkKey) {
         let id = apply_and_add_utxo(ledger, parent, slot, utxo_proof, utxo_add);
 
         let tx_hash = TxHash::from([0u8; 32]);
@@ -1072,7 +1073,7 @@ pub mod tests {
             .clone()
             .try_apply_sdp_declaration(
                 &declare_op,
-                &ZkKey::multi_sign(&[sdp_note_sk, zk_key], &tx_hash.to_fr()).unwrap(),
+                &ZkKey::multi_sign(&[sdp_note_sk, zk_key.clone()], &tx_hash.to_fr()).unwrap(),
                 &signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
                 block_ledger.cryptarchia_ledger.latest_utxos(),
                 tx_hash,
@@ -1081,7 +1082,7 @@ pub mod tests {
             .unwrap()
             .0;
 
-        (id, declare_op)
+        (id, declare_op, zk_key)
     }
 
     fn assert_sdp_snapshot(
@@ -1120,7 +1121,8 @@ pub mod tests {
         );
     }
 
-    fn declaration_in_snapshot<'l>(
+    #[must_use]
+    pub fn declaration_in_snapshot<'l>(
         ledger: &'l Ledger<HeaderId>,
         header_id: &HeaderId,
         declaration_id: &DeclarationId,
@@ -1185,7 +1187,7 @@ pub mod tests {
 
         let h_2 = update_ledger(&mut ledger, h_1, 60, leader_utxos[1]).unwrap();
 
-        let (h_3, declare_1) = apply_and_add_utxo_and_declaration(
+        let (h_3, declare_1, _) = apply_and_add_utxo_and_declaration(
             &mut ledger,
             h_2,
             90,
@@ -1223,7 +1225,7 @@ pub mod tests {
         );
 
         // Epoch transition: 0 -> 1
-        let (h_5, declare_2) = apply_and_add_utxo_and_declaration(
+        let (h_5, declare_2, _) = apply_and_add_utxo_and_declaration(
             &mut ledger,
             h_3,
             100,
@@ -1298,7 +1300,7 @@ pub mod tests {
 
         // Declare at slot 1 (epoch 0). The declaration's `active` field is
         // initialized to `created + 2 = 2`.
-        let (head0, declare) = apply_and_add_utxo_and_declaration(
+        let (head0, declare, _) = apply_and_add_utxo_and_declaration(
             &mut ledger0,
             genesis,
             1,
@@ -1309,17 +1311,17 @@ pub mod tests {
         );
 
         // Advance to epoch 4 (one-by-one).
-        // With inactivity_period=1, the declaration goes inactive at epoch 4.
-        // With retention_period=1, GC fires at epoch 5.
-        // So, at epoch 4, the declaration is inactive yet still present in the ledger.
+        // With inactivity_period=2, the declaration goes inactive at epoch 5.
+        // With retention_period=1, GC fires at epoch 6.
+        // So, at epoch 5, the declaration is inactive yet still present in the ledger.
         let mut ledger = ledger0.clone();
         let mut head = head0;
-        for epoch in 1..=4u64 {
+        for epoch in 1..=5u64 {
             head = update_ledger(&mut ledger, head, epoch * epoch_length, leader_utxo).unwrap();
         }
         assert_eq!(
             ledger.states[&head].cryptarchia_ledger.epoch_state.epoch,
-            Epoch::new(4)
+            Epoch::new(5)
         );
         assert!(
             ledger.states[&head]
@@ -1334,12 +1336,12 @@ pub mod tests {
             "inactive declaration must be filtered out of the EpochState snapshot"
         );
 
-        // Jump from epoch 0 to 4, and check the same conditions
+        // Jump from epoch 0 to 5, and check the same conditions
         let mut ledger = ledger0;
-        head = update_ledger(&mut ledger, head0, 4 * epoch_length, leader_utxo).unwrap();
+        head = update_ledger(&mut ledger, head0, 5 * epoch_length, leader_utxo).unwrap();
         assert_eq!(
             ledger.states[&head].cryptarchia_ledger.epoch_state.epoch,
-            Epoch::new(4)
+            Epoch::new(5)
         );
         assert!(
             ledger.states[&head]

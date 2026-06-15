@@ -30,7 +30,7 @@ cryptarchia:
   sdp_config:
     service_params:
       BN:
-        inactivity_period: 1
+        inactivity_period: 2
         retention_period: 1
         epoch: 0
     min_stake:

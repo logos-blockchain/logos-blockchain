@@ -723,7 +723,7 @@ mod tests {
     use lb_core::{
         events::{Event, EventPayload},
         mantle::{
-            MantleTx, Note, SignedMantleTx, Transaction as _,
+            MantleTx, Note, SignedMantleTx, Transaction as _, TxHash,
             encoding::Ops,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
@@ -736,16 +736,22 @@ mod tests {
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
                 },
+                sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
         },
         proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+        sdp::{ActivityMetadata, DeclarationId, Nonce, blend::ActivityProof},
     };
+    use lb_cryptarchia_engine::Epoch;
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::cryptarchia::tests::utxo_with_sk;
+    use crate::cryptarchia::tests::{
+        apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot, ledger,
+        update_ledger, utxo_with_sk,
+    };
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
         create_test_keys_with_seed(0)
@@ -875,6 +881,46 @@ mod tests {
             )
             .unwrap()
             .0
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "test fn")]
+    fn apply_and_add_utxo_and_activity(
+        ledger: &mut Ledger<HeaderId>,
+        parent: HeaderId,
+        slot: impl Into<Slot>,
+        utxo_proof: Utxo,
+        utxo_add: Utxo,
+        declaration_id: DeclarationId,
+        zk_key: ZkKey,
+        nonce: Nonce,
+    ) -> HeaderId {
+        use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+
+        let id = apply_and_add_utxo(ledger, parent, slot, utxo_proof, utxo_add);
+
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let active_op = SDPActiveOp {
+            declaration_id,
+            nonce,
+            metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
+                // TODO: Create real proofs once the blend rewards module is enabled
+                epoch: 0.into(),
+                signing_key: signing_key.public_key(),
+                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]).into(),
+                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([1; _]).into(),
+            })),
+        };
+        let tx_hash = TxHash::from([1u8; 32]);
+        let zk_sig = ZkKey::multi_sign(&[zk_key], &tx_hash.to_fr()).unwrap();
+        let config = ledger.config().clone();
+        let block_ledger = ledger.states.get_mut(&id).unwrap();
+        block_ledger.mantle_ledger = block_ledger
+            .mantle_ledger
+            .clone()
+            .try_apply_sdp_active(&active_op, &zk_sig, tx_hash, &config)
+            .unwrap()
+            .0;
+        id
     }
 
     #[test]
@@ -1491,6 +1537,87 @@ mod tests {
                 .unwrap()
                 .tip_message,
             inscribe_op3.id()
+        );
+    }
+
+    /// Tests the snapshot-finalization-delay scenario behind the
+    /// `inactivity_period >= SNAPSHOT_FINALIZATION_DELAY` invariant:
+    ///
+    ///   - A declaration is created at epoch 3 — `active = created +
+    ///     SNAPSHOT_FINALIZATION_DELAY = 5`.
+    ///   - An activity message accepted at epoch 6 refreshes the live SDP's
+    ///     `active` to 6.
+    ///   - But the snapshot for epoch 7 was built at the 5→6 transition, before
+    ///     the activity message landed. The snapshot sees the decl with
+    ///     `active=5`, not 6.
+    ///
+    /// With `inactivity_period = SNAPSHOT_FINALIZATION_DELAY = 2`, the
+    /// filter at epoch 7 is `5 + 2 ≥ 7` → INCLUDED. The decl survives the
+    /// finalization-delay gap.
+    #[test]
+    fn snapshot_includes_decl_when_active_refresh_lags_finalization() {
+        let leader_utxo = utxo();
+        let (sdp_utxo_key, sdp_utxo) = utxo_with_sk();
+        let new_utxo_1 = utxo();
+        let new_utxo_2 = utxo();
+        let config = config();
+        let epoch_length = config.epoch_length();
+        let (mut ledger, genesis) = ledger(&[leader_utxo, sdp_utxo], config);
+
+        // Declare at the first slot of epoch 3 — `active = 3 + 2 = 5`.
+        let (h_3, declare, zk_key) = apply_and_add_utxo_and_declaration(
+            &mut ledger,
+            genesis,
+            3 * epoch_length,
+            leader_utxo,
+            new_utxo_1,
+            sdp_utxo,
+            sdp_utxo_key,
+        );
+
+        // Advance to the first slot of epoch 6 and submit an Active message.
+        // This sets the live SDP's `active` to 6.
+        let h_6 = apply_and_add_utxo_and_activity(
+            &mut ledger,
+            h_3,
+            6 * epoch_length,
+            leader_utxo,
+            new_utxo_2,
+            declare.id(),
+            zk_key,
+            1,
+        );
+
+        // Advance to epoch 7. The snapshot for epoch 7 was built at the 5→6
+        // transition, before the epoch-6 Active was applied.
+        let h_7 = update_ledger(&mut ledger, h_6, 7 * epoch_length, leader_utxo).unwrap();
+        assert_eq!(
+            ledger.states[&h_7].cryptarchia_ledger.epoch_state.epoch,
+            Epoch::new(7)
+        );
+        let decl = declaration_in_snapshot(&ledger, &h_7, &declare.id()).expect(
+            "decl must be in the epoch-7 because inactivity_period >= SNAPSHOT_FINALIZATION_DELAY",
+        );
+        assert_eq!(
+            decl.active,
+            Epoch::new(5),
+            "decl must have active=5 because the snapshot was taken at the end of epoch 5 before the activity message was accepted"
+        );
+
+        // Advance to epoch 8. The snapshot for epoch 8 was built at the 6→7
+        // transition, after the epoch-6 Active was applied.
+        let h_8 = update_ledger(&mut ledger, h_7, 8 * epoch_length, leader_utxo).unwrap();
+        assert_eq!(
+            ledger.states[&h_8].cryptarchia_ledger.epoch_state.epoch,
+            Epoch::new(8)
+        );
+        let decl = declaration_in_snapshot(&ledger, &h_8, &declare.id()).expect(
+            "decl must be in the epoch-7 because inactivity_period >= SNAPSHOT_FINALIZATION_DELAY",
+        );
+        assert_eq!(
+            decl.active,
+            Epoch::new(6),
+            "decl must have active=6 because the snapshot was taken at the end of epoch 6 after the activity message was accepted"
         );
     }
 
