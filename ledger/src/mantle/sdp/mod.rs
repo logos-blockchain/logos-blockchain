@@ -894,6 +894,94 @@ mod tests {
         }
     }
 
+    /// A withdrawn declaration must remain active until its `withdrawn` epoch
+    /// is reached, and become inactive from that epoch onward — even while
+    /// the declaration is still present in the live SDP ledger.
+    #[test]
+    fn active_declarations_filters_out_withdrawn_at_effective_epoch() {
+        // Long inactivity/retention so the only filter that fires in this test
+        // is the withdrawn-effective-epoch check.
+        let config = setup(ServiceParameters {
+            inactivity_period: 100.into(),
+            retention_period: 100.into(),
+            epoch: 0.into(),
+        });
+
+        let epoch0 = dummy_epoch_state(0.into());
+        let mut ledger = dummy_sdp_ledger(0.into(), &config);
+
+        // Advance to epoch 1 and declare. The declaration's `active`
+        // initializes to created + 2 = 3.
+        let last_epoch_state = epoch0.clone();
+        let new_epoch_state = next_epoch_state(1.into(), epoch0);
+        (ledger, _) = ledger
+            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+            .unwrap();
+
+        let (utxo_sk, utxo) = utxo_with_sk();
+        let note_id = utxo.id();
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let declare_op = &SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: note_id,
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id = declare_op.id();
+        let ledger = apply_declare_with_dummies(
+            &utxo_tree(vec![utxo]),
+            ledger,
+            declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
+
+        // Withdraw at epoch 1: `withdrawn = 1 + SNAPSHOT_FINALIZATION_DELAY = 3`.
+        let withdraw_op = &SDPWithdrawOp {
+            declaration_id,
+            nonce: 1,
+            locked_note_id: note_id,
+        };
+        let ledger =
+            apply_withdraw_with_dummies(ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
+        let withdrawn_epoch = ledger
+            .get_declaration(&declaration_id)
+            .unwrap()
+            .withdrawn
+            .expect("withdraw must set the withdrawn epoch");
+        assert_eq!(withdrawn_epoch, Epoch::new(3));
+
+        // The declaration is still in the live SDP ledger — cleanup runs only
+        // when the ledger advances past `withdrawn_epoch`.
+        assert!(ledger.get_declaration(&declaration_id).is_some());
+
+        // Snapshot at any epoch strictly less than `withdrawn_epoch` must
+        // include the declaration.
+        for epoch in 0..withdrawn_epoch.into_inner() {
+            assert!(
+                ledger
+                    .active_declarations(epoch.into(), &config.service_params)
+                    .for_service(&ServiceType::BlendNetwork)
+                    .is_some_and(|m| m.contains_key(&declaration_id)),
+                "withdrawn-but-not-yet-effective declaration must be active at epoch {epoch}"
+            );
+        }
+
+        // Snapshot at `withdrawn_epoch` (and beyond) must exclude it.
+        for epoch in withdrawn_epoch.into_inner()..=withdrawn_epoch.into_inner() + 2 {
+            assert!(
+                ledger
+                    .active_declarations(epoch.into(), &config.service_params)
+                    .for_service(&ServiceType::BlendNetwork)
+                    .is_none_or(|m| !m.contains_key(&declaration_id)),
+                "withdrawn declaration must be excluded from the snapshot at epoch {epoch}"
+            );
+        }
+    }
+
     /// A provider that hasn't submit a new active message during
     /// `inactivity_period + retention_period` epochs must be removed.
     #[test]
