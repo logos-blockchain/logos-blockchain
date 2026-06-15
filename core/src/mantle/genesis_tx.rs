@@ -141,15 +141,6 @@ fn valid_cryptarchia_inscription(
 }
 
 // Validate that every operation is paired with a proof of the correct variant.
-//
-// Genesis proofs carry zero/placeholder values that we deliberately do not
-// verify here, but the (op, proof) variant pairing must still be well-formed.
-// Rather than maintain a separate copy of the pairing rules, we reuse the
-// binary encoder as the single source of truth: `encode_signed_mantle_tx` can
-// only encode a proof that matches its operation, and panics otherwise.
-// Round-tripping the transaction through it rejects a malformed genesis config
-// at load time instead of panicking later when the block is encoded for the
-// wire or storage.
 fn valid_op_proof_types(signed_tx: &SignedMantleTx) -> Result<(), Error> {
     let ops_count = signed_tx.mantle_tx.ops().len();
     let proofs_count = signed_tx.ops_proofs.len();
