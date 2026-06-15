@@ -9,9 +9,8 @@ mod funding_from_chain;
 
 pub use chain::{
     feed::{
-        WalletBlockFeedTracker, WalletBlockFeedTrackerError, WalletFeedStateResult,
-        WalletFeedStateResults, WalletFeedTrackingBatch, WalletFeedTrackingResult,
-        WalletObservedBlock,
+        WalletBlockFeedTracker, WalletBlockFeedTrackerError, WalletFeedTrackingBatch,
+        WalletFeedTrackingResult, WalletObservedBlock,
     },
     source::{NodeHttpWalletChainSource, WalletChainSource},
     state::{TrackedWalletKeys, TrackedWalletKeysError, WalletObservedOutput, WalletObservedSpend},

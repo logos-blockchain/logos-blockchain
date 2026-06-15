@@ -284,6 +284,10 @@ Feature: Transactions
     And I send 1 transactions of 700 LGO each from wallet "WALLET_4A" to wallet "WALLET_5A"
     And I send 1 transactions of 700 LGO each from wallet "WALLET_5A" to wallet "WALLET_BURN"
     And I send 1 transactions of 700 LGO each from wallet "WALLET_5A" to wallet "WALLET_4A"
+    When wallet "WALLET_1A" has all submitted transactions settled in 240 seconds
+    And wallet "WALLET_2A" has all submitted transactions settled in 240 seconds
+    And wallet "WALLET_4A" has all submitted transactions settled in 240 seconds
+    And wallet "WALLET_5A" has all submitted transactions settled in 240 seconds
     # Each wallet should now have 3 outputs: one received + two change (allow for fees)
     When wallet "WALLET_1A" has 3 or more outputs in 120 seconds
     And wallet "WALLET_2A" has 3 or more outputs in 60 seconds
@@ -293,11 +297,10 @@ Feature: Transactions
     When node "NODE_1" is at height 5 in 180 seconds
     And node "NODE_4" is at height 5 in 180 seconds
     # Bridge the two forks
-    And I start peer node "NODE_JOIN" connected to node "NODE_1" and node "NODE_4"
+    When I start peer node "NODE_JOIN" connected to node "NODE_1" and node "NODE_4"
     # Wait for all nodes to converge on the same chain and for the transactions to be mined in the new combined chain
     When node "NODE_JOIN" is at height 8 in 180 seconds
-    # Query balances for all wallets after the forks join - previous state should be restored for the re-orged chain
-    When I update all user wallets balances
+    # Previous wallet state should be restored for the re-orged chain.
     When wallet "WALLET_1A" has 3 or more outputs in 120 seconds
     And wallet "WALLET_2A" has 3 or more outputs in 10 seconds
     And wallet "WALLET_4A" has 3 or more outputs in 10 seconds
@@ -332,7 +335,6 @@ Feature: Transactions
     # Maximum number of inputs per transaction is 255 (as per encoding limits)
     And I send 1 transactions of 249000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
     When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
-    And I update all user wallets balances
     When wallet "WALLET_1A" has exactly 1 outputs and 249000 LGO in 20 seconds
     And tracked wallet fees equal sponsored fee account spent fees
     Then I stop all nodes
@@ -355,7 +357,6 @@ Feature: Transactions
     # should use all 3x its outputs and create 250 new outputs of 1000 LGO each.
     And I send one transaction with 250 outputs of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 250 or more outputs in 60 seconds
-    And I update all user wallets balances
     And wallet "WALLET_1A" has exactly 50000 LGO in 20 seconds
     And tracked wallet fees equal sponsored fee account spent fees
     Then I stop all nodes
