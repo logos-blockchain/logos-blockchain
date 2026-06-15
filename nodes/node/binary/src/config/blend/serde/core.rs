@@ -36,7 +36,7 @@ impl BackendConfig {
     ///
     /// This function will panic if the constructed multiaddr string is invalid.
     #[must_use]
-    pub fn listening_address(port: u16) -> Multiaddr {
+    pub fn default_listening_address(port: u16) -> Multiaddr {
         format!("/ip4/0.0.0.0/udp/{port}/quic-v1")
             .parse()
             .expect("Valid multiaddr structure")
@@ -46,7 +46,7 @@ impl BackendConfig {
 impl Default for BackendConfig {
     fn default() -> Self {
         Self {
-            listening_address: Self::listening_address(Self::default_port()),
+            listening_address: Self::default_listening_address(Self::default_port()),
             core_peering_degree: 3..=5,
             edge_node_connection_timeout: Duration::from_secs(1),
             max_edge_node_incoming_connections: 300,

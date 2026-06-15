@@ -36,7 +36,7 @@ impl AxumBackendSettings {
     }
 
     #[must_use]
-    pub fn listening_address(port: u16) -> core::net::SocketAddr {
+    pub fn default_listening_address(port: u16) -> core::net::SocketAddr {
         SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into()
     }
 }
@@ -44,7 +44,7 @@ impl AxumBackendSettings {
 impl Default for AxumBackendSettings {
     fn default() -> Self {
         Self {
-            listen_address: Self::listening_address(Self::default_port()),
+            listen_address: Self::default_listening_address(Self::default_port()),
             cors_origins: Vec::default(),
             timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,

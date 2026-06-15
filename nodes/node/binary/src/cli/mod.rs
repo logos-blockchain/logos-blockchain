@@ -225,7 +225,8 @@ impl From<EmbeddedInitArgs> for InitArgs {
             .clone_from(&args.external_address);
         init_args.network.initial_peers = Some(args.initial_peers.clone());
 
-        init_args.blend.blend_addr = Some(BlendCoreConfig::listening_address(args.blend_port));
+        init_args.blend.blend_addr =
+            Some(BlendCoreConfig::default_listening_address(args.blend_port));
 
         init_args.cryptarchia.ibd = args.ibd;
         init_args.api.addr = Some(args.http_addr);
@@ -242,7 +243,9 @@ impl Default for EmbeddedInitArgs {
             output: PathBuf::from("user_config.yaml"),
             net_port: SwarmConfig::default_port(),
             blend_port: BlendCoreConfig::default_port(),
-            http_addr: AxumBackendSettings::listening_address(AxumBackendSettings::default_port()),
+            http_addr: AxumBackendSettings::default_listening_address(
+                AxumBackendSettings::default_port(),
+            ),
             external_address: None,
             state_path: None,
             ibd: false,
