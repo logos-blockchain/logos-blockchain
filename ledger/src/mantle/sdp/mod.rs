@@ -840,7 +840,7 @@ mod tests {
 
         // The declaration is still present in the live ledger (no GC)
         assert!(ledger.get_declaration(&declaration_id).is_some());
-        // but active_declarations at epoch 10 must filter it out.
+        // but active_declarations at epoch 5 must filter it out.
         assert!(
             ledger
                 .active_declarations(5.into(), &config.service_params)
