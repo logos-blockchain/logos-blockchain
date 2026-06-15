@@ -229,6 +229,14 @@ impl Declarations {
     ) -> impl Iterator<Item = (&ServiceType, &HashMap<DeclarationId, Declaration>)> {
         self.0.iter()
     }
+
+    #[must_use]
+    pub fn for_service(
+        &self,
+        service_type: &ServiceType,
+    ) -> Option<&HashMap<DeclarationId, Declaration>> {
+        self.0.get(service_type)
+    }
 }
 
 impl From<HashMap<ServiceType, HashMap<DeclarationId, Declaration>>> for Declarations {

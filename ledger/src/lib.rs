@@ -429,7 +429,7 @@ impl LedgerState {
         let mantle_ledger = MantleLedger::new(config, cryptarchia_ledger.epoch_state());
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
         // ledger, which only exists after the mantle ledger is built.
-        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(mantle_ledger.sdp.clone());
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Self {
             block_number: 0,
             cryptarchia_ledger,
@@ -451,7 +451,7 @@ impl LedgerState {
         )?;
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
         // ledger (which carries the genesis declarations applied above).
-        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(mantle_ledger.sdp.clone());
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Ok((
             Self {
                 block_number: 0,
@@ -783,16 +783,31 @@ mod tests {
         (ledger, [0; 32], utxo)
     }
 
-    /// The genesis epoch-state membership snapshots must be seeded from the
-    /// genesis SDP ledger, not left as the empty `SdpLedger::new` placeholder
-    /// the cryptarchia genesis constructor initializes them with.
+    /// The genesis epoch-state active-declarations snapshots must be seeded
+    /// from the genesis SDP ledger, not left as the empty default the
+    /// cryptarchia genesis constructor initializes them with.
     #[test]
     fn genesis_seeds_epoch_state_sdp_from_mantle() {
         let config = config();
         let ledger = LedgerState::from_utxos([utxo()], &config);
 
-        assert_eq!(ledger.epoch_state().sdp, ledger.mantle_ledger.sdp);
-        assert_eq!(ledger.next_epoch_state().sdp, ledger.mantle_ledger.sdp);
+        let expected_for_epoch_0 = ledger
+            .mantle_ledger
+            .sdp
+            .active_declarations(0.into(), &config.sdp_config.service_params);
+        let expected_for_epoch_1 = ledger
+            .mantle_ledger
+            .sdp
+            .active_declarations(1.into(), &config.sdp_config.service_params);
+
+        assert_eq!(
+            *ledger.epoch_state().active_declarations,
+            expected_for_epoch_0
+        );
+        assert_eq!(
+            *ledger.next_epoch_state().active_declarations,
+            expected_for_epoch_1
+        );
     }
 
     fn create_test_keys_with_seed(seed: u8) -> (Ed25519Key, Ed25519PublicKey) {

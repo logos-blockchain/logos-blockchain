@@ -279,6 +279,21 @@ impl<R: Rewards> ServiceState<R> {
     }
 }
 
+/// Returns true if the declaration is active at `current_epoch`:
+/// an activity message has been accepted within `inactivity_period` epochs,
+/// and its withdrawal (if any) has not yet taken effect.
+///
+/// We don't check `declaration.active >= current_epoch` because genesis
+/// declarations which are initialized with `active = 2` must be treated as
+/// active from the epoch 0. To make it clearer, the spec should update
+/// `active` to `Option` and define a clearer way to handle it.
+fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServiceParameters) -> bool {
+    declaration.active.strict_add(config.inactivity_period) >= current_epoch
+        && declaration
+            .withdrawn
+            .is_none_or(|withdrawn| withdrawn > current_epoch)
+}
+
 /// A SDP state of the mantle ledger
 ///
 /// NOTE: Most collection fields in this struct should use `rpds`
@@ -553,7 +568,7 @@ impl SdpLedger {
     }
 
     /// Declarations of all services, which have been accumulated until the
-    /// current block.
+    /// current block, regardless of whether they are active or not.
     #[must_use]
     pub fn declarations(&self) -> lb_core::sdp::Declarations {
         self.services
@@ -567,6 +582,36 @@ impl SdpLedger {
                         .map(|(declaration_id, declaration)| (*declaration_id, declaration.clone()))
                         .collect(),
                 )
+            })
+            .collect()
+    }
+
+    /// Returns the declarations that are active at `epoch`, grouped by
+    /// service type.
+    ///
+    /// Service entries with no active declarations are omitted.
+    /// Services missing from `service_params` are skipped.
+    #[must_use]
+    pub fn active_declarations(
+        &self,
+        epoch: Epoch,
+        service_params: &HashMap<ServiceType, ServiceParameters>,
+    ) -> lb_core::sdp::Declarations {
+        self.services
+            .iter()
+            .filter_map(|(service_type, service)| {
+                let params = service_params.get(service_type)?;
+                let entries: HashMap<DeclarationId, Declaration> = service
+                    .declarations()
+                    .iter()
+                    .filter(|(_, declaration)| is_active(declaration, epoch, params))
+                    .map(|(declaration_id, declaration)| (*declaration_id, declaration.clone()))
+                    .collect();
+                if entries.is_empty() {
+                    None
+                } else {
+                    Some((*service_type, entries))
+                }
             })
             .collect()
     }
@@ -611,7 +656,11 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-    use lb_core::{crypto::ZkHash, mantle::ledger::Utxos, sdp::Locator};
+    use lb_core::{
+        crypto::ZkHash,
+        mantle::ledger::Utxos,
+        sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
+    };
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
@@ -705,23 +754,23 @@ mod tests {
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
-    fn dummy_epoch_state(epoch: Epoch, rewards_settings: &blend::RewardsParameters) -> EpochState {
-        let mut epoch_state = EpochState {
+    fn dummy_epoch_state(epoch: Epoch) -> EpochState {
+        EpochState {
             epoch,
             nonce: ZkHash::ZERO,
             utxos: UtxoTree::default(),
             total_stake: 100,
             lottery_0: Fr::ZERO,
             lottery_1: Fr::ZERO,
-            sdp: SdpLedger::new(epoch),
-        };
+            active_declarations: Arc::new(lb_core::sdp::Declarations::default()),
+        }
+    }
 
-        epoch_state.sdp = epoch_state
-            .sdp
-            .clone()
-            .with_blend_service(rewards_settings, &epoch_state);
-
-        epoch_state
+    fn dummy_sdp_ledger(epoch: Epoch, config: &Config) -> SdpLedger {
+        SdpLedger::new(epoch).with_blend_service(
+            &config.service_rewards_params.blend,
+            &dummy_epoch_state(epoch),
+        )
     }
 
     fn next_epoch_state(epoch: Epoch, last_epoch_state: EpochState) -> EpochState {
@@ -729,6 +778,124 @@ mod tests {
             epoch,
             nonce: ZkHash::from(epoch.into_inner()),
             ..last_epoch_state
+        }
+    }
+
+    /// `active_declarations` must drop entries that have gone inactive (i.e.,
+    /// `active + inactivity_period < snapshot_epoch`) even if they have not
+    /// been garbage-collected yet.
+    #[test]
+    fn active_declarations_filters_out_inactive() {
+        // Long retention so GC never runs in the window we test, short
+        // inactivity so the declaration goes inactive quickly.
+        let config = setup(ServiceParameters {
+            inactivity_period: 1.into(),
+            retention_period: 100.into(),
+            epoch: 0.into(),
+        });
+
+        let epoch0 = dummy_epoch_state(0.into());
+        let mut ledger = dummy_sdp_ledger(0.into(), &config);
+
+        // Advance to epoch 1 and declare. The new declaration's `active`
+        // initializes to created + 2 = 3.
+        let mut last_epoch_state = epoch0.clone();
+        let new_epoch_state = next_epoch_state(1.into(), epoch0);
+        (ledger, _) = ledger
+            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+            .unwrap();
+        last_epoch_state = new_epoch_state;
+
+        let (_utxo_sk, utxo) = utxo_with_sk();
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let declare_op = &SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id = declare_op.id();
+        let ledger = apply_declare_with_dummies(
+            &utxo_tree(vec![utxo]),
+            ledger,
+            declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
+
+        // Advance to epoch 5 without an activity message; GC won't fire
+        // (retention=100), but the declaration is inactive past epoch 4
+        // (active=3, inactivity=1 -> 3+1 < 5).
+        let mut ledger = ledger;
+        for epoch in 2..=5 {
+            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
+            (ledger, _) = ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
+        }
+
+        // The declaration is still present in the live ledger (no GC)
+        assert!(ledger.get_declaration(&declaration_id).is_some());
+        // but active_declarations at epoch 10 must filter it out.
+        assert!(
+            ledger
+                .active_declarations(5.into(), &config.service_params)
+                .for_service(&ServiceType::BlendNetwork)
+                .is_none_or(|m| !m.contains_key(&declaration_id)),
+            "inactive declaration must be excluded from the active-declarations snapshot"
+        );
+    }
+
+    /// Genesis declarations are initialized with `active = created + 2`, so a
+    /// declaration created at epoch 0 must still appear in the active set when
+    /// it's consumed at epochs 0 and 1.
+    #[test]
+    fn active_declarations_includes_genesis_at_epochs_0_and_1() {
+        let config = setup(ServiceParameters {
+            inactivity_period: 1.into(),
+            retention_period: 1.into(),
+            epoch: 0.into(),
+        });
+
+        // Build an SDP ledger with an declaration at epoch 0.
+        let ledger = dummy_sdp_ledger(0.into(), &config);
+        let (_utxo_sk, utxo) = utxo_with_sk();
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let declare_op = &SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id = declare_op.id();
+        let ledger = apply_declare_with_dummies(
+            &utxo_tree(vec![utxo]),
+            ledger,
+            declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
+
+        // `active` is initialized to created + 2.
+        let declaration = ledger.get_declaration(&declaration_id).unwrap();
+        assert_eq!(declaration.active, SNAPSHOT_FINALIZATION_DELAY);
+
+        // At epoch 0 and 1, the declaration must be included in the active set.
+        for epoch in [0u32, 1] {
+            assert!(
+                ledger
+                    .active_declarations(epoch.into(), &config.service_params)
+                    .for_service(&ServiceType::BlendNetwork)
+                    .is_some_and(|m| m.contains_key(&declaration_id)),
+                "genesis declaration must be active at epoch {epoch}"
+            );
         }
     }
 
@@ -745,8 +912,8 @@ mod tests {
         });
 
         // Init ledger with no declaration
-        let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
-        let mut ledger = epoch0.sdp.clone();
+        let epoch0 = dummy_epoch_state(0.into());
+        let mut ledger = dummy_sdp_ledger(0.into(), &config);
 
         // Move forward to the epoch 1
         let mut last_epoch_state = epoch0.clone();
@@ -928,8 +1095,8 @@ mod tests {
         let declaration_id = declare_op.id();
 
         // Initialize ledger with service config and declare
-        let epoch0 = dummy_epoch_state(0.into(), &config.service_rewards_params.blend);
-        let sdp_ledger = epoch0.sdp.clone();
+        let epoch0 = dummy_epoch_state(0.into());
+        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
 
         let utxo_tree = utxo_tree(vec![utxo]);
         let sdp_ledger =

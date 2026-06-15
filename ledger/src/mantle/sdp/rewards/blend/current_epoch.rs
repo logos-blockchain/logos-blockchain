@@ -105,13 +105,10 @@ impl CurrentEpochTracker {
         );
 
         let declarations = last_epoch_state
-            .sdp
-            .declarations()
-            .iter()
-            .filter(|(service_type, _)| matches!(service_type, ServiceType::BlendNetwork))
-            .flat_map(|(_, declarations)| declarations.values())
-            .cloned()
-            .collect::<Vec<_>>();
+            .active_declarations
+            .for_service(&ServiceType::BlendNetwork)
+            .map(|declarations| declarations.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
 
         if declarations.len() < settings.minimum_network_size.get() as usize {
             debug!(target: LOG_TARGET, "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetEpoch mode",

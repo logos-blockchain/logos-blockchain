@@ -15,7 +15,7 @@ use lb_core::{
         ops::transfer::{TransferOp, TransferValidationContext},
     },
     proofs::leader_proof::{self, LeaderPublic},
-    sdp::locked_notes::LockedNotes,
+    sdp::{Declarations, locked_notes::LockedNotes},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::{Fr, fr_from_bytes};
@@ -54,7 +54,7 @@ pub type UtxoTree = lb_utxotree::UtxoTree<NoteId, Utxo, ZkHasher>;
 use super::{Balance, Config, LedgerError, mantle};
 use crate::WINDOW_SIZE;
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EpochState {
     /// The epoch this snapshot is for
     pub epoch: Epoch,
@@ -72,10 +72,13 @@ pub struct EpochState {
     pub lottery_0: Fr,
     #[serde(with = "lb_groth16::serde::serde_fr")]
     pub lottery_1: Fr,
-    /// SDP service-provider declarations (membership) snapshot, frozen at the
-    /// same slot as the stake distribution (`stake_distribution_snapshot`).
-    /// Carried forward in ledger state so the epoch's membership is derivable
-    /// from the tip without walking storage.
+    /// Snapshot of the declarations that are active at the start of
+    /// `self.epoch`, frozen at the same slot as the stake distribution
+    /// (`stake_distribution_snapshot`).
+    ///
+    /// Held behind `Arc` because `EpochState` is cloned for every block in
+    /// cryptarchia's per-branch state; the underlying map is immutable once
+    /// frozen, so all clones can share it.
     ///
     /// TODO: This field reaches "up" into the mantle layer (`SdpLedger`), which
     /// is why the `&SdpLedger` is threaded through `update_from_ledger`,
@@ -84,7 +87,7 @@ pub struct EpochState {
     /// out of `cryptarchia` to sit alongside `cryptarchia_ledger` and
     /// `mantle_ledger` in the outer `LedgerState`, where the freeze can read
     /// both sub-ledgers directly and these `&SdpLedger` parameters disappear.
-    pub sdp: SdpLedger,
+    pub active_declarations: Arc<Declarations>,
 }
 
 impl EpochState {
@@ -96,14 +99,19 @@ impl EpochState {
             self.nonce
         };
 
-        // The SDP membership snapshot is frozen at the same slot as the stake
-        // distribution, so the two halves of the epoch's public info stay
-        // consistent.
+        // The active-declarations snapshot is frozen at the same slot as the
+        // stake distribution, so the two halves of the epoch's public info
+        // stay consistent.
         let stake_snapshot_slot = config.stake_distribution_snapshot(self.epoch);
-        let (utxos, sdp) = if ledger.slot < stake_snapshot_slot {
-            (ledger.utxos.clone(), sdp.clone())
+        let (utxos, active_declarations) = if ledger.slot < stake_snapshot_slot {
+            (
+                ledger.utxos.clone(),
+                // Filter declarations active at the `self.epoch` from `SdpLedger`
+                // regardless of when it was built.
+                Arc::new(sdp.active_declarations(self.epoch, &config.sdp_config.service_params)),
+            )
         } else {
-            (self.utxos, self.sdp)
+            (self.utxos, self.active_declarations)
         };
         Self {
             epoch: self.epoch,
@@ -112,7 +120,7 @@ impl EpochState {
             total_stake: self.total_stake,
             lottery_0: self.lottery_0,
             lottery_1: self.lottery_1,
-            sdp,
+            active_declarations,
         }
     }
 
@@ -271,14 +279,20 @@ impl LedgerState {
                 lottery_1,
                 ..next_epoch_state
             };
+            let next_epoch_state_epoch = new_epoch.strict_add(1.into());
             let next_epoch_state = EpochState {
-                epoch: new_epoch.strict_add(1.into()),
+                epoch: next_epoch_state_epoch,
                 nonce: self.nonce,
                 utxos: self.utxos.clone(),
                 total_stake,
                 lottery_0,
                 lottery_1,
-                sdp: sdp.clone(),
+                // Filter declarations active at the `next_epoch_state_epoch`
+                // from `SdpLedger` regardless of when it was built.
+                active_declarations: Arc::new(sdp.active_declarations(
+                    next_epoch_state_epoch,
+                    &config.sdp_config.service_params,
+                )),
             };
             let (new_price, new_ema) = update_storage_market(
                 self.storage_gas_price,
@@ -342,16 +356,26 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
-                sdp: sdp.clone(),
+                // Filter declarations active at the `new_epoch`
+                // from `SdpLedger` regardless of when it was built.
+                active_declarations: Arc::new(
+                    sdp.active_declarations(new_epoch, &config.sdp_config.service_params),
+                ),
             };
+            let next_epoch_state_epoch = new_epoch.strict_add(1.into());
             let next_epoch_state = EpochState {
-                epoch: new_epoch.strict_add(1.into()),
+                epoch: next_epoch_state_epoch,
                 nonce: self.nonce,
                 utxos: self.utxos.clone(),
                 total_stake,
                 lottery_0,
                 lottery_1,
-                sdp: sdp.clone(),
+                // Filter declarations active at the `next_epoch_state_epoch`
+                // from `SdpLedger` regardless of when it was built.
+                active_declarations: Arc::new(sdp.active_declarations(
+                    next_epoch_state_epoch,
+                    &config.sdp_config.service_params,
+                )),
             };
             Ok(Self {
                 slot,
@@ -524,13 +548,16 @@ impl LedgerState {
     ///
     /// At genesis the cryptarchia ledger is built before the mantle `SdpLedger`
     /// exists (the mantle ledger is derived from the cryptarchia epoch state),
-    /// so the initial epoch states start with an empty SDP snapshot. Once the
-    /// genesis `SdpLedger` is available, this seeds it into the epoch 0/1
-    /// snapshots so they carry the genesis membership. Genesis use only.
+    /// so the initial epoch states start with an empty active-declarations
+    /// snapshot. Once the genesis `SdpLedger` is available, this seeds the
+    /// active-declarations snapshot for epochs 0 and 1.
     #[must_use]
-    pub fn with_genesis_sdp(mut self, sdp: SdpLedger) -> Self {
-        self.next_epoch_state.sdp = sdp.clone();
-        self.epoch_state.sdp = sdp;
+    pub fn with_genesis_sdp(mut self, sdp: &SdpLedger, config: &Config) -> Self {
+        let service_params = &config.sdp_config.service_params;
+        self.epoch_state.active_declarations =
+            Arc::new(sdp.active_declarations(self.epoch_state.epoch, service_params));
+        self.next_epoch_state.active_declarations =
+            Arc::new(sdp.active_declarations(self.next_epoch_state.epoch, service_params));
         self
     }
 
@@ -635,7 +662,7 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
-                sdp: SdpLedger::new(1.into()),
+                active_declarations: Arc::new(Declarations::default()),
             },
             epoch_state: EpochState {
                 epoch: 0.into(),
@@ -644,7 +671,7 @@ impl LedgerState {
                 total_stake,
                 lottery_0,
                 lottery_1,
-                sdp: SdpLedger::new(0.into()),
+                active_declarations: Arc::new(Declarations::default()),
             },
             block_density,
             stake_inference,
@@ -939,33 +966,24 @@ pub mod tests {
         ));
         let block_density = BlockDensity::new(config.epoch(slot), &config);
 
-        let mut epoch_state = EpochState {
+        let epoch_state = EpochState {
             epoch: 0.into(),
             nonce: Fr::ZERO,
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
             lottery_1,
-            sdp: SdpLedger::new(0.into()),
+            active_declarations: Arc::new(Declarations::default()),
         };
-        epoch_state.sdp = epoch_state.sdp.clone().with_blend_service(
-            &config.sdp_config.service_rewards_params.blend,
-            &epoch_state,
-        );
-
-        let mut next_epoch_state = EpochState {
+        let next_epoch_state = EpochState {
             epoch: 1.into(),
             nonce: Fr::ZERO,
             utxos: utxos.clone(),
             total_stake,
             lottery_0,
             lottery_1,
-            sdp: SdpLedger::new(1.into()),
+            active_declarations: Arc::new(Declarations::default()),
         };
-        next_epoch_state.sdp = next_epoch_state.sdp.clone().with_blend_service(
-            &config.sdp_config.service_rewards_params.blend,
-            &next_epoch_state,
-        );
 
         LedgerState {
             utxos,
@@ -1071,16 +1089,20 @@ pub mod tests {
         header_id: &HeaderId,
         snapshot_header_id: &HeaderId,
     ) {
+        let epoch = ledger.states[header_id]
+            .cryptarchia_ledger
+            .epoch_state
+            .epoch;
+        let expected = ledger.states[snapshot_header_id]
+            .mantle_ledger
+            .sdp
+            .active_declarations(epoch, &config().sdp_config.service_params);
         assert_eq!(
-            ledger.states[header_id]
+            *ledger.states[header_id]
                 .cryptarchia_ledger
                 .epoch_state
-                .sdp
-                .declarations(),
-            ledger.states[snapshot_header_id]
-                .mantle_ledger
-                .sdp
-                .declarations(),
+                .active_declarations,
+            expected,
         );
     }
 
@@ -1106,8 +1128,9 @@ pub mod tests {
         ledger.states[header_id]
             .cryptarchia_ledger
             .epoch_state
-            .sdp
-            .get_declaration(declaration_id)
+            .active_declarations
+            .for_service(&ServiceType::BlendNetwork)
+            .and_then(|m| m.get(declaration_id))
     }
 
     #[test]
@@ -1258,6 +1281,77 @@ pub mod tests {
                 .block_density
                 .period_range(),
             &(200.into()..=259.into())
+        );
+    }
+
+    /// A declaration that lapses past `inactivity_period` but has not yet
+    /// been garbage-collected must be filtered out of the `EpochState`
+    /// snapshot built at a later epoch.
+    #[test]
+    fn epoch_state_snapshot_excludes_inactive_declaration() {
+        let leader_utxo = utxo();
+        let (sdp_utxo_key, sdp_utxo) = utxo_with_sk();
+        let new_utxo = utxo();
+        let config = config();
+        let epoch_length = config.epoch_length();
+        let (mut ledger0, genesis) = ledger(&[leader_utxo, sdp_utxo], config);
+
+        // Declare at slot 1 (epoch 0). The declaration's `active` field is
+        // initialized to `created + 2 = 2`.
+        let (head0, declare) = apply_and_add_utxo_and_declaration(
+            &mut ledger0,
+            genesis,
+            1,
+            leader_utxo,
+            new_utxo,
+            sdp_utxo,
+            sdp_utxo_key,
+        );
+
+        // Advance to epoch 4 (one-by-one).
+        // With inactivity_period=1, the declaration goes inactive at epoch 4.
+        // With retention_period=1, GC fires at epoch 5.
+        // So, at epoch 4, the declaration is inactive yet still present in the ledger.
+        let mut ledger = ledger0.clone();
+        let mut head = head0;
+        for epoch in 1..=4u64 {
+            head = update_ledger(&mut ledger, head, epoch * epoch_length, leader_utxo).unwrap();
+        }
+        assert_eq!(
+            ledger.states[&head].cryptarchia_ledger.epoch_state.epoch,
+            Epoch::new(4)
+        );
+        assert!(
+            ledger.states[&head]
+                .mantle_ledger
+                .sdp
+                .get_declaration(&declare.id())
+                .is_some(),
+            "declaration must still be in the live SDP ledger before GC removes it"
+        );
+        assert!(
+            declaration_in_snapshot(&ledger, &head, &declare.id()).is_none(),
+            "inactive declaration must be filtered out of the EpochState snapshot"
+        );
+
+        // Jump from epoch 0 to 4, and check the same conditions
+        let mut ledger = ledger0;
+        head = update_ledger(&mut ledger, head0, 4 * epoch_length, leader_utxo).unwrap();
+        assert_eq!(
+            ledger.states[&head].cryptarchia_ledger.epoch_state.epoch,
+            Epoch::new(4)
+        );
+        assert!(
+            ledger.states[&head]
+                .mantle_ledger
+                .sdp
+                .get_declaration(&declare.id())
+                .is_some(),
+            "declaration must still be in the live SDP ledger before GC removes it"
+        );
+        assert!(
+            declaration_in_snapshot(&ledger, &head, &declare.id()).is_none(),
+            "inactive declaration must be filtered out of the EpochState snapshot"
         );
     }
 
