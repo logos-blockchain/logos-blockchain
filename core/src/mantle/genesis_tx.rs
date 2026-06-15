@@ -320,9 +320,7 @@ impl CryptarchiaParameter {
 #[cfg(test)]
 mod tests {
     use lb_groth16::{AdditiveGroup as _, CompressedGroth16Proof};
-    use lb_key_management_system_keys::keys::{
-        Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature,
-    };
+    use lb_key_management_system_keys::keys::{Ed25519Signature, ZkKey, ZkPublicKey, ZkSignature};
     use num_bigint::BigUint;
 
     use super::*;
