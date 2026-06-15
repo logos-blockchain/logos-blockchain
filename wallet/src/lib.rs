@@ -1112,7 +1112,6 @@ mod tests {
                         ServiceType::BlendNetwork,
                         ServiceParameters {
                             inactivity_period: 20.into(),
-                            retention_period: 100.into(),
                             epoch: 0.into(),
                         },
                     )]

@@ -38,9 +38,6 @@ pub struct MinStake {
 pub struct ServiceParameters {
     /// Maximum epochs during which an activity message must be sent
     pub inactivity_period: NumberOfEpochs,
-    /// Epochs after which a declaration can be safely deleted by Garbage
-    /// Collection
-    pub retention_period: NumberOfEpochs,
     // Epoch number at which this parameter was set
     pub epoch: Epoch,
 }

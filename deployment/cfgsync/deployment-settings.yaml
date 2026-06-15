@@ -32,7 +32,6 @@ cryptarchia:
       BN:
         lock_period: 10
         inactivity_period: 1
-        retention_period: 1
         epoch: 0
     min_stake:
       threshold: 1

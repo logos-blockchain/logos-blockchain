@@ -93,7 +93,6 @@ pub fn create_provider_id(byte: u8) -> ProviderId {
 pub fn create_service_parameters() -> ServiceParameters {
     ServiceParameters {
         inactivity_period: 1.into(),
-        retention_period: 1.into(),
         epoch: 0.into(),
     }
 }

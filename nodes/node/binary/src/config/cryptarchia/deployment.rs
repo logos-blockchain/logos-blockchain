@@ -88,6 +88,5 @@ pub struct SdpConfig {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServiceParameters {
     pub inactivity_period: NumberOfEpochs,
-    pub retention_period: NumberOfEpochs,
     pub epoch: Epoch,
 }
