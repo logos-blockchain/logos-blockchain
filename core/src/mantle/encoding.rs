@@ -38,10 +38,6 @@ use crate::{
 // limits maximum transaction size to 1MiB, for memory safety limits we can
 // allow 4MiB.
 
-// Maximum memory allocation size allowed for SDP activity metadata.
-// Protects against unbounded allocation in `decode_sdp_active`
-const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 230; // `ActiveMessage` has a fixed size of 230 bytes
-
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
 type NomOps<'a> = NomBoundedVec<'a, Op, { Ops::MIN }, { Ops::MAX }, 1>;
