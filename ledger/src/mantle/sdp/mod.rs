@@ -282,11 +282,6 @@ impl<R: Rewards> ServiceState<R> {
 /// Returns true if the declaration is active at `current_epoch`:
 /// an activity message has been accepted within `inactivity_period` epochs,
 /// and its withdrawal (if any) has not yet taken effect.
-///
-/// We don't check `declaration.active >= current_epoch` because genesis
-/// declarations which are initialized with `active = 2` must be treated as
-/// active from the epoch 0. To make it clearer, the spec should update
-/// `active` to `Option` and define a clearer way to handle it.
 fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServiceParameters) -> bool {
     declaration.active.strict_add(config.inactivity_period) >= current_epoch
         && declaration
