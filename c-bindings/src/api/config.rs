@@ -10,9 +10,7 @@ use lb_node::cli::{EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, Upd
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
 
-use crate::{
-    OperationStatus, api::types::config::Deployment, logging, return_error_if_null_pointer,
-};
+use crate::{OperationStatus, logging, return_error_if_null_pointer};
 
 /// Converts a non-null C string pointer into a [`PathBuf`].
 ///
@@ -35,9 +33,10 @@ pub struct GenerateConfigArgs {
     pub blend_port: *const u16,
     pub http_addr: *const c_char,
     pub external_address: *const c_char,
-    pub no_public_ip_check: *const bool,
-    pub deployment: *const Deployment,
     pub state_path: *const c_char,
+    pub ibd: *const bool,
+    pub log_filter: *const c_char,
+    pub kms_file: *const c_char,
 }
 
 impl From<GenerateConfigArgs> for EmbeddedInitArgs {
@@ -101,6 +100,23 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
         if !value.state_path.is_null() {
             let state_path = unsafe { CStr::from_ptr(value.state_path) };
             init_args.state_path = Some(state_path.to_string_lossy().to_string().into());
+        }
+
+        // ---- ibd ----
+        if !value.ibd.is_null() {
+            init_args.ibd = unsafe { *value.ibd };
+        }
+
+        // ---- log_filter ----
+        if !value.log_filter.is_null() {
+            let log_filter = unsafe { CStr::from_ptr(value.log_filter) };
+            init_args.log_filter = Some(log_filter.to_string_lossy().to_string());
+        }
+
+        // ---- kms_file ----
+        if !value.kms_file.is_null() {
+            let kms_file = unsafe { CStr::from_ptr(value.kms_file) };
+            init_args.kms_file = Some(kms_file.to_string_lossy().to_string().into());
         }
 
         init_args
