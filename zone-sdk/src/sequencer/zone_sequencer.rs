@@ -301,6 +301,11 @@ where
     }
 
     /// Subscribe to tx-status changes.
+    ///
+    /// These updates are broadcast as soon as the sequencer classifies a tx.
+    /// When a block causes `OnChain`, `Orphaned`, or `Finalized`, the matching
+    /// [`super::Event::BlocksProcessed`] is queued separately and may be
+    /// observed later by consumers listening to both streams.
     #[must_use]
     pub fn subscribe_tx_status(&self) -> broadcast::Receiver<TxStatusUpdate> {
         self.tx_status_tx.subscribe()
@@ -374,11 +379,10 @@ where
             Some(results) = self.in_flight.next() => {
                 for (tx_hash, success) in results {
                     self.posting.remove(&tx_hash);
-                    if success {
-                        if let Some(state) = self.state.as_mut() {
-                            state.mark_pending_inscription_posted(&tx_hash);
-                        }
-                        self.queue_tx_status(tx_hash, TxStatus::PendingMempool);
+                    if success
+                        && let Some(state) = self.state.as_mut()
+                        && state.mark_pending_inscription_posted(&tx_hash) {
+                            self.queue_tx_status(tx_hash, TxStatus::PendingMempool);
                     }
                 }
                 self.buffered_events.pop_front().map(|event| self.emit_now(event))
@@ -403,12 +407,12 @@ where
                 TxStatus::AcceptedLocally => {
                     state.prune_local_tx_tracking(self.config.max_local_tx_tracking);
                 }
-                TxStatus::Orphaned(TxSource::Local) | TxStatus::Finalized(TxSource::Local) => {
+                TxStatus::Finalized(TxSource::Local) => {
                     state.remove_local_tx(&tx_hash);
                 }
                 TxStatus::PendingMempool
                 | TxStatus::OnChain(_)
-                | TxStatus::Orphaned(TxSource::Other)
+                | TxStatus::Orphaned(_)
                 | TxStatus::Finalized(TxSource::Other) => {}
             }
         }
