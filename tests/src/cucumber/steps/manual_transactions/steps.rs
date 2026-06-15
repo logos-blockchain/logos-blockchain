@@ -635,13 +635,6 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
     Ok(())
 }
 
-#[given(expr = "I update all user wallets balances")]
-#[when(expr = "I update all user wallets balances")]
-async fn step_update_all_wallets_balances(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    utils::sync_available_utxos_for_user_wallets(world, &step.value, None).await?;
-    Ok(())
-}
-
 #[given(expr = "I have a faucet with URL {string} username {string} and password {string}")]
 #[when(expr = "I have a faucet with URL {string} username {string} and password {string}")]
 #[expect(

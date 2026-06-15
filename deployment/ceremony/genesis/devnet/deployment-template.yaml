@@ -22,10 +22,10 @@ cryptarchia:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 30
+  security_param: 50
   slot_activation_coeff:
     numerator: 1
-    denominator: 20
+    denominator: 30
   learning_rate: 0.5
   sdp_config:
     service_params:

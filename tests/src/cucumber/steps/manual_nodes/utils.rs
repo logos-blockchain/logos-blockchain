@@ -719,7 +719,9 @@ pub async fn start_node(
             immediate_start,
         },
     );
-    world.register_wallet_block_feed_source(node_name, client.clone())?;
+    world
+        .register_wallet_block_feed_source(node_name, client.clone())
+        .await?;
 
     // All nodes are required to be network ready responsive, and bootstrap nodes
     // must be `Mode::OnLine` for IBD of other peers to succeed
