@@ -602,7 +602,7 @@ mod tests {
 
         // Drive sequencer until ready
         loop {
-            if matches!(sequencer.next_event().await, Some(Event::Ready)) {
+            if matches!(sequencer.next_event().await, Event::Ready) {
                 break;
             }
         }
@@ -1111,11 +1111,11 @@ mod tests {
         let mut finalized_items: Vec<FinalizedTx> = Vec::new();
         loop {
             match sequencer.next_event().await {
-                Some(Event::Ready) => break,
-                Some(Event::BlocksProcessed { finalized, .. }) => {
+                Event::Ready => break,
+                Event::BlocksProcessed { finalized, .. } => {
                     finalized_items.extend(finalized);
                 }
-                Some(_) | None => {}
+                Event::TurnNotification { .. } => {}
             }
         }
 

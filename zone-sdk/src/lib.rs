@@ -13,12 +13,19 @@
 //!
 //! # Quick start (sequencer)
 //!
-//! The sequencer is owned by a single drive task. State-mutating commands go
-//! through a borrowing handle obtained via
-//! [`sequencer::ZoneSequencer::handle`]; every publish returns the resulting
-//! [`sequencer::SequencerCheckpoint`] inline so the caller can persist outbox +
-//! checkpoint atomically. Read-only observers (other tasks) get cloneable watch
-//! receivers from the subscribe methods.
+//! The sequencer is owned by a single drive task. Two command surfaces:
+//!
+//! - [`sequencer::SequencerHandle`] (sync, drive-loop only) — obtained via
+//!   [`sequencer::ZoneSequencer::handle`]. Borrows the sequencer mutably so it
+//!   can only be used from the drive task. Every state-mutating method returns
+//!   the resulting [`sequencer::SequencerCheckpoint`] inline so the caller can
+//!   persist outbox + checkpoint atomically.
+//! - [`sequencer::SequencerClient`] (async, cross-task) — obtained via
+//!   [`sequencer::ZoneSequencer::client`]. Cheap-to-clone; routes publish/admin
+//!   commands through the actor's request channel and vends subscription
+//!   receivers off cloned senders. Useful for service-style integrations where
+//!   publish calls originate from tasks other than the drive loop. The drive
+//!   loop must still be polled for client publish awaits to resolve.
 //!
 //! ```ignore
 //! use lb_zone_sdk::{
@@ -32,20 +39,19 @@
 //! let node = NodeHttpClient::new(CommonHttpClient::new(None), "http://localhost:8080".parse().unwrap());
 //! let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, None);
 //!
-//! // Other tasks observe via cloneable watch receivers (subscribe before
-//! // moving the sequencer into its drive task).
-//! let _ready_rx      = sequencer.subscribe_ready();
-//! let _checkpoint_rx = sequencer.subscribe_checkpoint();
+//! // Cross-task surface: clone and move into any task. Carries both
+//! // publish/admin methods and subscription receivers.
+//! let client = sequencer.client();
+//! let _ready_rx      = client.subscribe_ready();
+//! let _checkpoint_rx = client.subscribe_checkpoint();
 //!
 //! loop {
-//!     tokio::select! {
-//!         Some(ev) = sequencer.next_event() => match ev {
-//!             Event::BlocksProcessed { checkpoint, channel_update, finalized } => {
-//!                 let _ = (checkpoint, channel_update, finalized);
-//!             }
-//!             Event::Ready                             => {}
-//!             Event::TurnNotification { notification } => { let _ = notification; }
-//!         },
+//!     match sequencer.next_event().await {
+//!         Event::BlocksProcessed { checkpoint, channel_update, finalized } => {
+//!             let _ = (checkpoint, channel_update, finalized);
+//!         }
+//!         Event::Ready                             => {}
+//!         Event::TurnNotification { notification } => { let _ = notification; }
 //!     }
 //! }
 //! # }

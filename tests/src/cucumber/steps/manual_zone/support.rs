@@ -166,7 +166,7 @@ impl PublishDeadline {
 /// drive task; the event mpsc is purely for test observation.
 pub struct PolicyRuntime {
     pub task: JoinHandle<()>,
-    pub client: SequencerClient<ZoneNodeHttpClient>,
+    pub client: SequencerClient,
     pub events: tokio::sync::broadcast::Receiver<Event>,
     pub checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     pub ready_rx: tokio::sync::watch::Receiver<bool>,
@@ -174,7 +174,7 @@ pub struct PolicyRuntime {
     pub turn_to_write_rx: tokio::sync::watch::Receiver<TurnNotification>,
 }
 
-fn to_policy_runtime(rt: runner::Runtime<ZoneNodeHttpClient>) -> PolicyRuntime {
+fn to_policy_runtime(rt: runner::Runtime) -> PolicyRuntime {
     PolicyRuntime {
         task: rt.task,
         client: rt.client,
@@ -527,7 +527,7 @@ pub fn sequencer_config_with_pending_submit_depth(
 /// the deadline elapses. No "wait for event" — the new SDK publishes
 /// synchronously and the runner forwards the call through the drive task.
 pub async fn publish_message_with_retry(
-    client: &SequencerClient<ZoneNodeHttpClient>,
+    client: &SequencerClient,
     data: &Inscription,
     deadline: PublishDeadline,
 ) -> Result<PublishResult, ZoneTestError> {
@@ -1143,7 +1143,7 @@ pub async fn submit_zone_deposit(
 /// and publishes the zone inscription that consumes it.
 pub async fn submit_atomic_zone_deposit(
     node_url: &Url,
-    client: &SequencerClient<ZoneNodeHttpClient>,
+    client: &SequencerClient,
     request: AtomicZoneDepositRequest,
 ) -> Result<AtomicZoneDepositSubmission, ZoneTestError> {
     let AtomicZoneDepositRequest {
@@ -1237,7 +1237,7 @@ fn build_atomic_deposit_op(
 /// Submits a channel withdraw signed by the active zone sequencer and publishes
 /// the withdraw inscription as part of the same SDK flow.
 pub async fn submit_zone_withdraw(
-    client: &SequencerClient<ZoneNodeHttpClient>,
+    client: &SequencerClient,
     channel_id: ChannelId,
     funding_public_key: ZkPublicKey,
     amount: Value,
@@ -1319,7 +1319,7 @@ pub struct ZoneAtomicWithdrawSubmission {
 /// listed amount). Exercises the SDK API at full width: multiple args, with
 /// any arg able to carry multiple output notes.
 pub async fn publish_atomic_zone_withdraw(
-    client: &SequencerClient<ZoneNodeHttpClient>,
+    client: &SequencerClient,
     funding_public_key: ZkPublicKey,
     outputs_per_arg: Vec<Vec<Value>>,
     inscription_data: Inscription,
