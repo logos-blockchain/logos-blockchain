@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
     fmt,
+    hash::BuildHasher,
     sync::{Arc, RwLock},
 };
 
@@ -23,7 +24,7 @@ use crate::{
     cucumber::{
         TARGET,
         world::{
-            SharedScannedTransactionHashes, SharedTrackedWallets, SharedWalletBlockFeedTracker,
+            SharedObservedTransactionHashes, SharedTrackedWallets, SharedWalletBlockFeedTracker,
         },
     },
 };
@@ -47,7 +48,7 @@ impl CucumberWalletBlockFeed {
     pub async fn start(
         wallets: SharedTrackedWallets,
         tracker: SharedWalletBlockFeedTracker,
-        scanned_transaction_hashes: SharedScannedTransactionHashes,
+        observed_transaction_hashes: SharedObservedTransactionHashes,
         genesis_utxos: Vec<Utxo>,
     ) -> Result<Self, CucumberWalletBlockFeedError> {
         let provider = DynamicWalletBlockFeedSources::default();
@@ -66,7 +67,7 @@ impl CucumberWalletBlockFeed {
                     tracker,
                     genesis_utxos,
                 )),
-                Box::new(TransactionHashCollector::new(scanned_transaction_hashes)),
+                Box::new(TransactionHashCollector::new(observed_transaction_hashes)),
             ],
         );
 
@@ -175,14 +176,14 @@ impl BlockFeedCollector for WalletBlockFeedStateCollector {
 }
 
 struct TransactionHashCollector {
-    scanned_transaction_hashes: SharedScannedTransactionHashes,
+    observed_transaction_hashes: SharedObservedTransactionHashes,
     observed_headers: HashSet<HeaderId>,
 }
 
 impl TransactionHashCollector {
-    fn new(scanned_transaction_hashes: SharedScannedTransactionHashes) -> Self {
+    fn new(observed_transaction_hashes: SharedObservedTransactionHashes) -> Self {
         Self {
-            scanned_transaction_hashes,
+            observed_transaction_hashes,
             observed_headers: HashSet::new(),
         }
     }
@@ -206,8 +207,8 @@ impl TransactionHashCollector {
             return;
         }
 
-        apply_observed_hashes_to_scanned_transaction_hashes(
-            &self.scanned_transaction_hashes,
+        record_observed_transaction_hashes(
+            &self.observed_transaction_hashes,
             &hashes,
             Some(new_blocks),
         );
@@ -259,14 +260,13 @@ impl SourceProvider<NodeHttpClient> for DynamicWalletBlockFeedSources {
     }
 }
 
-/// Applies the transaction hashes from a list of provided transaction hashes to
-/// the shared set of scanned transaction hashes, and logs the update.
-fn apply_observed_hashes_to_scanned_transaction_hashes<S: ::std::hash::BuildHasher>(
-    scanned_transaction_hashes: &SharedScannedTransactionHashes,
+/// Records transaction hashes observed in chain blocks and logs the update.
+pub(crate) fn record_observed_transaction_hashes<S: BuildHasher>(
+    observed_transaction_hashes: &SharedObservedTransactionHashes,
     transaction_hashes: &HashSet<TxHash, S>,
     num_of_blocks: Option<usize>,
 ) {
-    let mut sink = scanned_transaction_hashes
+    let mut sink = observed_transaction_hashes
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let before = sink.len();

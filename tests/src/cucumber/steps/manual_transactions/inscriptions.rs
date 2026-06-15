@@ -21,7 +21,7 @@ use crate::{
                 prepare_user_wallet_transaction_submission, submit_prepared_user_wallet_transaction,
             },
         },
-        wallet::checks::wait_for_scanned_transaction_hashes,
+        wallet::checks::wait_for_observed_transaction_hashes,
         world::{CucumberWorld, WalletType},
     },
 };
@@ -169,7 +169,7 @@ async fn step_transaction_is_included_on_node(
     }
 
     let expected_hashes = HashSet::from([tx_hash]);
-    wait_for_scanned_transaction_hashes(
+    wait_for_observed_transaction_hashes(
         world,
         &step.value,
         &expected_hashes,

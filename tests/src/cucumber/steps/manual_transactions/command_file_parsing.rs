@@ -28,6 +28,12 @@ pub enum ManualCommand {
         wallet_state_type: WalletOutputState,
         verify_max: bool,
     },
+    WalletBalance {
+        wallet_name: String,
+    },
+    WalletBalanceAllUserWallets,
+    WalletBalanceAllFundingWallets,
+    WalletBalanceAllWallets,
     ClearEncumbrances {
         wallet_name: String,
     },
@@ -205,6 +211,12 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
                 verify_max: command == "VERIFY_MAX",
             })
         }
+        "BALANCE" => Ok(ManualCommand::WalletBalance {
+            wallet_name: parse_quoted_field(&parts, "wallet")?,
+        }),
+        "BALANCE_ALL_USER_WALLETS" => Ok(ManualCommand::WalletBalanceAllUserWallets),
+        "BALANCE_ALL_FUNDING_WALLETS" => Ok(ManualCommand::WalletBalanceAllFundingWallets),
+        "BALANCE_ALL_WALLETS" => Ok(ManualCommand::WalletBalanceAllWallets),
         "CLEAR_ENCUMBRANCES" => Ok(ManualCommand::ClearEncumbrances {
             wallet_name: parse_quoted_field(&parts, "wallet")?,
         }),
@@ -424,6 +436,39 @@ mod tests {
         ));
     }
 
+    fn assert_balance_command() {
+        let command = parse_ok("BALANCE, wallet 'WALLET_1A'");
+
+        assert!(matches!(
+            command,
+            ManualCommand::WalletBalance { wallet_name } if wallet_name == "WALLET_1A"
+        ));
+    }
+
+    fn assert_balance_all_user_wallets_command() {
+        let command = parse_ok("BALANCE_ALL_USER_WALLETS");
+
+        assert!(matches!(
+            command,
+            ManualCommand::WalletBalanceAllUserWallets
+        ));
+    }
+
+    fn assert_balance_all_funding_wallets_command() {
+        let command = parse_ok("BALANCE_ALL_FUNDING_WALLETS");
+
+        assert!(matches!(
+            command,
+            ManualCommand::WalletBalanceAllFundingWallets
+        ));
+    }
+
+    fn assert_balance_all_wallets_command() {
+        let command = parse_ok("BALANCE_ALL_WALLETS");
+
+        assert!(matches!(command, ManualCommand::WalletBalanceAllWallets));
+    }
+
     fn assert_clear_encumbrances_command() {
         let command = parse_ok("CLEAR_ENCUMBRANCES, wallet 'WALLET_2A'");
 
@@ -582,6 +627,12 @@ mod tests {
                 wallet_state_type: WalletOutputState::OnChain,
                 verify_max: false,
             },
+            ManualCommand::WalletBalance {
+                wallet_name: String::new(),
+            },
+            ManualCommand::WalletBalanceAllUserWallets,
+            ManualCommand::WalletBalanceAllFundingWallets,
+            ManualCommand::WalletBalanceAllWallets,
             ManualCommand::ClearEncumbrances {
                 wallet_name: String::new(),
             },
@@ -657,6 +708,22 @@ mod tests {
                 ManualCommand::Verify { .. } => {
                     assert_verify_max_command();
                     assert_verify_min_command();
+                    visited += 1;
+                }
+                ManualCommand::WalletBalance { .. } => {
+                    assert_balance_command();
+                    visited += 1;
+                }
+                ManualCommand::WalletBalanceAllUserWallets => {
+                    assert_balance_all_user_wallets_command();
+                    visited += 1;
+                }
+                ManualCommand::WalletBalanceAllFundingWallets => {
+                    assert_balance_all_funding_wallets_command();
+                    visited += 1;
+                }
+                ManualCommand::WalletBalanceAllWallets => {
+                    assert_balance_all_wallets_command();
                     visited += 1;
                 }
                 ManualCommand::ClearEncumbrances { .. } => {

@@ -11,6 +11,10 @@
 //! ```text
 //! COIN_SPLIT, wallet '<wallet_name>', outputs <count>, value <amount>
 //! VERIFY, wallet '<wallet_name>', outputs <count>, time_out <duration_seconds>
+//! BALANCE, wallet '<wallet_name>'
+//! BALANCE_ALL_WALLETS
+//! BALANCE_ALL_USER_WALLETS
+//! BALANCE_ALL_FUNDING_WALLETS
 //! CLEAR_ENCUMBRANCES, wallet '<wallet_name>'
 //! CLEAR_ENCUMBRANCES_ALL_WALLETS
 //! SEND, transactions <count>, value <amount>, from '<wallet_name>', to '<wallet_name>'
@@ -58,7 +62,7 @@ use crate::{
         },
         wallet::{
             best_node::{get_best_node_info, get_best_node_info_choose},
-            checks::wait_for_scanned_transaction_hashes,
+            checks::wait_for_observed_transaction_hashes,
         },
         world::{CucumberWorld, WalletInfo},
     },
@@ -266,12 +270,12 @@ async fn verify_transactions_mined(
 
     info!(
         target: TARGET,
-        "{tag}{} {phase}: Wait for {} submitted transaction hashes to be observed in scanned blocks",
+        "{tag}{} {phase}: Wait for {} submitted transaction hashes to be observed in chain blocks",
         cycle.map_or_else(String::new, |cycle| format!(" cycle {cycle}")),
         tx_hashes.len(),
     );
 
-    wait_for_scanned_transaction_hashes(world, step, tx_hashes, Duration::from_mins(3)).await
+    wait_for_observed_transaction_hashes(world, step, tx_hashes, Duration::from_mins(3)).await
 }
 
 #[expect(
@@ -439,6 +443,21 @@ async fn execute_non_stop_manual_command(
             value,
         } => execute_coin_split(world, step, wallet, *outputs, *value, None).await,
         ManualCommand::Verify { .. } => handle_verify_command(world, step, command).await,
+        ManualCommand::WalletBalance { wallet_name } => {
+            log_wallet_balance(world, step, wallet_name).await
+        }
+        ManualCommand::WalletBalanceAllUserWallets => {
+            log_wallet_balances(world, step, world.all_user_wallets()).await
+        }
+        ManualCommand::WalletBalanceAllFundingWallets => {
+            log_wallet_balances(world, step, world.all_funding_wallets()).await
+        }
+        ManualCommand::WalletBalanceAllWallets => {
+            let mut wallets = world.all_user_wallets();
+            wallets.extend(world.all_funding_wallets());
+
+            log_wallet_balances(world, step, wallets).await
+        }
         ManualCommand::ClearEncumbrances { wallet_name } => {
             clear_wallet_encumbrances(world, step, wallet_name)
         }
@@ -492,6 +511,49 @@ async fn execute_non_stop_manual_command(
         }
         ManualCommand::Stop => Ok(()),
     }
+}
+
+async fn log_wallet_balances(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallets: Vec<WalletInfo>,
+) -> StepResult {
+    for wallet in wallets {
+        log_wallet_balance(world, step, &wallet.wallet_name).await?;
+    }
+
+    Ok(())
+}
+
+async fn log_wallet_balance(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+) -> StepResult {
+    let available =
+        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::Available)
+            .await?;
+
+    let reserved =
+        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::Reserved)
+            .await?;
+
+    let on_chain =
+        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::OnChain).await?;
+
+    info!(
+        target: TARGET,
+        "Wallet `{wallet_name}` [Available] {}/{} LGO, [Encumbered] {}/{} LGO, \
+        [On-chain] {}/{} LGO",
+        available.output_count,
+        available.value,
+        reserved.output_count,
+        reserved.value,
+        on_chain.output_count,
+        on_chain.value,
+    );
+
+    Ok(())
 }
 
 fn clear_wallet_encumbrances(
@@ -899,15 +961,15 @@ async fn execute_continuous_round_robin(
     }
 
     // Final drain: verify submitted D-phase transaction hashes are observed in
-    // scanned blocks.
+    // chain blocks.
     info!(
         target: TARGET,
         "CONTINUOUS ROUND ROBIN final: Verify {} submitted round-robin transaction(s) were observed \
-        in scanned blocks",
+        in chain blocks",
         all_round_robin_tx_hashes.len(),
     );
 
-    wait_for_scanned_transaction_hashes(
+    wait_for_observed_transaction_hashes(
         world,
         step,
         &all_round_robin_tx_hashes,
@@ -917,7 +979,7 @@ async fn execute_continuous_round_robin(
 
     info!(
         target: TARGET,
-        "CONTINUOUS ROUND ROBIN scenario complete: {} transaction(s) verified from scanned block transaction hashes across {} cycle(s)",
+        "CONTINUOUS ROUND ROBIN scenario complete: {} transaction(s) verified from observed chain block transaction hashes across {} cycle(s)",
         all_round_robin_tx_hashes.len(),
         cycles
     );

@@ -176,7 +176,7 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     Ok(())
 }
 
-pub async fn wait_for_scanned_transaction_hashes<S: BuildHasher + Sync>(
+pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
     world: &mut CucumberWorld,
     step: &str,
     expected_hashes: &HashSet<TxHash, S>,
@@ -187,13 +187,13 @@ pub async fn wait_for_scanned_transaction_hashes<S: BuildHasher + Sync>(
     let start = Instant::now();
 
     loop {
-        let missing = world.missing_scanned_transaction_hashes(expected_hashes);
+        let missing = world.missing_observed_transaction_hashes(expected_hashes);
         let observed = expected_hashes.len().saturating_sub(missing.len());
 
         if missing.is_empty() {
             info!(
                 target: TARGET,
-                "Step `{}` observed {}/{} submitted transaction hash(es) in scanned blocks",
+                "Step `{}` observed {}/{} submitted transaction hash(es) in chain blocks",
                 step,
                 observed,
                 expected_hashes.len(),
@@ -207,7 +207,7 @@ pub async fn wait_for_scanned_transaction_hashes<S: BuildHasher + Sync>(
 
             let msg = format!(
                 "Step `{step}` transaction inclusion timeout: submitted={} \
-                scanned_observed={observed} missing={}",
+                chain_observed={observed} missing={}",
                 expected_hashes.len(),
                 missing_set.len(),
             );

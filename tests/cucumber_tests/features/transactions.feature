@@ -293,6 +293,9 @@ Feature: Transactions
     And wallet "WALLET_2A" has 3 or more outputs in 60 seconds
     And wallet "WALLET_4A" has 3 or more outputs in 60 seconds
     And wallet "WALLET_5A" has 3 or more outputs in 60 seconds
+    # Wait for more blocks to be mined on each fork to ensure the chains are well established
+    When node "NODE_1" is at height 5 in 180 seconds
+    And node "NODE_4" is at height 5 in 180 seconds
     # Bridge the two forks
     When I start peer node "NODE_JOIN" connected to node "NODE_1" and node "NODE_4"
     # Wait for all nodes to converge on the same chain and for the transactions to be mined in the new combined chain
