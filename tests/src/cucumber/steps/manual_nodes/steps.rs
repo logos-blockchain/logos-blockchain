@@ -652,7 +652,7 @@ fn step_set_public_cryptarchia_endpoint_peers(
         }
 
         endpoint_peers.push(PublicCryptarchiaEndpointPeer {
-            url,
+            base_url: url,
             username,
             password,
         });

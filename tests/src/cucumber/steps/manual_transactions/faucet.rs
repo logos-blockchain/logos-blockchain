@@ -1,46 +1,43 @@
-use std::{num::NonZero, time::Duration};
+use std::{collections::HashMap, num::NonZero, time::Duration};
 
-use lb_chain_service::ChainServiceInfo;
-use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use reqwest::Client;
-use tokio::{task::JoinHandle, time::sleep};
+use tokio::{
+    task::JoinHandle,
+    time::{sleep, timeout},
+};
 use tracing::{info, warn};
 
-use crate::cucumber::{steps::TARGET, utils::truncate_hash};
-
-const FAUCET_BACKEND: &str = "/web/faucet-backend";
+use crate::cucumber::{
+    error::StepError,
+    steps::{TARGET, manual_nodes::utils::fetch_public_peer_consensus},
+    utils::truncate_hash,
+    world::PublicCryptarchiaEndpointPeer,
+};
 
 /// Background task that periodically checks the block height and requests funds
 /// from the faucet.
 pub struct FaucetTask {
-    username: String,
-    password: String,
     wallet_addresses: Vec<String>,
     last_height: u64,
     rounds_per_wallet: NonZero<usize>,
     faucet_url: String,
-    check_height_urls: Vec<String>,
+    cryptarchia_endpoint_peers: Vec<PublicCryptarchiaEndpointPeer>,
 }
 
 impl FaucetTask {
     /// Creates a new `FaucetTask` with the given parameters.
     pub fn new(
-        base_url: &str,
-        username: &str,
-        password: &str,
+        faucet_url: &str,
         wallet_addresses: &[String],
         rounds_per_wallet: NonZero<usize>,
+        cryptarchia_endpoint_peers: Vec<PublicCryptarchiaEndpointPeer>,
     ) -> Self {
         Self {
-            username: username.to_owned(),
-            password: password.to_owned(),
             wallet_addresses: wallet_addresses.to_owned(),
             last_height: 0,
             rounds_per_wallet,
-            faucet_url: format!("{base_url}{FAUCET_BACKEND}"),
-            check_height_urls: (0..=3)
-                .map(|i| format!("{base_url}/node/{i}{CRYPTARCHIA_INFO}"))
-                .collect(),
+            faucet_url: faucet_url.to_owned(),
+            cryptarchia_endpoint_peers,
         }
     }
 
@@ -52,13 +49,11 @@ impl FaucetTask {
     /// detected. This is a best effort task and funding is not guaranteed.
     pub fn spawn(self, poll_interval_ms: u64, step: &str) -> JoinHandle<()> {
         let Self {
-            username,
-            password,
             wallet_addresses,
             mut last_height,
             rounds_per_wallet,
             faucet_url,
-            check_height_urls,
+            cryptarchia_endpoint_peers,
         } = self;
         if wallet_addresses.is_empty() {
             warn!(
@@ -75,35 +70,37 @@ impl FaucetTask {
             info!(target: TARGET, "Faucet request(s) start");
             let mut next_index: usize = 0;
             let mut number_of_loops = 0;
+            let total_requests = wallet_addresses.len() * rounds_per_wallet.get();
             loop {
-                match Self::check_block_height(&client, &check_height_urls, &username, &password)
-                    .await
-                {
+                match Self::check_block_height(&client, &cryptarchia_endpoint_peers).await {
                     Ok(height) => {
                         if height > last_height {
+                            number_of_loops += 1;
                             let address = &wallet_addresses[next_index];
-                            info!(
-                                target: TARGET,
-                                "Faucet request {number_of_loops}/{} for `{} ...` at height \
-                                `{height}` from `{}`",
-                                 wallet_addresses.len() * rounds_per_wallet.get(),
-                                truncate_hash(address, 16),
-                                &check_height_urls[0],
-                            );
                             last_height = height;
 
                             // Process only one wallet address per height increase (round-robin).
                             let post_url = format!("{faucet_url}/{address}");
-                            if let Err(e) = Self::request_funds(&client, post_url).await {
-                                warn!(
-                                    target: TARGET,
-                                    "Step `{step}` [request_funds] error for address `{address}`: {e}"
-                                );
+                            match Self::request_funds(&client, post_url).await {
+                                Ok(tx_hash) => {
+                                    info!(
+                                        target: TARGET,
+                                        "Faucet request {number_of_loops}/{total_requests} for `{} ...` at height \
+                                        `{height}` from `{faucet_url}`, hash: `{} ...`",
+                                        truncate_hash(address, 16),
+                                        truncate_hash(&tx_hash, 16),
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        target: TARGET,
+                                        "Step `{step}` [request_funds] error for address `{address}`: {e}"
+                                    );
+                                }
                             }
 
                             next_index = (next_index + 1) % wallet_addresses.len();
-                            number_of_loops += 1;
-                            if number_of_loops >= wallet_addresses.len() * rounds_per_wallet.get() {
+                            if number_of_loops >= total_requests {
                                 break;
                             }
                         }
@@ -124,48 +121,60 @@ impl FaucetTask {
 
     async fn check_block_height(
         client: &Client,
-        check_height_urls: &[String],
-        username: &str,
-        password: &str,
-    ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
-        let mut last_err: Option<Box<dyn std::error::Error + Send + Sync>> = None;
+        cryptarchia_endpoint_peers: &[PublicCryptarchiaEndpointPeer],
+    ) -> Result<u64, StepError> {
+        if cryptarchia_endpoint_peers.is_empty() {
+            return Err(StepError::LogicalError {
+                message: "[check_block_height] No peers configured".to_owned(),
+            });
+        }
 
-        for url in check_height_urls {
-            match client
-                .get(url)
-                .basic_auth(username, Some(password))
-                .send()
-                .await
+        // Launch all peer requests concurrently with per-request timeout.
+        let futs = cryptarchia_endpoint_peers.iter().map(async |peer| {
+            match timeout(
+                Duration::from_secs(2),
+                fetch_public_peer_consensus(client, peer),
+            )
+            .await
             {
-                Ok(response) => {
-                    if !response.status().is_success() {
-                        last_err = Some(
-                            format!("[check_block_height] HTTP {} from {url}", response.status())
-                                .into(),
-                        );
-                        continue;
-                    }
+                Ok(Ok(info)) => Ok(info.height),
+                Ok(Err(e)) => Err(e),
+                Err(_) => Err(StepError::LogicalError {
+                    message: format!("[check_block_height] Timeout from peer `{}`", peer.base_url),
+                }),
+            }
+        });
 
-                    match response.json::<ChainServiceInfo>().await {
-                        Ok(data) => {
-                            return Ok(data.cryptarchia_info.height);
-                        }
-                        Err(e) => {
-                            last_err = Some(Box::new(e));
-                        }
-                    }
+        let results = futures::future::join_all(futs).await;
+
+        let mut counts: HashMap<u64, usize> = HashMap::new();
+        let mut last_err: Option<StepError> = None;
+
+        for r in results {
+            match r {
+                Ok(height) => {
+                    *counts.entry(height).or_insert(0) += 1;
                 }
-                Err(e) => {
-                    last_err = Some(Box::new(e));
-                }
+                Err(e) => last_err = Some(e),
             }
         }
 
-        Err(last_err.unwrap_or_else(|| {
-            Box::new(std::io::Error::other(
-                "[check_block_height] No response from any node",
-            ))
-        }))
+        if counts.is_empty() {
+            return Err(last_err.unwrap_or_else(|| StepError::LogicalError {
+                message: "[check_block_height] No successful response from any node".to_owned(),
+            }));
+        }
+
+        // Pick the most frequent height (majority/plurality).
+        // If tied, choose the higher height as deterministic tie-breaker.
+        let best = counts
+            .into_iter()
+            .max_by(|(h1, c1), (h2, c2)| c1.cmp(c2).then_with(|| h1.cmp(h2)))
+            .map(|(h, _)| h);
+
+        best.ok_or_else(|| StepError::LogicalError {
+            message: "[check_block_height] Unable to determine majority height".to_owned(),
+        })
     }
 
     async fn request_funds(

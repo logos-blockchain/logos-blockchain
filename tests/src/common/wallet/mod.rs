@@ -44,3 +44,7 @@ pub use transaction::{
     WalletTransactionIntent, fund_builder_from_wallet_source, prepare_wallet_transaction,
     wallet_state_from_utxos,
 };
+pub(crate) use transaction::{
+    PreparedWalletTransactionWorkItem, finalize_prepared_wallet_transaction,
+    prepare_wallet_transaction_work_item,
+};

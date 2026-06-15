@@ -1,7 +1,6 @@
 use std::{collections::HashSet, num::NonZero};
 
-use hex::ToHex as _;
-use lb_core::{codec::SerializeOp as _, mantle::TxHash};
+use lb_core::mantle::TxHash;
 use tracing::warn;
 
 pub use crate::cucumber::wallet::{
@@ -24,7 +23,11 @@ pub use crate::cucumber::wallet::{
 pub(crate) use crate::cucumber::wallet::{
     best_node::BestNodeInfo,
     submissions::{
-        prepare_user_wallet_transaction_submission, submit_prepared_user_wallet_transaction,
+        SignedUserWalletSubmission, finalize_reserved_user_wallet_submissions_concurrently,
+        prepare_user_wallet_transaction_submission,
+        reserve_user_wallet_transaction_submission_with_utxo_cache,
+        submit_prepared_user_wallet_transaction,
+        submit_signed_user_wallet_submissions_concurrently,
     },
 };
 use crate::cucumber::{
@@ -39,10 +42,7 @@ pub(crate) fn request_faucet_funds(
     number_of_rounds: NonZero<usize>,
     wallets: &[String],
 ) -> StepResult {
-    if world.faucet_base_url.is_none()
-        || world.faucet_username.is_none()
-        || world.faucet_password.is_none()
-    {
+    if world.faucet_base_url.is_none() || world.public_cryptarchia_endpoint_peers.is_none() {
         warn!(
             target: TARGET,
             "Step `{}` error: Faucet details not set.",
@@ -58,18 +58,12 @@ pub(crate) fn request_faucet_funds(
             .clone()
             .expect("checked above")
             .as_ref(),
-        world
-            .faucet_username
-            .clone()
-            .expect("checked above")
-            .as_ref(),
-        world
-            .faucet_password
-            .clone()
-            .expect("checked above")
-            .as_ref(),
         wallets,
         number_of_rounds,
+        world
+            .public_cryptarchia_endpoint_peers
+            .clone()
+            .expect("checked above"),
     );
     if let Some(handles) = &mut world.faucet_task_handles {
         handles.push(faucet_task.spawn(1000, step));
@@ -80,27 +74,11 @@ pub(crate) fn request_faucet_funds(
     Ok(())
 }
 
-pub(crate) fn tx_hash_hex(tx_hash: TxHash) -> String {
-    tx_hash
-        .to_bytes()
-        .expect("is valid")
-        .to_ascii_lowercase()
-        .encode_hex::<String>()
-}
-
-pub(crate) fn extend_tx_hash_set<'a, I>(
-    hash_set: &mut HashSet<TxHash>,
-    hashes: I,
-) -> Result<(), StepError>
+pub(crate) fn extend_tx_hash_set<'a, I>(hash_set: &mut HashSet<TxHash>, hashes: I)
 where
     I: IntoIterator<Item = &'a TxHash>,
 {
     for hash in hashes {
-        if !hash_set.insert(*hash) {
-            return Err(StepError::LogicalError {
-                message: format!("Duplicate transaction hash: {}", tx_hash_hex(*hash)),
-            });
-        }
+        let _unused = hash_set.insert(*hash);
     }
-    Ok(())
 }

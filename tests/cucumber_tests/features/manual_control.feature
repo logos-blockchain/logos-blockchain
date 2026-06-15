@@ -49,7 +49,7 @@ Feature: Manual control of transactions
   #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, transactions 10, value 100, cycles 3
   #   STOP
 
-  @transactions_manual_control
+  @manual_control_transactions
   Scenario: Transactions manual control
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -66,7 +66,7 @@ Feature: Manual control of transactions
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
 
-  @transactions_manual_control
+  @manual_control_transactions
   Scenario: Transactions stress manual control
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
@@ -100,60 +100,46 @@ Feature: Manual control of transactions
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
 
-  @transactions_devnet_manual_control
-  Scenario: Manual snapshot create
+  @devnet_snapshots
+  Scenario: Devnet manual snapshot create
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
+    And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
-      | initial_peer                                                                                  |
-      | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-      | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
+      | initial_peer                                                                                   |
+      | /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8  |
+      | /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ  |
+      | /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf  |
+      | /ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH |
 #    And I have IBD peers:
 #      | ibd_peer                                             |
-#      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-#      | 12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-#      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-#      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-#      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-#      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+#      | 12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8 |
+#      | 12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ |
+#      | 12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf |
+#      | 12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH |
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    When node "NODE_1" is at height 4000 in 30000 seconds
+    When node "NODE_1" is at height 10000 in 30000 seconds
     When I create a blockchain snapshot "SNAP_TEST_01" of node "NODE_1"
-    When node "NODE_2" is at height 4000 in 30000 seconds
+    When node "NODE_2" is at height 10000 in 30000 seconds
     When I create a blockchain snapshot "SNAP_TEST_01" of node "NODE_2"
     Then I stop all nodes
 
-  @transactions_devnet_manual_control
-  Scenario: Start from snapshot and create new snapshot
+  @devnet_snapshots
+  Scenario: Devnet start from snapshot and create new snapshot when synced
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
+    And I will initialize started nodes from snapshot "SNAP_TEST_01" source node "NODE_1"
     And I will create a blockchain snapshot "SNAP_TEST_03" of all nodes when stopping
-    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
+    And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
-      | initial_peer                                                                                  |
-      | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-      | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
-#    And I have IBD peers:
-#      | ibd_peer                                             |
-#      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-#      | 12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-#      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-#      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-#      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-#      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | initial_peer                                                                                   |
+      | /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8  |
+      | /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ  |
+      | /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf  |
+      | /ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH |
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -167,101 +153,71 @@ Feature: Manual control of transactions
     When I wait for all nodes to be synced to the chain
     Then I stop all nodes
 
-  @transactions_devnet_manual_control
-  Scenario: Start from base snapshot
+  @devnet_snapshots
+  Scenario: Devnet start from base snapshot advanced restart advance stop
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
-    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
+    And I will initialize started nodes from snapshot "SNAP_TEST_01" source node "NODE_1"
+    And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
-      | initial_peer                                                                                  |
-      | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-      | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
-#    And I have IBD peers:
-#      | ibd_peer                                             |
-#      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-#      | 12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-#      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-#      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-#      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-#      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | initial_peer                                                                                   |
+      | /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8  |
+      | /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ  |
+      | /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf  |
+      | /ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH |
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    When node "NODE_1" is at height 30200 in 30000 seconds
-    When node "NODE_2" is at height 30200 in 30000 seconds
+    When node "NODE_1" is at height 10200 in 30000 seconds
+    When node "NODE_2" is at height 1022 in 30000 seconds
     When I restart node "NODE_1"
     When I restart node "NODE_2"
-    When node "NODE_1" is at height 30300 in 30000 seconds
-    When node "NODE_2" is at height 30300 in 30000 seconds
+    When node "NODE_1" is at height 10300 in 30000 seconds
+    When node "NODE_2" is at height 10300 in 30000 seconds
     When I query cryptarchia info for all nodes
     Then I stop all nodes
 
-  @transactions_devnet_manual_control
-  Scenario: Transactions devnet manual control
+  @devnet_manual_control_transactions
+  Scenario: Devnet transactions manual control
     Given I have a devnet cluster with capacity of 2 nodes
     And we join an external network
-    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
-    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
+#    And I will initialize started nodes from snapshot "SNAP_TEST_03" source node "NODE"
+    And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
-      | initial_peer                                                                                  |
-      | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-      | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
-#    And I have IBD peers:
-#      | ibd_peer                                             |
-#      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-#      | 12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-#      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-#      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-#      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-#      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | initial_peer                                                                                   |
+      | /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8  |
+      | /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ  |
+      | /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf  |
+      | /ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH |
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    And I request 3 rounds of faucet funds for all user wallets
     And I have public cryptarchia endpoint peers:
       | public_cryptarchia_endpoint               | username               | password              |
       | https://devnet.blockchain.logos.co/node/0 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/1 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+    And I request 10 rounds of faucet funds for all user wallets
     When I wait for all nodes to be synced to the chain
-    When node NODE_1 is at height 2000 in 3000 seconds
+    When node "NODE_1" is at height 2000 in 3000 seconds
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
 
-  @transactions_devnet_manual_control
-  Scenario: Transactions stress devnet manual control
+  @devnet_manual_control_transactions
+  Scenario: Devnet transactions stress manual control
     Given I have a devnet cluster with capacity of 10 nodes
     And we join an external network
-    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
-    And I have a faucet with URL "https://devnet.blockchain.logos.co" username "env(CCMBR_DEVNET_USER)" and password "env(CCMBR_DEVNET_PWD)"
+#    And I will initialize started nodes from snapshot "000_094_856" source node "NODE"
+    And I have a faucet with URL "https://devnet.blockchain.logos.co/web/faucet-backend/"
     And I have initial peers:
-      | initial_peer                                                                                  |
-      | /ip4/209.38.241.182/udp/3001/quic-v1/p2p/12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-      | /ip4/209.38.241.182/udp/3000/quic-v1/p2p/12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-      | /ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8   |
-      | /ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh   |
-      | /ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD   |
-      | /ip4/65.109.51.37/udp/3003/quic-v1/p2p/12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR   |
-#    And I have IBD peers:
-#      | ibd_peer                                             |
-#      | 12D3KooWQHCiYiroktwPzrxnsg5DhHubhn1yvFLADa4RdvCkzavs |
-#      | 12D3KooWAihc6PGqjrsVp19Tvtcvec48zchuLAHpDsLvCN8xDX17 |
-#      | 12D3KooWL7a8LBbLRYnabptHPFBCmAs49Y7cVMqvzuSdd43tAJk8 |
-#      | 12D3KooWPLeAcachoUm68NXGD7tmNziZkVeMmeBS5NofyukuMRJh |
-#      | 12D3KooWKFNe4gS5DcCcRUVGdMjZp3fUWu6q6gG5R846Ui1pccHD |
-#      | 12D3KooWAnriLgXyQnGTYz1zPWPkQL3rthTKYLzuAP7MMnbgsxzR |
+      | initial_peer                                                                                   |
+      | /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8  |
+      | /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ  |
+      | /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf  |
+      | /ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH |
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
@@ -274,13 +230,13 @@ Feature: Manual control of transactions
       | NODE_8    | 8             | WALLET_8A   | NODE_7       |
       | NODE_9    | 9             | WALLET_9A   | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
-    And I request 3 rounds of faucet funds for all user wallets
     And I have public cryptarchia endpoint peers:
       | public_cryptarchia_endpoint               | username               | password              |
       | https://devnet.blockchain.logos.co/node/0 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/1 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
+    And I request 10 rounds of faucet funds for all user wallets
     When I wait for all nodes to be synced to the chain
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
