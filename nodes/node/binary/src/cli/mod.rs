@@ -4,7 +4,7 @@ pub mod keys;
 pub mod participate;
 
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -20,8 +20,10 @@ use crate::{
     },
     config::{
         ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
-        LogArgs, NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, update_api, update_blend,
-        update_cryptarchia, update_network, update_sdp, update_state, update_tracing,
+        LogArgs, NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig,
+        api::serde::AxumBackendSettings, blend::serde::core::BackendConfig as BlendCoreConfig,
+        network::serde::SwarmConfig, update_api, update_blend, update_cryptarchia, update_network,
+        update_sdp, update_state, update_tracing,
     },
 };
 
@@ -223,11 +225,7 @@ impl From<EmbeddedInitArgs> for InitArgs {
             .clone_from(&args.external_address);
         init_args.network.initial_peers = Some(args.initial_peers.clone());
 
-        init_args.blend.blend_addr = Some(
-            format!("/ip4/0.0.0.0/tcp/{}", args.blend_port)
-                .parse()
-                .expect("Valid multiaddr structure"),
-        );
+        init_args.blend.blend_addr = Some(BlendCoreConfig::listening_address(args.blend_port));
 
         init_args.cryptarchia.ibd = args.ibd;
         init_args.api.addr = Some(args.http_addr);
@@ -242,9 +240,9 @@ impl Default for EmbeddedInitArgs {
         Self {
             initial_peers: Vec::new(),
             output: PathBuf::from("user_config.yaml"),
-            net_port: 3000,
-            blend_port: 3400,
-            http_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3000),
+            net_port: SwarmConfig::default_port(),
+            blend_port: BlendCoreConfig::default_port(),
+            http_addr: AxumBackendSettings::listening_address(AxumBackendSettings::default_port()),
             external_address: None,
             state_path: None,
             ibd: false,

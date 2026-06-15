@@ -26,10 +26,27 @@ pub struct BackendConfig {
     pub max_dial_attempts_per_peer: NonZeroU64,
 }
 
+impl BackendConfig {
+    #[must_use]
+    pub const fn default_port() -> u16 {
+        3400
+    }
+
+    /// # Panics
+    ///
+    /// This function will panic if the constructed multiaddr string is invalid.
+    #[must_use]
+    pub fn listening_address(port: u16) -> Multiaddr {
+        format!("/ip4/0.0.0.0/udp/{port}/quic-v1")
+            .parse()
+            .expect("Valid multiaddr structure")
+    }
+}
+
 impl Default for BackendConfig {
     fn default() -> Self {
         Self {
-            listening_address: "/ip4/0.0.0.0/udp/3400/quic-v1".parse().unwrap(),
+            listening_address: Self::listening_address(Self::default_port()),
             core_peering_degree: 3..=5,
             edge_node_connection_timeout: Duration::from_secs(1),
             max_edge_node_incoming_connections: 300,
