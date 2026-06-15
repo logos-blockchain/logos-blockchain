@@ -39,18 +39,18 @@ impl Config {
     pub fn nonce_snapshot(&self, epoch: Epoch) -> Slot {
         let offset = self.nonce_contribution_period();
         let base =
-            u64::from(u32::from(epoch).saturating_sub(1)).saturating_mul(self.epoch_length());
-        base.saturating_add(offset).into()
+            u64::from(epoch.strict_sub(1.into()).into_inner()).strict_mul(self.epoch_length());
+        base.strict_add(offset).into()
     }
 
     /// The number of slots in Stake Distribution Snapshot + Buffer phases
     #[must_use]
     pub fn nonce_contribution_period(&self) -> u64 {
-        self.base_period_length().get().saturating_mul(
+        self.base_period_length().get().strict_mul(
             u64::from(NonZeroU64::from(
                 self.epoch_config.epoch_period_nonce_buffer,
             ))
-            .saturating_add(u64::from(NonZeroU64::from(
+            .strict_add(u64::from(NonZeroU64::from(
                 self.epoch_config.epoch_stake_distribution_stabilization,
             ))),
         )
@@ -76,7 +76,7 @@ impl Config {
     /// snapshotted, i.e., the first slot of the previous epoch.
     #[must_use]
     pub fn stake_distribution_snapshot(&self, epoch: Epoch) -> Slot {
-        (u64::from(u32::from(epoch) - 1) * self.epoch_length()).into()
+        (u64::from(epoch.strict_sub(1.into()).into_inner()) * self.epoch_length()).into()
     }
 
     #[must_use]
@@ -158,6 +158,66 @@ mod tests {
         assert_eq!(config.total_stake_snapshot(2.into()), 160.into());
         assert_eq!(config.stake_distribution_snapshot(1.into()), 0.into());
         assert_eq!(config.stake_distribution_snapshot(2.into()), 100.into());
+    }
+
+    fn epoch_zero_test_config() -> super::Config {
+        let epoch_config = EpochConfig {
+            epoch_stake_distribution_stabilization: NonZero::new(3u8).unwrap(),
+            epoch_period_nonce_buffer: NonZero::new(3).unwrap(),
+            epoch_period_nonce_stabilization: NonZero::new(4).unwrap(),
+        };
+        let consensus_config = lb_cryptarchia_engine::Config::new(
+            NonZero::new(5).unwrap(),
+            NonNegativeRatio::new(1, 2.try_into().unwrap()),
+            1f64.try_into().expect("1 > 0"),
+        );
+        let epoch_length = epoch_config.epoch_length(consensus_config.base_period_length());
+        super::Config {
+            epoch_config,
+            consensus_config,
+            sdp_config: crate::mantle::sdp::Config {
+                service_params: Arc::new(
+                    [(
+                        ServiceType::BlendNetwork,
+                        ServiceParameters {
+                            inactivity_period: 1.into(),
+                            retention_period: 1.into(),
+                            epoch: 0.into(),
+                        },
+                    )]
+                    .into(),
+                ),
+                service_rewards_params: ServiceRewardsParameters {
+                    blend: RewardsParameters {
+                        rounds_per_epoch: epoch_length.try_into().unwrap(),
+                        message_frequency_per_round: NonNegativeF64::try_from(1.0).unwrap(),
+                        num_blend_layers: NonZeroU64::new(3).unwrap(),
+                        minimum_network_size: NonZeroU64::new(1).unwrap(),
+                        data_replication_factor: 0,
+                        activity_threshold_sensitivity: 1,
+                    },
+                },
+                min_stake: MinStake {
+                    threshold: 1,
+                    timestamp: 0,
+                },
+            },
+            faucet_pk: None,
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to subtract with overflow")]
+    fn stake_distribution_snapshot_panics_at_epoch_zero() {
+        let config = epoch_zero_test_config();
+        let _ = config.stake_distribution_snapshot(0.into());
+    }
+
+    #[test]
+    #[should_panic(expected = "attempt to subtract with overflow")]
+    fn nonce_snapshot_panics_at_epoch_zero() {
+        let config = epoch_zero_test_config();
+        let _ = config.nonce_snapshot(0.into());
     }
 
     #[test]

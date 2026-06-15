@@ -49,6 +49,16 @@ impl Epoch {
     pub const fn strict_add(self, rhs: Self) -> Self {
         Self(self.0.strict_add(rhs.0))
     }
+
+    /// Strict epoch subtraction, panicking if overflow occurred.
+    ///
+    /// # Panics
+    /// This function will always panic on overflow, regardless of whether
+    /// overflow checks are enabled.
+    #[must_use]
+    pub const fn strict_sub(self, rhs: Self) -> Self {
+        Self(self.0.strict_sub(rhs.0))
+    }
 }
 
 impl Display for Epoch {

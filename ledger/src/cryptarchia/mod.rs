@@ -328,7 +328,7 @@ impl LedgerState {
             tracing::warn!(
                 old_epoch = ?current_epoch,
                 new_epoch = ?new_epoch,
-                epochs_skipped = u32::from(new_epoch) - u32::from(current_epoch) - 1,
+                epochs_skipped = new_epoch.strict_sub(current_epoch).strict_sub(1.into()).into_inner(),
                 old_total_stake = self.epoch_state.total_stake,
                 new_total_stake = total_stake,
                 slot = ?slot,
