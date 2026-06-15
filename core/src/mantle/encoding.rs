@@ -19,7 +19,7 @@ use crate::{
         ops::{
             Op, OpProof,
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
-            sdp::{SDPActiveOp, SDPWithdrawOp},
+            sdp::SDPActiveOp,
             transfer::TransferOp,
         },
     },
@@ -81,23 +81,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
 // ==============================================================================
 // SDP Operation Decoders
 // ==============================================================================
-
-pub(crate) fn decode_sdp_withdraw(input: &[u8]) -> IResult<&[u8], SDPWithdrawOp> {
-    // SDPWithdraw = DeclarationId Nonce LockedNoteId
-    let (input, declaration_id_bytes) = decode_hash32(input)?;
-    let declaration_id = DeclarationId(declaration_id_bytes);
-    let (input, nonce) = decode_uint64(input)?;
-    let (input, locked_note_id) = map(decode_field_element, NoteId).parse(input)?;
-
-    Ok((
-        input,
-        SDPWithdrawOp {
-            declaration_id,
-            locked_note_id,
-            nonce,
-        },
-    ))
-}
 
 pub(crate) fn decode_sdp_active(input: &[u8]) -> IResult<&[u8], SDPActiveOp> {
     // SDPActive = DeclarationId Nonce Metadata
@@ -433,14 +416,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
     bytes
 }
 
-pub(crate) fn encode_sdp_withdraw(op: &SDPWithdrawOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(&op.declaration_id.0));
-    bytes.extend(encode_uint64(op.nonce));
-    bytes.extend(encode_field_element(op.locked_note_id.as_ref()));
-    bytes
-}
-
 #[must_use]
 pub fn encode_sdp_active(op: &SDPActiveOp) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -635,7 +610,7 @@ mod tests {
                     inscribe::{self, Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
-                sdp::SDPDeclareOp,
+                sdp::{SDPDeclareOp, SDPWithdrawOp},
             },
             tx::GasPrices,
         },

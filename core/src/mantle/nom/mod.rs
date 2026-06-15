@@ -4,7 +4,7 @@ use nom::{
     IResult, Parser as _,
     combinator::{map, map_res},
     error::{Error, ErrorKind},
-    number::complete::{le_u16, le_u32, u8},
+    number::complete::{le_u16, le_u32, le_u64, u8},
 };
 
 use crate::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
@@ -68,6 +68,20 @@ impl NomDecode for u32 {
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         le_u32(bytes)
+    }
+}
+
+impl NomEncode for u64 {
+    fn encode(&self) -> Vec<u8> {
+        self.to_le_bytes().to_vec()
+    }
+}
+
+impl NomDecode for u64 {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        le_u64(bytes)
     }
 }
 
