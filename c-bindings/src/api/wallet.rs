@@ -1,23 +1,40 @@
 use core::ptr;
+use std::time::Duration;
 
 use lb_api_service::http::mempool;
-use lb_core::mantle::{SignedMantleTx, Transaction};
+use lb_core::{
+    header::HeaderId as CoreHeaderId,
+    mantle::{SignedMantleTx, Transaction},
+};
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_wallet_service::{WalletService, api::WalletApi};
+use lb_node::{
+    RuntimeServiceId,
+    generic_services::{CryptarchiaService, WalletService as NodeWalletService},
+};
+use lb_wallet_service::{ClaimableVoucherInfo, TipResponse, api::WalletApi};
 use num_bigint::BigUint;
+use overwatch::services::status::ServiceStatus;
 
 use crate::{
     LogosBlockchainNode,
     api::{
         cryptarchia::{Hash, HeaderId, get_cryptarchia_info_sync},
-        types::{known_addresses::KnownAddresses, value::Value},
+        types::{
+            claimable_vouchers::{ClaimableVoucher, ClaimableVouchers},
+            known_addresses::KnownAddresses,
+            value::Value,
+        },
     },
     errors::OperationStatus,
     logging,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
+
+pub type FfiClaimableVouchersResult = FfiStatusResult<ClaimableVouchers>;
+
+type WalletService = NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
 
 /// Gets the known wallet addresses from the wallet service.
 ///
@@ -36,7 +53,7 @@ pub(crate) fn get_known_addresses_sync(
 ) -> StatusResult<Vec<ZkPublicKey>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
-        let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
             node.get_overwatch_handle(),
         )
         .await;
@@ -209,6 +226,129 @@ pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> Oper
     OperationStatus::Ok
 }
 
+/// Gets the claimable vouchers tracked by the wallet.
+///
+/// This is a synchronous wrapper around [`WalletApi::get_claimable_vouchers`].
+///
+/// # Arguments
+///
+/// - `node`: A [`LogosBlockchainNode`] instance.
+/// - `tip`: The header ID to query claimable vouchers at.
+///
+/// # Returns
+///
+/// A [`Result`] containing the tip-scoped claimable vouchers on success, or an
+/// [`OperationStatus`] error on failure.
+pub(crate) fn get_claimable_vouchers_sync(
+    node: &LogosBlockchainNode,
+    tip: Option<CoreHeaderId>,
+) -> StatusResult<TipResponse<Vec<ClaimableVoucherInfo>>> {
+    let runtime_handle = node.get_runtime_handle();
+    runtime_handle.block_on(async {
+        if let Err(status) = node
+            .get_overwatch_handle()
+            .status_watcher::<WalletService>()
+            .await
+            .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
+            .await
+        {
+            logging::error!(
+                "get_claimable_vouchers_sync",
+                "Wallet service is not ready: {status:?}"
+            );
+            return Err(OperationStatus::ServiceError);
+        }
+
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
+            node.get_overwatch_handle(),
+        )
+        .await;
+        api.get_claimable_vouchers(tip).await.map_err(|error| {
+            logging::error!("get_claimable_vouchers_sync", "{error:?}");
+            OperationStatus::DynError
+        })
+    })
+}
+
+/// Gets the claimable vouchers tracked by the wallet.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+/// - `optional_tip`: An optional pointer to the header ID to query at. If null,
+///   the current tip will be used.
+///
+/// # Returns
+///
+/// A [`FfiClaimableVouchersResult`] containing the tip and claimable vouchers
+/// on success, or an [`OperationStatus`] error on failure.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that all pointers are valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_claimable_vouchers(
+    node: *const LogosBlockchainNode,
+    optional_tip: *const HeaderId,
+) -> FfiClaimableVouchersResult {
+    return_error_if_null_pointer!("get_claimable_vouchers", node);
+    let node = unsafe { &*node };
+    let tip = if optional_tip.is_null() {
+        None
+    } else {
+        Some(CoreHeaderId::from(unsafe { *optional_tip }))
+    };
+
+    let response = unwrap_or_return_error!(get_claimable_vouchers_sync(node, tip));
+    let vouchers: Vec<ClaimableVoucher> = response
+        .response
+        .into_iter()
+        .map(|voucher| {
+            let nullifier = voucher.nullifier.into();
+            ClaimableVoucher {
+                commitment: voucher.commitment.to_bytes(),
+                nullifier: fr_to_bytes(&nullifier),
+            }
+        })
+        .collect();
+
+    let len = vouchers.len();
+    let vouchers_ptr = Box::leak(vouchers.into_boxed_slice()).as_mut_ptr();
+
+    FfiClaimableVouchersResult::ok(ClaimableVouchers {
+        tip: response.tip.into(),
+        vouchers: vouchers_ptr,
+        len,
+    })
+}
+
+/// Frees the memory allocated for a [`ClaimableVouchers`] structure.
+///
+/// # Arguments
+///
+/// - `vouchers`: A [`ClaimableVouchers`] structure previously returned by
+///   [`get_claimable_vouchers`].
+///
+/// # Safety
+///
+/// This function is unsafe because it reconstructs a boxed slice from a raw
+/// pointer. The caller must only pass values returned by
+/// [`get_claimable_vouchers`] and must call this exactly once per result.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn free_claimable_vouchers(vouchers: ClaimableVouchers) -> OperationStatus {
+    return_error_if_null_pointer!("free_claimable_vouchers", vouchers.vouchers);
+    let vouchers = unsafe {
+        Box::from_raw(ptr::slice_from_raw_parts_mut(
+            vouchers.vouchers,
+            vouchers.len,
+        ))
+    };
+
+    drop(vouchers);
+    OperationStatus::Ok
+}
+
 /// Get the balance of a wallet address
 ///
 /// This is a synchronous wrapper around [`WalletApi::get_balance`].
@@ -231,7 +371,7 @@ pub(crate) fn get_balance_sync(
     let runtime_handle = node.get_runtime_handle();
     runtime_handle
         .block_on(async {
-            let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(
+            let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
                 node.get_overwatch_handle(),
             )
             .await;
@@ -383,7 +523,7 @@ pub(crate) fn transfer_funds_sync(
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
-        let api = WalletApi::<WalletService<_, _, _, _, _>, _>::from_overwatch_handle(handle).await;
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
 
         // The following calls are a rough copy-pate of
         // `post_transactions_transfer_funds`. TODO: Abstract into a common API
