@@ -7,14 +7,12 @@ use lb_blend::{
         encap::ProofsVerifier,
     },
     proofs::{
-        quota::{
-            ProofOfQuota, VerifiedProofOfQuota,
-            inputs::prove::private::ProofOfLeadershipQuotaInputs,
-        },
+        quota::{ProofOfQuota, VerifiedProofOfQuota},
         selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
     },
     scheduling::message_blend::provers::{
-        BlendLayerProof, ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator,
+        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+        core_and_leader::CoreAndLeaderProofsGenerator,
     },
 };
 use lb_chain_service::Epoch;
@@ -35,7 +33,7 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
 
     fn set_epoch_private(
         &mut self,
-        _new_epoch_private: ProofOfLeadershipQuotaInputs,
+        _winning_pol_info_stream: WinningPolInfoStream,
         _target_epoch: Epoch,
     ) {
     }
