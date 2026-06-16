@@ -145,15 +145,6 @@ async fn undeserializable_message_received() {
     }
 }
 
-#[ignore = "TODO: implement and enable this test once the test below is also enabled again"]
-#[test(tokio::test)]
-async fn different_key_same_nullifier_received() {
-    todo!(
-        "Implement test to make sure that a peer sending proofs with different keys but same index (i.e., same nullifier) is caught and marked as spammy."
-    );
-}
-
-#[ignore = "TODO: enable this logic after investigating session/epoch transition issues"]
 #[test(tokio::test)]
 async fn duplicate_message_received_from_same_peer() {
     let (mut identities, nodes) = new_nodes_with_empty_address(2);
