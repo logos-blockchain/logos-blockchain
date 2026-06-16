@@ -16,7 +16,7 @@ services:
       - NBE_NODE_API_HOST=logos-blockchain-node-0
       - NBE_NODE_API_PORT=${NODE0_API_PORT}
       - NBE_BASE_PATH=/web/explorer
-      - NBE_DATABASE_URL=sqlite:///node-data/explorer/sqlite.db
+      - NBE_DATABASE_URL=sqlite:////node-data/explorer/sqlite.db
     ports:
       - "13800:8000/tcp"
 

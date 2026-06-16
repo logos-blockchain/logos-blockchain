@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use super::{
     types::{
         Error, Event, PublishResult, SequencerChannelView, SequencerCheckpoint, TurnNotification,
-        WithdrawArg,
+        TxStatusUpdate, WithdrawArg,
     },
     zone_sequencer::ActorRequest,
 };
@@ -37,6 +37,7 @@ pub struct SequencerClient {
     channel_view_tx: watch::Sender<SequencerChannelView>,
     turn_to_write_tx: watch::Sender<TurnNotification>,
     checkpoint_tx: watch::Sender<Option<SequencerCheckpoint>>,
+    tx_status_tx: broadcast::Sender<TxStatusUpdate>,
 }
 
 impl SequencerClient {
@@ -47,6 +48,7 @@ impl SequencerClient {
         channel_view_tx: watch::Sender<SequencerChannelView>,
         turn_to_write_tx: watch::Sender<TurnNotification>,
         checkpoint_tx: watch::Sender<Option<SequencerCheckpoint>>,
+        tx_status_tx: broadcast::Sender<TxStatusUpdate>,
     ) -> Self {
         Self {
             request_tx,
@@ -55,6 +57,7 @@ impl SequencerClient {
             channel_view_tx,
             turn_to_write_tx,
             checkpoint_tx,
+            tx_status_tx,
         }
     }
 
@@ -198,6 +201,12 @@ impl SequencerClient {
         let mut rx = self.checkpoint_tx.subscribe();
         rx.mark_changed();
         rx
+    }
+
+    /// Subscribe to tx-status changes.
+    #[must_use]
+    pub fn subscribe_tx_status(&self) -> broadcast::Receiver<TxStatusUpdate> {
+        self.tx_status_tx.subscribe()
     }
 
     fn send(&self, request: ActorRequest) -> Result<(), Error> {

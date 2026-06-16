@@ -14,7 +14,7 @@ use super::{
     block_fetch::fetch_and_process_blocks,
     slot_clock::SlotClock,
     state::TxState,
-    types::{ChannelUpdate, Error, Event, FinalizedOp},
+    types::{ChannelUpdate, Error, Event, FinalizedOp, TxSource, TxStatus},
     zone_sequencer::ZoneSequencer,
 };
 use crate::adapter;
@@ -106,14 +106,23 @@ where
             return Some(None);
         };
 
-        Some(Some(Event::BlocksProcessed {
+        for tx in &batch.items {
+            let source = self
+                .state
+                .as_ref()
+                .map_or(TxSource::Other, |state| state.tx_source(&tx.tx_hash));
+            self.queue_tx_status(tx.tx_hash, TxStatus::Finalized(source));
+        }
+
+        self.buffered_events.push_back(Event::BlocksProcessed {
             checkpoint,
             channel_update: ChannelUpdate {
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
             },
             finalized: batch.items,
-        }))
+        });
+        Some(self.buffered_events.pop_front())
     }
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet

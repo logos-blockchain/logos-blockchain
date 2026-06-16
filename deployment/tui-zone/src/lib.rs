@@ -135,7 +135,7 @@ fn handle_event(
             }
             state.save_checkpoint(checkpoint);
         }
-        Event::TurnNotification { .. } => {}
+        Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
     }
 }
 

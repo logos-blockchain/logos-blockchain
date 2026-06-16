@@ -1,216 +1,115 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
 use lb_core::mantle::Utxo;
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_testing_framework::{BlockFeed, BlockFeedObservation, is_truthy_env};
-use tracing::{info, warn};
+use lb_testing_framework::BlockFeed;
+use tracing::{debug, warn};
 
 use crate::{
     common::wallet::{
-        NodeHttpWalletChainSource, TrackedWalletKeysBySource, TrackedWalletKeysForSource,
-        WalletBalance, WalletBlockFeedTracker, WalletBlockFeedTrackerError, WalletFeedStateResult,
-        WalletFeedStateResults, WalletFeedTrackingBatch, WalletFeedTrackingResult, WalletId,
-        WalletObservedBlock, WalletObservedOutput, WalletObservedSpend, WalletOutputState,
+        NodeHttpWalletChainSource, TrackedWalletKeysBySource, WalletBalance,
+        WalletBlockFeedTrackerError, WalletFeedTrackingBatch, WalletId, WalletOutputState,
         WalletUtxos, wallet_utxos_from_chain,
     },
     cucumber::{
-        defaults::CUCUMBER_VERBOSE_CONSOLE,
         error::StepError,
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
-        wallet::{
-            TARGET, WalletStateView,
-            best_node::{BestNodeInfo, sanitize_best_node_info_for_group_with_feed},
-            feed::{
-                apply_observed_blocks_to_scanned_transaction_hashes,
-                apply_observed_hashes_to_scanned_transaction_hashes,
-            },
-        },
+        wallet::{TARGET, WalletStateView, feed::record_observed_transaction_hashes},
         world::{CucumberWorld, WalletInfo},
     },
 };
+
+const CURRENT_WALLET_STATE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(10);
+const WALLET_BLOCK_FEED_SOURCE_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct FreshWalletAvailableState {
     pub observation: WalletStateView,
     pub available_utxos: Vec<Utxo>,
 }
 
-pub async fn sync_available_utxos_for_user_wallets(
-    world: &mut CucumberWorld,
-    step: &str,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletUtxos, StepError> {
-    observe_available_utxos_for_user_wallets(world, step, best_node_info).await
+struct WalletFeedSourceRequirement {
+    node_name: String,
+    min_height: u64,
 }
 
-pub async fn observe_available_utxos_for_user_wallets(
+pub async fn current_available_utxos_for_user_wallets(
     world: &mut CucumberWorld,
     step: &str,
-    best_node_info: Option<&BestNodeInfo>,
 ) -> Result<WalletUtxos, StepError> {
     let wallets = world.all_user_wallets();
+    let feed_requirements = wallet_feed_source_requirements(world, &wallets).await?;
     let mut wallet_keys = build_tracked_wallet_keys(world, step, &wallets)?;
     add_scenario_fee_wallet_keys(world, &mut wallet_keys);
-    observe_available_utxos_from_feed(world, step, &wallet_keys, best_node_info).await
+
+    current_available_utxos_for_wallet_keys_with_requirements(
+        world,
+        &wallet_keys,
+        feed_requirements,
+    )
+    .await
 }
 
-pub async fn sync_available_utxos_for_funding_wallets(
+pub async fn current_available_utxos_for_funding_wallets(
     world: &mut CucumberWorld,
     step: &str,
 ) -> Result<WalletUtxos, StepError> {
-    observe_available_utxos_for_funding_wallets(world, step, None).await
+    current_available_utxos_for_named_wallets(world, step, world.all_funding_wallets()).await
 }
 
-pub async fn observe_available_utxos_for_funding_wallets(
+pub async fn current_available_utxos_for_all_wallets(
     world: &mut CucumberWorld,
     step: &str,
-    _best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletUtxos, StepError> {
-    let mut funding_wallet_utxos = WalletUtxos::new();
-    for wallet in world.all_funding_wallets() {
-        let utxos = observe_wallet(world, step, &wallet.wallet_name)
-            .await?
-            .into_available_utxos();
-        funding_wallet_utxos.insert(wallet.wallet_name.clone().into(), utxos);
-    }
-    Ok(funding_wallet_utxos)
-}
-
-pub async fn sync_available_utxos_for_all_wallets(
-    world: &mut CucumberWorld,
-    step: &str,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletUtxos, StepError> {
-    observe_available_utxos_for_all_wallets(world, step, best_node_info).await
-}
-
-pub async fn observe_available_utxos_for_all_wallets(
-    world: &mut CucumberWorld,
-    step: &str,
-    best_node_info: Option<&BestNodeInfo>,
 ) -> Result<WalletUtxos, StepError> {
     let mut all_wallet_utxos =
-        observe_available_utxos_for_wallets(world, step, world.all_user_wallets(), best_node_info)
-            .await?;
-    for wallet in world.all_funding_wallets() {
-        let utxos = observe_wallet(world, step, &wallet.wallet_name)
-            .await?
-            .into_available_utxos();
-        all_wallet_utxos.insert(wallet.wallet_name.clone().into(), utxos);
-    }
+        current_available_utxos_for_named_wallets(world, step, world.all_user_wallets()).await?;
+    let funding_wallet_utxos = current_available_utxos_for_funding_wallets(world, step).await?;
+
+    all_wallet_utxos.extend(funding_wallet_utxos);
+
     Ok(all_wallet_utxos)
 }
 
-pub async fn sync_available_utxos_for_wallets(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallets: Vec<WalletInfo>,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletUtxos, StepError> {
-    observe_available_utxos_for_wallets(world, step, wallets, best_node_info).await
-}
-
-pub async fn observe_available_utxos_for_wallets(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallets: Vec<WalletInfo>,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletUtxos, StepError> {
-    for wallet in &wallets {
-        if wallet.is_funding_wallet() {
-            return Err(StepError::LogicalError {
-                message: format!(
-                    "Funding wallet {} should be updated individually due to their strict coupling \
-                    with their node's state.",
-                    wallet.wallet_name
-                ),
-            });
-        }
-    }
-
-    let wallet_keys = build_tracked_wallet_keys(world, step, &wallets)?;
-    observe_available_utxos_from_feed(world, step, &wallet_keys, best_node_info).await
-}
-
-pub async fn sync_available_utxos_for_wallet(
+pub async fn current_available_utxos_for_wallet(
     world: &mut CucumberWorld,
     step: &str,
     wallet_name: &str,
 ) -> Result<Vec<Utxo>, StepError> {
-    observe_available_utxos_for_wallet(world, step, wallet_name).await
-}
-
-pub async fn observe_available_utxos_for_wallet(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallet_name: &str,
-) -> Result<Vec<Utxo>, StepError> {
-    Ok(observe_wallet(world, step, wallet_name)
+    Ok(current_wallet_state(world, step, wallet_name)
         .await?
         .into_available_utxos())
 }
 
-pub async fn sync_wallet_output_balance(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallet: &WalletInfo,
-    wallet_name: &str,
-    wallet_state_type: WalletOutputState,
-) -> Result<WalletBalance, StepError> {
-    observe_wallet_output_balance(world, step, wallet, wallet_name, wallet_state_type).await
-}
-
-pub async fn observe_wallet_output_balance(
+pub async fn current_wallet_output_balance(
     world: &mut CucumberWorld,
     _step: &str,
     wallet: &WalletInfo,
-    wallet_name: &str,
     wallet_state_type: WalletOutputState,
 ) -> Result<WalletBalance, StepError> {
-    observe_wallet_state(world, wallet_name, &wallet.node_name, wallet.public_key()?)
+    current_wallet_state_for_wallet(world, wallet)
         .await
         .map(|observation| observation.balance(wallet_state_type))
 }
 
-pub async fn sync_wallet_balance(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallet_name: &str,
-    wallet_state_type: WalletOutputState,
-    _best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletBalance, StepError> {
-    observe_wallet_balance(world, step, wallet_name, wallet_state_type).await
-}
-
-pub async fn observe_wallet_balance(
+pub async fn current_wallet_balance(
     world: &mut CucumberWorld,
     step: &str,
     wallet_name: &str,
     wallet_state_type: WalletOutputState,
 ) -> Result<WalletBalance, StepError> {
-    Ok(observe_wallet(world, step, wallet_name)
+    Ok(current_wallet_state(world, step, wallet_name)
         .await?
         .balance(wallet_state_type))
 }
 
-pub async fn sync_wallet_state_from_feed(
+pub async fn current_wallet_available_state(
     world: &mut CucumberWorld,
     wallet_name: &str,
-    wallet_node_name: &str,
-    wallet_pk: ZkPublicKey,
-) -> Result<WalletStateView, StepError> {
-    observe_wallet_state(world, wallet_name, wallet_node_name, wallet_pk).await
-}
-
-pub async fn sync_wallet_available_state(
-    world: &mut CucumberWorld,
-    wallet_name: &str,
-    wallet_node_name: &str,
-    wallet_pk: ZkPublicKey,
 ) -> Result<FreshWalletAvailableState, StepError> {
-    let observation = observe_wallet_state(world, wallet_name, wallet_node_name, wallet_pk).await?;
+    let wallet = world.resolve_wallet(wallet_name)?;
+    let observation = current_wallet_state_for_wallet(world, &wallet).await?;
     let available_utxos = observation.clone().into_available_utxos();
 
     Ok(FreshWalletAvailableState {
@@ -219,28 +118,368 @@ pub async fn sync_wallet_available_state(
     })
 }
 
-pub async fn observe_wallet_state(
+async fn current_available_utxos_for_named_wallets(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallets: Vec<WalletInfo>,
+) -> Result<WalletUtxos, StepError> {
+    let feed_requirements = wallet_feed_source_requirements(world, &wallets).await?;
+    let wallet_keys = build_tracked_wallet_keys(world, step, &wallets)?;
+
+    current_available_utxos_for_wallet_keys_with_requirements(
+        world,
+        &wallet_keys,
+        feed_requirements,
+    )
+    .await
+}
+
+async fn current_available_utxos_for_wallet_keys_with_requirements(
+    world: &mut CucumberWorld,
+    wallet_keys: &TrackedWalletKeysBySource,
+    feed_requirements: Vec<WalletFeedSourceRequirement>,
+) -> Result<WalletUtxos, StepError> {
+    let observations = current_wallet_state_views(world, wallet_keys, feed_requirements).await?;
+
+    Ok(observations
+        .into_iter()
+        .map(|(wallet_name, observation)| (wallet_name, observation.into_available_utxos()))
+        .collect())
+}
+
+async fn current_wallet_state(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+) -> Result<WalletStateView, StepError> {
+    let wallet = world.resolve_wallet(wallet_name).inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step);
+    })?;
+
+    current_wallet_state_for_wallet(world, &wallet).await
+}
+
+async fn current_wallet_state_for_wallet(
+    world: &mut CucumberWorld,
+    wallet: &WalletInfo,
+) -> Result<WalletStateView, StepError> {
+    let wallet_keys = build_tracked_wallet_keys(world, "", std::slice::from_ref(wallet))?;
+    let feed_requirements =
+        wallet_feed_source_requirements(world, std::slice::from_ref(wallet)).await?;
+
+    current_wallet_state_for_keys(
+        world,
+        wallet.wallet_name.as_str(),
+        &wallet_keys,
+        feed_requirements,
+    )
+    .await
+}
+
+pub async fn current_wallet_state_for_key(
     world: &mut CucumberWorld,
     wallet_name: &str,
-    wallet_node_name: &str,
     wallet_pk: ZkPublicKey,
 ) -> Result<WalletStateView, StepError> {
-    world.ensure_wallet_block_feed().await?;
-    let feed = world.wallet_block_feed()?;
-    let mut wallet_keys = TrackedWalletKeysBySource::new();
-    wallet_keys.add_wallet("", wallet_name, wallet_pk);
+    let wallet_keys = tracked_wallet_keys_for_all_active_sources(world, wallet_name, wallet_pk);
+    let feed_requirements = all_wallet_feed_source_requirements(world).await?;
 
-    let plan =
-        build_wallet_feed_source_plan(world, wallet_name, wallet_node_name, &wallet_keys).await?;
-    let on_chain_utxos = observe_wallet_feed_plan(world, &feed, plan).await?;
+    current_wallet_state_for_keys(world, wallet_name, &wallet_keys, feed_requirements).await
+}
 
-    let mut observations = observe_wallet_states(world, &wallet_keys, &on_chain_utxos)?;
+async fn current_wallet_state_for_keys(
+    world: &mut CucumberWorld,
+    wallet_name: &str,
+    wallet_keys: &TrackedWalletKeysBySource,
+    feed_requirements: Vec<WalletFeedSourceRequirement>,
+) -> Result<WalletStateView, StepError> {
+    let observations = current_wallet_state_views(world, wallet_keys, feed_requirements).await?;
 
     observations
-        .remove(wallet_name)
+        .into_values()
+        .next()
         .ok_or_else(|| StepError::LogicalError {
-            message: format!("Wallet state observation for `{wallet_name}` was not returned"),
+            message: format!("Wallet state for `{wallet_name}` is not tracked"),
         })
+}
+
+async fn current_wallet_state_views(
+    world: &mut CucumberWorld,
+    wallet_keys: &TrackedWalletKeysBySource,
+    feed_requirements: Vec<WalletFeedSourceRequirement>,
+) -> Result<BTreeMap<WalletId, WalletStateView>, StepError> {
+    world.ensure_wallet_block_feed().await?;
+    let feed = world.wallet_block_feed()?;
+    let genesis_utxos = world.genesis_block_utxos.clone();
+    let tracking_batches = wallet_feed_tracking_batches(world, wallet_keys, &feed_requirements);
+
+    track_wallet_feed_batches_with_backfill(world, &tracking_batches, &genesis_utxos).await?;
+
+    wait_for_wallet_feed_sources(world, &feed, feed_requirements).await?;
+
+    let started_at = Instant::now();
+
+    loop {
+        let observations = current_wallet_state_views_from_feed(world, wallet_keys, &feed)?;
+
+        if !wallet_states_waiting_for_reserved_outputs(&observations)
+            || started_at.elapsed() >= CURRENT_WALLET_STATE_CATCH_UP_TIMEOUT
+        {
+            return Ok(observations);
+        }
+
+        wait_for_current_wallet_feed_cycle(&feed).await;
+    }
+}
+
+fn current_wallet_state_views_from_feed(
+    world: &CucumberWorld,
+    wallet_keys: &TrackedWalletKeysBySource,
+    feed: &BlockFeed,
+) -> Result<BTreeMap<WalletId, WalletStateView>, StepError> {
+    apply_latest_wallet_feed_state(world, feed)?;
+
+    let mut observations = world.with_wallets(|wallets| {
+        wallets.current_wallet_states(wallet_keys.wallet_keys().cloned())
+    })?;
+    let on_chain_utxos = observations
+        .iter()
+        .map(|(wallet_id, observation)| (wallet_id.clone(), observation.on_chain_utxos().to_vec()))
+        .collect();
+
+    apply_scenario_fee_observations(world, &mut observations, &on_chain_utxos);
+
+    Ok(observations)
+}
+
+pub(crate) async fn track_wallet_feed_batches_with_backfill(
+    world: &CucumberWorld,
+    tracking_batches: &[WalletFeedTrackingBatch],
+    genesis_utxos: &[Utxo],
+) -> Result<(), StepError> {
+    if tracking_batches.is_empty() {
+        return Ok(());
+    }
+
+    let tracking = world
+        .with_wallet_feed_state_mut(|tracker, wallets| {
+            tracker.track_wallets(wallets, tracking_batches, genesis_utxos)
+        })?
+        .map_err(wallet_feed_error)?;
+
+    if !tracking.needs_backfill() {
+        return Ok(());
+    }
+
+    backfill_wallet_feed_batches(world, tracking.backfill_batches(), genesis_utxos).await
+}
+
+async fn backfill_wallet_feed_batches(
+    world: &CucumberWorld,
+    tracking_batches: &[WalletFeedTrackingBatch],
+    genesis_utxos: &[Utxo],
+) -> Result<(), StepError> {
+    for tracking_batch in tracking_batches {
+        backfill_wallet_feed_batch(world, tracking_batch, genesis_utxos).await?;
+    }
+
+    Ok(())
+}
+
+async fn backfill_wallet_feed_batch(
+    world: &CucumberWorld,
+    tracking_batch: &WalletFeedTrackingBatch,
+    genesis_utxos: &[Utxo],
+) -> Result<(), StepError> {
+    let source_node_name = tracking_batch.source_node_name().to_owned();
+    let node = world
+        .nodes_info
+        .get(&source_node_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Wallet block-feed source node `{source_node_name}` not found"),
+        })?;
+    let consensus = node.started_node.client.consensus_info().await?;
+    let tip = consensus.cryptarchia_info.tip;
+    let height = consensus.cryptarchia_info.height;
+    let mut source = NodeHttpWalletChainSource::from_tip(
+        source_node_name.clone(),
+        node.started_node.client.clone(),
+        tip,
+    );
+    let (wallet_utxos, transaction_hashes, new_blocks) =
+        wallet_utxos_from_chain(&mut source, tracking_batch.wallet_keys(), genesis_utxos)
+            .await
+            .map_err(|error| StepError::LogicalError {
+                message: format!(
+                    "Wallet chain backfill failed for source `{source_node_name}`: {error}"
+                ),
+            })?;
+    let observed_utxos = wallet_utxos.clone();
+    let tracked_utxos = wallet_utxos;
+    let tip_string = tip.to_string();
+
+    record_observed_transaction_hashes(
+        &world.observed_transaction_hashes,
+        &transaction_hashes,
+        Some(new_blocks),
+    );
+
+    world
+        .with_wallet_feed_state_mut(|tracker, wallets| {
+            tracker.replace_source_state(
+                source_node_name.clone(),
+                tracking_batch.wallet_keys(),
+                observed_utxos,
+                tip,
+                height,
+            )?;
+            wallets.record_header_height(&source_node_name, &tip_string, height);
+            wallets.record_observed_wallets_utxos(tip_string, tracked_utxos);
+
+            Ok(())
+        })?
+        .map_err(wallet_feed_error)
+}
+
+fn wallet_states_waiting_for_reserved_outputs(
+    observations: &BTreeMap<WalletId, WalletStateView>,
+) -> bool {
+    observations.values().any(|observation| {
+        observation
+            .balance(WalletOutputState::Reserved)
+            .output_count
+            > 0
+            && observation
+                .balance(WalletOutputState::Available)
+                .output_count
+                == 0
+    })
+}
+
+async fn wait_for_current_wallet_feed_cycle(feed: &BlockFeed) {
+    let after_cycle = feed
+        .latest_observation()
+        .map_or(0, |observation| observation.cycle());
+
+    if let Err(error) = feed
+        .wait_for_next_cycle(after_cycle, Duration::from_secs(1))
+        .await
+    {
+        debug!(target: TARGET, "Wallet block feed did not advance while waiting for current state: {error}");
+    }
+}
+
+async fn wait_for_wallet_feed_sources(
+    world: &CucumberWorld,
+    feed: &BlockFeed,
+    requirements: Vec<WalletFeedSourceRequirement>,
+) -> Result<(), StepError> {
+    if requirements.is_empty() {
+        return Ok(());
+    }
+
+    let started_at = Instant::now();
+    let mut after_cycle = feed
+        .latest_observation()
+        .map_or(0, |observation| observation.cycle());
+
+    loop {
+        apply_latest_wallet_feed_state(world, feed)?;
+
+        if let Some(observation) = feed.latest_observation() {
+            let pending_sources = pending_wallet_feed_sources(&observation, &requirements);
+            if pending_sources.is_empty() {
+                return Ok(());
+            }
+
+            if started_at.elapsed() >= WALLET_BLOCK_FEED_SOURCE_WAIT_TIMEOUT {
+                return Err(wallet_feed_sources_timeout(
+                    feed,
+                    &observation,
+                    &pending_sources,
+                ));
+            }
+
+            after_cycle = observation.cycle();
+        } else if started_at.elapsed() >= WALLET_BLOCK_FEED_SOURCE_WAIT_TIMEOUT {
+            return Err(StepError::Timeout {
+                message: wallet_feed_timeout_message(feed, "no block-feed observation yet"),
+            });
+        }
+
+        if let Ok(observation) = feed
+            .wait_for_next_cycle(after_cycle, Duration::from_secs(1))
+            .await
+        {
+            after_cycle = observation.cycle();
+        }
+    }
+}
+
+fn pending_wallet_feed_sources(
+    observation: &lb_testing_framework::BlockFeedObservation,
+    requirements: &[WalletFeedSourceRequirement],
+) -> Vec<String> {
+    requirements
+        .iter()
+        .filter_map(|requirement| {
+            let Some(head) = observation.node_head(&requirement.node_name) else {
+                return Some(format!("{} missing", requirement.node_name));
+            };
+
+            match head.tip_height {
+                Some(height) if height >= requirement.min_height => None,
+                Some(height) => Some(format!(
+                    "{} at {height}/{}",
+                    requirement.node_name, requirement.min_height
+                )),
+                None => Some(format!(
+                    "{} height unknown/{}",
+                    requirement.node_name, requirement.min_height
+                )),
+            }
+        })
+        .collect()
+}
+
+fn wallet_feed_sources_timeout(
+    feed: &BlockFeed,
+    observation: &lb_testing_framework::BlockFeedObservation,
+    pending_sources: &[String],
+) -> StepError {
+    StepError::Timeout {
+        message: wallet_feed_timeout_message(
+            feed,
+            &format!(
+                "pending sources [{}]; last observation: {}",
+                pending_sources.join(", "),
+                observation.summary(),
+            ),
+        ),
+    }
+}
+
+fn wallet_feed_timeout_message(feed: &BlockFeed, details: &str) -> String {
+    let last_error = feed.last_error().map_or_else(
+        || "no observation error recorded".to_owned(),
+        |error| error.message,
+    );
+
+    format!(
+        "Timed out waiting for wallet block feed freshness: {details}; last error: {last_error}"
+    )
+}
+
+fn apply_latest_wallet_feed_state(
+    world: &CucumberWorld,
+    feed: &BlockFeed,
+) -> Result<(), StepError> {
+    if let Some(status) = update_wallet_feed_state_status(world, feed, &world.genesis_block_utxos)?
+    {
+        debug!(target: TARGET, "{status}");
+    }
+
+    Ok(())
 }
 
 fn build_tracked_wallet_keys(
@@ -266,6 +505,111 @@ fn build_tracked_wallet_keys(
     Ok(wallet_keys)
 }
 
+fn tracked_wallet_keys_for_all_active_sources(
+    world: &CucumberWorld,
+    wallet_name: &str,
+    wallet_pk: ZkPublicKey,
+) -> TrackedWalletKeysBySource {
+    let mut wallet_keys = TrackedWalletKeysBySource::new();
+
+    for source_id in active_wallet_feed_source_ids(world) {
+        wallet_keys.add_wallet(source_id, wallet_name, wallet_pk);
+    }
+
+    if wallet_keys.batches().next().is_none() {
+        wallet_keys.add_wallet("", wallet_name, wallet_pk);
+    }
+
+    wallet_keys
+}
+
+fn wallet_feed_tracking_batches(
+    world: &CucumberWorld,
+    wallet_keys: &TrackedWalletKeysBySource,
+    requirements: &[WalletFeedSourceRequirement],
+) -> Vec<WalletFeedTrackingBatch> {
+    requirements
+        .iter()
+        .filter_map(|requirement| {
+            let source_id = wallet_feed_source_id(world, &requirement.node_name);
+            let wallet_keys_for_source = wallet_keys
+                .batches()
+                .find(|batch| batch.source_id().as_str() == source_id)?;
+
+            Some(WalletFeedTrackingBatch::new(
+                requirement.node_name.clone(),
+                wallet_keys_for_source.wallet_keys().iter().cloned(),
+            ))
+        })
+        .collect()
+}
+
+fn active_wallet_feed_source_ids(world: &CucumberWorld) -> Vec<String> {
+    world
+        .nodes_info
+        .keys()
+        .map(|node_name| wallet_feed_source_id(world, node_name).to_owned())
+        .collect()
+}
+
+fn wallet_feed_source_id<'a>(world: &'a CucumberWorld, node_name: &str) -> &'a str {
+    world
+        .node_to_group
+        .get(node_name)
+        .map_or("", String::as_str)
+}
+
+async fn wallet_feed_source_requirements(
+    world: &CucumberWorld,
+    wallets: &[WalletInfo],
+) -> Result<Vec<WalletFeedSourceRequirement>, StepError> {
+    let source_nodes = wallets
+        .iter()
+        .map(|wallet| wallet.node_name.clone())
+        .collect::<BTreeSet<_>>();
+    let mut requirements = Vec::with_capacity(source_nodes.len());
+
+    for node_name in source_nodes {
+        let node = world
+            .nodes_info
+            .get(&node_name)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Wallet block-feed source node `{node_name}` not found"),
+            })?;
+        let consensus = node.started_node.client.consensus_info().await?;
+
+        requirements.push(WalletFeedSourceRequirement {
+            node_name,
+            min_height: consensus.cryptarchia_info.height,
+        });
+    }
+
+    Ok(requirements)
+}
+
+async fn all_wallet_feed_source_requirements(
+    world: &CucumberWorld,
+) -> Result<Vec<WalletFeedSourceRequirement>, StepError> {
+    let mut requirements = Vec::with_capacity(world.nodes_info.len());
+
+    for node_name in world.nodes_info.keys() {
+        let node = world
+            .nodes_info
+            .get(node_name)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Wallet block-feed source node `{node_name}` not found"),
+            })?;
+        let consensus = node.started_node.client.consensus_info().await?;
+
+        requirements.push(WalletFeedSourceRequirement {
+            node_name: node_name.clone(),
+            min_height: consensus.cryptarchia_info.height,
+        });
+    }
+
+    Ok(requirements)
+}
+
 fn add_scenario_fee_wallet_keys(
     world: &CucumberWorld,
     wallet_keys: &mut TrackedWalletKeysBySource,
@@ -276,449 +620,6 @@ fn add_scenario_fee_wallet_keys(
 
     wallet_keys
         .add_wallet_for_each_source(SCENARIO_FEE_ACCOUNT_NAME, fee_wallet_account.public_key());
-}
-
-async fn build_wallet_feed_source_plan(
-    world: &CucumberWorld,
-    wallet_name: &str,
-    wallet_node_name: &str,
-    wallet_keys: &TrackedWalletKeysBySource,
-) -> Result<WalletFeedTrackingPlan, StepError> {
-    let source_wallet_keys =
-        wallet_keys
-            .batches()
-            .next()
-            .ok_or_else(|| StepError::LogicalError {
-                message: format!(
-                    "Cannot observe wallet `{wallet_name}` without tracked wallet keys"
-                ),
-            })?;
-    let min_height = wallet_feed_source_height(world, wallet_name, wallet_node_name).await?;
-
-    let mut plan = WalletFeedTrackingPlan::default();
-    plan.add_wallet_keys(wallet_node_name, min_height, &source_wallet_keys);
-
-    Ok(plan)
-}
-
-async fn build_wallet_feed_best_node_plan(
-    world: &CucumberWorld,
-    step: &str,
-    wallet_keys: &TrackedWalletKeysBySource,
-    feed: &BlockFeed,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletFeedTrackingPlan, StepError> {
-    let mut plan = WalletFeedTrackingPlan::default();
-
-    for source_wallet_keys in wallet_keys.batches() {
-        let source =
-            wallet_feed_source_from_best_node(world, feed, &source_wallet_keys, best_node_info)
-                .await
-                .inspect_err(|e| {
-                    warn!(target: TARGET, "Step `{}` error: {e}", step);
-                })?;
-
-        plan.add_wallet_keys(source.node_name, source.min_height, &source_wallet_keys);
-    }
-
-    Ok(plan)
-}
-
-async fn observe_available_utxos_from_feed(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallet_keys: &TrackedWalletKeysBySource,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletUtxos, StepError> {
-    world.ensure_wallet_block_feed().await?;
-    let feed = world.wallet_block_feed()?;
-    let plan =
-        build_wallet_feed_best_node_plan(world, step, wallet_keys, &feed, best_node_info).await?;
-    let on_chain_utxos = observe_wallet_feed_plan(world, &feed, plan)
-        .await
-        .inspect_err(|e| {
-            warn!(target: TARGET, "Step `{}` error: {e}", step);
-        })?;
-
-    let observations = observe_wallet_states(world, wallet_keys, &on_chain_utxos)?;
-
-    Ok(observations
-        .into_iter()
-        .map(|(wallet_name, observation)| (wallet_name, observation.into_available_utxos()))
-        .collect())
-}
-
-async fn observe_wallet_feed_plan(
-    world: &CucumberWorld,
-    feed: &BlockFeed,
-    plan: WalletFeedTrackingPlan,
-) -> Result<WalletUtxos, StepError> {
-    let genesis_utxos = world.genesis_block_utxos.clone();
-    let (tracking_batches, feed_requirements) = plan.into_parts();
-
-    track_wallet_feed_batches_with_backfill(world, &tracking_batches, &genesis_utxos).await?;
-    wait_for_wallet_feed_sources(world, feed, feed_requirements, &genesis_utxos).await?;
-
-    let state_results =
-        observe_wallet_feed_batches(world, feed, tracking_batches, &genesis_utxos).await?;
-
-    for observed_block in state_results.observed_blocks() {
-        log_wallet_observed_block(observed_block);
-    }
-
-    Ok(state_results.into_wallet_utxos())
-}
-
-fn observe_wallet_states(
-    world: &CucumberWorld,
-    wallet_keys: &TrackedWalletKeysBySource,
-    on_chain_utxos: &WalletUtxos,
-) -> Result<BTreeMap<WalletId, WalletStateView>, StepError> {
-    let mut observations = world
-        .with_wallets(|wallets| wallets.observe_wallets(wallet_keys.wallet_keys().cloned()))?;
-
-    apply_scenario_fee_observations(world, &mut observations, on_chain_utxos);
-
-    Ok(observations)
-}
-
-#[derive(Default)]
-struct WalletFeedTrackingPlan {
-    sources: BTreeMap<String, WalletFeedSourceTrackingPlan>,
-}
-
-impl WalletFeedTrackingPlan {
-    fn add_wallet_keys(
-        &mut self,
-        source_node_name: impl Into<String>,
-        min_height: u64,
-        source_wallet_keys: &TrackedWalletKeysForSource,
-    ) {
-        let source_node_name = source_node_name.into();
-        self.sources
-            .entry(source_node_name.clone())
-            .and_modify(|source| source.add_wallet_keys(min_height, source_wallet_keys))
-            .or_insert_with(|| {
-                WalletFeedSourceTrackingPlan::new(source_node_name, min_height, source_wallet_keys)
-            });
-    }
-
-    fn into_parts(self) -> (Vec<WalletFeedTrackingBatch>, BTreeMap<String, u64>) {
-        let mut tracking_batches = Vec::new();
-        let mut feed_requirements = BTreeMap::new();
-
-        for (source_node_name, source) in self.sources {
-            if source.tracking_batch.is_empty() {
-                continue;
-            }
-
-            feed_requirements.insert(source_node_name, source.min_height);
-            tracking_batches.push(source.tracking_batch);
-        }
-
-        (tracking_batches, feed_requirements)
-    }
-}
-
-struct WalletFeedSourceTrackingPlan {
-    min_height: u64,
-    tracking_batch: WalletFeedTrackingBatch,
-}
-
-impl WalletFeedSourceTrackingPlan {
-    fn new(
-        source_node_name: String,
-        min_height: u64,
-        source_wallet_keys: &TrackedWalletKeysForSource,
-    ) -> Self {
-        Self {
-            min_height,
-            tracking_batch: WalletFeedTrackingBatch::new(
-                source_node_name,
-                source_wallet_keys.wallet_keys().iter().cloned(),
-            ),
-        }
-    }
-
-    fn add_wallet_keys(
-        &mut self,
-        min_height: u64,
-        source_wallet_keys: &TrackedWalletKeysForSource,
-    ) {
-        self.min_height = self.min_height.min(min_height);
-        self.tracking_batch
-            .extend_wallet_keys(source_wallet_keys.wallet_keys().iter().cloned());
-    }
-}
-
-async fn observe_wallet_feed_batches(
-    world: &CucumberWorld,
-    feed: &BlockFeed,
-    tracking_batches: Vec<WalletFeedTrackingBatch>,
-    genesis_utxos: &[Utxo],
-) -> Result<WalletFeedStateResults, StepError> {
-    let feed_result = world.with_wallet_feed_state_mut(|tracker, wallets| {
-        let observed_blocks = tracker.apply_feed(wallets, feed, genesis_utxos)?;
-        apply_observed_blocks_to_scanned_transaction_hashes(
-            &world.scanned_transaction_hashes,
-            &observed_blocks,
-        );
-        observed_wallet_results(tracker, &tracking_batches, observed_blocks)
-    })?;
-
-    match feed_result {
-        Ok(results) => Ok(results),
-        Err(error) if should_backfill_wallet_state(&error) => {
-            backfill_wallet_feed_batches(world, &tracking_batches, genesis_utxos).await
-        }
-        Err(error) => Err(wallet_feed_error(error)),
-    }
-}
-
-fn observed_wallet_results(
-    tracker: &WalletBlockFeedTracker,
-    tracking_batches: &[WalletFeedTrackingBatch],
-    observed_blocks: Vec<WalletObservedBlock>,
-) -> Result<WalletFeedStateResults, WalletBlockFeedTrackerError> {
-    let mut observed_blocks_by_source = observed_blocks_by_source(observed_blocks);
-    let mut results = Vec::new();
-
-    for batch in tracking_batches {
-        if batch.is_empty() {
-            continue;
-        }
-
-        results.push(WalletFeedStateResult::from_parts(
-            tracker.observed_wallet_utxos(batch.source_node_name())?,
-            observed_blocks_by_source
-                .remove(batch.source_node_name())
-                .unwrap_or_default(),
-        ));
-    }
-
-    Ok(WalletFeedStateResults::new(results))
-}
-
-fn observed_blocks_by_source(
-    observed_blocks: Vec<WalletObservedBlock>,
-) -> HashMap<String, Vec<WalletObservedBlock>> {
-    let mut by_source = HashMap::new();
-
-    for observed_block in observed_blocks {
-        by_source
-            .entry(observed_block.source_node_name().to_owned())
-            .or_insert_with(Vec::new)
-            .push(observed_block);
-    }
-
-    by_source
-}
-
-async fn backfill_wallet_feed_batches(
-    world: &CucumberWorld,
-    tracking_batches: &[WalletFeedTrackingBatch],
-    genesis_utxos: &[Utxo],
-) -> Result<WalletFeedStateResults, StepError> {
-    let mut results = Vec::new();
-
-    for tracking_batch in tracking_batches {
-        let result = backfill_wallet_feed_batch(world, tracking_batch, genesis_utxos).await?;
-        results.push(result);
-    }
-
-    Ok(WalletFeedStateResults::new(results))
-}
-
-async fn backfill_wallet_feed_batch(
-    world: &CucumberWorld,
-    tracking_batch: &WalletFeedTrackingBatch,
-    genesis_utxos: &[Utxo],
-) -> Result<WalletFeedStateResult, StepError> {
-    let source_node_name = tracking_batch.source_node_name().to_owned();
-    let node = world
-        .nodes_info
-        .get(&source_node_name)
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("Wallet block-feed source node `{source_node_name}` not found"),
-        })?;
-    let consensus = node.started_node.client.consensus_info().await?;
-    let tip = consensus.cryptarchia_info.tip;
-    let height = consensus.cryptarchia_info.height;
-    let mut source = NodeHttpWalletChainSource::from_tip(
-        source_node_name.clone(),
-        node.started_node.client.clone(),
-        tip,
-    );
-    let (wallet_utxos, transaction_hashes, new_blocks) =
-        wallet_utxos_from_chain(&mut source, tracking_batch.wallet_keys(), genesis_utxos)
-            .await
-            .map_err(|error| StepError::LogicalError {
-                message: format!(
-                    "Wallet chain backfill failed for source `{source_node_name}`: {error}"
-                ),
-            })?;
-    let observed_utxos = wallet_utxos.clone();
-    let tracked_utxos = wallet_utxos.clone();
-    let tip_string = tip.to_string();
-
-    apply_observed_hashes_to_scanned_transaction_hashes(
-        &world.scanned_transaction_hashes,
-        &transaction_hashes,
-        Some(new_blocks),
-    );
-
-    world
-        .with_wallet_feed_state_mut(|tracker, wallets| {
-            tracker.replace_source_state(
-                source_node_name.clone(),
-                tracking_batch.wallet_keys(),
-                observed_utxos,
-                tip,
-                height,
-            )?;
-            wallets.record_header_height(&source_node_name, &tip_string, height);
-            wallets.record_observed_wallets_utxos(tip_string, tracked_utxos);
-
-            Ok(())
-        })?
-        .map_err(wallet_feed_error)?;
-
-    Ok(WalletFeedStateResult::from_parts(wallet_utxos, Vec::new()))
-}
-
-const fn should_backfill_wallet_state(error: &WalletBlockFeedTrackerError) -> bool {
-    error.requires_direct_backfill()
-}
-
-fn log_wallet_balance(wallet_name: &str, observation: &WalletStateView) {
-    let available = observation.balance(WalletOutputState::Available);
-    let reserved = observation.balance(WalletOutputState::Reserved);
-    let on_chain = observation.balance(WalletOutputState::OnChain);
-    info!(
-        target: TARGET,
-        "Wallet `{wallet_name}` [Available] {}/{} LGO, \
-        [Encumbered] {}/{} LGO, \
-        [On-chain] {}/{} LGO",
-        available.output_count,
-        available.value,
-        reserved.output_count,
-        reserved.value,
-        on_chain.output_count,
-        on_chain.value,
-    );
-}
-
-async fn observe_wallet(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallet_name: &str,
-) -> Result<WalletStateView, StepError> {
-    let wallet = world.resolve_wallet(wallet_name).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{}` error: {e}", step);
-    })?;
-
-    let state_observation =
-        observe_wallet_state(world, wallet_name, &wallet.node_name, wallet.public_key()?)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{}` error: {e}", step);
-            })?;
-    log_wallet_balance(wallet_name, &state_observation);
-
-    Ok(state_observation)
-}
-
-struct WalletFeedSource {
-    node_name: String,
-    min_height: u64,
-}
-
-async fn wallet_feed_source_from_best_node(
-    world: &CucumberWorld,
-    feed: &BlockFeed,
-    source_wallet_keys: &TrackedWalletKeysForSource,
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<WalletFeedSource, StepError> {
-    let (node_name, _, consensus) = sanitize_best_node_info_for_group_with_feed(
-        world,
-        source_wallet_keys.source_id(),
-        best_node_info,
-        Some(feed),
-    )
-    .await?;
-
-    Ok(WalletFeedSource {
-        node_name,
-        min_height: consensus.height,
-    })
-}
-
-async fn wallet_feed_source_height(
-    world: &CucumberWorld,
-    wallet_name: &str,
-    node_name: &str,
-) -> Result<u64, StepError> {
-    let node = world
-        .nodes_info
-        .get(node_name)
-        .ok_or_else(|| StepError::LogicalError {
-            message: format!("Node '{node_name}' for wallet '{wallet_name}' not found"),
-        })?;
-
-    Ok(node
-        .started_node
-        .client
-        .consensus_info()
-        .await?
-        .cryptarchia_info
-        .height)
-}
-
-async fn wait_for_wallet_feed_sources(
-    world: &CucumberWorld,
-    feed: &BlockFeed,
-    feed_requirements: impl IntoIterator<Item = (String, u64)>,
-    genesis_utxos: &[Utxo],
-) -> Result<(), StepError> {
-    const WALLET_BLOCK_FEED_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
-
-    let feed_requirements = feed_requirements.into_iter().collect::<BTreeMap<_, _>>();
-    if feed_requirements.is_empty() {
-        return Ok(());
-    }
-
-    let started_at = Instant::now();
-    let requirements = WalletFeedWaitRequirements::new(feed_requirements);
-    let mut wait = WalletFeedWait::new(feed, requirements);
-
-    loop {
-        refresh_wallet_feed_wait(world, feed, genesis_utxos, &mut wait)?;
-        if wait.is_complete() {
-            return Ok(());
-        }
-
-        if started_at.elapsed() >= WALLET_BLOCK_FEED_WAIT_TIMEOUT {
-            return Err(wait.timeout_error(feed));
-        }
-
-        wait_for_next_wallet_feed_cycle(feed, &mut wait).await;
-    }
-}
-
-fn refresh_wallet_feed_wait(
-    world: &CucumberWorld,
-    feed: &BlockFeed,
-    genesis_utxos: &[Utxo],
-    wait: &mut WalletFeedWait,
-) -> Result<(), StepError> {
-    let Some(observation) = feed.latest_observation() else {
-        return Ok(());
-    };
-
-    let state_status = update_wallet_feed_state_status(world, feed, genesis_utxos)?;
-    wait.refresh(&observation, state_status);
-
-    Ok(())
 }
 
 fn update_wallet_feed_state_status(
@@ -735,135 +636,6 @@ fn update_wallet_feed_state_status(
     }
 }
 
-async fn wait_for_next_wallet_feed_cycle(feed: &BlockFeed, wait: &mut WalletFeedWait) {
-    if let Ok(observation) = feed
-        .wait_for_next_cycle(wait.after_cycle(), Duration::from_secs(1))
-        .await
-    {
-        wait.set_after_cycle(observation.cycle());
-    }
-}
-
-struct WalletFeedWaitRequirements {
-    min_heights: BTreeMap<String, u64>,
-}
-
-impl WalletFeedWaitRequirements {
-    const fn new(min_heights: BTreeMap<String, u64>) -> Self {
-        Self { min_heights }
-    }
-
-    fn source_names(&self) -> impl Iterator<Item = String> + '_ {
-        self.min_heights.keys().cloned()
-    }
-
-    fn pending_sources(&self, observation: &BlockFeedObservation) -> Vec<String> {
-        self.min_heights
-            .iter()
-            .filter_map(|(node_name, min_height)| {
-                let Some(head) = observation.node_head(node_name) else {
-                    return Some(format!("{node_name} missing"));
-                };
-
-                match head.tip_height {
-                    Some(height) if height >= *min_height => None,
-                    Some(height) => Some(format!("{node_name} at {height}/{min_height}")),
-                    None => Some(format!("{node_name} height unknown/{min_height}")),
-                }
-            })
-            .collect()
-    }
-}
-
-struct WalletFeedWait {
-    requirements: WalletFeedWaitRequirements,
-    after_cycle: u64,
-    pending_sources: Vec<String>,
-    last_summary: String,
-}
-
-impl WalletFeedWait {
-    fn new(feed: &BlockFeed, requirements: WalletFeedWaitRequirements) -> Self {
-        let after_cycle = feed
-            .latest_observation()
-            .map_or(0, |observation| observation.cycle());
-        let pending_sources = requirements.source_names().collect();
-
-        Self {
-            requirements,
-            after_cycle,
-            pending_sources,
-            last_summary: "no block-feed observation yet".to_owned(),
-        }
-    }
-
-    const fn after_cycle(&self) -> u64 {
-        self.after_cycle
-    }
-
-    const fn set_after_cycle(&mut self, after_cycle: u64) {
-        self.after_cycle = after_cycle;
-    }
-
-    fn refresh(&mut self, observation: &BlockFeedObservation, state_status: Option<String>) {
-        self.after_cycle = observation.cycle();
-        self.pending_sources = self.requirements.pending_sources(observation);
-        self.last_summary = observation.summary();
-
-        if let Some(state_status) = state_status {
-            self.last_summary = format!("{}; {}", self.last_summary, state_status);
-        }
-    }
-
-    const fn is_complete(&self) -> bool {
-        self.pending_sources.is_empty()
-    }
-
-    fn timeout_error(&self, feed: &BlockFeed) -> StepError {
-        let last_error = feed.last_error().map_or_else(
-            || "no observation error recorded".to_owned(),
-            |error| error.message,
-        );
-
-        StepError::Timeout {
-            message: format!(
-                "Timed out waiting for wallet block feed sources [{}]; last observation: {}; \
-                last error: {}",
-                self.pending_sources.join(", "),
-                self.last_summary,
-                last_error
-            ),
-        }
-    }
-}
-
-fn track_wallet_feed_batches(
-    world: &CucumberWorld,
-    tracking_batches: &[WalletFeedTrackingBatch],
-    genesis_utxos: &[Utxo],
-) -> Result<WalletFeedTrackingResult, StepError> {
-    world
-        .with_wallet_feed_state_mut(|tracker, wallets| {
-            tracker.track_wallets(wallets, tracking_batches, genesis_utxos)
-        })?
-        .map_err(wallet_feed_error)
-}
-
-async fn track_wallet_feed_batches_with_backfill(
-    world: &CucumberWorld,
-    tracking_batches: &[WalletFeedTrackingBatch],
-    genesis_utxos: &[Utxo],
-) -> Result<(), StepError> {
-    let tracking = track_wallet_feed_batches(world, tracking_batches, genesis_utxos)?;
-    if !tracking.needs_backfill() {
-        return Ok(());
-    }
-
-    backfill_wallet_feed_batches(world, tracking.backfill_batches(), genesis_utxos).await?;
-
-    Ok(())
-}
-
 fn update_wallet_feed_state(
     world: &CucumberWorld,
     feed: &BlockFeed,
@@ -871,33 +643,9 @@ fn update_wallet_feed_state(
 ) -> Result<Result<(), WalletBlockFeedTrackerError>, StepError> {
     world
         .with_wallet_feed_state_mut(|tracker, wallets| {
-            let result = tracker.apply_feed(wallets, feed, genesis_utxos);
-            if let Ok(observed_blocks) = result.as_ref() {
-                apply_observed_blocks_to_scanned_transaction_hashes(
-                    &world.scanned_transaction_hashes,
-                    observed_blocks,
-                );
-            }
-            result
+            tracker.apply_feed(wallets, feed, genesis_utxos)
         })
         .map(|result| result.map(|_| ()))
-}
-
-fn log_wallet_observed_block(block: &WalletObservedBlock) {
-    if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
-        info!(
-            target: TARGET,
-            "Evaluating block {} for {} wallets on `{}`: {}, transactions len: {}",
-            block.height(),
-            block.wallet_count(),
-            block.source_node_name(),
-            block.header_id(),
-            block.transaction_count(),
-        );
-    }
-
-    log_wallet_observed_outputs(block.observed_outputs());
-    log_wallet_observed_spends(block.observed_spends());
 }
 
 fn wallet_feed_error(error: WalletBlockFeedTrackerError) -> StepError {
@@ -908,35 +656,6 @@ fn wallet_feed_error(error: WalletBlockFeedTrackerError) -> StepError {
         other => StepError::LogicalError {
             message: other.to_string(),
         },
-    }
-}
-
-fn log_wallet_observed_outputs(observed_outputs: &[WalletObservedOutput]) {
-    if !is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
-        return;
-    }
-
-    for found in observed_outputs {
-        info!(
-            target: TARGET,
-            "Found UTXO for `{}`: value: {}, id: {:?}",
-            found.wallet_id,
-            found.utxo.note.value,
-            found.utxo.id(),
-        );
-    }
-}
-
-fn log_wallet_observed_spends(observed_spends: &[WalletObservedSpend]) {
-    for spent in observed_spends {
-        if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
-            info!(
-                target: TARGET,
-                "Found spent UTXO for `{}`: id: {:?}",
-                spent.wallet_id,
-                spent.note_id,
-            );
-        }
     }
 }
 

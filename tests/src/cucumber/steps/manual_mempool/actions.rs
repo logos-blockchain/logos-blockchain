@@ -38,15 +38,9 @@ pub async fn prepare_transfer_transaction(
 ) -> Result<(), StepError> {
     let receiver_pk = receiver_public_key(world, step, &receiver_wallet_name)?;
     let intent = transfer_intent(receiver_pk, amount)?;
-    let prepared = prepare_user_wallet_transaction_submission(
-        world,
-        step,
-        &sender_wallet_name,
-        intent,
-        None,
-        None,
-    )
-    .await?;
+    let prepared =
+        prepare_user_wallet_transaction_submission(world, step, &sender_wallet_name, intent, None)
+            .await?;
     let signed = sign_prepared_user_wallet_transaction(step, prepared, Vec::new())?;
     let tx_hash = record_prepared_transaction(world, transaction_alias.clone(), &signed)?;
 
