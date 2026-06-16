@@ -704,17 +704,31 @@ where
             return;
         };
 
-        match orphan_downloader.enqueue_orphan(tip, info.tip, info.lib) {
+        Self::enqueue_polled_tip(orphan_downloader, tip, height, &info);
+    }
+
+    /// Hand a tip discovered by the watchdog to the orphan downloader and
+    /// record the outcome. `chosen_tip`/`chosen_height` describe the polled
+    /// tip; `local` is the local chain info it is being caught up against.
+    fn enqueue_polled_tip(
+        orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+        chosen_tip: HeaderId,
+        chosen_height: u64,
+        local: &lb_chain_service::CryptarchiaInfo,
+    ) where
+        RuntimeServiceId: Send + Sync + 'static,
+    {
+        match orphan_downloader.enqueue_orphan(chosen_tip, local.tip, local.lib) {
             Ok(()) => {
                 info!(
                     target: LOG_TARGET,
-                    ?tip, height, local_height = info.height,
+                    tip = ?chosen_tip, height = chosen_height, local_height = local.height,
                     "tip poll: enqueued peer tip for catch-up"
                 );
                 metrics::tip_poll_enqueued_total();
             }
             Err(e) => {
-                debug!(target: LOG_TARGET, %e, ?tip, "tip poll: did not enqueue polled tip");
+                debug!(target: LOG_TARGET, %e, tip = ?chosen_tip, "tip poll: did not enqueue polled tip");
             }
         }
     }
@@ -802,7 +816,7 @@ impl TipPollParams {
         // Compute `ceil(1/f)` with integer arithmetic to avoid float casts.
         let coeff = consensus_config.slot_activation_coeff();
         let numerator = u64::from(coeff.numerator);
-        let denominator = u64::from(coeff.denominator.get());
+        let denominator = core::num::NonZeroU64::from(coeff.denominator).get();
         if numerator == 0 {
             return Err(DynError::from(
                 "active slot coefficient f must be > 0 for tip polling",
