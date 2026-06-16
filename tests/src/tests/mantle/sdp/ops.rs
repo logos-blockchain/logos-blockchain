@@ -462,7 +462,7 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
         .service_params
         .get_mut(&ServiceType::BlendNetwork)
         .expect("blend network params should exist");
-    service_params.inactivity_period = 10.into();
+    service_params.inactivity_period = 10.try_into().unwrap();
     service_params.retention_period = RETENTION_PERIOD;
 
     config.deployment.blend.common.num_blend_layers = 1.try_into().unwrap();

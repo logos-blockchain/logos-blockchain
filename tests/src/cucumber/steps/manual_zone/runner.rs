@@ -26,7 +26,8 @@ use lb_key_management_system_service::keys::Ed25519Signature;
 pub use lb_zone_sdk::sequencer::{
     AtomicWithdrawInfo, ChannelUpdate, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
     InscriptionId, InscriptionInfo, OrphanedTx, PendingTx, PublishResult, SequencerChannelView,
-    SequencerCheckpoint, SequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
+    SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
+    WithdrawArg, WithdrawInfo,
 };
 use lb_zone_sdk::{adapter, sequencer::ZoneSequencer};
 use tokio::{
@@ -232,6 +233,7 @@ pub struct Runtime<Node> {
     pub ready_rx: watch::Receiver<bool>,
     pub channel_view_rx: watch::Receiver<SequencerChannelView>,
     pub turn_to_write_rx: watch::Receiver<TurnNotification>,
+    pub tx_status_rx: broadcast::Receiver<TxStatusUpdate>,
 }
 
 /// Drive loop body. Owns the sequencer until both the block stream
@@ -284,6 +286,7 @@ where
     let ready_rx = sequencer.subscribe_ready();
     let channel_view_rx = sequencer.subscribe_channel_view();
     let turn_to_write_rx = sequencer.subscribe_turn_to_write();
+    let tx_status_rx = sequencer.subscribe_tx_status();
     let event_rx = sequencer.subscribe_events();
 
     let task = tokio::spawn(run(sequencer, policy, cmd_rx));
@@ -299,6 +302,7 @@ where
         ready_rx,
         channel_view_rx,
         turn_to_write_rx,
+        tx_status_rx,
     }
 }
 

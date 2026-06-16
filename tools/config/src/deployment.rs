@@ -53,7 +53,7 @@ const EPOCH_STAKE_DISTRIBUTION_STABILIZATION: u8 = 3;
 const EPOCH_PERIOD_NONCE_BUFFER: u8 = 3;
 const EPOCH_PERIOD_NONCE_STABILIZATION: u8 = 4;
 
-const SDP_INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
+const SDP_INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
 const SDP_RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 const SDP_EPOCH: Epoch = Epoch::new(0);
 const MIN_STAKE_THRESHOLD: u64 = 1;
@@ -131,7 +131,7 @@ pub fn e2e_deployment_settings_with_genesis_block(
                 service_params: [(
                     ServiceType::BlendNetwork,
                     ServiceParameters {
-                        inactivity_period: SDP_INACTIVITY_PERIOD,
+                        inactivity_period: SDP_INACTIVITY_PERIOD.try_into().unwrap(),
                         retention_period: SDP_RETENTION_PERIOD,
                         epoch: SDP_EPOCH,
                     },
