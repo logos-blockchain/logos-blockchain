@@ -641,15 +641,16 @@ where
     /// Proactive tip-poll lag watchdog.
     ///
     /// Fires on a slot-tick cadence (`params.cadence_slots`, ≈ one expected
-    /// block interval). When the local tip has fallen behind the current slot by
-    /// more than `params.lag_threshold_slots`, it samples a handful of peers
-    /// with `GetTip` and hands the most-advanced tip that is strictly ahead of
-    /// the local height to the orphan downloader, which performs the actual
-    /// catch-up download and full validation.
+    /// block interval). When the local tip has fallen behind the current slot
+    /// by more than `params.lag_threshold_slots`, it samples a handful of
+    /// peers with `GetTip` and hands the most-advanced tip that is strictly
+    /// ahead of the local height to the orphan downloader, which performs
+    /// the actual catch-up download and full validation.
     ///
     /// Polled tips are unauthenticated peer hearsay, but enqueuing one only
     /// triggers a download: every downloaded block still goes through normal
-    /// `apply_block` validation, and a bogus tip is dropped on download failure.
+    /// `apply_block` validation, and a bogus tip is dropped on download
+    /// failure.
     async fn poll_peer_tips_if_behind(
         network_adapter: &NetAdapter,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
@@ -781,8 +782,8 @@ struct TipPollParams {
 
 impl TipPollParams {
     /// Derive the polling cadence and lag threshold from the active slot
-    /// coefficient `f`. The expected number of slots between blocks is `1/f`, so
-    /// the cadence is `ceil(1/f)` slots and the lag threshold is
+    /// coefficient `f`. The expected number of slots between blocks is `1/f`,
+    /// so the cadence is `ceil(1/f)` slots and the lag threshold is
     /// `lag_threshold_blocks` such intervals.
     async fn derive<Cryptarchia, RuntimeServiceId>(
         config: &TipPollConfig,
@@ -809,8 +810,7 @@ impl TipPollParams {
         }
 
         let cadence_slots = denominator.div_ceil(numerator).max(1);
-        let lag_threshold_slots =
-            cadence_slots.saturating_mul(config.lag_threshold_blocks.get());
+        let lag_threshold_slots = cadence_slots.saturating_mul(config.lag_threshold_blocks.get());
 
         Ok(Self {
             cadence_slots,
