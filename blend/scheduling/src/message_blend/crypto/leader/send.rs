@@ -5,7 +5,6 @@ use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
-use lb_blend_proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_cryptarchia_engine::Epoch;
 
 use crate::{
@@ -15,7 +14,7 @@ use crate::{
             EncapsulatedMessageWithVerifiedPublicHeader,
             serialize_encapsulated_message_with_verified_public_header,
         },
-        provers::{ProofsGeneratorSettings, leader::LeaderProofsGenerator},
+        provers::{ProofsGeneratorSettings, WinningPolInfoStream, leader::LeaderProofsGenerator},
     },
 };
 
@@ -48,7 +47,7 @@ where
         num_blend_layers: NonZeroU64,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         epoch: Epoch,
     ) -> Self {
         let generator_settings = ProofsGeneratorSettings {
@@ -61,7 +60,7 @@ where
         Self {
             num_blend_layers,
             membership,
-            proofs_generator: ProofsGenerator::new(generator_settings, private_info),
+            proofs_generator: ProofsGenerator::new(generator_settings, winning_pol_info_stream),
             epoch,
         }
     }

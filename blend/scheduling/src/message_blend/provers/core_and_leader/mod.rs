@@ -1,13 +1,12 @@
 use async_trait::async_trait;
 use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
-use lb_blend_proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_cryptarchia_engine::Epoch;
 use lb_log_targets::blend;
 
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,
     provers::{
-        BlendLayerProof, ProofsGeneratorSettings,
+        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
         core::{CoreProofsGenerator as _, RealCoreProofsGenerator},
         leader::{LeaderProofsGenerator as _, RealLeaderProofsGenerator},
     },
@@ -32,12 +31,14 @@ pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator>: Sized {
         settings: ProofsGeneratorSettings,
         core_proof_of_quota_generator: CorePoQGenerator,
     ) -> Self;
-    /// Notify the proof generator about winning `PoL` slots and their related
-    /// info. After this information is provided for a new epoch, the generator
-    /// will be able to provide leadership `PoQ` variants.
+    /// Notify the proof generator about the stream of winning `PoL` slots for
+    /// an epoch (one item per winning slot). After this is provided for a
+    /// new epoch, the generator can provide leadership `PoQ` variants,
+    /// pulling a fresh slot for each data message so each gets a distinct
+    /// key nullifier.
     fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         reference_epoch: Epoch,
     );
     /// Request a new core proof from the prover. It returns `None` if the
@@ -82,11 +83,11 @@ where
         }
     }
 
-    // Creates a new leader proofs generator with the provided public+private
-    // secret.
+    // Creates a new leader proofs generator with the provided public inputs and
+    // winning-slot stream.
     fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         reference_epoch: Epoch,
     ) {
         // TODO: Change trait API to avoid runtime panics.
@@ -114,7 +115,7 @@ where
                 },
                 encapsulation_layers: self.core_proofs_generator.settings.encapsulation_layers,
             },
-            new_epoch_private,
+            winning_pol_info_stream,
         ));
     }
 
