@@ -13,11 +13,14 @@
 //! through the watchdog's tip-polling and catch-up downloads.
 //!
 //! Run locally:
-//!   cargo build -p logos-blockchain-node --release \
-//!     --features testing-disable-proposal-publish
-//!   LOGOS_BLOCKCHAIN_NODE_BIN=$(pwd)/target/release/logos-blockchain-node \
-//!     cargo test -p logos-blockchain-tests --features tip_poll_self_heal \
-//!     --test test_cryptarchia_tip_poll_self_heal -- --nocapture
+//!
+//! ```text
+//! cargo build -p logos-blockchain-node --release \
+//!   --features testing-disable-proposal-publish
+//! LOGOS_BLOCKCHAIN_NODE_BIN=$(pwd)/target/release/logos-blockchain-node \
+//!   cargo test -p logos-blockchain-tests --features tip_poll_self_heal \
+//!   --test test_cryptarchia_tip_poll_self_heal -- --nocapture
+//! ```
 
 use std::{num::NonZeroU64, path::PathBuf, time::Duration};
 
