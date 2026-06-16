@@ -73,6 +73,18 @@ where
     _id: std::marker::PhantomData<RuntimeServiceId>,
 }
 
+impl<Wallet, RuntimeServiceId> Clone for WalletApi<Wallet, RuntimeServiceId>
+where
+    Wallet: WalletServiceData,
+{
+    fn clone(&self) -> Self {
+        Self {
+            relay: self.relay.clone(),
+            _id: std::marker::PhantomData,
+        }
+    }
+}
+
 impl<Wallet, RuntimeServiceId> WalletApi<Wallet, RuntimeServiceId>
 where
     Wallet: WalletServiceData,

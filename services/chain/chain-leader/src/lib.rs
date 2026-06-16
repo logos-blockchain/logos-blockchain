@@ -10,7 +10,7 @@ mod wallet;
 use core::fmt::Debug;
 use std::{fmt::Display, iter, pin::Pin, time::Duration};
 
-use futures::{StreamExt as _, stream};
+use futures::{Stream, StreamExt as _, stream};
 use lb_chain_network_service::api::{ChainNetworkServiceApi, ChainNetworkServiceData};
 use lb_chain_service::{
     Epoch,
@@ -23,7 +23,7 @@ use lb_core::{
         AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash, TxSelect,
         gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
     },
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
+    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_service::{api::KmsServiceApi, keys::Ed25519Key};
@@ -39,11 +39,12 @@ use lb_tx_service::{
 use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
-    services::{AsServiceId, ServiceCore, ServiceData},
+    services::{AsServiceId, ServiceCore, ServiceData, relay::OutboundRelay},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::{mpsc, oneshot};
+use tokio_stream::wrappers::ReceiverStream;
 use tracing::{Level, error, info, instrument, span, trace};
 use tracing_futures::Instrument as _;
 
@@ -51,14 +52,30 @@ pub use crate::wallet::LeaderWalletConfig;
 use crate::{
     blend::BlendAdapter,
     kms::PreloadKmsService,
-    leadership::{PotentialWinningPoLSlotNotifier, build_proof_for},
+    leadership::{SlotContext, build_proof_for, fetch_slot_context, search_for_winning_slots},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
     wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
 };
 
-pub(crate) type WinningPolInfo = (LeaderPrivate, LeaderPublic, Epoch);
+/// The per-subscriber stream of per-epoch winning slots. Each item
+/// carries a single epoch and that epoch's stream of winning slots.
+pub type WinningPolEpochSlotsStream =
+    Pin<Box<dyn Stream<Item = WinningPolEpochSlots> + Send + Sync + Unpin>>;
 
+pub struct WinningPolEpochSlots {
+    pub epoch: Epoch,
+    pub slots: WinningPolSlotStream,
+}
+
+/// A lazy stream of one epoch's winning-slot leadership private inputs (one
+/// item per winning slot), as handed to a Blend subscriber.
+pub type WinningPolSlotStream = Pin<Box<dyn Stream<Item = LeaderPrivate> + Send + Sync + Unpin>>;
+
+/// Number of epochs to buffer for late subscribers to the winning `PoL` slots
+/// stream. Subscribers will almost certainly consume each epoch at some point,
+/// so `2` is already a safe value for the buffer.
+const WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE: usize = 2;
 const SERVICE_ID: &str = "ChainLeader";
 
 pub(crate) const LOG_TARGET: &str = "chain_leader::service";
@@ -95,24 +112,30 @@ impl From<WalletApiError> for Error {
     }
 }
 
-#[derive(Debug)]
 pub enum LeaderMsg {
-    /// Request a new receiver that yields PoL-winning slot information.
+    /// Subscribe to a stream of this node's winning `PoL` slots.
     ///
-    /// The stream will yield items in one of the following cases:
-    /// * a new epoch starts -> immediately the first potential winning slot of
-    ///   the new epoch, if any
-    /// * this service is started mid-epoch -> immediately the first potential
-    ///   winning slot of the ongoing epoch (the slot can also be in the past
-    ///   compared to the current slot as returned by the time service), if any
-    /// * a new consumer subscribes -> the latest value that was sent to all the
-    ///   other consumers, if any
+    /// The reply is a stream of per-epoch handoffs: one item per epoch, each
+    /// carrying that epoch's lazy stream of winning slots. A dedicated
+    /// background task scans the current epoch from the subscribe slot onward
+    /// (and each later epoch in full).
     PotentialWinningPolEpochSlotStreamSubscribe {
-        sender: oneshot::Sender<watch::Receiver<Option<WinningPolInfo>>>,
+        sender: oneshot::Sender<WinningPolEpochSlotsStream>,
     },
     Claim {
         sender: oneshot::Sender<Result<TxHash, Error>>,
     },
+}
+
+impl Debug for LeaderMsg {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::PotentialWinningPolEpochSlotStreamSubscribe { .. } => {
+                f.write_str("PotentialWinningPolEpochSlotStreamSubscribe")
+            }
+            Self::Claim { .. } => f.write_str("Claim"),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -155,7 +178,6 @@ pub struct CryptarchiaLeader<
     Wallet: lb_wallet_service::api::WalletServiceData,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
-    winning_pol_epoch_slots_sender: watch::Sender<Option<WinningPolInfo>>,
 }
 
 impl<
@@ -268,9 +290,9 @@ where
     TxS::Settings: Send + Sync + 'static,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
-    CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
+    CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item> + 'static,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
-    Wallet: lb_wallet_service::api::WalletServiceData,
+    Wallet: lb_wallet_service::api::WalletServiceData + 'static,
     RuntimeServiceId: Debug
         + Send
         + Sync
@@ -291,11 +313,8 @@ where
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
         _initial_state: Self::State,
     ) -> Result<Self, DynError> {
-        let winning_pol_epoch_slots_sender = watch::Sender::new(None);
-
         Ok(Self {
             service_resources_handle,
-            winning_pol_epoch_slots_sender,
         })
     }
 
@@ -335,11 +354,6 @@ where
             .settings_handle
             .notifier()
             .get_updated_settings();
-
-        let mut winning_pol_slot_notifier = PotentialWinningPoLSlotNotifier::new(
-            &ledger_config,
-            &self.winning_pol_epoch_slots_sender,
-        );
 
         let wallet_api = WalletApi::<Wallet, RuntimeServiceId>::new(
             self.service_resources_handle
@@ -413,51 +427,34 @@ where
             loop {
                 tokio::select! {
                     Some(SlotTick { slot, epoch }) = slot_timer.next() => {
-                        trace!("Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
-                        let (tip, tip_state) = match Self::get_tip_ledger_state(&cryptarchia_api).await {
-                            Ok(output) => output,
+                        trace!(target: LOG_TARGET, "Received SlotTick for slot {}, ep {}", u64::from(slot), u32::from(epoch));
+                        let Some(SlotContext { tip, epoch_state, eligible_aged }) =
+                            fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
+                        else {
+                            error!(target: LOG_TARGET, "Failed to fetch epoch context for slot {slot:?}");
+                            continue;
+                        };
+
+                        // The block-proposal proof must prove the winning note is still
+                        // unspent, so it needs the latest tip ledger state (fetched per slot).
+                        let tip_state = match cryptarchia_api.get_ledger_state(tip).await {
+                            Ok(Some(state)) => state,
+                            Ok(None) => {
+                                error!(target: LOG_TARGET, "Ledger state not found for tip {tip:?}");
+                                continue;
+                            }
                             Err(e) => {
-                                error!("Failed to get tip ledger state: {e:?}");
+                                error!(target: LOG_TARGET, "Failed to get ledger state for tip: {e}");
                                 continue;
                             }
                         };
-                        let parent = tip;
 
                         let latest_tree = tip_state.latest_utxos();
 
-                        let epoch_state = match cryptarchia_api.get_epoch_state(slot).await {
-                            Ok(Ok(state)) => state,
-                            Ok(Err(e)) => {
-                                error!("trying to propose a block for slot {} but epoch state is not available: {e}", u64::from(slot));
-                                continue;
-                            }
-                            Err(e) => {
-                                error!("Failed to get epoch state: {e}");
-                                continue;
-                            }
-                        };
-
-                        let eligible_utxos = match wallet_api.get_leader_aged_notes(Some(parent)).await {
-                            Ok(utxos) => utxos,
-                            Err(e) => {
-                                error!("Failed to fetch leader aged notes from wallet: {:?}", e);
-                                continue;
-                            }
-                        };
-
-                        let eligible: Vec<_> = match &ledger_config.faucet_pk {
-                            Some(fpk) => eligible_utxos.response.into_iter()
-                                .filter(|u| u.utxo.note.pk != *fpk).collect(),
-                            None => eligible_utxos.response,
-                        };
-
-                        // If it's a new epoch or the service just started, pre-compute the first winning slot and notify consumers.
-                        winning_pol_slot_notifier.process_epoch(&eligible, latest_tree, &epoch_state, &kms_api).await;
-
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible, latest_tree, &epoch_state, slot, &winning_pol_slot_notifier, &wallet_api, &kms_api).await {
+                       if let Some((proof, signing_key)) = build_proof_for(&eligible_aged, latest_tree, &epoch_state, slot, &wallet_api, &kms_api).await {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
-                                parent,
+                                tip,
                                 slot,
                                 proof,
                                 &signing_key,
@@ -480,7 +477,7 @@ where
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
-                        Self::handle_inbound_message(msg, &self.winning_pol_epoch_slots_sender, &cryptarchia_api, &wallet_api, &wallet_config, relays.mempool_adapter()).await;
+                        Self::handle_inbound_message(msg, &cryptarchia_api, &wallet_api, &kms_api, relays.time_relay(), &ledger_config, &wallet_config, relays.mempool_adapter()).await;
                     }
                 }
             }
@@ -562,10 +559,16 @@ where
     TxS::Settings: Send + Sync + 'static,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
-    CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item>,
+    CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item> + 'static,
     ChainNetwork: ChainNetworkServiceData<Tx = Mempool::Item>,
-    Wallet: lb_wallet_service::api::WalletServiceData,
-    RuntimeServiceId: Debug + Display + Sync + Send + 'static + AsServiceId<Wallet>,
+    Wallet: lb_wallet_service::api::WalletServiceData + 'static,
+    RuntimeServiceId: Debug
+        + Display
+        + Sync
+        + Send
+        + 'static
+        + AsServiceId<Wallet>
+        + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
     #[expect(clippy::allow_attributes_without_reason)]
     #[expect(
@@ -691,24 +694,43 @@ where
         metrics::consensus_proposals_created_local();
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "All handles are required to serve the winning-slot subscription off the main loop."
+    )]
     async fn handle_inbound_message(
         msg: LeaderMsg,
-        winning_pol_epoch_slots_sender: &watch::Sender<Option<WinningPolInfo>>,
         cryptarchia: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
         wallet: &WalletApi<Wallet, RuntimeServiceId>,
+        kms: &KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+        time_relay: &OutboundRelay<TimeServiceMessage>,
+        ledger_config: &lb_ledger::Config,
         config: &LeaderWalletConfig,
         mempool: &MempoolAdapter<Mempool::Item>,
     ) {
         match msg {
-            LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
-                sender
-                    .send(winning_pol_epoch_slots_sender.subscribe())
-                    .unwrap_or_else(|_| {
-                        error!("Could not subscribe to POL epoch winning slots channel.");
-                    });
-            }
             LeaderMsg::Claim { sender } => {
                 Self::handle_claim_message(cryptarchia, wallet, config, mempool, sender).await;
+            }
+            LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender } => {
+                // Spawn a dedicated, off-main-loop task that scans winning slots
+                // for this subscriber and streams them in, with the bounded
+                // channel providing backpressure.
+                let (epoch_handoff_sender, epoch_handoff_receiver) =
+                    mpsc::channel(WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE);
+                tokio::spawn(search_for_winning_slots(
+                    cryptarchia.clone(),
+                    wallet.clone(),
+                    kms.clone(),
+                    time_relay.clone(),
+                    ledger_config.clone(),
+                    epoch_handoff_sender,
+                ));
+                let stream: WinningPolEpochSlotsStream =
+                    Box::pin(ReceiverStream::new(epoch_handoff_receiver));
+                if sender.send(stream).is_err() {
+                    error!(target: LOG_TARGET, "Could not send winning PoL epoch slots stream to subscriber.");
+                }
             }
         }
     }
@@ -779,7 +801,7 @@ where
 async fn txs_for_block<Tx, S>(mut txs: S) -> Vec<Tx>
 where
     Tx: StorageSize,
-    S: futures::Stream<Item = Tx> + Unpin,
+    S: Stream<Item = Tx> + Unpin,
 {
     let mut block_size: usize = 0;
     let mut selected_txs = Vec::new();
