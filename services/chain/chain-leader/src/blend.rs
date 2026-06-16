@@ -1,3 +1,7 @@
+// When `testing-disable-proposal-publish` is on, some functions and struct
+// fields are not used.
+#![cfg_attr(feature = "testing-disable-proposal-publish", allow(dead_code))]
+
 use std::marker::PhantomData;
 
 use lb_blend_service::message::{NetworkMessage, ProxyServiceMessage, ServiceMessage};

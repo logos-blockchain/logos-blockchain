@@ -112,6 +112,28 @@ jobs:
           command: nextest
           args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features mantle_sdp --test test_mantle_sdp_ops --test test_mantle_sdp_blend --no-fail-fast
 
+      # Build the testing-featured node binary required by tip_poll_self_heal.
+      - name: Build testing binary for tip_poll_self_heal
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          args: --locked --release -p logos-blockchain-node --features testing-disable-proposal-publish
+        env:
+          CARGO_INCREMENTAL: 0  # Disable incremental compilation
+
+      # Run the isolated tip-poll self-heal test that requires the testing-featured node binary.
+      - name: End-to-end integration tests - tip_poll_self_heal
+        id: tip_poll_self_heal_end_to_end
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 90
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+        with:
+          command: nextest
+          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features tip_poll_self_heal --test test_cryptarchia_tip_poll_self_heal --no-fail-fast
+
       # Build release binaries for the remaining end-to-end tests.
       - name: Build binaries for remaining end-to-end tests
         if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
@@ -136,7 +158,7 @@ jobs:
           args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --no-fail-fast
 
       - name: Upload integration tests results on failure
-        if: ${{ failure() && (steps.mantle_sdp_end_to_end.conclusion == 'failure' || steps.end_to_end.conclusion == 'failure') }}
+        if: ${{ failure() && (steps.mantle_sdp_end_to_end.conclusion == 'failure' || steps.tip_poll_self_heal_end_to_end.conclusion == 'failure' || steps.end_to_end.conclusion == 'failure') }}
         uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
         with:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}

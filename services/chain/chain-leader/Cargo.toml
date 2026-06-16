@@ -42,3 +42,6 @@ lb-utils   = { workspace = true }
 
 [features]
 default = []
+# Suppresses publishing of locally-proposed blocks over the blend network.
+# The block is still self-applied to this node's chain. Test-only build flag.
+testing-disable-proposal-publish = []
