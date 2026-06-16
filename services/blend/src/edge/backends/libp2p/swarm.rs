@@ -4,7 +4,6 @@ use core::{
 };
 use std::{
     collections::{HashMap, HashSet, hash_map::Entry},
-    io,
     time::Duration,
 };
 
@@ -23,10 +22,9 @@ use libp2p::{
     identity::Keypair,
     swarm::{ConnectionId, dial_opts::PeerCondition},
 };
-use libp2p_stream::OpenStreamError;
 use rand::RngCore;
 use tokio::sync::mpsc;
-use tracing::{debug, error, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use super::settings::Libp2pBlendBackendSettings;
 use crate::edge::backends::libp2p::LOG_TARGET;
@@ -56,7 +54,37 @@ impl DialAttempt {
     }
 }
 
-type PendingRetries = FuturesUnordered<Pin<Box<dyn Future<Output = (PeerId, DialAttempt)> + Send>>>;
+type PendingEvents = FuturesUnordered<Pin<Box<dyn Future<Output = PendingEvent> + Send>>>;
+
+/// An event produced by a future in [`BlendSwarm::pending`], applied back to
+/// swarm state once the future resolves. Retry timers and in-flight sends share
+/// a single queue, so the `select!` loop has one place to drain them.
+enum PendingEvent {
+    /// A retry's backoff has elapsed; the peer should be redialed.
+    RetryReady {
+        peer_id: PeerId,
+        dial_attempt: Box<DialAttempt>,
+    },
+    /// An in-flight stream-open/send completed.
+    Send(SendOutcome),
+}
+
+/// Outcome of an in-flight attempt to open a stream and send a message,
+/// applied back to [`BlendSwarm`] state once the future completes.
+enum SendOutcome {
+    /// The message was sent (the stream close result is best-effort). The
+    /// pending dial for this connection can be removed.
+    Sent {
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+    },
+    /// Opening the stream or sending the message failed. The dial should be
+    /// retried with backoff.
+    Failed {
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+    },
+}
 
 pub(super) struct BlendSwarm<Rng>
 where
@@ -69,7 +97,10 @@ where
     rng: Rng,
     max_dial_attempts_per_connection: NonZeroU64,
     pending_dials: HashMap<(PeerId, ConnectionId), DialAttempt>,
-    pending_retries: PendingRetries,
+    /// Pending retry timers and in-flight stream-open/send futures. Both are
+    /// polled off the main `select!` loop so that one unresponsive peer cannot
+    /// stall command handling.
+    pending_events: PendingEvents,
     protocol_name: StreamProtocol,
     replication_factor: NonZeroUsize,
 }
@@ -122,7 +153,7 @@ where
             membership,
             rng,
             pending_dials: HashMap::new(),
-            pending_retries: FuturesUnordered::new(),
+            pending_events: FuturesUnordered::new(),
             max_dial_attempts_per_connection: settings.max_dial_attempts_per_peer_per_message,
             protocol_name: settings.protocol_name.into_inner(),
             replication_factor,
@@ -153,7 +184,7 @@ where
             membership,
             max_dial_attempts_per_connection,
             pending_dials: HashMap::new(),
-            pending_retries: FuturesUnordered::new(),
+            pending_events: FuturesUnordered::new(),
             rng,
             stream_control: inner_swarm.behaviour().new_control(),
             swarm: inner_swarm,
@@ -219,7 +250,7 @@ where
     ///
     /// The dial attempt is removed from `pending_dials`. If the maximum number
     /// of attempts has not been reached, a delayed future is pushed into
-    /// `pending_retries`; when it fires, the dial is re-attempted in
+    /// `pending_events`; when it fires, the dial is re-attempted in
     /// `poll_next_and_match`. Once all attempts are exhausted the message is
     /// dropped: we do not fall back to a different peer.
     fn schedule_retry(&mut self, peer_id: PeerId, connection_id: ConnectionId) {
@@ -236,21 +267,27 @@ where
             );
             return;
         }
-        let delay = Duration::from_secs(1 << (new_dial_attempt_number.get() - 1));
+        let delay = Duration::from_secs(
+            1u64.checked_shl((new_dial_attempt_number.get() - 1) as u32)
+                .unwrap_or_else(|| {
+                    tracing::warn!(target: LOG_TARGET, "Shift overflow when calculating delay for peer {peer_id:?}. Using maximum delay.");
+                    u64::MAX
+                }),
+        );
         debug!(
             target: LOG_TARGET,
             "Scheduling retry {new_dial_attempt_number} for peer {peer_id:?} in {} seconds",
             delay.as_secs()
         );
-        self.pending_retries.push(Box::pin(async move {
+        self.pending_events.push(Box::pin(async move {
             tokio::time::sleep(delay).await;
-            (
+            PendingEvent::RetryReady {
                 peer_id,
-                DialAttempt {
+                dial_attempt: Box::new(DialAttempt {
                     attempt_number: new_dial_attempt_number,
                     ..dial_attempt
-                },
-            )
+                }),
+            }
         }));
     }
 
@@ -262,15 +299,14 @@ where
             .collect()
     }
 
-    async fn handle_swarm_event(&mut self, event: SwarmEvent<()>) {
+    fn handle_swarm_event(&mut self, event: SwarmEvent<()>) {
         match event {
             SwarmEvent::ConnectionEstablished {
                 peer_id,
                 connection_id,
                 ..
             } => {
-                self.handle_connection_established(peer_id, connection_id)
-                    .await;
+                self.handle_connection_established(peer_id, connection_id);
             }
             SwarmEvent::OutgoingConnectionError {
                 connection_id,
@@ -285,81 +321,71 @@ where
         }
     }
 
-    async fn handle_connection_established(
-        &mut self,
-        peer_id: PeerId,
-        connection_id: ConnectionId,
-    ) {
+    /// On a newly established connection, kick off opening a stream and sending
+    /// the pending message.
+    ///
+    /// The open/send/close chain can block indefinitely on a peer that
+    /// completes the QUIC handshake but never negotiates the stream protocol,
+    /// so instead of awaiting it inline (which would stall the whole `select!`
+    /// loop), we push it into `pending` and apply the resulting [`SendOutcome`]
+    /// back to our state once it completes.
+    fn handle_connection_established(&self, peer_id: PeerId, connection_id: ConnectionId) {
         debug!(target: LOG_TARGET, "Connection established: peer_id: {peer_id}, connection_id: {connection_id}");
 
-        // We need to clone so we can access `&mut self` below.
+        // We clone the message so the send future can own it independently of
+        // `self`; the pending dial stays in place until the send completes.
         let message = self
             .pending_dials
             .get(&(peer_id, connection_id))
             .map(|entry| entry.message.clone())
             .unwrap();
 
-        match self
-            .stream_control
-            .open_stream(peer_id, self.protocol_name.clone())
-            .await
-        {
-            Ok(stream) => {
-                self.handle_open_stream_success(stream, &message, (peer_id, connection_id))
-                    .await;
+        let stream_control = self.stream_control.clone();
+        let protocol_name = self.protocol_name.clone();
+        self.pending_events.push(Box::pin(async move {
+            PendingEvent::Send(
+                send_message_over_new_stream(
+                    stream_control,
+                    protocol_name,
+                    message,
+                    peer_id,
+                    connection_id,
+                )
+                .await,
+            )
+        }));
+    }
+
+    /// Apply the outcome of a completed [`pending send`](Self::pending_sends)
+    /// to our state.
+    fn handle_send_outcome(&mut self, outcome: &SendOutcome) {
+        match outcome {
+            SendOutcome::Sent {
+                peer_id,
+                connection_id,
+            } => {
+                self.pending_dials.remove(&(*peer_id, *connection_id));
             }
-            Err(e) => self.handle_open_stream_failure(&e, (peer_id, connection_id)),
+            SendOutcome::Failed {
+                peer_id,
+                connection_id,
+            } => {
+                self.schedule_retry(*peer_id, *connection_id);
+            }
         }
     }
 
-    async fn handle_open_stream_success(
-        &mut self,
-        stream: libp2p::Stream,
-        message: &EncapsulatedMessageWithVerifiedPublicHeader,
-        (peer_id, connection_id): (PeerId, ConnectionId),
-    ) {
-        match send_msg(
-            stream,
-            serialize_encapsulated_message_with_verified_public_header(message),
-        )
-        .await
-        {
-            Ok(stream) => {
-                self.handle_send_message_success(stream, (peer_id, connection_id))
-                    .await;
-            }
-            Err(e) => self.handle_send_message_failure(&e, (peer_id, connection_id)),
+    /// Redial a peer whose retry backoff has elapsed.
+    fn handle_new_dial_retry(&mut self, peer_id: PeerId, dial_attempt: DialAttempt) {
+        let opts = dial_opts(peer_id, dial_attempt.address.clone());
+        let connection_id = opts.connection_id();
+        self.pending_dials
+            .insert((peer_id, connection_id), dial_attempt);
+
+        if let Err(e) = self.swarm.dial(opts) {
+            error!(target: LOG_TARGET, "Failed to redial peer {peer_id:?}: {e:?}");
+            self.schedule_retry(peer_id, connection_id);
         }
-    }
-
-    async fn handle_send_message_success(
-        &mut self,
-        stream: libp2p::Stream,
-        (peer_id, connection_id): (PeerId, ConnectionId),
-    ) {
-        debug!(target: LOG_TARGET, "Message sent successfully to peer {peer_id:?} on connection {connection_id:?}.");
-        close_stream(stream, peer_id, connection_id).await;
-        // Regardless of the result of closing the stream, the message was sent so we
-        // can remove the pending dial info.
-        self.pending_dials.remove(&(peer_id, connection_id));
-    }
-
-    fn handle_send_message_failure(
-        &mut self,
-        error: &io::Error,
-        (peer_id, connection_id): (PeerId, ConnectionId),
-    ) {
-        error!(target: LOG_TARGET, "Failed to send message: {error} to peer {peer_id:?} on connection {connection_id:?}.");
-        self.schedule_retry(peer_id, connection_id);
-    }
-
-    fn handle_open_stream_failure(
-        &mut self,
-        error: &OpenStreamError,
-        (peer_id, connection_id): (PeerId, ConnectionId),
-    ) {
-        error!(target: LOG_TARGET, "Failed to open stream to {peer_id}: {error}");
-        self.schedule_retry(peer_id, connection_id);
     }
 
     fn handle_outgoing_connection_error(
@@ -383,6 +409,22 @@ where
         self.dial_and_schedule_message(msg);
     }
 
+    /// Push a send future that never completes into the pending-events queue,
+    /// simulating a peer that accepted the connection but never lets the
+    /// stream-open/send finish. Tests use this to assert the event loop keeps
+    /// servicing commands and retries instead of head-of-line blocking on it.
+    #[cfg(test)]
+    pub fn push_stalled_send(&self) {
+        self.pending_events
+            .push(Box::pin(core::future::pending::<PendingEvent>()));
+    }
+
+    /// Drive a single iteration of the event loop.
+    #[cfg(test)]
+    pub async fn poll_next(&mut self) {
+        self.poll_next_internal().await;
+    }
+
     pub(super) async fn run(mut self) {
         loop {
             self.poll_next_internal().await;
@@ -400,21 +442,21 @@ where
         tokio::select! {
             Some(event) = self.swarm.next() => {
                 let predicate_matched = predicate(&event);
-                self.handle_swarm_event(event).await;
+                self.handle_swarm_event(event);
                 predicate_matched
             }
             Some(command) = self.command_receiver.recv() => {
                 self.handle_command(command);
                 false
             }
-            Some((peer_id, dial_attempt)) = self.pending_retries.next() => {
-                let opts = dial_opts(peer_id, dial_attempt.address.clone());
-                let connection_id = opts.connection_id();
-                self.pending_dials.insert((peer_id, connection_id), dial_attempt);
-
-                if let Err(e) = self.swarm.dial(opts) {
-                    error!(target: LOG_TARGET, "Failed to redial peer {peer_id:?}: {e:?}");
-                    self.schedule_retry(peer_id, connection_id);
+            Some(event) = self.pending_events.next() => {
+                match event {
+                    PendingEvent::RetryReady { peer_id, dial_attempt } => {
+                        self.handle_new_dial_retry(peer_id, *dial_attempt);
+                    }
+                    PendingEvent::Send(outcome) => {
+                        self.handle_send_outcome(&outcome);
+                    }
                 }
                 false
             }
@@ -431,6 +473,58 @@ where
                 break;
             }
         }
+    }
+}
+
+/// Open a stream to `peer_id`, send `message` over it, and close it.
+///
+/// Runs detached from the main `select!` loop (see
+/// [`BlendSwarm::handle_connection_established`]) so that a peer which stalls
+/// stream negotiation only delays its own send rather than wedging the whole
+/// event loop.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: Address this at some point."
+)]
+async fn send_message_over_new_stream(
+    mut stream_control: libp2p_stream::Control,
+    protocol_name: StreamProtocol,
+    message: EncapsulatedMessageWithVerifiedPublicHeader,
+    peer_id: PeerId,
+    connection_id: ConnectionId,
+) -> SendOutcome {
+    let stream = match stream_control.open_stream(peer_id, protocol_name).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            error!(target: LOG_TARGET, "Failed to open stream to {peer_id}: {e}");
+            return SendOutcome::Failed {
+                peer_id,
+                connection_id,
+            };
+        }
+    };
+
+    let stream = match send_msg(
+        stream,
+        serialize_encapsulated_message_with_verified_public_header(&message),
+    )
+    .await
+    {
+        Ok(stream) => stream,
+        Err(e) => {
+            error!(target: LOG_TARGET, "Failed to send message: {e} to peer {peer_id:?} on connection {connection_id:?}.");
+            return SendOutcome::Failed {
+                peer_id,
+                connection_id,
+            };
+        }
+    };
+
+    info!(target: LOG_TARGET, "Message sent successfully to peer {peer_id:?} on connection {connection_id:?}.");
+    close_stream(stream, peer_id, connection_id).await;
+    SendOutcome::Sent {
+        peer_id,
+        connection_id,
     }
 }
 

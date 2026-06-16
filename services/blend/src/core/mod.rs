@@ -245,10 +245,21 @@ where
         Ok(Self {
             service_resources_handle,
             // We consume the serializable state into the state type we interact with in the
-            // service.
-            last_saved_state: recovery_initial_state.service_state.map(|s| {
-                s.try_into_state_with_state_updater(state_updater)
-                    .expect("Stored state should be valid")
+            // service. If the persisted state is inconsistent (e.g. an epoch
+            // mismatch from version skew or a partial write), discard it rather
+            // than panicking: `run` already falls back to a fresh state when
+            // none was recovered, which avoids a crash loop on every start.
+            last_saved_state: recovery_initial_state.service_state.and_then(|s| {
+                match s.try_into_state_with_state_updater(state_updater) {
+                    Ok(state) => Some(state),
+                    Err(error) => {
+                        tracing::error!(
+                            target: LOG_TARGET,
+                            "Discarding inconsistent recovery state and starting fresh: {error:?}"
+                        );
+                        None
+                    }
+                }
             }),
             _phantom: PhantomData,
         })
@@ -1304,14 +1315,18 @@ where
     };
     state_updater.collect_current_epoch_tokens(blending_tokens.into_iter());
 
+    scheduler.schedule_processed_message(processed_message.clone());
     // We treat a partially or fully decapsulated message as a processed message,
     // and we schedule for its release at the next release round.
-    scheduler.schedule_processed_message(processed_message.clone());
-    assert_eq!(
-        state_updater.add_unsent_processed_message(processed_message.clone()),
-        Ok(()),
-        "There should not be another copy of the same locally-generated processed message: {processed_message:?}."
-    );
+    if state_updater
+        .add_unsent_processed_message(processed_message.clone())
+        .is_err()
+    {
+        tracing::warn!(
+            target: LOG_TARGET,
+            "There should not be another copy of the same locally-generated processed message: {processed_message:?}."
+        );
+    }
     state_updater.commit_changes()
 }
 
@@ -1513,10 +1528,15 @@ where
         cryptographic_processor,
     );
 
-    if let Some(processed_message) = maybe_processed_message {
-        state_updater
+    if let Some(processed_message) = maybe_processed_message
+        && state_updater
             .add_unsent_processed_message(processed_message)
-            .expect("Swarm should bubble up unique messages only.");
+            .is_err()
+    {
+        tracing::trace!(
+            target: LOG_TARGET,
+            "Dropping a duplicate decapsulated replica already pending release."
+        );
     }
 
     state_updater.collect_current_epoch_tokens(blending_tokens);

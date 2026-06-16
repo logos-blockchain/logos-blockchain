@@ -3,7 +3,7 @@ use futures::{Stream, future::ready, stream::once};
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
-use lb_groth16::Field as _;
+use lb_groth16::AdditiveGroup as _;
 use overwatch::overwatch::OverwatchHandle;
 
 use crate::epoch_info::{PolEpochInfo, PolInfoProvider};

@@ -422,7 +422,7 @@ where
 
     let mut blocks = Vec::with_capacity(limit.min(1024));
     let mut current_id = chain_info.tip;
-    let gated_slot_from = slot_from.max(chain_info.lib_slot + 1);
+    let gated_slot_from = slot_from.max(chain_info.lib_slot.strict_add(1.into()));
     if gated_slot_from > slot_to {
         return Ok(Vec::new());
     }
@@ -588,7 +588,7 @@ where
     let has_immutable_range = slot_from <= immutable_slot_to;
     // Mutable window starts strictly above LIB; LIB itself is served via immutable
     // index.
-    let mutable_slot_from = (chain_info.lib_slot + 1).max(slot_from);
+    let mutable_slot_from = (chain_info.lib_slot.strict_add(1.into())).max(slot_from);
     let has_mutable_range = !immutable_only && mutable_slot_from <= slot_to;
 
     let fetch_mutable = |remaining: usize, descending: bool| {

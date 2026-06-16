@@ -5,7 +5,7 @@ use lb_core::{
     mantle::NoteId,
     sdp::{DeclarationId, DeclarationMessage, Locator, Locators, ProviderId, ServiceType},
 };
-use lb_groth16::{Field as _, Fr};
+use lb_groth16::{AdditiveGroup as _, Fr};
 use lb_key_management_system_service::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_libp2p::{Multiaddr, Protocol};
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};

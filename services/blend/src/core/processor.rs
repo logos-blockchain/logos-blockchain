@@ -291,7 +291,7 @@ mod tests {
     };
 
     fn mock_verification_inputs() -> PoQVerificationInputsMinusSigningKey {
-        use lb_groth16::Field as _;
+        use lb_groth16::AdditiveGroup as _;
 
         PoQVerificationInputsMinusSigningKey {
             core: CoreInputs {

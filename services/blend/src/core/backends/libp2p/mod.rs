@@ -14,7 +14,7 @@ use libp2p::PeerId;
 use overwatch::overwatch::handle::OverwatchHandle;
 use rand::RngCore;
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 
 use crate::{
     core::{
@@ -28,6 +28,7 @@ use crate::{
         settings::RunningBlendConfig as BlendConfig,
     },
     message::NetworkInfo,
+    metrics,
 };
 
 const LOG_TARGET: &str = blend::backend::LIBP2P;
@@ -136,7 +137,7 @@ where
     ) -> Pin<Box<dyn Stream<Item = (EncapsulatedMessageWithVerifiedSignature, Epoch)> + Send>> {
         Box::pin(
             BroadcastStream::new(self.incoming_message_sender.subscribe())
-                .filter_map(async |event| event.ok()),
+                .filter_map(async |event| handle_incoming_broadcast_event(event)),
         )
     }
 
@@ -152,6 +153,28 @@ where
             return None;
         }
         receiver.await.unwrap_or(None)
+    }
+}
+
+/// Maps a raw broadcast event to the message it carries, if any.
+///
+/// On `Lagged`, the consumer fell behind the producer and the broadcast channel
+/// overwrote `dropped_count` messages before they could be read. Rather than
+/// dropping that silently (as a plain `event.ok()` would), we log it and bump a
+/// metric so the loss is observable, then continue from the oldest
+/// still-buffered message.
+fn handle_incoming_broadcast_event<T>(event: Result<T, BroadcastStreamRecvError>) -> Option<T> {
+    match event {
+        Ok(message) => Some(message),
+        Err(BroadcastStreamRecvError::Lagged(dropped_count)) => {
+            tracing::warn!(
+                target: LOG_TARGET,
+                dropped_count,
+                "Incoming blend message channel lagged behind: {dropped_count} message(s) were dropped before the event loop could process them.",
+            );
+            metrics::inbound_messages_dropped(dropped_count);
+            None
+        }
     }
 }
 

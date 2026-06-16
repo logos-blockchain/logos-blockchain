@@ -32,7 +32,7 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
         _key_index: u64,
     ) -> impl Future<Output = Result<(VerifiedProofOfQuota, ZkHash), quota::Error>> + Send + Sync
     {
-        use lb_groth16::Field as _;
+        use lb_groth16::AdditiveGroup as _;
 
         ready(Ok((
             VerifiedProofOfQuota::from_bytes_unchecked([0; _]),

@@ -81,6 +81,11 @@ impl WalletStateView {
     }
 
     #[must_use]
+    pub fn on_chain_utxos(&self) -> &[Utxo] {
+        &self.on_chain_utxos
+    }
+
+    #[must_use]
     pub fn into_available_utxos(self) -> Vec<Utxo> {
         self.available_utxos
     }

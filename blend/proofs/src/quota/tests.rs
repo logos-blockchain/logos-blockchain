@@ -1,6 +1,6 @@
 use const_hex::FromHex as _;
 use lb_blend_crypto::{ZkHash, merkle::MerkleTree};
-use lb_groth16::{Field as _, Fr, fr_from_bytes_unchecked};
+use lb_groth16::{AdditiveGroup as _, Fr, fr_from_bytes_unchecked};
 use lb_key_management_system_keys::keys::UnsecuredZkKey;
 
 use crate::{

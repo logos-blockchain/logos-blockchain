@@ -18,6 +18,7 @@ pub struct SDPActiveValidationContext<'a> {
     pub declarations: &'a Declarations,
     pub tx_hash: &'a TxHash,
     pub active_sig: &'a ZkSignature,
+    pub epoch: Epoch,
 }
 
 pub struct SDPActiveExecutionContext {
@@ -37,6 +38,17 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         let Some(declaration) = ctx.declarations.get(&self.declaration_id) else {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
+
+        // Check the declaration hasn't been withdrawn
+        // (Return error if `withdrawn` epoch has passed)
+        if let Some(withdrawn) = declaration.withdrawn
+            && withdrawn <= ctx.epoch
+        {
+            return Err(SdpError::DeclarationWithdrawn {
+                declaration_id: self.declaration_id,
+                withdrawn_epoch: withdrawn,
+            });
+        }
 
         // Check the nonce is increasing
         if self.nonce <= declaration.nonce {

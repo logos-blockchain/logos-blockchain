@@ -3,7 +3,6 @@ pub mod locked_notes;
 
 use core::{
     fmt::{self, Display, Formatter},
-    ops::{Add, Sub},
     str::FromStr,
 };
 use std::{collections::HashMap, hash::Hash};
@@ -37,10 +36,8 @@ pub struct MinStake {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
-    /// Minimum epochs during which a declaration cannot be withdrawn
-    pub lock_period: NumberOfEpochs,
-    /// Maximum epochs during which an activity message must be sent
-    pub inactivity_period: NumberOfEpochs,
+    /// Maximum epochs during which an activity message must be sent.
+    pub inactivity_period: InactivityPeriod,
     /// Epochs after which a declaration can be safely deleted by Garbage
     /// Collection
     pub retention_period: NumberOfEpochs,
@@ -48,50 +45,56 @@ pub struct ServiceParameters {
     pub epoch: Epoch,
 }
 
+pub type NumberOfEpochs = Epoch;
+
+/// Number of epochs without an activity message before a declaration is
+/// considered inactive
+///
+/// Invariant: must be at least [`SNAPSHOT_FINALIZATION_DELAY`].
+/// Otherwise, the declaration may be excluded from the active set before
+/// the [`Declaration::active`] value (refreshed by an activity message)
+/// is reflected in the next snapshot.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NumberOfEpochs(Epoch);
+#[serde(try_from = "NumberOfEpochs")]
+pub struct InactivityPeriod(NumberOfEpochs);
 
-impl NumberOfEpochs {
+impl InactivityPeriod {
+    pub const fn new(period: NumberOfEpochs) -> Result<Self, InactivityPeriodTooSmall> {
+        if period.into_inner() < SNAPSHOT_FINALIZATION_DELAY.into_inner() {
+            Err(InactivityPeriodTooSmall { period })
+        } else {
+            Ok(Self(period))
+        }
+    }
+
     #[must_use]
-    pub const fn new(epoch: Epoch) -> Self {
-        Self(epoch)
+    pub const fn into_inner(self) -> NumberOfEpochs {
+        self.0
     }
 }
 
-impl From<u32> for NumberOfEpochs {
-    fn from(value: u32) -> Self {
-        Self(value.into())
+impl TryFrom<u32> for InactivityPeriod {
+    type Error = InactivityPeriodTooSmall;
+
+    fn try_from(period: u32) -> Result<Self, Self::Error> {
+        Self::new(period.into())
     }
 }
 
-impl From<NumberOfEpochs> for u32 {
-    fn from(this: NumberOfEpochs) -> Self {
-        this.0.into_inner()
+impl TryFrom<NumberOfEpochs> for InactivityPeriod {
+    type Error = InactivityPeriodTooSmall;
+
+    fn try_from(period: NumberOfEpochs) -> Result<Self, Self::Error> {
+        Self::new(period)
     }
 }
 
-impl Add for NumberOfEpochs {
-    type Output = Self;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
-    }
-}
-
-impl Add<NumberOfEpochs> for Epoch {
-    type Output = Self;
-
-    fn add(self, rhs: NumberOfEpochs) -> Self::Output {
-        self + rhs.0
-    }
-}
-
-impl Sub<NumberOfEpochs> for Epoch {
-    type Output = Self;
-
-    fn sub(self, rhs: NumberOfEpochs) -> Self::Output {
-        self - rhs.0
-    }
+#[derive(Copy, Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "inactivity_period must be >= SNAPSHOT_FINALIZATION_DELAY ({SNAPSHOT_FINALIZATION_DELAY:?}); got {period:?}"
+)]
+pub struct InactivityPeriodTooSmall {
+    pub period: NumberOfEpochs,
 }
 
 // TODO: Check spec for max limit once we migrate the SDP Declare op to use the
@@ -236,8 +239,17 @@ pub struct Declaration {
     pub locked_note_id: NoteId,
     pub locators: Locators,
     pub zk_id: ZkPublicKey,
+    /// The epoch of the block that contained the declaration
     pub created: Epoch,
+    /// The latest epoch for which the active message was sent.
+    ///
+    /// This is used only for checking if the declaration should
+    /// be marked as inactive, not for checking if it becomes active.
+    /// Idle->Active transition must be handled by the `EpochState`
+    /// snapshot logic.
+    // TODO: Use Option<Epoch> with a better name.
     pub active: Epoch,
+    /// The epoch at which the declaration must be withdrawn
     pub withdrawn: Option<Epoch>,
     pub nonce: Nonce,
 }
@@ -248,7 +260,7 @@ pub struct ProviderInfo {
     pub zk_id: ZkPublicKey,
 }
 
-const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
+pub const SNAPSHOT_FINALIZATION_DELAY: Epoch = Epoch::new(2);
 
 impl Declaration {
     #[must_use]
@@ -260,7 +272,7 @@ impl Declaration {
             locators: declaration_msg.locators.clone(),
             zk_id: declaration_msg.zk_id,
             created: epoch,
-            active: epoch + SNAPSHOT_FINALIZATION_DELAY,
+            active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
             withdrawn: None,
             nonce: 0,
         }
@@ -275,6 +287,14 @@ impl Declarations {
         &self,
     ) -> impl Iterator<Item = (&ServiceType, &HashMap<DeclarationId, Declaration>)> {
         self.0.iter()
+    }
+
+    #[must_use]
+    pub fn for_service(
+        &self,
+        service_type: &ServiceType,
+    ) -> Option<&HashMap<DeclarationId, Declaration>> {
+        self.0.get(service_type)
     }
 }
 
@@ -396,7 +416,7 @@ fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
 
 #[cfg(test)]
 mod tests {
-    use lb_groth16::{Field as _, Fr};
+    use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use super::*;

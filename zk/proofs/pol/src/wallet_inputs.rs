@@ -1,4 +1,4 @@
-use lb_groth16::{Field as _, Fr, Groth16Input, Groth16InputDeser};
+use lb_groth16::{AdditiveGroup as _, Field as _, Fr, Groth16Input, Groth16InputDeser};
 use num_bigint::BigUint;
 use serde::Serialize;
 

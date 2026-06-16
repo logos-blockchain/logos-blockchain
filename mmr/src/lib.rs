@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use ark_ff::Field as _;
+use ark_ff::AdditiveGroup as _;
 use lb_groth16::serde::serde_fr;
 use lb_poseidon2::{Digest, Fr};
 use rpds::StackSync;

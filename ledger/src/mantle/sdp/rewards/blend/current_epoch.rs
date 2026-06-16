@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
 use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey,
@@ -104,18 +106,14 @@ impl CurrentEpochTracker {
             last_epoch_state.epoch,
         );
 
-        let declarations = last_epoch_state
-            .sdp
-            .declarations()
-            .iter()
-            .filter(|(service_type, _)| matches!(service_type, ServiceType::BlendNetwork))
-            .flat_map(|(_, declarations)| declarations.values())
-            .cloned()
-            .collect::<Vec<_>>();
+        let maybe_declarations = last_epoch_state
+            .active_declarations
+            .for_service(&ServiceType::BlendNetwork);
 
-        if declarations.len() < settings.minimum_network_size.get() as usize {
+        let declaration_count = maybe_declarations.map_or(0, HashMap::len);
+        if declaration_count < settings.minimum_network_size.get() as usize {
             debug!(target: LOG_TARGET, "Declaration count({}) is below minimum network size({}). Switching to WithoutTargetEpoch mode",
-                declarations.len(),
+                declaration_count,
                 settings.minimum_network_size.get()
             );
             return CurrentEpochTrackerOutput::WithoutTargetEpoch {
@@ -124,7 +122,11 @@ impl CurrentEpochTracker {
             };
         }
 
-        let (providers, zk_root) = Self::providers_and_zk_root(declarations.iter());
+        let (providers, zk_root) = Self::providers_and_zk_root(
+            maybe_declarations
+                .expect("declaration set must exist since it's larger than minimum network size")
+                .values(),
+        );
 
         let (core_quota, token_evaluation) = settings.core_quota_and_token_evaluation(
             providers.size() as u64,

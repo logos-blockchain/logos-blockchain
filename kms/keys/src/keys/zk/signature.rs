@@ -48,7 +48,14 @@ macro_rules! declare_serde_generic_array {
                 if serializer.is_human_readable() {
                     serializer.serialize_str(&hex::encode(bytes))
                 } else {
-                    serializer.serialize_bytes(bytes)
+                    // Serialized as a fixed-size tuple so binary formats like
+                    // bincode do not emit a length prefix.
+                    use serde::ser::SerializeTuple as _;
+                    let mut tuple = serializer.serialize_tuple($size::USIZE)?;
+                    for byte in bytes {
+                        tuple.serialize_element(byte)?;
+                    }
+                    tuple.end()
                 }
             }
 
@@ -79,18 +86,35 @@ macro_rules! declare_serde_generic_array {
                     GenericArray::try_from_iter(bytes)
                         .map_err(|e| serde::de::Error::custom(e.to_string()))
                 } else {
-                    let bytes = <Vec<u8>>::deserialize(deserializer)?;
+                    struct ArrayVisitor;
 
-                    if bytes.len() != $size::USIZE {
-                        return Err(serde::de::Error::custom(format!(
-                            "expected {} bytes, got {}",
-                            $size::USIZE,
-                            bytes.len()
-                        )));
+                    impl<'de> serde::de::Visitor<'de> for ArrayVisitor {
+                        type Value = GenericArray<u8, $size>;
+
+                        fn expecting(
+                            &self,
+                            formatter: &mut core::fmt::Formatter,
+                        ) -> core::fmt::Result {
+                            write!(formatter, "an array of {} bytes", $size::USIZE)
+                        }
+
+                        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                            self,
+                            mut seq: A,
+                        ) -> Result<Self::Value, A::Error> {
+                            let mut output = GenericArray::<u8, $size>::default();
+                            for (i, byte) in output.iter_mut().enumerate() {
+                                *byte = seq
+                                    .next_element()?
+                                    .ok_or_else(|| serde::de::Error::invalid_length(i, &self))?;
+                            }
+                            Ok(output)
+                        }
                     }
 
-                    GenericArray::try_from_iter(bytes)
-                        .map_err(|e| serde::de::Error::custom(e.to_string()))
+                    // Mirrors `serialize`: a fixed-size tuple read back
+                    // without a length prefix.
+                    deserializer.deserialize_tuple($size::USIZE, ArrayVisitor)
                 }
             }
         }

@@ -422,7 +422,7 @@ mod pol_tests {
             total_stake,
             lottery_0,
             lottery_1,
-            sdp: lb_ledger::mantle::sdp::SdpLedger::new(1.into()),
+            active_declarations: Arc::new(lb_core::sdp::Declarations::default()),
         };
 
         // Create notifier channel (not used in this test)
@@ -506,8 +506,7 @@ mod pol_tests {
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            lock_period: 10.into(),
-                            inactivity_period: 20.into(),
+                            inactivity_period: 20.try_into().unwrap(),
                             retention_period: 100.into(),
                             epoch: 0.into(),
                         },

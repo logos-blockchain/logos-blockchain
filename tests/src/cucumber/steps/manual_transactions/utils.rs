@@ -16,9 +16,9 @@ pub use crate::cucumber::wallet::{
         wait_for_wallet_submitted_transactions_inclusion,
     },
     sync::{
-        sync_available_utxos_for_all_wallets, sync_available_utxos_for_funding_wallets,
-        sync_available_utxos_for_user_wallets, sync_available_utxos_for_wallet,
-        sync_wallet_available_state, sync_wallet_balance,
+        current_available_utxos_for_all_wallets, current_available_utxos_for_funding_wallets,
+        current_available_utxos_for_user_wallets, current_available_utxos_for_wallet,
+        current_wallet_available_state, current_wallet_balance,
     },
 };
 pub(crate) use crate::cucumber::wallet::{

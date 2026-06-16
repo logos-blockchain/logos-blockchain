@@ -69,4 +69,36 @@ mod tests {
         assert_eq!(block.header().id(), restored.header().id());
         assert_eq!(block.signature(), restored.signature());
     }
+
+    #[test]
+    fn test_bincode_fixed_size_fields_have_no_length_prefix() {
+        const VERSION: usize = 1;
+        const PARENT_BLOCK: usize = 32;
+        const SLOT: usize = 8;
+        const BLOCK_ROOT: usize = 32;
+        const POL_PROOF: usize = 128;
+        const ENTROPY_CONTRIBUTION: usize = 32;
+        const LEADER_KEY: usize = 32;
+        const VOUCHER_CM: usize = 32;
+        const SIGNATURE: usize = 64;
+        const TX_COUNT: usize = 8; // u64 Vec length (genuinely variable)
+        const EXPECTED: usize = VERSION
+            + PARENT_BLOCK
+            + SLOT
+            + BLOCK_ROOT
+            + POL_PROOF
+            + ENTROPY_CONTRIBUTION
+            + LEADER_KEY
+            + VOUCHER_CM
+            + SIGNATURE
+            + TX_COUNT;
+
+        let block = make_empty_block();
+        let bytes = bincode::serialize(&block).expect("bincode serialization should succeed");
+        assert_eq!(
+            bytes.len(),
+            EXPECTED,
+            "empty block encoding must contain no length prefixes for fixed-size fields"
+        );
+    }
 }

@@ -74,7 +74,7 @@ impl OldEpoch {
             self.negotiated_peers.iter(),
             &mut self.events,
             &mut self.message_cache,
-            self.waker.take(),
+            &mut self.waker,
         )
     }
 
@@ -100,7 +100,7 @@ impl OldEpoch {
                 .filter(|(peer_id, _)| **peer_id != except),
             &mut self.events,
             &mut self.message_cache,
-            self.waker.take(),
+            &mut self.waker,
         )
     }
 
@@ -152,7 +152,7 @@ impl OldEpoch {
             &mut self.message_cache,
             from_peer_id,
             &mut self.events,
-            self.waker.take(),
+            &mut self.waker,
             self.epoch,
         ).inspect_err(|receive_error| {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with spammy peer.");
@@ -167,20 +167,25 @@ impl OldEpoch {
         Ok(true)
     }
 
-    /// Stops the old epoch by returning events to close all the substreams
-    /// in the old epoch.
+    /// Stops the old epoch by returning any events still queued, followed by
+    /// the events to close all the substreams in the old epoch.
     ///
     /// It should be called once the epoch transition period has passed.
-    pub fn stop(self) -> VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>> {
-        let mut events = VecDeque::with_capacity(self.negotiated_peers.len());
+    ///
+    /// Already-queued events (e.g. received-but-undelivered messages and
+    /// pending outbound forwards) are preserved and returned before the
+    /// substream-close notifications, so queued forwards are delivered to their
+    /// handlers before the corresponding substreams are closed.
+    pub fn stop(mut self) -> VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>> {
+        self.events.reserve(self.negotiated_peers.len());
         for (&peer_id, &connection_id) in &self.negotiated_peers {
-            events.push_back(ToSwarm::NotifyHandler {
+            self.events.push_back(ToSwarm::NotifyHandler {
                 peer_id,
                 handler: NotifyHandler::One(connection_id),
                 event: Either::Left(FromBehaviour::CloseSubstreams),
             });
         }
-        events
+        self.events
     }
 
     /// Checks if the connection is part of the old epoch.
