@@ -666,11 +666,6 @@ where
             return;
         }
 
-        // Don't pile on while a catch-up download is already in flight.
-        if orphan_downloader.should_poll() {
-            return;
-        }
-
         let info = match cryptarchia.info().await {
             Ok(info) => info.cryptarchia_info,
             Err(e) => {
