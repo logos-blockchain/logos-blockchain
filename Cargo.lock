@@ -4024,7 +4024,6 @@ dependencies = [
  "logos-blockchain-blend-message",
  "logos-blockchain-blend-proofs",
  "logos-blockchain-blend-scheduling",
- "logos-blockchain-core",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
