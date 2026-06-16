@@ -24,9 +24,10 @@ where
 {
     type Stream = Box<dyn Stream<Item = PolEpochInfo> + Send + Unpin>;
 
-    /// Subscribes to the chain-leader's per-epoch winning-slot handoffs (one per
-    /// epoch) and maps each into a [`PolEpochInfo`], converting that epoch's
-    /// stream of winning leadership inputs into the Blend leadership-quota inputs.
+    /// Subscribes to the chain-leader's per-epoch winning-slot handoffs (one
+    /// per epoch) and maps each into a [`PolEpochInfo`], converting that
+    /// epoch's stream of winning leadership inputs into the Blend
+    /// leadership-quota inputs.
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Option<Self::Stream> {
