@@ -661,7 +661,8 @@ where
         RuntimeServiceId: Send + Sync + 'static,
     {
         // Cadence gate: only act roughly once per expected block interval.
-        if u64::from(tick.slot) % params.cadence_slots != 0 {
+        let current_slot = u64::from(tick.slot);
+        if current_slot % params.cadence_slots != 0 {
             return;
         }
 
@@ -678,7 +679,6 @@ where
             }
         };
 
-        let current_slot = u64::from(tick.slot);
         let tip_slot = u64::from(info.slot);
         let lag = current_slot.saturating_sub(tip_slot);
         if lag <= params.lag_threshold_slots {
