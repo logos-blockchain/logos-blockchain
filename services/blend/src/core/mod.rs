@@ -1077,6 +1077,7 @@ where
                         .as_ref()
                         .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
                     {
+                        // We consume the stream by `take()`ing only if the epochs match.
                         let current_secret_info = current_secret_info
                             .take()
                             .expect("Secret PoL info presence checked above.");
