@@ -39,6 +39,10 @@ const WINNING_SLOT_BUFFER_SIZE: usize = 8;
 /// one for any of the eligible UTXOs, for use in a block proposal.
 ///
 /// If the slot is not a winning one, it returns `None`.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 pub async fn build_proof_for<Wallet, RuntimeServiceId>(
     utxos: &[UtxoWithKeyId],
     latest_tree: &UtxoTree,
@@ -203,6 +207,10 @@ pub struct SlotContext {
 /// the subscriber a fresh bounded `mpsc` stream and fills it lazily; the
 /// bounded channel applies backpressure so the whole epoch is never
 /// materialized at once. The task exits when the subscriber drops its stream.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeServiceId>(
     cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
     wallet_api: WalletApi<Wallet, RuntimeServiceId>,
@@ -347,6 +355,10 @@ where
 /// sending the leadership private inputs of each winning slot to the
 /// subscriber. `send().await` applies backpressure, so the scan pauses rather
 /// than racing ahead of the consumer (and never collects the whole epoch).
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
 async fn scan_epoch_winning_slots<RuntimeServiceId>(
     ledger_config: &lb_ledger::Config,
     epoch_state: &EpochState,
