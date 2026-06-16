@@ -719,11 +719,11 @@ where
                 let (epoch_handoff_sender, epoch_handoff_receiver) =
                     mpsc::channel(WINNING_POL_EPOCH_HANDOFF_BUFFER_SIZE);
                 tokio::spawn(search_for_winning_slots(
-                    cryptarchia.clone(),
-                    wallet.clone(),
-                    kms.clone(),
-                    time_relay.clone(),
-                    ledger_config.clone(),
+                    (*cryptarchia).clone(),
+                    (*wallet).clone(),
+                    (*kms).clone(),
+                    (*time_relay).clone(),
+                    (*ledger_config).clone(),
                     epoch_handoff_sender,
                 ));
                 let stream: WinningPolEpochSlotsStream =

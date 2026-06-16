@@ -373,7 +373,9 @@ async fn scan_epoch_winning_slots<RuntimeServiceId>(
         .epoch_config
         .starting_slot(&epoch_state.epoch, ledger_config.base_period_length())
         .into();
-    let epoch_last_slot = epoch_first_slot.saturating_add(slots_per_epoch);
+    let epoch_last_slot = epoch_first_slot
+        .checked_add(slots_per_epoch)
+        .expect("Epoch slot calculation overflow.");
     // Skip slots earlier than the start slot: a mid-epoch subscriber does not
     // waste work on slots it has already passed.
     let scan_starting_slot = u64::from(start_slot).max(epoch_first_slot);
