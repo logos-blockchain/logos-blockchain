@@ -1,4 +1,7 @@
-use core::{num::NonZeroUsize, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroUsize},
+    time::Duration,
+};
 use std::collections::HashSet;
 
 use libp2p::PeerId;
@@ -43,6 +46,7 @@ impl Default for IbdConfig {
 #[serde(default)]
 pub struct SyncConfig {
     pub orphan: OrphanConfig,
+    pub tip_poll: TipPollConfig,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -56,6 +60,28 @@ impl Default for OrphanConfig {
     fn default() -> Self {
         Self {
             max_orphan_cache_size: NonZeroUsize::new(1000).unwrap(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct TipPollConfig {
+    /// Whether the proactive tip-polling lag watchdog is enabled.
+    pub enabled: bool,
+    /// How many expected block-intervals (`1/f` slots each) the local tip may
+    /// lag behind the current slot before we proactively poll peers.
+    pub lag_threshold_blocks: NonZeroU64,
+    /// Maximum number of peers to sample with `GetTip` on each poll.
+    pub max_peers_to_sample: NonZeroUsize,
+}
+
+impl Default for TipPollConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            lag_threshold_blocks: NonZeroU64::new(3).unwrap(),
+            max_peers_to_sample: NonZeroUsize::new(5).unwrap(),
         }
     }
 }

@@ -274,6 +274,33 @@ where
         metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
     }
 
+    async fn sample_tips(&self, max_peers: usize) -> Vec<GetTipResponse> {
+        let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
+            Ok(peers) => peers,
+            Err(e) => {
+                tracing::warn!("tip poll: failed to fetch connected peers: {e}");
+                return Vec::new();
+            }
+        };
+
+        let sampled: Vec<PeerId> = connected_peers
+            .into_iter()
+            .choose_multiple(&mut thread_rng(), max_peers);
+
+        if sampled.is_empty() {
+            tracing::debug!("tip poll: no connected peers to sample");
+            return Vec::new();
+        }
+
+        let requests = sampled.into_iter().map(|peer| self.request_tip(peer));
+
+        futures::future::join_all(requests)
+            .await
+            .into_iter()
+            .filter_map(Result::ok)
+            .collect()
+    }
+
     async fn request_blocks_from_peer(
         &self,
         peer: Self::PeerId,

@@ -22,10 +22,11 @@ use lb_core::{
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
+use lb_cryptarchia_sync::GetTipResponse;
 pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
-use lb_time_service::TimeService;
+use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
@@ -46,7 +47,7 @@ use tracing_futures::Instrument as _;
 
 pub use crate::{
     bootstrap::config::{BootstrapConfig, IbdConfig},
-    sync::config::{OrphanConfig, SyncConfig},
+    sync::config::{OrphanConfig, SyncConfig, TipPollConfig},
 };
 use crate::{
     bootstrap::ibd::InitialBlockDownload,
@@ -300,10 +301,52 @@ where
         let mut incoming_proposals = network_adapter.proposals_stream().await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
+        // Keep a handle to the adapter for the proactive tip-poll watchdog before
+        // the downloader takes ownership of it.
+        let tip_poll_adapter = network_adapter.clone();
+
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
             network_adapter,
             sync_config.orphan.max_orphan_cache_size,
         ));
+
+        // Set up the proactive tip-poll lag watchdog: subscribe to slot ticks and
+        // derive the polling cadence / lag threshold from the active slot
+        // coefficient `f`. If it can't be derived (or polling is disabled), the
+        // watchdog stays inert and the slot-tick arm is gated off.
+        let mut slot_ticks = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(TimeServiceMessage::Subscribe { sender })
+                .await
+                .map_err(|(e, _)| {
+                    DynError::from(format!("failed to subscribe to slot ticks: {e}"))
+                })?;
+            receiver
+                .await
+                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?
+        };
+        let tip_poll_params = if sync_config.tip_poll.enabled {
+            match TipPollParams::derive(&sync_config.tip_poll, relays.cryptarchia()).await {
+                Ok(params) => {
+                    info!(
+                        target: LOG_TARGET,
+                        cadence_slots = params.cadence_slots,
+                        lag_threshold_slots = params.lag_threshold_slots,
+                        max_peers = params.max_peers,
+                        "Tip-poll lag watchdog enabled"
+                    );
+                    Some(params)
+                }
+                Err(e) => {
+                    error!(target: LOG_TARGET, %e, "Failed to derive tip-poll params; watchdog disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
         self.notify_service_ready();
 
@@ -353,6 +396,20 @@ where
                                 orphan_downloader.cancel_active_download();
                             }
                         }
+                    }
+
+                    Some(tick) = slot_ticks.next(), if tip_poll_params.is_some() => {
+                        let params = tip_poll_params
+                            .as_ref()
+                            .expect("tip_poll_params is Some, guaranteed by the select arm condition");
+                        Self::poll_peer_tips_if_behind(
+                            &tip_poll_adapter,
+                            relays.cryptarchia(),
+                            orphan_downloader.as_mut().get_mut(),
+                            tick,
+                            params,
+                        )
+                        .await;
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
@@ -581,6 +638,86 @@ where
         );
     }
 
+    /// Proactive tip-poll lag watchdog.
+    ///
+    /// Fires on a slot-tick cadence (`params.cadence_slots`, ≈ one expected
+    /// block interval). When the local tip has fallen behind the current slot by
+    /// more than `params.lag_threshold_slots`, it samples a handful of peers
+    /// with `GetTip` and hands the most-advanced tip that is strictly ahead of
+    /// the local height to the orphan downloader, which performs the actual
+    /// catch-up download and full validation.
+    ///
+    /// Polled tips are unauthenticated peer hearsay, but enqueuing one only
+    /// triggers a download: every downloaded block still goes through normal
+    /// `apply_block` validation, and a bogus tip is dropped on download failure.
+    async fn poll_peer_tips_if_behind(
+        network_adapter: &NetAdapter,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+        tick: SlotTick,
+        params: &TipPollParams,
+    ) where
+        RuntimeServiceId: Send + Sync + 'static,
+    {
+        // Cadence gate: only act roughly once per expected block interval.
+        if u64::from(tick.slot) % params.cadence_slots != 0 {
+            return;
+        }
+
+        // Don't pile on while a catch-up download is already in flight.
+        if orphan_downloader.should_poll() {
+            return;
+        }
+
+        let info = match cryptarchia.info().await {
+            Ok(info) => info.cryptarchia_info,
+            Err(e) => {
+                warn!(target: LOG_TARGET, %e, "tip poll: failed to read local chain info");
+                return;
+            }
+        };
+
+        let current_slot = u64::from(tick.slot);
+        let tip_slot = u64::from(info.slot);
+        let lag = current_slot.saturating_sub(tip_slot);
+        if lag <= params.lag_threshold_slots {
+            return;
+        }
+
+        debug!(
+            target: LOG_TARGET,
+            lag, tip_slot, current_slot,
+            "Chain tip lagging; polling peers for their tip"
+        );
+        metrics::tip_poll_triggered_total();
+
+        let tips = network_adapter.sample_tips(params.max_peers).await;
+
+        // Pick the most-advanced reported tip that is strictly ahead of us.
+        let Some((height, _, tip)) = select_catchup_tip(tips, info.height) else {
+            debug!(
+                target: LOG_TARGET,
+                local_height = info.height,
+                "tip poll: no sampled peer reported a tip ahead of us"
+            );
+            return;
+        };
+
+        match orphan_downloader.enqueue_orphan(tip, info.tip, info.lib) {
+            Ok(()) => {
+                info!(
+                    target: LOG_TARGET,
+                    ?tip, height, local_height = info.height,
+                    "tip poll: enqueued peer tip for catch-up"
+                );
+                metrics::tip_poll_enqueued_total();
+            }
+            Err(e) => {
+                debug!(target: LOG_TARGET, %e, ?tip, "tip poll: did not enqueue polled tip");
+            }
+        }
+    }
+
     async fn handle_message(
         msg: Message<Mempool::Item>,
         relays: &ChainNetworkRelays<
@@ -610,6 +747,76 @@ where
                 }
             }
         }
+    }
+}
+
+/// From a set of polled tip responses, pick the most-advanced tip that is
+/// strictly ahead of `local_height`. Ties on height are broken by the higher
+/// slot. `Failure` responses are ignored. Returns `(height, slot, tip)`.
+fn select_catchup_tip(
+    tips: impl IntoIterator<Item = GetTipResponse>,
+    local_height: u64,
+) -> Option<(u64, Slot, HeaderId)> {
+    tips.into_iter()
+        .filter_map(|resp| match resp {
+            GetTipResponse::Tip { tip, slot, height } => Some((height, slot, tip)),
+            GetTipResponse::Failure(reason) => {
+                debug!(target: LOG_TARGET, %reason, "tip poll: peer reported failure");
+                None
+            }
+        })
+        .filter(|(height, _, _)| *height > local_height)
+        .max_by_key(|(height, slot, _)| (*height, u64::from(*slot)))
+}
+
+/// Derived parameters for the proactive tip-poll lag watchdog.
+struct TipPollParams {
+    /// Act every this many slots (≈ one expected block interval, `1/f`).
+    cadence_slots: u64,
+    /// Lag, in slots, beyond which we proactively poll peers for their tip.
+    lag_threshold_slots: u64,
+    /// Maximum number of peers to sample with `GetTip` per poll.
+    max_peers: usize,
+}
+
+impl TipPollParams {
+    /// Derive the polling cadence and lag threshold from the active slot
+    /// coefficient `f`. The expected number of slots between blocks is `1/f`, so
+    /// the cadence is `ceil(1/f)` slots and the lag threshold is
+    /// `lag_threshold_blocks` such intervals.
+    async fn derive<Cryptarchia, RuntimeServiceId>(
+        config: &TipPollConfig,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) -> Result<Self, DynError>
+    where
+        Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
+        RuntimeServiceId: Sync,
+    {
+        let (_, consensus_config) = cryptarchia
+            .get_epoch_config()
+            .await
+            .map_err(|e| DynError::from(format!("failed to fetch epoch config: {e}")))?;
+
+        // `f = numerator / denominator`, so `1/f = denominator / numerator`.
+        // Compute `ceil(1/f)` with integer arithmetic to avoid float casts.
+        let coeff = consensus_config.slot_activation_coeff();
+        let numerator = u64::from(coeff.numerator);
+        let denominator = u64::from(coeff.denominator.get());
+        if numerator == 0 {
+            return Err(DynError::from(
+                "active slot coefficient f must be > 0 for tip polling",
+            ));
+        }
+
+        let cadence_slots = denominator.div_ceil(numerator).max(1);
+        let lag_threshold_slots =
+            cadence_slots.saturating_mul(config.lag_threshold_blocks.get());
+
+        Ok(Self {
+            cadence_slots,
+            lag_threshold_slots,
+            max_peers: config.max_peers_to_sample.get(),
+        })
     }
 }
 
@@ -916,5 +1123,51 @@ mod tests {
 
         assert!(matches!(result, Err(Error::InvalidBlock(_))));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    fn tip(height: u64, slot: u64, id: u8) -> GetTipResponse {
+        GetTipResponse::Tip {
+            tip: HeaderId::from([id; 32]),
+            slot: Slot::new(slot),
+            height,
+        }
+    }
+
+    #[test]
+    fn select_catchup_tip_ignores_tips_at_or_below_local_height() {
+        let tips = vec![tip(10, 100, 1), tip(9, 200, 2)];
+        // local height is 10: nothing strictly ahead.
+        assert!(select_catchup_tip(tips, 10).is_none());
+    }
+
+    #[test]
+    fn select_catchup_tip_picks_highest_then_breaks_ties_by_slot() {
+        let tips = vec![
+            tip(12, 100, 1),
+            tip(15, 300, 2), // highest height
+            tip(15, 400, 3), // same height, higher slot -> winner
+            tip(14, 999, 4),
+        ];
+        let (height, slot, id) = select_catchup_tip(tips, 11).expect("a tip ahead exists");
+        assert_eq!(height, 15);
+        assert_eq!(slot, Slot::new(400));
+        assert_eq!(id, HeaderId::from([3; 32]));
+    }
+
+    #[test]
+    fn select_catchup_tip_skips_failures() {
+        let tips = vec![
+            GetTipResponse::Failure("busy".to_owned()),
+            tip(20, 500, 7),
+            GetTipResponse::Failure("nope".to_owned()),
+        ];
+        let (height, _, id) = select_catchup_tip(tips, 5).expect("a tip ahead exists");
+        assert_eq!(height, 20);
+        assert_eq!(id, HeaderId::from([7; 32]));
+    }
+
+    #[test]
+    fn select_catchup_tip_empty_is_none() {
+        assert!(select_catchup_tip(Vec::new(), 0).is_none());
     }
 }
