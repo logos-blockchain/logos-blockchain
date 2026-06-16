@@ -1,6 +1,10 @@
-// When `testing-disable-proposal-publish` is on, some functions and struct
-// fields are not used.
-#![cfg_attr(feature = "testing-disable-proposal-publish", allow(dead_code))]
+#![cfg_attr(
+    feature = "testing-disable-proposal-publish",
+    allow(
+        dead_code,
+        reason = "with proposal publishing disabled for testing, some functions and struct fields are unused"
+    )
+)]
 
 use std::marker::PhantomData;
 
