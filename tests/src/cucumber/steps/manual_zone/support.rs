@@ -51,7 +51,7 @@ use tracing::warn;
 use super::runner::{
     self, ChannelUpdate, Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx, PendingTx,
     PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerClient, SequencerConfig,
-    TurnNotification, WithdrawArg,
+    TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
 };
 use crate::common::{
     chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
@@ -172,6 +172,7 @@ pub struct PolicyRuntime {
     pub ready_rx: tokio::sync::watch::Receiver<bool>,
     pub channel_view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
     pub turn_to_write_rx: tokio::sync::watch::Receiver<TurnNotification>,
+    pub tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
 }
 
 fn to_policy_runtime(rt: runner::Runtime<ZoneNodeHttpClient>) -> PolicyRuntime {
@@ -183,6 +184,7 @@ fn to_policy_runtime(rt: runner::Runtime<ZoneNodeHttpClient>) -> PolicyRuntime {
         ready_rx: rt.ready_rx,
         channel_view_rx: rt.channel_view_rx,
         turn_to_write_rx: rt.turn_to_write_rx,
+        tx_status_rx: rt.tx_status_rx,
     }
 }
 
@@ -546,14 +548,16 @@ pub async fn publish_message_with_retry(
 }
 
 /// Waits until the sequencer's event stream surfaces the payload in
-/// [`ChannelUpdate::adopted`] — i.e. the inscription was published and
+/// [`ChannelUpdate::adopted`] while collecting any mempool-pending events
+/// passed on the same event stream — i.e. the inscription was published and
 /// landed on the canonical chain. This is the end-to-end signal a real
 /// SDK consumer would observe.
-pub async fn wait_for_adopted_payload(
+pub async fn wait_for_adopted_payload_and_collect_mempool_pending(
     events: &mut tokio::sync::broadcast::Receiver<Event>,
     data: &[u8],
     duration: Duration,
-) -> Result<PublishResult, ZoneTestError> {
+) -> Result<(PublishResult, HashSet<InscriptionId>), ZoneTestError> {
+    let mut mempool_pending = HashSet::new();
     timeout(duration, async {
         loop {
             let event = match events.recv().await {
@@ -566,14 +570,21 @@ pub async fn wait_for_adopted_payload(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
+            if let Event::MempoolPending(tx_hash) = event {
+                mempool_pending.insert(tx_hash);
+                continue;
+            }
             let Event::BlocksProcessed { channel_update, .. } = event else {
                 continue;
             };
             for info in channel_update.adopted {
                 if info.payload.as_slice() == data {
-                    return Ok(PublishResult {
-                        tx: PendingTx::Inscription(info),
-                    });
+                    return Ok((
+                        PublishResult {
+                            tx: PendingTx::Inscription(info),
+                        },
+                        mempool_pending,
+                    ));
                 }
             }
         }
@@ -583,16 +594,18 @@ pub async fn wait_for_adopted_payload(
 }
 
 /// Waits for every payload in `data` to appear in
-/// [`ChannelUpdate::adopted`].
-pub async fn wait_for_adopted_payloads(
+/// [`ChannelUpdate::adopted`], while collecting any mempool-pending events
+/// passed on the same event stream.
+pub async fn wait_for_adopted_payloads_and_collect_mempool_pending(
     events: &mut tokio::sync::broadcast::Receiver<Event>,
     data: &[Inscription],
     duration: Duration,
-) -> Result<Vec<PublishResult>, ZoneTestError> {
+) -> Result<(Vec<PublishResult>, HashSet<InscriptionId>), ZoneTestError> {
     timeout(duration, async {
         let mut results: Vec<Option<PublishResult>> =
             std::iter::repeat_with(|| None).take(data.len()).collect();
         let mut remaining = data.len();
+        let mut mempool_pending = HashSet::new();
 
         while remaining > 0 {
             let event = match events.recv().await {
@@ -605,6 +618,10 @@ pub async fn wait_for_adopted_payloads(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
+            if let Event::MempoolPending(tx_hash) = event {
+                mempool_pending.insert(tx_hash);
+                continue;
+            }
             let Event::BlocksProcessed { channel_update, .. } = event else {
                 continue;
             };
@@ -625,10 +642,44 @@ pub async fn wait_for_adopted_payloads(
             }
         }
 
-        Ok(results.into_iter().flatten().collect())
+        Ok((results.into_iter().flatten().collect(), mempool_pending))
     })
     .await
     .map_err(|_| ZoneTestError::PublishTimeout)?
+}
+
+pub async fn wait_for_tx_status_lifecycle(
+    tx_status_rx: &mut tokio::sync::broadcast::Receiver<TxStatusUpdate>,
+    tx_hashes: &[InscriptionId],
+    statuses: &[TxStatus],
+    duration: Duration,
+) -> Result<(), ZoneTestError> {
+    let mut remaining: HashSet<(InscriptionId, TxStatus)> = tx_hashes
+        .iter()
+        .flat_map(|tx_hash| statuses.iter().map(move |status| (*tx_hash, *status)))
+        .collect();
+
+    timeout(duration, async {
+        while !remaining.is_empty() {
+            let update = match tx_status_rx.recv().await {
+                Ok(update) => update,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("tx-status subscriber lagged by {n}, recovering");
+                    continue;
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                    return Err(ZoneTestError::SequencerStopped);
+                }
+            };
+            remaining.remove(&(update.tx_hash, update.status));
+            if remaining.is_empty() {
+                return Ok(());
+            }
+        }
+        Ok(())
+    })
+    .await
+    .map_err(|_| ZoneTestError::IndexerTimeout)?
 }
 
 /// Waits until the subscribed channel view satisfies the supplied predicate.
@@ -926,32 +977,38 @@ pub async fn wait_for_withdraw(
 
 /// Waits until the sequencer's event stream surfaces the expected deposit
 /// in [`Event::BlocksProcessed::finalized`] (matched by `inputs`, `amount`,
-/// and `metadata`). Drains the events channel as it goes — call this
-/// after any earlier event consumers in the scenario have moved past the
-/// relevant publish events.
-pub async fn wait_for_finalized_deposit_via_sequencer(
+/// and `metadata`) while collecting any mempool-pending events. Drains the
+/// events channel as it goes — call this after any earlier event consumers in
+/// the scenario have moved past the relevant publish events.
+pub async fn wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending(
     events: &mut tokio::sync::broadcast::Receiver<Event>,
     expected: &DepositOp,
     expected_amount: Value,
     duration: Duration,
-) -> Result<(), ZoneTestError> {
-    poll_sequencer_finalized_until(events, duration, ZoneTestError::IndexerTimeout, |op| {
-        matches!(op, FinalizedOp::Deposit(d)
+) -> Result<HashSet<InscriptionId>, ZoneTestError> {
+    poll_sequencer_finalized_until_and_collect_mempool_pending(
+        events,
+        duration,
+        ZoneTestError::IndexerTimeout,
+        |op| {
+            matches!(op, FinalizedOp::Deposit(d)
             if d.inputs == expected.inputs
                 && d.amount == expected_amount
                 && d.metadata == expected.metadata)
-    })
+        },
+    )
     .await
 }
 
 /// Waits until the sequencer's event stream surfaces the expected withdraw
-/// (matched by `outputs`). Drains the events channel as it goes.
-pub async fn wait_for_finalized_withdraw_via_sequencer(
+/// (matched by `outputs`) while collecting any mempool-pending events. Drains
+/// the events channel as it goes.
+pub async fn wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending(
     events: &mut tokio::sync::broadcast::Receiver<Event>,
     expected: &ChannelWithdrawOp,
     duration: Duration,
-) -> Result<(), ZoneTestError> {
-    poll_sequencer_finalized_until(
+) -> Result<HashSet<InscriptionId>, ZoneTestError> {
+    poll_sequencer_finalized_until_and_collect_mempool_pending(
         events,
         duration,
         ZoneTestError::WithdrawTimeout,
@@ -960,13 +1017,14 @@ pub async fn wait_for_finalized_withdraw_via_sequencer(
     .await
 }
 
-async fn poll_sequencer_finalized_until(
+async fn poll_sequencer_finalized_until_and_collect_mempool_pending(
     events: &mut tokio::sync::broadcast::Receiver<Event>,
     duration: Duration,
     timeout_error: ZoneTestError,
     mut predicate: impl FnMut(&FinalizedOp) -> bool,
-) -> Result<(), ZoneTestError> {
+) -> Result<HashSet<InscriptionId>, ZoneTestError> {
     timeout(duration, async {
+        let mut mempool_pending = HashSet::new();
         loop {
             let event = match events.recv().await {
                 Ok(event) => event,
@@ -978,12 +1036,16 @@ async fn poll_sequencer_finalized_until(
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
+            if let Event::MempoolPending(tx_hash) = event {
+                mempool_pending.insert(tx_hash);
+                continue;
+            }
             let Event::BlocksProcessed { finalized, .. } = event else {
                 continue;
             };
             for tx in finalized {
                 if tx.ops.iter().any(&mut predicate) {
-                    return Ok(());
+                    return Ok(mempool_pending);
                 }
             }
         }

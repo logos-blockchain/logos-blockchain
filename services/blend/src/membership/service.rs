@@ -30,11 +30,11 @@ pub fn membership_info_from_epoch_state<NodeId>(
 where
     NodeId: node_id::TryFrom + Clone + Hash + Eq,
 {
-    let declarations = epoch_state.sdp.declarations();
-    let mut nodes: Vec<ZkNode<NodeId>> = declarations
+    let mut nodes: Vec<ZkNode<NodeId>> = epoch_state
+        .active_declarations
+        .for_service(&ServiceType::BlendNetwork)
         .iter()
-        .filter(|(service_type, _)| matches!(service_type, ServiceType::BlendNetwork))
-        .flat_map(|(_, declarations)| declarations.values())
+        .flat_map(|declarations| declarations.values())
         .filter_map(|declaration| {
             let provider_info = ProviderInfo {
                 locators: declaration.locators.clone(),

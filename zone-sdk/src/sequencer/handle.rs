@@ -23,7 +23,7 @@ use super::{
     },
     types::{
         AtomicWithdrawInfo, Error, InscriptionInfo, PendingTx, PublishResult, SequencerCheckpoint,
-        WithdrawArg, WithdrawInfo,
+        TxStatus, WithdrawArg, WithdrawInfo,
     },
     zone_sequencer::ZoneSequencer,
 };
@@ -118,6 +118,8 @@ where
         let state = self.sequencer.state.as_mut().unwrap();
         state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
         self.sequencer.last_msg_id = new_msg_id;
+        self.sequencer
+            .queue_tx_status(id, TxStatus::AcceptedLocally);
 
         // Queue the post into the in-flight batch pool only if it's our
         // turn — otherwise the tx sits in `state.pending` as `!posted` and
@@ -195,6 +197,8 @@ where
         state.submit_other(tx.clone());
         let parent_msg = self.sequencer.last_msg_id;
         self.sequencer.last_msg_id = msg_id;
+        self.sequencer
+            .queue_tx_status(id, TxStatus::AcceptedLocally);
 
         info!(target: TARGET,
             "Submitted tx including inscription {:?}",
@@ -280,6 +284,8 @@ where
         // Safe to unwrap — ensure_ready() guarantees state is initialized.
         let state = self.sequencer.state.as_mut().unwrap();
         state.submit_other(signed_tx.clone());
+        self.sequencer
+            .queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
 
@@ -410,6 +416,8 @@ where
             withdraw_infos.clone(),
         );
         self.sequencer.last_msg_id = msg_id;
+        self.sequencer
+            .queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         // Queue the post only if it's our turn — see `publish` for the
         // turn-gate rationale.

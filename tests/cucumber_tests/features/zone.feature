@@ -19,6 +19,11 @@ Feature: Zone SDK
       | MSG_3 | Third message  |
     Then all zone messages are safe in 120 seconds
     And all zone messages are finalized in 180 seconds
+    And sequencer "SEQ_A" emits the full transaction lifecycle for zone messages in 30 seconds:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
     And the zone indexer returns messages in this order:
       | alias |
       | MSG_1 |
@@ -123,6 +128,11 @@ Feature: Zone SDK
       | MSG_1 | a1   |
       | MSG_2 | a2   |
       | MSG_3 | a3   |
+    And sequencer "SEQ_A" emits the full transaction lifecycle for zone messages in 30 seconds:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
     Then the zone indexer returns messages in any order in 360 seconds:
       | alias |
       | MSG_1 |
@@ -264,6 +274,10 @@ Feature: Zone SDK
       | alias  |
       | MSG_B1 |
       | MSG_B2 |
+    And sequencer "SEQ_B" observed mempool pending events for zone messages:
+      | alias  |
+      | MSG_B1 |
+      | MSG_B2 |
     Then sequencer "SEQ_B" has 3 pending publish txs in 180 seconds
     Then sequencer "SEQ_B" has 1 pending publish txs in 180 seconds
     And the zone indexer returns messages in any order in 360 seconds:
@@ -310,6 +324,11 @@ Feature: Zone SDK
       | own_key_index | turn_to_write | pending_transactions | time_out |
       | 1             | NOT_OUR_TURN  | 3                    | 120      |
     And sequencer "SEQ_B" emits published events for queued zone messages on its turn in 180 seconds:
+      | alias  |
+      | MSG_C1 |
+      | MSG_C2 |
+      | MSG_C3 |
+    And sequencer "SEQ_B" observed mempool pending events for zone messages:
       | alias  |
       | MSG_C1 |
       | MSG_C2 |

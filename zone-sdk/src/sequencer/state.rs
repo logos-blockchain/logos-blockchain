@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use lb_core::{
     header::HeaderId,
@@ -10,7 +10,7 @@ use lb_core::{
 };
 use rpds::HashTrieSetSync;
 
-use super::types::{AtomicWithdrawInfo, InscriptionInfo, PendingTx, WithdrawInfo};
+use super::types::{AtomicWithdrawInfo, InscriptionInfo, PendingTx, TxSource, WithdrawInfo};
 
 /// Result of channel update detection — the linear block-level delta
 /// between two canonical chains.
@@ -54,6 +54,9 @@ pub struct TxState {
     pending_by_parent: HashMap<MsgId, Vec<TxHash>>,
     /// Non-inscription pending txs (e.g. `set_keys`).
     pending_other: HashMap<TxHash, SignedMantleTx>,
+    /// Bounded insertion-ordered tx hashes accepted locally by this sequencer
+    /// runtime or restored from its checkpoint.
+    local_txs: VecDeque<TxHash>,
     /// Per-block cumulative safe sets.
     block_states: BTreeMap<HeaderId, HashTrieSetSync<TxHash>>,
     /// Block parent relationships for pruning.
@@ -75,6 +78,7 @@ impl TxState {
             pending: HashMap::new(),
             pending_by_parent: HashMap::new(),
             pending_other: HashMap::new(),
+            local_txs: VecDeque::new(),
             block_states,
             parent_map: HashMap::new(),
             current_lib: lib,
@@ -122,6 +126,7 @@ impl TxState {
         withdraws: Option<Vec<WithdrawInfo>>,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
+        self.track_local_tx(tx_hash);
         self.pending_by_parent
             .entry(parent_msg)
             .or_default()
@@ -143,7 +148,24 @@ impl TxState {
     /// Submit a non-inscription tx for tracking (e.g. `set_keys`).
     pub fn submit_other(&mut self, signed_tx: SignedMantleTx) {
         let tx_hash = signed_tx.mantle_tx.hash();
+        self.track_local_tx(tx_hash);
         self.pending_other.insert(tx_hash, signed_tx);
+    }
+
+    fn track_local_tx(&mut self, tx_hash: TxHash) {
+        if !self.local_txs.contains(&tx_hash) {
+            self.local_txs.push_back(tx_hash);
+        }
+    }
+
+    pub fn prune_local_tx_tracking(&mut self, max_tracked: usize) {
+        while self.local_txs.len() > max_tracked {
+            self.local_txs.pop_front();
+        }
+    }
+
+    pub fn remove_local_tx(&mut self, tx_hash: &TxHash) {
+        self.local_txs.retain(|tracked| tracked != tx_hash);
     }
 
     /// Process a new block. Finalization is handled by backfill ground
@@ -326,18 +348,18 @@ impl TxState {
             return Vec::new();
         }
         let channel_tip = self.channel_tip_at(tip);
-        let on_branch: std::collections::HashSet<TxHash> = self
+        let on_branch: HashSet<TxHash> = self
             .collect_pending_suffix(channel_tip)
             .iter()
             .map(|i| i.tx_hash)
             .collect();
-        let safe: std::collections::HashSet<TxHash> = self
+        let safe: HashSet<TxHash> = self
             .block_states
             .get(&tip)
             .map(|s| s.iter().copied().collect())
             .unwrap_or_default();
 
-        let eligible: std::collections::HashSet<TxHash> = self
+        let eligible: HashSet<TxHash> = self
             .pending
             .keys()
             .filter(|h| !on_branch.contains(h) && !safe.contains(h))
@@ -350,7 +372,7 @@ impl TxState {
         // Find root parents: parent_msg values for eligible entries whose
         // parent is NOT the `this_msg` of another eligible entry. Sort for
         // determinism across HashMap iteration order.
-        let eligible_this_msgs: std::collections::HashSet<MsgId> = eligible
+        let eligible_this_msgs: HashSet<MsgId> = eligible
             .iter()
             .filter_map(|h| self.pending.get(h).map(|p| p.this_msg))
             .collect();
@@ -371,7 +393,7 @@ impl TxState {
         // BFS from each root parent via pending_by_parent; collect only
         // eligible entries in parent-first order.
         let mut ordered = Vec::with_capacity(eligible.len());
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::new();
         for root in root_parents {
             for info in self.collect_pending_suffix(root) {
                 if eligible.contains(&info.tx_hash) && seen.insert(info.tx_hash) {
@@ -418,6 +440,15 @@ impl TxState {
     #[must_use]
     pub fn pending_inscription(&self, tx_hash: &TxHash) -> Option<&PendingInscription> {
         self.pending.get(tx_hash)
+    }
+
+    #[must_use]
+    pub fn tx_source(&self, tx_hash: &TxHash) -> TxSource {
+        if self.local_txs.contains(tx_hash) {
+            TxSource::Local
+        } else {
+            TxSource::Other
+        }
     }
 
     /// Mark a pending inscription as posted. Returns true only for the first
@@ -551,10 +582,8 @@ impl TxState {
         let new_branch = self.collect_inscriptions_on_branch(new_tip);
         let old_branch = self.collect_inscriptions_on_branch(old_tip);
 
-        let new_chain: std::collections::HashSet<MsgId> =
-            new_branch.iter().map(|i| i.this_msg).collect();
-        let old_chain: std::collections::HashSet<MsgId> =
-            old_branch.iter().map(|i| i.this_msg).collect();
+        let new_chain: HashSet<MsgId> = new_branch.iter().map(|i| i.this_msg).collect();
+        let old_chain: HashSet<MsgId> = old_branch.iter().map(|i| i.this_msg).collect();
 
         let adopted: Vec<InscriptionInfo> = new_branch
             .iter()
@@ -584,7 +613,7 @@ impl TxState {
     /// Returns inscriptions in BFS order (parents before children).
     pub(crate) fn collect_pending_suffix(&self, from_msg: MsgId) -> Vec<InscriptionInfo> {
         let mut suffix = Vec::new();
-        let mut queue = std::collections::VecDeque::new();
+        let mut queue = VecDeque::new();
         queue.push_back(from_msg);
 
         while let Some(current) = queue.pop_front() {

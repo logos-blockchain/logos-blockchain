@@ -4452,6 +4452,7 @@ version = "0.1.2"
 dependencies = [
  "logos-blockchain-pol",
  "logos-blockchain-utils",
+ "rpds",
  "serde",
  "serde_with",
  "thiserror 2.0.18",

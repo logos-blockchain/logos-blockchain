@@ -3,11 +3,12 @@ pub mod time;
 
 use core::{fmt::Debug, hash::Hash};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     num::NonZero,
 };
 
 pub use config::*;
+use rpds::{HashTrieMapSync, HashTrieSetSync};
 use thiserror::Error;
 pub use time::{Epoch, EpochConfig, Slot};
 
@@ -135,9 +136,12 @@ where
 }
 
 #[derive(Clone, Debug)]
-pub struct Branches<Id> {
-    branches: HashMap<Id, Branch<Id>>,
-    tips: HashSet<Id>,
+pub struct Branches<Id>
+where
+    Id: Eq + Hash,
+{
+    branches: HashTrieMapSync<Id, Branch<Id>>,
+    tips: HashTrieSetSync<Id>,
     lib: Id,
 }
 
@@ -179,8 +183,8 @@ where
     Id: Eq + Hash + Copy,
 {
     pub fn from_lib(lib: Id, slot: Slot, length: u64) -> Self {
-        let mut branches = HashMap::new();
-        branches.insert(
+        let mut branches = HashTrieMapSync::new_sync();
+        branches.insert_mut(
             lib,
             Branch {
                 id: lib,
@@ -189,7 +193,8 @@ where
                 length,
             },
         );
-        let tips = HashSet::from([lib]);
+        let mut tips = HashTrieSetSync::new_sync();
+        tips.insert_mut(lib);
         Self {
             branches,
             tips,
@@ -216,10 +221,10 @@ where
             .checked_add(1)
             .expect("New branch height overflows.");
 
-        self.tips.remove(&parent);
-        self.tips.insert(header);
+        self.tips.remove_mut(&parent);
+        self.tips.insert_mut(header);
 
-        self.branches.insert(
+        self.branches.insert_mut(
             header,
             Branch {
                 id: header,
@@ -305,12 +310,6 @@ where
             }
         }
         *current
-    }
-
-    /// Shrink internal data structures to release unused capacity.
-    fn shrink(&mut self) {
-        self.branches.shrink_to_fit();
-        self.tips.shrink_to_fit();
     }
 }
 
@@ -489,7 +488,7 @@ where
 
     /// Remove all blocks of a fork from `tip` to `lca`, excluding `lca`.
     fn prune_fork(&mut self, &ForkDivergenceInfo { lca, tip }: &ForkDivergenceInfo<Id>) -> Vec<Id> {
-        let tip_removed = self.branches.tips.remove(&tip.id);
+        let tip_removed = self.branches.tips.remove_mut(&tip.id);
         if !tip_removed {
             tracing::error!(target: LOG_TARGET, "Fork tip {tip:#?} not found in the set of tips.");
         }
@@ -497,11 +496,12 @@ where
         let mut current_tip = tip.id;
         let mut removed_blocks = vec![];
         while current_tip != lca.id {
-            let Some(branch) = self.branches.branches.remove(&current_tip) else {
+            let Some(branch) = self.branches.branches.get(&current_tip).copied() else {
                 // If tip is not in branch set, it means this tip was sharing part of its
                 // history with another fork that has already been removed.
                 break;
             };
+            self.branches.branches.remove_mut(&current_tip);
             removed_blocks.push(branch.id);
             current_tip = branch.parent;
         }
@@ -517,21 +517,11 @@ where
     fn prune_immutable_blocks(&mut self) -> impl Iterator<Item = (Slot, Id)> + '_ {
         let mut block = self.lib_branch().parent;
         std::iter::from_fn(move || {
-            self.branches.branches.remove(&block).map(|branch| {
-                block = branch.parent;
-                (branch.slot, branch.id)
-            })
+            let branch = self.branches.branches.get(&block).copied()?;
+            self.branches.branches.remove_mut(&block);
+            block = branch.parent;
+            Some((branch.slot, branch.id))
         })
-    }
-
-    /// Shrink internal data structures to release unused capacity.
-    ///
-    /// This should be called after a significant number of blocks have been
-    /// pruned by [`Self::prune_fork`] and [`Self::prune_immutable_blocks`] to
-    /// free up memory. This should not be called frequently since it is an
-    /// expensive operation.
-    fn shrink(&mut self) {
-        self.branches.shrink();
     }
 
     pub const fn branches(&self) -> &Branches<Id> {
@@ -564,7 +554,6 @@ where
         self.state = State::Online;
         // Update the LIB to the current local chain's tip
         let pruned_blocks = self.update_lib();
-        self.shrink();
         (self, pruned_blocks)
     }
 

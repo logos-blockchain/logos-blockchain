@@ -36,8 +36,8 @@ pub struct MinStake {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
-    /// Maximum epochs during which an activity message must be sent
-    pub inactivity_period: NumberOfEpochs,
+    /// Maximum epochs during which an activity message must be sent.
+    pub inactivity_period: InactivityPeriod,
     /// Epochs after which a declaration can be safely deleted by Garbage
     /// Collection
     pub retention_period: NumberOfEpochs,
@@ -46,6 +46,56 @@ pub struct ServiceParameters {
 }
 
 pub type NumberOfEpochs = Epoch;
+
+/// Number of epochs without an activity message before a declaration is
+/// considered inactive
+///
+/// Invariant: must be at least [`SNAPSHOT_FINALIZATION_DELAY`].
+/// Otherwise, the declaration may be excluded from the active set before
+/// the [`Declaration::active`] value (refreshed by an activity message)
+/// is reflected in the next snapshot.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "NumberOfEpochs")]
+pub struct InactivityPeriod(NumberOfEpochs);
+
+impl InactivityPeriod {
+    pub const fn new(period: NumberOfEpochs) -> Result<Self, InactivityPeriodTooSmall> {
+        if period.into_inner() < SNAPSHOT_FINALIZATION_DELAY.into_inner() {
+            Err(InactivityPeriodTooSmall { period })
+        } else {
+            Ok(Self(period))
+        }
+    }
+
+    #[must_use]
+    pub const fn into_inner(self) -> NumberOfEpochs {
+        self.0
+    }
+}
+
+impl TryFrom<u32> for InactivityPeriod {
+    type Error = InactivityPeriodTooSmall;
+
+    fn try_from(period: u32) -> Result<Self, Self::Error> {
+        Self::new(period.into())
+    }
+}
+
+impl TryFrom<NumberOfEpochs> for InactivityPeriod {
+    type Error = InactivityPeriodTooSmall;
+
+    fn try_from(period: NumberOfEpochs) -> Result<Self, Self::Error> {
+        Self::new(period)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "inactivity_period must be >= SNAPSHOT_FINALIZATION_DELAY ({SNAPSHOT_FINALIZATION_DELAY:?}); got {period:?}"
+)]
+pub struct InactivityPeriodTooSmall {
+    pub period: NumberOfEpochs,
+}
 
 // TODO: Check spec for max limit once we migrate the SDP Declare op to use the
 // `NomEncode` and `NomDecode` traits.
@@ -189,8 +239,17 @@ pub struct Declaration {
     pub locked_note_id: NoteId,
     pub locators: Locators,
     pub zk_id: ZkPublicKey,
+    /// The epoch of the block that contained the declaration
     pub created: Epoch,
+    /// The latest epoch for which the active message was sent.
+    ///
+    /// This is used only for checking if the declaration should
+    /// be marked as inactive, not for checking if it becomes active.
+    /// Idle->Active transition must be handled by the `EpochState`
+    /// snapshot logic.
+    // TODO: Use Option<Epoch> with a better name.
     pub active: Epoch,
+    /// The epoch at which the declaration must be withdrawn
     pub withdrawn: Option<Epoch>,
     pub nonce: Nonce,
 }
@@ -228,6 +287,14 @@ impl Declarations {
         &self,
     ) -> impl Iterator<Item = (&ServiceType, &HashMap<DeclarationId, Declaration>)> {
         self.0.iter()
+    }
+
+    #[must_use]
+    pub fn for_service(
+        &self,
+        service_type: &ServiceType,
+    ) -> Option<&HashMap<DeclarationId, Declaration>> {
+        self.0.get(service_type)
     }
 }
 
