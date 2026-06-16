@@ -694,25 +694,11 @@ where
             return;
         }
 
-        let info = match cryptarchia.info().await {
-            Ok(info) => info.cryptarchia_info,
-            Err(e) => {
-                warn!(target: LOG_TARGET, %e, "tip poll: failed to read local chain info");
-                return;
-            }
-        };
-
-        let tip_slot = u64::from(info.slot);
-        let lag = current_slot.saturating_sub(tip_slot);
-        if lag <= params.lag_threshold_slots {
+        let Some(info) =
+            Self::lagging_local_info(cryptarchia, current_slot, params.lag_threshold_slots).await
+        else {
             return;
-        }
-
-        debug!(
-            target: LOG_TARGET,
-            lag, tip_slot, current_slot,
-            "Chain tip lagging; polling peers for their tip"
-        );
+        };
         metrics::tip_poll_triggered_total();
 
         let tips = network_adapter.sample_tips(params.max_peers).await;
@@ -737,6 +723,39 @@ where
         {
             debug!(target: LOG_TARGET, %e, "tip poll: select! loop has dropped the polled-tip receiver");
         }
+    }
+
+    /// Read the local chain info and return it only if the tip is lagging the
+    /// current slot by more than `lag_threshold_slots`. Returns `None` (and
+    /// logs) when the info can't be read or the node is keeping up.
+    async fn lagging_local_info(
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+        current_slot: u64,
+        lag_threshold_slots: u64,
+    ) -> Option<lb_chain_service::CryptarchiaInfo>
+    where
+        RuntimeServiceId: Send + Sync,
+    {
+        let info = match cryptarchia.info().await {
+            Ok(info) => info.cryptarchia_info,
+            Err(e) => {
+                warn!(target: LOG_TARGET, %e, "tip poll: failed to read local chain info");
+                return None;
+            }
+        };
+
+        let tip_slot = u64::from(info.slot);
+        let lag = current_slot.saturating_sub(tip_slot);
+        if lag <= lag_threshold_slots {
+            return None;
+        }
+
+        debug!(
+            target: LOG_TARGET,
+            lag, tip_slot, current_slot,
+            "Chain tip lagging; polling peers for their tip"
+        );
+        Some(info)
     }
 
     /// Hand a tip discovered by the watchdog to the orphan downloader and
