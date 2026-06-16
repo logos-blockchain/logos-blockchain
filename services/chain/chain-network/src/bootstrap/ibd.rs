@@ -1036,6 +1036,10 @@ mod tests {
             }
         }
 
+        async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
+            Box::new(futures::stream::empty())
+        }
+
         async fn request_blocks_from_peer(
             &self,
             peer: Self::PeerId,

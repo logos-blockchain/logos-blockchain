@@ -701,7 +701,11 @@ where
         };
         metrics::tip_poll_triggered_total();
 
-        let tips = network_adapter.sample_tips(params.max_peers).await;
+        let tips: Vec<GetTipResponse> = network_adapter
+            .sample_tips(params.max_peers)
+            .await
+            .collect()
+            .await;
 
         // Pick the most-advanced reported tip that is strictly ahead of us.
         let Some((height, _, tip)) = select_catchup_tip(tips, info.height) else {

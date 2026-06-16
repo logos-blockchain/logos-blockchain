@@ -1,6 +1,6 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData, time::Instant};
 
-use futures::{FutureExt as _, TryStreamExt as _, future::select_ok};
+use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream::FuturesUnordered};
 use lb_chain_service_common::NetworkMessage;
 use lb_core::{
     block::{Block, Proposal},
@@ -274,12 +274,12 @@ where
         metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
     }
 
-    async fn sample_tips(&self, max_peers: usize) -> Vec<GetTipResponse> {
+    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
         let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!("tip poll: failed to fetch connected peers: {e}");
-                return Vec::new();
+                return Box::new(futures::stream::empty::<GetTipResponse>());
             }
         };
 
@@ -289,16 +289,37 @@ where
 
         if sampled.is_empty() {
             tracing::debug!("tip poll: no connected peers to sample");
-            return Vec::new();
+            return Box::new(futures::stream::empty::<GetTipResponse>());
         }
 
-        let requests = sampled.into_iter().map(|peer| self.request_tip(peer));
+        // Fire a GetTip request to each sampled peer, collecting the response
+        // receivers. Returning a stream over the (owned) receivers lets the
+        // caller drive the round-trips concurrently and consume tips as they
+        // resolve, rather than blocking on all of them here.
+        let mut receivers = Vec::with_capacity(sampled.len());
+        for peer in sampled {
+            let (reply_sender, receiver) = oneshot::channel();
+            if let Err((e, _)) = self
+                .network_relay
+                .send(NetworkMsg::Process(Command::ChainSync(
+                    ChainSyncCommand::RequestTip { peer, reply_sender },
+                )))
+                .await
+            {
+                tracing::debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                continue;
+            }
+            receivers.push(receiver);
+        }
 
-        futures::future::join_all(requests)
-            .await
-            .into_iter()
-            .filter_map(Result::ok)
-            .collect()
+        // `oneshot::Receiver` is itself a `Future`, so collecting the receivers
+        // into `FuturesUnordered` drives all the round-trips concurrently and
+        // yields each as it resolves. Drop receive/provider errors.
+        let responses: FuturesUnordered<_> = receivers.into_iter().collect();
+        let tips = futures::StreamExt::filter_map(responses, |res| {
+            std::future::ready(res.ok().and_then(Result::ok))
+        });
+        Box::new(Box::pin(tips))
     }
 
     async fn request_blocks_from_peer(
