@@ -1,7 +1,7 @@
 pub mod api;
 mod states;
 
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{collections::HashMap, num::NonZeroU64, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -382,6 +382,7 @@ where
         let mut lib_receiver = cryptarchia_api.subscribe_lib_updates().await?;
 
         let (epoch_config, consensus_config) = cryptarchia_api.get_epoch_config().await?;
+        let security_param = NonZeroU64::from(consensus_config.security_param()).get();
         let epoch_config = EpochConfig {
             epoch_config,
             consensus_config,
@@ -402,6 +403,7 @@ where
             lib,
             &lib_ledger,
             &service_resources_handle.state_updater,
+            security_param,
         );
         let voucher_master_key_id = settings.voucher_master_key_id;
 
@@ -1358,9 +1360,11 @@ where
             state.release_claim_reservation(*nullifier);
         }
 
+        let lib_blocks_count = lib_update.pruned_blocks.immutable_blocks.len() as u64;
         state.advance_lib(
             lib_update.new_lib,
             lib_update.pruned_blocks.all(),
+            lib_blocks_count,
             claimed_nullifiers,
         );
     }

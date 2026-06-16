@@ -1,7 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    time::{Duration, Instant},
-};
+use std::collections::{HashMap, HashSet};
 
 use lb_core::{
     header::HeaderId,
@@ -23,12 +20,10 @@ type VoucherIndex = u64;
 type VoucherId = (KeyId, VoucherIndex);
 pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
 
-const VOUCHER_PENDING_TIMEOUT: Duration = Duration::from_mins(1);
-
 #[derive(Debug, Clone)]
 struct PendingClaim {
     funding_notes: HashSet<NoteId>,
-    reserved_at: Instant,
+    lib_blocks_elapsed: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -38,7 +33,6 @@ struct PendingClaims {
 
 impl PendingClaims {
     fn reserve(&mut self, nullifier: VoucherNullifier) {
-        self.prune_expired();
         debug!(
             target: wallet::SERVICE,
             ?nullifier,
@@ -48,7 +42,7 @@ impl PendingClaims {
             nullifier,
             PendingClaim {
                 funding_notes: HashSet::new(),
-                reserved_at: Instant::now(),
+                lib_blocks_elapsed: 0,
             },
         );
     }
@@ -63,8 +57,7 @@ impl PendingClaims {
         }
     }
 
-    fn is_reserved(&mut self, nullifier: &VoucherNullifier) -> bool {
-        self.prune_expired();
+    fn is_reserved(&self, nullifier: &VoucherNullifier) -> bool {
         self.claims.contains_key(nullifier)
     }
 
@@ -73,7 +66,6 @@ impl PendingClaims {
         nullifier: VoucherNullifier,
         funding_notes: impl IntoIterator<Item = NoteId>,
     ) -> Result<(), WalletServiceError> {
-        self.prune_expired();
         let Some(claim) = self.claims.get_mut(&nullifier) else {
             return Err(WalletServiceError::ClaimReservationNotFound(nullifier));
         };
@@ -89,28 +81,32 @@ impl PendingClaims {
         Ok(())
     }
 
-    fn funding_notes(&mut self) -> Vec<NoteId> {
-        self.prune_expired();
-
+    fn funding_notes(&self) -> Vec<NoteId> {
         self.claims
             .values()
             .flat_map(|claim| claim.funding_notes.iter().copied())
             .collect()
     }
 
-    fn prune_expired(&mut self) {
-        let now = Instant::now();
+    fn advance_lib(&mut self, lib_blocks: u64, expiry_blocks: u64) {
+        if lib_blocks == 0 {
+            return;
+        }
+
         let before_count = self.claims.len();
 
         self.claims.retain(|nullifier, claim| {
-            let expired = now.duration_since(claim.reserved_at) >= VOUCHER_PENDING_TIMEOUT;
+            claim.lib_blocks_elapsed = claim.lib_blocks_elapsed.saturating_add(lib_blocks);
+
+            let expired = claim.lib_blocks_elapsed >= expiry_blocks;
 
             if expired {
                 debug!(
                     target: wallet::SERVICE,
                     ?nullifier,
-                    "Removing expired pending claim reservation (timeout: {:?})",
-                    VOUCHER_PENDING_TIMEOUT
+                    lib_blocks_elapsed = claim.lib_blocks_elapsed,
+                    expiry_blocks,
+                    "Removing pending claim reservation after LIB progress"
                 );
             }
 
@@ -120,7 +116,7 @@ impl PendingClaims {
         if before_count != self.claims.len() {
             debug!(
                 target: wallet::SERVICE,
-                "Cleaned {} expired pending claim reservation(s)",
+                "Cleaned {} pending claim reservation(s) after LIB progress",
                 before_count - self.claims.len()
             );
         }
@@ -161,6 +157,7 @@ pub struct ServiceState<'u> {
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
     pending_claims: PendingClaims,
+    security_param: u64,
 }
 
 impl<'u> ServiceState<'u> {
@@ -170,6 +167,7 @@ impl<'u> ServiceState<'u> {
         lib: HeaderId,
         lib_ledger: &LedgerState,
         updater: &'u StateUpdater<Option<RecoveryState>>,
+        security_param: u64,
     ) -> Self {
         let RecoveryState {
             next_new_voucher_index,
@@ -201,6 +199,7 @@ impl<'u> ServiceState<'u> {
             lib: wallet_lib,
             updater,
             pending_claims,
+            security_param,
         }
     }
 
@@ -230,11 +229,14 @@ impl<'u> ServiceState<'u> {
         &mut self,
         new_lib: HeaderId,
         pruned_blocks: impl IntoIterator<Item = HeaderId>,
+        lib_blocks_count: u64,
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
     ) {
         self.lib = new_lib;
         self.wallet.prune_states(pruned_blocks);
         self.wallet.prune_vouchers(pruned_nullifiers);
+        self.pending_claims
+            .advance_lib(lib_blocks_count, self.security_param);
         self.update_state();
     }
 
@@ -285,7 +287,7 @@ impl<'u> ServiceState<'u> {
             .reserve_funding_notes(nullifier, funding_notes)
     }
 
-    pub fn pending_claim_funding_notes(&mut self) -> Vec<NoteId> {
+    pub fn pending_claim_funding_notes(&self) -> Vec<NoteId> {
         self.pending_claims.funding_notes()
     }
 
@@ -301,5 +303,36 @@ impl<'u> ServiceState<'u> {
             lib_wallet_state: Some((self.lib, lib_wallet_state)),
             pending_claims: self.pending_claims.clone(),
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EXPIRY_BLOCKS: u64 = 4;
+
+    #[test]
+    fn pending_claim_does_not_expire_without_lib_progress() {
+        let nullifier = VoucherNullifier::default();
+        let mut pending_claims = PendingClaims::default();
+
+        pending_claims.reserve(nullifier);
+        pending_claims.advance_lib(0, EXPIRY_BLOCKS);
+
+        assert!(pending_claims.is_reserved(&nullifier));
+    }
+
+    #[test]
+    fn pending_claim_expires_after_enough_lib_progress() {
+        let nullifier = VoucherNullifier::default();
+        let mut pending_claims = PendingClaims::default();
+
+        pending_claims.reserve(nullifier);
+        pending_claims.advance_lib(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
+        assert!(pending_claims.is_reserved(&nullifier));
+
+        pending_claims.advance_lib(1, EXPIRY_BLOCKS);
+        assert!(!pending_claims.is_reserved(&nullifier));
     }
 }
