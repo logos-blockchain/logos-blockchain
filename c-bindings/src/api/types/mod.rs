@@ -3,3 +3,4 @@ pub mod claimable_vouchers;
 pub mod config;
 pub mod known_addresses;
 pub mod value;
+pub mod wallet_notes;
