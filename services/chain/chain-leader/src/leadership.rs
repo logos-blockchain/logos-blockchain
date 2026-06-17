@@ -375,12 +375,13 @@ async fn scan_epoch_winning_slots<RuntimeServiceId>(
         .into();
     let epoch_last_slot = epoch_first_slot
         .checked_add(slots_per_epoch)
-        .expect("Epoch slot calculation overflow.");
+        .expect("Epoch slot calculation overflow.")
+        - 1;
     // Skip slots earlier than the start slot: a mid-epoch subscriber does not
     // waste work on slots it has already passed.
     let scan_starting_slot = u64::from(start_slot).max(epoch_first_slot);
 
-    for slot in scan_starting_slot..epoch_last_slot {
+    for slot in scan_starting_slot..=epoch_last_slot {
         for UtxoWithKeyId { utxo, key_id } in eligible_utxos {
             let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), latest_tree);
             if !kms
