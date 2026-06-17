@@ -97,43 +97,93 @@ pub struct InactivityPeriodTooSmall {
     pub period: NumberOfEpochs,
 }
 
-pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
-
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
-pub struct Locator(Multiaddr);
+struct BoundedMultiaddr<const MAX_SIZE: usize>(Multiaddr);
 
-impl Locator {
-    #[must_use]
-    pub const fn new_unchecked(addr: Multiaddr) -> Self {
-        Self(addr)
-    }
-
-    #[must_use]
-    pub fn into_inner(self) -> Multiaddr {
-        self.0
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.0.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl AsRef<Multiaddr> for Locator {
+impl<const MAX_SIZE: usize> AsRef<Multiaddr> for BoundedMultiaddr<MAX_SIZE> {
     fn as_ref(&self) -> &Multiaddr {
         &self.0
     }
 }
 
+impl<const MAX_SIZE: usize> TryFrom<Multiaddr> for BoundedMultiaddr<MAX_SIZE> {
+    type Error = String;
+
+    fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
+        if value.len() > MAX_SIZE {
+            return Err(format!(
+                "Multiaddr must not exceed {MAX_LOCATOR_BYTE_SIZE} bytes: {value}"
+            ));
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl<const MAX_SIZE: usize> TryFrom<Vec<u8>> for BoundedMultiaddr<MAX_SIZE> {
+    type Error = String;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let multiaddr =
+            Multiaddr::try_from(value).map_err(|e| format!("Invalid multiaddr: {e}"))?;
+        Self::try_from(multiaddr)
+    }
+}
+
+impl<const MAX_SIZE: usize, const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>>
+    for BoundedMultiaddr<MAX_SIZE>
+{
+    type Error = String;
+
+    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
+        const {
+            assert!(
+                MAX <= MAX_LOCATOR_BYTE_SIZE,
+                "Max size cannot be more than the maximum allowed byte size for a multiaddr."
+            );
+        }
+        Self::try_from(value.into_inner())
+    }
+}
+
+pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "Multiaddr")]
+pub struct Locator(BoundedMultiaddr<MAX_LOCATOR_BYTE_SIZE>);
+
+impl Locator {
+    #[must_use]
+    pub const fn new_unchecked(addr: Multiaddr) -> Self {
+        Self(BoundedMultiaddr(addr))
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> Multiaddr {
+        self.0.0
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.0.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.0.is_empty()
+    }
+}
+
+impl AsRef<Multiaddr> for Locator {
+    fn as_ref(&self) -> &Multiaddr {
+        self.0.as_ref()
+    }
+}
+
 impl AsRef<[u8]> for Locator {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
+        self.0.as_ref().as_ref()
     }
 }
 
@@ -141,13 +191,10 @@ impl TryFrom<Multiaddr> for Locator {
     type Error = String;
 
     fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
-        if value.len() > MAX_LOCATOR_BYTE_SIZE {
-            return Err(format!(
-                "Locator multiaddr must not exceed {MAX_LOCATOR_BYTE_SIZE} bytes: {value}"
-            ));
-        }
+        let bounded_multiaddr = BoundedMultiaddr::<MAX_LOCATOR_BYTE_SIZE>::try_from(value.clone())
+            .map_err(|e| format!("Invalid multiaddr: {e}"))?;
 
-        for protocol in &value {
+        for protocol in bounded_multiaddr.as_ref() {
             match protocol {
                 Protocol::Ip4(ip) if ip.is_unspecified() => {
                     return Err(format!(
@@ -168,7 +215,7 @@ impl TryFrom<Multiaddr> for Locator {
             }
         }
 
-        Ok(Self(value))
+        Ok(Self(bounded_multiaddr))
     }
 }
 
@@ -209,7 +256,7 @@ impl FromStr for Locator {
 
 impl Display for Locator {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        self.0.0.fmt(f)
     }
 }
 
