@@ -21,8 +21,7 @@ mod test_utils;
 /// for each new data message (advancing the slot every `message_quota` proofs),
 /// so each message gets a distinct key nullifier. Backpressure on the
 /// underlying channel keeps the producer from materializing the whole epoch.
-pub type WinningPolInfoStream =
-    Pin<Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Send + Sync>>;
+pub type WinningPolInfoStream = Pin<Box<dyn Stream<Item = ProofOfLeadershipQuotaInputs> + Send>>;
 
 /// A single proof to be attached to one layer of a Blend message.
 pub struct BlendLayerProof {

@@ -51,35 +51,42 @@ where
             .ok()?;
         let winning_pol_epoch_slots_stream = receiver.await.ok()?;
         Some(Box::new(winning_pol_epoch_slots_stream.map(
-            |WinningPolEpochSlots { epoch, slots }| PolEpochInfo {
-                epoch,
-                winning_pol_info_stream: Box::pin(slots.map(|leader_private| {
-                    let PolWitnessInputsData {
-                        wallet:
-                            PolWalletInputsData {
-                                aged_path,
-                                aged_selectors,
-                                note_value,
-                                output_number,
-                                secret_key,
-                                transaction_hash,
-                                ..
-                            },
-                        chain: PolChainInputsData { slot_number, .. },
-                    } = leader_private.input();
+            |WinningPolEpochSlots { epoch, slots }| {
+                PolEpochInfo {
+                    epoch,
+                    // Just drive each per-slot future and drop the non-winners.
+                    winning_pol_info_stream: Box::pin(
+                        slots
+                            .filter_map(|winning_slot| winning_slot)
+                            .map(|leader_private| {
+                                let PolWitnessInputsData {
+                                    wallet:
+                                        PolWalletInputsData {
+                                            aged_path,
+                                            aged_selectors,
+                                            note_value,
+                                            output_number,
+                                            secret_key,
+                                            transaction_hash,
+                                            ..
+                                        },
+                                    chain: PolChainInputsData { slot_number, .. },
+                                } = leader_private.input();
 
-                    let aged_path_and_selectors =
-                        core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
+                                let aged_path_and_selectors =
+                                    core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
 
-                    ProofOfLeadershipQuotaInputs {
-                        aged_path_and_selectors,
-                        note_value: *note_value,
-                        output_number: *output_number,
-                        secret_key: *secret_key,
-                        slot: *slot_number,
-                        transaction_hash: *transaction_hash,
-                    }
-                })),
+                                ProofOfLeadershipQuotaInputs {
+                                    aged_path_and_selectors,
+                                    note_value: *note_value,
+                                    output_number: *output_number,
+                                    secret_key: *secret_key,
+                                    slot: *slot_number,
+                                    transaction_hash: *transaction_hash,
+                                }
+                            }),
+                    ),
+                }
             },
         )))
     }

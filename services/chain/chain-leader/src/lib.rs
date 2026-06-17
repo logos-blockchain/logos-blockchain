@@ -60,17 +60,29 @@ use crate::{
 
 /// The per-subscriber stream of per-epoch winning slots. Each item
 /// carries a single epoch and that epoch's stream of winning slots.
+///
+/// `Send` but not `Sync`: each item carries a [`WinningPolSlotStream`] of
+/// `Send`-only per-slot futures (see [`WinningSlotFuture`]), so the handoff is
+/// not `Sync`.
 pub type WinningPolEpochSlotsStream =
-    Pin<Box<dyn Stream<Item = WinningPolEpochSlots> + Send + Sync + Unpin>>;
+    Pin<Box<dyn Stream<Item = WinningPolEpochSlots> + Send + Unpin>>;
 
 pub struct WinningPolEpochSlots {
     pub epoch: Epoch,
     pub slots: WinningPolSlotStream,
 }
 
-/// A lazy stream of one epoch's winning-slot leadership private inputs (one
-/// item per winning slot), as handed to a Blend subscriber.
-pub type WinningPolSlotStream = Pin<Box<dyn Stream<Item = LeaderPrivate> + Send + Sync + Unpin>>;
+/// A single slot's leadership-proof work: a future resolving to that slot's
+/// leadership private inputs if it is a winning slot, or `None` otherwise.
+///
+/// Boxed `Send` (not `Sync`): the KMS adapter is `#[async_trait]`, so the
+/// futures it awaits are `Send`-only, which makes this future `!Sync`.
+pub type WinningSlotFuture = Pin<Box<dyn Future<Output = Option<LeaderPrivate>> + Send>>;
+
+/// A lazy stream of one epoch's per-slot leadership-proof work: one
+/// [`WinningSlotFuture`] per slot in the epoch's range. The consumer drives the
+/// futures and filters out the non-winning (`None`) slots.
+pub type WinningPolSlotStream = Pin<Box<dyn Stream<Item = WinningSlotFuture> + Send + Unpin>>;
 
 /// Number of epochs to buffer for late subscribers to the winning `PoL` slots
 /// stream. Subscribers will almost certainly consume each epoch at some point,
@@ -259,7 +271,6 @@ where
             >,
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
-        + Sync
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
     Mempool: MemPool<Item = SignedMantleTx>
@@ -528,7 +539,6 @@ where
             >,
         > + lb_blend_service::ServiceComponents<NodeId: Send + Sync>
         + Send
-        + Sync
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
     Mempool: MemPool<Item = SignedMantleTx>

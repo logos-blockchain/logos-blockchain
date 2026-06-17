@@ -45,7 +45,7 @@ pub trait LeaderProofsGenerator: Sized {
 
 pub struct RealLeaderProofsGenerator {
     pub(super) settings: ProofsGeneratorSettings,
-    proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send + Sync>>,
+    proofs_stream: Pin<Box<dyn Stream<Item = BlendLayerProof> + Send>>,
 }
 
 impl RealLeaderProofsGenerator {

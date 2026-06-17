@@ -215,9 +215,8 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>
-        + Send
-        + Sync,
+    ProofsGenerator:
+        CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
@@ -787,7 +786,7 @@ where
                                    + Sync
                                    + Unpin,
         > + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send + Sync,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
@@ -803,6 +802,10 @@ where
     let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
 
     loop {
+        // `old_epoch` captured here so we can drop the `Sync` requirement.
+        let old_epoch = old_epoch_crypto_processor
+            .as_ref()
+            .map(CoreCryptographicProcessor::epoch);
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
                 match msg {
@@ -828,9 +831,9 @@ where
                 recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, network_adapter, recovery_checkpoint).await;
             }
             Some((Some(processed_messages_to_release), previous_epoch)) = async {
-                match (&mut old_epoch_message_scheduler, &old_epoch_crypto_processor) {
-                    (Some(old_scheduler), Some(old_crypto_processor)) => {
-                        Some((old_scheduler.next().await, old_crypto_processor.epoch()))
+                match (&mut old_epoch_message_scheduler, old_epoch) {
+                    (Some(old_scheduler), Some(old_epoch)) => {
+                        Some((old_scheduler.next().await, old_epoch))
                     },
                     _ => None
                 }
@@ -936,7 +939,7 @@ async fn retire<
                                    + Unpin,
         > + Send
         + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send + Sync,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Send + Sync,
