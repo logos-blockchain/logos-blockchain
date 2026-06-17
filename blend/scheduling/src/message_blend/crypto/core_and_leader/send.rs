@@ -140,7 +140,7 @@ where
             PayloadType::Cover => {
                 for _ in 0..self.num_blend_layers.into() {
                     let Some(proof) = self.proofs_generator.get_next_core_proof().await else {
-                        return Err(Error::NoMoreProofOfQuotas);
+                        return Err(Error::ProofNotAvailable);
                     };
                     proofs.push(proof);
                 }
@@ -148,7 +148,7 @@ where
             PayloadType::Data => {
                 for _ in 0..self.num_blend_layers.into() {
                     let Some(proof) = self.proofs_generator.get_next_leader_proof().await else {
-                        return Err(Error::NoLeadershipInfoProvided);
+                        return Err(Error::ProofNotAvailable);
                     };
                     proofs.push(proof);
                 }

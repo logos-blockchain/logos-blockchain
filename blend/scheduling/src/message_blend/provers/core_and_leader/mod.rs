@@ -45,7 +45,8 @@ pub trait CoreAndLeaderProofsGenerator<CorePoQGenerator>: Sized {
     /// maximum core quota has already been reached for this epoch.
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof>;
     /// Request a new leadership proof from the prover. It returns `None` if no
-    /// secret `PoL` info has been provided for the current epoch.
+    /// secret `PoL` info has been provided for the current epoch or if all the
+    /// winning slots for the current epoch have been used up.
     async fn get_next_leader_proof(&mut self) -> Option<BlendLayerProof>;
 }
 
@@ -138,7 +139,7 @@ where
         let Some(leader_proofs_generator) = &mut self.leader_proofs_generator else {
             return None;
         };
-        let proof = leader_proofs_generator.get_next_proof().await;
+        let proof = leader_proofs_generator.get_next_proof().await?;
         tracing::trace!(
             target: LOG_TARGET,
             epoch = ?leader_proofs_generator.settings.epoch,

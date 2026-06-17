@@ -42,12 +42,12 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         Self
     }
 
-    async fn get_next_proof(&mut self) -> BlendLayerProof {
-        BlendLayerProof {
+    async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(BlendLayerProof {
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
-        }
+        })
     }
 }
 

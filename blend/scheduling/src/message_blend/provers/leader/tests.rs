@@ -33,7 +33,7 @@ async fn proof_generation() {
     );
 
     for _ in 0..leadership_quota {
-        let proof = leader_proofs_generator.get_next_proof().await;
+        let proof = leader_proofs_generator.get_next_proof().await.unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()

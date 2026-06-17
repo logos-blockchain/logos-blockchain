@@ -24,10 +24,8 @@ pub enum Error {
     SignatureVerificationFailed,
     #[error("Node is not a core node")]
     NotCoreNodeReceiver,
-    #[error("Node has generated the maximum number of allowed Proof of Quota this epoch")]
-    NoMoreProofOfQuotas,
-    #[error("Attempted to generate a leadership proof without any secret PoL info provided.")]
-    NoLeadershipInfoProvided,
+    #[error("Node could not generate enough proof of the required type")]
+    ProofNotAvailable,
     #[error("Invalid shared secret")]
     InvalidSharedSecret,
 }

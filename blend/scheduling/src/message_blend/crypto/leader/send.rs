@@ -80,7 +80,10 @@ where
         let mut proofs = Vec::with_capacity(self.num_blend_layers.get() as usize);
 
         for _ in 0..self.num_blend_layers.into() {
-            proofs.push(self.proofs_generator.get_next_proof().await);
+            let Some(proof) = self.proofs_generator.get_next_proof().await else {
+                return Err(Error::ProofNotAvailable);
+            };
+            proofs.push(proof);
         }
 
         let membership_size = self.membership.size();

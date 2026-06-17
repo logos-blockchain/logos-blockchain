@@ -41,8 +41,8 @@ impl LeaderProofsGenerator for MockLeaderProofsGenerator {
         Self
     }
 
-    async fn get_next_proof(&mut self) -> BlendLayerProof {
-        mock_blend_proof()
+    async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
     }
 }
 
