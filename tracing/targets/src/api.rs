@@ -8,6 +8,7 @@ log_targets! {
         PPROF,
         wallet::{
             BALANCE,
+            CLAIMABLE_VOUCHERS,
             TRANSFER_FUNDS,
         },
     },

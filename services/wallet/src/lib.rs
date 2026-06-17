@@ -162,6 +162,10 @@ pub enum WalletMsg {
         resp_tx:
             Sender<Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>>,
     },
+    GetClaimableVouchers {
+        tip: Option<HeaderId>,
+        resp_tx: Sender<Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletServiceError>>,
+    },
     GetKnownAddresses {
         resp_tx: Sender<Result<Vec<ZkPublicKey>, WalletServiceError>>,
     },
@@ -189,6 +193,12 @@ pub struct VoucherCommitmentAndNullifier {
     pub nullifier: VoucherNullifier,
 }
 
+#[derive(Debug)]
+pub struct ClaimableVoucherInfo {
+    pub commitment: VoucherCm,
+    pub nullifier: VoucherNullifier,
+}
+
 impl WalletMsg {
     /// Returns [`HeaderId`] of the tip if the message is associated
     /// with a specific tip.
@@ -200,6 +210,7 @@ impl WalletMsg {
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
             | Self::GetClaimableVoucher { tip, .. }
+            | Self::GetClaimableVouchers { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::SignTxWithEd25519 { .. }
             | Self::SignTxWithZk { .. }
@@ -557,6 +568,9 @@ where
             }
             WalletMsg::GetClaimableVoucher { tip, resp_tx } => {
                 Self::get_claimable_voucher(tip, resp_tx, state.wallet(), cryptarchia).await;
+            }
+            WalletMsg::GetClaimableVouchers { tip, resp_tx } => {
+                Self::get_claimable_vouchers(tip, resp_tx, state.wallet(), cryptarchia).await;
             }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
@@ -1037,6 +1051,50 @@ where
             }
         }
         None
+    }
+
+    async fn get_claimable_vouchers(
+        tip: Option<HeaderId>,
+        resp_tx: Sender<Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletServiceError>>,
+        wallet: &Wallet,
+        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
+    ) {
+        let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
+            Ok(tip) => tip,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
+        let response = Self::find_claimable_vouchers(wallet, tip).map(|vouchers| TipResponse {
+            tip,
+            response: vouchers,
+        });
+
+        if resp_tx.send(response).is_err() {
+            debug!(target: LOG_TARGET, "Failed to respond to GetClaimableVouchers");
+        }
+    }
+
+    fn find_claimable_vouchers(
+        wallet: &Wallet,
+        tip: HeaderId,
+    ) -> Result<Vec<ClaimableVoucherInfo>, WalletServiceError> {
+        wallet
+            .voucher_commitments_and_nullifiers()
+            .filter_map(|(nf, cm)| {
+                wallet
+                    .voucher_path_snapshot(tip, cm)
+                    .map_err(WalletServiceError::from)
+                    .transpose()
+                    .map(|path| {
+                        path.map(|_| ClaimableVoucherInfo {
+                            commitment: *cm,
+                            nullifier: *nf,
+                        })
+                    })
+            })
+            .collect()
     }
 
     async fn backfill_if_not_in_sync(
