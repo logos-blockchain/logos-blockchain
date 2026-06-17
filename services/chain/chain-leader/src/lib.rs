@@ -690,7 +690,11 @@ where
         #[cfg(not(feature = "testing-disable-proposal-publish"))]
         blend_adapter.publish_proposal(block.to_proposal()).await;
         #[cfg(feature = "testing-disable-proposal-publish")]
-        let _ = blend_adapter;
+        let _ = {
+            tracing::warn!(target: LOG_TARGET, "proposal publishing is disabled by the `testing-disable-proposal-publish` feature");
+            blend_adapter
+        };
+
         metrics::consensus_proposals_created_local();
     }
 
