@@ -382,8 +382,8 @@ async fn scan_epoch_winning_slots<RuntimeServiceId>(
     let scan_starting_slot = u64::from(start_slot).max(epoch_first_slot);
 
     for slot in scan_starting_slot..=epoch_last_slot {
+        let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), latest_tree);
         for UtxoWithKeyId { utxo, key_id } in eligible_utxos {
-            let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), latest_tree);
             if !kms
                 .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
                 .await
