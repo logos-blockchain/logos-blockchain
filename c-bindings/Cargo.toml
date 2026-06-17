@@ -21,7 +21,6 @@ lb-sdp-service                = { workspace = true }
 lb-utils                      = { workspace = true }
 lb-wallet-service             = { workspace = true }
 multiaddr                     = { workspace = true }
-num-bigint                    = { workspace = true }
 overwatch                     = { workspace = true }
 serde_json                    = { workspace = true }
 tempfile                      = { workspace = true }
