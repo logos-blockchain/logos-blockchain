@@ -25,7 +25,6 @@ use lb_node::{
     generic_services::{CryptarchiaService, WalletService as NodeWalletService},
 };
 use lb_wallet_service::{ClaimableVoucherInfo, TipResponse, api::WalletApi};
-use num_bigint::BigUint;
 use overwatch::services::status::ServiceStatus;
 
 use crate::{
@@ -745,11 +744,8 @@ pub unsafe extern "C" fn transfer_funds(
     } else {
         lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
     };
-    let change_public_key = {
-        let change_public_key_bytes =
-            unsafe { std::slice::from_raw_parts(arguments.change_public_key, 32) };
-        ZkPublicKey::from(BigUint::from_bytes_le(change_public_key_bytes))
-    };
+    let change_public_key =
+        unwrap_or_return_error!(unsafe { parse_public_key(arguments.change_public_key) });
     let funding_public_keys = {
         let funding_public_keys_pointers = unsafe {
             std::slice::from_raw_parts(
@@ -757,20 +753,17 @@ pub unsafe extern "C" fn transfer_funds(
                 arguments.funding_public_keys_len,
             )
         };
-        funding_public_keys_pointers
-            .iter()
-            .map(|funding_public_key_pointer| {
-                let funding_public_key_bytes =
-                    unsafe { std::slice::from_raw_parts(*funding_public_key_pointer, 32) };
-                ZkPublicKey::from(BigUint::from_bytes_le(funding_public_key_bytes))
-            })
-            .collect::<Vec<_>>()
+        unwrap_or_return_error!(
+            funding_public_keys_pointers
+                .iter()
+                .map(|funding_public_key_pointer| unsafe {
+                    parse_public_key(*funding_public_key_pointer)
+                })
+                .collect::<StatusResult<Vec<_>>>()
+        )
     };
-    let recipient_public_key = {
-        let recipient_public_key_bytes =
-            unsafe { std::slice::from_raw_parts(arguments.recipient_public_key, 32) };
-        ZkPublicKey::from(BigUint::from_bytes_le(recipient_public_key_bytes))
-    };
+    let recipient_public_key =
+        unwrap_or_return_error!(unsafe { parse_public_key(arguments.recipient_public_key) });
     let amount = Value::from(arguments.amount);
 
     let transaction = unwrap_or_return_error!(transfer_funds_sync(
@@ -794,12 +787,19 @@ pub unsafe extern "C" fn transfer_funds(
 
 /// Parses a 32-byte little-endian buffer into a [`ZkPublicKey`].
 ///
+/// Validates that the bytes encode a canonical field element (rather than
+/// silently reducing modulo the field order), matching the parsing used by
+/// [`get_balance`] and [`get_wallet_notes`].
+///
 /// # Safety
 ///
 /// `pointer` must be non-null and point to at least 32 readable bytes.
-unsafe fn parse_public_key(pointer: *const u8) -> ZkPublicKey {
+unsafe fn parse_public_key(pointer: *const u8) -> StatusResult<ZkPublicKey> {
     let bytes = unsafe { std::slice::from_raw_parts(pointer, 32) };
-    ZkPublicKey::from(BigUint::from_bytes_le(bytes))
+    fr_from_bytes(bytes).map(ZkPublicKey::new).map_err(|error| {
+        logging::error!("parse_public_key", "Invalid public key: {error:?}");
+        OperationStatus::DynError
+    })
 }
 
 pub type FfiChannelDepositResult = FfiStatusResult<Hash>;
@@ -852,6 +852,12 @@ impl ChannelDepositWithNotesArguments {
             return Err((
                 "ChannelDeposit contains a null `input_note_ids` pointer.".to_owned(),
                 OperationStatus::NullPointer,
+            ));
+        }
+        if self.input_note_ids_len == 0 {
+            return Err((
+                "ChannelDeposit requires at least one input note.".to_owned(),
+                OperationStatus::RuntimeError,
             ));
         }
         for i in 0..self.input_note_ids_len {
@@ -923,7 +929,7 @@ impl ChannelDepositWithNotesArguments {
 /// [`OperationStatus`] error on failure.
 pub(crate) fn channel_deposit_with_notes_sync(
     node: &LogosBlockchainNode,
-    tip: Option<lb_core::header::HeaderId>,
+    tip: lb_core::header::HeaderId,
     deposit: DepositOp,
     change_public_key: ZkPublicKey,
     funding_public_keys: Vec<ZkPublicKey>,
@@ -936,7 +942,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
 
         // Mirrors the node's `channel_deposit` handler: build -> fund -> check
         // fee -> sign -> submit.
-        let tx_context = api.get_tx_context(tip).await.map_err(|error| {
+        let tx_context = api.get_tx_context(Some(tip)).await.map_err(|error| {
             logging::error!(
                 "channel_deposit_with_notes_sync",
                 "Failed to get tx context: {error}"
@@ -956,7 +962,12 @@ pub(crate) fn channel_deposit_with_notes_sync(
             tip: funded_tip,
             response: funded_tx_builder,
         } = api
-            .fund_tx(tip, tx_builder, change_public_key, funding_public_keys)
+            .fund_tx(
+                Some(tip),
+                tx_builder,
+                change_public_key,
+                funding_public_keys,
+            )
             .await
             .map_err(|error| {
                 logging::error!(
@@ -1042,9 +1053,16 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
 
     let node = unsafe { &*node };
     let tip = if arguments.optional_tip.is_null() {
-        None
+        unwrap_or_return_error!(get_cryptarchia_info_sync(node), |_| {
+            logging::error!(
+                "channel_deposit_with_notes",
+                "Failed to get cryptarchia info. Aborting."
+            );
+        })
+        .cryptarchia_info
+        .tip
     } else {
-        Some(CoreHeaderId::from(unsafe { *arguments.optional_tip }))
+        CoreHeaderId::from(unsafe { *arguments.optional_tip })
     };
 
     let channel_id = {
@@ -1092,17 +1110,20 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
         metadata,
     };
 
-    let change_public_key = unsafe { parse_public_key(arguments.change_public_key) };
+    let change_public_key =
+        unwrap_or_return_error!(unsafe { parse_public_key(arguments.change_public_key) });
     let funding_public_key_pointers = unsafe {
         std::slice::from_raw_parts(
             arguments.funding_public_keys,
             arguments.funding_public_keys_len,
         )
     };
-    let funding_public_keys = funding_public_key_pointers
-        .iter()
-        .map(|pointer| unsafe { parse_public_key(*pointer) })
-        .collect::<Vec<_>>();
+    let funding_public_keys = unwrap_or_return_error!(
+        funding_public_key_pointers
+            .iter()
+            .map(|pointer| unsafe { parse_public_key(*pointer) })
+            .collect::<StatusResult<Vec<_>>>()
+    );
     let max_tx_fee = GasCost::new(arguments.max_tx_fee);
 
     let transaction = unwrap_or_return_error!(channel_deposit_with_notes_sync(
@@ -1307,6 +1328,15 @@ pub(crate) fn channel_deposit_sync(
 
         // 5. Assemble [transfer, deposit] in order and sign both ops with a single ZK
         //    signature by the funding key (which owns every input).
+        //
+        //    NOTE: we deliberately sign with `sign_tx_with_zk` (explicit keys) rather
+        //    than the usual `WalletApi::sign_tx`. `sign_tx` resolves each op's input
+        //    public keys from the *committed* ledger state, but the deposit consumes
+        //    the note this same transaction's transfer creates (it is not on-chain
+        //    yet), so `sign_tx` would fail with `MissingInputNote`. Both the transfer
+        //    inputs and the deposit's input note are owned by `funding_public_key`, so
+        //    one signature over the tx hash satisfies both op proofs. Do not "simplify"
+        //    this to `sign_tx`.
         let tx = MantleTx([Op::Transfer(transfer), Op::ChannelDeposit(deposit)].into());
         let tx_hash = tx.hash();
         let user_sig = api
@@ -1389,7 +1419,8 @@ pub unsafe extern "C" fn channel_deposit(
         };
         ChannelId::from(array)
     };
-    let funding_public_key = unsafe { parse_public_key(arguments.funding_public_key) };
+    let funding_public_key =
+        unwrap_or_return_error!(unsafe { parse_public_key(arguments.funding_public_key) });
     let amount = Value::from(arguments.amount);
 
     let metadata_bytes = if arguments.metadata_len == 0 {
