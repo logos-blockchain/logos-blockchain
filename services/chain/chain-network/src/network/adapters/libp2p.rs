@@ -1,6 +1,6 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData, time::Instant};
+use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
 
-use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream::FuturesUnordered};
+use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_chain_service_common::NetworkMessage;
 use lb_core::{
     block::{Block, Proposal},
@@ -275,11 +275,12 @@ where
     }
 
     async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
+        use futures::stream::StreamExt as FuturesStreamExt;
         let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
             Ok(peers) => peers,
             Err(e) => {
                 tracing::warn!("tip poll: failed to fetch connected peers: {e}");
-                return Box::new(futures::stream::empty::<GetTipResponse>());
+                return Box::new(stream::empty::<GetTipResponse>());
             }
         };
 
@@ -288,38 +289,38 @@ where
             .choose_multiple(&mut thread_rng(), max_peers);
 
         if sampled.is_empty() {
-            tracing::debug!("tip poll: no connected peers to sample");
-            return Box::new(futures::stream::empty::<GetTipResponse>());
+            debug!("tip poll: no connected peers to sample");
+            return Box::new(stream::empty::<GetTipResponse>());
         }
-
-        // Fire a GetTip request to each sampled peer, collecting the response
-        // receivers. Returning a stream over the (owned) receivers lets the
-        // caller drive the round-trips concurrently and consume tips as they
-        // resolve, rather than blocking on all of them here.
-        let mut receivers = Vec::with_capacity(sampled.len());
-        for peer in sampled {
-            let (reply_sender, receiver) = oneshot::channel();
-            if let Err((e, _)) = self
-                .network_relay
-                .send(NetworkMsg::Process(Command::ChainSync(
-                    ChainSyncCommand::RequestTip { peer, reply_sender },
-                )))
-                .await
-            {
-                tracing::debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
-                continue;
-            }
-            receivers.push(receiver);
-        }
-
-        // `oneshot::Receiver` is itself a `Future`, so collecting the receivers
-        // into `FuturesUnordered` drives all the round-trips concurrently and
-        // yields each as it resolves. Drop receive/provider errors.
-        let responses: FuturesUnordered<_> = receivers.into_iter().collect();
-        let tips = futures::StreamExt::filter_map(responses, |res| {
-            std::future::ready(res.ok().and_then(Result::ok))
-        });
-        Box::new(Box::pin(tips))
+        let result_stream = FuturesStreamExt::filter_map(
+            stream::iter(
+                sampled
+                    .into_iter()
+                    .zip(iter::repeat(self.network_relay.clone())),
+            ),
+            async |(peer, relay)| {
+                let (reply_sender, receiver) = oneshot::channel();
+                if let Err((e, _)) = relay
+                    .send(NetworkMsg::Process(Command::ChainSync(
+                        ChainSyncCommand::RequestTip { peer, reply_sender },
+                    )))
+                    .await
+                {
+                    debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                    None
+                } else {
+                    match receiver.await.ok() {
+                        None => None,
+                        Some(Err(e)) => {
+                            debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                            None
+                        }
+                        Some(Ok(tip)) => Some(tip),
+                    }
+                }
+            },
+        );
+        Box::new(Box::pin(result_stream))
     }
 
     async fn request_blocks_from_peer(
