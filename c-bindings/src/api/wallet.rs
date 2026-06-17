@@ -5,7 +5,7 @@ use lb_api_service::http::mempool;
 use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
-        MantleTx, Note, NoteId, Op, OpProof, SignedMantleTx, Transaction,
+        MantleTx, Note, NoteId as CoreNoteId, Op, OpProof, SignedMantleTx, Transaction,
         gas::{GasCost, MainnetGasConstants},
         ledger::{Inputs, Outputs},
         ops::{
@@ -30,7 +30,7 @@ use overwatch::services::status::ServiceStatus;
 use crate::{
     LogosBlockchainNode,
     api::{
-        cryptarchia::{Hash, HeaderId, get_cryptarchia_info_sync},
+        cryptarchia::{Hash, HeaderId, NoteId, get_cryptarchia_info_sync},
         types::{
             claimable_vouchers::{ClaimableVoucher, ClaimableVouchers},
             known_addresses::KnownAddresses,
@@ -49,7 +49,7 @@ pub type FfiClaimableVouchersResult = FfiStatusResult<ClaimableVouchers>;
 type WalletService = NodeWalletService<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>;
 
 /// Resolved tip plus the `(note ID, value)` pairs for a wallet address.
-type WalletNotesData = (lb_core::header::HeaderId, Vec<(NoteId, Value)>);
+type WalletNotesData = (lb_core::header::HeaderId, Vec<(CoreNoteId, Value)>);
 
 /// Gets the known wallet addresses from the wallet service.
 ///
@@ -816,9 +816,9 @@ pub struct ChannelDepositWithNotesArguments {
     pub optional_tip: *const HeaderId,
     /// The 32-byte channel ID to deposit into.
     pub channel_id: *const u8,
-    /// Array of pointers to 32-byte note IDs to deposit. Their combined value
-    /// is the deposited amount.
-    pub input_note_ids: *const *const u8,
+    /// Array of note IDs to deposit. Their combined value is the deposited
+    /// amount.
+    pub input_note_ids: *const NoteId,
     pub input_note_ids_len: usize,
     /// Optional metadata bytes attached to the deposit. May be null iff
     /// `metadata_len` is 0.
@@ -859,16 +859,6 @@ impl ChannelDepositWithNotesArguments {
                 "ChannelDeposit requires at least one input note.".to_owned(),
                 OperationStatus::RuntimeError,
             ));
-        }
-        for i in 0..self.input_note_ids_len {
-            let element_pointer = unsafe { self.input_note_ids.add(i) };
-            let note_id_pointer = unsafe { *element_pointer };
-            if note_id_pointer.is_null() {
-                return Err((
-                    format!("ChannelDeposit contains a null pointer at `input_note_ids[{i}]`."),
-                    OperationStatus::NullPointer,
-                ));
-            }
         }
         if self.metadata.is_null() && self.metadata_len != 0 {
             return Err((
@@ -1074,16 +1064,18 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
         ChannelId::from(array)
     };
 
-    let note_id_pointers = unsafe {
+    let input_note_ids = unsafe {
         std::slice::from_raw_parts(arguments.input_note_ids, arguments.input_note_ids_len)
     };
     let mut note_ids = Vec::with_capacity(arguments.input_note_ids_len);
-    for note_id_pointer in note_id_pointers {
-        let bytes = unsafe { std::slice::from_raw_parts(*note_id_pointer, 32) };
-        let note_id = unwrap_or_return_error!(fr_from_bytes(bytes).map(NoteId).map_err(|error| {
-            logging::error!("channel_deposit_with_notes", "Invalid note ID: {error:?}");
-            OperationStatus::DynError
-        }));
+    for note_id_bytes in input_note_ids {
+        let note_id =
+            unwrap_or_return_error!(fr_from_bytes(note_id_bytes).map(CoreNoteId).map_err(
+                |error| {
+                    logging::error!("channel_deposit_with_notes", "Invalid note ID: {error:?}");
+                    OperationStatus::DynError
+                }
+            ));
         note_ids.push(note_id);
     }
     let inputs = unwrap_or_return_error!(Inputs::try_new(note_ids).map_err(|error| {
@@ -1150,9 +1142,9 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
 /// Returns the selected note IDs and their combined value, or `None` if the
 /// supplied notes cannot cover `amount`.
 fn select_notes_covering(
-    mut notes: Vec<(NoteId, Value)>,
+    mut notes: Vec<(CoreNoteId, Value)>,
     amount: Value,
-) -> Option<(Vec<NoteId>, Value)> {
+) -> Option<(Vec<CoreNoteId>, Value)> {
     notes.sort_by_key(|(_, value)| std::cmp::Reverse(*value));
     let mut selected = Vec::new();
     let mut total: Value = 0;
@@ -1269,7 +1261,7 @@ pub(crate) fn channel_deposit_sync(
                 logging::error!("channel_deposit_sync", "Failed to get balance: {error}");
                 OperationStatus::DynError
             })?;
-        let notes: Vec<(NoteId, Value)> = balance
+        let notes: Vec<(CoreNoteId, Value)> = balance
             .response
             .map(|balance| balance.notes.into_iter().collect())
             .ok_or_else(|| {
