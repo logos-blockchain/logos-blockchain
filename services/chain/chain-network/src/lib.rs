@@ -22,11 +22,10 @@ use lb_core::{
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_cryptarchia_sync::GetTipResponse;
 pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
-use lb_time_service::{SlotTick, TimeService, TimeServiceMessage};
+use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
@@ -41,7 +40,11 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use tokio::{sync::oneshot, time::sleep};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+    time::sleep,
+};
 use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
@@ -53,7 +56,10 @@ use crate::{
     bootstrap::ibd::InitialBlockDownload,
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::ChainNetworkRelays,
-    sync::orphan_handler::OrphanBlocksDownloader,
+    sync::{
+        orphan_handler::OrphanBlocksDownloader,
+        tip_poll::{PolledTip, TipPollParams, poll_peer_tips_if_behind},
+    },
 };
 
 const SERVICE_ID: &str = "ChainNetwork";
@@ -348,9 +354,8 @@ where
             None
         };
 
-        let (polled_tip_tx, mut polled_tip_rx) =
-            tokio::sync::mpsc::channel::<PolledTip>(POLLED_TIP_CHANNEL_CAPACITY);
-        let mut tip_poll_task: Option<tokio::task::JoinHandle<()>> = None;
+        let (polled_tip_tx, mut polled_tip_rx) = mpsc::channel::<PolledTip>(32);
+        let mut tip_poll_task: Option<JoinHandle<()>> = None;
 
         self.notify_service_ready();
 
@@ -429,14 +434,15 @@ where
                         let cryptarchia = relays.cryptarchia().clone();
                         let tx = polled_tip_tx.clone();
                         tip_poll_task = Some(tokio::spawn(async move {
-                            Self::poll_peer_tips_if_behind(
+                            if let Some(polled) = poll_peer_tips_if_behind(
                                 &adapter,
                                 &cryptarchia,
                                 tick,
                                 &params,
-                                &tx,
                             )
-                            .await;
+                            .await && let Err(e) = tx.send(polled).await {
+                                error!(target: LOG_TARGET, %e, "the polled-tip receiver has been dropped");
+                            }
                         }));
                     }
 
@@ -666,102 +672,6 @@ where
         );
     }
 
-    /// Proactive tip-poll lag watchdog.
-    ///
-    /// Fires on a slot-tick cadence (`params.cadence_slots`, ≈ one expected
-    /// block interval). When the local tip has fallen behind the current slot
-    /// by more than `params.lag_threshold_slots`, it samples a handful of
-    /// peers with `GetTip` and hands the most-advanced tip that is strictly
-    /// ahead of the local height to the orphan downloader, which performs
-    /// the actual catch-up download and full validation.
-    ///
-    /// Polled tips are unauthenticated peer hearsay, but enqueuing one only
-    /// triggers a download: every downloaded block still goes through normal
-    /// `apply_block` validation, and a bogus tip is dropped on download
-    /// failure.
-    async fn poll_peer_tips_if_behind(
-        network_adapter: &NetAdapter,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-        tick: SlotTick,
-        params: &TipPollParams,
-        polled_tip_tx: &tokio::sync::mpsc::Sender<PolledTip>,
-    ) where
-        RuntimeServiceId: Send + Sync + 'static,
-    {
-        // Cadence gate: only act roughly once per expected block interval.
-        let current_slot = u64::from(tick.slot);
-        if current_slot % params.cadence_slots != 0 {
-            return;
-        }
-
-        let Some(info) =
-            Self::lagging_local_info(cryptarchia, current_slot, params.lag_threshold_slots).await
-        else {
-            return;
-        };
-        metrics::tip_poll_triggered_total();
-
-        let tips: Vec<GetTipResponse> = network_adapter
-            .sample_tips(params.max_peers)
-            .await
-            .collect()
-            .await;
-
-        // Pick the most-advanced reported tip that is strictly ahead of us.
-        let Some((height, _, tip)) = select_catchup_tip(tips, info.height) else {
-            debug!(
-                target: LOG_TARGET,
-                local_height = info.height,
-                "tip poll: no sampled peer reported a tip ahead of us"
-            );
-            return;
-        };
-
-        if let Err(e) = polled_tip_tx
-            .send(PolledTip {
-                tip,
-                height,
-                local: info,
-            })
-            .await
-        {
-            debug!(target: LOG_TARGET, %e, "tip poll: select! loop has dropped the polled-tip receiver");
-        }
-    }
-
-    /// Read the local chain info and return it only if the tip is lagging the
-    /// current slot by more than `lag_threshold_slots`. Returns `None` (and
-    /// logs) when the info can't be read or the node is keeping up.
-    async fn lagging_local_info(
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-        current_slot: u64,
-        lag_threshold_slots: u64,
-    ) -> Option<lb_chain_service::CryptarchiaInfo>
-    where
-        RuntimeServiceId: Send + Sync,
-    {
-        let info = match cryptarchia.info().await {
-            Ok(info) => info.cryptarchia_info,
-            Err(e) => {
-                warn!(target: LOG_TARGET, %e, "tip poll: failed to read local chain info");
-                return None;
-            }
-        };
-
-        let tip_slot = u64::from(info.slot);
-        let lag = current_slot.saturating_sub(tip_slot);
-        if lag <= lag_threshold_slots {
-            return None;
-        }
-
-        debug!(
-            target: LOG_TARGET,
-            lag, tip_slot, current_slot,
-            "Chain tip lagging; polling peers for their tip"
-        );
-        Some(info)
-    }
-
     /// Hand a tip discovered by the watchdog to the orphan downloader and
     /// record the outcome. `chosen_tip`/`chosen_height` describe the polled
     /// tip; `local` is the local chain info it is being caught up against.
@@ -817,84 +727,6 @@ where
                 }
             }
         }
-    }
-}
-
-/// From a set of polled tip responses, pick the most-advanced tip that is
-/// strictly ahead of `local_height`. Ties on height are broken by the higher
-/// slot. `Failure` responses are ignored. Returns `(height, slot, tip)`.
-fn select_catchup_tip(
-    tips: impl IntoIterator<Item = GetTipResponse>,
-    local_height: u64,
-) -> Option<(u64, Slot, HeaderId)> {
-    tips.into_iter()
-        .filter_map(|resp| match resp {
-            GetTipResponse::Tip { tip, slot, height } => Some((height, slot, tip)),
-            GetTipResponse::Failure(reason) => {
-                debug!(target: LOG_TARGET, %reason, "tip poll: peer reported failure");
-                None
-            }
-        })
-        .filter(|(height, _, _)| *height > local_height)
-        .max_by_key(|(height, slot, _)| (*height, u64::from(*slot)))
-}
-
-struct PolledTip {
-    tip: HeaderId,
-    height: u64,
-    local: lb_chain_service::CryptarchiaInfo,
-}
-
-const POLLED_TIP_CHANNEL_CAPACITY: usize = 32;
-
-/// Derived parameters for the proactive tip-poll lag watchdog.
-#[derive(Clone, Copy)]
-struct TipPollParams {
-    /// Act every this many slots (≈ one expected block interval, `1/f`).
-    cadence_slots: u64,
-    /// Lag, in slots, beyond which we proactively poll peers for their tip.
-    lag_threshold_slots: u64,
-    /// Maximum number of peers to sample with `GetTip` per poll.
-    max_peers: usize,
-}
-
-impl TipPollParams {
-    /// Derive the polling cadence and lag threshold from the active slot
-    /// coefficient `f`. The expected number of slots between blocks is `1/f`,
-    /// so the cadence is `ceil(1/f)` slots and the lag threshold is
-    /// `lag_threshold_blocks` such intervals.
-    async fn derive<Cryptarchia, RuntimeServiceId>(
-        config: &TipPollConfig,
-        cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
-    ) -> Result<Self, DynError>
-    where
-        Cryptarchia: CryptarchiaServiceData<Tx: Send + Sync>,
-        RuntimeServiceId: Sync,
-    {
-        let (_, consensus_config) = cryptarchia
-            .get_epoch_config()
-            .await
-            .map_err(|e| DynError::from(format!("failed to fetch epoch config: {e}")))?;
-
-        // `f = numerator / denominator`, so `1/f = denominator / numerator`.
-        // Compute `ceil(1/f)` with integer arithmetic to avoid float casts.
-        let coeff = consensus_config.slot_activation_coeff();
-        let numerator = u64::from(coeff.numerator);
-        let denominator = core::num::NonZeroU64::from(coeff.denominator).get();
-        if numerator == 0 {
-            return Err(DynError::from(
-                "active slot coefficient f must be > 0 for tip polling",
-            ));
-        }
-
-        let cadence_slots = denominator.div_ceil(numerator).max(1);
-        let lag_threshold_slots = cadence_slots.saturating_mul(config.lag_threshold_blocks.get());
-
-        Ok(Self {
-            cadence_slots,
-            lag_threshold_slots,
-            max_peers: config.max_peers_to_sample.get(),
-        })
     }
 }
 
@@ -1201,51 +1033,5 @@ mod tests {
 
         assert!(matches!(result, Err(Error::InvalidBlock(_))));
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    }
-
-    fn tip(height: u64, slot: u64, id: u8) -> GetTipResponse {
-        GetTipResponse::Tip {
-            tip: HeaderId::from([id; 32]),
-            slot: Slot::new(slot),
-            height,
-        }
-    }
-
-    #[test]
-    fn select_catchup_tip_ignores_tips_at_or_below_local_height() {
-        let tips = vec![tip(10, 100, 1), tip(9, 200, 2)];
-        // local height is 10: nothing strictly ahead.
-        assert!(select_catchup_tip(tips, 10).is_none());
-    }
-
-    #[test]
-    fn select_catchup_tip_picks_highest_then_breaks_ties_by_slot() {
-        let tips = vec![
-            tip(12, 100, 1),
-            tip(15, 300, 2), // highest height
-            tip(15, 400, 3), // same height, higher slot -> winner
-            tip(14, 999, 4),
-        ];
-        let (height, slot, id) = select_catchup_tip(tips, 11).expect("a tip ahead exists");
-        assert_eq!(height, 15);
-        assert_eq!(slot, Slot::new(400));
-        assert_eq!(id, HeaderId::from([3; 32]));
-    }
-
-    #[test]
-    fn select_catchup_tip_skips_failures() {
-        let tips = vec![
-            GetTipResponse::Failure("busy".to_owned()),
-            tip(20, 500, 7),
-            GetTipResponse::Failure("nope".to_owned()),
-        ];
-        let (height, _, id) = select_catchup_tip(tips, 5).expect("a tip ahead exists");
-        assert_eq!(height, 20);
-        assert_eq!(id, HeaderId::from([7; 32]));
-    }
-
-    #[test]
-    fn select_catchup_tip_empty_is_none() {
-        assert!(select_catchup_tip(Vec::new(), 0).is_none());
     }
 }
