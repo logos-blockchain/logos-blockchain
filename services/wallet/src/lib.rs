@@ -1080,19 +1080,21 @@ where
         wallet: &Wallet,
         tip: HeaderId,
     ) -> Result<Vec<ClaimableVoucherInfo>, WalletServiceError> {
-        wallet.voucher_commitments_and_nullifiers().try_fold(
-            Vec::new(),
-            |mut vouchers, (nf, cm)| {
-                if wallet.voucher_path_snapshot(tip, cm)?.is_some() {
-                    vouchers.push(ClaimableVoucherInfo {
-                        commitment: *cm,
-                        nullifier: *nf,
-                    });
-                }
-
-                Ok(vouchers)
-            },
-        )
+        wallet
+            .voucher_commitments_and_nullifiers()
+            .filter_map(|(nf, cm)| {
+                wallet
+                    .voucher_path_snapshot(tip, cm)
+                    .map_err(WalletServiceError::from)
+                    .transpose()
+                    .map(|path| {
+                        path.map(|_| ClaimableVoucherInfo {
+                            commitment: *cm,
+                            nullifier: *nf,
+                        })
+                    })
+            })
+            .collect()
     }
 
     async fn backfill_if_not_in_sync(
