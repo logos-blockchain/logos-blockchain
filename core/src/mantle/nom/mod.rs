@@ -106,7 +106,7 @@ impl NomDecode for Fr {
         Ok((
             bytes,
             fr_from_bytes(&inner)
-                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
     }
 }
@@ -156,7 +156,7 @@ impl NomDecode for Ed25519PublicKey {
         Ok((
             bytes,
             Self::from_bytes(&inner)
-                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
     }
 }

@@ -26,7 +26,7 @@ impl NomDecode for ProofOfQuota {
         Ok((
             bytes,
             Self::try_from(value)
-                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
     }
 }
@@ -48,7 +48,7 @@ impl NomDecode for ProofOfSelection {
         Ok((
             bytes,
             Self::try_from(value)
-                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
     }
 }

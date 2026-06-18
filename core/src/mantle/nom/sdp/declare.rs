@@ -1,8 +1,7 @@
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_utils::bounded_vec::BoundedVec;
 use nom::{
-    IResult, Parser as _,
-    combinator::{map, map_res},
+    IResult,
     error::{Error, ErrorKind},
 };
 
@@ -32,7 +31,7 @@ impl NomDecode for ServiceType {
         Ok((
             bytes,
             Self::try_from(value)
-                .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+                .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
     }
 }
@@ -55,7 +54,7 @@ impl NomDecode for Locator {
         Ok((
             bytes,
             Self::try_from(value)
-                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
     }
 }

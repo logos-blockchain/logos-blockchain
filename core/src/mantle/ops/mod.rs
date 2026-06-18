@@ -167,7 +167,7 @@ impl NomDecode for Op {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (input, opcode) = u8::decode(bytes)?;
+        let (bytes, opcode) = u8::decode(bytes)?;
 
         match opcode {
             INSCRIBE => {
@@ -191,9 +191,9 @@ impl NomDecode for Op {
                 SDPActiveOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPActive(op)))
             }
             // TODO: Use `.decode()` once implemented for all other ops
-            LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(input),
-            TRANSFER => map(decode_transfer, Self::Transfer).parse(input),
-            _ => Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
+            LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(bytes),
+            TRANSFER => map(decode_transfer, Self::Transfer).parse(bytes),
+            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
         }
     }
 }
