@@ -150,6 +150,7 @@ pub struct BlendBehaviourBuilder {
     peer_id: PeerId,
     membership: Membership<PeerId>,
     observation_window: Option<(Duration, RangeInclusive<u64>)>,
+    peering_degree: Option<RangeInclusive<usize>>,
 }
 
 impl BlendBehaviourBuilder {
@@ -158,6 +159,7 @@ impl BlendBehaviourBuilder {
             peer_id,
             membership,
             observation_window: None,
+            peering_degree: None,
         }
     }
 
@@ -170,16 +172,22 @@ impl BlendBehaviourBuilder {
         self
     }
 
+    pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
+        self.peering_degree = Some(peering_degree);
+        self
+    }
+
     pub fn build(self) -> BlendBehaviour<TestObservationWindowProvider> {
         let observation_window_values = self
             .observation_window
             .unwrap_or((Duration::from_secs(1), u64::MIN..=u64::MAX));
+        let peering_degree = self.peering_degree.unwrap_or(1..=100);
 
         BlendBehaviour {
             blend: NetworkBehaviour::new(
                 &Config {
                     with_core: CoreToCoreConfig {
-                        peering_degree: 1..=100,
+                        peering_degree,
                         minimum_network_size: 1.try_into().unwrap(),
                     },
                     with_edge: CoreToEdgeConfig {
