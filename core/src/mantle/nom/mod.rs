@@ -1,3 +1,4 @@
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use nom::{
@@ -166,5 +167,19 @@ impl NomDecode for ZkPublicKey {
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         map_res(Fr::decode, Self::try_from).parse(bytes)
+    }
+}
+
+impl NomEncode for Epoch {
+    fn encode(&self) -> Vec<u8> {
+        self.as_ref().encode()
+    }
+}
+
+impl NomDecode for Epoch {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        map(u32::decode, Self::new).parse(bytes)
     }
 }

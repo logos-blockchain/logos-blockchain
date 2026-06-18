@@ -31,10 +31,7 @@ use super::{
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        encoding::{
-            decode_leader_claim, decode_sdp_active, decode_transfer, encode_leader_claim,
-            encode_sdp_active, encode_transfer_op,
-        },
+        encoding::{decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op},
         nom::{NomDecode, NomEncode},
         ops::{
             internal::{OpDe, OpSer},
@@ -151,10 +148,10 @@ impl NomEncode for Op {
             Self::SDPWithdraw(op) => {
                 bytes.extend(op.encode());
             }
-            // TODO: Use `.encode()` once implemented for all other ops
             Self::SDPActive(op) => {
-                bytes.extend(encode_sdp_active(op));
+                bytes.extend(op.encode());
             }
+            // TODO: Use `.encode()` once implemented for all other ops
             Self::LeaderClaim(op) => {
                 bytes.extend(encode_leader_claim(op));
             }
@@ -179,8 +176,8 @@ impl NomDecode for Op {
             CHANNEL_WITHDRAW => map(ChannelWithdrawOp::decode, Self::ChannelWithdraw).parse(input),
             SDP_DECLARE => map(SDPDeclareOp::decode, Self::SDPDeclare).parse(input),
             SDP_WITHDRAW => map(SDPWithdrawOp::decode, Self::SDPWithdraw).parse(input),
+            SDP_ACTIVE => map(SDPActiveOp::decode, Self::SDPActive).parse(input),
             // TODO: Use `.decode()` once implemented for all other ops
-            SDP_ACTIVE => map(decode_sdp_active, Self::SDPActive).parse(input),
             LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(input),
             TRANSFER => map(decode_transfer, Self::Transfer).parse(input),
             _ => Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
