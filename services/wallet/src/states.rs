@@ -6,7 +6,7 @@ use lb_core::{
 };
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
-use lb_wallet::{KnownVoucher, Vouchers, WalletBlock, WalletError, WalletState};
+use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
 use overwatch::services::state::StateUpdater;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -17,12 +17,17 @@ type VoucherIndex = u64;
 type VoucherId = (KeyId, VoucherIndex);
 pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
 
-#[derive(Debug, Clone)]
-struct PendingClaim {
-    lib_blocks_elapsed: u64,
+pub struct ClaimableVouchers {
+    pub available: Vec<Voucher>,
+    pub pending: Vec<Voucher>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PendingClaim {
+    immutable_blocks_since_reservation: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct PendingClaims {
     claims: HashMap<VoucherNullifier, PendingClaim>,
 }
@@ -37,7 +42,7 @@ impl PendingClaims {
         self.claims.insert(
             nullifier,
             PendingClaim {
-                lib_blocks_elapsed: 0,
+                immutable_blocks_since_reservation: 0,
             },
         );
     }
@@ -56,24 +61,36 @@ impl PendingClaims {
         self.claims.contains_key(nullifier)
     }
 
-    fn advance_lib(&mut self, lib_blocks: u64, expiry_blocks: u64) {
-        if lib_blocks == 0 {
+    /// Evict reservations whose LIB-progress age reached the configured limit.
+    ///
+    /// Each LIB update adds `new_immutable_blocks_count` to every reservation's
+    /// `immutable_blocks_since_reservation` counter. A reservation expires once
+    /// that counter reaches `max_immutable_blocks_since_reservation`.
+    fn evict_expired(
+        &mut self,
+        new_immutable_blocks_count: u64,
+        max_immutable_blocks_since_reservation: u64,
+    ) {
+        if new_immutable_blocks_count == 0 {
             return;
         }
 
         let before_count = self.claims.len();
 
         self.claims.retain(|nullifier, claim| {
-            claim.lib_blocks_elapsed = claim.lib_blocks_elapsed.saturating_add(lib_blocks);
+            claim.immutable_blocks_since_reservation = claim
+                .immutable_blocks_since_reservation
+                .saturating_add(new_immutable_blocks_count);
 
-            let expired = claim.lib_blocks_elapsed >= expiry_blocks;
+            let expired =
+                claim.immutable_blocks_since_reservation >= max_immutable_blocks_since_reservation;
 
             if expired {
                 debug!(
                     target: wallet::SERVICE,
                     ?nullifier,
-                    lib_blocks_elapsed = claim.lib_blocks_elapsed,
-                    expiry_blocks,
+                    immutable_blocks_since_reservation = claim.immutable_blocks_since_reservation,
+                    max_immutable_blocks_since_reservation,
                     "Removing pending claim reservation after LIB progress"
                 );
             }
@@ -98,9 +115,9 @@ pub struct RecoveryState {
     /// [`WalletState`] at the last known LIB.
     /// `None` on fresh start; populated after the first LIB update.
     lib_wallet_state: Option<(HeaderId, WalletState)>,
-    // After restart we cannot know whether a reserved claim was submitted,
-    // accepted, or dropped, so recovering it could block usable vouchers/notes.
-    #[serde(skip)]
+    /// Voucher reservations for claim transactions that were built/submitted
+    /// but have not reached LIB yet. Stale reservations are bounded by
+    /// LIB-progress expiry after recovery.
     pending_claims: PendingClaims,
 }
 
@@ -197,14 +214,14 @@ impl<'u> ServiceState<'u> {
         &mut self,
         new_lib: HeaderId,
         pruned_blocks: impl IntoIterator<Item = HeaderId>,
-        lib_blocks_count: u64,
+        new_immutable_blocks_count: u64,
         pruned_nullifiers: impl IntoIterator<Item = VoucherNullifier>,
     ) {
         self.lib = new_lib;
         self.wallet.prune_states(pruned_blocks);
         self.wallet.prune_vouchers(pruned_nullifiers);
         self.pending_claims
-            .advance_lib(lib_blocks_count, self.security_param);
+            .evict_expired(new_immutable_blocks_count, self.security_param);
         self.update_state();
     }
 
@@ -212,30 +229,29 @@ impl<'u> ServiceState<'u> {
         &self.wallet
     }
 
-    pub fn find_available_claimable_voucher(
-        &mut self,
+    pub fn claimable_vouchers(
+        &self,
         tip: HeaderId,
-    ) -> (Option<KnownVoucher>, usize) {
-        let wallet_state = &self.wallet;
-        let pending_claims = &mut self.pending_claims;
-        let mut pending_count = 0;
+    ) -> Result<ClaimableVouchers, WalletServiceError> {
+        let mut available = Vec::new();
+        let mut pending = Vec::new();
 
-        let available_voucher = wallet_state
-            .voucher_commitments_and_nullifiers()
-            .find(|voucher| {
-                if pending_claims.is_reserved(&voucher.nullifier) {
-                    pending_count += 1;
+        for voucher in self.wallet.voucher_commitments_and_nullifiers() {
+            if self.pending_claims.is_reserved(&voucher.nullifier) {
+                pending.push(voucher);
+                continue;
+            }
 
-                    return false;
-                }
+            if self
+                .wallet
+                .voucher_path_snapshot(tip, &voucher.commitment)?
+                .is_some()
+            {
+                available.push(voucher);
+            }
+        }
 
-                matches!(
-                    wallet_state.voucher_path_snapshot(tip, &voucher.commitment),
-                    Ok(Some(_))
-                )
-            });
-
-        (available_voucher, pending_count)
+        Ok(ClaimableVouchers { available, pending })
     }
 
     pub fn reserve_claim(&mut self, nullifier: VoucherNullifier) {
@@ -244,10 +260,6 @@ impl<'u> ServiceState<'u> {
 
     pub fn release_claim_reservation(&mut self, nullifier: VoucherNullifier) {
         self.pending_claims.release(nullifier);
-    }
-
-    pub fn is_claim_reserved(&self, nullifier: &VoucherNullifier) -> bool {
-        self.pending_claims.is_reserved(nullifier)
     }
 
     fn update_state(&self) {
@@ -277,7 +289,7 @@ mod tests {
         let mut pending_claims = PendingClaims::default();
 
         pending_claims.reserve(nullifier);
-        pending_claims.advance_lib(0, EXPIRY_BLOCKS);
+        pending_claims.evict_expired(0, EXPIRY_BLOCKS);
 
         assert!(pending_claims.is_reserved(&nullifier));
     }
@@ -288,10 +300,10 @@ mod tests {
         let mut pending_claims = PendingClaims::default();
 
         pending_claims.reserve(nullifier);
-        pending_claims.advance_lib(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
+        pending_claims.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
         assert!(pending_claims.is_reserved(&nullifier));
 
-        pending_claims.advance_lib(1, EXPIRY_BLOCKS);
+        pending_claims.evict_expired(1, EXPIRY_BLOCKS);
         assert!(!pending_claims.is_reserved(&nullifier));
     }
 }

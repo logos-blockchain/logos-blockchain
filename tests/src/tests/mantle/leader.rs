@@ -41,10 +41,17 @@ async fn leader_claim() {
     let node = &nodes[0];
     let mut block_stream = node.client.blocks_stream().await.unwrap();
 
+    // Wait for two epoch transitions.
+    // 0->1: vouchers (blocks) are collected but not added to MMR
+    // 1->2: vouchers are added to MMR and become claimable
     // Submit a tx with a LeaderClaim operation
-    wait_for_claimable_vouchers(&node.client, Duration::from_secs(30)).await;
+    wait_for_claimable_vouchers(&node.client, Duration::from_mins(5)).await;
 
     let tx_hash = claim_leader_rewards(&node.client, Duration::from_secs(30)).await;
+
+    // Wait for the claim tx to be included in the chain
+    // TODO: Check if wallet balance is increased by improving wallet
+    // to track reward UTXOs in the wallet: https://github.com/logos-blockchain/logos-blockchain/issues/2627
     wait_for_tx_inclusion(&mut block_stream, tx_hash).await;
 }
 

@@ -200,7 +200,7 @@ pub struct UtxoWithKeyId {
     pub key_id: KeyId,
 }
 
-struct BuiltLeaderClaimTx {
+struct LeaderClaimTx {
     signed_tx: SignedMantleTx,
     voucher_nullifier: VoucherNullifier,
 }
@@ -1087,8 +1087,8 @@ where
         ledger: LedgerState,
         state: &mut ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-    ) -> Result<BuiltLeaderClaimTx, WalletServiceError> {
-        let voucher_nullifier = Self::reserve_claimable_voucher(state, request.tip)
+    ) -> Result<LeaderClaimTx, WalletServiceError> {
+        let voucher_nullifier = Self::reserve_claimable_voucher(state, request.tip)?
             .ok_or(WalletServiceError::NoClaimableVoucher)?;
 
         let result =
@@ -1099,7 +1099,7 @@ where
             state.release_claim_reservation(voucher_nullifier);
         }
 
-        result.map(|signed_tx| BuiltLeaderClaimTx {
+        result.map(|signed_tx| LeaderClaimTx {
             signed_tx,
             voucher_nullifier,
         })
@@ -1108,8 +1108,13 @@ where
     fn reserve_claimable_voucher(
         state: &mut ServiceState<'_>,
         tip: HeaderId,
-    ) -> Option<VoucherNullifier> {
-        match state.find_available_claimable_voucher(tip) {
+    ) -> Result<Option<VoucherNullifier>, WalletServiceError> {
+        let claimable_vouchers = state.claimable_vouchers(tip)?;
+
+        match (
+            claimable_vouchers.available.into_iter().next(),
+            claimable_vouchers.pending.len(),
+        ) {
             (Some(voucher), _) => {
                 state.reserve_claim(voucher.nullifier);
 
@@ -1120,16 +1125,16 @@ where
                     "Found and reserved claimable voucher"
                 );
 
-                Some(voucher.nullifier)
+                Ok(Some(voucher.nullifier))
             }
             (None, pending_count) if pending_count > 0 => {
                 debug!(
                     target: LOG_TARGET,
                     "No available vouchers: {pending_count} are pending"
                 );
-                None
+                Ok(None)
             }
-            (None, _) => None,
+            (None, _) => Ok(None),
         }
     }
 
@@ -1146,38 +1151,21 @@ where
                 return;
             }
         };
-        let response = Self::find_claimable_vouchers(state, tip).map(|vouchers| TipResponse {
+        let response = state.claimable_vouchers(tip).map(|vouchers| TipResponse {
             tip,
-            response: vouchers,
+            response: vouchers
+                .available
+                .into_iter()
+                .map(|voucher| ClaimableVoucherInfo {
+                    commitment: voucher.commitment,
+                    nullifier: voucher.nullifier,
+                })
+                .collect(),
         });
 
         if resp_tx.send(response).is_err() {
             debug!(target: LOG_TARGET, "Failed to respond to GetClaimableVouchers");
         }
-    }
-
-    fn find_claimable_vouchers(
-        state: &ServiceState<'_>,
-        tip: HeaderId,
-    ) -> Result<Vec<ClaimableVoucherInfo>, WalletServiceError> {
-        let wallet = state.wallet();
-
-        wallet
-            .voucher_commitments_and_nullifiers()
-            .filter(|voucher| !state.is_claim_reserved(&voucher.nullifier))
-            .filter_map(|voucher| {
-                wallet
-                    .voucher_path_snapshot(tip, &voucher.commitment)
-                    .map_err(WalletServiceError::from)
-                    .transpose()
-                    .map(|path| {
-                        path.map(|_| ClaimableVoucherInfo {
-                            commitment: voucher.commitment,
-                            nullifier: voucher.nullifier,
-                        })
-                    })
-            })
-            .collect()
     }
 
     async fn build_reserved_leader_claim_tx(
@@ -1341,11 +1329,11 @@ where
             state.release_claim_reservation(*nullifier);
         }
 
-        let lib_blocks_count = lib_update.pruned_blocks.immutable_blocks.len() as u64;
+        let new_immutable_blocks_count = lib_update.pruned_blocks.immutable_blocks.len() as u64;
         state.advance_lib(
             lib_update.new_lib,
             lib_update.pruned_blocks.all(),
-            lib_blocks_count,
+            new_immutable_blocks_count,
             claimed_nullifiers,
         );
     }

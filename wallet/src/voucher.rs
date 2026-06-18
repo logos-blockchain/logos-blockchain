@@ -4,7 +4,7 @@ use lb_core::mantle::ops::leader_claim::{VoucherCm, VoucherNullifier};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug)]
-pub struct KnownVoucher {
+pub struct Voucher {
     pub nullifier: VoucherNullifier,
     pub commitment: VoucherCm,
 }
@@ -52,10 +52,10 @@ impl<Id> Vouchers<Id> {
         self.vouchers.remove(&cm)
     }
 
-    pub(crate) fn commitments_and_nullifiers(&self) -> impl Iterator<Item = KnownVoucher> + '_ {
+    pub(crate) fn commitments_and_nullifiers(&self) -> impl Iterator<Item = Voucher> + '_ {
         self.voucher_nullifiers
             .iter()
-            .map(|(&nullifier, &commitment)| KnownVoucher {
+            .map(|(&nullifier, &commitment)| Voucher {
                 nullifier,
                 commitment,
             })

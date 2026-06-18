@@ -32,7 +32,7 @@ use lb_mmr::{MerkleMountainRange, MerklePath};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-pub use crate::voucher::{KnownVoucher, Vouchers};
+pub use crate::voucher::{Voucher, Vouchers};
 
 const LOG_TARGET: &str = wallet::CORE;
 
@@ -449,7 +449,7 @@ where
         self.known_vouchers.get_by_nullifier(nf)
     }
 
-    pub fn voucher_commitments_and_nullifiers(&self) -> impl Iterator<Item = KnownVoucher> + '_ {
+    pub fn voucher_commitments_and_nullifiers(&self) -> impl Iterator<Item = Voucher> + '_ {
         self.known_vouchers.commitments_and_nullifiers()
     }
 
