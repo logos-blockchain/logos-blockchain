@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use futures::{StreamExt as _, stream::FuturesUnordered};
+use futures::{Stream, StreamExt as _, stream::FuturesUnordered};
 use lb_blend::{
     message::encap::validated::{
         EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
@@ -30,10 +30,7 @@ use lb_chain_service::Epoch;
 use lb_libp2p::{DialOpts, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
 use rand::RngCore;
-use tokio::{
-    sync::{broadcast, mpsc, oneshot},
-    time::Interval,
-};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
 use crate::{
     core::{
@@ -110,7 +107,7 @@ where
     minimum_network_size: NonZeroUsize,
     /// Periodic timer that re-runs peering-degree maintenance to keep the
     /// number of healthy peers at or above the minimum.
-    peering_degree_check_interval: Interval,
+    peering_degree_check_clock: Pin<Box<dyn Stream<Item = ()> + Send>>,
 }
 
 pub struct SwarmParams<'config, Rng> {
@@ -176,7 +173,7 @@ where
             ),
             pending_retries: FuturesUnordered::new(),
             minimum_network_size,
-            peering_degree_check_interval: config.peering_degree_check_clock(),
+            peering_degree_check_clock: config.peering_degree_check_clock(),
         };
 
         self_instance.check_and_dial_new_peers();
@@ -480,7 +477,7 @@ where
                 self.execute_retry(peer_id, dial_attempt);
                 false
             }
-            _ = self.peering_degree_check_interval.tick() => {
+            Some(()) = self.peering_degree_check_clock.next() => {
                 tracing::trace!(target: LOG_TARGET, "Periodic peering-degree maintenance: re-checking healthy peer count.");
                 self.check_and_dial_new_peers();
                 false
@@ -771,7 +768,7 @@ where
 {
     #[cfg(test)]
     #[expect(clippy::too_many_arguments, reason = "necessary for testing")]
-    pub fn new_test<BehaviourConstructor>(
+    pub fn new_test<BehaviourConstructor, PeeringDegreeCheckClock>(
         identity: &libp2p::identity::Keypair,
         behaviour_constructor: BehaviourConstructor,
         swarm_messages_receiver: mpsc::Receiver<BlendSwarmMessage>,
@@ -783,11 +780,12 @@ where
         rng: Rng,
         max_dial_attempts_per_connection: NonZeroU64,
         minimum_network_size: NonZeroUsize,
-        peering_degree_check_interval: Interval,
+        peering_degree_check_clock: PeeringDegreeCheckClock,
     ) -> Self
     where
         BehaviourConstructor:
             FnOnce(PeerId, Membership<PeerId>) -> BlendBehaviour<ObservationWindowProvider>,
+        PeeringDegreeCheckClock: Stream<Item = ()> + Send + 'static,
     {
         use crate::test_utils::memory_test_swarm;
 
@@ -807,7 +805,7 @@ where
             ),
             swarm_messages_receiver,
             minimum_network_size,
-            peering_degree_check_interval,
+            peering_degree_check_clock: Box::pin(peering_degree_check_clock),
         }
     }
 }

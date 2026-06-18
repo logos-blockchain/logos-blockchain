@@ -1,8 +1,8 @@
-use core::{num::NonZeroU64, ops::RangeInclusive, time::Duration};
+use core::{num::NonZeroU64, ops::RangeInclusive, pin::Pin, time::Duration};
 use std::iter::repeat_with;
 
 use async_trait::async_trait;
-use futures::StreamExt as _;
+use futures::{Stream, StreamExt as _, stream::pending};
 use lb_blend::{
     message::{
         crypto::key_ext::Ed25519SecretKeyExt as _,
@@ -95,7 +95,7 @@ pub struct SwarmBuilder {
     identity: Keypair,
     public_info: BackendEpochInfo<PeerId>,
     max_dial_attempts: Option<NonZeroU64>,
-    peering_degree_check_interval: Option<Interval>,
+    peering_degree_check_clock: Option<Pin<Box<dyn Stream<Item = ()> + Send>>>,
 }
 
 impl SwarmBuilder {
@@ -108,7 +108,7 @@ impl SwarmBuilder {
             identity,
             public_info,
             max_dial_attempts: None,
-            peering_degree_check_interval: None,
+            peering_degree_check_clock: None,
         }
     }
 
@@ -118,7 +118,7 @@ impl SwarmBuilder {
     }
 
     pub fn with_peering_degree_check_interval(mut self, interval: Interval) -> Self {
-        self.peering_degree_check_interval = Some(interval);
+        self.peering_degree_check_clock = Some(IntervalStream::new(interval).map(|_| ()).boxed());
         self
     }
 
@@ -143,10 +143,8 @@ impl SwarmBuilder {
             self.max_dial_attempts
                 .unwrap_or_else(|| 3u64.try_into().unwrap()),
             1usize.try_into().unwrap(),
-            // Default to an interval far longer than any test, so the periodic
-            // maintenance task never fires unless a test explicitly opts in.
-            self.peering_degree_check_interval
-                .unwrap_or_else(|| interval(Duration::from_hours(1))),
+            self.peering_degree_check_clock
+                .unwrap_or_else(|| Box::pin(pending())),
         );
 
         TestSwarm {
@@ -238,8 +236,7 @@ impl<Settings> From<&BlendConfig<Settings>> for TestObservationWindowProvider {
 }
 
 impl IntervalStreamProvider for TestObservationWindowProvider {
-    type IntervalStream =
-        Box<dyn futures::Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
+    type IntervalStream = Box<dyn Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
     type IntervalItem = RangeInclusive<u64>;
 
     fn interval_stream(&self) -> Self::IntervalStream {

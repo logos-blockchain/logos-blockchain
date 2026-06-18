@@ -106,7 +106,6 @@ blend:
       edge_node_connection_timeout: '1.000000000'
       max_edge_node_incoming_connections: 300
       max_dial_attempts_per_peer: 3
-      peering_degree_check_interval: '60.000000000'
     zk:
       secret_key_kms_id: 852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a
   edge:
