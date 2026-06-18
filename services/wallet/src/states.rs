@@ -1,11 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use lb_core::{
     header::HeaderId,
-    mantle::{
-        NoteId,
-        ops::leader_claim::{VoucherCm, VoucherNullifier},
-    },
+    mantle::ops::leader_claim::{VoucherCm, VoucherNullifier},
 };
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
@@ -22,7 +19,6 @@ pub type Wallet = lb_wallet::Wallet<KeyId, VoucherId>;
 
 #[derive(Debug, Clone)]
 struct PendingClaim {
-    funding_notes: HashSet<NoteId>,
     lib_blocks_elapsed: u64,
 }
 
@@ -41,7 +37,6 @@ impl PendingClaims {
         self.claims.insert(
             nullifier,
             PendingClaim {
-                funding_notes: HashSet::new(),
                 lib_blocks_elapsed: 0,
             },
         );
@@ -59,33 +54,6 @@ impl PendingClaims {
 
     fn is_reserved(&self, nullifier: &VoucherNullifier) -> bool {
         self.claims.contains_key(nullifier)
-    }
-
-    fn reserve_funding_notes(
-        &mut self,
-        nullifier: VoucherNullifier,
-        funding_notes: impl IntoIterator<Item = NoteId>,
-    ) -> Result<(), WalletServiceError> {
-        let Some(claim) = self.claims.get_mut(&nullifier) else {
-            return Err(WalletServiceError::ClaimReservationNotFound(nullifier));
-        };
-
-        claim.funding_notes = funding_notes.into_iter().collect();
-        debug!(
-            target: wallet::SERVICE,
-            ?nullifier,
-            funding_notes = claim.funding_notes.len(),
-            "Reserved claim funding notes"
-        );
-
-        Ok(())
-    }
-
-    fn funding_notes(&self) -> Vec<NoteId> {
-        self.claims
-            .values()
-            .flat_map(|claim| claim.funding_notes.iter().copied())
-            .collect()
     }
 
     fn advance_lib(&mut self, lib_blocks: u64, expiry_blocks: u64) {
@@ -276,19 +244,6 @@ impl<'u> ServiceState<'u> {
 
     pub fn release_claim_reservation(&mut self, nullifier: VoucherNullifier) {
         self.pending_claims.release(nullifier);
-    }
-
-    pub fn reserve_claim_funding_notes(
-        &mut self,
-        nullifier: VoucherNullifier,
-        funding_notes: impl IntoIterator<Item = NoteId>,
-    ) -> Result<(), WalletServiceError> {
-        self.pending_claims
-            .reserve_funding_notes(nullifier, funding_notes)
-    }
-
-    pub fn pending_claim_funding_notes(&self) -> Vec<NoteId> {
-        self.pending_claims.funding_notes()
     }
 
     fn update_state(&self) {

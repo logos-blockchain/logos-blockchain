@@ -2,11 +2,11 @@ use std::{collections::HashSet, num::NonZero, path::PathBuf, time::Duration};
 
 use futures::StreamExt as _;
 use lb_api_service::http::consensus::leader::LeaderClaimResponseBody;
-use lb_chain_service::{ChainServiceMode, State};
 use lb_common_http_client::ProcessedBlockEvent;
 use lb_groth16::fr_to_bytes;
-use lb_http_api_common::bodies::wallet::balance::WalletBalanceResponseBody;
-use lb_http_api_common::bodies::wallet::claimable_vouchers::WalletClaimableVouchersResponseBody;
+use lb_http_api_common::bodies::wallet::{
+    balance::WalletBalanceResponseBody, claimable_vouchers::WalletClaimableVouchersResponseBody,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::{
     Transaction as _, TxHash,

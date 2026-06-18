@@ -167,23 +167,12 @@ impl WalletState {
         change_pk: ZkPublicKey,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.fund_tx_excluding::<G>(tx_builder, change_pk, pks, std::iter::empty::<NoteId>())
-    }
-
-    pub fn fund_tx_excluding<G: GasConstants>(
-        &self,
-        tx_builder: &MantleTxBuilder,
-        change_pk: ZkPublicKey,
-        pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-        excluded_notes: impl IntoIterator<Item = NoteId>,
-    ) -> Result<MantleTxBuilder, WalletError> {
         // Get all UTXOs owned by the provided PKs, excluding the following notes:
         // - Notes that are being consumed/locked by the tx
         // - Notes that are already locked in Ledger
         let consumed_or_locked = tx_builder
             .consumed_or_locked_notes()
             .chain(self.locked_notes.iter().copied())
-            .chain(excluded_notes)
             .collect::<HashSet<_>>();
         let mut utxos = self
             .utxos_owned_by_pks(pks)
@@ -530,22 +519,6 @@ where
     ) -> Result<MantleTxBuilder, WalletError> {
         self.wallet_state_at(tip)?
             .fund_tx::<G>(tx_builder, change_pk, funding_pks)
-    }
-
-    pub fn fund_tx_excluding<G: GasConstants>(
-        &self,
-        tip: HeaderId,
-        tx_builder: &MantleTxBuilder,
-        change_pk: ZkPublicKey,
-        funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
-        excluded_notes: impl IntoIterator<Item = NoteId>,
-    ) -> Result<MantleTxBuilder, WalletError> {
-        self.wallet_state_at(tip)?.fund_tx_excluding::<G>(
-            tx_builder,
-            change_pk,
-            funding_pks,
-            excluded_notes,
-        )
     }
 
     pub fn wallet_state_at(&self, tip: HeaderId) -> Result<WalletState, WalletError> {

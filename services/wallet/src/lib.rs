@@ -121,9 +121,6 @@ pub enum WalletServiceError {
     #[error("Voucher not found for the nullifier")]
     VoucherNotFound(VoucherNullifier),
 
-    #[error("Claim reservation not found for voucher nullifier {0:?}")]
-    ClaimReservationNotFound(VoucherNullifier),
-
     #[error("Merkle path not found for voucher_cm: {0:?}")]
     VoucherMerklePathNotFound(VoucherCm),
 
@@ -177,11 +174,6 @@ pub enum WalletMsg {
     },
     GenerateNewVoucherSecret {
         resp_tx: Sender<VoucherCm>,
-    },
-    GetClaimableVoucher {
-        tip: Option<HeaderId>,
-        resp_tx:
-            Sender<Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletServiceError>>,
     },
     GetClaimableVouchers {
         tip: Option<HeaderId>,
@@ -237,7 +229,6 @@ impl WalletMsg {
             | Self::FundTx { tip, .. }
             | Self::SignTx { tip, .. }
             | Self::GetLeaderAgedNotes { tip, .. }
-            | Self::GetClaimableVoucher { tip, .. }
             | Self::GetClaimableVouchers { tip, .. }
             | Self::GetTxContext { block_id: tip, .. } => *tip,
             Self::BuildLeaderClaimTx { tip, .. } => Some(*tip),
@@ -647,9 +638,6 @@ where
                     resp_tx,
                 )
                 .await;
-            }
-            WalletMsg::GetClaimableVoucher { tip, resp_tx } => {
-                Self::get_claimable_voucher(tip, resp_tx, state.wallet(), cryptarchia).await;
             }
             WalletMsg::GetClaimableVouchers { tip, resp_tx } => {
                 Self::get_claimable_vouchers(tip, resp_tx, state.wallet(), cryptarchia).await;
@@ -1174,15 +1162,15 @@ where
     ) -> Result<Vec<ClaimableVoucherInfo>, WalletServiceError> {
         wallet
             .voucher_commitments_and_nullifiers()
-            .filter_map(|(nf, cm)| {
+            .filter_map(|voucher| {
                 wallet
-                    .voucher_path_snapshot(tip, cm)
+                    .voucher_path_snapshot(tip, &voucher.commitment)
                     .map_err(WalletServiceError::from)
                     .transpose()
                     .map(|path| {
                         path.map(|_| ClaimableVoucherInfo {
-                            commitment: *cm,
-                            nullifier: *nf,
+                            commitment: voucher.commitment,
+                            nullifier: voucher.nullifier,
                         })
                     })
             })
@@ -1193,7 +1181,7 @@ where
         request: LeaderClaimTxRequest,
         voucher_nullifier: VoucherNullifier,
         ledger: LedgerState,
-        state: &mut ServiceState<'_>,
+        state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<SignedMantleTx, WalletServiceError> {
         let tx_builder = MantleTxBuilder::new(ledger.tx_context())
@@ -1204,22 +1192,12 @@ where
             }))?
             .add_ledger_output(Note::new(request.reward_amount, request.funding_pk))?;
 
-        let excluded_notes = state.pending_claim_funding_notes();
-        let funded_tx_builder = state.wallet().fund_tx_excluding::<MainnetGasConstants>(
+        let funded_tx_builder = state.wallet().fund_tx::<MainnetGasConstants>(
             request.tip,
             &tx_builder,
             request.funding_pk,
             [request.funding_pk],
-            excluded_notes,
         )?;
-
-        let funding_notes = funded_tx_builder
-            .ledger_inputs()
-            .iter()
-            .map(Utxo::id)
-            .collect::<Vec<_>>();
-
-        state.reserve_claim_funding_notes(voucher_nullifier, funding_notes)?;
 
         let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>()?;
         debug!(
