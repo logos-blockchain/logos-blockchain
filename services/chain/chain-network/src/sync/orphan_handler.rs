@@ -8,7 +8,6 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_core::header::HeaderId;
-use lb_cryptarchia_sync::{BlocksUnavailableReason, ChainSyncError, ChainSyncErrorKind};
 use overwatch::DynError;
 use tracing::{debug, error, warn};
 
@@ -180,64 +179,34 @@ where
         self.remove_orphan(&block_id)
     }
 
-    fn is_retryable_block_not_found(err: &DynError) -> bool {
-        err.downcast_ref::<ChainSyncError>().is_some_and(|err| {
-            matches!(
-                err.kind,
-                ChainSyncErrorKind::BlockProviderUnavailable(
-                    BlocksUnavailableReason::BlockNotFound(_)
-                        | BlocksUnavailableReason::StartBlockNotFound
-                )
-            )
-        })
-    }
-
     async fn request_blocks_stream(
         network: NetAdapter,
         orphan_info: OrphanInfo,
         known_blocks: HashSet<HeaderId>,
         download_started_at: Instant,
     ) -> Result<ActiveDownload<NetAdapter::Block>, DynError> {
-        let mut attempts_remaining = 3usize;
-        let mut last_err: Option<DynError> = None;
-
-        while attempts_remaining > 0 {
-            match network
-                .request_blocks_from_peers(
-                    orphan_info.orphan_id,
-                    orphan_info.tip,
-                    orphan_info.lib,
-                    known_blocks.clone(),
-                )
-                .await
-            {
-                Ok(stream) => {
-                    return Ok(ActiveDownload::new(
-                        orphan_info,
-                        stream,
-                        download_started_at,
-                    ));
-                }
-                Err(err) if Self::is_retryable_block_not_found(&err) => {
-                    warn!(
-                        target: LOG_TARGET,
-                        ?err,
-                        orphan_id = ?orphan_info.orphan_id,
-                        attempts_remaining,
-                        "Orphan fetch hit transient provider not-found; retrying with a reshuffled peer selection"
-                    );
-                    last_err = Some(err);
-                    attempts_remaining -= 1;
-                }
-                Err(err) => {
-                    metrics::orphan_observe_parent_fetch_err();
-                    return Err(err);
-                }
+        // `request_blocks_from_peers` fans out to multiple peers in parallel.
+        // So, we don't do retry. A single try with multiple peers is enough.
+        // It's better to drain the orphan queue quicker.
+        match network
+            .request_blocks_from_peers(
+                orphan_info.orphan_id,
+                orphan_info.tip,
+                orphan_info.lib,
+                known_blocks,
+            )
+            .await
+        {
+            Ok(stream) => Ok(ActiveDownload::new(
+                orphan_info,
+                stream,
+                download_started_at,
+            )),
+            Err(err) => {
+                metrics::orphan_observe_parent_fetch_err();
+                Err(err)
             }
         }
-
-        metrics::orphan_observe_parent_fetch_err();
-        Err(last_err.unwrap_or_else(|| DynError::from("orphan recovery exhausted retries")))
     }
 
     pub fn remove_orphan(&mut self, block_id: &HeaderId) -> Option<OrphanInfo> {
@@ -460,11 +429,7 @@ mod tests {
 
     use futures::stream;
     use lb_cryptarchia_sync::GetTipResponse;
-    use lb_network_service::{
-        NetworkService,
-        backends::{libp2p::PeerId, mock::Mock},
-        message::ChainSyncEvent,
-    };
+    use lb_network_service::{NetworkService, backends::mock::Mock, message::ChainSyncEvent};
     use overwatch::services::{ServiceData, relay::OutboundRelay};
     use tokio::time::timeout;
 
@@ -681,49 +646,6 @@ mod tests {
 
     const TEST_TIP: [u8; 32] = [10u8; 32];
     const TEST_LIB: [u8; 32] = [11u8; 32];
-
-    #[test]
-    fn retryable_block_not_found_variants() {
-        let block_not_found = ChainSyncError::new(
-            PeerId::random(),
-            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::BlockNotFound(
-                HeaderId::from([99u8; 32]),
-            )),
-        );
-        let start_block_not_found = ChainSyncError::new(
-            PeerId::random(),
-            ChainSyncErrorKind::BlockProviderUnavailable(
-                BlocksUnavailableReason::StartBlockNotFound,
-            ),
-        );
-
-        assert!(
-            OrphanBlocksDownloader::<MockNetworkAdapter, usize>::is_retryable_block_not_found(
-                &(Box::new(block_not_found) as DynError),
-            )
-        );
-        assert!(
-            OrphanBlocksDownloader::<MockNetworkAdapter, usize>::is_retryable_block_not_found(
-                &(Box::new(start_block_not_found) as DynError),
-            )
-        );
-    }
-
-    #[test]
-    fn non_retryable_provider_error_is_rejected() {
-        let unknown = ChainSyncError::new(
-            PeerId::random(),
-            ChainSyncErrorKind::BlockProviderUnavailable(BlocksUnavailableReason::Unknown(
-                "boom".to_owned(),
-            )),
-        );
-
-        assert!(
-            !OrphanBlocksDownloader::<MockNetworkAdapter, usize>::is_retryable_block_not_found(
-                &(Box::new(unknown) as DynError),
-            )
-        );
-    }
 
     #[tokio::test]
     async fn test_orphan_cache_limit() {
