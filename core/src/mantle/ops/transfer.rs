@@ -25,6 +25,11 @@ impl TransferOp {
         Self { inputs, outputs }
     }
 
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.inputs.is_empty() && self.outputs.is_empty()
+    }
+
     pub fn balance(&self, utxos: &Utxos) -> Result<i128, TransferError> {
         let mut balance: i128 = 0;
         let input_amount = self.inputs.amount(utxos)?;
