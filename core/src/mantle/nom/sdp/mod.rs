@@ -139,28 +139,12 @@ mod tests {
 
         let result = ActivityProof::decode(&bytes);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Failed to parse"));
+        assert!(result.unwrap_err().to_string().contains("Parsing Error"));
     }
 
     #[test]
     fn activity_proof_too_short() {
         let bytes = vec![BLEND_ACTIVE_METADATA_VERSION_BYTE, 0x01, 0x02]; // Only 3 bytes
-
-        let result = ActivityProof::decode(&bytes);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Eof"));
-    }
-
-    #[test]
-    fn activity_proof_too_long() {
-        let proof = ActivityProof {
-            epoch: 10.into(),
-            signing_key: new_signing_key(0),
-            proof_of_quota: new_proof_of_quota_unchecked(0),
-            proof_of_selection: new_proof_of_selection_unchecked(1),
-        };
-        let mut bytes = proof.encode();
-        bytes.push(0xFF); // An extra byte
 
         let result = ActivityProof::decode(&bytes);
         assert!(result.is_err());

@@ -15,7 +15,7 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::Events,
     mantle::{
-        encoding::{BoundedInputs, BoundedOutputs, NomInputs, decode_uint64, decode_zk_public_key},
+        encoding::{BoundedInputs, BoundedOutputs, NomInputs},
         nom::{NomDecode, NomEncode},
         ops::OpId,
     },
@@ -380,10 +380,8 @@ impl Note {
 impl NomEncode for Note {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend(crate::mantle::encoding::encode_uint64(self.value));
-        bytes.extend(crate::mantle::encoding::encode_field_element(
-            self.pk.as_fr(),
-        ));
+        bytes.extend(self.value.encode());
+        bytes.extend(self.pk.encode());
         bytes
     }
 }
@@ -392,8 +390,8 @@ impl NomDecode for Note {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        let (bytes, value) = decode_uint64(bytes)?;
-        let (bytes, pk) = decode_zk_public_key(bytes)?;
+        let (bytes, value) = u64::decode(bytes)?;
+        let (bytes, pk) = ZkPublicKey::decode(bytes)?;
         Ok((bytes, Self::new(value, pk)))
     }
 }
