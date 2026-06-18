@@ -313,7 +313,8 @@ impl NomDecode for Inputs {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        NomInputs::decode(bytes).map(|(remaining, items)| (remaining, Self(items)))
+        let (bytes, items) = NomInputs::decode(bytes)?;
+        Ok((bytes, Self(items)))
     }
 }
 
@@ -355,7 +356,8 @@ impl NomDecode for NoteId {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        Fr::decode(bytes).map(|(remaining, fr)| (remaining, Self(fr)))
+        let (bytes, inner) = Fr::decode(bytes)?;
+        Ok((bytes, Self(inner)))
     }
 }
 

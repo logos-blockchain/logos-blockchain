@@ -170,13 +170,26 @@ impl NomDecode for Op {
         let (input, opcode) = u8::decode(bytes)?;
 
         match opcode {
-            INSCRIBE => map(InscriptionOp::decode, Self::ChannelInscribe).parse(input),
-            CHANNEL_CONFIG => map(ChannelConfigOp::decode, Self::ChannelConfig).parse(input),
-            CHANNEL_DEPOSIT => map(DepositOp::decode, Self::ChannelDeposit).parse(input),
-            CHANNEL_WITHDRAW => map(ChannelWithdrawOp::decode, Self::ChannelWithdraw).parse(input),
-            SDP_DECLARE => map(SDPDeclareOp::decode, Self::SDPDeclare).parse(input),
-            SDP_WITHDRAW => map(SDPWithdrawOp::decode, Self::SDPWithdraw).parse(input),
-            SDP_ACTIVE => map(SDPActiveOp::decode, Self::SDPActive).parse(input),
+            INSCRIBE => {
+                InscriptionOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelInscribe(op)))
+            }
+            CHANNEL_CONFIG => {
+                ChannelConfigOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelConfig(op)))
+            }
+            CHANNEL_DEPOSIT => {
+                DepositOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelDeposit(op)))
+            }
+            CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(bytes)
+                .map(|(bytes, op)| (bytes, Self::ChannelWithdraw(op))),
+            SDP_DECLARE => {
+                SDPDeclareOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPDeclare(op)))
+            }
+            SDP_WITHDRAW => {
+                SDPWithdrawOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPWithdraw(op)))
+            }
+            SDP_ACTIVE => {
+                SDPActiveOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPActive(op)))
+            }
             // TODO: Use `.decode()` once implemented for all other ops
             LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(input),
             TRANSFER => map(decode_transfer, Self::Transfer).parse(input),

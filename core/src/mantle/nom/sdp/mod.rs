@@ -1,7 +1,10 @@
 use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use nom::{IResult, Parser as _, combinator::map, error::Error};
+use nom::{
+    IResult,
+    error::{Error, ErrorKind},
+};
 
 use crate::{
     mantle::nom::{NomArray, NomDecode, NomEncode},
@@ -22,7 +25,8 @@ impl NomDecode for DeclarationId {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map(NomArray::<u8, 32>::decode, Self).parse(bytes)
+        let (bytes, value) = NomArray::<u8, _>::decode(bytes)?;
+        Ok((bytes, Self(value)))
     }
 }
 
@@ -50,10 +54,7 @@ impl NomDecode for ActivityMetadata {
                 let (bytes, blend_activity_proof) = blend::ActivityProof::decode(bytes)?;
                 Ok((bytes, Self::Blend(Box::new(blend_activity_proof))))
             }
-            _ => Err(nom::Err::Error(Error::new(
-                bytes,
-                nom::error::ErrorKind::Fail,
-            ))),
+            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
         }
     }
 }
@@ -77,10 +78,7 @@ impl NomDecode for blend::ActivityProof {
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let (bytes, proof_version) = u8::decode(bytes)?;
         if proof_version != BLEND_ACTIVE_METADATA_VERSION_BYTE {
-            return Err(nom::Err::Error(Error::new(
-                bytes,
-                nom::error::ErrorKind::Fail,
-            )));
+            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail)));
         }
         let (bytes, epoch) = Epoch::decode(bytes)?;
         let (bytes, signing_key) = Ed25519PublicKey::decode(bytes)?;

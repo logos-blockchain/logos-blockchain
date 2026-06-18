@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
-use nom::{IResult, Parser as _, combinator::map};
+use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -43,7 +43,8 @@ impl NomDecode for SlotTimeframe {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map(u32::decode, Self).parse(bytes)
+        let (bytes, inner) = u32::decode(bytes)?;
+        Ok((bytes, Self(inner)))
     }
 }
 
@@ -72,7 +73,8 @@ impl NomDecode for SlotTimeout {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map(u32::decode, Self).parse(bytes)
+        let (bytes, inner) = u32::decode(bytes)?;
+        Ok((bytes, Self(inner)))
     }
 }
 

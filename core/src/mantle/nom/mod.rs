@@ -2,8 +2,7 @@ use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use nom::{
-    IResult, Parser as _,
-    combinator::{map, map_res},
+    IResult,
     error::{Error, ErrorKind},
     number::complete::{le_u16, le_u32, le_u64, u8},
 };
@@ -103,10 +102,12 @@ impl NomDecode for Fr {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map_res(NomArray::<u8, 32>::decode, |bytes: [u8; 32]| {
-            fr_from_bytes(&bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
-        })
-        .parse(bytes)
+        let (bytes, inner) = NomArray::<u8, 32>::decode(bytes)?;
+        Ok((
+            bytes,
+            fr_from_bytes(&inner)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+        ))
     }
 }
 
@@ -120,7 +121,8 @@ impl NomDecode for ChannelId {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map(NomArray::<u8, 32>::decode, Self::from).parse(bytes)
+        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        Ok((bytes, Self::from(inner)))
     }
 }
 
@@ -134,7 +136,8 @@ impl NomDecode for MsgId {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map(NomArray::<u8, 32>::decode, Self::from).parse(bytes)
+        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        Ok((bytes, Self::from(inner)))
     }
 }
 
@@ -149,10 +152,12 @@ impl NomDecode for Ed25519PublicKey {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map_res(NomArray::<u8, 32>::decode, |key_bytes: [u8; 32]| {
-            Self::from_bytes(&key_bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
-        })
-        .parse(bytes)
+        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        Ok((
+            bytes,
+            Self::from_bytes(&inner)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+        ))
     }
 }
 
@@ -166,7 +171,8 @@ impl NomDecode for ZkPublicKey {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map_res(Fr::decode, Self::try_from).parse(bytes)
+        let (bytes, inner) = Fr::decode(bytes)?;
+        Ok((bytes, Self::new(inner)))
     }
 }
 
@@ -180,6 +186,7 @@ impl NomDecode for Epoch {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map(u32::decode, Self::new).parse(bytes)
+        let (bytes, inner) = u32::decode(bytes)?;
+        Ok((bytes, Self::new(inner)))
     }
 }

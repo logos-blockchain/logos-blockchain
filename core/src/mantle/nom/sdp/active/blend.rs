@@ -2,7 +2,10 @@ use lb_blend_proofs::{
     quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota},
     selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection},
 };
-use nom::{IResult, Parser as _, combinator::map_res};
+use nom::{
+    IResult,
+    error::{Error, ErrorKind},
+};
 
 use crate::mantle::nom::{NomArray, NomDecode, NomEncode};
 
@@ -19,7 +22,12 @@ impl NomDecode for ProofOfQuota {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map_res(ProofOfQuotaNom::decode, Self::try_from).parse(bytes)
+        let (bytes, value) = ProofOfQuotaNom::decode(bytes)?;
+        Ok((
+            bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+        ))
     }
 }
 
@@ -36,6 +44,11 @@ impl NomDecode for ProofOfSelection {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map_res(ProofOfSelectionNom::decode, Self::try_from).parse(bytes)
+        let (bytes, value) = ProofOfSelectionNom::decode(bytes)?;
+        Ok((
+            bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::Fail)))?,
+        ))
     }
 }
