@@ -87,7 +87,7 @@ slots 180–239  → index 0
 ...
 ```
 
-If index 1's turn elapses without a publish, the on-chain validator advances past it once the `posting_timeout` window is reached, so index 2 becomes authorized without waiting for the full `posting_timeframe` to expire.
+If index 1's turn elapses without a publish, the on-chain validator advances past it once the `posting_timeout` window is reached.
 
 The SDK exposes the current rotation state to your sequencer in two forms:
 
