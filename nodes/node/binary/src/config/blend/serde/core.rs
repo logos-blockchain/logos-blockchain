@@ -24,6 +24,9 @@ pub struct BackendConfig {
     pub edge_node_connection_timeout: Duration,
     pub max_edge_node_incoming_connections: u64,
     pub max_dial_attempts_per_peer: NonZeroU64,
+    #[serde_as(
+        as = "lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>"
+    )]
     pub peering_degree_check_interval: Duration,
 }
 

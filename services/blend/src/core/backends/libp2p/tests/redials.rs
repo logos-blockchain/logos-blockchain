@@ -342,10 +342,6 @@ async fn core_epoch_rotation_clears_pending_retries() {
 /// set rather than via `except`. So once any peer negotiates, `except` can only
 /// ever reach `size - 2`, the reset never fires, and the node gives up below
 /// the minimum.
-///
-/// The assertion below encodes the *desired* invariant (a node below the
-/// minimum peering degree must not permanently give up), so this test currently
-/// FAILS — that failure is the reproduction.
 #[test(tokio::test)]
 async fn core_does_not_give_up_below_minimum_peering_degree() {
     let min_peering_degree = 2;
