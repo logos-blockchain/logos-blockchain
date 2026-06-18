@@ -26,7 +26,7 @@ use libp2p_swarm_test::SwarmExt as _;
 use rand::SeedableRng as _;
 use tokio::{
     sync::{broadcast, mpsc},
-    time::interval,
+    time::{Interval, interval},
 };
 use tokio_stream::wrappers::IntervalStream;
 
@@ -95,6 +95,7 @@ pub struct SwarmBuilder {
     identity: Keypair,
     public_info: BackendEpochInfo<PeerId>,
     max_dial_attempts: Option<NonZeroU64>,
+    peering_degree_check_interval: Option<Interval>,
 }
 
 impl SwarmBuilder {
@@ -107,11 +108,17 @@ impl SwarmBuilder {
             identity,
             public_info,
             max_dial_attempts: None,
+            peering_degree_check_interval: None,
         }
     }
 
     pub fn with_max_dial_attempts(mut self, max_dial_attempts: NonZeroU64) -> Self {
         self.max_dial_attempts = Some(max_dial_attempts);
+        self
+    }
+
+    pub fn with_peering_degree_check_interval(mut self, interval: Interval) -> Self {
+        self.peering_degree_check_interval = Some(interval);
         self
     }
 
@@ -136,6 +143,10 @@ impl SwarmBuilder {
             self.max_dial_attempts
                 .unwrap_or_else(|| 3u64.try_into().unwrap()),
             1usize.try_into().unwrap(),
+            // Default to an interval far longer than any test, so the periodic
+            // maintenance task never fires unless a test explicitly opts in.
+            self.peering_degree_check_interval
+                .unwrap_or_else(|| interval(Duration::from_hours(1))),
         );
 
         TestSwarm {

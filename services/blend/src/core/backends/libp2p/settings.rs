@@ -5,6 +5,7 @@ use lb_libp2p::protocol_name::StreamProtocol;
 use lb_utils::math::NonNegativeF64;
 use libp2p::{Multiaddr, PeerId, identity::Keypair};
 use serde::{Deserialize, Serialize};
+use tokio::time::{Instant, Interval, MissedTickBehavior, interval_at};
 
 use crate::core::settings::RunningBlendConfig as BlendConfig;
 
@@ -22,6 +23,7 @@ pub struct Libp2pBlendBackendSettings {
     pub max_edge_node_incoming_connections: u64,
     pub max_dial_attempts_per_peer: NonZeroU64,
     pub protocol_name: StreamProtocol,
+    pub peering_degree_check_interval: Duration,
 }
 
 impl BlendConfig<Libp2pBlendBackendSettings> {
@@ -35,5 +37,17 @@ impl BlendConfig<Libp2pBlendBackendSettings> {
     #[must_use]
     pub fn peer_id(&self) -> PeerId {
         self.keypair().public().to_peer_id()
+    }
+
+    #[must_use]
+    pub fn peering_degree_check_clock(&self) -> Interval {
+        let mut interval = interval_at(
+            Instant::now()
+                .checked_add(self.backend.peering_degree_check_interval)
+                .expect("Peering degree check interval value too large."),
+            self.backend.peering_degree_check_interval,
+        );
+        interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        interval
     }
 }

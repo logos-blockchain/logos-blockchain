@@ -437,6 +437,70 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
     );
 }
 
+/// The periodic peering-degree maintenance task must dial peers to reach the
+/// minimum degree even when nothing else triggers a dial — no `StartNewEpoch`,
+/// no dial failure, no disconnection. Here the node starts quiescent and below
+/// degree (`new_test` performs no initial dial and we send no message), so the
+/// ONLY thing that can make it connect to the reachable peer is the maintenance
+/// tick.
+#[test(tokio::test)]
+async fn core_maintenance_task_dials_to_maintain_peering_degree() {
+    let (mut identities, mut nodes) = new_nodes_with_empty_address(2);
+
+    // The reachable peer: a real listening swarm.
+    let TestSwarm {
+        swarm: mut reachable_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+    let (reachable_node, _) = reachable_swarm
+        .listen_and_return_membership_entry(None)
+        .await;
+    update_nodes(&mut nodes, &reachable_node.id, reachable_node.address);
+
+    // The node under test: a short maintenance interval. No initial dial is
+    // triggered (new_test does not dial, and we send no StartNewEpoch).
+    let TestSwarm {
+        swarm: mut dialing_swarm,
+        ..
+    } = SwarmBuilder::new(identities.next().unwrap(), &nodes)
+        .with_peering_degree_check_interval(time::interval(Duration::from_millis(200)))
+        .build(|id, membership| BlendBehaviourBuilder::new(id, membership).build());
+
+    // Precondition: the node is idle and below the (default) minimum degree of 1.
+    assert!(dialing_swarm.ongoing_dials().is_empty());
+    assert_eq!(
+        dialing_swarm
+            .behaviour()
+            .blend
+            .with_core()
+            .num_healthy_peers(),
+        0
+    );
+
+    // Drive both swarms until a fixed deadline. The only thing that can initiate a
+    // dial is the periodic maintenance tick; once it fires it must connect to the
+    // reachable peer.
+    let deadline = time::Instant::now() + Duration::from_secs(2);
+    loop {
+        select! {
+            () = sleep_until(deadline) => break,
+            () = dialing_swarm.poll_next() => {}
+            () = reachable_swarm.poll_next() => {}
+        }
+    }
+
+    assert!(
+        dialing_swarm
+            .behaviour()
+            .blend
+            .with_core()
+            .negotiated_peers()
+            .contains_key(&reachable_node.id),
+        "the maintenance task should have dialed and negotiated with the reachable peer"
+    );
+}
+
 /// When a retry fires but the peering degree is already satisfied (because
 /// another peer connected in the meantime), the retry should be skipped.
 #[test(tokio::test)]

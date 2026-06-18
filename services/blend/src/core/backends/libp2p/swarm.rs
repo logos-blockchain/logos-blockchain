@@ -30,7 +30,10 @@ use lb_chain_service::Epoch;
 use lb_libp2p::{DialOpts, SwarmEvent};
 use libp2p::{Multiaddr, PeerId, Swarm, SwarmBuilder, swarm::dial_opts::PeerCondition};
 use rand::RngCore;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::{
+    sync::{broadcast, mpsc, oneshot},
+    time::Interval,
+};
 
 use crate::{
     core::{
@@ -105,6 +108,9 @@ where
     ongoing_dials: HashMap<PeerId, DialAttempt>,
     pending_retries: PendingRetries,
     minimum_network_size: NonZeroUsize,
+    /// Periodic timer that re-runs peering-degree maintenance to keep the
+    /// number of healthy peers at or above the minimum.
+    peering_degree_check_interval: Interval,
 }
 
 pub struct SwarmParams<'config, Rng> {
@@ -170,9 +176,10 @@ where
             ),
             pending_retries: FuturesUnordered::new(),
             minimum_network_size,
+            peering_degree_check_interval: config.peering_degree_check_clock(),
         };
 
-        self_instance.check_and_dial_new_peers_except(&HashSet::new());
+        self_instance.check_and_dial_new_peers();
 
         self_instance
     }
@@ -230,6 +237,10 @@ where
         for (peer_id, peer_address) in peers_to_dial {
             self.dial(peer_id, peer_address, except.clone());
         }
+    }
+
+    fn check_and_dial_new_peers(&mut self) {
+        self.check_and_dial_new_peers_except(&HashSet::new());
     }
 
     /// Dial new peers, if necessary, to maintain the peering degree.
@@ -387,7 +398,7 @@ where
                 // We don't retry if `peer_id` is `None` or if we've achieved the maximum number
                 // of retries for this peer.
                 let Some(peer_id) = peer_id else {
-                    self.check_and_dial_new_peers_except(&HashSet::new());
+                    self.check_and_dial_new_peers();
                     return;
                 };
 
@@ -426,7 +437,7 @@ where
                     .start_new_epoch(self.current_epoch_info.clone());
                 self.ongoing_dials.clear();
                 self.pending_retries.clear();
-                self.check_and_dial_new_peers_except(&HashSet::new());
+                self.check_and_dial_new_peers();
             }
             BlendSwarmMessage::CompleteEpochTransition => {
                 self.swarm.behaviour_mut().blend.finish_epoch_transition();
@@ -467,6 +478,11 @@ where
             }
             Some((peer_id, dial_attempt)) = self.pending_retries.next() => {
                 self.execute_retry(peer_id, dial_attempt);
+                false
+            }
+            _ = self.peering_degree_check_interval.tick() => {
+                tracing::trace!(target: LOG_TARGET, "Periodic peering-degree maintenance: re-checking healthy peer count.");
+                self.check_and_dial_new_peers();
                 false
             }
         }
@@ -767,6 +783,7 @@ where
         rng: Rng,
         max_dial_attempts_per_connection: NonZeroU64,
         minimum_network_size: NonZeroUsize,
+        peering_degree_check_interval: Interval,
     ) -> Self
     where
         BehaviourConstructor:
@@ -790,6 +807,7 @@ where
             ),
             swarm_messages_receiver,
             minimum_network_size,
+            peering_degree_check_interval,
         }
     }
 }

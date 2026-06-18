@@ -24,6 +24,7 @@ pub struct BackendConfig {
     pub edge_node_connection_timeout: Duration,
     pub max_edge_node_incoming_connections: u64,
     pub max_dial_attempts_per_peer: NonZeroU64,
+    pub peering_degree_check_interval: Duration,
 }
 
 impl BackendConfig {
@@ -51,6 +52,7 @@ impl Default for BackendConfig {
             edge_node_connection_timeout: Duration::from_secs(1),
             max_edge_node_incoming_connections: 300,
             max_dial_attempts_per_peer: NonZeroU64::new(3).unwrap(),
+            peering_degree_check_interval: Duration::from_mins(1),
         }
     }
 }
