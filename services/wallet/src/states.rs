@@ -246,6 +246,10 @@ impl<'u> ServiceState<'u> {
         self.pending_claims.release(nullifier);
     }
 
+    pub fn is_claim_reserved(&self, nullifier: &VoucherNullifier) -> bool {
+        self.pending_claims.is_reserved(nullifier)
+    }
+
     fn update_state(&self) {
         let lib_wallet_state = self
             .wallet()

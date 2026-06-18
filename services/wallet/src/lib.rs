@@ -640,7 +640,7 @@ where
                 .await;
             }
             WalletMsg::GetClaimableVouchers { tip, resp_tx } => {
-                Self::get_claimable_vouchers(tip, resp_tx, state.wallet(), cryptarchia).await;
+                Self::get_claimable_vouchers(tip, resp_tx, state, cryptarchia).await;
             }
             WalletMsg::GetKnownAddresses { resp_tx } => {
                 Self::get_known_addresses(state.wallet(), resp_tx);
@@ -1136,7 +1136,7 @@ where
     async fn get_claimable_vouchers(
         tip: Option<HeaderId>,
         resp_tx: Sender<Result<TipResponse<Vec<ClaimableVoucherInfo>>, WalletServiceError>>,
-        wallet: &Wallet,
+        state: &ServiceState<'_>,
         cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     ) {
         let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -1146,7 +1146,7 @@ where
                 return;
             }
         };
-        let response = Self::find_claimable_vouchers(wallet, tip).map(|vouchers| TipResponse {
+        let response = Self::find_claimable_vouchers(state, tip).map(|vouchers| TipResponse {
             tip,
             response: vouchers,
         });
@@ -1157,11 +1157,14 @@ where
     }
 
     fn find_claimable_vouchers(
-        wallet: &Wallet,
+        state: &ServiceState<'_>,
         tip: HeaderId,
     ) -> Result<Vec<ClaimableVoucherInfo>, WalletServiceError> {
+        let wallet = state.wallet();
+
         wallet
             .voucher_commitments_and_nullifiers()
+            .filter(|voucher| !state.is_claim_reserved(&voucher.nullifier))
             .filter_map(|voucher| {
                 wallet
                     .voucher_path_snapshot(tip, &voucher.commitment)
