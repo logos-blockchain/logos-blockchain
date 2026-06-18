@@ -85,6 +85,10 @@ pub fn orphan_blocks_removed_total() {
     lb_tracing::increase_counter_u64!(orphan_blocks_removed_total, 1);
 }
 
+pub fn orphan_blocks_replaced_total() {
+    lb_tracing::increase_counter_u64!(orphan_blocks_replaced_total, 1);
+}
+
 pub fn orphan_blocks_received_total() {
     lb_tracing::increase_counter_u64!(orphan_blocks_received_total, 1);
 }

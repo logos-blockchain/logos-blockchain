@@ -572,7 +572,9 @@ where
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing. Trying to enqueue block for orphan processing",
                 );
-                if let Err(e) = orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib) {
+                if let Err(e) =
+                    orphan_downloader.enqueue_orphan(block_id, Some(parent), info.tip, info.lib)
+                {
                     error!(
                         target: LOG_TARGET, %e, ?block_id, ?parent,
                         "Failed to enqueue block for orphan processing",
@@ -683,7 +685,7 @@ where
     ) where
         RuntimeServiceId: Send + Sync + 'static,
     {
-        match orphan_downloader.enqueue_orphan(chosen_tip, local.tip, local.lib) {
+        match orphan_downloader.enqueue_orphan(chosen_tip, None, local.tip, local.lib) {
             Ok(()) => {
                 info!(
                     target: LOG_TARGET,
