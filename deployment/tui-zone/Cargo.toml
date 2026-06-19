@@ -22,6 +22,7 @@ workspace = true
 
 [dependencies]
 bincode                          = { workspace = true }
+chrono                           = { workspace = true }
 clap                             = { features = ["derive", "env", "error-context", "help", "std", "suggestions", "usage"], workspace = true }
 hex                              = { workspace = true }
 lb-core                          = { workspace = true }
@@ -37,4 +38,3 @@ tracing                          = { workspace = true }
 tracing-appender                 = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "registry"], workspace = true }
 uuid                             = { features = ["serde", "v4"], workspace = true }
-chrono = "0.4.45"

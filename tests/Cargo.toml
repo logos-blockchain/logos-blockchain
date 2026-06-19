@@ -41,6 +41,7 @@ lb-libp2p                        = { workspace = true }
 lb-mmr                           = { workspace = true }
 lb-node                          = { features = ["testing"], workspace = true }
 lb-testing-framework             = { workspace = true }
+lb-tui-zone                      = { workspace = true }
 lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
@@ -65,7 +66,6 @@ time                             = { workspace = true }
 tokio                            = { workspace = true }
 tracing                          = { workspace = true }
 tracing-subscriber               = { features = ["env-filter", "fmt"], workspace = true }
-lb-tui-zone                      = { workspace = true }
 
 [features]
 cucumber             = []
