@@ -768,9 +768,8 @@ pub async fn start_node(
 /// Stop a node and leave it down.
 ///
 /// Unlike [`restart_node`], which brings it back up and waits for readiness,
-/// this leaves the node down. Used to exercise reconnect behavior: while the
-/// node is down, an in-process sequencer enters its reconnect loop but its
-/// `SequencerClient` stays alive.
+/// this leaves the node down, useful to exercise reconnect behavior while the
+/// node is down.
 pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
     let cluster = world
         .local_cluster

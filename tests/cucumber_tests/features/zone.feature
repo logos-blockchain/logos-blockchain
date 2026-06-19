@@ -122,14 +122,6 @@ Feature: Zone SDK
     # Take the node down: the sequencer enters its reconnect loop, but its
     # in-process SequencerClient stays alive.
     When I stop node "NODE_1"
-    # Publishes issued via SequencerClient while the node is down must be
-    # accepted locally and return promptly — the inscription is appended to
-    # state and posted on reconnect, the same as a republish-while-down. With
-    # the pre-fix behavior these client calls would block until connectivity
-    # returned (the request was never drained during reconnect), hanging here.
-    # This step publishes without waiting for inclusion (no node calls), so it
-    # works while the node is down; inclusion/finalization is asserted after
-    # restart below.
     And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
       | alias | data           |
       | MSG_1 | While down (1) |
