@@ -6,10 +6,7 @@ use crate::{
     cli::{ConfigArgs, RunResult},
     run_commands::{
         driver::{CommandGoal, WaitFor, drive_until_observed},
-        utils::{
-            load_or_create_signing_key, resolve_channel_id, save_cli_checkpoint,
-            start_cli_sequencer, timestamp,
-        },
+        utils::{load_or_create_signing_key, resolve_channel_id, start_cli_sequencer, timestamp},
     },
 };
 
@@ -49,24 +46,15 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
     let channel_id = resolve_channel_id(&args.node_key)?;
     let mut sequencer = start_cli_sequencer(&args.node_key).await?;
     let status_rx = sequencer.subscribe_tx_status();
-    let (result, checkpoint, signed_tx) = sequencer.handle().channel_config(
+    let (result, _checkpoint, signed_tx) = sequencer.handle().channel_config(
         Keys::try_from(authorized_keys)?,
         args.posting_timeframe.into(),
         args.posting_timeout.into(),
         args.configuration_threshold,
         args.withdraw_threshold,
     )?;
-    save_cli_checkpoint(&channel_id, &checkpoint)?;
     let tx_hash = signed_tx.hash();
     let goal = CommandGoal::Tx { tx_hash };
-    println!(
-        "{} zone config submitted channel_id={} tx_hash={} withdraw_threshold={} configuration_threshold={}",
-        timestamp(),
-        hex::encode(channel_id.as_ref()),
-        hex::encode(result.inscription_id().as_ref()),
-        args.withdraw_threshold,
-        args.configuration_threshold
-    );
     let wait_for = if args.wait_finalized {
         WaitFor::Finalized
     } else {
@@ -81,5 +69,13 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
         "zone_config",
     )
     .await?;
+    println!(
+        "{} zone config: submitted channel_id={} tx_hash={} withdraw_threshold={} configuration_threshold={}",
+        timestamp(),
+        hex::encode(channel_id.as_ref()),
+        hex::encode(result.inscription_id().as_ref()),
+        args.withdraw_threshold,
+        args.configuration_threshold
+    );
     Ok(())
 }

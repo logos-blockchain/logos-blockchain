@@ -5,7 +5,9 @@ use lb_core::{
         Note, Op, OpProof, SignedMantleTx, Transaction as _,
         encoding::{encode_mantle_tx, encode_signed_mantle_tx},
         ledger::Outputs,
-        ops::channel::{ChannelKeyIndex, inscribe::Inscription, withdraw::ChannelWithdrawOp},
+        ops::channel::{
+            ChannelId, ChannelKeyIndex, inscribe::Inscription, withdraw::ChannelWithdrawOp,
+        },
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -27,9 +29,9 @@ pub(crate) use crate::{
         utils::{
             decode_ed25519_public_key_hex, decode_hex_bincode, decode_mantle_tx_hex,
             decode_msg_id_hex, decode_signed_mantle_tx_hex, decode_zk_public_key_hex,
-            encode_hex_bincode, ensure_tx_hash, load_or_create_signing_key, node_client, read_json,
-            resolve_channel_id, save_cli_checkpoint, start_cli_sequencer, timestamp, validate_kind,
-            write_json,
+            encode_hex_bincode, ensure_tx_hash, fixed_bytes, load_or_create_signing_key,
+            node_client, read_json, resolve_channel_id, start_cli_sequencer, timestamp,
+            validate_kind, write_json,
         },
     },
 };
@@ -83,8 +85,10 @@ pub(crate) async fn run_withdraw_prepare(args: WithdrawPrepareArgs) -> RunResult
     };
     write_json(&args.out, &intent)?;
     println!(
-        "withdraw intent tx_hash={} msg_id={}",
-        intent.tx_hash, intent.msg_id
+        "{} withdraw intent: tx_hash={} msg_id={}",
+        timestamp(),
+        intent.tx_hash,
+        intent.msg_id
     );
     Ok(())
 }
@@ -116,8 +120,10 @@ pub(crate) fn run_withdraw_sign(args: &WithdrawSignArgs) -> RunResult<()> {
     };
     write_json(&args.out, &signature_file)?;
     println!(
-        "withdraw signature tx_hash={} signer_key_index={}",
-        signature_file.tx_hash, signature_file.signer_key_index
+        "{} withdraw signature: tx_hash={} signer_key_index={}",
+        timestamp(),
+        signature_file.tx_hash,
+        signature_file.signer_key_index
     );
     Ok(())
 }
@@ -201,8 +207,10 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
     };
     write_json(&args.out, &signed)?;
     println!(
-        "withdraw signed tx_hash={} msg_id={}",
-        signed.tx_hash, signed.msg_id
+        "{} withdraw signed: tx_hash={} msg_id={}",
+        timestamp(),
+        signed.tx_hash,
+        signed.msg_id
     );
     Ok(())
 }
@@ -223,21 +231,28 @@ fn validate_authorized_signer(
     .into())
 }
 
+fn decode_channel_id_hex(channel_id: &str) -> RunResult<ChannelId> {
+    Ok(ChannelId::from(fixed_bytes::<32>(channel_id)?))
+}
+
 pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<()> {
     let signed = read_json::<SignedWithdrawFile>(&args.input)?;
     validate_kind(&signed.kind, ZONE_SIGNED_TRANSACTION, signed.version)?;
     let signed_tx = decode_signed_mantle_tx_hex(&signed.signed_mantle_tx)?;
     let tx_hash = signed_tx.hash();
     ensure_tx_hash(&signed.tx_hash, tx_hash)?;
-    let channel_id = resolve_channel_id(&args.node_key)?;
-    let requested_channel_id = hex::encode(channel_id.as_ref());
-    if signed.channel_id != requested_channel_id {
+    let channel_id = decode_channel_id_hex(&signed.channel_id)?;
+    if let Some(requested_channel_id) = args.node_key.channel_id.as_deref()
+        && signed.channel_id != requested_channel_id
+    {
         return Err(format!(
-            "signed withdraw channel_id {} does not match requested channel_id {requested_channel_id}",
-            signed.channel_id
+            "signed withdraw channel_id {} does not match requested channel_id {}",
+            signed.channel_id, requested_channel_id
         )
         .into());
     }
+    let mut node_key = args.node_key;
+    node_key.channel_id = Some(signed.channel_id.clone());
     let tx = signed_tx.mantle_tx.clone();
     let withdraws = tx
         .ops()
@@ -259,14 +274,13 @@ pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<(
         );
     }
     let goal = CommandGoal::Withdraw { tx_hash, withdraws };
-    let mut sequencer = start_cli_sequencer(&args.node_key).await?;
+    let mut sequencer = start_cli_sequencer(&node_key).await?;
     let status_rx = sequencer.subscribe_tx_status();
-    let (_result, checkpoint) = sequencer
+    let (_result, _checkpoint) = sequencer
         .handle()
         .submit_signed_tx(signed_tx, decode_msg_id_hex(&signed.msg_id)?)?;
-    save_cli_checkpoint(&channel_id, &checkpoint)?;
     println!(
-        "{} withdraw submitted tx_hash={} msg_id={}",
+        "{} withdraw submitted: tx_hash={} msg_id={}",
         timestamp(),
         signed.tx_hash,
         signed.msg_id

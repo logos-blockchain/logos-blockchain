@@ -73,12 +73,13 @@ pub async fn drive_until_observed(
     let tx_hash = goal.tx_hash();
     let timeout = sleep(COMMAND_FINALITY_TIMEOUT);
     tokio::pin!(timeout);
+    let mut observed_on_chain = false;
 
     loop {
         select! {
             () = &mut timeout => {
                 return Err(format!(
-                    "{} {label} verification timeout tx_hash={}",
+                    "{} {label}: verification timeout tx_hash={}",
                     timestamp(),
                     hex::encode(tx_hash.as_ref())
                 ).into());
@@ -88,7 +89,7 @@ pub async fn drive_until_observed(
                     print_status(label, update);
                     if matches!(update.status, TxStatus::Orphaned(_)) {
                         return Err(format!(
-                            "{} {label} orphaned tx_hash={}",
+                            "{} {label}: orphaned tx_hash={}",
                             timestamp(),
                             hex::encode(tx_hash.as_ref())
                         ).into());
@@ -96,10 +97,7 @@ pub async fn drive_until_observed(
                     if matches!(update.status, TxStatus::OnChain(_))
                         && matches!(wait_for, WaitFor::OnChain)
                     {
-                        if let Some(checkpoint) = sequencer.checkpoint() {
-                            save_cli_checkpoint(channel_id, &checkpoint)?;
-                        }
-                        return Ok(());
+                        observed_on_chain = true;
                     }
                     if matches!(update.status, TxStatus::Finalized(_))
                         && matches!(goal, CommandGoal::Tx { .. })
@@ -110,7 +108,7 @@ pub async fn drive_until_observed(
                 Ok(_) => {}
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
                     println!(
-                        "{} {label} verification lagged skipped_updates={skipped}",
+                        "{} {label}: verification lagged skipped_updates={skipped}",
                         timestamp()
                     );
                 }
@@ -121,9 +119,12 @@ pub async fn drive_until_observed(
             event = sequencer.next_event() => {
                 if let Some(Event::BlocksProcessed { checkpoint, finalized, .. }) = event {
                     save_cli_checkpoint(channel_id, &checkpoint)?;
+                    if observed_on_chain {
+                        return Ok(());
+                    }
                     if finalized_goal_matches(&goal, &finalized) {
                         println!(
-                            "{} {label} finalized tx_hash={}",
+                            "{} {label}: finalized tx_hash={}",
                             timestamp(),
                             hex::encode(tx_hash.as_ref())
                         );

@@ -11,8 +11,8 @@ use crate::{
         types::{DepositSubmission, WalletFundsExport},
         utils::{
             build_deposit_op, build_deposit_transfer, decode_exported_utxos,
-            decode_required_hex_bincode, read_json, resolve_channel_id, save_cli_checkpoint,
-            start_cli_sequencer, timestamp, validate_kind, write_json,
+            decode_required_hex_bincode, read_json, resolve_channel_id, start_cli_sequencer,
+            timestamp, validate_kind, write_json,
         },
     },
 };
@@ -56,8 +56,7 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
             amount: args.amount,
             metadata: goal_metadata,
         };
-        let (_result, checkpoint) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
-        save_cli_checkpoint(&channel_id, &checkpoint)?;
+        let (_result, _checkpoint) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
         println!(
             "{} deposit submitted tx_hash={} msg_id={}",
             timestamp(),
@@ -96,8 +95,10 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
         write_json(&path, &submission)?;
     }
     println!(
-        "deposit tx_hash={} msg_id={}",
-        submission.tx_hash, submission.msg_id
+        "{} deposit: tx_hash={} msg_id={}",
+        timestamp(),
+        submission.tx_hash,
+        submission.msg_id
     );
     Ok(())
 }
