@@ -1,4 +1,5 @@
 use bytes::Bytes;
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -6,7 +7,10 @@ use crate::{
     crypto::Hash,
     mantle::{
         TxHash, Value,
-        ops::channel::{ChannelId, deposit::Metadata},
+        ops::{
+            channel::{ChannelId, deposit::Metadata},
+            leader_claim::VoucherNullifier,
+        },
     },
 };
 
@@ -78,6 +82,12 @@ pub enum EventPayload {
         channel_id: ChannelId,
         amount: Value,
         metadata: Metadata,
+    },
+    /// A leader claim operation created the reward note for its beneficiary.
+    LeaderRewardClaimed {
+        voucher_nullifier: VoucherNullifier,
+        pk: ZkPublicKey,
+        amount: Value,
     },
 }
 

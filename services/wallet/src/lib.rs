@@ -1150,8 +1150,9 @@ where
             return;
         };
 
+        let events = Self::load_block_events(header_id, storage_adapter).await;
         let wallet_block =
-            WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()));
+            WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()), &events);
         match state.apply_block(&wallet_block) {
             Ok(()) => {
                 trace!(target: LOG_TARGET, block_id = ?wallet_block.id, "Applied block to wallet");
@@ -1197,6 +1198,23 @@ where
             .get_block(&header_id)
             .await
             .ok_or(WalletServiceError::BlockNotFoundInStorage(header_id))
+    }
+
+    async fn load_block_events(
+        header_id: HeaderId,
+        storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> Events {
+        storage_adapter
+            .get_block_events(&header_id)
+            .await
+            .unwrap_or_else(|| {
+                warn!(
+                    target: LOG_TARGET,
+                    block_id = ?header_id,
+                    "Failed to load block events for wallet"
+                );
+                Events::new()
+            })
     }
 
     async fn handle_lib_update(
@@ -1297,8 +1315,9 @@ where
             }
 
             let block = Self::load_block(header_id, storage_adapter).await?;
+            let events = Self::load_block_events(header_id, storage_adapter).await;
             let wallet_block =
-                WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()));
+                WalletBlock::from_block(&block, epoch_config.epoch(block.header().slot()), &events);
 
             if let Err(e) = state.apply_block(&wallet_block) {
                 error!(

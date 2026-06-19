@@ -409,22 +409,25 @@ mod tests {
         );
 
         assert_eq!(events.len(), 1);
-        let Event::Tx {
-            tx_hash,
-            op_id,
-            payload,
-        } = events.iter().next().cloned().unwrap()
-        else {
-            panic!("expected Tx event")
-        };
+        let (tx_hash, op_id, event_channel_id, amount, metadata) = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Tx {
+                    tx_hash,
+                    op_id,
+                    payload:
+                        EventPayload::Deposit {
+                            channel_id,
+                            amount,
+                            metadata,
+                        },
+                } => Some((*tx_hash, *op_id, *channel_id, *amount, metadata.clone())),
+                _ => None,
+            })
+            .expect("events should include deposit event");
         assert_eq!(tx_hash, [0; 32].into());
         assert_eq!(op_id, deposit_op.op_id());
-        let EventPayload::Deposit {
-            channel_id,
-            amount,
-            metadata,
-        } = payload;
-        assert_eq!(channel_id, deposit_op.channel_id);
+        assert_eq!(event_channel_id, deposit_op.channel_id);
         assert_eq!(amount, utxo.note.value);
         assert_eq!(metadata, deposit_op.metadata);
     }

@@ -681,6 +681,7 @@ impl LedgerState {
                             reward_amount: self.mantle_ledger.leaders.reward_amount(),
                             claimable_rewards: self.mantle_ledger.leaders.claimable_rewards(),
                             utxos: self.cryptarchia_ledger.latest_utxos().clone(),
+                            tx_hash,
                         })
                         .map_err(mantle::Error::LeaderClaim)?;
                     self.mantle_ledger
@@ -1112,22 +1113,25 @@ mod tests {
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);
-        let Event::Tx {
-            tx_hash,
-            op_id,
-            payload,
-        } = events.iter().next().unwrap().clone()
-        else {
-            panic!("expected a Tx event")
-        };
-        assert_eq!(tx_hash, tx.hash());
+        let (event_tx_hash, op_id, event_channel_id, amount, metadata) = events
+            .iter()
+            .find_map(|event| match event {
+                Event::Tx {
+                    tx_hash,
+                    op_id,
+                    payload:
+                        EventPayload::Deposit {
+                            channel_id,
+                            amount,
+                            metadata,
+                        },
+                } => Some((*tx_hash, *op_id, *channel_id, *amount, metadata.clone())),
+                _ => None,
+            })
+            .expect("events should include deposit event");
+        assert_eq!(event_tx_hash, tx.hash());
         assert_eq!(op_id, deposit.op_id());
-        let EventPayload::Deposit {
-            channel_id,
-            amount,
-            metadata,
-        } = payload;
-        assert_eq!(channel_id, deposit.channel_id);
+        assert_eq!(event_channel_id, deposit.channel_id);
         assert_eq!(amount, utxo.note.value);
         assert_eq!(metadata, deposit.metadata);
     }
