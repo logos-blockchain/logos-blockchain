@@ -19,7 +19,10 @@ use crate::{
         },
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
-        sdp::serde::{Config as SdpConfig, RequiredValues as SdpRequiredValues},
+        sdp::{
+            ServiceConfig as SdpServiceConfig,
+            serde::{Config as SdpConfig, RequiredValues as SdpRequiredValues},
+        },
         storage::{
             ServiceConfig as StorageServiceConfig,
             serde::{Config as StorageConfig, RocksDbSettings},
@@ -122,6 +125,22 @@ fn common_recovery_folder() {
         mempool_service_settings
             .recovery_path
             .starts_with(Path::new(STATE_PATH).join("recovery").join("mempool"))
+    );
+
+    // The SDP service must own its recovery file under `recovery/sdp`. If it
+    // shares a path with another service (e.g. the mempool), that service
+    // overwrites the persisted `declaration_id`, so a restarted blend core node
+    // loses its declaration and silently drops out of the blend network.
+    let sdp_service_settings = SdpServiceConfig {
+        user: user_config.sdp.clone(),
+    }
+    .into_sdp_service_settings(&user_config.state);
+    assert!(
+        sdp_service_settings
+            .recovery_path
+            .starts_with(Path::new(STATE_PATH).join("recovery").join("sdp")),
+        "SDP recovery path must live under recovery/sdp, but was {:?} (collides with another service's recovery file)",
+        sdp_service_settings.recovery_path
     );
 
     let storage_service_settings = StorageServiceConfig {

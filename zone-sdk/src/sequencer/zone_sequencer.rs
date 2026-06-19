@@ -11,32 +11,44 @@ use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction as _,
-        channel::ChannelState,
-        ops::channel::{ChannelId, MsgId, inscribe::Inscription},
+        MantleTx, Op, SignedMantleTx, Transaction as _,
+        channel::{ChannelState, SlotTimeframe, SlotTimeout},
+        encoding::Ops,
+        ops::channel::{
+            ChannelId, MsgId,
+            config::Keys,
+            inscribe::{Inscription, InscriptionOp},
+            withdraw::ChannelWithdrawOp,
+        },
         tx::TxHash,
     },
 };
-use lb_key_management_system_service::keys::Ed25519Key;
-use tokio::sync::{broadcast, watch};
-use tracing::{info, warn};
+use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tracing::{debug, info, warn};
 
 use super::{
     TARGET,
+    client::SequencerClient,
     handle::SequencerHandle,
     slot_clock::SlotClock,
     state::TxState,
+    tx_builder::{
+        build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
+        find_own_key_index, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
+    },
     types::{
-        Event, SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification,
-        TxSource, TxStatus, TxStatusUpdate, WithdrawInfo,
+        AtomicWithdrawInfo, Error, Event, InscriptionInfo, PendingTx, PublishResult,
+        SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
+        TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo,
     },
 };
 use crate::{adapter, adapter::BoxStream};
 
 /// Zone sequencer.
 ///
-/// The caller drives execution by pumping [`Self::next_event`] or
-/// [`Self::events`] in a loop. Publish and admin operations go through a
+/// The caller drives execution by pumping [`Self::next_event`] in a loop.
+/// Publish and admin operations go through a
 /// borrowing [`SequencerHandle`] obtained via [`Self::handle`] — the handle's
 /// `&mut self` borrow means it can only be used from the drive task, which
 /// removes any actor-vs-caller deadlock window and lets every state-mutating
@@ -117,6 +129,53 @@ pub struct ZoneSequencer<Node> {
     pub(super) turn_to_write_tx: watch::Sender<TurnNotification>,
     pub(super) checkpoint_tx: watch::Sender<Option<SequencerCheckpoint>>,
     pub(super) tx_status_tx: broadcast::Sender<TxStatusUpdate>,
+
+    // Request channel for actor-routed commands from cheap-to-clone
+    // `SequencerClient`s. `request_tx` is retained so `client()` can vend new
+    // senders; `request_rx` is drained inside `next_event`.
+    request_tx: mpsc::UnboundedSender<ActorRequest>,
+    request_rx: mpsc::UnboundedReceiver<ActorRequest>,
+}
+
+/// Internal request enum routed through the actor's `request_rx` channel.
+///
+/// Sent by [`SequencerClient`] from any task; processed inside
+/// [`ZoneSequencer::next_event`] and replied to via the embedded oneshot.
+/// One variant per [`SequencerHandle`] method, so the client surface is a
+/// 1:1 async mirror of the drive-loop handle.
+pub(super) enum ActorRequest {
+    Publish {
+        data: Inscription,
+        response_tx: oneshot::Sender<Result<(PublishResult, SequencerCheckpoint), Error>>,
+    },
+    PublishAtomicWithdraw {
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+        response_tx: oneshot::Sender<Result<(PublishResult, SequencerCheckpoint), Error>>,
+    },
+    ChannelConfig {
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
+        response_tx:
+            oneshot::Sender<Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error>>,
+    },
+    SubmitSignedTx {
+        tx: SignedMantleTx,
+        msg_id: MsgId,
+        response_tx: oneshot::Sender<Result<(PublishResult, SequencerCheckpoint), Error>>,
+    },
+    PrepareTx {
+        ops: Ops,
+        data: Inscription,
+        response_tx: oneshot::Sender<Result<(MantleTx, MsgId, Ed25519Signature), Error>>,
+    },
+    SignTx {
+        tx: MantleTx,
+        response_tx: oneshot::Sender<Result<Ed25519Signature, Error>>,
+    },
 }
 
 impl<Node> ZoneSequencer<Node>
@@ -194,6 +253,7 @@ where
             .map(|s| build_checkpoint(s, last_msg_id, lib_slot));
         let (checkpoint_tx, _) = watch::channel(initial_checkpoint);
         let (tx_status_tx, _) = broadcast::channel(256);
+        let (request_tx, request_rx) = mpsc::unbounded_channel();
 
         Self {
             channel_id,
@@ -223,6 +283,8 @@ where
             turn_to_write_tx,
             checkpoint_tx,
             tx_status_tx,
+            request_tx,
+            request_rx,
         }
     }
 
@@ -234,6 +296,31 @@ where
     /// the publish + checkpoint atomically.
     pub const fn handle(&mut self) -> SequencerHandle<'_, Node> {
         SequencerHandle::new(self)
+    }
+
+    /// Obtain a cheap-to-clone client for driving the sequencer from tasks
+    /// outside the drive loop.
+    ///
+    /// Unlike [`Self::handle`], the client does not borrow the sequencer —
+    /// publish/admin commands are routed through an internal channel and
+    /// processed inside [`Self::next_event`], and watch/broadcast
+    /// subscriptions are vended directly from cloned senders. The drive loop
+    /// must therefore still be polled for client publish calls to make
+    /// progress; an unpolled sequencer will leave client awaits pending
+    /// forever. Subscriptions, on the other hand, work regardless of whether
+    /// the drive loop is being polled (they're just receivers attached to the
+    /// senders the actor updates).
+    #[must_use]
+    pub fn client(&self) -> SequencerClient {
+        SequencerClient::new(
+            self.request_tx.clone(),
+            self.event_tx.clone(),
+            self.ready_tx.clone(),
+            self.channel_view_tx.clone(),
+            self.turn_to_write_tx.clone(),
+            self.checkpoint_tx.clone(),
+            self.tx_status_tx.clone(),
+        )
     }
 
     /// Whether the sequencer has completed cold-start backfill.
@@ -315,39 +402,33 @@ where
     ///
     /// Late subscribers see events emitted from this point on (not the
     /// full history). The primary way to consume events is
-    /// [`Self::next_event`] / [`Self::events`] on the drive task; this
-    /// broadcast is for additional read-only observers.
+    /// [`Self::next_event`] on the drive task; this broadcast is for
+    /// additional read-only observers.
     #[must_use]
     pub fn subscribe_events(&self) -> broadcast::Receiver<Event> {
         self.event_tx.subscribe()
     }
 
-    /// Convert the sequencer into a [`futures::Stream`] of [`Event`]s.
+    /// Drive the sequencer until the next public event.
     ///
-    /// The returned stream borrows `self` mutably for its lifetime. For
-    /// drive loops that also need to call [`Self::handle`] in response to
-    /// events, prefer [`Self::next_event`] in a `tokio::select!` so the
-    /// borrow is released between turns.
-    pub fn events(&mut self) -> impl futures::Stream<Item = Event> + Send + Unpin + '_ {
-        Box::pin(futures::stream::unfold(self, async |seq| {
-            // `next_event` can complete a drive step without emitting a public
-            // event; loop until we have one. All such non-emitting paths await
-            // (network call, sleep, or channel/timer poll), so this loop is
-            // not a hot spin.
-            loop {
-                if let Some(event) = seq.next_event().await {
-                    return Some((event, seq));
-                }
+    /// Loops internally over drive steps that complete work without emitting
+    /// (in-progress backfill batches, periodic resubmit ticks, in-flight post
+    /// completions, reconnect retries), so the caller's loop body always
+    /// receives a real [`Event`] — no `Option` unwrapping required.
+    pub async fn next_event(&mut self) -> Event {
+        loop {
+            if let Some(ev) = self.step().await {
+                return ev;
             }
-        }))
+        }
     }
 
     /// Drive the sequencer one step. Returns `None` when the step completed
     /// without emitting a public event (e.g. an empty backfill batch, a
     /// failed reconnect attempt that already slept, a periodic resubmit
-    /// tick). Designed for `tokio::select!` so the drive task can interleave
-    /// publish calls via [`Self::handle`] between turns.
-    pub async fn next_event(&mut self) -> Option<Event> {
+    /// tick). Internal: callers use [`Self::next_event`] which loops until
+    /// an event is produced.
+    async fn step(&mut self) -> Option<Event> {
         // Return buffered event from previous call if any.
         if let Some(event) = self.buffered_events.pop_front() {
             return Some(self.emit_now(event));
@@ -387,7 +468,387 @@ where
                 }
                 self.buffered_events.pop_front().map(|event| self.emit_now(event))
             }
+            Some(request) = self.request_rx.recv() => {
+                self.handle_request(request);
+                None
+            }
         }
+    }
+
+    fn handle_request(&mut self, request: ActorRequest) {
+        match request {
+            ActorRequest::Publish { data, response_tx } => {
+                drop(response_tx.send(self.do_publish(data)));
+            }
+            ActorRequest::PublishAtomicWithdraw {
+                inscribe,
+                withdraws,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_publish_atomic_withdraw(inscribe, withdraws)));
+            }
+            ActorRequest::ChannelConfig {
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                withdraw_threshold,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_channel_config(
+                    keys,
+                    posting_timeframe,
+                    posting_timeout,
+                    configuration_threshold,
+                    withdraw_threshold,
+                )));
+            }
+            ActorRequest::SubmitSignedTx {
+                tx,
+                msg_id,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_submit_signed_tx(tx, msg_id)));
+            }
+            ActorRequest::PrepareTx {
+                ops,
+                data,
+                response_tx,
+            } => {
+                drop(response_tx.send(self.do_prepare_tx(ops, data)));
+            }
+            ActorRequest::SignTx { tx, response_tx } => {
+                drop(response_tx.send(self.do_sign_tx(&tx)));
+            }
+        }
+    }
+
+    /// Wait the configured reconnect delay, but keep servicing client
+    /// [`ActorRequest`]s while waiting.
+    ///
+    /// This preserves the same post-[`Event::Ready`] local-acceptance
+    /// semantics as
+    /// [`SequencerHandle::publish`](super::SequencerHandle::publish):
+    /// a publish that arrives via [`SequencerClient`](super::SequencerClient)
+    /// during a reconnect is handled immediately (queued locally via
+    /// `do_publish`) instead of blocking until connectivity is restored.
+    /// Without this, client requests would sit unserviced until
+    /// [`Self::ensure_connected`] succeeds, since `request_rx` is otherwise
+    /// only drained from `step`'s `select!` after connection.
+    ///
+    /// The sleep is pinned so the backoff keeps elapsing across iterations: any
+    /// number of requests can be serviced during the wait without resetting or
+    /// short-circuiting the delay.
+    pub(super) async fn wait_reconnect_delay(&mut self) {
+        let sleep = tokio::time::sleep(self.config.reconnect_delay);
+        tokio::pin!(sleep);
+        loop {
+            tokio::select! {
+                () = &mut sleep => break,
+                Some(request) = self.request_rx.recv() => self.handle_request(request),
+            }
+        }
+    }
+
+    fn ensure_ready(&self) -> Result<(), Error> {
+        if !self.is_ready() {
+            return Err(Error::Unavailable {
+                reason: "sequencer not yet ready",
+            });
+        }
+        if self.state.is_none() {
+            return Err(Error::Unavailable {
+                reason: "sequencer state not initialized",
+            });
+        }
+        Ok(())
+    }
+
+    /// Core publish logic. Shared by [`SequencerHandle::publish`] (called
+    /// from the drive task) and the actor's [`ActorRequest::Publish`] handler
+    /// (called from outside the drive task via [`SequencerClient`]).
+    pub(super) fn do_publish(
+        &mut self,
+        data: Inscription,
+    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+        self.ensure_ready()?;
+
+        let parent = self.compute_publish_parent();
+        let (signed_tx, new_msg_id) =
+            create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
+        let id = signed_tx.mantle_tx.hash();
+
+        debug!(target: TARGET,
+            "Prepared publish: payload={:?}, parent={}, msg_id={}, tx={}",
+            String::from_utf8_lossy(&data),
+            hex::encode(parent.as_ref()),
+            hex::encode(new_msg_id.as_ref()),
+            hex::encode(id.0),
+        );
+
+        let info = InscriptionInfo {
+            tx_hash: id,
+            parent_msg: parent,
+            this_msg: new_msg_id,
+            payload: data.clone(),
+        };
+
+        // Safe to unwrap — `ensure_ready` checks state.
+        let state = self.state.as_mut().unwrap();
+        state.submit_inscription(signed_tx.clone(), parent, new_msg_id, data);
+        self.last_msg_id = new_msg_id;
+        self.queue_tx_status(id, TxStatus::AcceptedLocally);
+
+        if self.can_publish_inscription_now() {
+            self.queue_publish_post(id, signed_tx);
+        }
+
+        self.publish_channel_view();
+
+        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
+            reason: "checkpoint unavailable",
+        })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::Inscription(info),
+            },
+            checkpoint,
+        ))
+    }
+
+    pub(super) fn do_publish_atomic_withdraw(
+        &mut self,
+        inscribe: Inscription,
+        withdraws: Vec<WithdrawArg>,
+    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+        self.ensure_ready()?;
+
+        if withdraws.is_empty() {
+            return Err(Error::Network(
+                "publish_atomic_withdraw requires at least one withdraw".into(),
+            ));
+        }
+
+        // Use the cached channel state kept fresh by the drive loop — see
+        // `ensure_connected` for the staleness gate.
+        let channel_state = self.channel_state.as_ref().ok_or_else(|| {
+            Error::Network(format!(
+                "publish_atomic_withdraw requires channel state for {:?}",
+                self.channel_id
+            ))
+        })?;
+        if channel_state.withdraw_threshold > 1 {
+            return Err(Error::Network(format!(
+                "publish_atomic_withdraw requires withdraw_threshold == 1, got {}",
+                channel_state.withdraw_threshold
+            )));
+        }
+        let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
+        let mut next_nonce = channel_state.withdrawal_nonce;
+
+        let parent = self.compute_publish_parent();
+
+        let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
+        let mut withdraw_ops = Vec::with_capacity(withdraws.len());
+        for arg in withdraws {
+            let op = ChannelWithdrawOp {
+                channel_id: self.channel_id,
+                outputs: arg.outputs,
+                withdraw_nonce: next_nonce,
+            };
+            withdraw_ops.push(op.clone());
+            ops.push(Op::ChannelWithdraw(op));
+            next_nonce = next_nonce
+                .checked_add(1)
+                .ok_or_else(|| Error::Network("withdraw nonce overflow".into()))?;
+        }
+
+        let inscription_op = InscriptionOp {
+            channel_id: self.channel_id,
+            inscription: inscribe.clone(),
+            parent,
+            signer: self.signing_key.public_key(),
+        };
+        let msg_id = inscription_op.id();
+        ops.push(Op::ChannelInscribe(inscription_op));
+
+        let tx = MantleTx(Ops::try_from(ops).map_err(|e| {
+            Error::Network(format!("atomic withdraw bundle exceeds op limit: {e:?}"))
+        })?);
+        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
+        let ops_proofs = build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig)?;
+        let signed_tx = SignedMantleTx::new(tx, ops_proofs)
+            .map_err(|e| Error::Network(format!("signed tx assembly failed: {e:?}")))?;
+
+        let tx_hash = signed_tx.mantle_tx.hash();
+        let withdraw_infos: Vec<WithdrawInfo> = withdraw_ops
+            .into_iter()
+            .map(|op| WithdrawInfo { tx_hash, op })
+            .collect();
+
+        // Safe to unwrap — `ensure_ready` checks state.
+        let state = self.state.as_mut().unwrap();
+        state.submit_atomic_withdraw(
+            signed_tx.clone(),
+            parent,
+            msg_id,
+            inscribe.clone(),
+            withdraw_infos.clone(),
+        );
+        self.last_msg_id = msg_id;
+        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
+
+        if self.can_publish_inscription_now() {
+            self.queue_publish_post(tx_hash, signed_tx);
+        }
+
+        self.publish_channel_view();
+
+        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
+            reason: "checkpoint unavailable",
+        })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
+                    tx_hash,
+                    inscription: InscriptionInfo {
+                        tx_hash,
+                        parent_msg: parent,
+                        this_msg: msg_id,
+                        payload: inscribe,
+                    },
+                    withdraws: withdraw_infos,
+                }),
+            },
+            checkpoint,
+        ))
+    }
+
+    pub(super) fn do_channel_config(
+        &mut self,
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
+    ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
+        self.ensure_ready()?;
+
+        let signed_tx = create_channel_config_tx(
+            self.channel_id,
+            &[&self.signing_key],
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            withdraw_threshold,
+        );
+        let tx_hash = signed_tx.mantle_tx.hash();
+
+        // Safe to unwrap — `ensure_ready` checks state.
+        let state = self.state.as_mut().unwrap();
+        state.submit_other(signed_tx.clone());
+        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
+
+        info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
+
+        self.queue_publish_post(tx_hash, signed_tx.clone());
+
+        self.publish_channel_view();
+
+        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
+            reason: "checkpoint unavailable",
+        })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::Inscription(InscriptionInfo {
+                    tx_hash,
+                    parent_msg: self.last_msg_id,
+                    this_msg: self.last_msg_id,
+                    payload: Inscription::new_unchecked(Vec::new()),
+                }),
+            },
+            checkpoint,
+            signed_tx,
+        ))
+    }
+
+    pub(super) fn do_submit_signed_tx(
+        &mut self,
+        tx: SignedMantleTx,
+        msg_id: MsgId,
+    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+        self.ensure_ready()?;
+
+        // Safe to unwrap — `ensure_ready` checks state.
+        let state = self.state.as_mut().unwrap();
+        let id = tx.mantle_tx.hash();
+        state.submit_other(tx.clone());
+        let parent_msg = self.last_msg_id;
+        self.last_msg_id = msg_id;
+        self.queue_tx_status(id, TxStatus::AcceptedLocally);
+
+        info!(target: TARGET, "Submitted tx including inscription {:?}", id);
+
+        let payload = tx
+            .mantle_tx
+            .ops()
+            .iter()
+            .find_map(|op| match op {
+                Op::ChannelInscribe(i) if i.channel_id == self.channel_id => {
+                    Some(i.inscription.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| Inscription::new_unchecked(Vec::new()));
+
+        self.queue_publish_post(id, tx);
+
+        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
+            reason: "checkpoint unavailable",
+        })?;
+
+        Ok((
+            PublishResult {
+                tx: PendingTx::Inscription(InscriptionInfo {
+                    tx_hash: id,
+                    parent_msg,
+                    this_msg: msg_id,
+                    payload,
+                }),
+            },
+            checkpoint,
+        ))
+    }
+
+    pub(super) fn do_prepare_tx(
+        &self,
+        ops: Ops,
+        data: Inscription,
+    ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
+        self.ensure_ready()?;
+        Ok(build_prepare_tx(
+            ops,
+            self.channel_id,
+            &self.signing_key,
+            data,
+            self.last_msg_id,
+        ))
+    }
+
+    pub(super) fn do_sign_tx(&self, tx: &MantleTx) -> Result<Ed25519Signature, Error> {
+        self.ensure_ready()?;
+        Ok(build_sign_tx(tx.hash(), &self.signing_key))
+    }
+
+    pub(super) fn compute_publish_parent(&self) -> MsgId {
+        // Safe to unwrap — callers gate on `state.is_some()`.
+        let state = self.state.as_ref().unwrap();
+        self.current_tip
+            .map_or(self.last_msg_id, |tip| state.publish_parent(tip))
     }
 
     pub(super) fn emit_now(&self, event: Event) -> Event {
