@@ -165,11 +165,11 @@ The view carries `pending_publish_txs` and `queued_messages` so the UI can show 
 
 ## Adding and removing sequencers
 
-The committee is changed by submitting a `ChannelConfig` op — same primitive used during channel creation. Two flows exist depending on the current `configuration_threshold`.
+The committee is changed by submitting a `ChannelConfig` op — same primitive used during channel creation. Currently only the single signer flow is supported through the SDK, but we outline both flows here.
 
-### Single-admin: `configuration_threshold == 1`
+### Single-signer: `configuration_threshold == 1`
 
-Currently only the signing key at the first index (`keys[0]`) - the channel administrator key - is authorized (hard-coded) to change the channel configuration. The `ChannelConfigOp` operation overwrites the entire key list - include the admin key at the first index again if it should remain authorized as the channel administrator key.
+When `configuration_threshold == 1`, a single valid signature from any one of the channel's accredited keys authorizes a configuration change. Because `ChannelConfigOp` overwrites the entire key list, re-include any keys that should remain accredited after the update.
 
 ```rust
 use lb_core::mantle::channel::{Keys, SlotTimeframe, SlotTimeout};
