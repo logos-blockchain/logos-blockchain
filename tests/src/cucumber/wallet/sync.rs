@@ -52,34 +52,6 @@ pub async fn current_available_utxos_for_user_wallets(
     .await
 }
 
-pub async fn start_current_wallet_feed_tracking_from_observed_tip(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallets: &[WalletInfo],
-) -> Result<(), StepError> {
-    world.ensure_wallet_block_feed().await?;
-    let feed = world.wallet_block_feed()?;
-    let genesis_utxos = world.genesis_block_utxos.clone();
-    let feed_requirements = wallet_feed_source_requirements(world, wallets).await?;
-    let wallet_keys = build_tracked_wallet_keys(world, step, wallets)?;
-    let tracking_batches = wallet_feed_tracking_batches(world, &wallet_keys, &feed_requirements);
-
-    wait_for_wallet_feed_sources(world, &feed, feed_requirements).await?;
-
-    world
-        .with_wallet_feed_state_mut(|tracker, wallets| {
-            tracker.track_wallets_from_observed_tip(
-                wallets,
-                &tracking_batches,
-                &feed,
-                &genesis_utxos,
-            )
-        })?
-        .map_err(wallet_feed_error)?;
-
-    Ok(())
-}
-
 pub async fn current_available_utxos_for_funding_wallets(
     world: &mut CucumberWorld,
     step: &str,
@@ -248,7 +220,9 @@ async fn current_wallet_state_views(
     let started_at = Instant::now();
 
     loop {
-        let observations = current_wallet_state_views_from_feed(world, wallet_keys, &feed)?;
+        apply_latest_wallet_feed_state(world, &feed, &tracking_batches, &genesis_utxos).await?;
+
+        let observations = current_wallet_state_views_from_state(world, wallet_keys)?;
 
         if !wallet_states_waiting_for_reserved_outputs(&observations)
             || started_at.elapsed() >= CURRENT_WALLET_STATE_CATCH_UP_TIMEOUT
@@ -260,13 +234,10 @@ async fn current_wallet_state_views(
     }
 }
 
-fn current_wallet_state_views_from_feed(
+fn current_wallet_state_views_from_state(
     world: &CucumberWorld,
     wallet_keys: &TrackedWalletKeysBySource,
-    feed: &BlockFeed,
 ) -> Result<BTreeMap<WalletId, WalletStateView>, StepError> {
-    apply_latest_wallet_feed_state(world, feed)?;
-
     let mut observations = world.with_wallets(|wallets| {
         wallets.current_wallet_states(wallet_keys.wallet_keys().cloned())
     })?;
@@ -412,7 +383,11 @@ async fn wait_for_wallet_feed_sources(
         .map_or(0, |observation| observation.cycle());
 
     loop {
-        apply_latest_wallet_feed_state(world, feed)?;
+        if let Some(status) =
+            update_wallet_feed_state_status(world, feed, &world.genesis_block_utxos)?
+        {
+            debug!(target: TARGET, "{status}");
+        }
 
         if let Some(observation) = feed.latest_observation() {
             let pending_sources = pending_wallet_feed_sources(&observation, &requirements);
@@ -498,16 +473,21 @@ fn wallet_feed_timeout_message(feed: &BlockFeed, details: &str) -> String {
     )
 }
 
-fn apply_latest_wallet_feed_state(
+async fn apply_latest_wallet_feed_state(
     world: &CucumberWorld,
     feed: &BlockFeed,
+    tracking_batches: &[WalletFeedTrackingBatch],
+    genesis_utxos: &[Utxo],
 ) -> Result<(), StepError> {
-    if let Some(status) = update_wallet_feed_state_status(world, feed, &world.genesis_block_utxos)?
-    {
-        debug!(target: TARGET, "{status}");
-    }
+    match update_wallet_feed_state(world, feed, genesis_utxos)? {
+        Ok(()) => Ok(()),
+        Err(error) if error.requires_direct_backfill() => {
+            debug!(target: TARGET, "wallet feed state needs backfill: {error}");
 
-    Ok(())
+            backfill_wallet_feed_batches(world, tracking_batches, genesis_utxos).await
+        }
+        Err(error) => Err(wallet_feed_error(error)),
+    }
 }
 
 fn build_tracked_wallet_keys(

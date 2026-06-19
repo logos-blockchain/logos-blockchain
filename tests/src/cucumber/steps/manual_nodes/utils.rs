@@ -8,7 +8,7 @@ use std::{
 use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
-use lb_chain_service::{ChainServiceMode, CryptarchiaInfo, State};
+use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, State};
 use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
@@ -422,8 +422,9 @@ async fn fetch_public_peer_consensus(
         .send()
         .await?
         .error_for_status()?
-        .json::<CryptarchiaInfo>()
+        .json::<ChainServiceInfo>()
         .await
+        .map(|info| info.cryptarchia_info)
         .map_err(Into::into)
 }
 

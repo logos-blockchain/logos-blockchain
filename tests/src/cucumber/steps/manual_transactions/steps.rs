@@ -31,10 +31,7 @@ use crate::{
             },
         },
         utils::resolve_literal_or_env,
-        wallet::{
-            best_node::get_best_node_info,
-            sync::start_current_wallet_feed_tracking_from_observed_tip,
-        },
+        wallet::best_node::get_best_node_info,
         world::{CucumberWorld, WalletInfo},
     },
     non_zero,
@@ -679,15 +676,7 @@ async fn step_request_faucet_funds_for_wallet(
 
     let wallet_pk_hex = wallet.public_key_hex();
 
-    start_current_wallet_feed_tracking_from_observed_tip(
-        world,
-        &step.value,
-        std::slice::from_ref(&wallet),
-    )
-    .await
-    .inspect_err(|error| {
-        warn!(target: TARGET, "Step `{}` error: {error}", step.value);
-    })?;
+    track_wallets_before_faucet_request(world, step).await?;
 
     utils::request_faucet_funds(
         world,
@@ -704,17 +693,13 @@ async fn step_request_faucet_funds_for_all_wallets(
     step: &Step,
     number_of_rounds: usize,
 ) -> StepResult {
-    let wallets = world.wallet_info.values().cloned().collect::<Vec<_>>();
-    let all_wallets_pk_hex = wallets
-        .iter()
+    let all_wallets_pk_hex = world
+        .wallet_info
+        .values()
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 
-    start_current_wallet_feed_tracking_from_observed_tip(world, &step.value, &wallets)
-        .await
-        .inspect_err(|error| {
-            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
-        })?;
+    track_wallets_before_faucet_request(world, step).await?;
 
     utils::request_faucet_funds(
         world,
@@ -731,23 +716,14 @@ async fn step_request_faucet_funds_for_all_user_wallets(
     step: &Step,
     number_of_rounds: usize,
 ) -> StepResult {
-    let wallets = world
+    let all_wallets_pk_hex = world
         .wallet_info
         .values()
         .filter(|w| w.is_user_wallet())
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let all_wallets_pk_hex = wallets
-        .iter()
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 
-    start_current_wallet_feed_tracking_from_observed_tip(world, &step.value, &wallets)
-        .await
-        .inspect_err(|error| {
-            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
-        })?;
+    track_wallets_before_faucet_request(world, step).await?;
 
     utils::request_faucet_funds(
         world,
@@ -764,23 +740,14 @@ async fn step_request_faucet_funds_for_all_funding_wallets(
     step: &Step,
     number_of_rounds: usize,
 ) -> StepResult {
-    let wallets = world
+    let all_wallets_pk_hex = world
         .wallet_info
         .values()
         .filter(|w| w.is_funding_wallet())
-        .cloned()
-        .collect::<Vec<_>>();
-
-    let all_wallets_pk_hex = wallets
-        .iter()
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 
-    start_current_wallet_feed_tracking_from_observed_tip(world, &step.value, &wallets)
-        .await
-        .inspect_err(|error| {
-            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
-        })?;
+    track_wallets_before_faucet_request(world, step).await?;
 
     utils::request_faucet_funds(
         world,
@@ -788,4 +755,20 @@ async fn step_request_faucet_funds_for_all_funding_wallets(
         non_zero!("number of rounds", number_of_rounds)?,
         &all_wallets_pk_hex,
     )
+}
+
+async fn track_wallets_before_faucet_request(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    world
+        .ensure_wallet_block_feed()
+        .await
+        .inspect_err(|error| {
+            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+        })?;
+
+    world
+        .track_known_wallets_with_block_feed()
+        .await
+        .inspect_err(|error| {
+            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+        })
 }

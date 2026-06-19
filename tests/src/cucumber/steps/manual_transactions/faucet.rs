@@ -1,5 +1,6 @@
 use std::{num::NonZero, time::Duration};
 
+use lb_chain_service::ChainServiceInfo;
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use reqwest::Client;
 use tokio::{task::JoinHandle, time::sleep};
@@ -145,20 +146,9 @@ impl FaucetTask {
                         continue;
                     }
 
-                    match response.json::<serde_json::Value>().await {
+                    match response.json::<ChainServiceInfo>().await {
                         Ok(data) => {
-                            if let Some(height) =
-                                data.get("height").and_then(serde_json::Value::as_u64)
-                            {
-                                return Ok(height);
-                            }
-                            last_err = Some(
-                                format!(
-                                    "[check_block_height] Missing or invalid `height` in JSON \
-                                        from {url}",
-                                )
-                                .into(),
-                            );
+                            return Ok(data.cryptarchia_info.height);
                         }
                         Err(e) => {
                             last_err = Some(Box::new(e));
