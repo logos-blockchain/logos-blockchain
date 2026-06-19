@@ -117,7 +117,7 @@ pub async fn drive_until_observed(
                 }
             },
             event = sequencer.next_event() => {
-                if let Some(Event::BlocksProcessed { checkpoint, finalized, .. }) = event {
+                if let Event::BlocksProcessed { checkpoint, finalized, .. } = event {
                     save_cli_checkpoint(channel_id, &checkpoint)?;
                     if observed_on_chain {
                         return Ok(());
