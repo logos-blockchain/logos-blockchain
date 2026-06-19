@@ -52,6 +52,34 @@ pub async fn current_available_utxos_for_user_wallets(
     .await
 }
 
+pub async fn start_current_wallet_feed_tracking_from_observed_tip(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallets: &[WalletInfo],
+) -> Result<(), StepError> {
+    world.ensure_wallet_block_feed().await?;
+    let feed = world.wallet_block_feed()?;
+    let genesis_utxos = world.genesis_block_utxos.clone();
+    let feed_requirements = wallet_feed_source_requirements(world, wallets).await?;
+    let wallet_keys = build_tracked_wallet_keys(world, step, wallets)?;
+    let tracking_batches = wallet_feed_tracking_batches(world, &wallet_keys, &feed_requirements);
+
+    wait_for_wallet_feed_sources(world, &feed, feed_requirements).await?;
+
+    world
+        .with_wallet_feed_state_mut(|tracker, wallets| {
+            tracker.track_wallets_from_observed_tip(
+                wallets,
+                &tracking_batches,
+                &feed,
+                &genesis_utxos,
+            )
+        })?
+        .map_err(wallet_feed_error)?;
+
+    Ok(())
+}
+
 pub async fn current_available_utxos_for_funding_wallets(
     world: &mut CucumberWorld,
     step: &str,

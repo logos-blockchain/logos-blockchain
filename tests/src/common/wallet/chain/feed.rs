@@ -42,6 +42,11 @@ pub enum WalletBlockFeedTrackerError {
         source_node_name: String,
         height: u64,
     },
+    #[error(
+        "cannot start wallet tracking from observed tip for `{source_node_name}` before source \
+        has advanced past genesis"
+    )]
+    SourceAtGenesis { source_node_name: String },
     #[error(transparent)]
     TrackedKeys(#[from] TrackedWalletKeysError),
 }
@@ -243,6 +248,42 @@ impl WalletBlockFeedTracker {
         Ok(tracking)
     }
 
+    /// Start wallet tracking from the currently observed feed tip.
+    ///
+    /// This is for live-chain scenarios that intentionally begin tracking
+    /// before new wallet-relevant transactions are submitted. It does not
+    /// reconstruct historical wallet state.
+    pub fn track_wallets_from_observed_tip(
+        &mut self,
+        wallets: &mut TrackedWallets,
+        tracking_batches: &[WalletFeedTrackingBatch],
+        feed: &BlockFeed,
+        genesis_utxos: &[Utxo],
+    ) -> Result<(), WalletBlockFeedTrackerError> {
+        self.remember_block_bodies(&feed.history());
+
+        let Some(observation) = feed.latest_observation() else {
+            return Ok(());
+        };
+
+        for batch in tracking_batches {
+            self.prepare_tracking_batch_from_observed_tip(wallets, batch, genesis_utxos)?;
+        }
+
+        let view = WalletFeedChainView::new(observation, &self.block_bodies_by_header);
+
+        for batch in tracking_batches {
+            Self::start_prepared_tracking_batch_from_observed_tip(
+                wallets,
+                &mut self.source_trackers,
+                batch,
+                &view,
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Apply all newly observed canonical blocks from the feed.
     pub fn apply_feed(
         &mut self,
@@ -328,6 +369,75 @@ impl WalletBlockFeedTracker {
         );
 
         Ok(WalletSourceTracking::Ready)
+    }
+
+    fn prepare_tracking_batch_from_observed_tip(
+        &mut self,
+        wallets: &mut TrackedWallets,
+        batch: &WalletFeedTrackingBatch,
+        genesis_utxos: &[Utxo],
+    ) -> Result<(), WalletBlockFeedTrackerError> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        wallets.ensure_wallets_from_tracked_keys(batch.wallet_keys());
+        self.ensure_observed_tip_source_tracker(
+            batch.source_node_name(),
+            batch.wallet_keys(),
+            genesis_utxos,
+        )?;
+
+        Ok(())
+    }
+
+    fn start_prepared_tracking_batch_from_observed_tip(
+        wallets: &mut TrackedWallets,
+        source_trackers: &mut HashMap<String, WalletSourceTracker>,
+        batch: &WalletFeedTrackingBatch,
+        view: &WalletFeedChainView<'_>,
+    ) -> Result<(), WalletBlockFeedTrackerError> {
+        if batch.is_empty() {
+            return Ok(());
+        }
+
+        let source_tracker = source_trackers
+            .get_mut(batch.source_node_name())
+            .ok_or_else(|| WalletBlockFeedTrackerError::MissingSource {
+                source_node_name: batch.source_node_name().to_owned(),
+            })?;
+
+        source_tracker.start_at_observed_tip(wallets, view, batch.source_node_name())?;
+        wallets.replace_current_wallets_utxos(source_tracker.wallet_utxos());
+
+        Ok(())
+    }
+
+    fn ensure_observed_tip_source_tracker(
+        &mut self,
+        source_node_name: &str,
+        wallet_keys: &[TrackedWalletKeys],
+        genesis_utxos: &[Utxo],
+    ) -> Result<(), WalletBlockFeedTrackerError> {
+        let Some(source_tracker) = self.source_trackers.get(source_node_name) else {
+            self.source_trackers.insert(
+                source_node_name.to_owned(),
+                WalletSourceTracker::new(wallet_keys, genesis_utxos)?,
+            );
+
+            return Ok(());
+        };
+
+        if source_tracker.covers_wallet_keys(wallet_keys) {
+            return Ok(());
+        }
+
+        self.source_trackers.insert(
+            source_node_name.to_owned(),
+            source_tracker.with_added_wallet_keys(wallet_keys, genesis_utxos)?,
+        );
+
+        Ok(())
     }
 
     fn advance_source_trackers(
@@ -452,6 +562,29 @@ impl WalletSourceTracker {
             .collect()
     }
 
+    fn with_added_wallet_keys(
+        &self,
+        wallet_keys: &[TrackedWalletKeys],
+        genesis_utxos: &[Utxo],
+    ) -> Result<Self, TrackedWalletKeysError> {
+        let merged_wallet_keys = self.merged_wallet_keys(wallet_keys);
+
+        let Some((applied_tip, applied_height)) = self.applied_position() else {
+            return Self::new(&merged_wallet_keys, genesis_utxos);
+        };
+
+        Self::from_wallet_utxos(
+            &merged_wallet_keys,
+            self.wallet_utxos(),
+            applied_tip,
+            applied_height,
+        )
+    }
+
+    fn applied_position(&self) -> Option<(HeaderId, u64)> {
+        Some((self.applied_tip?, self.applied_height?))
+    }
+
     fn advance_to_observed_tip(
         &mut self,
         wallets: &mut TrackedWallets,
@@ -482,6 +615,36 @@ impl WalletSourceTracker {
                 )
             })
             .collect())
+    }
+
+    fn start_at_observed_tip(
+        &mut self,
+        wallets: &mut TrackedWallets,
+        view: &WalletFeedChainView<'_>,
+        source_node_name: &str,
+    ) -> Result<(), WalletBlockFeedTrackerError> {
+        let tip_height = view.source_tip_height(source_node_name)?;
+        if tip_height == 0 {
+            return Err(WalletBlockFeedTrackerError::SourceAtGenesis {
+                source_node_name: source_node_name.to_owned(),
+            });
+        }
+
+        let tip_header = view.header_at_height(source_node_name, tip_height)?;
+        let tip_header_string = tip_header.to_string();
+
+        self.applied_tip = Some(tip_header);
+        self.applied_height = Some(tip_height);
+
+        wallets.record_header_height(source_node_name, &tip_header_string, tip_height);
+        wallets.record_observed_wallets_utxos(
+            tip_header_string,
+            self.chain_state
+                .wallet_utxos()
+                .map(|(wallet_id, utxos)| (wallet_id.clone(), utxos)),
+        );
+
+        Ok(())
     }
 
     fn next_unapplied_height(

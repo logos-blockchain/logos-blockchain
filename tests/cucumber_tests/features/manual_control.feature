@@ -228,14 +228,15 @@ Feature: Manual control of transactions
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
-    And I request 3 rounds of faucet funds for all user wallets
     And I have public cryptarchia endpoint peers:
       | public_cryptarchia_endpoint               | username               | password              |
       | https://devnet.blockchain.logos.co/node/0 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/1 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
-#    When I wait for all nodes to be synced to the chain
+    When I wait for all nodes to be synced to the chain
+    And I request 3 rounds of faucet funds for all user wallets
+    And I verify each wallet has minimum 1 outputs "available" in 300 seconds
     When node NODE_1 is at height 2000 in 3000 seconds
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
@@ -274,7 +275,6 @@ Feature: Manual control of transactions
       | NODE_8    | 8             | WALLET_8A   | NODE_7       |
       | NODE_9    | 9             | WALLET_9A   | NODE_8       |
       | NODE_10   | 10            | WALLET_10A  | NODE_9       |
-    And I request 3 rounds of faucet funds for all user wallets
     And I have public cryptarchia endpoint peers:
       | public_cryptarchia_endpoint               | username               | password              |
       | https://devnet.blockchain.logos.co/node/0 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
@@ -282,5 +282,7 @@ Feature: Manual control of transactions
       | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
     When I wait for all nodes to be synced to the chain
+    And I request 3 rounds of faucet funds for all user wallets
+    And I verify each wallet has minimum 1 outputs "available" in 300 seconds
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
