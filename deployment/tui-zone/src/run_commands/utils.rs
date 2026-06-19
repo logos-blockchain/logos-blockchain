@@ -48,7 +48,6 @@ pub fn timestamp() -> String {
     let secs = now.as_secs();
     let micros = now.subsec_micros();
 
-    // Convert UNIX seconds to UTC date/time
     let datetime = DateTime::<Utc>::from_timestamp(secs as i64, micros * 1_000)
         .unwrap_or_else(|| DateTime::<Utc>::from_timestamp(0, 0).unwrap());
 
