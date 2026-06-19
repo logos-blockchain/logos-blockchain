@@ -129,21 +129,21 @@ async fn sdp_ops_e2e() {
         &declare_hash.to_fr(),
     )
     .expect("SDP declare zk proof should build");
-    let declare_transfer_proof = OpProof::ZkSig(
-        ZkKey::multi_sign(&declare_signing_keys, &declare_hash.to_fr())
-            .expect("transfer proof should build"),
-    );
-    let declare_tx = SignedMantleTx::new(
-        declare_mantle_tx,
-        vec![
-            OpProof::ZkAndEd25519Sigs {
-                zk_sig: declare_zk_sig,
-                ed25519_sig: declare_ed25519_sig,
-            },
-            declare_transfer_proof,
-        ],
-    )
-    .expect("funded SDP declare transaction should be valid");
+    // The SDP declare op is proven first. With zero gas prices the funding step
+    // adds no input, so there is no trailing transfer op to prove; only attach a
+    // transfer proof when funding actually pulled in inputs.
+    let mut declare_proofs = vec![OpProof::ZkAndEd25519Sigs {
+        zk_sig: declare_zk_sig,
+        ed25519_sig: declare_ed25519_sig,
+    }];
+    if !declare_signing_keys.is_empty() {
+        declare_proofs.push(OpProof::ZkSig(
+            ZkKey::multi_sign(&declare_signing_keys, &declare_hash.to_fr())
+                .expect("transfer proof should build"),
+        ));
+    }
+    let declare_tx = SignedMantleTx::new(declare_mantle_tx, declare_proofs)
+        .expect("funded SDP declare transaction should be valid");
 
     node0
         .submit_transaction(&declare_tx)
@@ -182,16 +182,15 @@ async fn sdp_ops_e2e() {
     )
     .expect("SDP withdraw zk proof should build");
 
-    let withdraw_transfer_proof = OpProof::ZkSig(
-        ZkKey::multi_sign(&withdraw_signing_keys, &withdraw_hash.to_fr())
-            .expect("transfer proof should build"),
-    );
-
-    let withdraw_tx = SignedMantleTx::new(
-        withdraw_mantle_tx,
-        vec![OpProof::ZkSig(withdraw_zk_sig), withdraw_transfer_proof],
-    )
-    .expect("funded SDP withdraw transaction should be valid");
+    let mut withdraw_proofs = vec![OpProof::ZkSig(withdraw_zk_sig)];
+    if !withdraw_signing_keys.is_empty() {
+        withdraw_proofs.push(OpProof::ZkSig(
+            ZkKey::multi_sign(&withdraw_signing_keys, &withdraw_hash.to_fr())
+                .expect("transfer proof should build"),
+        ));
+    }
+    let withdraw_tx = SignedMantleTx::new(withdraw_mantle_tx, withdraw_proofs)
+        .expect("funded SDP withdraw transaction should be valid");
 
     node0
         .submit_transaction(&withdraw_tx)
