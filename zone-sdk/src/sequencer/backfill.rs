@@ -62,7 +62,7 @@ where
                     to = batch_end,
                     "Backfill batch failed; will retry same range after delay: {e}"
                 );
-                tokio::time::sleep(self.config.reconnect_delay).await;
+                self.wait_reconnect_delay().await;
                 // Leave `backfill_from` untouched so the next tick retries
                 // the same range. Active but no event this turn.
                 return Some(None);
@@ -165,7 +165,7 @@ where
             Ok(info) => info,
             Err(err) => {
                 warn!(target: TARGET, "Failed to fetch time info: {err}");
-                tokio::time::sleep(self.config.reconnect_delay).await;
+                self.wait_reconnect_delay().await;
                 return false;
             }
         };
@@ -179,7 +179,7 @@ where
                 );
                 if let Err(err) = self.refresh_channel_state().await {
                     warn!(target: TARGET, "Failed to fetch initial channel state: {err}");
-                    tokio::time::sleep(self.config.reconnect_delay).await;
+                    self.wait_reconnect_delay().await;
                     return false;
                 }
                 if self.state.is_none() {
@@ -190,7 +190,7 @@ where
                         Ok(clock) => clock,
                         Err(err) => {
                             warn!(target: TARGET, "Invalid time info from node: {err}");
-                            tokio::time::sleep(self.config.reconnect_delay).await;
+                            self.wait_reconnect_delay().await;
                             return false;
                         }
                     };
@@ -200,7 +200,7 @@ where
             }
             Err(e) => {
                 warn!(target: TARGET, "Failed to fetch consensus info: {e}");
-                tokio::time::sleep(self.config.reconnect_delay).await;
+                self.wait_reconnect_delay().await;
                 false
             }
         }
@@ -246,7 +246,7 @@ where
             }
             Err(e) => {
                 warn!(target: TARGET, "Failed to connect to blocks stream: {e}");
-                tokio::time::sleep(self.config.reconnect_delay).await;
+                self.wait_reconnect_delay().await;
                 false
             }
         }

@@ -109,6 +109,45 @@ Feature: Zone SDK
     And I stop all nodes
 
   @zone_ci
+  Scenario: Publishes issued while the node is down are accepted locally and posted on reconnect
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A      |
+    When node "NODE_1" is at height 1 in 120 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    # Take the node down: the sequencer enters its reconnect loop, but its
+    # in-process SequencerClient stays alive.
+    When I stop node "NODE_1"
+    # Publishes issued via SequencerClient while the node is down must be
+    # accepted locally and return promptly — the inscription is appended to
+    # state and posted on reconnect, the same as a republish-while-down. With
+    # the pre-fix behavior these client calls would block until connectivity
+    # returned (the request was never drained during reconnect), hanging here.
+    # This step publishes without waiting for inclusion (no node calls), so it
+    # works while the node is down; inclusion/finalization is asserted after
+    # restart below.
+    And sequencer "SEQ_A" submits the following zone messages without waiting for inclusion:
+      | alias | data           |
+      | MSG_1 | While down (1) |
+      | MSG_2 | While down (2) |
+      | MSG_3 | While down (3) |
+    # Bring the node back; the locally-queued inscriptions are posted, mined
+    # and adopted, preserving publish order.
+    When I restart node "NODE_1"
+    Then all zone messages are safe in 120 seconds
+    And all zone messages are finalized in 180 seconds
+    And the zone indexer returns messages in this order:
+      | alias |
+      | MSG_1 |
+      | MSG_2 |
+      | MSG_3 |
+    And I stop all nodes
+
+  @zone_ci
   # [tests/src/tests/zone_sdk/e2e.rs] test_sequential_multi_sequencer
   Scenario: Sequential multi-sequencer publishing keeps channel order
     Given the genesis block has the following wallet resources:

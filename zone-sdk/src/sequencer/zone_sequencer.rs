@@ -523,6 +523,33 @@ where
         }
     }
 
+    /// Wait the configured reconnect delay, but keep servicing client
+    /// [`ActorRequest`]s while waiting.
+    ///
+    /// This preserves the same post-[`Event::Ready`] local-acceptance
+    /// semantics as
+    /// [`SequencerHandle::publish`](super::SequencerHandle::publish):
+    /// a publish that arrives via [`SequencerClient`](super::SequencerClient)
+    /// during a reconnect is handled immediately (queued locally via
+    /// `do_publish`) instead of blocking until connectivity is restored.
+    /// Without this, client requests would sit unserviced until
+    /// [`Self::ensure_connected`] succeeds, since `request_rx` is otherwise
+    /// only drained from `step`'s `select!` after connection.
+    ///
+    /// The sleep is pinned so the backoff keeps elapsing across iterations: any
+    /// number of requests can be serviced during the wait without resetting or
+    /// short-circuiting the delay.
+    pub(super) async fn wait_reconnect_delay(&mut self) {
+        let sleep = tokio::time::sleep(self.config.reconnect_delay);
+        tokio::pin!(sleep);
+        loop {
+            tokio::select! {
+                () = &mut sleep => break,
+                Some(request) = self.request_rx.recv() => self.handle_request(request),
+            }
+        }
+    }
+
     fn ensure_ready(&self) -> Result<(), Error> {
         if !self.is_ready() {
             return Err(Error::Unavailable {
