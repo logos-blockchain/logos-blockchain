@@ -12,7 +12,6 @@ use lb_core::{
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
-use lb_zone_sdk::adapter::Node as _;
 
 pub(crate) use crate::{
     cli::{
@@ -29,9 +28,9 @@ pub(crate) use crate::{
         utils::{
             decode_ed25519_public_key_hex, decode_hex_bincode, decode_mantle_tx_hex,
             decode_msg_id_hex, decode_signed_mantle_tx_hex, decode_zk_public_key_hex,
-            encode_hex_bincode, ensure_tx_hash, fixed_bytes, load_or_create_signing_key,
-            node_client, read_json, resolve_channel_id, start_cli_sequencer, timestamp,
-            validate_kind, write_json,
+            encode_hex_bincode, ensure_tx_hash, fixed_bytes, load_or_create_signing_key, read_json,
+            resolve_channel_id, start_cli_sequencer, start_cli_sequencer_with_channel_state,
+            timestamp, validate_kind, write_json,
         },
     },
 };
@@ -41,11 +40,10 @@ pub(crate) async fn run_withdraw_prepare(args: WithdrawPrepareArgs) -> RunResult
     validate_kind(&funds.kind, ZONE_WALLET_FUNDS_EXPORT, funds.version)?;
     let recipient = decode_zk_public_key_hex(&funds.public_key)?;
     let channel_id = resolve_channel_id(&args.node_key)?;
-    let node = node_client(&args.node_key.node_url)?;
-    let channel_state = node
-        .channel_state(channel_id)
-        .await?
-        .ok_or_else(|| format!("channel state not found for {channel_id}"))?;
+    let (mut sequencer, channel_state) =
+        start_cli_sequencer_with_channel_state(&args.node_key).await?;
+    let channel_state =
+        channel_state.ok_or_else(|| format!("channel state not found for {channel_id}"))?;
     let withdraw_nonce = channel_state.withdrawal_nonce;
     let withdraw = ChannelWithdrawOp {
         channel_id,
@@ -53,7 +51,6 @@ pub(crate) async fn run_withdraw_prepare(args: WithdrawPrepareArgs) -> RunResult
         withdraw_nonce,
     };
     let inscription = Inscription::try_from(args.message.into_bytes())?;
-    let mut sequencer = start_cli_sequencer(&args.node_key).await?;
     let (tx, msg_id, inscription_signature) = sequencer
         .handle()
         .prepare_tx([Op::ChannelWithdraw(withdraw)].into(), inscription)?;
@@ -85,7 +82,7 @@ pub(crate) async fn run_withdraw_prepare(args: WithdrawPrepareArgs) -> RunResult
     };
     write_json(&args.out, &intent)?;
     println!(
-        "{} withdraw intent: tx_hash={} msg_id={}",
+        "{} withdraw: intent tx_hash={} msg_id={}",
         timestamp(),
         intent.tx_hash,
         intent.msg_id
@@ -120,7 +117,7 @@ pub(crate) fn run_withdraw_sign(args: &WithdrawSignArgs) -> RunResult<()> {
     };
     write_json(&args.out, &signature_file)?;
     println!(
-        "{} withdraw signature: tx_hash={} signer_key_index={}",
+        "{} withdraw: signature tx_hash={} signer_key_index={}",
         timestamp(),
         signature_file.tx_hash,
         signature_file.signer_key_index
@@ -207,7 +204,7 @@ pub(crate) fn run_withdraw_combine(args: WithdrawCombineArgs) -> RunResult<()> {
     };
     write_json(&args.out, &signed)?;
     println!(
-        "{} withdraw signed: tx_hash={} msg_id={}",
+        "{} withdraw: signed tx_hash={} msg_id={}",
         timestamp(),
         signed.tx_hash,
         signed.msg_id
@@ -280,7 +277,7 @@ pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<(
         .handle()
         .submit_signed_tx(signed_tx, decode_msg_id_hex(&signed.msg_id)?)?;
     println!(
-        "{} withdraw submitted: tx_hash={} msg_id={}",
+        "{} withdraw: submitted tx_hash={} msg_id={}",
         timestamp(),
         signed.tx_hash,
         signed.msg_id

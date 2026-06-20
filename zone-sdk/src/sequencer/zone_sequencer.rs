@@ -830,12 +830,13 @@ where
         data: Inscription,
     ) -> Result<(MantleTx, MsgId, Ed25519Signature), Error> {
         self.ensure_ready()?;
+        let parent = self.compute_publish_parent();
         Ok(build_prepare_tx(
             ops,
             self.channel_id,
             &self.signing_key,
             data,
-            self.last_msg_id,
+            parent,
         ))
     }
 

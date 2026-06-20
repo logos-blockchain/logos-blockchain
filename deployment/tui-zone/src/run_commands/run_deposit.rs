@@ -58,7 +58,7 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
         };
         let (_result, _checkpoint) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
         println!(
-            "{} deposit submitted tx_hash={} msg_id={}",
+            "{} deposit: submitted tx_hash={} msg_id={}",
             timestamp(),
             hex::encode(tx_hash.as_ref()),
             hex::encode(msg_id.as_ref())

@@ -13,7 +13,7 @@ use tokio::{select, sync::broadcast, time::sleep};
 
 use crate::{
     cli::RunResult,
-    run_commands::utils::{format_tx_status, save_cli_checkpoint, timestamp},
+    run_commands::utils::{save_cli_checkpoint, timestamp},
 };
 
 const COMMAND_FINALITY_TIMEOUT: Duration = Duration::from_mins(5);
@@ -138,10 +138,10 @@ pub async fn drive_until_observed(
 
 fn print_status(label: &str, update: TxStatusUpdate) {
     println!(
-        "{} {label} verification tx_hash={} status={}",
+        "{} {label}: verification tx_hash={} status={:?}",
         timestamp(),
         hex::encode(update.tx_hash.as_ref()),
-        format_tx_status(update.status)
+        update.status
     );
 }
 

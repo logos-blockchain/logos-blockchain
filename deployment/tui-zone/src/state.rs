@@ -3,7 +3,7 @@ use std::{error::Error, fs};
 use lb_core::mantle::ops::channel::{ChannelId, MsgId};
 use lb_zone_sdk::sequencer::{InscriptionInfo, SequencerChannelView, SequencerCheckpoint};
 use serde::{Deserialize, Serialize};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::message::Msg;
 
@@ -164,18 +164,25 @@ pub fn load_persisted_checkpoint_for_channel(
         format!("checkpoint '{CHECKPOINT_FILE}' is missing channel_id; remove it or recreate it")
     })?;
     if checkpoint_channel_id != expected_channel_id {
-        return Err(format!(
+        discard_stale_checkpoint(&format!(
             "checkpoint channel_id {checkpoint_channel_id} does not match requested channel_id {expected_channel_id}"
-        )
-        .into());
+        ))?;
+        return Ok(None);
     }
     if !channel_exists {
-        return Err(format!(
+        discard_stale_checkpoint(&format!(
             "checkpoint channel_id {expected_channel_id} was accepted by file validation, but the node has no channel state for it"
-        )
-        .into());
+        ))?;
+        return Ok(None);
     }
     Ok(Some(bincode::deserialize(&hex::decode(file.checkpoint)?)?))
+}
+
+fn discard_stale_checkpoint(reason: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
+    warn!("discarding stale sequencer checkpoint '{CHECKPOINT_FILE}': {reason}");
+    eprintln!("discarding stale sequencer checkpoint '{CHECKPOINT_FILE}': {reason}");
+    fs::remove_file(CHECKPOINT_FILE)?;
+    Ok(())
 }
 
 /// Persist the sequencer checkpoint shared by all TUI zone commands.

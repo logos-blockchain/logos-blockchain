@@ -7,6 +7,7 @@ use std::{
 use chrono::{DateTime, Utc};
 use lb_core::mantle::{
     MantleTx, Note, SignedMantleTx, TxHash, Utxo, Value,
+    channel::ChannelState,
     encoding::{decode_mantle_tx, decode_signed_mantle_tx},
     ledger::{Inputs, Outputs},
     ops::{
@@ -23,7 +24,7 @@ use lb_key_management_system_service::keys::{
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
-    sequencer::{SequencerCheckpoint, TxSource, TxStatus, ZoneSequencer},
+    sequencer::{Event, SequencerCheckpoint, ZoneSequencer},
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -156,9 +157,17 @@ pub fn resolve_channel_id(args: &NodeKeyArgs) -> RunResult<ChannelId> {
 
 /// Query whether the node has channel state, retrying until the node responds.
 pub async fn query_channel_exists(node: &NodeHttpClient, channel_id: ChannelId) -> bool {
+    query_channel_state(node, channel_id).await.is_some()
+}
+
+/// Query channel state, retrying until the node responds.
+pub async fn query_channel_state(
+    node: &NodeHttpClient,
+    channel_id: ChannelId,
+) -> Option<ChannelState> {
     loop {
         match node.channel_state(channel_id).await {
-            Ok(channel_state) => return channel_state.is_some(),
+            Ok(channel_state) => return channel_state,
             Err(error) => {
                 warn!("failed to query channel state before sequencer init: {error}");
                 sleep(CHANNEL_STATE_QUERY_RETRY).await;
@@ -288,16 +297,43 @@ pub fn build_deposit_op(
 /// Start a zone sequencer for non-interactive CLI commands and wait for
 /// readiness.
 pub async fn start_cli_sequencer(args: &NodeKeyArgs) -> RunResult<ZoneSequencer<NodeHttpClient>> {
+    let (sequencer, _channel_state) = start_cli_sequencer_with_channel_state(args).await?;
+    Ok(sequencer)
+}
+
+/// Start a zone sequencer for non-interactive CLI commands and wait until the
+/// post-ready channel view is backed by freshly queried node channel state.
+pub async fn start_cli_sequencer_with_channel_state(
+    args: &NodeKeyArgs,
+) -> RunResult<(ZoneSequencer<NodeHttpClient>, Option<ChannelState>)> {
     let signing_key = load_or_create_signing_key(PathBuf::from(&args.key_path).as_path());
     let channel_id = resolve_channel_id(args)?;
     let node = node_client(&args.node_url)?;
     let channel_exists = query_channel_exists(&node, channel_id).await;
     let checkpoint = load_cli_checkpoint(&channel_id, channel_exists)?;
-    let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node, checkpoint);
+    let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node.clone(), checkpoint);
     while !sequencer.is_ready() {
         drop(sequencer.next_event().await);
     }
-    Ok(sequencer)
+    let channel_state = wait_for_fresh_channel_state(&mut sequencer, &node, channel_id).await?;
+    Ok((sequencer, channel_state))
+}
+
+async fn wait_for_fresh_channel_state(
+    sequencer: &mut ZoneSequencer<NodeHttpClient>,
+    node: &NodeHttpClient,
+    channel_id: ChannelId,
+) -> RunResult<Option<ChannelState>> {
+    let fresh_channel_state = query_channel_state(node, channel_id).await;
+    let view_rx = sequencer.subscribe_channel_view();
+    loop {
+        if view_rx.borrow().channel == fresh_channel_state {
+            return Ok(fresh_channel_state);
+        }
+        if let Event::BlocksProcessed { checkpoint, .. } = sequencer.next_event().await {
+            save_cli_checkpoint(&channel_id, &checkpoint)?;
+        }
+    }
 }
 
 /// Load the persisted non-interactive sequencer checkpoint, if present.
@@ -314,17 +350,4 @@ pub fn save_cli_checkpoint(
     checkpoint: &SequencerCheckpoint,
 ) -> RunResult<()> {
     save_persisted_checkpoint(channel_id, checkpoint)
-}
-
-pub(in crate::run_commands) const fn format_tx_status(status: TxStatus) -> &'static str {
-    match status {
-        TxStatus::AcceptedLocally => "accepted_locally",
-        TxStatus::PendingMempool => "pending_mempool",
-        TxStatus::OnChain(TxSource::Local) => "on_chain_local",
-        TxStatus::OnChain(TxSource::Other) => "on_chain_other",
-        TxStatus::Orphaned(TxSource::Local) => "orphaned_local",
-        TxStatus::Orphaned(TxSource::Other) => "orphaned_other",
-        TxStatus::Finalized(TxSource::Local) => "finalized_local",
-        TxStatus::Finalized(TxSource::Other) => "finalized_other",
-    }
 }
