@@ -16,8 +16,8 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, Note, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
-        Utxo, Value,
+        AuthenticatedMantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
+        Value,
         gas::{GasCost, GasOverflow, MainnetGasConstants},
         ledger::Inputs,
         ops::{
@@ -1175,13 +1175,12 @@ where
         state: &ServiceState<'_>,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
     ) -> Result<SignedMantleTx, WalletServiceError> {
-        let tx_builder = MantleTxBuilder::new(ledger.tx_context())
-            .push_op(Op::LeaderClaim(LeaderClaimOp {
+        let tx_builder =
+            MantleTxBuilder::new(ledger.tx_context()).push_op(Op::LeaderClaim(LeaderClaimOp {
                 rewards_root: request.rewards_root,
                 voucher_nullifier,
                 pk: request.funding_pk,
-            }))?
-            .add_ledger_output(Note::new(request.reward_amount, request.funding_pk))?;
+            }))?;
 
         let funded_tx_builder = state.wallet().fund_tx::<MainnetGasConstants>(
             request.tip,
