@@ -214,7 +214,6 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
         // Remove the distributed rewards from the pool
         ctx.claimable_rewards -= ctx.reward_amount;
         let tx_hash = ctx.tx_hash;
-        let reward_amount = ctx.reward_amount;
 
         Ok((
             ctx,
@@ -223,8 +222,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
                 self.op_id(),
                 EventPayload::LeaderRewardClaimed {
                     voucher_nullifier: self.voucher_nullifier,
-                    pk: self.pk,
-                    amount: reward_amount,
+                    utxo,
                 },
             ))
             .collect(),
@@ -306,8 +304,7 @@ mod tests {
             payload:
                 EventPayload::LeaderRewardClaimed {
                     voucher_nullifier,
-                    pk: event_pk,
-                    amount,
+                    utxo,
                 },
         }) = events.next()
         else {
@@ -316,8 +313,7 @@ mod tests {
         assert_eq!(*event_tx_hash, tx_hash);
         assert_eq!(*op_id, op.op_id());
         assert_eq!(*voucher_nullifier, op.voucher_nullifier);
-        assert_eq!(*event_pk, pk);
-        assert_eq!(*amount, reward_amount);
+        assert_eq!(*utxo, op.utxo(reward_amount));
         assert!(events.next().is_none());
     }
 }

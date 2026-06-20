@@ -15,7 +15,7 @@ use lb_core::{
     events::{Event, EventPayload, Events},
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, GasConstants, Note, NoteId, Utxo, Value,
+        AuthenticatedMantleTx, GasConstants, NoteId, Utxo, Value,
         ops::{
             Op,
             leader_claim::{VoucherCm, VoucherNullifier},
@@ -364,10 +364,9 @@ fn insert_owned_utxo<KeyId>(
 fn leader_reward_utxos_from_events(events: &Events) -> impl Iterator<Item = Utxo> + '_ {
     events.iter().filter_map(|event| match event {
         Event::Tx {
-            op_id,
-            payload: EventPayload::LeaderRewardClaimed { pk, amount, .. },
+            payload: EventPayload::LeaderRewardClaimed { utxo, .. },
             ..
-        } => Some(Utxo::new(*op_id, 0, Note::new(*amount, *pk))),
+        } => Some(*utxo),
         _ => None,
     })
 }
@@ -615,7 +614,7 @@ mod tests {
     use lb_core::{
         crypto::{Hash, ZkDigest as _},
         mantle::{
-            TxHash,
+            Note, TxHash,
             channel::Channels,
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
@@ -856,25 +855,23 @@ mod tests {
     fn extracts_leader_reward_utxos_from_events() {
         let alice = pk(1);
         let bob = pk(2);
-        let alice_op_id = tx_hash(9);
-        let bob_op_id = tx_hash(10);
+        let alice_utxo = Utxo::new(tx_hash(9), 0, Note::new(38, alice));
+        let bob_utxo = Utxo::new(tx_hash(10), 0, Note::new(21, bob));
         let events = [
             Event::from_tx(
                 TxHash::from(tx_hash(1)),
-                alice_op_id,
+                tx_hash(9),
                 EventPayload::LeaderRewardClaimed {
                     voucher_nullifier: voucher(1, 0).1,
-                    pk: alice,
-                    amount: 38,
+                    utxo: alice_utxo,
                 },
             ),
             Event::from_tx(
                 TxHash::from(tx_hash(2)),
-                bob_op_id,
+                tx_hash(10),
                 EventPayload::LeaderRewardClaimed {
                     voucher_nullifier: voucher(2, 0).1,
-                    pk: bob,
-                    amount: 21,
+                    utxo: bob_utxo,
                 },
             ),
         ]
@@ -883,13 +880,7 @@ mod tests {
 
         let utxos = leader_reward_utxos_from_events(&events).collect::<Vec<_>>();
 
-        assert_eq!(
-            utxos,
-            vec![
-                Utxo::new(alice_op_id, 0, Note::new(38, alice)),
-                Utxo::new(bob_op_id, 0, Note::new(21, bob)),
-            ]
-        );
+        assert_eq!(utxos, vec![alice_utxo, bob_utxo]);
     }
 
     #[test]
