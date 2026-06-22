@@ -95,10 +95,15 @@ pub struct CliArgs {
 
 impl CliArgs {
     #[must_use]
-    pub fn config_path(&self) -> &Path {
+    pub fn user_config_path(&self) -> &Path {
         self.config
             .as_deref()
             .expect("config path is required when not using a subcommand")
+    }
+
+    #[must_use]
+    pub const fn deployment_config_path(&self) -> &Option<PathBuf> {
+        &self.deployment.custom_deployment_path
     }
 
     #[must_use]

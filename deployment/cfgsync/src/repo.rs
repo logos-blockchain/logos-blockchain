@@ -6,10 +6,7 @@ use std::{
 };
 
 use lb_config::GeneralConfig;
-use lb_node::config::{
-    TracingConfig,
-    deployment::{DeploymentSettings, WellKnownDeployment},
-};
+use lb_node::config::{TracingConfig, deployment::DeploymentSettings};
 use tokio::{sync::oneshot::Sender, time::timeout};
 
 use crate::{
@@ -145,7 +142,7 @@ impl ConfigRepo {
                 hosts,
             );
             let settings = {
-                let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Builtin);
+                let mut default_settings = DeploymentSettings::default();
                 default_settings.cryptarchia.genesis_block = genesis_block;
                 default_settings.cryptarchia.faucet_pk = faucet_pk;
                 default_settings

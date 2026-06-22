@@ -38,7 +38,7 @@ impl DeploymentSettings {
 impl Default for DeploymentSettings {
     fn default() -> Self {
         deserialize_value_from_reader(SERIALIZED_DEPLOYMENT, OnUnknownKeys::Fail)
-            .expect("Builtin deployment settings must be valid.")
+            .expect("Default deployment settings must be valid.")
     }
 }
 
@@ -47,7 +47,7 @@ mod tests {
     use crate::config::DeploymentSettings;
 
     #[test]
-    fn builtin_initialization() {
+    fn default_initialization() {
         drop(DeploymentSettings::default());
     }
 
