@@ -277,7 +277,7 @@ fn standalone_node_config_deserializes() {
 
 #[test]
 fn standalone_deployment_config_deserializes() {
-    let yaml_path = repo_file("src/config/deployment/settings.yaml");
+    let yaml_path = repo_file("../standalone-deployment-config.yaml");
     assert!(
         yaml_path.exists(),
         "standalone deployment config should exist at {yaml_path:?}"

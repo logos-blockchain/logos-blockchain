@@ -1,0 +1,99 @@
+blend:
+  common:
+    num_blend_layers: 1
+    minimum_network_size: 2
+    protocol_name: /logos-blockchain-standalone-local/blend/1.0.0
+    data_replication_factor: 0
+  core:
+    scheduler:
+      cover:
+        message_frequency_per_round: 1.0
+      delayer:
+        maximum_release_delay_in_rounds: 1
+    minimum_messages_coefficient: 1
+    normalization_constant: 1.03
+    activity_threshold_sensitivity: 1
+network:
+  kademlia_protocol_name: /logos-blockchain-standalone-local/kad/1.0.0
+  identify_protocol_name: /logos-blockchain-standalone-local/identify/1.0.0
+  chain_sync_protocol_name: /logos-blockchain-standalone-local/chainsync/1.0.0
+cryptarchia:
+  epoch_config:
+    epoch_stake_distribution_stabilization: 3
+    epoch_period_nonce_buffer: 3
+    epoch_period_nonce_stabilization: 4
+  security_param: 30
+  slot_activation_coeff:
+    numerator: 1
+    denominator: 20
+  learning_rate: 0.5
+  sdp_config:
+    service_params:
+      BN:
+        inactivity_period: 2
+        retention_period: 1
+        epoch: 0
+    min_stake:
+      threshold: 1
+      timestamp: 0
+  gossipsub_protocol: /logos-blockchain-standalone-local/cryptarchia/1.0.0
+  genesis_block:
+    header:
+      version: Bedrock
+      parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
+      slot: 0
+      block_root: '5a701af24c1e88ff8622750821f2c52df1ebcbbe76b8dc3baa3fedf05d1a7100'
+      proof_of_leadership:
+        proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
+        leader_key: '0000000000000000000000000000000000000000000000000000000000000000'
+        voucher_cm: '0000000000000000000000000000000000000000000000000000000000000000'
+    signature: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    transactions:
+    - mantle_tx:
+        ops:
+        - opcode: 0
+          payload:
+            inputs: []
+            outputs:
+            - value: 100000
+              pk: e3635f207984ae779cf76b5f20714b514373f61ff96260879fe0a6d71f2dce07
+            - value: 100
+              pk: '39e16b432574571a6bcd8ee36e370589641bd9f35367f6f97a972453c46c3225'
+            - value: 100
+              pk: '9750fa86471fddc69749aa9f8568ef6635e64d9f9aa815e8cb932cea183c8e18'
+            - value: 1
+              pk: '852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a'
+            - value: 18446744073709551615
+              pk: d2a1977db29daf6691f7ce897fe7b666ec964b1bf027814cacd1a2c141b12f10
+        - opcode: 17
+          payload:
+            channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
+            inscription: '10000000000000007374616e64616c6f6e652d6c6f63616c9169fe69000000002d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
+            parent: '0000000000000000000000000000000000000000000000000000000000000000'
+            signer: '0000000000000000000000000000000000000000000000000000000000000000'
+        - opcode: 32
+          payload:
+            service_type: BN
+            locators:
+            - /ip4/127.0.0.1/udp/3400/quic-v1
+            provider_id: aa70aafc48536ae13168ed4845981a40cbd2dc1c38df88d04c46250e9ad65ce0
+            zk_id: '852efb444db8c3c811625850df39425f43aeffc69571192c0be9f72523256e0a'
+            locked_note_id: a4405fdbd782bd39c4e388ac470c98fdca3e9edfdf7d2672bc63223d75dab721
+      ops_proofs:
+      - !ZkSig
+        pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+        pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+      - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+      - !ZkAndEd25519Sigs
+        zk_sig:
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        ed25519_sig: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+  faucet_pk: d2a1977db29daf6691f7ce897fe7b666ec964b1bf027814cacd1a2c141b12f10
+time:
+  slot_duration: '1.000000000'
+mempool:
+  pubsub_topic: /logos-blockchain-standalone-local/mempool/1.0.0

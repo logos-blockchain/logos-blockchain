@@ -192,7 +192,7 @@ mod test {
         file
     });
     static STANDALONE_DEPLOYMENT_CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
-        let file = NODE_DIR.join("binary/src/config/deployment/settings.yaml");
+        let file = NODE_DIR.join("standalone-deployment-config.yaml");
         assert!(file.exists());
         file
     });

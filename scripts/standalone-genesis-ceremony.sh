@@ -4,4 +4,4 @@
   --providers deployment/ceremony/genesis/standalone/providers.yaml \
   --faucet deployment/ceremony/genesis/standalone/faucet.yaml \
   --deployment deployment/ceremony/genesis/standalone/deployment-template.yaml \
-  --output nodes/node/binary/src/config/deployment/settings.yaml
+  --output nodes/node/standalone-deployment-config.yaml
