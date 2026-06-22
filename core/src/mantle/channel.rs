@@ -461,6 +461,7 @@ mod tests {
             .execute(WithdrawExecutionContext {
                 channels,
                 utxos: utxo_tree,
+                tx_hash: [1; 32].into(),
             })
             .expect("execution should succeed");
 
@@ -468,7 +469,31 @@ mod tests {
             updated.channels.channel_state(&channel_id).unwrap().balance,
             4
         );
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 1);
+        let Event::Tx {
+            tx_hash,
+            op_id,
+            payload,
+        } = events.iter().next().cloned().unwrap()
+        else {
+            panic!("expected Tx event")
+        };
+        assert_eq!(tx_hash, [1; 32].into());
+        assert_eq!(op_id, withdraw_op.op_id());
+        let EventPayload::Withdraw {
+            channel_id,
+            amount,
+            utxos,
+        } = payload
+        else {
+            panic!("expected Withdraw event")
+        };
+        assert_eq!(channel_id, withdraw_op.channel_id);
+        assert_eq!(amount, 6);
+        assert_eq!(
+            utxos,
+            withdraw_op.outputs.utxos(&withdraw_op).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -492,6 +517,7 @@ mod tests {
         let result = withdraw_op.execute(WithdrawExecutionContext {
             channels,
             utxos: utxo_tree,
+            tx_hash: [0; 32].into(),
         });
 
         assert!(matches!(result, Err(Error::InsufficientFunds)));
@@ -517,6 +543,7 @@ mod tests {
         let result = withdraw_op.execute(WithdrawExecutionContext {
             channels,
             utxos: utxo_tree,
+            tx_hash: [0; 32].into(),
         });
 
         assert!(matches!(result, Err(Error::ChannelNotFound { .. })));

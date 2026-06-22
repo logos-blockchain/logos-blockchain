@@ -45,6 +45,7 @@ pub struct WalletBlock {
     pub voucher_cm: VoucherCm,
     pub spent_notes: Vec<NoteId>,
     pub leader_reward_utxos: Vec<Utxo>,
+    pub channel_withdraw_utxos: Vec<Utxo>,
     pub transfers: Vec<TransferOp>,
     pub locked_notes: HashSet<NoteId>,
     pub unlocked_notes: HashSet<NoteId>,
@@ -59,6 +60,7 @@ impl WalletBlock {
         // TODO: handle inputs/outputs of ALL operations: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let mut spent_notes = Vec::new();
         let mut leader_reward_utxos = Vec::new();
+        let mut channel_withdraw_utxos = Vec::new();
         let mut transfers = Vec::new();
         let mut locked_notes = HashSet::new();
         let mut unlocked_notes = HashSet::new();
@@ -85,6 +87,7 @@ impl WalletBlock {
         }
 
         leader_reward_utxos.extend(leader_reward_utxos_from_events(events));
+        channel_withdraw_utxos.extend(channel_withdraw_utxos_from_events(events));
 
         Self {
             id: block.header().id(),
@@ -93,6 +96,7 @@ impl WalletBlock {
             voucher_cm: *block.header().leader_proof().voucher_cm(),
             spent_notes,
             leader_reward_utxos,
+            channel_withdraw_utxos,
             transfers,
             locked_notes,
             unlocked_notes,
@@ -257,6 +261,10 @@ impl WalletState {
             insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
         }
 
+        for utxo in &block.channel_withdraw_utxos {
+            insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
+        }
+
         for transfer in &block.transfers {
             // Add new UTXOs (outputs) - only if they belong to our known keys
             for utxo in transfer.outputs.utxos(transfer) {
@@ -369,6 +377,19 @@ fn leader_reward_utxos_from_events(events: &Events) -> impl Iterator<Item = Utxo
         } => Some(*utxo),
         _ => None,
     })
+}
+
+fn channel_withdraw_utxos_from_events(events: &Events) -> impl Iterator<Item = Utxo> + '_ {
+    events
+        .iter()
+        .flat_map(|event| match event {
+            Event::Tx {
+                payload: EventPayload::Withdraw { utxos, .. },
+                ..
+            } => utxos.as_slice(),
+            _ => &[],
+        })
+        .copied()
 }
 
 fn remove_spent_utxo(
@@ -753,6 +774,7 @@ mod tests {
             voucher_cm: v1_cm,
             spent_notes: vec![],
             leader_reward_utxos: vec![],
+            channel_withdraw_utxos: vec![],
             transfers: vec![transfer1.clone()],
             locked_notes: HashSet::from([locked_note]),
             // Unknown unlocked note that will be ignored
@@ -776,6 +798,7 @@ mod tests {
             voucher_cm: v2_cm,
             spent_notes: vec![alice_100_nmo_utxo.id()],
             leader_reward_utxos: vec![],
+            channel_withdraw_utxos: vec![],
             transfers: vec![TransferOp {
                 inputs: Inputs::new([alice_100_nmo_utxo.id()]),
                 outputs: Outputs::new([Note::new(20, bob), Note::new(80, alice)]),
@@ -826,6 +849,7 @@ mod tests {
             voucher_cm: v3_cm,
             spent_notes: vec![alice_80_nmo_utxo.id()],
             leader_reward_utxos: vec![Utxo::new(tx_hash(9), 0, Note::new(38, alice))],
+            channel_withdraw_utxos: vec![],
             transfers: vec![],
             locked_notes: HashSet::new(),
             unlocked_notes: HashSet::new(),
@@ -879,6 +903,45 @@ mod tests {
         let utxos = leader_reward_utxos_from_events(&events).collect::<Vec<_>>();
 
         assert_eq!(utxos, vec![alice_utxo, bob_utxo]);
+    }
+
+    #[test]
+    fn test_channel_withdraw_outputs_update_balance() {
+        let alice = pk(1);
+        let bob = pk(2);
+        let genesis = HeaderId::from([0; 32]);
+        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let (voucher_cm, _voucher_nf) = voucher(1, 0);
+        let alice_withdraw_utxo = Utxo::new(tx_hash(1), 0, Note::new(42, alice));
+        let bob_withdraw_utxo = Utxo::new(tx_hash(1), 1, Note::new(7, bob));
+
+        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(alice, 1)],
+            Vouchers::default(),
+            genesis,
+            &ledger,
+        );
+
+        let block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 1.into(),
+            voucher_cm,
+            spent_notes: vec![],
+            leader_reward_utxos: vec![],
+            channel_withdraw_utxos: vec![alice_withdraw_utxo, bob_withdraw_utxo],
+            transfers: vec![],
+            locked_notes: HashSet::new(),
+            unlocked_notes: HashSet::new(),
+        };
+
+        wallet.apply_block(&block).unwrap();
+
+        assert_eq!(
+            wallet.balance(block.id, alice).unwrap().unwrap().balance,
+            42
+        );
+        assert_eq!(wallet.balance(block.id, bob).unwrap(), None);
     }
 
     #[test]
