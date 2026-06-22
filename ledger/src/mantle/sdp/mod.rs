@@ -216,6 +216,9 @@ impl<R: Rewards> ServiceState<R> {
         locked_notes: &mut LockedNotes,
         epoch: Epoch,
     ) {
+        // Collect IDs to remove first, and remove them in a second pass.
+        // `rpds` doesn't support `retain`, and we can't remove entries while iterating
+        // over them.
         let to_remove: Vec<DeclarationId> = self
             .declarations
             .iter()
