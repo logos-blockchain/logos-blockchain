@@ -22,9 +22,9 @@ impl NomDecode for ProofOfQuota {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, value) = ProofOfQuotaNom::decode(bytes)?;
+        let (remaining_bytes, value) = ProofOfQuotaNom::decode(bytes)?;
         Ok((
-            bytes,
+            remaining_bytes,
             Self::try_from(value)
                 .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
@@ -44,9 +44,9 @@ impl NomDecode for ProofOfSelection {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, value) = ProofOfSelectionNom::decode(bytes)?;
+        let (remaining_bytes, value) = ProofOfSelectionNom::decode(bytes)?;
         Ok((
-            bytes,
+            remaining_bytes,
             Self::try_from(value)
                 .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))

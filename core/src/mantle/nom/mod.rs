@@ -102,9 +102,9 @@ impl NomDecode for Fr {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, inner) = NomArray::<u8, 32>::decode(bytes)?;
+        let (remaining_bytes, inner) = NomArray::<u8, 32>::decode(bytes)?;
         Ok((
-            bytes,
+            remaining_bytes,
             fr_from_bytes(&inner)
                 .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
@@ -152,9 +152,9 @@ impl NomDecode for Ed25519PublicKey {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        let (remaining_bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
         Ok((
-            bytes,
+            remaining_bytes,
             Self::from_bytes(&inner)
                 .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))

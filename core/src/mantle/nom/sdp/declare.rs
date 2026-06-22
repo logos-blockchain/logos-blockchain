@@ -27,9 +27,9 @@ impl NomDecode for ServiceType {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, value) = u8::decode(bytes)?;
+        let (remaining_bytes, value) = u8::decode(bytes)?;
         Ok((
-            bytes,
+            remaining_bytes,
             Self::try_from(value)
                 .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
@@ -50,9 +50,9 @@ impl NomDecode for Locator {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, value) = NomLocator::decode(bytes)?;
+        let (remaining_bytes, value) = NomLocator::decode(bytes)?;
         Ok((
-            bytes,
+            remaining_bytes,
             Self::try_from(value)
                 .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))

@@ -48,10 +48,10 @@ impl NomDecode for ActivityMetadata {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, metadata_type) = u8::decode(bytes)?;
+        let (remaining_bytes, metadata_type) = u8::decode(bytes)?;
         match metadata_type {
             ACTIVE_METADATA_BLEND_TYPE => {
-                let (bytes, blend_activity_proof) = blend::ActivityProof::decode(bytes)?;
+                let (bytes, blend_activity_proof) = blend::ActivityProof::decode(remaining_bytes)?;
                 Ok((bytes, Self::Blend(Box::new(blend_activity_proof))))
             }
             _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
@@ -76,11 +76,11 @@ impl NomDecode for blend::ActivityProof {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, proof_version) = u8::decode(bytes)?;
+        let (remaining_bytes, proof_version) = u8::decode(bytes)?;
         if proof_version != BLEND_ACTIVE_METADATA_VERSION_BYTE {
             return Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail)));
         }
-        let (bytes, epoch) = Epoch::decode(bytes)?;
+        let (bytes, epoch) = Epoch::decode(remaining_bytes)?;
         let (bytes, signing_key) = Ed25519PublicKey::decode(bytes)?;
         let (bytes, proof_of_quota) = ProofOfQuota::decode(bytes)?;
         let (bytes, proof_of_selection) = ProofOfSelection::decode(bytes)?;
