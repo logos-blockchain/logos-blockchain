@@ -28,7 +28,7 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 /// - `custom_deployment_path`: An optional pointer to a string representing the
 ///   path to the custom deployment configuration file. If null, defaults to
 ///   binary default deployment (e.g., devnet for release candidates and testnet
-///   for candidates).
+///   for releases).
 ///
 /// # Returns
 ///
@@ -52,11 +52,10 @@ pub extern "C" fn start_lb_node(
 ///
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
-/// - `deployment`: A pointer to a string representing either a well-known
 /// - `custom_deployment_path`: An optional pointer to a string representing the
 ///   path to the custom deployment configuration file. If null, defaults to
 ///   binary default deployment (e.g., devnet for release candidates and testnet
-///   for candidates).
+///   for releases).
 ///
 /// # Returns
 ///
@@ -193,7 +192,7 @@ mod test {
         file
     });
     static STANDALONE_DEPLOYMENT_CONFIG_PATH: LazyLock<PathBuf> = LazyLock::new(|| {
-        let file = NODE_DIR.join("standalone-deployment-config.yaml");
+        let file = NODE_DIR.join("binary/src/config/deployment/settings.yaml");
         assert!(file.exists());
         file
     });
