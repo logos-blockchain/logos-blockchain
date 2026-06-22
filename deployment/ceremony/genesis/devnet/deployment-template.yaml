@@ -3,7 +3,7 @@ blend:
     num_blend_layers: 1
     minimum_network_size: 2
     protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/blend/1.0.0
-    data_replication_factor: 0
+    data_replication_factor: 1
   core:
     scheduler:
       cover:
