@@ -40,13 +40,13 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         };
 
         // Check the declaration hasn't been withdrawn
-        // (Return error if `withdrawn` epoch has passed)
-        if let Some(withdrawn) = declaration.withdrawn
-            && withdrawn <= ctx.epoch
+        // (Return error if `scheduled_withdrawal_epoch` epoch has passed)
+        if let Some(withdraw_at) = declaration.withdraw_at
+            && withdraw_at <= ctx.epoch
         {
             return Err(SdpError::DeclarationWithdrawn {
                 declaration_id: self.declaration_id,
-                withdrawn_epoch: withdrawn,
+                withdraw_at,
             });
         }
 

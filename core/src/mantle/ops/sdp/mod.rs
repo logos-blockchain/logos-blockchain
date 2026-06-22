@@ -41,11 +41,11 @@ pub enum SdpError {
     #[error("Sdp declaration id not found: {0:?}")]
     DeclarationNotFound(DeclarationId),
     #[error(
-        "Sdp declaration has been already withdrawn: {declaration_id:?} at epoch {withdrawn_epoch:?}"
+        "Sdp declaration has been already scheduled to be withdrawn: {declaration_id:?} at epoch {withdraw_at:?}"
     )]
     DeclarationWithdrawn {
         declaration_id: DeclarationId,
-        withdrawn_epoch: Epoch,
+        withdraw_at: Epoch,
     },
     #[error(
         "Invalid sdp message nonce: message_nonce={message_nonce:?}, declaration_nonce={declaration_nonce:?}"
