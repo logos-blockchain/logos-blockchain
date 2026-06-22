@@ -726,7 +726,7 @@ mod tests {
             MantleTx, Note, SignedMantleTx, Transaction as _, TxHash,
             encoding::Ops,
             gas::MainnetGasConstants,
-            ledger::{Inputs, Outputs},
+            ledger::{Inputs, Outputs, Utxos},
             ops::{
                 OpId as _,
                 channel::{
@@ -736,21 +736,29 @@ mod tests {
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
                 },
+                leader_claim::{LeaderClaimError, LeaderClaimOp},
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
         },
-        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+        proofs::{
+            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+            leader_claim_proof::Groth16LeaderClaimProof,
+        },
         sdp::{ActivityMetadata, DeclarationId, Nonce, blend::ActivityProof},
     };
     use lb_cryptarchia_engine::Epoch;
+    use lb_groth16::{CompressedGroth16Proof, Field as _};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::cryptarchia::tests::{
-        apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot, ledger,
-        update_ledger, utxo_with_sk,
+    use crate::{
+        cryptarchia::tests::{
+            apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot,
+            ledger, update_ledger, utxo_with_sk,
+        },
+        mantle::leader::LeaderState,
     };
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
@@ -1733,5 +1741,99 @@ mod tests {
                 .get_pending_rewards()
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_leader_claim_operation() {
+        let leaders = LeaderState::new();
+        // Add 3 vouchers (blocks) at epoch 1
+        let leaders = leaders.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
+        let leaders = leaders.try_apply_header(1.into(), Fr::ONE.into()).unwrap();
+        let leaders = leaders
+            .try_apply_header(1.into(), Fr::from(2u64).into())
+            .unwrap();
+        // Advance to epoch 2 by adding a voucher (block)
+        let mut leaders = leaders
+            .try_apply_header(2.into(), Fr::from(3u64).into())
+            .unwrap();
+        // Set rewards to 300 which can be distributed to the 3 vouchers
+        // collected so far (during epoch 1).
+        leaders.update_rewards(300);
+
+        // For each of the 3 vouchers, claim the reward.
+        for nf in [Fr::ZERO, Fr::ONE, Fr::from(2u64)] {
+            assert_eq!(leaders.reward_amount(), 100);
+            let op = LeaderClaimOp {
+                rewards_root: leaders.vouchers_snapshot_root(),
+                voucher_nullifier: nf.into(),
+                pk: ZkPublicKey::zero(),
+            };
+            // Skip `op.validate` in this test to avoid having to generate a valid proof
+            let (result, _events) = op
+                .execute(LeaderClaimExecutionContext {
+                    nullifiers: leaders.nullifiers_cloned(),
+                    reward_amount: leaders.reward_amount(),
+                    claimable_rewards: leaders.claimable_rewards(),
+                    utxos: Utxos::new(),
+                })
+                .unwrap();
+            leaders.update_nullifiers(result.nullifiers);
+            leaders.update_rewards(result.claimable_rewards);
+
+            assert_eq!(result.utxos.size(), 1);
+            let (_, (utxo, _)) = result.utxos.utxos().iter().next().unwrap();
+            assert_eq!(utxo.note.value, 100);
+        }
+
+        // All rewards have been claimed.
+        assert_eq!(leaders.claimable_rewards(), 0);
+    }
+
+    #[test]
+    fn test_duplicate_leader_claim_is_rejected() {
+        let leaders = LeaderState::new();
+        // Add a voucher (block) at epoch 1
+        let leaders = leaders.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
+        // Advance to epoch 2 by adding a voucher (block)
+        let mut leaders = leaders.try_apply_header(2.into(), Fr::ONE.into()).unwrap();
+        // Set rewards to 100 which can be distributed to the vouchers
+        // collected so far (during epoch 1).
+        leaders.update_rewards(100);
+
+        // Claim the reward for the 1st voucher.
+        let op = LeaderClaimOp {
+            rewards_root: leaders.vouchers_snapshot_root(),
+            voucher_nullifier: Fr::ZERO.into(), // nf of the 1st voucher
+            pk: ZkPublicKey::zero(),
+        };
+        // Skip `op.validate` in this test to avoid having to generate a valid proof
+        let (result, _events) = op
+            .execute(LeaderClaimExecutionContext {
+                nullifiers: leaders.nullifiers_cloned(),
+                reward_amount: leaders.reward_amount(),
+                claimable_rewards: leaders.claimable_rewards(),
+                utxos: Utxos::new(),
+            })
+            .unwrap();
+        leaders.update_nullifiers(result.nullifiers);
+        leaders.update_rewards(result.claimable_rewards);
+        assert_eq!(result.utxos.size(), 1);
+        let (_, (utxo, _)) = result.utxos.utxos().iter().next().unwrap();
+        assert_eq!(utxo.note.value, 100);
+
+        // Try to claim the reward using the same nullifier.
+        let err = op
+            .validate(&LeaderClaimValidationContext {
+                nullifiers: leaders.nullifiers(),
+                claimable_vouchers_root: &leaders.vouchers_snapshot_root(),
+                // Use a dummy proof since duplication is detected before proof verification
+                proof_of_claim: &Groth16LeaderClaimProof::new(
+                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+                    Fr::ZERO.into(),
+                ),
+                tx_hash: &TxHash::from([0u8; 32]),
+            })
+            .unwrap_err();
+        assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);
     }
 }
