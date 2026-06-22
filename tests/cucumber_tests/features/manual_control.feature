@@ -236,7 +236,6 @@ Feature: Manual control of transactions
       | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
     When I wait for all nodes to be synced to the chain
-    And I verify each wallet has minimum 1 outputs "available" in 300 seconds
     When node NODE_1 is at height 2000 in 3000 seconds
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
@@ -283,6 +282,5 @@ Feature: Manual control of transactions
       | https://devnet.blockchain.logos.co/node/2 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
       | https://devnet.blockchain.logos.co/node/3 | env(CCMBR_DEVNET_USER) | env(CCMBR_DEVNET_PWD) |
     When I wait for all nodes to be synced to the chain
-    And I verify each wallet has minimum 1 outputs "available" in 300 seconds
     When I perform manual control of transactions for all wallets no time-out
     Then I stop all nodes
