@@ -34,7 +34,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Commit and push the changes
 - [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch specifying the `devnet` image tag and the right version number `X.Y.Z-rc.N`
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's single embedded deployment slot (`nodes/node/binary/src/config/deployment/builtin/deployment.yaml`) with the devnet settings. This commit stays on the release/`devnet` branches and is never merged into `master`.
+- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the devnet settings.
 - [ ] Checkout and hard reset the `devnet` branch to point to the latest commit of the current release branch
 - [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
 - [ ] Commit and push to `devnet` branch to trigger the cleanup
@@ -43,7 +43,7 @@ Most of the template content is the same or very similar to what is in `release.
 ## Release candidate preparation
 
 - [ ] Checkout and pull the release branch, it should contain the bot generated commit updating the deployment settings as its `HEAD`
-- [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z-rc.N` (on `master` it stays at the `0.0.0` placeholder; the version bump happens on the release branch only and is never merged back)
+- [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z-rc.N`
 - [ ] Re-generate the workspace `Cargo.lock` file with `cargo update -w`
 - [ ] Verify the `Cargo.lock` is now up to date with `cargo update -w --locked`
 - [ ] Verify the `HEAD` of the release branch has green CI ✅

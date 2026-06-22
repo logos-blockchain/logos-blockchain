@@ -32,7 +32,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Commit and push the changes
 - [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch specifying the `testnet` image tag and the right version number `X.Y.Z`
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's single embedded deployment slot (`nodes/node/binary/src/config/deployment/builtin/deployment.yaml`) with the testnet settings. This commit stays on the release/`testnet` branches and is never merged into `master`.
+- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the testnet settings.
 - [ ] Checkout and hard reset the `testnet` branch to point to the latest commit of the current release branch
 - [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
 - [ ] Commit and push to `testnet` branch to trigger the cleanup
@@ -41,7 +41,7 @@ Most of the template content is the same or very similar to what is in `release-
 ## Release preparation
 
 - [ ] Checkout and pull the release branch, it should contain the bot generated commit updating the deployment settings as its `HEAD`
-- [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z` (on `master` it stays at the `0.0.0` placeholder; the version bump happens on the release branch only and is never merged back)
+- [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z`
 - [ ] Re-generate the workspace `Cargo.lock` file with `cargo update -w`
 - [ ] Verify the `Cargo.lock` is now up to date with `cargo update -w --locked`
 - [ ] Verify the `HEAD` of the release branch has green CI ✅
@@ -71,11 +71,6 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Wait around 1 minute for deployment to be updated. Environment is now live.
 - [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://testnet.blockchain.logos.co/internal/node-data/](https://testnet.blockchain.logos.co/internal/node-data/)
 - [ ] Go back to the [GitHub Release][github-release-section] section and finalize the release
-
-## Release branch wind-down
-
-- [ ] Do **not** merge the release branch into `master`. Instead, verify that the release branch's only diff versus its base `master` commit is release-specific: the version bump and the ceremony-regenerated embedded deployment. If any unrelated change (e.g. a bug-fix) landed on the release branch instead of on `master`, port it to `master` via a separate PR.
-- [ ] The release is recorded by the `X.Y.Z` tag and the `testnet` branch; the release branch can now be abandoned. `master` keeps its standalone built-in deployment and its `0.0.0` placeholder version — it never inherits a released version or deployment.
 
 # Post-Release
 
