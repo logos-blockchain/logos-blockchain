@@ -217,15 +217,15 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
 
         Ok((
             ctx,
-            std::iter::once(Event::from_tx(
+            Event::from_tx(
                 tx_hash,
                 self.op_id(),
                 EventPayload::LeaderRewardClaimed {
                     voucher_nullifier: self.voucher_nullifier,
                     utxo,
                 },
-            ))
-            .collect(),
+            )
+            .into(),
         ))
     }
 }

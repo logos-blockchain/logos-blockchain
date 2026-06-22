@@ -1113,27 +1113,32 @@ mod tests {
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);
-        let (event_tx_hash, op_id, event_channel_id, amount, metadata) = events
-            .iter()
-            .find_map(|event| match event {
+        let Some(Event::Tx {
+            tx_hash: event_tx_hash,
+            op_id,
+            payload:
+                EventPayload::Deposit {
+                    channel_id: event_channel_id,
+                    amount,
+                    metadata,
+                },
+        }) = events.iter().find(|event| {
+            matches!(
+                event,
                 Event::Tx {
-                    tx_hash,
-                    op_id,
-                    payload:
-                        EventPayload::Deposit {
-                            channel_id,
-                            amount,
-                            metadata,
-                        },
-                } => Some((*tx_hash, *op_id, *channel_id, *amount, metadata.clone())),
-                _ => None,
-            })
-            .expect("events should include deposit event");
-        assert_eq!(event_tx_hash, tx.hash());
-        assert_eq!(op_id, deposit.op_id());
-        assert_eq!(event_channel_id, deposit.channel_id);
-        assert_eq!(amount, utxo.note.value);
-        assert_eq!(metadata, deposit.metadata);
+                    payload: EventPayload::Deposit { .. },
+                    ..
+                }
+            )
+        })
+        else {
+            panic!("events should include deposit event")
+        };
+        assert_eq!(*event_tx_hash, tx.hash());
+        assert_eq!(*op_id, deposit.op_id());
+        assert_eq!(*event_channel_id, deposit.channel_id);
+        assert_eq!(*amount, utxo.note.value);
+        assert_eq!(*metadata, deposit.metadata);
     }
 
     #[test]

@@ -351,14 +351,14 @@ fn insert_owned_utxo<KeyId>(
     }
 
     let note_id = utxo.id();
-    *utxos = utxos.insert(note_id, utxo);
+    utxos.insert_mut(note_id, utxo);
 
     let note_set = pk_index
         .get(&utxo.note.pk)
         .cloned()
         .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
         .insert(note_id);
-    *pk_index = pk_index.insert(utxo.note.pk, note_set);
+    pk_index.insert_mut(utxo.note.pk, note_set);
 }
 
 fn leader_reward_utxos_from_events(events: &Events) -> impl Iterator<Item = Utxo> + '_ {
