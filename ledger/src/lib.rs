@@ -1784,6 +1784,7 @@ mod tests {
                     reward_amount: leaders.reward_amount(),
                     claimable_rewards: leaders.claimable_rewards(),
                     utxos: Utxos::new(),
+                    tx_hash: TxHash::from([0u8; 32]),
                 })
                 .unwrap();
             leaders.update_nullifiers(result.nullifiers);
@@ -1822,6 +1823,7 @@ mod tests {
                 reward_amount: leaders.reward_amount(),
                 claimable_rewards: leaders.claimable_rewards(),
                 utxos: Utxos::new(),
+                tx_hash: TxHash::from([0u8; 32]),
             })
             .unwrap();
         leaders.update_nullifiers(result.nullifiers);
