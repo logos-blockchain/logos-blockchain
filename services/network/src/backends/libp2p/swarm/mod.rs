@@ -147,6 +147,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     fn handle_swarm_event(&mut self, event: SwarmEvent<BehaviourEvent<R>>) {
         match event {
             SwarmEvent::ConnectionEstablished {
@@ -188,30 +192,32 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             } => {
                 crate::metrics::network_dial_failures();
 
-                // A `WrongPeerId` failure is permanent for that exact
-                // `/p2p/<id>@addr`: the node at that address rotated its
-                // identity key, so retrying can never succeed. Such dials are
-                // issued by Kademlia periodic bootstrap / Identify / chain sync
-                // (not our own `connect()`), so they have no `pending_dials`
-                // entry and would otherwise be re-dialed forever. Evict the
-                // stale address from Kademlia immediately instead of retrying.
-                if let DialError::WrongPeerId { obtained, endpoint } = &error {
-                    let dial_addr = endpoint.get_remote_address();
-                    tracing::debug!(
-                        target: LOG_TARGET,
-                        "Evicting stale address after WrongPeerId (expected {peer_id:?}, obtained {obtained}): {dial_addr}"
-                    );
-                    self.remove_kademlia_address_for_dial(peer_id, dial_addr);
-                    // Drop any matching pending dial so it is not also retried.
-                    self.pending_dials.remove(&connection_id);
-                    return;
+                match error {
+                    // A `WrongPeerId` failure is permanent for that exact
+                    // `/p2p/<id>@addr`: the node at that address rotated its
+                    // identity key, so retrying can never succeed. Such dials are
+                    // issued by Kademlia periodic bootstrap / Identify / chain sync
+                    // (not our own `connect()`), so they have no `pending_dials`
+                    // entry and would otherwise be re-dialed forever. Evict the
+                    // stale address from Kademlia immediately instead of retrying.
+                    DialError::WrongPeerId { obtained, endpoint } => {
+                        let dial_addr = endpoint.get_remote_address();
+                        tracing::debug!(
+                            target: LOG_TARGET,
+                            "Evicting stale address after WrongPeerId (expected {peer_id:?}, obtained {obtained}): {dial_addr}"
+                        );
+                        self.remove_kademlia_address_for_dial(peer_id, dial_addr);
+                        // Drop any matching pending dial so it is not also retried.
+                        self.pending_dials.remove(&connection_id);
+                    }
+                    error => {
+                        tracing::error!(
+                            target: LOG_TARGET,
+                            "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
+                        );
+                        self.retry_connect(connection_id, peer_id);
+                    }
                 }
-
-                tracing::error!(
-                    target: LOG_TARGET,
-                    "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
-                );
-                self.retry_connect(connection_id, peer_id);
             }
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 self.handle_external_addr_confirmed(&address);
