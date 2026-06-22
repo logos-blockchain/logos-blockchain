@@ -3,7 +3,7 @@ use std::{ffi::c_char, path::PathBuf};
 use lb_node::{
     UserConfig,
     config::{
-        DeploymentType, RunConfig,
+        CustomDeployment, RunConfig,
         deployment::{DeploymentSettings, WellKnownDeployment},
     },
     get_services_to_start, run_node_from_config,
@@ -116,7 +116,7 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
 }
 
 fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<DeploymentSettings> {
-    let deployment_type: DeploymentType = if deployment_arg.is_null() {
+    let deployment_type: CustomDeployment = if deployment_arg.is_null() {
         WellKnownDeployment::default().into()
     } else {
         let deployment_str = unsafe { std::ffi::CStr::from_ptr(deployment_arg) }
@@ -130,13 +130,13 @@ fn get_deployment_config(deployment_arg: *const c_char) -> StatusResult<Deployme
             })?;
         deployment_str.parse::<WellKnownDeployment>().map_or_else(
             |()| PathBuf::from(deployment_str).into(),
-            DeploymentType::from,
+            CustomDeployment::from,
         )
     };
 
     match deployment_type {
-        DeploymentType::WellKnown(well_known_deployment) => Ok(well_known_deployment.into()),
-        DeploymentType::Custom(path) => {
+        CustomDeployment::WellKnown(well_known_deployment) => Ok(well_known_deployment.into()),
+        CustomDeployment::Custom(path) => {
             deserialize_value_at_path::<DeploymentSettings>(path.as_ref(), OnUnknownKeys::Fail)
                 .map_err(|e| {
                     logging::error!(

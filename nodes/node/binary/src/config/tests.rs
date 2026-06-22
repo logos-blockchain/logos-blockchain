@@ -8,7 +8,7 @@ use crate::{
     UserConfig,
     cli::CliArgs,
     config::{
-        DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
+        DeploymentSettings, RequiredValues as ConfigRequiredValues,
         blend::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
@@ -76,7 +76,7 @@ fn common_recovery_folder() {
         base_config
     };
 
-    let deployment_settings = DeploymentSettings::from(WellKnownDeployment::Builtin);
+    let deployment_settings = DeploymentSettings::default();
 
     let blend_rewards_params = deployment_settings.blend_reward_params();
 

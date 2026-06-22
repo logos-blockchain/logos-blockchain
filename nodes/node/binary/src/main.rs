@@ -4,7 +4,7 @@ use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use logos_blockchain_node::{
     UserConfig,
     cli::{CliArgs, Command, build_run_config},
-    config::{DeploymentType, deployment::DeploymentSettings},
+    config::{CustomDeployment, deployment::DeploymentSettings},
     get_services_to_start, run_node_from_config,
 };
 
@@ -62,7 +62,8 @@ async fn main() -> Result<()> {
             OnUnknownKeys::Fail,
         )?);
         // If custom, check deployment config.
-        if let DeploymentType::Custom(custom_deployment_config_file) = cli_args.deployment_type() {
+        if let CustomDeployment::Custom(custom_deployment_config_file) = cli_args.deployment_type()
+        {
             drop(deserialize_value_at_path::<DeploymentSettings>(
                 custom_deployment_config_file,
                 OnUnknownKeys::Fail,
