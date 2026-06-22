@@ -29,8 +29,8 @@ pub type FfiInitializedLogosBlockchainNodeResult = FfiStatusResult<*mut LogosBlo
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
 /// - `deployment`: A pointer to a string representing either a well-known
-///   deployment name (e.g., "devnet") or a path to a deployment YAML file. If
-///   null, defaults to "devnet".
+///   deployment name (e.g., "builtin") or a path to a deployment YAML file. If
+///   null, defaults to "builtin".
 ///
 /// # Returns
 ///
@@ -55,8 +55,8 @@ pub extern "C" fn start_lb_node(
 /// - `config_path`: A pointer to a string representing the path to the
 ///   configuration file.
 /// - `deployment`: A pointer to a string representing either a well-known
-///   deployment name (e.g., "devnet") or a path to a deployment YAML file. If
-///   null, defaults to "devnet".
+///   deployment name (e.g., "builtin") or a path to a deployment YAML file. If
+///   null, defaults to "builtin".
 ///
 /// # Returns
 ///

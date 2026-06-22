@@ -32,7 +32,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Commit and push the changes
 - [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch specifying the `testnet` image tag and the right version number `X.Y.Z`
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch with the updated testnet deployment settings.
+- [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's single embedded deployment slot (`nodes/node/binary/src/config/deployment/builtin/deployment.yaml`) with the testnet settings. This commit stays on the release/`testnet` branches and is never merged into `master`.
 - [ ] Checkout and hard reset the `testnet` branch to point to the latest commit of the current release branch
 - [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
 - [ ] Commit and push to `testnet` branch to trigger the cleanup
@@ -74,7 +74,8 @@ Most of the template content is the same or very similar to what is in `release-
 
 ## Release branch wind-down
 
-- [ ] Open a PR against `master` to merge the release branch into it. Make sure the diff between the two show only release-relevant changes. I.e., make sure no unrelated changes, e.g., bug-fixes have landed on the release branch instead of landing on `master`.
+- [ ] Do **not** merge the release branch into `master`. Instead, verify that the release branch's only diff versus its base `master` commit is release-specific: the version bump and the ceremony-regenerated embedded deployment. If any unrelated change (e.g. a bug-fix) landed on the release branch instead of on `master`, port it to `master` via a separate PR.
+- [ ] The release is recorded by the `X.Y.Z` tag and the `testnet` branch; the release branch can now be abandoned. `master` keeps its standalone built-in deployment and `-dev` version — it never inherits a released version or deployment.
 
 # Post-Release
 

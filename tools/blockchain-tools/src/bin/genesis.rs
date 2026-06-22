@@ -83,7 +83,7 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub faucet: PathBuf,
 
-    /// The base deployment config (e.g., 'devnet' or path/to/config.yaml).
+    /// The base deployment config (e.g., 'builtin' or path/to/config.yaml).
     #[arg(long, value_name = "NAME_OR_PATH")]
     pub deployment: String,
 
@@ -101,7 +101,7 @@ pub struct CeremonyArgs {
 
 #[derive(Parser, Debug)]
 struct ConfigArgs {
-    /// Base config source: a well-known deployment name (e.g. 'devnet') or a
+    /// Base config source: a well-known deployment name (e.g. 'builtin') or a
     /// path to an existing YAML deployment config file.
     #[arg(long, value_name = "NAME_OR_PATH")]
     deployment: String,

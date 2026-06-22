@@ -948,7 +948,7 @@ fn prepare_config_patch(
     if join_external_network {
         config.deployment = deployment_override
             .cloned()
-            .unwrap_or_else(|| DeploymentSettings::from(WellKnownDeployment::Devnet));
+            .unwrap_or_else(|| DeploymentSettings::from(WellKnownDeployment::Builtin));
     } else if let Some(deployment_override) = deployment_override {
         config.deployment = deployment_override.clone();
     }

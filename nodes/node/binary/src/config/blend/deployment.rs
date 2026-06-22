@@ -143,13 +143,13 @@ mod tests {
     use crate::config::{DeploymentSettings, WellKnownDeployment};
 
     #[test]
-    fn blend_devnet() {
+    fn blend_builtin() {
         const EXPECTED_ROUND_DURATION: Duration = Duration::from_secs(1);
         const EXPECTED_ROUNDS_PER_EPOCH: NonZeroU64 = NonZeroU64::new(6_000).unwrap();
         const EXPECTED_ROUNDS_PER_OBSERVATION_WINDOW: NonZeroU64 = NonZeroU64::new(10).unwrap();
         const EXPECTED_EPOCH_TRANSITION_PERIOD: Duration = Duration::from_secs(20);
 
-        let deployment: DeploymentSettings = WellKnownDeployment::Devnet.into();
+        let deployment: DeploymentSettings = WellKnownDeployment::Builtin.into();
 
         let slots_per_epoch = deployment.cryptarchia.slots_per_epoch();
         let slots_per_block = deployment.cryptarchia.average_slots_per_block();

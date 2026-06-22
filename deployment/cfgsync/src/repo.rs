@@ -144,8 +144,8 @@ impl ConfigRepo {
                 &self.tracing_settings,
                 hosts,
             );
-            let devnet_settings = {
-                let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
+            let settings = {
+                let mut default_settings = DeploymentSettings::from(WellKnownDeployment::Builtin);
                 default_settings.cryptarchia.genesis_block = genesis_block;
                 default_settings.cryptarchia.faucet_pk = faucet_pk;
                 default_settings
@@ -158,17 +158,17 @@ impl ConfigRepo {
 
             {
                 let mut deployment_settings = self.deployment_settings.lock().unwrap();
-                *deployment_settings = Some(devnet_settings.clone());
+                *deployment_settings = Some(settings.clone());
             };
 
-            self.persist_deployment_settings(&devnet_settings)
+            self.persist_deployment_settings(&settings)
                 .expect("Settings should be persisted");
 
             for (host, sender) in waiting_hosts.drain() {
                 let config = configs.get(&host).expect("host should have a config");
                 drop(sender.send(RepoResponse::Config(Box::new((
                     config.to_owned(),
-                    devnet_settings.clone(),
+                    settings.clone(),
                 )))));
             }
         } else {

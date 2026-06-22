@@ -76,7 +76,7 @@ fn common_recovery_folder() {
         base_config
     };
 
-    let deployment_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
+    let deployment_settings = DeploymentSettings::from(WellKnownDeployment::Builtin);
 
     let blend_rewards_params = deployment_settings.blend_reward_params();
 

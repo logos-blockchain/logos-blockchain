@@ -186,3 +186,29 @@ jobs:
           name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
           include-hidden-files: true
           path: tests/.run_*
+
+  master-deployment-guard:
+    name: Guard master's embedded deployment
+    # Only enforce on master: pushes to master and PRs targeting master. Release
+    # branches legitimately carry devnet/testnet content in the embedded slot and
+    # are never merged back into master.
+    if: ${{ github.base_ref == 'master' || github.ref == 'refs/heads/master' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+
+      - name: Assert embedded deployment is the standalone/dev built-in
+        run: |
+          FILE=nodes/node/binary/src/config/deployment/builtin/deployment.yaml
+          # master must never ship a real-network (devnet/testnet/mainnet) genesis;
+          # its embedded built-in is the standalone/dev deployment.
+          if grep -nE '/logos-blockchain-(devnet|testnet|mainnet)-' "$FILE"; then
+            echo "::error file=$FILE::master's embedded deployment carries a real-network protocol namespace. It must be the standalone/dev built-in (a release branch must never be merged into master)."
+            exit 1
+          fi
+          if ! grep -q 'logos-blockchain-standalone' "$FILE"; then
+            echo "::error file=$FILE::master's embedded deployment is not the expected standalone/dev built-in."
+            exit 1
+          fi
+          echo "OK: embedded built-in is the standalone/dev deployment."

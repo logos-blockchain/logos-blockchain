@@ -24,6 +24,15 @@ jobs:
       LB_VERSION: ${{ github.event.inputs.version }}
 
     steps:
+      - name: Guard against running on master
+        # The ceremony overwrites the single embedded deployment slot with
+        # devnet/testnet content and pushes to the current branch. It must only
+        # run from a release branch; master keeps its standalone built-in.
+        if: ${{ github.ref_name == 'master' || github.ref_name == 'main' }}
+        run: |
+          echo "::error::The genesis ceremony must not run on '${{ github.ref_name }}'. Dispatch it from a release branch."
+          exit 1
+
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
@@ -44,7 +53,7 @@ jobs:
             --providers deployment/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
             --faucet deployment/ceremony/genesis/$LB_TARGET_ENV/faucet.yaml \
             --deployment /tmp/deployment-generated.yaml \
-            --output nodes/node/binary/src/config/deployment/devnet/deployment.yaml
+            --output nodes/node/binary/src/config/deployment/builtin/deployment.yaml
 
       - name: Commit and Push changes
         run: |
@@ -52,7 +61,7 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          git add nodes/node/binary/src/config/deployment/devnet/deployment.yaml
+          git add nodes/node/binary/src/config/deployment/builtin/deployment.yaml
 
           # Only commit and push if there are actual changes
           if git diff --staged --quiet; then
