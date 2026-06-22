@@ -257,11 +257,11 @@ impl WalletState {
             remove_spent_utxo(spent_id, &mut utxos, &mut pk_index);
         }
 
-        for utxo in &block.leader_reward_utxos {
-            insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
-        }
-
-        for utxo in &block.channel_withdraw_utxos {
+        for utxo in block
+            .leader_reward_utxos
+            .iter()
+            .chain(&block.channel_withdraw_utxos)
+        {
             insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
         }
 
