@@ -31,7 +31,7 @@ where
     type Output = [T::Output; N];
 
     fn decode(input: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (input, items) = count(T::decode, N).parse(input)?;
+        let (input, items) = count(T::decode, N).parse_complete(input)?;
 
         let Ok(items) = items.try_into() else {
             panic!("Decoded `N` elements.");

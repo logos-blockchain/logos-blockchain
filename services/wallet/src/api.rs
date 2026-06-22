@@ -2,7 +2,8 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Note, SignedMantleTx, TxHash, Value,
-        ops::leader_claim::VoucherCm,
+        gas::GasCost,
+        ops::leader_claim::{RewardsRoot, VoucherCm},
         tx::MantleTxContext,
         tx_builder::{MantleTxBuilder, TxBuilderError},
     },
@@ -21,8 +22,8 @@ use overwatch::{
 use tokio::sync::oneshot::{self, error::RecvError};
 
 use crate::{
-    ClaimableVoucherInfo, TipResponse, UtxoWithKeyId, VoucherCommitmentAndNullifier, WalletMsg,
-    WalletServiceError, WalletServiceSettings,
+    ClaimableVoucherInfo, TipResponse, UtxoWithKeyId, WalletMsg, WalletServiceError,
+    WalletServiceSettings,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -148,6 +149,30 @@ where
         Ok(rx.await??)
     }
 
+    pub async fn build_leader_claim_tx(
+        &self,
+        tip: HeaderId,
+        rewards_root: RewardsRoot,
+        reward_amount: Value,
+        funding_pk: ZkPublicKey,
+        max_tx_fee: GasCost,
+    ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
+        let (resp_tx, rx) = oneshot::channel();
+
+        self.relay
+            .send(WalletMsg::BuildLeaderClaimTx {
+                tip,
+                rewards_root,
+                reward_amount,
+                funding_pk,
+                max_tx_fee,
+                resp_tx,
+            })
+            .await?;
+
+        Ok(rx.await??)
+    }
+
     pub async fn get_tx_context(
         &self,
         block_id: Option<HeaderId>,
@@ -249,17 +274,6 @@ where
             .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })
             .await?;
         Ok(rx.await?)
-    }
-
-    pub async fn get_claimable_voucher(
-        &self,
-        tip: Option<HeaderId>,
-    ) -> Result<TipResponse<Option<VoucherCommitmentAndNullifier>>, WalletApiError> {
-        let (resp_tx, rx) = oneshot::channel();
-        self.relay
-            .send(WalletMsg::GetClaimableVoucher { tip, resp_tx })
-            .await?;
-        Ok(rx.await??)
     }
 
     pub async fn get_claimable_vouchers(

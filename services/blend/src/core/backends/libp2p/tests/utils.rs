@@ -1,8 +1,8 @@
-use core::{num::NonZeroU64, ops::RangeInclusive, time::Duration};
+use core::{num::NonZeroU64, ops::RangeInclusive, pin::Pin, time::Duration};
 use std::iter::repeat_with;
 
 use async_trait::async_trait;
-use futures::StreamExt as _;
+use futures::{Stream, StreamExt as _, stream::pending};
 use lb_blend::{
     message::{
         crypto::key_ext::Ed25519SecretKeyExt as _,
@@ -26,7 +26,7 @@ use libp2p_swarm_test::SwarmExt as _;
 use rand::SeedableRng as _;
 use tokio::{
     sync::{broadcast, mpsc},
-    time::interval,
+    time::{Interval, interval},
 };
 use tokio_stream::wrappers::IntervalStream;
 
@@ -95,6 +95,7 @@ pub struct SwarmBuilder {
     identity: Keypair,
     public_info: BackendEpochInfo<PeerId>,
     max_dial_attempts: Option<NonZeroU64>,
+    peering_degree_check_clock: Option<Pin<Box<dyn Stream<Item = ()> + Send>>>,
 }
 
 impl SwarmBuilder {
@@ -107,11 +108,17 @@ impl SwarmBuilder {
             identity,
             public_info,
             max_dial_attempts: None,
+            peering_degree_check_clock: None,
         }
     }
 
     pub fn with_max_dial_attempts(mut self, max_dial_attempts: NonZeroU64) -> Self {
         self.max_dial_attempts = Some(max_dial_attempts);
+        self
+    }
+
+    pub fn with_peering_degree_check_interval(mut self, interval: Interval) -> Self {
+        self.peering_degree_check_clock = Some(IntervalStream::new(interval).map(|_| ()).boxed());
         self
     }
 
@@ -136,6 +143,8 @@ impl SwarmBuilder {
             self.max_dial_attempts
                 .unwrap_or_else(|| 3u64.try_into().unwrap()),
             1usize.try_into().unwrap(),
+            self.peering_degree_check_clock
+                .unwrap_or_else(|| Box::pin(pending())),
         );
 
         TestSwarm {
@@ -150,6 +159,7 @@ pub struct BlendBehaviourBuilder {
     peer_id: PeerId,
     membership: Membership<PeerId>,
     observation_window: Option<(Duration, RangeInclusive<u64>)>,
+    peering_degree: Option<RangeInclusive<usize>>,
 }
 
 impl BlendBehaviourBuilder {
@@ -158,6 +168,7 @@ impl BlendBehaviourBuilder {
             peer_id,
             membership,
             observation_window: None,
+            peering_degree: None,
         }
     }
 
@@ -170,16 +181,22 @@ impl BlendBehaviourBuilder {
         self
     }
 
+    pub fn with_peering_degree(mut self, peering_degree: RangeInclusive<usize>) -> Self {
+        self.peering_degree = Some(peering_degree);
+        self
+    }
+
     pub fn build(self) -> BlendBehaviour<TestObservationWindowProvider> {
         let observation_window_values = self
             .observation_window
             .unwrap_or((Duration::from_secs(1), u64::MIN..=u64::MAX));
+        let peering_degree = self.peering_degree.unwrap_or(1..=100);
 
         BlendBehaviour {
             blend: NetworkBehaviour::new(
                 &Config {
                     with_core: CoreToCoreConfig {
-                        peering_degree: 1..=100,
+                        peering_degree,
                         minimum_network_size: 1.try_into().unwrap(),
                     },
                     with_edge: CoreToEdgeConfig {
@@ -219,8 +236,7 @@ impl<Settings> From<&BlendConfig<Settings>> for TestObservationWindowProvider {
 }
 
 impl IntervalStreamProvider for TestObservationWindowProvider {
-    type IntervalStream =
-        Box<dyn futures::Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
+    type IntervalStream = Box<dyn Stream<Item = RangeInclusive<u64>> + Send + Unpin + 'static>;
     type IntervalItem = RangeInclusive<u64>;
 
     fn interval_stream(&self) -> Self::IntervalStream {

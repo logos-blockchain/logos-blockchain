@@ -94,6 +94,11 @@ impl ServiceConfig {
                     minimum_messages_coefficient: self.deployment.core.minimum_messages_coefficient,
                     normalization_constant: self.deployment.core.normalization_constant,
                     protocol_name: self.deployment.common.protocol_name.clone(),
+                    peering_degree_check_interval: self
+                        .user
+                        .core
+                        .backend
+                        .peering_degree_check_interval,
                 },
                 scheduler: SchedulerSettings {
                     cover: CoverTrafficSettings {

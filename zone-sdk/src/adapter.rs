@@ -237,7 +237,7 @@ pub(crate) fn build_deposit_amounts(events: &Events) -> HashMap<(TxHash, Hash), 
                 op_id,
                 payload: EventPayload::Deposit { amount, .. },
             } => Some(((*tx_hash, *op_id), *amount)),
-            Event::Ledger(_) => None,
+            Event::Tx { .. } | Event::Ledger(_) => None,
         })
         .collect()
 }

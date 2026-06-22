@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::{
     crypto::ZkHasher,
-    events::Events,
+    events::{Event, EventPayload, Events},
     mantle::{
         Note, TxHash, Utxo, Value,
         encoding::encode_leader_claim,
@@ -168,6 +168,7 @@ pub struct LeaderClaimExecutionContext {
     pub reward_amount: Value,
     pub claimable_rewards: Value,
     pub utxos: Utxos,
+    pub tx_hash: TxHash,
 }
 
 impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
@@ -212,8 +213,20 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
 
         // Remove the distributed rewards from the pool
         ctx.claimable_rewards -= ctx.reward_amount;
+        let tx_hash = ctx.tx_hash;
 
-        Ok((ctx, Events::new()))
+        Ok((
+            ctx,
+            Event::from_tx(
+                tx_hash,
+                self.op_id(),
+                EventPayload::LeaderRewardClaimed {
+                    voucher_nullifier: self.voucher_nullifier,
+                    utxo,
+                },
+            )
+            .into(),
+        ))
     }
 }
 
@@ -253,5 +266,54 @@ mod tests {
         };
 
         assert_eq!(op.validate(&ctx), Ok(()));
+    }
+
+    #[test]
+    fn execute_emits_leader_reward_claimed_event() {
+        let voucher_secret = VoucherSecret::from(Fr::from(7u64));
+        let reward_amount = 38;
+        let pk = ZkPublicKey::zero();
+        let tx_hash = TxHash::from([11u8; 32]);
+        let op = LeaderClaimOp {
+            rewards_root: RewardsRoot::default(),
+            voucher_nullifier: VoucherNullifier::from_secret(voucher_secret),
+            pk,
+        };
+
+        let (ctx, events) = op
+            .execute(LeaderClaimExecutionContext {
+                nullifiers: rpds::HashTrieSetSync::new_sync(),
+                reward_amount,
+                claimable_rewards: 100,
+                utxos: Utxos::new(),
+                tx_hash,
+            })
+            .expect("leader claim execution should succeed");
+
+        assert!(ctx.nullifiers.contains(&op.voucher_nullifier));
+        assert_eq!(ctx.claimable_rewards, 62);
+        assert_eq!(
+            ctx.utxos.get(&op.utxo(reward_amount).id()),
+            Some(op.utxo(reward_amount))
+        );
+
+        let mut events = events.iter();
+        let Some(Event::Tx {
+            tx_hash: event_tx_hash,
+            op_id,
+            payload:
+                EventPayload::LeaderRewardClaimed {
+                    voucher_nullifier,
+                    utxo,
+                },
+        }) = events.next()
+        else {
+            panic!("expected LeaderRewardClaimed tx event");
+        };
+        assert_eq!(*event_tx_hash, tx_hash);
+        assert_eq!(*op_id, op.op_id());
+        assert_eq!(*voucher_nullifier, op.voucher_nullifier);
+        assert_eq!(*utxo, op.utxo(reward_amount));
+        assert!(events.next().is_none());
     }
 }

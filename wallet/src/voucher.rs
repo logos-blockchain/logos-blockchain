@@ -3,6 +3,12 @@ use std::collections::HashMap;
 use lb_core::mantle::ops::leader_claim::{VoucherCm, VoucherNullifier};
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone, Copy, Debug)]
+pub struct Voucher {
+    pub nullifier: VoucherNullifier,
+    pub commitment: VoucherCm,
+}
+
 /// Holds voucher indices for
 /// - generating new vouchers
 /// - looking up existing voucher IDs by commitment or nullifier
@@ -46,10 +52,13 @@ impl<Id> Vouchers<Id> {
         self.vouchers.remove(&cm)
     }
 
-    pub(crate) fn commitments_and_nullifiers(
-        &self,
-    ) -> impl Iterator<Item = (&VoucherNullifier, &VoucherCm)> {
-        self.voucher_nullifiers.iter()
+    pub(crate) fn commitments_and_nullifiers(&self) -> impl Iterator<Item = Voucher> + '_ {
+        self.voucher_nullifiers
+            .iter()
+            .map(|(&nullifier, &commitment)| Voucher {
+                nullifier,
+                commitment,
+            })
     }
 
     #[must_use]

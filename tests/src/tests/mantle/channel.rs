@@ -152,20 +152,22 @@ async fn channel_deposit() {
     .expect("timed out waiting for the deposit tx to be included in a block");
 
     let events = fetch_block_events(&validator.client, deposit_block_id).await;
-    let payload = events
+    let (channel_id, amount, metadata) = events
         .iter()
         .find_map(|event| match event {
             Event::Tx {
-                tx_hash, payload, ..
-            } => (tx_hash == &deposit_tx_hash).then(|| payload.clone()),
-            Event::Ledger(_) => None,
+                tx_hash,
+                payload:
+                    EventPayload::Deposit {
+                        channel_id,
+                        amount,
+                        metadata,
+                    },
+                ..
+            } if tx_hash == &deposit_tx_hash => Some((*channel_id, *amount, metadata.clone())),
+            _ => None,
         })
-        .expect("block events should include the deposit tx");
-    let EventPayload::Deposit {
-        channel_id,
-        amount,
-        metadata,
-    } = payload;
+        .expect("block events should include the deposit event");
     assert_eq!(channel_id, deposit_op.channel_id);
     assert_eq!(amount, deposit_amount);
     assert_eq!(metadata, deposit_op.metadata);

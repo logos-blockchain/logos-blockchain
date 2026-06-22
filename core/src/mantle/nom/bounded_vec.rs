@@ -76,7 +76,7 @@ where
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
         let () = Self::_N_BYTES_VALUE_CHECK;
 
-        let (bytes, len_bytes): (&[u8], &[u8]) = take(N_BYTES).parse(bytes)?;
+        let (bytes, len_bytes): (&[u8], &[u8]) = take(N_BYTES).parse_complete(bytes)?;
         let mut buf = [0u8; 8];
         buf[..N_BYTES].copy_from_slice(len_bytes);
         let len = u64::from_le_bytes(buf) as usize;
@@ -90,7 +90,7 @@ where
             return Err(nom::Err::Error(Error::new(bytes, ErrorKind::TooLarge)));
         }
 
-        let (bytes, items) = count(T::decode, len).parse(bytes)?;
+        let (bytes, items) = count(T::decode, len).parse_complete(bytes)?;
         Ok((bytes, BoundedVec::new_unchecked(items)))
     }
 }

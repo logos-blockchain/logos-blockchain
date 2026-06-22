@@ -4,7 +4,7 @@ use lb_core::{
     crypto::ZkHasher,
     mantle::{
         Value,
-        ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherCm, VoucherNullifier},
+        ops::leader_claim::{RewardsRoot, VoucherCm, VoucherNullifier},
     },
 };
 use lb_cryptarchia_engine::Epoch;
@@ -17,16 +17,16 @@ use serde::{Deserialize, Serialize};
 /// since we keep a copy of this state for each block.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaderState {
-    /// current epoch
+    /// Current epoch
     epoch: Epoch,
     /// A snapshot of voucher commitments, updated once at each epoch start.
     vouchers_snapshot: VouchersSnapshot,
-    /// nullifiers of vouchers that have been claimed since genesis
+    /// Nullifiers of vouchers that have been claimed since genesis
     nfs: rpds::HashTrieSetSync<VoucherNullifier>,
-    /// rewards to be distributed
-    /// at the start of each epoch this is increased by the amount of rewards
+    /// Rewards to be distributed.
+    /// At the start of each epoch this is increased by the amount of rewards
     /// that have been collected in the previous epoch.
-    /// unclaimed rewards are carried over to the next epoch.
+    /// Unclaimed rewards are carried over to the next epoch.
     claimable_rewards: Value,
     /// Rewards that are being collected during the current epoch.
     /// This will be added to the `claimable_rewards` when a new epoch starts.
@@ -40,10 +40,10 @@ pub struct LeaderState {
 struct VouchersSnapshot {
     /// Root of voucher commitment tree
     root: RewardsRoot,
-    /// Number of voucher commitments in the tree
+    /// Number of voucher commitments in the tree.
     /// This includes voucher commitments that have been already claimed
-    /// because claiming is done by nullifier that is transparently coupled
-    /// with commitment.
+    /// because claims are done by nullifiers that is not transparently
+    /// linked to commitments.
     count: u64,
 }
 
@@ -181,88 +181,19 @@ impl LeaderState {
             .checked_div(n_unclaimed_vouchers)
             .unwrap_or(0)
     }
-
-    /// Claim the reward associated with a voucher.
-    /// Any cryptographic proof of correct derivation of the voucher nullifier
-    /// and membership proof in the merkle tree is expected to happen
-    /// outside of this function.
-    pub fn claim(&self, op: &LeaderClaimOp) -> Result<(Self, Value), Error> {
-        if self.nfs.contains(&op.voucher_nullifier) {
-            return Err(Error::DuplicatedVoucherNullifier);
-        }
-
-        if self.vouchers_snapshot_root() != op.rewards_root {
-            return Err(Error::VoucherNotFound);
-        }
-
-        let reward_amount = self.reward_amount();
-        let nfs = self.nfs.insert(op.voucher_nullifier);
-        let claimable_rewards = self.claimable_rewards - reward_amount;
-        Ok((
-            Self {
-                nfs,
-                claimable_rewards,
-                ..self.clone()
-            },
-            reward_amount,
-        ))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
-    use lb_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
 
     impl LeaderState {
-        #[cfg(test)]
         #[must_use]
         pub fn get_pending_rewards(&self) -> Value {
             self.pending_rewards
         }
-    }
-
-    #[test]
-    fn test_reward_amounts() {
-        let state = LeaderState::new();
-        let state = state.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
-        let state = state.try_apply_header(1.into(), Fr::ONE.into()).unwrap();
-        let state = state
-            .try_apply_header(1.into(), Fr::from(2u64).into())
-            .unwrap();
-        let state = state
-            .try_apply_header(2.into(), Fr::from(3u64).into())
-            .unwrap();
-        let state = LeaderState {
-            claimable_rewards: 300,
-            ..state
-        };
-        let op1 = LeaderClaimOp {
-            rewards_root: state.vouchers_snapshot_root(),
-            voucher_nullifier: Fr::ZERO.into(),
-            pk: ZkPublicKey::zero(),
-        };
-        let (state, bal) = state.claim(&op1).unwrap();
-        assert_eq!(bal, 100);
-        assert_eq!(state.claimable_rewards, 200);
-        let op2 = LeaderClaimOp {
-            rewards_root: state.vouchers_snapshot_root(),
-            voucher_nullifier: Fr::ONE.into(),
-            pk: ZkPublicKey::zero(),
-        };
-        let (state, bal) = state.claim(&op2).unwrap();
-        assert_eq!(bal, 100);
-        assert_eq!(state.claimable_rewards, 100);
-        let op3 = LeaderClaimOp {
-            rewards_root: state.vouchers_snapshot_root(),
-            voucher_nullifier: Fr::from(2u64).into(),
-            pk: ZkPublicKey::zero(),
-        };
-        let (state, bal) = state.claim(&op3).unwrap();
-        assert_eq!(bal, 100);
-        assert_eq!(state.claimable_rewards, 0);
     }
 
     #[test]
@@ -300,19 +231,5 @@ mod tests {
             .unwrap();
         assert_eq!(state.epoch, 4);
         assert_eq!(state.vouchers_snapshot.count, 4);
-    }
-
-    #[test]
-    fn test_cannot_claim_reward_twice() {
-        let state = LeaderState::new();
-        let op = LeaderClaimOp {
-            voucher_nullifier: Fr::ZERO.into(),
-            rewards_root: state.vouchers_snapshot_root(),
-            pk: ZkPublicKey::zero(),
-        };
-        let (state, balance) = state.claim(&op).unwrap();
-        assert_eq!(balance, 0);
-        let err = state.claim(&op).unwrap_err();
-        assert_eq!(err, Error::DuplicatedVoucherNullifier);
     }
 }
