@@ -254,13 +254,13 @@ impl WalletState {
         }
 
         for utxo in &block.leader_reward_utxos {
-            insert_owned_utxo(*utxo, known_keys, &mut utxos, &mut pk_index);
+            insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
         }
 
         for transfer in &block.transfers {
             // Add new UTXOs (outputs) - only if they belong to our known keys
             for utxo in transfer.outputs.utxos(transfer) {
-                insert_owned_utxo(utxo, known_keys, &mut utxos, &mut pk_index);
+                insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index);
             }
         }
 
@@ -340,7 +340,7 @@ impl WalletState {
     }
 }
 
-fn insert_owned_utxo<KeyId>(
+fn insert_utxo_if_owned<KeyId>(
     utxo: Utxo,
     known_keys: &HashMap<ZkPublicKey, KeyId>,
     utxos: &mut rpds::HashTrieMapSync<NoteId, Utxo>,
