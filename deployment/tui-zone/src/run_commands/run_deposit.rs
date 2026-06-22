@@ -6,13 +6,14 @@ use lb_key_management_system_service::keys::ZkKey;
 use crate::{
     cli::{DepositArgs, RunResult},
     run_commands::{
-        ZONE_DEPOSIT_SUBMISSION, ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT,
+        ZONE_WALLET_FUNDS_EXPORT,
         driver::{CommandGoal, WaitFor, drive_until_observed},
-        types::{DepositSubmission, WalletFundsExport},
+        types::WalletFundsExport,
         utils::{
             build_deposit_op, build_deposit_transfer, decode_exported_utxos,
-            decode_required_hex_bincode, read_json, resolve_channel_id, start_cli_sequencer,
-            timestamp, validate_kind, write_json,
+            decode_required_hex_bincode, node_client, print_channel_balance, query_channel_state,
+            read_json, resolve_channel_id, start_cli_sequencer_with_channel_state, timestamp,
+            validate_kind,
         },
     },
 };
@@ -26,12 +27,14 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
     )?;
     let funding_public_key = wallet_key.to_public_key();
     let available_utxos = decode_exported_utxos(&funds)?;
-    let (transfer, reserved_inputs) =
+    let (transfer, _reserved_inputs) =
         build_deposit_transfer(available_utxos, funding_public_key, args.amount)?;
     let channel_id = resolve_channel_id(&args.node_key)?;
     let deposit = build_deposit_op(channel_id, &transfer, &args.metadata)?;
     let inscription = Inscription::try_from(args.message.into_bytes())?;
-    let mut sequencer = start_cli_sequencer(&args.node_key).await?;
+    let (mut sequencer, channel_state) =
+        start_cli_sequencer_with_channel_state(&args.node_key).await?;
+    print_channel_balance("deposit before", &channel_id, channel_state.as_ref());
     let status_rx = sequencer.subscribe_tx_status();
     let goal_inputs = deposit.inputs.clone();
     let goal_metadata = deposit.metadata.clone();
@@ -49,56 +52,47 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
         ],
     )?;
     let tx_hash = signed_tx.hash();
-    if args.submit {
-        let goal = CommandGoal::Deposit {
-            tx_hash,
-            inputs: goal_inputs,
-            amount: args.amount,
-            metadata: goal_metadata,
-        };
-        let (_result, _checkpoint) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
-        println!(
-            "{} deposit: submitted tx_hash={} msg_id={}",
-            timestamp(),
-            hex::encode(tx_hash.as_ref()),
-            hex::encode(msg_id.as_ref())
-        );
-        let wait_for = if args.wait_finalized {
-            WaitFor::Finalized
-        } else {
-            WaitFor::OnChain
-        };
-        drive_until_observed(
-            &channel_id,
-            &mut sequencer,
-            status_rx,
-            goal,
-            wait_for,
-            "deposit",
-        )
-        .await?;
-    }
-    let submission = DepositSubmission {
-        version: ZONE_FILE_TRANSFER_VERSION,
-        kind: ZONE_DEPOSIT_SUBMISSION.to_owned(),
-        channel_id: hex::encode(channel_id.as_ref()),
+
+    let goal = CommandGoal::Deposit {
+        tx_hash,
+        inputs: goal_inputs,
         amount: args.amount,
-        tx_hash: hex::encode(tx_hash.as_ref()),
-        msg_id: hex::encode(msg_id.as_ref()),
-        recipient_wallet_public_key: funds.public_key,
-        reserved_input_ids: reserved_inputs
-            .iter()
-            .map(|utxo| hex::encode(utxo.id().as_bytes()))
-            .collect(),
+        metadata: goal_metadata,
     };
-    if let Some(path) = args.out {
-        write_json(&path, &submission)?;
-    }
+    let (_result, _checkpoint) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
     println!(
-        "{} deposit: tx_hash={} msg_id={}",
+        "{} deposit: submitted tx_hash={} msg_id={}",
         timestamp(),
-        submission.tx_hash,
-        submission.msg_id
+        hex::encode(tx_hash.as_ref()),
+        hex::encode(msg_id.as_ref())
+    );
+    let wait_for = if args.wait_finalized {
+        WaitFor::Finalized
+    } else {
+        WaitFor::OnChain
+    };
+    drive_until_observed(
+        &channel_id,
+        &mut sequencer,
+        status_rx,
+        goal,
+        wait_for,
+        "deposit",
+    )
+    .await?;
+
+    let node = node_client(&args.node_key.node_url)?;
+    let channel_state = query_channel_state(&node, channel_id).await;
+    println!(
+        "{} deposit: balance={}, tx_hash={} msg_id={}",
+        timestamp(),
+        if let Some(state) = channel_state {
+            state.balance
+        } else {
+            0
+        },
+        hex::encode(tx_hash.as_ref()),
+        hex::encode(msg_id.as_ref())
     );
     Ok(())
 }

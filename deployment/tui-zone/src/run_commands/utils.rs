@@ -34,7 +34,7 @@ use tracing::warn;
 use crate::{
     cli::{NodeKeyArgs, RunResult},
     run_commands::types::WalletFundsExport,
-    state::{load_persisted_checkpoint_for_channel, save_persisted_checkpoint},
+    state::{load_or_discard_persisted_checkpoint_for_channel, save_persisted_checkpoint},
 };
 
 const CHANNEL_STATE_QUERY_RETRY: Duration = Duration::from_secs(5);
@@ -173,6 +173,45 @@ pub async fn query_channel_state(
                 sleep(CHANNEL_STATE_QUERY_RETRY).await;
             }
         }
+    }
+}
+
+/// Print the channel's current balance.
+pub fn print_channel_balance(label: &str, channel_id: &ChannelId, state: Option<&ChannelState>) {
+    match state {
+        Some(state) => println!(
+            "{} {label}: channel_id={} balance={}",
+            timestamp(),
+            hex::encode(channel_id.as_ref()),
+            state.balance,
+        ),
+        None => println!(
+            "{} {label}: channel_id={} balance=unknown channel_state=missing",
+            timestamp(),
+            hex::encode(channel_id.as_ref())
+        ),
+    }
+}
+
+/// Print the channel's current balance and configuration state.
+pub fn print_channel_state(label: &str, channel_id: &ChannelId, state: Option<&ChannelState>) {
+    match state {
+        Some(state) => println!(
+            "{} {label}: channel_id={} balance={} withdrawal_nonce={} accredited_keys={} configuration_threshold={} withdraw_threshold={} tip_message={}",
+            timestamp(),
+            hex::encode(channel_id.as_ref()),
+            state.balance,
+            state.withdrawal_nonce,
+            state.accredited_keys.len(),
+            state.configuration_threshold,
+            state.withdraw_threshold,
+            hex::encode(state.tip_message.as_ref())
+        ),
+        None => println!(
+            "{} {label}: channel_id={} balance=unknown channel_state=missing",
+            timestamp(),
+            hex::encode(channel_id.as_ref())
+        ),
     }
 }
 
@@ -341,7 +380,7 @@ pub fn load_cli_checkpoint(
     channel_id: &ChannelId,
     channel_exists: bool,
 ) -> RunResult<Option<SequencerCheckpoint>> {
-    load_persisted_checkpoint_for_channel(channel_id, channel_exists)
+    load_or_discard_persisted_checkpoint_for_channel(channel_id, channel_exists)
 }
 
 /// Persist a non-interactive sequencer checkpoint in the runtime directory.

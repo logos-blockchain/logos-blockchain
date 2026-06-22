@@ -68,7 +68,7 @@ a1
 
 Then stop the sequencer with `CTRL-C`.
 
-Create the second and third authorized signer keys:
+Create the second, third, and fourth signer keys:
 
 ```sh
 cargo run -p logos-blockchain-tui-zone -- keygen \
@@ -76,10 +76,21 @@ cargo run -p logos-blockchain-tui-zone -- keygen \
 
 cargo run -p logos-blockchain-tui-zone -- keygen \
   --key-path /tmp/tui-zone/keys/seq-c.key
+
+cargo run -p logos-blockchain-tui-zone -- keygen \
+  --key-path /tmp/tui-zone/keys/seq-d.key
 ```
 
-`seq-a.key` is the channel admin key. `seq-b.key` and `seq-c.key` are only
-accredited later by the channel config command.
+`seq-a.key` is the channel admin key. `seq-b.key`, `seq-c.key`, and
+`seq-d.key` are only accredited later by channel config commands.
+
+Print the channel balance at any point:
+
+```sh
+cargo run -p logos-blockchain-tui-zone -- state balance \
+  --node-url http://localhost:<PORT> \
+  --key-path /tmp/tui-zone/keys/seq-a.key
+```
 
 ## [Sequencer] Deposit
 
@@ -92,8 +103,7 @@ cargo run -p logos-blockchain-tui-zone -- deposit \
   --funds /tmp/tui-zone/artifacts/funds-wallet-1a.json \
   --amount 1000 \
   --metadata "demo deposit" \
-  --message "deposit wallet 1a" \
-  --submit
+  --message "deposit wallet 1a"
 ```
 
 Deposit the second exported wallet funds:
@@ -105,8 +115,7 @@ cargo run -p logos-blockchain-tui-zone -- deposit \
   --funds /tmp/tui-zone/artifacts/funds-wallet-2a.json \
   --amount 1000 \
   --metadata "demo deposit" \
-  --message "deposit wallet 2a" \
-  --submit
+  --message "deposit wallet 2a"
 ```
 
 ## [Cucumber] Check deposit balances
@@ -173,22 +182,23 @@ BALANCE, wallet 'WALLET_1A'
 ## [Sequencer] Configure multi-signers
 
 Configure the Zone channel created by `seq-a.key` so the accredited withdrawal
-keys contain all three local sequencer keys and the withdrawal threshold is `2`:
+keys contain the first three local sequencer keys, the withdrawal threshold is
+`2`, and future configuration changes require `2` signatures:
 
 ```sh
-cargo run -p logos-blockchain-tui-zone -- config \
+cargo run -p logos-blockchain-tui-zone -- config apply \
   --node-url http://localhost:<PORT> \
   --key-path /tmp/tui-zone/keys/seq-a.key \
   --authorized-key-path /tmp/tui-zone/keys/seq-a.key \
   --authorized-key-path /tmp/tui-zone/keys/seq-b.key \
   --authorized-key-path /tmp/tui-zone/keys/seq-c.key \
-  --configuration-threshold 1 \
+  --configuration-threshold 2 \
   --withdraw-threshold 2 \
   --posting-timeframe 30 \
   --posting-timeout 30
 ```
 
-The `--key-path` key is the channel admin key and is kept at authorized key
+The `--key-path` key signs this threshold-1 update and is kept at authorized key
 index `0`; duplicate `--authorized-key-path` entries are ignored.
 
 ## [Sequencer] Multi-signer withdrawal
@@ -251,6 +261,67 @@ BALANCE, wallet 'WALLET_1A'
 
 The withdrawn funds are normal chain notes addressed to the exported cucumber
 wallet public key, so they are observed through the existing wallet scan path.
+
+## [Sequencer] Multi-signer config update
+
+Prepare a 2-of-3 configuration update that adds the fourth key and raises both
+thresholds to `3`:
+
+```sh
+cargo run -p logos-blockchain-tui-zone -- config prepare \
+  --node-url http://localhost:<PORT> \
+  --key-path /tmp/tui-zone/keys/seq-a.key \
+  --authorized-key-path /tmp/tui-zone/keys/seq-a.key \
+  --authorized-key-path /tmp/tui-zone/keys/seq-b.key \
+  --authorized-key-path /tmp/tui-zone/keys/seq-c.key \
+  --authorized-key-path /tmp/tui-zone/keys/seq-d.key \
+  --configuration-threshold 3 \
+  --withdraw-threshold 3 \
+  --posting-timeframe 30 \
+  --posting-timeout 30 \
+  --out /tmp/tui-zone/artifacts/config-3of4.intent.json
+```
+
+Sign the config intent with two currently authorized keys:
+
+```sh
+cargo run -p logos-blockchain-tui-zone -- config sign \
+  --key-path /tmp/tui-zone/keys/seq-a.key \
+  --in /tmp/tui-zone/artifacts/config-3of4.intent.json \
+  --out /tmp/tui-zone/artifacts/config-sig-a.json
+
+cargo run -p logos-blockchain-tui-zone -- config sign \
+  --key-path /tmp/tui-zone/keys/seq-b.key \
+  --in /tmp/tui-zone/artifacts/config-3of4.intent.json \
+  --out /tmp/tui-zone/artifacts/config-sig-b.json
+```
+
+Combine the signatures:
+
+```sh
+cargo run -p logos-blockchain-tui-zone -- config combine \
+  --in /tmp/tui-zone/artifacts/config-3of4.intent.json \
+  --sig /tmp/tui-zone/artifacts/config-sig-a.json \
+  --sig /tmp/tui-zone/artifacts/config-sig-b.json \
+  --out /tmp/tui-zone/artifacts/config-3of4.signed.json
+```
+
+Submit the signed config update:
+
+```sh
+cargo run -p logos-blockchain-tui-zone -- config submit \
+  --node-url http://localhost:<PORT> \
+  --key-path /tmp/tui-zone/keys/seq-a.key \
+  --in /tmp/tui-zone/artifacts/config-3of4.signed.json
+```
+
+Check the full channel state:
+
+```sh
+cargo run -p logos-blockchain-tui-zone -- state full \
+  --node-url http://localhost:<PORT> \
+  --key-path /tmp/tui-zone/keys/seq-a.key
+```
 
 ## [Cucumber] Stop cucumber scenario
 

@@ -1,5 +1,7 @@
 /// The TUI sequencer command runner module.
 mod driver;
+/// Channel balance query command runner.
+pub mod run_balance;
 /// Channel configuration command runner.
 pub mod run_config;
 /// Deposit command runner.
@@ -19,6 +21,15 @@ mod utils;
 mod unit_tests;
 
 pub const ZONE_DEPOSIT_SUBMISSION: &str = "zone_deposit_submission";
+/// The TUI sequencer prefix for all config intent files to ensure they are
+/// easily identifiable.
+pub const ZONE_CONFIG_INTENT: &str = "zone_config_intent";
+/// The TUI sequencer prefix for all config signature files to ensure they are
+/// easily identifiable.
+pub const ZONE_CONFIG_SIGNATURE: &str = "zone_config_signature";
+/// The TUI sequencer prefix for all signed config transaction files to ensure
+/// they are easily identifiable.
+pub const ZONE_SIGNED_CONFIG: &str = "zone_signed_config";
 
 /// The TUI sequencer prefix for all withdraw intent files to ensure they are
 /// easily identifiable.

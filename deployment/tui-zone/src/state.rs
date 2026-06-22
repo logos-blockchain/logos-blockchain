@@ -133,11 +133,11 @@ impl ZoneState for InMemoryZoneState {
 pub fn load_persisted_checkpoint(
     channel_id: &ChannelId,
 ) -> Result<Option<SequencerCheckpoint>, Box<dyn Error + Send + Sync>> {
-    load_persisted_checkpoint_for_channel(channel_id, true)
+    load_or_discard_persisted_checkpoint_for_channel(channel_id, true)
 }
 
 /// Load the persisted sequencer checkpoint after validating the target channel.
-pub fn load_persisted_checkpoint_for_channel(
+pub fn load_or_discard_persisted_checkpoint_for_channel(
     channel_id: &ChannelId,
     channel_exists: bool,
 ) -> Result<Option<SequencerCheckpoint>, Box<dyn Error + Send + Sync>> {
@@ -180,7 +180,6 @@ pub fn load_persisted_checkpoint_for_channel(
 
 fn discard_stale_checkpoint(reason: &str) -> Result<(), Box<dyn Error + Send + Sync>> {
     warn!("discarding stale sequencer checkpoint '{CHECKPOINT_FILE}': {reason}");
-    eprintln!("discarding stale sequencer checkpoint '{CHECKPOINT_FILE}': {reason}");
     fs::remove_file(CHECKPOINT_FILE)?;
     Ok(())
 }
@@ -210,7 +209,10 @@ impl InMemoryZoneState {
             published: Vec::new(),
             adopted: Vec::new(),
             finalized: Vec::new(),
-            checkpoint: load_persisted_checkpoint_for_channel(&channel_id, channel_exists)?,
+            checkpoint: load_or_discard_persisted_checkpoint_for_channel(
+                &channel_id,
+                channel_exists,
+            )?,
             channel_id: Some(channel_id),
             channel_view: None,
         })

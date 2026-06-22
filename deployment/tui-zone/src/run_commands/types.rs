@@ -37,27 +37,6 @@ pub struct ExportedUtxo {
 }
 
 #[derive(Serialize, Deserialize)]
-/// Summary written after building a deposit transaction.
-pub struct DepositSubmission {
-    /// File format version.
-    pub version: u8,
-    /// File kind discriminator.
-    pub kind: String,
-    /// Hex-encoded zone channel identifier.
-    pub channel_id: String,
-    /// Deposited value.
-    pub amount: Value,
-    /// Hex-encoded signed transaction hash.
-    pub tx_hash: String,
-    /// Hex-encoded inscription message identifier.
-    pub msg_id: String,
-    /// Hex-encoded public key that funded the deposit.
-    pub recipient_wallet_public_key: String,
-    /// Hex-encoded input IDs reserved by the deposit transaction.
-    pub reserved_input_ids: Vec<String>,
-}
-
-#[derive(Serialize, Deserialize)]
 /// Unsigned withdrawal transaction plus metadata required for offline signing.
 pub struct WithdrawIntent {
     /// File format version.
@@ -146,6 +125,78 @@ pub struct SignedWithdrawFile {
     /// Hex-encoded signed transaction hash.
     pub tx_hash: String,
     /// Hex-encoded inscription message identifier.
+    pub msg_id: String,
+    /// Hex-encoded signed mantle transaction bytes.
+    pub signed_mantle_tx: String,
+    /// Signature entries used to build the signed transaction.
+    pub signatures: Vec<WithdrawSignatureEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+/// Unsigned channel configuration transaction plus metadata for offline
+/// signing.
+pub struct ConfigIntent {
+    /// File format version.
+    pub version: u8,
+    /// File kind discriminator.
+    pub kind: String,
+    /// Hex-encoded zone channel identifier.
+    pub channel_id: String,
+    /// Hex-encoded transaction hash that signers must sign.
+    pub tx_hash: String,
+    /// Hex-encoded channel config message identifier.
+    pub msg_id: String,
+    /// Number of current authorized signatures required.
+    pub required_threshold: u16,
+    /// Hex-encoded mantle transaction bytes.
+    pub mantle_tx: String,
+    /// New authorized signer public keys in channel order.
+    pub new_authorized_keys: Vec<String>,
+    /// New configuration threshold.
+    pub configuration_threshold: u16,
+    /// New withdrawal threshold.
+    pub withdraw_threshold: u16,
+    /// New posting timeframe in slots.
+    pub posting_timeframe: u32,
+    /// New posting timeout in slots.
+    pub posting_timeout: u32,
+    /// Current authorized channel signers indexed by channel key index.
+    pub authorized_signers: Vec<AuthorizedSigner>,
+    /// Signatures already attached to the intent.
+    pub signatures: Vec<WithdrawSignatureEntry>,
+}
+
+#[derive(Serialize, Deserialize)]
+/// Standalone signature file produced by `config sign`.
+pub struct ConfigSignatureFile {
+    /// File format version.
+    pub version: u8,
+    /// File kind discriminator.
+    pub kind: String,
+    /// Hex-encoded zone channel identifier.
+    pub channel_id: String,
+    /// Hex-encoded transaction hash this signature covers.
+    pub tx_hash: String,
+    /// Hex-encoded Ed25519 public key for the signer.
+    pub signer_public_key: String,
+    /// Index of the signer in the channel's current accredited key list.
+    pub signer_key_index: ChannelKeyIndex,
+    /// Hex-encoded bincode Ed25519 signature over the transaction hash.
+    pub signature: String,
+}
+
+#[derive(Serialize, Deserialize)]
+/// Signed channel configuration transaction file ready for submission.
+pub struct SignedConfigFile {
+    /// File format version.
+    pub version: u8,
+    /// File kind discriminator.
+    pub kind: String,
+    /// Hex-encoded zone channel identifier.
+    pub channel_id: String,
+    /// Hex-encoded signed transaction hash.
+    pub tx_hash: String,
+    /// Hex-encoded channel config message identifier.
     pub msg_id: String,
     /// Hex-encoded signed mantle transaction bytes.
     pub signed_mantle_tx: String,

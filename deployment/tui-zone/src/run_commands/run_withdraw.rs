@@ -28,9 +28,10 @@ pub(crate) use crate::{
         utils::{
             decode_ed25519_public_key_hex, decode_hex_bincode, decode_mantle_tx_hex,
             decode_msg_id_hex, decode_signed_mantle_tx_hex, decode_zk_public_key_hex,
-            encode_hex_bincode, ensure_tx_hash, fixed_bytes, load_or_create_signing_key, read_json,
-            resolve_channel_id, start_cli_sequencer, start_cli_sequencer_with_channel_state,
-            timestamp, validate_kind, write_json,
+            encode_hex_bincode, ensure_tx_hash, fixed_bytes, load_or_create_signing_key,
+            node_client, print_channel_balance, query_channel_state, read_json, resolve_channel_id,
+            start_cli_sequencer, start_cli_sequencer_with_channel_state, timestamp, validate_kind,
+            write_json,
         },
     },
 };
@@ -44,6 +45,14 @@ pub(crate) async fn run_withdraw_prepare(args: WithdrawPrepareArgs) -> RunResult
         start_cli_sequencer_with_channel_state(&args.node_key).await?;
     let channel_state =
         channel_state.ok_or_else(|| format!("channel state not found for {channel_id}"))?;
+    print_channel_balance("withdraw before", &channel_id, Some(&channel_state));
+    if args.amount > channel_state.balance {
+        return Err(format!(
+            "insufficient channel balance for withdraw: requested {}, available {}",
+            args.amount, channel_state.balance
+        )
+        .into());
+    }
     let withdraw_nonce = channel_state.withdrawal_nonce;
     let withdraw = ChannelWithdrawOp {
         channel_id,
@@ -296,5 +305,8 @@ pub(crate) async fn run_withdraw_submit(args: WithdrawSubmitArgs) -> RunResult<(
         "withdraw",
     )
     .await?;
+    let node = node_client(&node_key.node_url)?;
+    let channel_state = query_channel_state(&node, channel_id).await;
+    print_channel_balance("withdraw after", &channel_id, channel_state.as_ref());
     Ok(())
 }

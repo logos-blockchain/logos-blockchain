@@ -3,7 +3,10 @@ use std::{error::Error, path::PathBuf};
 use clap::{Args, Parser, Subcommand};
 
 use crate::run_commands::{
-    run_config::run_config,
+    run_balance::{run_state_balance, run_state_full},
+    run_config::{
+        run_config, run_config_combine, run_config_prepare, run_config_sign, run_config_submit,
+    },
     run_deposit::run_deposit,
     run_keygen::run_keygen,
     run_withdraw::{
@@ -28,8 +31,17 @@ pub struct Cli {
 enum Command {
     /// Run the interactive inscription TUI.
     Run(NodeKeyArgs),
-    /// Update zone channel configuration.
-    Config(ConfigArgs),
+    /// Apply, prepare, sign, combine, or submit zone channel configuration
+    /// updates.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
+    /// Print zone channel state.
+    State {
+        #[command(subcommand)]
+        command: StateCommand,
+    },
     /// Build and optionally submit a zone deposit.
     Deposit(DepositArgs),
     /// Create or inspect a local sequencer signing key.
@@ -39,6 +51,28 @@ enum Command {
         #[command(subcommand)]
         command: WithdrawCommand,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigCommand {
+    /// Apply a single-signer channel configuration update.
+    Apply(ConfigArgs),
+    /// Prepare an unsigned channel configuration intent file.
+    Prepare(ConfigPrepareArgs),
+    /// Sign a channel configuration intent with one authorized key.
+    Sign(ConfigSignArgs),
+    /// Combine configuration signature files into a signed transaction file.
+    Combine(ConfigCombineArgs),
+    /// Submit a signed channel configuration transaction file.
+    Submit(ConfigSubmitArgs),
+}
+
+#[derive(Subcommand, Debug)]
+enum StateCommand {
+    /// Print the channel balance and configuration state.
+    Full(StateArgs),
+    /// Print the channel balance.
+    Balance(StateArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -77,14 +111,8 @@ pub struct DepositArgs {
     /// Inscription message paired with the deposit transaction.
     pub message: String,
     #[arg(long)]
-    /// Submit the signed transaction to the node after building it.
-    pub submit: bool,
-    #[arg(long)]
     /// Wait for finality instead of returning once the tx is observed on chain.
     pub wait_finalized: bool,
-    #[arg(long)]
-    /// Optional path where a deposit submission summary JSON is written.
-    pub out: Option<PathBuf>,
 }
 
 #[derive(Args, Debug)]
@@ -108,6 +136,82 @@ pub struct ConfigArgs {
     #[arg(long, default_value_t = 0)]
     /// Number of slots after which a poster is considered timed out.
     pub posting_timeout: u32,
+    #[arg(long)]
+    /// Wait for finality instead of returning once the tx is observed on chain.
+    pub wait_finalized: bool,
+}
+
+#[derive(Args, Debug)]
+/// Arguments for printing zone channel state.
+pub struct StateArgs {
+    #[command(flatten)]
+    /// Node endpoint and channel key used to resolve the channel.
+    pub node_key: NodeKeyArgs,
+}
+
+#[derive(Args, Debug)]
+/// Arguments for preparing an unsigned channel configuration intent file.
+pub struct ConfigPrepareArgs {
+    #[command(flatten)]
+    /// Node endpoint and channel signing key.
+    pub node_key: NodeKeyArgs,
+    #[arg(long = "authorized-key-path", required = true)]
+    /// Paths to signing keys that should be accredited for the channel.
+    pub authorized_key_paths: Vec<String>,
+    #[arg(long)]
+    /// Number of accredited signatures required for future config updates.
+    pub configuration_threshold: u16,
+    #[arg(long)]
+    /// Number of accredited signatures required for withdrawals.
+    pub withdraw_threshold: u16,
+    #[arg(long, default_value_t = 0)]
+    /// Number of slots assigned to an accredited poster.
+    pub posting_timeframe: u32,
+    #[arg(long, default_value_t = 0)]
+    /// Number of slots after which a poster is considered timed out.
+    pub posting_timeout: u32,
+    #[arg(long)]
+    /// Path where the configuration intent JSON is written.
+    pub out: PathBuf,
+}
+
+#[derive(Args, Debug)]
+/// Arguments for signing a channel configuration intent with one key.
+pub struct ConfigSignArgs {
+    #[arg(long)]
+    /// Path to the signer key file.
+    pub key_path: String,
+    #[arg(long = "in")]
+    /// Path to the configuration intent JSON file.
+    pub input: PathBuf,
+    #[arg(long)]
+    /// Path where the signature JSON is written.
+    pub out: PathBuf,
+}
+
+#[derive(Args, Debug)]
+/// Arguments for combining configuration signature files into a signed tx file.
+pub struct ConfigCombineArgs {
+    #[arg(long = "in")]
+    /// Path to the configuration intent JSON file.
+    pub input: PathBuf,
+    #[arg(long)]
+    /// Signature JSON file paths to include.
+    pub sig: Vec<PathBuf>,
+    #[arg(long)]
+    /// Path where the signed configuration transaction JSON is written.
+    pub out: PathBuf,
+}
+
+#[derive(Args, Debug)]
+/// Arguments for submitting a signed channel configuration transaction file.
+pub struct ConfigSubmitArgs {
+    #[command(flatten)]
+    /// Node endpoint and channel signing key used to submit the transaction.
+    pub node_key: NodeKeyArgs,
+    #[arg(long = "in")]
+    /// Path to the signed configuration transaction JSON file.
+    pub input: PathBuf,
     #[arg(long)]
     /// Wait for finality instead of returning once the tx is observed on chain.
     pub wait_finalized: bool,
@@ -202,7 +306,17 @@ pub async fn run_cli(cli: Cli) -> RunResult<()> {
             crate::run_commands::run_inscribe::run_inscribe(args).await;
             Ok(())
         }
-        Some(Command::Config(args)) => run_config(args).await,
+        Some(Command::Config { command }) => match command {
+            ConfigCommand::Apply(args) => run_config(args).await,
+            ConfigCommand::Prepare(args) => run_config_prepare(args).await,
+            ConfigCommand::Sign(args) => run_config_sign(&args),
+            ConfigCommand::Combine(args) => run_config_combine(args),
+            ConfigCommand::Submit(args) => run_config_submit(args).await,
+        },
+        Some(Command::State { command }) => match command {
+            StateCommand::Full(args) => run_state_full(args).await,
+            StateCommand::Balance(args) => run_state_balance(args).await,
+        },
         Some(Command::Deposit(args)) => run_deposit(args).await,
         Some(Command::Keygen(args)) => {
             run_keygen(&args);
