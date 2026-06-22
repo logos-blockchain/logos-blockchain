@@ -17,7 +17,7 @@ Generate a default configuration by connecting to the bootstrap peers:
     -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/{TODO} \
     -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/{TODO} \
     -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/{TODO} \
-    -p /ip4/65.108.203.235/udp/3003/quic-v1/p2p/{TODO}
+    -p /ip4/65.108.203.235/udp/50001/quic-v1/p2p/{TODO}
 ```
 
 If your node has a known public IP address and you want to disable NAT traversal, you can add `--external-address /ip4/<public-ip>/udp/<port>/quic-v1` to the previous command. Nodes behind NAT or CG-NAT require no extra flags — NAT traversal is enabled by default.
@@ -125,7 +125,7 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
                 -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8 \
                 -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ \
                 -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf \
-                -p /ip4/65.108.203.235/udp/3003/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH
+                -p /ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH
         ```
     * For a release (for testnet), copy-paste the new testnet addresses from the [testnet dashboard][testnet-dashboard]
 - [ ] Delete this checklist and publish

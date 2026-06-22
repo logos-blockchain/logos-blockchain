@@ -16,5 +16,5 @@
 - provider_id: f6807fc50fbd4ef5f7fe1aaef037ee78d23233e60de802da36bfbb64215800fe
   zk_id: 4d705c711b7c99fc041576c0c5412934cd86f3369d88c9f451e786c0e396fb1c
   locators:
-    - /ip4/65.109.51.37/udp/3403/quic-v1
+    - /ip4/65.109.51.37/udp/50002/quic-v1
   service_type: BN
