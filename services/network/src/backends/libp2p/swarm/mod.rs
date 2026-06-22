@@ -356,10 +356,7 @@ mod tests {
     use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
     use lb_libp2p::{
-        libp2p::{
-            core::{ConnectedPoint, Endpoint, transport::PortUse},
-            swarm::DialError,
-        },
+        libp2p::core::{ConnectedPoint, Endpoint, transport::PortUse},
         protocol_name::StreamProtocol,
     };
     use lb_utils::net::get_available_udp_port;
