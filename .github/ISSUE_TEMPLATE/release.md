@@ -41,7 +41,7 @@ Most of the template content is the same or very similar to what is in `release-
 ## Release preparation
 
 - [ ] Checkout and pull the release branch, it should contain the bot generated commit updating the deployment settings as its `HEAD`
-- [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z`
+- [ ] Bump the Cargo workspace version to match the new release version `X.Y.Z` (on `master` it stays at the `0.0.0` placeholder; the version bump happens on the release branch only and is never merged back)
 - [ ] Re-generate the workspace `Cargo.lock` file with `cargo update -w`
 - [ ] Verify the `Cargo.lock` is now up to date with `cargo update -w --locked`
 - [ ] Verify the `HEAD` of the release branch has green CI ✅
@@ -75,7 +75,7 @@ Most of the template content is the same or very similar to what is in `release-
 ## Release branch wind-down
 
 - [ ] Do **not** merge the release branch into `master`. Instead, verify that the release branch's only diff versus its base `master` commit is release-specific: the version bump and the ceremony-regenerated embedded deployment. If any unrelated change (e.g. a bug-fix) landed on the release branch instead of on `master`, port it to `master` via a separate PR.
-- [ ] The release is recorded by the `X.Y.Z` tag and the `testnet` branch; the release branch can now be abandoned. `master` keeps its standalone built-in deployment and `-dev` version — it never inherits a released version or deployment.
+- [ ] The release is recorded by the `X.Y.Z` tag and the `testnet` branch; the release branch can now be abandoned. `master` keeps its standalone built-in deployment and its `0.0.0` placeholder version — it never inherits a released version or deployment.
 
 # Post-Release
 
