@@ -4436,7 +4436,6 @@ dependencies = [
  "bytes",
  "const-hex",
  "divan",
- "futures",
  "hasher",
  "hex",
  "logos-blockchain-blend-proofs",
