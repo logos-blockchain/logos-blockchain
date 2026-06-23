@@ -91,6 +91,12 @@ impl PartialOrd<Epoch> for u32 {
     }
 }
 
+impl AsRef<u32> for Epoch {
+    fn as_ref(&self) -> &u32 {
+        &self.0
+    }
+}
+
 impl Slot {
     #[must_use]
     pub const fn new(inner: u64) -> Self {

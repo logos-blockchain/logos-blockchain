@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
-use nom::{IResult, Parser as _, combinator::map};
+use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -43,7 +43,8 @@ impl NomDecode for SlotTimeframe {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map(u32::decode, Self).parse(bytes)
+        let (bytes, inner) = u32::decode(bytes)?;
+        Ok((bytes, Self(inner)))
     }
 }
 
@@ -72,7 +73,8 @@ impl NomDecode for SlotTimeout {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map(u32::decode, Self).parse(bytes)
+        let (bytes, inner) = u32::decode(bytes)?;
+        Ok((bytes, Self(inner)))
     }
 }
 
@@ -409,24 +411,32 @@ mod tests {
         );
 
         assert_eq!(events.len(), 1);
-        let Event::Tx {
+        let Some(Event::Tx {
             tx_hash,
             op_id,
-            payload,
-        } = events.iter().next().cloned().unwrap()
+            payload:
+                EventPayload::Deposit {
+                    channel_id: event_channel_id,
+                    amount,
+                    metadata,
+                },
+        }) = events.iter().find(|event| {
+            matches!(
+                event,
+                Event::Tx {
+                    payload: EventPayload::Deposit { .. },
+                    ..
+                }
+            )
+        })
         else {
-            panic!("expected Tx event")
+            panic!("events should include deposit event")
         };
-        assert_eq!(tx_hash, [0; 32].into());
-        assert_eq!(op_id, deposit_op.op_id());
-        let EventPayload::Deposit {
-            channel_id,
-            amount,
-            metadata,
-        } = payload;
-        assert_eq!(channel_id, deposit_op.channel_id);
-        assert_eq!(amount, utxo.note.value);
-        assert_eq!(metadata, deposit_op.metadata);
+        assert_eq!(*tx_hash, [0; 32].into());
+        assert_eq!(*op_id, deposit_op.op_id());
+        assert_eq!(*event_channel_id, deposit_op.channel_id);
+        assert_eq!(*amount, utxo.note.value);
+        assert_eq!(*metadata, deposit_op.metadata);
     }
 
     #[test]

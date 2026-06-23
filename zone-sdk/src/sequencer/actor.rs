@@ -592,10 +592,13 @@ mod tests {
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, watch};
 
     use super::{
-        super::{types::FinalizedOp, zone_sequencer::restore_pending_tx},
+        super::{
+            types::{FinalizedOp, SequencerConfig},
+            zone_sequencer::restore_pending_tx,
+        },
         *,
     };
     use crate::{ZoneMessage, adapter::BoxStream};
@@ -636,7 +639,7 @@ mod tests {
 
         // Drive sequencer until ready
         loop {
-            if matches!(sequencer.next_event().await, Some(Event::Ready)) {
+            if matches!(sequencer.next_event().await, Event::Ready) {
                 break;
             }
         }
@@ -725,6 +728,211 @@ mod tests {
                 rx,
             )
         }
+    }
+
+    /// Like [`MockNode`], but with a controllable connectivity flag.
+    ///
+    /// Used to exercise reconnect behavior. While "down" (`up` set to `false`),
+    /// `block_stream` errors and any previously-returned live stream ends, so
+    /// the sequencer notices the disconnect and re-enters `ensure_connected`.
+    #[derive(Clone)]
+    struct ReconnectMockNode {
+        inner: MockNode,
+        up_rx: watch::Receiver<bool>,
+    }
+
+    impl ReconnectMockNode {
+        fn new() -> (Self, mpsc::Receiver<SignedMantleTx>, watch::Sender<bool>) {
+            let (inner, posted_rx) = MockNode::new();
+            let (up_tx, up_rx) = watch::channel(true);
+            (Self { inner, up_rx }, posted_rx, up_tx)
+        }
+    }
+
+    #[async_trait]
+    impl adapter::Node for ReconnectMockNode {
+        async fn consensus_info(&self) -> Result<ChainServiceInfo, lb_common_http_client::Error> {
+            self.inner.consensus_info().await
+        }
+
+        async fn time_info(&self) -> Result<TimeInfo, lb_common_http_client::Error> {
+            self.inner.time_info().await
+        }
+
+        async fn channel_state(
+            &self,
+            channel_id: ChannelId,
+        ) -> Result<Option<ChannelState>, lb_common_http_client::Error> {
+            self.inner.channel_state(channel_id).await
+        }
+
+        async fn block_stream(
+            &self,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            if !*self.up_rx.borrow() {
+                return Err(lb_common_http_client::Error::Client("node down".to_owned()));
+            }
+            let initial = futures::stream::once(async {
+                ProcessedBlockEvent {
+                    block: ApiBlock {
+                        header: ApiHeader {
+                            id: HeaderId::from([1; 32]),
+                            parent_block: HeaderId::from([0; 32]),
+                            slot: 1.into(),
+                            block_root: ContentId::from([0; 32]),
+                            proof_of_leadership: Groth16LeaderProof::genesis(),
+                        },
+                        transactions: Vec::new(),
+                    },
+                    tip: HeaderId::from([1; 32]),
+                    tip_slot: 1.into(),
+                    lib: HeaderId::from([0; 32]),
+                    lib_slot: Slot::genesis(),
+                }
+            });
+            // Stay open until the node goes down, then end so the sequencer
+            // re-enters `ensure_connected` (where `block_stream` errors).
+            let up_rx = self.up_rx.clone();
+            let until_down = futures::stream::once(async move {
+                let mut up_rx = up_rx;
+                while *up_rx.borrow_and_update() {
+                    if up_rx.changed().await.is_err() {
+                        break;
+                    }
+                }
+            })
+            .filter_map(async |()| None::<ProcessedBlockEvent>);
+            Ok(Box::pin(initial.chain(until_down)))
+        }
+
+        async fn blocks_range_stream(
+            &self,
+            params: BlocksStreamQuery,
+        ) -> Result<BoxStream<ProcessedBlockEvent>, lb_common_http_client::Error> {
+            self.inner.blocks_range_stream(params).await
+        }
+
+        async fn lib_stream(&self) -> Result<BoxStream<BlockInfo>, lb_common_http_client::Error> {
+            self.inner.lib_stream().await
+        }
+
+        async fn block(
+            &self,
+            id: HeaderId,
+        ) -> Result<Option<ApiBlock>, lb_common_http_client::Error> {
+            self.inner.block(id).await
+        }
+
+        async fn block_events(
+            &self,
+            id: HeaderId,
+        ) -> Result<Option<lb_common_http_client::Events>, lb_common_http_client::Error> {
+            self.inner.block_events(id).await
+        }
+
+        async fn immutable_blocks(
+            &self,
+            slot_from: Slot,
+            slot_to: Slot,
+        ) -> Result<Vec<ApiBlock>, lb_common_http_client::Error> {
+            self.inner.immutable_blocks(slot_from, slot_to).await
+        }
+
+        async fn zone_messages_in_block(
+            &self,
+            id: HeaderId,
+            channel_id: ChannelId,
+        ) -> Result<BoxStream<ZoneMessage>, lb_common_http_client::Error> {
+            self.inner.zone_messages_in_block(id, channel_id).await
+        }
+
+        async fn zone_messages_in_blocks(
+            &self,
+            slot_from: Slot,
+            slot_to: Slot,
+            channel_id: ChannelId,
+        ) -> Result<BoxStream<(ZoneMessage, Slot)>, lb_common_http_client::Error> {
+            self.inner
+                .zone_messages_in_blocks(slot_from, slot_to, channel_id)
+                .await
+        }
+
+        async fn post_transaction(
+            &self,
+            tx: SignedMantleTx,
+        ) -> Result<(), lb_common_http_client::Error> {
+            self.inner.post_transaction(tx).await
+        }
+    }
+
+    /// Comment #1 regression guard for client publishes during reconnect.
+    ///
+    /// A `SequencerClient::publish` issued while the node is down (reconnect in
+    /// progress) must be accepted locally and resolve promptly — matching
+    /// `SequencerHandle::publish` — instead of blocking until connectivity is
+    /// restored. It must also be posted once the node comes back.
+    #[tokio::test]
+    async fn client_publish_accepted_locally_during_reconnect() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let (node, mut posted_txs, up_tx) = ReconnectMockNode::new();
+        let config = SequencerConfig {
+            reconnect_delay: std::time::Duration::from_millis(20),
+            resubmit_interval: std::time::Duration::from_millis(20),
+            ..SequencerConfig::default()
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        let client = sequencer.client();
+
+        // Drive until the sequencer has emitted `Ready`.
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        // Take the node down: the live stream ends and the sequencer enters
+        // reconnect (subsequent `block_stream` calls error).
+        up_tx.send(false).unwrap();
+
+        // A client publish while the node is down must resolve promptly. We
+        // drive `next_event` concurrently; the publish is serviced from inside
+        // `wait_reconnect_delay` while the node is still down. With the old
+        // behavior the request would never be drained during reconnect and this
+        // would hang (caught by the timeout).
+        let publish = client.publish(b"during-reconnect".into());
+        let (_result, _checkpoint) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::select! {
+                    result = publish => result,
+                    () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+                }
+            })
+            .await
+            .expect("client publish must resolve during reconnect, not block on connectivity")
+            .expect("publish should be accepted locally after Ready");
+
+        // Bring the node back up; the locally-queued inscription must be posted.
+        up_tx.send(true).unwrap();
+        let posted = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::select! {
+                tx = posted_txs.recv() => tx,
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+            }
+        })
+        .await
+        .expect("inscription should be posted after reconnect")
+        .expect("posted_txs channel should be open");
+
+        assert!(
+            posted
+                .mantle_tx
+                .ops()
+                .iter()
+                .any(|op| matches!(op, Op::ChannelInscribe(_))),
+            "posted tx should carry the inscription published during reconnect"
+        );
     }
 
     #[test]
@@ -1145,11 +1353,11 @@ mod tests {
         let mut finalized_items: Vec<FinalizedTx> = Vec::new();
         loop {
             match sequencer.next_event().await {
-                Some(Event::Ready) => break,
-                Some(Event::BlocksProcessed { finalized, .. }) => {
+                Event::Ready => break,
+                Event::BlocksProcessed { finalized, .. } => {
                     finalized_items.extend(finalized);
                 }
-                Some(_) | None => {}
+                Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
             }
         }
 

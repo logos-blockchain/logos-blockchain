@@ -12,6 +12,7 @@ pub use error::WalletError;
 use lb_core::{
     block::Block,
     crypto::ZkHasher,
+    events::{Event, EventPayload, Events},
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GasConstants, NoteId, Utxo, Value,
@@ -32,7 +33,7 @@ use lb_mmr::{MerkleMountainRange, MerklePath};
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-pub use crate::voucher::Vouchers;
+pub use crate::voucher::{Voucher, Vouchers};
 
 const LOG_TARGET: &str = wallet::CORE;
 
@@ -43,6 +44,7 @@ pub struct WalletBlock {
     pub epoch: Epoch,
     pub voucher_cm: VoucherCm,
     pub spent_notes: Vec<NoteId>,
+    pub leader_reward_utxos: Vec<Utxo>,
     pub transfers: Vec<TransferOp>,
     pub locked_notes: HashSet<NoteId>,
     pub unlocked_notes: HashSet<NoteId>,
@@ -50,12 +52,13 @@ pub struct WalletBlock {
 
 impl WalletBlock {
     #[must_use]
-    pub fn from_block<Tx>(block: &Block<Tx>, epoch: Epoch) -> Self
+    pub fn from_block<Tx>(block: &Block<Tx>, epoch: Epoch, events: &Events) -> Self
     where
         Tx: AuthenticatedMantleTx,
     {
         // TODO: handle inputs/outputs of ALL operations: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let mut spent_notes = Vec::new();
+        let mut leader_reward_utxos = Vec::new();
         let mut transfers = Vec::new();
         let mut locked_notes = HashSet::new();
         let mut unlocked_notes = HashSet::new();
@@ -81,12 +84,15 @@ impl WalletBlock {
             }
         }
 
+        leader_reward_utxos.extend(leader_reward_utxos_from_events(events));
+
         Self {
             id: block.header().id(),
             parent: block.header().parent(),
             epoch,
             voucher_cm: *block.header().leader_proof().voucher_cm(),
             spent_notes,
+            leader_reward_utxos,
             transfers,
             locked_notes,
             unlocked_notes,
@@ -247,20 +253,14 @@ impl WalletState {
             remove_spent_utxo(spent_id, &mut utxos, &mut pk_index);
         }
 
+        for utxo in &block.leader_reward_utxos {
+            insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
+        }
+
         for transfer in &block.transfers {
             // Add new UTXOs (outputs) - only if they belong to our known keys
             for utxo in transfer.outputs.utxos(transfer) {
-                if known_keys.contains_key(&utxo.note.pk) {
-                    let note_id = utxo.id();
-                    utxos = utxos.insert(note_id, utxo);
-
-                    let note_set = pk_index
-                        .get(&utxo.note.pk)
-                        .cloned()
-                        .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
-                        .insert(note_id);
-                    pk_index = pk_index.insert(utxo.note.pk, note_set);
-                }
+                insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index);
             }
         }
 
@@ -338,6 +338,37 @@ impl WalletState {
 
         (vouchers, voucher_paths, snapshot)
     }
+}
+
+fn insert_utxo_if_owned<KeyId>(
+    utxo: Utxo,
+    known_keys: &HashMap<ZkPublicKey, KeyId>,
+    utxos: &mut rpds::HashTrieMapSync<NoteId, Utxo>,
+    pk_index: &mut rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
+) {
+    if !known_keys.contains_key(&utxo.note.pk) {
+        return;
+    }
+
+    let note_id = utxo.id();
+    utxos.insert_mut(note_id, utxo);
+
+    let note_set = pk_index
+        .get(&utxo.note.pk)
+        .cloned()
+        .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
+        .insert(note_id);
+    pk_index.insert_mut(utxo.note.pk, note_set);
+}
+
+fn leader_reward_utxos_from_events(events: &Events) -> impl Iterator<Item = Utxo> + '_ {
+    events.iter().filter_map(|event| match event {
+        Event::Tx {
+            payload: EventPayload::LeaderRewardClaimed { utxo, .. },
+            ..
+        } => Some(*utxo),
+        _ => None,
+    })
 }
 
 fn remove_spent_utxo(
@@ -449,9 +480,7 @@ where
         self.known_vouchers.get_by_nullifier(nf)
     }
 
-    pub fn voucher_commitments_and_nullifiers(
-        &self,
-    ) -> impl Iterator<Item = (&VoucherNullifier, &VoucherCm)> {
+    pub fn voucher_commitments_and_nullifiers(&self) -> impl Iterator<Item = Voucher> + '_ {
         self.known_vouchers.commitments_and_nullifiers()
     }
 
@@ -583,7 +612,7 @@ mod tests {
     use lb_core::{
         crypto::{Hash, ZkDigest as _},
         mantle::{
-            Note,
+            Note, TxHash,
             channel::Channels,
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
@@ -723,6 +752,7 @@ mod tests {
             epoch: 1.into(),
             voucher_cm: v1_cm,
             spent_notes: vec![],
+            leader_reward_utxos: vec![],
             transfers: vec![transfer1.clone()],
             locked_notes: HashSet::from([locked_note]),
             // Unknown unlocked note that will be ignored
@@ -745,6 +775,7 @@ mod tests {
             epoch: 2.into(),
             voucher_cm: v2_cm,
             spent_notes: vec![alice_100_nmo_utxo.id()],
+            leader_reward_utxos: vec![],
             transfers: vec![TransferOp {
                 inputs: Inputs::new([alice_100_nmo_utxo.id()]),
                 outputs: Outputs::new([Note::new(20, bob), Note::new(80, alice)]),
@@ -794,6 +825,7 @@ mod tests {
             epoch: 2.into(),
             voucher_cm: v3_cm,
             spent_notes: vec![alice_80_nmo_utxo.id()],
+            leader_reward_utxos: vec![Utxo::new(tx_hash(9), 0, Note::new(38, alice))],
             transfers: vec![],
             locked_notes: HashSet::new(),
             unlocked_notes: HashSet::new(),
@@ -802,7 +834,7 @@ mod tests {
 
         assert_eq!(
             wallet.balance(block_3.id, alice).unwrap().unwrap().balance,
-            4
+            42
         );
         assert_eq!(
             wallet.balance(block_3.id, bob).unwrap().unwrap().balance,
@@ -815,6 +847,38 @@ mod tests {
         assert_tracked_but_not_snapshotted_voucher(&wallet, block_3.id, &v2_cm);
         // v3 is not ours, so not tracked at all
         assert_not_tracked_voucher(&wallet, block_3.id, &v3_cm);
+    }
+
+    #[test]
+    fn extracts_leader_reward_utxos_from_events() {
+        let alice = pk(1);
+        let bob = pk(2);
+        let alice_utxo = Utxo::new(tx_hash(9), 0, Note::new(38, alice));
+        let bob_utxo = Utxo::new(tx_hash(10), 0, Note::new(21, bob));
+        let events = [
+            Event::from_tx(
+                TxHash::from(tx_hash(1)),
+                tx_hash(9),
+                EventPayload::LeaderRewardClaimed {
+                    voucher_nullifier: voucher(1, 0).1,
+                    utxo: alice_utxo,
+                },
+            ),
+            Event::from_tx(
+                TxHash::from(tx_hash(2)),
+                tx_hash(10),
+                EventPayload::LeaderRewardClaimed {
+                    voucher_nullifier: voucher(2, 0).1,
+                    utxo: bob_utxo,
+                },
+            ),
+        ]
+        .into_iter()
+        .collect();
+
+        let utxos = leader_reward_utxos_from_events(&events).collect::<Vec<_>>();
+
+        assert_eq!(utxos, vec![alice_utxo, bob_utxo]);
     }
 
     #[test]

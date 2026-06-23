@@ -372,6 +372,47 @@ async fn step_publish_zone_messages_to_queue_for_sequencer(
     Ok(())
 }
 
+/// Publish via [`SequencerClient`] and record each inscription id, without
+/// waiting for on-chain inclusion.
+///
+/// Unlike `publishes the following zone messages` (which polls the node to
+/// confirm inclusion), this performs no node HTTP calls, so it can be issued
+/// while the node is down: each publish is accepted locally and posted on
+/// reconnect. Recording the ids (the publish returns them locally) lets later
+/// `... are finalized` / indexer assertions track the messages once the node is
+/// back.
+#[when(
+    expr = "sequencer {string} submits the following zone messages without waiting for inclusion:"
+)]
+async fn step_publish_zone_messages_without_inclusion_for_sequencer(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+) -> StepResult {
+    let rows = zone_message_rows(step)?;
+    let handle = world.zone.sequencer_client(&sequencer_alias)?.clone();
+
+    for (message_alias, payload) in rows {
+        let (published, _checkpoint) = handle
+            .publish(payload.clone())
+            .await
+            .map_err(|error| StepError::LogicalError {
+                message: format!(
+                    "Zone publish failed for sequencer '{sequencer_alias}' and message '{message_alias}': {error}"
+                ),
+            })?;
+        remember_published_zone_message(
+            world,
+            &sequencer_alias,
+            message_alias,
+            payload,
+            &published,
+        );
+    }
+
+    Ok(())
+}
+
 #[when(expr = "I save current checkpoint of sequencer {string} as {string}")]
 fn step_save_zone_checkpoint(
     world: &mut CucumberWorld,

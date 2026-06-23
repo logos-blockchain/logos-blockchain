@@ -21,7 +21,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash, TxSelect,
-        gas::MainnetGasConstants, ops::leader_claim::LeaderClaimOp,
+        gas::MainnetGasConstants,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
@@ -55,7 +55,6 @@ use crate::{
     leadership::{SlotContext, build_proof_for, fetch_slot_context, search_for_winning_slots},
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::CryptarchiaConsensusRelays,
-    wallet::{LeaderWalletError, fund_and_sign_leader_claim_tx},
 };
 
 /// The per-subscriber stream of per-epoch winning slots. Each item
@@ -106,14 +105,10 @@ pub enum Error {
     BlockCreation(#[from] BlockError),
     #[error("Wallet API error: {0}")]
     Wallet(#[from] Box<WalletApiError>),
-    #[error("Leader wallet error: {0}")]
-    LeaderWallet(#[from] LeaderWalletError),
     #[error("Mempool error: {0}")]
     Mempool(#[source] DynError),
     #[error("Chain service error: {0}")]
     ChainService(#[from] lb_chain_service::api::ApiError),
-    #[error("No claimable voucher found")]
-    NoClaimableVoucher,
     #[error("Ledger state not found for {0:?}")]
     LedgerStateNotFound(HeaderId),
 }
@@ -773,28 +768,17 @@ where
     ) -> Result<TxHash, Error> {
         let (tip, ledger_state) = Self::get_tip_ledger_state(cryptarchia).await?;
 
-        let voucher_nullifier = wallet
-            .get_claimable_voucher(Some(tip))
-            .await?
-            .response
-            .ok_or(Error::NoClaimableVoucher)?
-            .nullifier;
-        let pks = wallet.get_known_addresses().await?;
-
-        // TODO: let the user chose where to receive the rewards
         let reward_amount = ledger_state.mantle_ledger().leader_reward_amount();
-        let signed_tx = fund_and_sign_leader_claim_tx(
-            LeaderClaimOp {
-                rewards_root: ledger_state.mantle_ledger().vouchers_snapshot_root(),
-                voucher_nullifier,
-                pk: pks[0],
-            },
-            reward_amount,
-            tip,
-            wallet,
-            config,
-        )
-        .await?;
+        let signed_tx = wallet
+            .build_leader_claim_tx(
+                tip,
+                ledger_state.mantle_ledger().vouchers_snapshot_root(),
+                reward_amount,
+                config.funding_pk,
+                config.max_tx_fee,
+            )
+            .await?
+            .response;
         let tx_hash = signed_tx.hash();
 
         mempool.post_tx(signed_tx).await.map_err(Error::Mempool)?;

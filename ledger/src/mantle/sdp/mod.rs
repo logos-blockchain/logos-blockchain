@@ -223,8 +223,7 @@ impl<R: Rewards> ServiceState<R> {
             .declarations
             .iter()
             .filter_map(|(id, declaration)| {
-                let withdrawn = declaration.withdrawn?;
-                if epoch < withdrawn {
+                if epoch < declaration.withdraw_at? {
                     return None;
                 }
                 if locked_notes
@@ -265,8 +264,8 @@ fn is_active(declaration: &Declaration, current_epoch: Epoch, config: ServicePar
         .strict_add(config.inactivity_period.into_inner())
         >= current_epoch
         && declaration
-            .withdrawn
-            .is_none_or(|withdrawn| withdrawn > current_epoch)
+            .withdraw_at
+            .is_none_or(|withdraw_at| withdraw_at > current_epoch)
 }
 
 /// A SDP state of the mantle ledger
@@ -920,12 +919,12 @@ mod tests {
         };
         let ledger =
             apply_withdraw_with_dummies(ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
-        let withdrawn_epoch = ledger
+        let withdraw_at = ledger
             .get_declaration(&declaration_id)
             .unwrap()
-            .withdrawn
-            .expect("withdraw must set the withdrawn epoch");
-        assert_eq!(withdrawn_epoch, Epoch::new(3));
+            .withdraw_at
+            .expect("withdraw must set the withdraw_at");
+        assert_eq!(withdraw_at, Epoch::new(3));
 
         // The declaration is still in the live SDP ledger — cleanup runs only
         // when the ledger advances past `withdrawn_epoch`.
@@ -933,7 +932,7 @@ mod tests {
 
         // Snapshot at any epoch strictly less than `withdrawn_epoch` must
         // include the declaration.
-        for epoch in 0..withdrawn_epoch.into_inner() {
+        for epoch in 0..withdraw_at.into_inner() {
             assert!(
                 ledger
                     .active_declarations(epoch.into(), &config.service_params)
@@ -944,7 +943,7 @@ mod tests {
         }
 
         // Snapshot at `withdrawn_epoch` (and beyond) must exclude it.
-        for epoch in withdrawn_epoch.into_inner()..=withdrawn_epoch.into_inner() + 2 {
+        for epoch in withdraw_at.into_inner()..=withdraw_at.into_inner() + 2 {
             assert!(
                 ledger
                     .active_declarations(epoch.into(), &config.service_params)
@@ -1145,17 +1144,17 @@ mod tests {
         let sdp_ledger =
             apply_withdraw_with_dummies(sdp_ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
 
-        let withdrawn_epoch = sdp_ledger
+        let withdraw_epoch = sdp_ledger
             .get_declaration(&declaration_id)
             .expect("declaration must still exist until the withdrawn epoch is reached")
-            .withdrawn
-            .expect("withdraw epoch must be set after withdraw tx is accepted");
+            .withdraw_at
+            .expect("withdraw_at must be set after withdraw tx is accepted");
 
         // Move forward to the epoch just before the withdrawn epoch.
         // The declaration must still be present and the note still locked.
         let mut sdp_ledger = sdp_ledger;
         let mut last_epoch_state = epoch0;
-        for epoch in 1..withdrawn_epoch.into_inner() {
+        for epoch in 1..withdraw_epoch.into_inner() {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             (sdp_ledger, _) = sdp_ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
@@ -1175,7 +1174,7 @@ mod tests {
 
         // Move forward to the withdrawn epoch. The declaration must be removed
         // and the note must be unlocked.
-        let new_epoch_state = next_epoch_state(withdrawn_epoch, last_epoch_state.clone());
+        let new_epoch_state = next_epoch_state(withdraw_epoch, last_epoch_state.clone());
         (sdp_ledger, _) = sdp_ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();

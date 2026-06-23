@@ -202,8 +202,8 @@ async fn sdp_ops_e2e() {
         .await
         .expect("API must succeed")
         .expect("declaration must still exist until the snapshot finalization delay has passed")
-        .withdrawn
-        .expect("withdraw epoch must be set after withdraw tx is accepted");
+        .withdraw_at
+        .expect("withdraw_at must be set after withdraw tx is accepted");
 
     // Wait for the snapshot finalization delay to pass. At the `withdrawn`
     // epoch the locked note is unlocked and the declaration is removed.

@@ -8,7 +8,7 @@ use std::{
 use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
-use lb_chain_service::{ChainServiceMode, CryptarchiaInfo, State};
+use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, State};
 use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
@@ -422,8 +422,9 @@ async fn fetch_public_peer_consensus(
         .send()
         .await?
         .error_for_status()?
-        .json::<CryptarchiaInfo>()
+        .json::<ChainServiceInfo>()
         .await
+        .map(|info| info.cryptarchia_info)
         .map_err(Into::into)
 }
 
@@ -762,6 +763,38 @@ pub async fn start_node(
         }
     }
 
+    Ok(())
+}
+
+/// Stop a node and leave it down.
+///
+/// Unlike [`restart_node`], which brings it back up and waits for readiness,
+/// this leaves the node down, useful to exercise reconnect behavior while the
+/// node is down.
+pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
+    let cluster = world
+        .local_cluster
+        .as_ref()
+        .ok_or(StepError::LogicalError {
+            message: "No local cluster available".into(),
+        })?;
+    let started_node_name = world
+        .resolve_node_runtime_name(node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+
+    cluster
+        .stop_node(&started_node_name)
+        .await
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+
+    info!(
+        target: TARGET,
+        "Stopped node `{node_name}` (runtime name `{started_node_name}`)"
+    );
     Ok(())
 }
 

@@ -66,10 +66,8 @@ pub async fn run(args: InscribeArgs) {
     loop {
         tokio::select! {
             event = sequencer.next_event() => {
-                if let Some(event) = event {
-                    state.set_channel_view(view_rx.borrow().clone());
-                    handle_event(event, &mut state, &mut sequencer, &mut ready_tx);
-                }
+                state.set_channel_view(view_rx.borrow().clone());
+                handle_event(event, &mut state, &mut sequencer, &mut ready_tx);
             }
 
             input = stdin_rx.recv() => {

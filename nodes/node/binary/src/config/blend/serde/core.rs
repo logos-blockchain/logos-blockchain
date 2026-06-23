@@ -24,6 +24,10 @@ pub struct BackendConfig {
     pub edge_node_connection_timeout: Duration,
     pub max_edge_node_incoming_connections: u64,
     pub max_dial_attempts_per_peer: NonZeroU64,
+    #[serde_as(
+        as = "Option<lb_utils::bounded_duration::MinimalBoundedDuration<1, lb_utils::bounded_duration::SECOND>>"
+    )]
+    pub peering_degree_check_interval: Option<Duration>,
 }
 
 impl BackendConfig {
@@ -51,6 +55,7 @@ impl Default for BackendConfig {
             edge_node_connection_timeout: Duration::from_secs(1),
             max_edge_node_incoming_connections: 300,
             max_dial_attempts_per_peer: NonZeroU64::new(3).unwrap(),
+            peering_degree_check_interval: Some(Duration::from_mins(1)),
         }
     }
 }

@@ -59,12 +59,12 @@ impl NomDecode for InscriptionOp {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (input, channel_id) = ChannelId::decode(bytes)?;
-        let (input, inscription) = NomInscription::decode(input)?;
-        let (input, parent) = MsgId::decode(input)?;
-        let (input, signer) = Ed25519PublicKey::decode(input)?;
+        let (bytes, channel_id) = ChannelId::decode(bytes)?;
+        let (bytes, inscription) = NomInscription::decode(bytes)?;
+        let (bytes, parent) = MsgId::decode(bytes)?;
+        let (bytes, signer) = Ed25519PublicKey::decode(bytes)?;
         Ok((
-            input,
+            bytes,
             Self {
                 channel_id,
                 inscription,

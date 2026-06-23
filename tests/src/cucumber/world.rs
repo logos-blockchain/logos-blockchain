@@ -156,7 +156,7 @@ pub struct ZoneSequencerIdentity {
 }
 
 pub struct ZoneSequencerRuntime {
-    client: SequencerClient<ZoneNodeHttpClient>,
+    client: SequencerClient,
     task: JoinHandle<()>,
     events: tokio::sync::broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
@@ -596,7 +596,7 @@ impl ZoneState {
     pub fn set_sequencer_runtime(
         &mut self,
         alias: String,
-        sequencer_client: SequencerClient<ZoneNodeHttpClient>,
+        sequencer_client: SequencerClient,
         sequencer_task: JoinHandle<()>,
         sequencer_events: tokio::sync::broadcast::Receiver<Event>,
         checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
@@ -674,10 +674,7 @@ impl ZoneState {
         Ok(())
     }
 
-    pub fn sequencer_client(
-        &self,
-        alias: &str,
-    ) -> Result<&SequencerClient<ZoneNodeHttpClient>, StepError> {
+    pub fn sequencer_client(&self, alias: &str) -> Result<&SequencerClient, StepError> {
         self.runtimes
             .get(alias)
             .map(|runtime| &runtime.client)

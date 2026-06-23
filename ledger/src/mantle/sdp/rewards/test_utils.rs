@@ -30,7 +30,7 @@ pub fn create_epoch_state(
                 zk_id: ZkPublicKey::new(BigUint::from(i as u64).into()),
                 created: 0.into(),
                 active: 2.into(),
-                withdrawn: None,
+                withdraw_at: None,
                 nonce: 0,
             };
             (DeclarationId([i as u8; 32]), declaration)

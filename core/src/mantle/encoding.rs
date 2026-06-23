@@ -7,7 +7,7 @@ use nom::{
     combinator::{map, map_res},
     error::{Error, ErrorKind},
     multi::length_count,
-    number::complete::{le_u16, le_u32, le_u64},
+    number::complete::{le_u16, le_u64},
     sequence::pair,
 };
 use time::OffsetDateTime;
@@ -19,12 +19,10 @@ use crate::{
         ops::{
             Op, OpProof,
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
-            sdp::SDPActiveOp,
             transfer::TransferOp,
         },
     },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
-    sdp::{ActivityMetadata, DeclarationId},
 };
 
 // ==============================================================================
@@ -37,10 +35,6 @@ use crate::{
 // memory usage (e.g., 68GB allocation). As an example, if the network currently
 // limits maximum transaction size to 1MiB, for memory safety limits we can
 // allow 4MiB.
-
-// Maximum memory allocation size allowed for SDP activity metadata.
-// Protects against unbounded allocation in `decode_sdp_active`
-const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 230; // `ActiveMessage` has a fixed size of 230 bytes
 
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
@@ -76,40 +70,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     let (input, ops) = NomOps::decode(input)?;
 
     Ok((input, MantleTx(ops)))
-}
-
-// ==============================================================================
-// SDP Operation Decoders
-// ==============================================================================
-
-pub(crate) fn decode_sdp_active(input: &[u8]) -> IResult<&[u8], SDPActiveOp> {
-    // SDPActive = DeclarationId Nonce Metadata
-    // Metadata = UINT32 *BYTE
-    let (input, declaration_id_bytes) = decode_hash32(input)?;
-    let declaration_id = DeclarationId(declaration_id_bytes);
-
-    let (input, nonce) = decode_uint64(input)?;
-
-    let (input, metadata_len) = decode_uint32(input)?;
-
-    // Validate metadata length to prevent unbounded memory allocation
-    if metadata_len > MAX_ENCODE_DECODE_METADATA_SIZE {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
-    }
-
-    let (input, metadata_bytes) = take(metadata_len as usize).parse(input)?;
-
-    let metadata = ActivityMetadata::from_metadata_bytes(metadata_bytes)
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
-
-    Ok((
-        input,
-        SDPActiveOp {
-            declaration_id,
-            nonce,
-            metadata,
-        },
-    ))
 }
 
 // ==============================================================================
@@ -280,11 +240,6 @@ pub(crate) fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
     .parse(input)
 }
 
-pub(crate) fn decode_hash32(input: &[u8]) -> IResult<&[u8], [u8; 32]> {
-    // Hash32 = 32BYTE
-    decode_array::<32>(input)
-}
-
 // ==============================================================================
 // Primitive Decoders
 // ==============================================================================
@@ -309,11 +264,6 @@ pub(crate) fn decode_utf8_string(input: &[u8], len: usize) -> IResult<&[u8], Str
 fn decode_uint16(input: &[u8]) -> IResult<&[u8], u16> {
     // UINT16 = 2BYTE
     le_u16(input)
-}
-
-pub(crate) fn decode_uint32(input: &[u8]) -> IResult<&[u8], u32> {
-    // UINT32 = 4BYTE
-    le_u32(input)
 }
 
 pub(crate) fn decode_uint64(input: &[u8]) -> IResult<&[u8], u64> {
@@ -354,10 +304,6 @@ fn encode_uint16(value: u16) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
 
-pub(crate) fn encode_uint32(value: u32) -> Vec<u8> {
-    value.to_le_bytes().to_vec()
-}
-
 pub(crate) fn encode_uint64(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
@@ -376,10 +322,6 @@ pub(crate) fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
             .try_into()
             .expect("timestamp fits in u64"),
     )
-}
-
-pub(crate) fn encode_hash32(hash: &[u8; 32]) -> Vec<u8> {
-    hash.to_vec()
 }
 
 pub(crate) fn encode_field_element(fr: &Fr) -> Vec<u8> {
@@ -413,26 +355,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
             .into_iter()
             .chain(encode_uint16(signature.channel_key_index))
     }));
-    bytes
-}
-
-#[must_use]
-pub fn encode_sdp_active(op: &SDPActiveOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(&op.declaration_id.0));
-    bytes.extend(encode_uint64(op.nonce));
-
-    // Metadata - convert ActivityMetadata to bytes
-    let metadata_bytes = op.metadata.to_metadata_bytes();
-    assert!(
-        metadata_bytes.len() <= MAX_ENCODE_DECODE_METADATA_SIZE as usize,
-        "Fatal error in 'encode_sdp_active' - {} metadata bytes clipped to {}",
-        metadata_bytes.len(),
-        MAX_ENCODE_DECODE_METADATA_SIZE
-    );
-
-    bytes.extend(encode_uint32(metadata_bytes.len() as u32));
-    bytes.extend(&metadata_bytes);
     bytes
 }
 
@@ -593,7 +515,6 @@ mod tests {
     use std::{collections::HashMap, panic};
 
     use ark_ff::AdditiveGroup as _;
-    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::bounded_vec::BoundedError;
     use multiaddr::Multiaddr;
@@ -603,6 +524,7 @@ mod tests {
     use crate::{
         mantle::{
             Transaction as _,
+            nom::NomArray,
             ops::{
                 channel::{
                     ChannelId, MsgId,
@@ -610,11 +532,14 @@ mod tests {
                     inscribe::{self, Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
-                sdp::{SDPDeclareOp, SDPWithdrawOp},
+                sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             },
             tx::GasPrices,
         },
-        sdp::{Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId, ServiceType, blend::ActivityProof},
+        sdp::{
+            ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId,
+            ServiceType, blend::ActivityProof,
+        },
     };
 
     fn dbg_test_vector(actual: &str, expected: &str) {
@@ -652,20 +577,20 @@ mod tests {
         assert!(remaining.is_empty());
 
         // Test UINT32
-        let data = encode_uint32(123u32);
-        let (remaining, value) = decode_uint32(&data).unwrap();
+        let data = 123u32.encode();
+        let (remaining, value) = u32::decode(&data).unwrap();
         assert_eq!(value, 123u32);
         assert!(remaining.is_empty());
 
         // Test Byte
-        let data = encode_byte(0xAB);
+        let data = 0xABu8.encode();
         let (remaining, value) = u8::decode(&data).unwrap();
         assert_eq!(value, 0xAB);
         assert!(remaining.is_empty());
 
         // Test Hash32
-        let data = encode_hash32(&[0x42u8; 32]);
-        let (remaining, value) = decode_hash32(&data).unwrap();
+        let data = NomArray::<u8, _>::from(&[0x42u8; 32]).encode();
+        let (remaining, value) = NomArray::<u8, _>::decode(&data).unwrap();
         assert_eq!(value, [0x42u8; 32]);
         assert!(remaining.is_empty());
 
@@ -1477,34 +1402,6 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_reject_oversized_metadata() {
-        // Create a malicious input with metadata_len = MAX_METADATA_SIZE + 1
-        let mut malicious_input = Vec::new();
-
-        // DeclarationId (32 bytes)
-        malicious_input.extend_from_slice(&[0x42; 32]);
-
-        // Nonce (u64)
-        malicious_input.extend_from_slice(&42u64.to_le_bytes());
-
-        // Metadata length (u32) - exceeds MAX_METADATA_SIZE
-        let oversized_len = MAX_ENCODE_DECODE_METADATA_SIZE + 1;
-        malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
-
-        // Try to decode - should fail with TooLarge error
-        let result = decode_sdp_active(&malicious_input);
-        assert!(result.is_err(), "Should reject oversized metadata");
-
-        // Verify it fails with the right error kind
-        match result {
-            Err(nom::Err::Error(e)) => {
-                assert_eq!(e.code, ErrorKind::TooLarge);
-            }
-            _ => panic!("Expected TooLarge error"),
-        }
-    }
-
-    #[test]
     fn test_encode_reject_excessive_op_count() {
         let ops = vec![
             Op::ChannelConfig(ChannelConfigOp {
@@ -1598,7 +1495,7 @@ mod tests {
         malicious_input2.extend_from_slice(&42u64.to_le_bytes()); // Nonce
         malicious_input2.extend_from_slice(&huge_len.to_le_bytes());
 
-        let result2 = decode_sdp_active(&malicious_input2);
+        let result2 = SDPActiveOp::decode(&malicious_input2);
         assert!(result2.is_err(), "Should reject huge metadata length");
     }
 
@@ -1665,26 +1562,6 @@ mod tests {
 
         let (_, set_keys_op) = result.unwrap();
         assert_eq!(set_keys_op.keys.len(), u16::MAX as usize);
-    }
-
-    #[test]
-    fn test_encode_reject_excessive_sdp_active() {
-        let blend_proof = ActivityProof {
-            epoch: u32::MAX.into(),
-            signing_key: Ed25519Key::from_bytes(&[1; 32]).public_key(),
-            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
-            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
-        };
-        let sdp_active_op = SDPActiveOp {
-            declaration_id: DeclarationId([0x33; 32]),
-            nonce: u64::MAX,
-            metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
-        };
-        assert_eq!(
-            sdp_active_op.metadata.to_metadata_bytes().len(),
-            MAX_ENCODE_DECODE_METADATA_SIZE as usize,
-            "`ActiveMessage` has a fixed size of 234 bytes"
-        );
     }
 
     #[test]

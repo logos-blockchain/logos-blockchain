@@ -97,7 +97,7 @@ struct PublishedZoneMessage {
 
 struct StartedSequencerRuntime {
     task: JoinHandle<()>,
-    client: SequencerClient<ZoneNodeHttpClient>,
+    client: SequencerClient,
     events: broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     ready_rx: tokio::sync::watch::Receiver<bool>,

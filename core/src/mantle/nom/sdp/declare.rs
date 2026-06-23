@@ -1,8 +1,8 @@
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
 use lb_utils::bounded_vec::BoundedVec;
 use nom::{
-    IResult, Parser as _,
-    combinator::{map, map_res},
+    IResult,
+    error::{Error, ErrorKind},
 };
 
 use crate::{
@@ -27,7 +27,12 @@ impl NomDecode for ServiceType {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map_res(u8::decode, Self::try_from).parse(bytes)
+        let (remaining_bytes, value) = u8::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
     }
 }
 
@@ -45,7 +50,12 @@ impl NomDecode for Locator {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map_res(NomLocator::decode, Self::try_from).parse(bytes)
+        let (remaining_bytes, value) = NomLocator::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
     }
 }
 
@@ -61,7 +71,8 @@ impl NomDecode for Locators {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map(NomLocators::decode, Self::from).parse(bytes)
+        let (bytes, value) = NomLocators::decode(bytes)?;
+        Ok((bytes, value))
     }
 }
 
@@ -75,7 +86,8 @@ impl NomDecode for ProviderId {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map(Ed25519PublicKey::decode, Self).parse(bytes)
+        let (bytes, value) = Ed25519PublicKey::decode(bytes)?;
+        Ok((bytes, Self(value)))
     }
 }
 

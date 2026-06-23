@@ -13,7 +13,6 @@ use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
-use nom::{IResult, Parser as _, bytes::complete::take};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
@@ -25,8 +24,6 @@ use crate::{
 };
 
 pub type StakeThreshold = u64;
-
-const ACTIVE_METADATA_BLEND_TYPE: u8 = 0x01;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct MinStake {
@@ -365,8 +362,8 @@ pub struct Declaration {
     /// snapshot logic.
     // TODO: Use Option<Epoch> with a better name.
     pub active: Epoch,
-    /// The epoch at which the declaration must be withdrawn
-    pub withdrawn: Option<Epoch>,
+    /// The epoch at which the declaration is scheduled to be withdrawn.
+    pub withdraw_at: Option<Epoch>,
     pub nonce: Nonce,
 }
 
@@ -389,7 +386,7 @@ impl Declaration {
             zk_id: declaration_msg.zk_id,
             created: epoch,
             active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
-            withdrawn: None,
+            withdraw_at: None,
             nonce: 0,
         }
     }
@@ -499,65 +496,14 @@ pub enum ActivityMetadata {
     Blend(Box<blend::ActivityProof>),
 }
 
-impl ActivityMetadata {
-    #[must_use]
-    pub fn to_metadata_bytes(&self) -> Vec<u8> {
-        match self {
-            Self::Blend(proof) => proof.to_metadata_bytes(),
-        }
-    }
-
-    pub fn from_metadata_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        if bytes.is_empty() {
-            return Err("empty metadata bytes".to_owned().into());
-        }
-
-        // Read metadata type byte to determine variant
-        let metadata_type = bytes[0];
-
-        match metadata_type {
-            ACTIVE_METADATA_BLEND_TYPE => {
-                let proof_opt = blend::ActivityProof::from_metadata_bytes(bytes)?;
-                Ok(Self::Blend(Box::new(proof_opt)))
-            }
-            _ => Err(format!("Unknown metadata type: {metadata_type:#x}").into()),
-        }
-    }
-}
-
-fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
-    let (input, bytes) = take(size_of::<Epoch>()).parse(input)?;
-    let epoch_bytes: [u8; 4] = bytes
-        .try_into()
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-    Ok((input, u32::from_le_bytes(epoch_bytes).into()))
-}
-
 #[cfg(test)]
 mod tests {
+    use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
+    use multiaddr::Multiaddr;
 
-    use super::*;
-
-    #[test]
-    fn test_activity_metadata_empty_bytes() {
-        let result = ActivityMetadata::from_metadata_bytes(&[]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_activity_metadata_unknown_type() {
-        let bytes = vec![0xFF]; // Unknown type
-        let result = ActivityMetadata::from_metadata_bytes(&bytes);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Unknown metadata type")
-        );
-    }
+    use crate::sdp::{Declaration, DeclarationMessage, Locator, Locators, ServiceType};
 
     #[test]
     fn locator_rejects_multiaddr_with_peer_id() {
@@ -642,7 +588,7 @@ mod tests {
         assert_eq!(declaration.zk_id, msg.zk_id);
         assert_eq!(declaration.created, Epoch::new(10));
         assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
-        assert_eq!(declaration.withdrawn, None);
+        assert_eq!(declaration.withdraw_at, None);
         assert_eq!(declaration.nonce, 0);
     }
 }
