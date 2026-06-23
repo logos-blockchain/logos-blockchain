@@ -227,7 +227,7 @@ fn decode_channel_multi_sig_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSi
         .map(|(signature, index)| IndexedSignature::from((index, signature)))
         .collect();
 
-    ChannelMultiSigProof::new(signatures)
+    ChannelMultiSigProof::try_from(signatures)
         .map(|proof| (input, proof))
         .map_err(|_| nom::Err::Failure(Error::new(input, ErrorKind::Verify)))
 }
@@ -708,7 +708,7 @@ mod tests {
 
         // ChannelConfig creates the channel just-in-time, so no signatures are
         // required for validation — empty proof is well-formed.
-        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+        let config_proof = ChannelMultiSigProof::try_from(vec![]).unwrap();
 
         // Encode and decode roundtrip test (no hardcoded test vector since signatures
         // are deterministic)
@@ -922,7 +922,7 @@ mod tests {
 
         // Create a signed tx and encode it to get actual size. New channel
         // → empty proof (no signatures required for just-in-time create).
-        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+        let config_proof = ChannelMultiSigProof::try_from(vec![]).unwrap();
         let signed_tx =
             SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(config_proof)])
                 .unwrap();
@@ -1110,7 +1110,7 @@ mod tests {
         let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
         // Create a signed tx and encode it to get actual size. ChannelConfig
         // creates the channel here, so its proof has no signatures.
-        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+        let config_proof = ChannelMultiSigProof::try_from(vec![]).unwrap();
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![
@@ -1223,7 +1223,7 @@ mod tests {
         // creates the channel here, so its proof has no signatures.
         let txhash = mantle_tx.hash();
         let op_ed25519_sig = signing_key1.sign_payload(&txhash.as_signing_bytes());
-        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+        let config_proof = ChannelMultiSigProof::try_from(vec![]).unwrap();
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![
@@ -1340,7 +1340,7 @@ mod tests {
             },
         )]));
         let tx_hash = mantle_tx.hash();
-        let proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
+        let proof = ChannelMultiSigProof::try_from(vec![IndexedSignature::new(
             0,
             signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
         )])

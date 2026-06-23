@@ -770,7 +770,7 @@ mod tests {
             withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();
-        let signatures = signing_keys
+        let signatures: Vec<_> = signing_keys
             .iter()
             .enumerate()
             .map(|(index, key)| {
@@ -780,7 +780,7 @@ mod tests {
                 )
             })
             .collect();
-        let proof = ChannelMultiSigProof::new(signatures).unwrap();
+        let proof = ChannelMultiSigProof::try_from(signatures).unwrap();
         SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(proof)]).unwrap()
     }
 

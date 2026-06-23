@@ -53,52 +53,14 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-// Serde goes through `ChannelMultiSigProofRepr` via `try_from`/`into`: `Deserialize`
-// routes through `new`, so the well-formedness invariant (strictly-increasing
-// indices) is upheld on every serde path too — a non-monotonic proof is
-// unrepresentable no matter how it is constructed, and no consumer needs to
-// re-check. The repr keeps the `{ "signatures": [..] }` wire form.
-#[serde(
-    try_from = "ChannelMultiSigProofRepr",
-    into = "ChannelMultiSigProofRepr"
-)]
+#[serde(try_from = "Vec<IndexedSignature>")]
 pub struct ChannelMultiSigProof {
     // Invariant: signature indices are strictly increasing (hence ordered and
     // unique), as required by the spec.
     signatures: Vec<IndexedSignature>,
 }
 
-/// Serde wire representation of [`ChannelMultiSigProof`] — a struct with a
-/// `signatures` field. Kept separate so the public type's (de)serialization
-/// is forced through `new` (via the `TryFrom`/`From` impls below) while
-/// preserving the `{ "signatures": [..] }` JSON shape.
-#[derive(Serialize, Deserialize)]
-struct ChannelMultiSigProofRepr {
-    signatures: Vec<IndexedSignature>,
-}
-
-impl TryFrom<ChannelMultiSigProofRepr> for ChannelMultiSigProof {
-    type Error = Error;
-
-    fn try_from(repr: ChannelMultiSigProofRepr) -> Result<Self, Self::Error> {
-        Self::new(repr.signatures)
-    }
-}
-
-impl From<ChannelMultiSigProof> for ChannelMultiSigProofRepr {
-    fn from(proof: ChannelMultiSigProof) -> Self {
-        Self {
-            signatures: proof.signatures,
-        }
-    }
-}
-
 impl ChannelMultiSigProof {
-    pub fn new(signatures: Vec<IndexedSignature>) -> Result<Self, Error> {
-        Self::validate_well_formedness(&signatures)?;
-        Ok(Self { signatures })
-    }
-
     /// Validates that the proof is structurally well-formed: signature indices
     /// must be strictly increasing (so they are ordered and unique, per the
     /// `CHANNEL_CONFIG` / `CHANNEL_WITHDRAW` spec), and the count must not
@@ -136,7 +98,8 @@ impl TryFrom<Vec<IndexedSignature>> for ChannelMultiSigProof {
     type Error = Error;
 
     fn try_from(value: Vec<IndexedSignature>) -> Result<Self, Self::Error> {
-        Self::new(value)
+        Self::validate_well_formedness(&value)?;
+        Ok(Self { signatures: value })
     }
 }
 
@@ -156,7 +119,7 @@ mod tests {
             IndexedSignature::new(0, sig(2)),
         ];
         assert!(matches!(
-            ChannelMultiSigProof::new(signatures),
+            ChannelMultiSigProof::try_from(signatures),
             Err(Error::IndicesNotStrictlyIncreasing(_))
         ));
     }
@@ -170,7 +133,7 @@ mod tests {
             IndexedSignature::new(0, sig(2)),
         ];
         assert!(matches!(
-            ChannelMultiSigProof::new(signatures),
+            ChannelMultiSigProof::try_from(signatures),
             Err(Error::IndicesNotStrictlyIncreasing(_))
         ));
     }
@@ -181,7 +144,7 @@ mod tests {
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(1, sig(2)),
         ];
-        let proof = ChannelMultiSigProof::new(signatures)
+        let proof = ChannelMultiSigProof::try_from(signatures)
             .expect("strictly-increasing indices are well-formed");
         assert_eq!(proof.signatures().len(), 2);
     }
@@ -210,7 +173,7 @@ mod tests {
 
         // A well-formed proof still round-trips, and keeps the `{ "signatures": [..] }`
         // JSON shape.
-        let ok = ChannelMultiSigProof::new(vec![
+        let ok = ChannelMultiSigProof::try_from(vec![
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(1, sig(2)),
         ])
