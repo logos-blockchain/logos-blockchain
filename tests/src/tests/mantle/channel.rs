@@ -201,10 +201,8 @@ async fn channel_deposit() {
 /// 2. Create a channel with a known signer.
 /// 3. Deposit funds into that channel.
 /// 4. Submit a signed channel withdraw transaction.
-/// 5. Verify the block containing the withdraw tx exposes a matching `Withdraw`
-///    event via the `/cryptarchia/blocks/:id/events` endpoint.
-/// 6. Verify the recipient wallet balance increases.
-/// 7. Verify the channel balance decreases.
+/// 5. Verify the recipient wallet balance increases.
+/// 6. Verify the channel balance decreases.
 #[tokio::test]
 #[serial]
 async fn channel_withdraw_updates_wallet_balance() {
@@ -281,23 +279,7 @@ async fn channel_withdraw_updates_wallet_balance() {
         .await
         .expect("withdraw transaction should be submitted");
 
-    let withdraw_block_id =
-        wait_for_tx_inclusion(&mut block_stream, withdraw_tx_hash, "withdraw").await;
-
-    let events = fetch_block_events(&validator.client, withdraw_block_id).await;
-    let payload = find_tx_payload(&events, withdraw_tx_hash)
-        .expect("block events should include the withdraw tx");
-    let EventPayload::Withdraw {
-        channel_id,
-        amount,
-        utxos,
-    } = payload
-    else {
-        panic!("expected Withdraw event")
-    };
-    assert_eq!(channel_id, withdraw.channel_id);
-    assert_eq!(amount, withdraw_amount);
-    assert_eq!(utxos, withdraw.outputs.utxos(&withdraw).collect::<Vec<_>>());
+    wait_for_tx_inclusion(&mut block_stream, withdraw_tx_hash, "withdraw").await;
 
     let balance_after_withdraw = wait_for_wallet_balance(
         &validator.client,
@@ -524,15 +506,6 @@ async fn fetch_block_events(node: &NodeHttpClient, block_id: HeaderId) -> Events
         .json::<Events>()
         .await
         .expect("block events response should be valid JSON")
-}
-
-fn find_tx_payload(events: &Events, expected_tx_hash: TxHash) -> Option<EventPayload> {
-    events.iter().find_map(|event| match event {
-        Event::Tx {
-            tx_hash, payload, ..
-        } => (tx_hash == &expected_tx_hash).then(|| payload.clone()),
-        Event::Ledger(_) => None,
-    })
 }
 
 async fn get_channel_balance(node: &NodeHttpClient, channel_id: ChannelId) -> u64 {

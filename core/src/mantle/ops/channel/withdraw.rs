@@ -2,7 +2,7 @@ use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::{Event, EventPayload, Events},
+    events::Events,
     mantle::{
         TxHash,
         channel::{Channels, Error},
@@ -155,18 +155,6 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         // Add the outputs to the ledger
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
-        let output_utxos = self.outputs.utxos(self).collect::<Vec<_>>();
-        let events = Event::from_tx(
-            ctx.tx_hash,
-            self.op_id(),
-            EventPayload::Withdraw {
-                channel_id: self.channel_id,
-                amount: amount_withdraw,
-                utxos: output_utxos,
-            },
-        )
-        .into();
-
-        Ok((ctx, events))
+        Ok((ctx, Events::new()))
     }
 }

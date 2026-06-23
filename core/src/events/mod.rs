@@ -93,11 +93,6 @@ pub enum EventPayload {
         voucher_nullifier: VoucherNullifier,
         utxo: Utxo,
     },
-    Withdraw {
-        channel_id: ChannelId,
-        amount: Value,
-        utxos: Vec<Utxo>,
-    },
 }
 
 impl TryFrom<Bytes> for Events {

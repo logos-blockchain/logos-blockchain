@@ -441,12 +441,13 @@ fn transform_op(op: &Op, event: Option<EventPayload>) -> Option<WalletOp> {
         Op::SDPWithdraw(withdrawal) => Some(WalletOp::Unlock(withdrawal.locked_note_id)),
         Op::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
             EventPayload::LeaderRewardClaimed { utxo, .. } => Some(WalletOp::LeaderClaim(utxo)),
-            _ => None,
+            EventPayload::Deposit { .. } => {
+                panic!("event for LeaderClaim op must be LeaderRewardClaimed")
+            }
         },
-        Op::ChannelWithdraw(_) => match event.expect("event for ChannelWithdraw op must exist") {
-            EventPayload::Withdraw { utxos, .. } => Some(WalletOp::ChannelWithdraw(utxos)),
-            _ => None,
-        },
+        Op::ChannelWithdraw(withdraw) => Some(WalletOp::ChannelWithdraw(
+            withdraw.outputs.utxos(withdraw).collect(),
+        )),
         Op::ChannelInscribe(_) | Op::ChannelConfig(_) | Op::SDPActive(_) => None,
     }
 }
