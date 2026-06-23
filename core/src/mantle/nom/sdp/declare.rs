@@ -1,4 +1,5 @@
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
+use lb_utils::bounded_vec::UpperBoundedVec;
 use nom::{
     IResult,
     error::{Error, ErrorKind},
@@ -10,7 +11,7 @@ use crate::{
         nom::{NomDecode, NomEncode},
         ops::sdp::SDPDeclareOp,
     },
-    sdp::{Locators, ProviderId, ServiceType},
+    sdp::{Locator, Locators, MAX_LOCATOR_BYTE_SIZE, ProviderId, ServiceType},
 };
 
 impl NomEncode for ServiceType {
@@ -26,6 +27,26 @@ impl NomDecode for ServiceType {
             remaining_bytes,
             Self::try_from(value)
                 .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
+impl NomEncode for Locator {
+    fn encode(&self) -> Vec<u8> {
+        let bounded_bytes = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::new_unchecked(
+            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
+        );
+        bounded_bytes.encode()
+    }
+}
+
+impl NomDecode for Locator {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
         ))
     }
 }

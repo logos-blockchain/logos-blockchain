@@ -7,12 +7,11 @@ use nom::{
 
 use crate::mantle::nom::{NomDecode, NomEncode, encode_slice};
 
-#[repr(usize)]
 enum NOfBytes {
-    One = 1,
-    Two = 2,
-    Four = 4,
-    Eight = 8,
+    One,
+    Two,
+    Four,
+    Eight,
 }
 
 const fn length_prefix_width<const MAX_LENGTH: usize>() -> NOfBytes {
@@ -80,7 +79,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use lb_utils::bounded_vec::BoundedVec as BV;
+    use lb_utils::bounded_vec::BoundedVec;
     use nom::error::ErrorKind;
 
     use crate::mantle::nom::{NomDecode as _, NomEncode as _};
@@ -89,12 +88,12 @@ mod tests {
     const MIN: usize = 2;
     const MAX: usize = 4;
 
-    type BoundedVec = BV<u8, MIN, MAX>;
+    type Bounded = BoundedVec<u8, MIN, MAX>;
 
     /// Builds a `BoundedVec` for encoding tests, bypassing the length checks so
     /// the codec itself remains the thing under test.
-    fn bounded(items: &[u8]) -> BoundedVec {
-        BoundedVec::new_unchecked(items.to_vec())
+    fn bounded(items: &[u8]) -> Bounded {
+        Bounded::new_unchecked(items.to_vec())
     }
 
     /// Extracts the [`ErrorKind`] from a nom decode error.
@@ -111,14 +110,6 @@ mod tests {
     }
 
     #[test]
-    fn encode_prefix_width_follows_n_bytes() {
-        // The length prefix is `N_BYTES` little-endian bytes wide.
-        assert_eq!(bounded(&[1, 2, 3]).encode(), vec![3, 1, 2, 3]);
-        assert_eq!(bounded(&[1, 2, 3]).encode(), vec![3, 1, 2, 3]);
-        assert_eq!(bounded(&[1, 2, 3]).encode(), vec![3, 1, 2, 3]);
-    }
-
-    #[test]
     fn encode_at_the_min_and_max_lengths() {
         assert_eq!(bounded(&[1, 2]).encode(), vec![2, 1, 2]);
         assert_eq!(bounded(&[1, 2, 3, 4]).encode(), vec![4, 1, 2, 3, 4]);
@@ -126,7 +117,7 @@ mod tests {
 
     #[test]
     fn decode_reads_a_well_formed_payload() {
-        let (rest, bv) = BoundedVec::decode(&[3, 1, 2, 3]).unwrap();
+        let (rest, bv) = Bounded::decode(&[3, 1, 2, 3]).unwrap();
         assert!(rest.is_empty());
         assert_eq!(bv.as_slice(), &[1, 2, 3]);
     }
@@ -134,30 +125,30 @@ mod tests {
     #[test]
     fn decode_leaves_trailing_bytes_untouched() {
         // Only the prefix and `len` items are consumed; the rest is returned.
-        let (rest, bv) = BoundedVec::decode(&[2, 1, 2, 99, 100]).unwrap();
+        let (rest, bv) = Bounded::decode(&[2, 1, 2, 99, 100]).unwrap();
         assert_eq!(rest, &[99, 100]);
         assert_eq!(bv.as_slice(), &[1, 2]);
     }
 
     #[test]
     fn decode_at_the_min_and_max_lengths() {
-        let (_, at_min) = BoundedVec::decode(&[2, 1, 2]).unwrap();
+        let (_, at_min) = Bounded::decode(&[2, 1, 2]).unwrap();
         assert_eq!(at_min.as_slice(), &[1, 2]);
 
-        let (_, at_max) = BoundedVec::decode(&[4, 1, 2, 3, 4]).unwrap();
+        let (_, at_max) = Bounded::decode(&[4, 1, 2, 3, 4]).unwrap();
         assert_eq!(at_max.as_slice(), &[1, 2, 3, 4]);
     }
 
     #[test]
     fn decode_rejects_a_length_below_min() {
         // `len == 1 < MIN`: rejected before any payload is consumed.
-        let err = BoundedVec::decode(&[1, 7]).unwrap_err();
+        let err = Bounded::decode(&[1, 7]).unwrap_err();
         assert_eq!(error_kind(err), ErrorKind::LengthValue);
     }
 
     #[test]
     fn decode_rejects_a_zero_length() {
-        let err = BoundedVec::decode(&[0]).unwrap_err();
+        let err = Bounded::decode(&[0]).unwrap_err();
         assert_eq!(error_kind(err), ErrorKind::LengthValue);
     }
 
@@ -165,7 +156,7 @@ mod tests {
     fn decode_rejects_a_length_above_max() {
         // `len == 5 > MAX`: rejected up front, so the oversized payload that
         // would follow is never decoded.
-        let err = BoundedVec::decode(&[5, 1, 2, 3, 4, 5]).unwrap_err();
+        let err = Bounded::decode(&[5, 1, 2, 3, 4, 5]).unwrap_err();
         assert_eq!(error_kind(err), ErrorKind::TooLarge);
     }
 
@@ -173,20 +164,20 @@ mod tests {
     fn decode_rejects_an_oversized_length_even_without_a_payload() {
         // The length check happens before items are read, so a bogus prefix
         // alone is enough to fail.
-        let err = BoundedVec::decode(&[5]).unwrap_err();
+        let err = Bounded::decode(&[5]).unwrap_err();
         assert_eq!(error_kind(err), ErrorKind::TooLarge);
     }
 
     #[test]
     fn decode_fails_on_an_empty_input() {
         // Not even the length prefix can be read.
-        assert!(BoundedVec::decode(&[]).is_err());
+        assert!(Bounded::decode(&[]).is_err());
     }
 
     #[test]
     fn decode_fails_when_the_payload_is_truncated() {
         // The prefix promises 3 items but only 1 byte follows.
-        let err = BoundedVec::decode(&[3, 1]).unwrap_err();
+        let err = Bounded::decode(&[3, 1]).unwrap_err();
         assert!(matches!(err, nom::Err::Error(_) | nom::Err::Failure(_)));
     }
 
@@ -194,19 +185,19 @@ mod tests {
     fn encode_then_decode_roundtrips() {
         let original = bounded(&[10, 20, 30, 40]);
         let bytes = original.encode();
-        let (rest, decoded) = BoundedVec::decode(&bytes).unwrap();
+        let (rest, decoded) = Bounded::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
     }
 
     #[test]
     fn roundtrips_with_a_multi_byte_item_type() {
-        type U16Codec = BV<u16, MIN, MAX>;
+        type U16Codec = BoundedVec<u16, MIN, MAX>;
         let original: U16Codec = U16Codec::new_unchecked(vec![0x0102, 0x0304, 0xABCD]);
 
         let bytes = original.encode();
-        // 2-byte length prefix (3) followed by three little-endian `u16`s.
-        assert_eq!(bytes, vec![3, 0, 0x02, 0x01, 0x04, 0x03, 0xCD, 0xAB]);
+        // 1-byte length prefix (3) followed by three little-endian `u16`s.
+        assert_eq!(bytes, vec![3, 0x02, 0x01, 0x04, 0x03, 0xCD, 0xAB]);
 
         let (rest, decoded) = U16Codec::decode(&bytes).unwrap();
         assert!(rest.is_empty());
