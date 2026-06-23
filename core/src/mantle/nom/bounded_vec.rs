@@ -8,6 +8,79 @@ use nom::{
 
 use crate::mantle::nom::{NomDecode, NomEncode, encode_slice};
 
+#[repr(usize)]
+enum NOfBytes {
+    One = 1,
+    Two = 2,
+    Four = 4,
+    Eight = 8,
+}
+
+const fn length_prefix_width<const MAX_LENGTH: usize>() -> NOfBytes {
+    if MAX_LENGTH <= u8::MAX as usize {
+        NOfBytes::One
+    } else if MAX_LENGTH <= u16::MAX as usize {
+        NOfBytes::Two
+    } else if MAX_LENGTH <= u32::MAX as usize {
+        NOfBytes::Four
+    } else {
+        NOfBytes::Eight
+    }
+}
+
+const fn encode_length_prefix<const MAX_LENGTH: usize>(actual_length: usize) -> Vec<u8> {
+    match length_prefix_width::<MAX_LENGTH>() {
+        NOfBytes::One => (actual_length as u8).encode(),
+        NOfBytes::Two => (actual_length as u16).encode(),
+        NOfBytes::Four => (actual_length as u32).encode(),
+        NOfBytes::Eight => (actual_length as u64).encode(),
+    }
+}
+
+fn decode_length_prefix<const MAX_LENGTH: usize>(bytes: &[u8]) -> IResult<&[u8], usize> {
+    match length_prefix_width::<MAX_LENGTH>() {
+        NOfBytes::One => u8::decode(bytes).map(|(rest, len)| (rest, len as usize)),
+        NOfBytes::Two => u16::decode(bytes).map(|(rest, len)| (rest, len as usize)),
+        NOfBytes::Four => u32::decode(bytes).map(|(rest, len)| (rest, len as usize)),
+        NOfBytes::Eight => u64::decode(bytes).map(|(rest, len)| (rest, len as usize)),
+    }
+}
+
+impl<T, const MIN: usize, const MAX: usize> NomEncode for BoundedVec<T, MIN, MAX>
+where
+    T: NomEncode,
+{
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = encode_length_prefix::<MAX>(self.len());
+        bytes.extend(encode_slice(self.as_slice()));
+
+        bytes
+    }
+}
+
+impl<T, const MIN: usize, const MAX: usize> NomDecode for BoundedVec<T, MIN, MAX>
+where
+    T: NomDecode,
+{
+    type Output = BoundedVec<T::Output, MIN, MAX>;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        let (bytes, len) = decode_length_prefix::<MAX>(bytes)?;
+
+        // We check length first instead of relying on `BoundedVec::try_from` to avoid
+        // decoding a payload that is too large.
+        if len < MIN {
+            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::LengthValue)));
+        }
+        if len > MAX {
+            return Err(nom::Err::Error(Error::new(bytes, ErrorKind::TooLarge)));
+        }
+
+        let (bytes, items) = count(T::decode, len).parse_complete(bytes)?;
+        Ok((bytes, BoundedVec::new_unchecked(items)))
+    }
+}
+
 /// Nom encoder for bounded vectors with a specified number of bytes for the
 /// length prefix.
 pub struct NomBoundedVec<'a, T, const MIN: usize, const MAX: usize, const N_BYTES: usize>(
