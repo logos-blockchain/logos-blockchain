@@ -2,11 +2,15 @@ use std::ffi::c_char;
 
 use lb_api_service::http::storage::StorageAdapter as _;
 use lb_chain_service::api::CryptarchiaServiceApi;
-use lb_core::block::Block as CoreBlock;
+use lb_core::{
+    block::Block as CoreBlock,
+    mantle::{StorageSize, Transaction, TransactionHasher, TxHash},
+};
 use lb_node::{
     ApiStorageAdapter, RuntimeServiceId, SignedMantleTx, StorageService,
     generic_services::CryptarchiaService,
 };
+use serde::Serialize;
 
 use crate::{
     LogosBlockchainNode, OperationStatus,
@@ -14,6 +18,29 @@ use crate::{
     callbacks::{BoxedCallback, CCallback, into_boxed_callback},
     logging, return_error_if_null_pointer,
 };
+
+#[derive(Serialize)]
+#[serde(rename = "SignedMantleTx")]
+pub struct TxWithId {
+    id: TxHash,
+    #[serde(flatten)]
+    tx: SignedMantleTx,
+}
+
+impl Transaction for TxWithId {
+    const HASHER: TransactionHasher<Self> = |tx| <SignedMantleTx as Transaction>::HASHER(&tx.tx);
+    type Hash = <SignedMantleTx as Transaction>::Hash;
+
+    fn as_signing(&self) -> Vec<u8> {
+        self.tx.as_signing()
+    }
+}
+
+impl StorageSize for TxWithId {
+    fn storage_size(&self) -> usize {
+        self.tx.storage_size()
+    }
+}
 
 pub fn subscribe_to_new_blocks_sync(
     node: &LogosBlockchainNode,
@@ -52,6 +79,19 @@ pub fn subscribe_to_new_blocks_sync(
                             ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
                                 .await;
                         if let Ok(Some(block)) = res {
+                            let txs_with_id: Vec<TxWithId> = block
+                                .transactions()
+                                .map(|tx| TxWithId {
+                                    id: tx.hash(),
+                                    tx: tx.clone(),
+                                })
+                                .collect();
+                            let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
+                                block.header().clone(),
+                                txs_with_id,
+                                *block.signature(),
+                            )
+                            .expect("Block should always build from valid block");
                             callback_per_block(Block::from(block).as_ptr());
                         } else {
                             logging::error!(

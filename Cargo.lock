@@ -4158,6 +4158,7 @@ dependencies = [
  "logos-blockchain-wallet-service",
  "multiaddr",
  "overwatch",
+ "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
