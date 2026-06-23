@@ -53,7 +53,7 @@ pub enum Error {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "Vec<IndexedSignature>")]
+#[serde(try_from = "Vec<IndexedSignature>", into = "Vec<IndexedSignature>")]
 pub struct ChannelMultiSigProof {
     // Invariant: signature indices are strictly increasing (hence ordered and
     // unique), as required by the spec.
@@ -100,6 +100,12 @@ impl TryFrom<Vec<IndexedSignature>> for ChannelMultiSigProof {
     fn try_from(value: Vec<IndexedSignature>) -> Result<Self, Self::Error> {
         Self::validate_well_formedness(&value)?;
         Ok(Self { signatures: value })
+    }
+}
+
+impl From<ChannelMultiSigProof> for Vec<IndexedSignature> {
+    fn from(value: ChannelMultiSigProof) -> Self {
+        value.signatures
     }
 }
 
@@ -179,10 +185,6 @@ mod tests {
         ])
         .expect("distinct indices are well-formed");
         let serialized = serde_json::to_string(&ok).expect("serialize proof");
-        assert!(
-            serialized.starts_with("{\"signatures\":"),
-            "expected the `{{ signatures: [..] }}` shape, got {serialized}"
-        );
         let round_tripped: ChannelMultiSigProof =
             serde_json::from_str(&serialized).expect("well-formed proof round-trips");
         assert_eq!(round_tripped, ok);
