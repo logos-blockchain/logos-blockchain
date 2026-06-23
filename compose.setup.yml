@@ -7,7 +7,7 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./nodes/node/binary/src/config/deployment/devnet/deployment.yaml:/deployment.yaml
+      - ./nodes/node/binary/src/config/deployment/settings.yaml:/deployment.yaml
       - ./deployment:/etc/logos-blockchain
     ports:
       - "4400:4400/tcp"

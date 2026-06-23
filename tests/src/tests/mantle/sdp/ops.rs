@@ -207,8 +207,8 @@ async fn sdp_ops_e2e() {
         .await
         .expect("API must succeed")
         .expect("declaration must still exist even after withdrawal because GC shouldn't remove it immediately")
-        .withdrawn
-        .expect("withdraw epoch must be set after withdraw tx is accepted");
+        .withdraw_at
+        .expect("withdraw_at must be set after withdraw tx is accepted");
 
     // Wait for the snapshot finalization delay and the retention period to pass.
     wait_for_tip_slot(

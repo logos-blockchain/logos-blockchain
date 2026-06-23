@@ -42,11 +42,11 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
             return Err(SdpError::DeclarationNotFound(self.declaration_id));
         };
 
-        // Check that the declaration hasn't been withdrawn
-        if let Some(withdrawn) = declaration.withdrawn {
+        // Check that the declaration hasn't been already scheduled to be withdrawn.
+        if let Some(withdraw_at) = declaration.withdraw_at {
             return Err(SdpError::DeclarationWithdrawn {
                 declaration_id: self.declaration_id,
-                withdrawn_epoch: withdrawn,
+                withdraw_at,
             });
         }
 
@@ -110,13 +110,13 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
         // withdrawal because SDP uses the snapshot from `SNAPSHOT_FINALIZATION_DELAY`
         // epochs ago.
         // The note will be unlocked once the withdrawn epoch set here is reached.
-        declaration.withdrawn = Some(ctx.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
+        declaration.withdraw_at = Some(ctx.epoch.strict_add(sdp::SNAPSHOT_FINALIZATION_DELAY));
         declaration.nonce = self.nonce;
 
         debug!(
             target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
-            withdrawn = ?declaration.withdrawn,
+            withdraw_at = ?declaration.withdraw_at,
             nonce = ?declaration.nonce,
             "updated declaration with withdraw message"
         );

@@ -5,10 +5,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 
-use crate::{
-    mantle::ops::leader_claim::{VoucherNullifier, VoucherSecret},
-    proofs::merkle::mmr_path_to_witness,
-};
+use crate::{mantle::ops::leader_claim::VoucherSecret, proofs::merkle::mmr_path_to_witness};
 
 const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 
@@ -16,7 +13,6 @@ const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 pub struct Groth16LeaderClaimProof {
     #[serde(with = "proof_serde")]
     proof: lb_poc::PoCProof,
-    voucher_nf: VoucherNullifier,
 }
 
 #[derive(Debug, Error)]
@@ -28,19 +24,16 @@ pub enum Error {
 impl Groth16LeaderClaimProof {
     pub fn prove(witness: LeaderClaimPrivate) -> Result<Self, Error> {
         let start_t = std::time::Instant::now();
-        let (proof, voucher_nf) = Self::generate_proof(witness)?;
+        let proof = Self::generate_proof(witness)?;
         tracing::debug!(target: LOG_TARGET, "PoC groth16 prover time: {:.2?}", start_t.elapsed());
 
-        Ok(Self {
-            proof,
-            voucher_nf: voucher_nf.into(),
-        })
+        Ok(Self { proof })
     }
 
-    fn generate_proof(private: LeaderClaimPrivate) -> Result<(lb_poc::PoCProof, Fr), Error> {
-        let (proof, verif_inputs) =
+    fn generate_proof(private: LeaderClaimPrivate) -> Result<lb_poc::PoCProof, Error> {
+        let (proof, _verif_inputs) =
             lb_poc::prove(private.input.into()).map_err(Error::PoCProofFailed)?;
-        Ok((proof, verif_inputs.voucher_nullifier.into_inner()))
+        Ok(proof)
     }
 
     #[must_use]
@@ -49,16 +42,14 @@ impl Groth16LeaderClaimProof {
     }
 
     #[must_use]
-    pub const fn new(proof: lb_poc::PoCProof, voucher_nf: VoucherNullifier) -> Self {
-        Self { proof, voucher_nf }
+    pub const fn new(proof: lb_poc::PoCProof) -> Self {
+        Self { proof }
     }
 }
 
 pub trait LeaderClaimProof {
     /// Verify the proof against the public inputs.
     fn verify(&self, public_inputs: &LeaderClaimPublic) -> bool;
-
-    fn voucher_nf(&self) -> &VoucherNullifier;
 }
 
 impl LeaderClaimProof for Groth16LeaderClaimProof {
@@ -66,7 +57,7 @@ impl LeaderClaimProof for Groth16LeaderClaimProof {
         lb_poc::verify(
             &self.proof,
             &lb_poc::PoCVerifierInput::new(
-                (*self.voucher_nf()).into(),
+                public_inputs.voucher_nullifier,
                 public_inputs.voucher_root,
                 public_inputs.mantle_tx_hash,
             ),
@@ -76,14 +67,12 @@ impl LeaderClaimProof for Groth16LeaderClaimProof {
             false
         })
     }
-
-    fn voucher_nf(&self) -> &VoucherNullifier {
-        &self.voucher_nf
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaderClaimPublic {
+    #[serde(with = "serde_fr")]
+    pub voucher_nullifier: Fr,
     #[serde(with = "serde_fr")]
     pub voucher_root: Fr,
     #[serde(with = "serde_fr")]
@@ -92,8 +81,9 @@ pub struct LeaderClaimPublic {
 
 impl LeaderClaimPublic {
     #[must_use]
-    pub const fn new(voucher_root: Fr, mantle_tx_hash: Fr) -> Self {
+    pub const fn new(voucher_nullifier: Fr, voucher_root: Fr, mantle_tx_hash: Fr) -> Self {
         Self {
+            voucher_nullifier,
             voucher_root,
             mantle_tx_hash,
         }

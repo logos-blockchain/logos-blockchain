@@ -623,6 +623,7 @@ impl LedgerState {
                         .execute(WithdrawExecutionContext {
                             channels: channels.clone(),
                             utxos: utxos.clone(),
+                            tx_hash,
                         })
                         .map_err(mantle::Error::Channel)?;
                     self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
@@ -1237,7 +1238,28 @@ mod tests {
             .expect("withdraw should have at least one utxo")
             .id();
         assert!(new_state.latest_utxos().contains(&withdraw_utxo));
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 1);
+        let Event::Tx {
+            tx_hash,
+            op_id,
+            payload,
+        } = events.iter().next().unwrap().clone()
+        else {
+            panic!("expected a Tx event")
+        };
+        assert_eq!(tx_hash, withdraw_tx_hash);
+        assert_eq!(op_id, withdraw.op_id());
+        let EventPayload::Withdraw {
+            channel_id,
+            amount,
+            utxos,
+        } = payload
+        else {
+            panic!("expected Withdraw event")
+        };
+        assert_eq!(channel_id, withdraw.channel_id);
+        assert_eq!(amount, withdraw_note.value);
+        assert_eq!(utxos, withdraw.outputs.utxos(&withdraw).collect::<Vec<_>>());
     }
 
     #[test]
@@ -1784,7 +1806,7 @@ mod tests {
                     reward_amount: leaders.reward_amount(),
                     claimable_rewards: leaders.claimable_rewards(),
                     utxos: Utxos::new(),
-                    tx_hash: TxHash::default(),
+                    tx_hash: TxHash::from([0u8; 32]),
                 })
                 .unwrap();
             leaders.update_nullifiers(result.nullifiers);
@@ -1823,7 +1845,7 @@ mod tests {
                 reward_amount: leaders.reward_amount(),
                 claimable_rewards: leaders.claimable_rewards(),
                 utxos: Utxos::new(),
-                tx_hash: TxHash::default(),
+                tx_hash: TxHash::from([0u8; 32]),
             })
             .unwrap();
         leaders.update_nullifiers(result.nullifiers);
@@ -1838,10 +1860,9 @@ mod tests {
                 nullifiers: leaders.nullifiers(),
                 claimable_vouchers_root: &leaders.vouchers_snapshot_root(),
                 // Use a dummy proof since duplication is detected before proof verification
-                proof_of_claim: &Groth16LeaderClaimProof::new(
-                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-                    Fr::ZERO.into(),
-                ),
+                proof_of_claim: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
+                    &[0u8; 128],
+                )),
                 tx_hash: &TxHash::from([0u8; 32]),
             })
             .unwrap_err();

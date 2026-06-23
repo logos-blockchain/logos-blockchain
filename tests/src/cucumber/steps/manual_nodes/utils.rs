@@ -12,7 +12,7 @@ use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Stat
 use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
-use lb_node::config::{DeploymentSettings, RunConfig, WellKnownDeployment};
+use lb_node::config::{DeploymentSettings, RunConfig};
 use lb_testing_framework::{
     LbcEnv, LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
 };
@@ -948,7 +948,7 @@ fn prepare_config_patch(
     if join_external_network {
         config.deployment = deployment_override
             .cloned()
-            .unwrap_or_else(|| DeploymentSettings::from(WellKnownDeployment::Devnet));
+            .unwrap_or_else(DeploymentSettings::default);
     } else if let Some(deployment_override) = deployment_override {
         config.deployment = deployment_override.clone();
     }

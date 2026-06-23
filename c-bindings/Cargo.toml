@@ -22,6 +22,7 @@ lb-utils                      = { workspace = true }
 lb-wallet-service             = { workspace = true }
 multiaddr                     = { workspace = true }
 overwatch                     = { workspace = true }
+serde                         = { features = ["derive"], workspace = true }
 serde_json                    = { workspace = true }
 tempfile                      = { workspace = true }
 tokio                         = { features = ["rt-multi-thread"], workspace = true }

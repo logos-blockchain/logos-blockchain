@@ -20,11 +20,11 @@ use crate::{
         keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
     },
     config::{
-        ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
-        LogArgs, NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig,
-        api::serde::AxumBackendSettings, blend::serde::core::BackendConfig as BlendCoreConfig,
-        network::serde::SwarmConfig, update_api, update_blend, update_cryptarchia, update_network,
-        update_sdp, update_state, update_tracing,
+        ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
+        NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
+        blend::serde::core::BackendConfig as BlendCoreConfig, network::serde::SwarmConfig,
+        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
+        update_tracing,
     },
 };
 
@@ -96,20 +96,20 @@ pub struct CliArgs {
 
 impl CliArgs {
     #[must_use]
-    pub fn config_path(&self) -> &Path {
+    pub fn user_config_path(&self) -> &Path {
         self.config
             .as_deref()
             .expect("config path is required when not using a subcommand")
     }
 
     #[must_use]
-    pub const fn dry_run(&self) -> bool {
-        self.check_config_only
+    pub const fn deployment_config_path(&self) -> &Option<PathBuf> {
+        &self.deployment.custom_deployment_path
     }
 
     #[must_use]
-    pub const fn deployment_type(&self) -> &DeploymentType {
-        self.deployment.deployment_type()
+    pub const fn dry_run(&self) -> bool {
+        self.check_config_only
     }
 }
 
@@ -444,14 +444,9 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
 
-    let deployment_settings = match deployment_args.deployment_type() {
-        DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
-        DeploymentType::Custom(custom_deployment_config_path) => {
-            deserialize_value_at_path::<DeploymentSettings>(
-                custom_deployment_config_path,
-                OnUnknownKeys::Fail,
-            )?
-        }
+    let deployment_settings = match deployment_args.custom_deployment_path {
+        None => DeploymentSettings::default(),
+        Some(path) => deserialize_value_at_path::<DeploymentSettings>(&path, OnUnknownKeys::Fail)?,
     };
 
     Ok(RunConfig {

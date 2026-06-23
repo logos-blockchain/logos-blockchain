@@ -8,7 +8,7 @@ use crate::{
     UserConfig,
     cli::CliArgs,
     config::{
-        DeploymentSettings, RequiredValues as ConfigRequiredValues, WellKnownDeployment,
+        DeploymentSettings, RequiredValues as ConfigRequiredValues,
         blend::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
@@ -39,7 +39,10 @@ use crate::{
 fn parse_config_path() {
     use clap::Parser as _;
     let parsed_args = CliArgs::parse_from(["", "test_cfg.yaml"]);
-    assert_eq!(parsed_args.config_path().to_str().unwrap(), "test_cfg.yaml");
+    assert_eq!(
+        parsed_args.user_config_path().to_str().unwrap(),
+        "test_cfg.yaml"
+    );
 }
 
 #[test]
@@ -76,7 +79,7 @@ fn common_recovery_folder() {
         base_config
     };
 
-    let deployment_settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
+    let deployment_settings = DeploymentSettings::default();
 
     let blend_rewards_params = deployment_settings.blend_reward_params();
 

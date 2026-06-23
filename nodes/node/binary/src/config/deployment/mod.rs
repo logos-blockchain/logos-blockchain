@@ -1,8 +1,4 @@
-use core::{
-    fmt::{self, Display, Formatter},
-    str::FromStr,
-    time::Duration,
-};
+use core::time::Duration;
 
 use lb_ledger::mantle::sdp::rewards::blend::RewardsParameters;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
@@ -16,34 +12,7 @@ use crate::config::{
     time::deployment::Settings as TimeDeploymentSettings,
 };
 
-pub mod devnet;
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default)]
-pub enum WellKnownDeployment {
-    // Must match the `DEVNET` definition in the `devnet` module.
-    #[serde(rename = "devnet")]
-    #[default]
-    Devnet,
-}
-
-impl FromStr for WellKnownDeployment {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            devnet::NAME => Ok(Self::Devnet),
-            _ => Err(()),
-        }
-    }
-}
-
-impl Display for WellKnownDeployment {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Devnet => write!(f, "{}", devnet::NAME),
-        }
-    }
-}
+pub const SERIALIZED_DEPLOYMENT: &[u8] = include_bytes!("settings.yaml");
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct DeploymentSettings {
@@ -52,17 +21,6 @@ pub struct DeploymentSettings {
     pub cryptarchia: CryptarchiaDeploymentSettings,
     pub time: TimeDeploymentSettings,
     pub mempool: MempoolDeploymentSettings,
-}
-
-impl From<WellKnownDeployment> for DeploymentSettings {
-    fn from(value: WellKnownDeployment) -> Self {
-        match value {
-            WellKnownDeployment::Devnet => {
-                deserialize_value_from_reader(devnet::SERIALIZED_DEPLOYMENT, OnUnknownKeys::Fail)
-                    .expect("Devnet deployment config is valid.")
-            }
-        }
-    }
 }
 
 impl DeploymentSettings {
@@ -77,18 +35,25 @@ impl DeploymentSettings {
     }
 }
 
+impl Default for DeploymentSettings {
+    fn default() -> Self {
+        deserialize_value_from_reader(SERIALIZED_DEPLOYMENT, OnUnknownKeys::Fail)
+            .expect("Default deployment settings must be valid.")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::config::{DeploymentSettings, WellKnownDeployment};
+    use crate::config::DeploymentSettings;
 
     #[test]
-    fn devnet_initialization() {
-        drop(DeploymentSettings::from(WellKnownDeployment::Devnet));
+    fn default_initialization() {
+        drop(DeploymentSettings::default());
     }
 
     #[test]
     fn serialize_deserialize_yaml() {
-        let settings = DeploymentSettings::from(WellKnownDeployment::Devnet);
+        let settings = DeploymentSettings::default();
         let as_str = serde_yaml::to_string(&settings).unwrap();
         let _recovered: DeploymentSettings = serde_yaml::from_str(&as_str).unwrap();
     }

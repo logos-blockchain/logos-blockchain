@@ -365,8 +365,8 @@ pub struct Declaration {
     /// snapshot logic.
     // TODO: Use Option<Epoch> with a better name.
     pub active: Epoch,
-    /// The epoch at which the declaration must be withdrawn
-    pub withdrawn: Option<Epoch>,
+    /// The epoch at which the declaration is scheduled to be withdrawn.
+    pub withdraw_at: Option<Epoch>,
     pub nonce: Nonce,
 }
 
@@ -389,7 +389,7 @@ impl Declaration {
             zk_id: declaration_msg.zk_id,
             created: epoch,
             active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
-            withdrawn: None,
+            withdraw_at: None,
             nonce: 0,
         }
     }
@@ -591,7 +591,7 @@ mod tests {
         assert_eq!(declaration.zk_id, msg.zk_id);
         assert_eq!(declaration.created, Epoch::new(10));
         assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
-        assert_eq!(declaration.withdrawn, None);
+        assert_eq!(declaration.withdraw_at, None);
         assert_eq!(declaration.nonce, 0);
     }
 }

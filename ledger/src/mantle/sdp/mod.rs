@@ -213,8 +213,8 @@ impl<R: Rewards> ServiceState<R> {
         epoch: Epoch,
     ) {
         self.declarations.iter().for_each(|(_, declaration)| {
-            if let Some(withdrawn) = declaration.withdrawn
-                && epoch >= withdrawn
+            if let Some(withdraw_at) = declaration.withdraw_at
+                && epoch >= withdraw_at
                 && locked_notes
                     .is_locked_for_service(&declaration.locked_note_id, &declaration.service_type)
             {
@@ -254,9 +254,9 @@ impl<R: Rewards> ServiceState<R> {
         current_epoch: Epoch,
         config: &ServiceParameters,
     ) -> bool {
-        let withdrawn = declaration
-            .withdrawn
-            .is_some_and(|withdrawn| withdrawn.strict_add(config.retention_period) < current_epoch);
+        let withdrawn = declaration.withdraw_at.is_some_and(|withdraw_at| {
+            withdraw_at.strict_add(config.retention_period) < current_epoch
+        });
         let inactive = declaration
             .active
             .strict_add(config.inactivity_period.into_inner())
@@ -288,8 +288,8 @@ fn is_active(declaration: &Declaration, current_epoch: Epoch, config: &ServicePa
         .strict_add(config.inactivity_period.into_inner())
         >= current_epoch
         && declaration
-            .withdrawn
-            .is_none_or(|withdrawn| withdrawn > current_epoch)
+            .withdraw_at
+            .is_none_or(|withdraw_at| withdraw_at > current_epoch)
 }
 
 /// A SDP state of the mantle ledger
@@ -950,12 +950,12 @@ mod tests {
         };
         let ledger =
             apply_withdraw_with_dummies(ledger, withdraw_op, utxo_sk, zk_key, &config).unwrap();
-        let withdrawn_epoch = ledger
+        let withdraw_at = ledger
             .get_declaration(&declaration_id)
             .unwrap()
-            .withdrawn
-            .expect("withdraw must set the withdrawn epoch");
-        assert_eq!(withdrawn_epoch, Epoch::new(3));
+            .withdraw_at
+            .expect("withdraw must set the withdraw_at");
+        assert_eq!(withdraw_at, Epoch::new(3));
 
         // The declaration is still in the live SDP ledger — cleanup runs only
         // when the ledger advances past `withdrawn_epoch`.
@@ -963,7 +963,7 @@ mod tests {
 
         // Snapshot at any epoch strictly less than `withdrawn_epoch` must
         // include the declaration.
-        for epoch in 0..withdrawn_epoch.into_inner() {
+        for epoch in 0..withdraw_at.into_inner() {
             assert!(
                 ledger
                     .active_declarations(epoch.into(), &config.service_params)
@@ -974,7 +974,7 @@ mod tests {
         }
 
         // Snapshot at `withdrawn_epoch` (and beyond) must exclude it.
-        for epoch in withdrawn_epoch.into_inner()..=withdrawn_epoch.into_inner() + 2 {
+        for epoch in withdraw_at.into_inner()..=withdraw_at.into_inner() + 2 {
             assert!(
                 ledger
                     .active_declarations(epoch.into(), &config.service_params)
@@ -1203,8 +1203,8 @@ mod tests {
 
         let withdrawn_epoch = sdp_ledger.get_declaration(&declaration_id)
             .expect("declaration must still exist even after withdrawal because GC shouldn't remove it immediately")
-            .withdrawn
-            .expect("withdraw epoch must be set after withdraw tx is accepted");
+            .withdraw_at
+            .expect("withdraw_at must be set after withdraw tx is accepted");
 
         // Move forward epochs until withdrawn_epoch is reached,
         // and check that the note has been unlocked.
