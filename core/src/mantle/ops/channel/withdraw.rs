@@ -153,9 +153,9 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         }?;
 
         // Add the outputs to the ledger
-        let output_utxos = self.outputs.utxos(self).collect::<Vec<_>>();
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
+        let output_utxos = self.outputs.utxos(self).collect::<Vec<_>>();
         let events = Event::from_tx(
             ctx.tx_hash,
             self.op_id(),
