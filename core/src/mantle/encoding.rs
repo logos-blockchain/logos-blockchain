@@ -1,14 +1,13 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 use lb_utils::bounded_vec::UpperBoundedVec;
-use multiaddr::Multiaddr;
 use nom::{
     IResult, Parser as _,
     bytes::complete::take,
     combinator::{map, map_res},
     error::{Error, ErrorKind},
-    multi::{count, length_count},
-    number::complete::{le_u16, le_u32, le_u64, u8 as decode_u8},
+    multi::length_count,
+    number::complete::{le_u16, le_u64},
     sequence::pair,
 };
 use time::OffsetDateTime;
@@ -19,14 +18,11 @@ use crate::{
         nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
-            channel::Ed25519PublicKey,
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
-            sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferOp,
         },
     },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
-    sdp::{ActivityMetadata, DeclarationId, Locator, ProviderId, ServiceType},
 };
 
 // ==============================================================================
@@ -39,13 +35,6 @@ use crate::{
 // memory usage (e.g., 68GB allocation). As an example, if the network currently
 // limits maximum transaction size to 1MiB, for memory safety limits we can
 // allow 4MiB.
-
-// Maximum memory allocation size allowed for SDP activity metadata.
-// Protects against unbounded allocation in `decode_sdp_active`
-const MAX_ENCODE_DECODE_METADATA_SIZE: u32 = 230; // `ActiveMessage` has a fixed size of 230 bytes
-
-// Maximum byte size allowed for a locator in SDPDeclare operations.
-const LOCATOR_BYTES_SIZE_LIMIT: usize = 329usize;
 
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
@@ -81,105 +70,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     let (input, ops) = NomOps::decode(input)?;
 
     Ok((input, MantleTx(ops)))
-}
-
-// ==============================================================================
-// SDP Operation Decoders
-// ==============================================================================
-
-pub(crate) fn decode_sdp_declare(input: &[u8]) -> IResult<&[u8], SDPDeclareOp> {
-    // SDPDeclare = ServiceType LocatorCount *Locator ProviderId ZkId LockedNoteId
-    let (input, service_type_byte) = decode_byte(input)?;
-    let service_type = match service_type_byte {
-        0 => ServiceType::BlendNetwork,
-        _ => return Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
-    };
-    let (input, locator_count) = decode_byte(input)?;
-
-    let (input, multiaddrs) = count(decode_locator, locator_count as usize).parse(input)?;
-    let locators = multiaddrs
-        .into_iter()
-        .map(Locator::try_from)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?
-        .try_into()
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
-    let (input, provider_key) = decode_ed25519_public_key(input)?;
-    let provider_id = ProviderId(provider_key);
-    let (input, zk_fr) = decode_field_element(input)?;
-    let zk_id = ZkPublicKey::new(zk_fr);
-    let (input, locked_note_id) = map(decode_field_element, NoteId).parse(input)?;
-
-    Ok((
-        input,
-        SDPDeclareOp {
-            service_type,
-            locators,
-            provider_id,
-            zk_id,
-            locked_note_id,
-        },
-    ))
-}
-
-fn decode_locator(input: &[u8]) -> IResult<&[u8], Multiaddr> {
-    // Locator = 2Byte *BYTE
-    let (input, len_bytes) = take(2usize).parse(input)?;
-    let len = u16::from_le_bytes([len_bytes[0], len_bytes[1]]) as usize;
-    if len > LOCATOR_BYTES_SIZE_LIMIT {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::LengthValue)));
-    }
-    map_res(take(len), |bytes: &[u8]| {
-        Multiaddr::try_from(bytes.to_vec()).map_err(|_| Error::new(bytes, ErrorKind::Fail))
-    })
-    .parse(input)
-}
-
-pub(crate) fn decode_sdp_withdraw(input: &[u8]) -> IResult<&[u8], SDPWithdrawOp> {
-    // SDPWithdraw = DeclarationId Nonce LockedNoteId
-    let (input, declaration_id_bytes) = decode_hash32(input)?;
-    let declaration_id = DeclarationId(declaration_id_bytes);
-    let (input, nonce) = decode_uint64(input)?;
-    let (input, locked_note_id) = map(decode_field_element, NoteId).parse(input)?;
-
-    Ok((
-        input,
-        SDPWithdrawOp {
-            declaration_id,
-            locked_note_id,
-            nonce,
-        },
-    ))
-}
-
-pub(crate) fn decode_sdp_active(input: &[u8]) -> IResult<&[u8], SDPActiveOp> {
-    // SDPActive = DeclarationId Nonce Metadata
-    // Metadata = UINT32 *BYTE
-    let (input, declaration_id_bytes) = decode_hash32(input)?;
-    let declaration_id = DeclarationId(declaration_id_bytes);
-
-    let (input, nonce) = decode_uint64(input)?;
-
-    let (input, metadata_len) = decode_uint32(input)?;
-
-    // Validate metadata length to prevent unbounded memory allocation
-    if metadata_len > MAX_ENCODE_DECODE_METADATA_SIZE {
-        return Err(nom::Err::Error(Error::new(input, ErrorKind::TooLarge)));
-    }
-
-    let (input, metadata_bytes) = take(metadata_len as usize).parse(input)?;
-
-    let metadata = ActivityMetadata::from_metadata_bytes(metadata_bytes)
-        .map_err(|_| nom::Err::Error(Error::new(input, ErrorKind::Fail)))?;
-
-    Ok((
-        input,
-        SDPActiveOp {
-            declaration_id,
-            nonce,
-            metadata,
-        },
-    ))
 }
 
 // ==============================================================================
@@ -267,11 +157,8 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         }
 
         // ProofOfClaimProof = Groth16
-        Op::LeaderClaim(leader_claim_op) => map(decode_groth16, |proof| {
-            OpProof::PoC(Groth16LeaderClaimProof::new(
-                proof,
-                leader_claim_op.voucher_nullifier,
-            ))
+        Op::LeaderClaim(_) => map(decode_groth16, |proof| {
+            OpProof::PoC(Groth16LeaderClaimProof::new(proof))
         })
         .parse(input),
 
@@ -306,18 +193,6 @@ fn decode_groth16(input: &[u8]) -> IResult<&[u8], CompressedGroth16Proof> {
 pub(crate) fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
     // ZkPublicKey = FieldElement
     map(decode_field_element, ZkPublicKey::new).parse(input)
-}
-
-const ED25519_PK_BYTES: usize = 32;
-pub(crate) fn decode_ed25519_public_key(input: &[u8]) -> IResult<&[u8], Ed25519PublicKey> {
-    // Ed25519PublicKey = 32BYTE
-    map_res(
-        decode_array::<ED25519_PK_BYTES>,
-        |bytes: [u8; ED25519_PK_BYTES]| {
-            Ed25519PublicKey::from_bytes(&bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
-        },
-    )
-    .parse(input)
 }
 
 const ED25519_SIG_BYTES: usize = 64;
@@ -362,11 +237,6 @@ pub(crate) fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
     .parse(input)
 }
 
-pub(crate) fn decode_hash32(input: &[u8]) -> IResult<&[u8], [u8; 32]> {
-    // Hash32 = 32BYTE
-    decode_array::<32>(input)
-}
-
 // ==============================================================================
 // Primitive Decoders
 // ==============================================================================
@@ -393,19 +263,9 @@ fn decode_uint16(input: &[u8]) -> IResult<&[u8], u16> {
     le_u16(input)
 }
 
-pub(crate) fn decode_uint32(input: &[u8]) -> IResult<&[u8], u32> {
-    // UINT32 = 4BYTE
-    le_u32(input)
-}
-
 pub(crate) fn decode_uint64(input: &[u8]) -> IResult<&[u8], u64> {
     // UINT64 = 8BYTE
     le_u64(input)
-}
-
-fn decode_byte(input: &[u8]) -> IResult<&[u8], u8> {
-    // Byte = OCTET
-    decode_u8(input)
 }
 
 pub(crate) fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTime> {
@@ -441,10 +301,6 @@ fn encode_uint16(value: u16) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
 
-pub(crate) fn encode_uint32(value: u32) -> Vec<u8> {
-    value.to_le_bytes().to_vec()
-}
-
 pub(crate) fn encode_uint64(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
@@ -465,10 +321,6 @@ pub(crate) fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
     )
 }
 
-pub(crate) fn encode_hash32(hash: &[u8; 32]) -> Vec<u8> {
-    hash.to_vec()
-}
-
 pub(crate) fn encode_field_element(fr: &Fr) -> Vec<u8> {
     fr_to_bytes(fr).to_vec()
 }
@@ -476,10 +328,6 @@ pub(crate) fn encode_field_element(fr: &Fr) -> Vec<u8> {
 /// Encode cryptographic primitives
 fn encode_ed25519_signature(sig: &Ed25519Signature) -> Vec<u8> {
     sig.to_bytes().to_vec()
-}
-
-pub(crate) fn encode_ed25519_public_key(key: &Ed25519PublicKey) -> Vec<u8> {
-    key.to_bytes().to_vec()
 }
 
 fn encode_zk_signature(sig: &ZkSignature) -> Vec<u8> {
@@ -504,76 +352,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
             .into_iter()
             .chain(encode_uint16(signature.channel_key_index))
     }));
-    bytes
-}
-
-/// Encode SDP operations
-fn encode_locator(locator: &Multiaddr) -> Vec<u8> {
-    let locator_bytes = locator.to_vec();
-    assert!(
-        locator_bytes.len() <= LOCATOR_BYTES_SIZE_LIMIT,
-        "Fatal error in 'encode_locator' - {} locator bytes clipped to \
-            {LOCATOR_BYTES_SIZE_LIMIT}",
-        locator_bytes.len()
-    );
-    let mut bytes = Vec::new();
-    bytes.extend((locator_bytes.len() as u16).to_le_bytes());
-    bytes.extend(locator_bytes);
-    bytes
-}
-
-pub(crate) fn encode_sdp_declare(op: &SDPDeclareOp) -> Vec<u8> {
-    assert!(
-        u8::try_from(op.locators.len()).is_ok(),
-        "Fatal error in 'encode_sdp_declare' - {} locators clipped to {}",
-        op.locators.len(),
-        u8::MAX
-    );
-    let mut bytes = Vec::new();
-    // ServiceType
-    let service_type_byte = match op.service_type {
-        ServiceType::BlendNetwork => 0u8,
-    };
-    bytes.extend(encode_byte(service_type_byte));
-    // Locators
-    bytes.extend(encode_byte(op.locators.len() as u8));
-    for locator in &op.locators {
-        bytes.extend(encode_locator(locator.as_ref()));
-    }
-    // ProviderId
-    bytes.extend(encode_ed25519_public_key(&op.provider_id.0));
-    // ZkId
-    bytes.extend(encode_field_element(op.zk_id.as_fr()));
-    // LockedNoteId
-    bytes.extend(encode_field_element(op.locked_note_id.as_ref()));
-    bytes
-}
-
-pub(crate) fn encode_sdp_withdraw(op: &SDPWithdrawOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(&op.declaration_id.0));
-    bytes.extend(encode_uint64(op.nonce));
-    bytes.extend(encode_field_element(op.locked_note_id.as_ref()));
-    bytes
-}
-
-#[must_use]
-pub fn encode_sdp_active(op: &SDPActiveOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_hash32(&op.declaration_id.0));
-    bytes.extend(encode_uint64(op.nonce));
-
-    // Metadata - convert ActivityMetadata to bytes
-    let metadata_bytes = op.metadata.to_metadata_bytes();
-    assert!(
-        metadata_bytes.len() <= MAX_ENCODE_DECODE_METADATA_SIZE as usize,
-        "Fatal error in 'encode_sdp_active' - {} metadata bytes clipped to {}",
-        metadata_bytes.len(),
-        MAX_ENCODE_DECODE_METADATA_SIZE
-    );
-
-    bytes.extend(encode_uint32(metadata_bytes.len() as u32));
-    bytes.extend(&metadata_bytes);
     bytes
 }
 
@@ -621,32 +399,44 @@ pub fn encode_transfer_op(op: &TransferOp) -> Vec<u8> {
     bytes
 }
 
+// Check if proofs correspond to ops
+#[must_use]
+pub const fn proof_matches(proof: &OpProof, op: &Op) -> bool {
+    matches!(
+        (proof, op),
+        (OpProof::Ed25519Sig(_), Op::ChannelInscribe(_))
+            | (
+                OpProof::ChannelMultiSigProof(_),
+                Op::ChannelWithdraw(_) | Op::ChannelConfig(_)
+            )
+            | (OpProof::ZkAndEd25519Sigs { .. }, Op::SDPDeclare(_))
+            | (
+                OpProof::ZkSig(_),
+                Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
+            )
+            | (OpProof::PoC(_), Op::LeaderClaim(_))
+    )
+}
+
 /// Encode proofs
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
-    match (proof, op) {
-        (OpProof::Ed25519Sig(sig), Op::ChannelInscribe(_)) => encode_ed25519_signature(sig),
-        (OpProof::ChannelMultiSigProof(proof), Op::ChannelWithdraw(_) | Op::ChannelConfig(_)) => {
-            encode_channel_multi_sig_proof(proof)
-        }
-        (
+    if proof_matches(proof, op) {
+        match proof {
+            OpProof::Ed25519Sig(sig) => encode_ed25519_signature(sig),
+            OpProof::ChannelMultiSigProof(proof) => encode_channel_multi_sig_proof(proof),
             OpProof::ZkAndEd25519Sigs {
                 zk_sig,
                 ed25519_sig,
-            },
-            Op::SDPDeclare(_),
-        ) => {
-            let mut bytes = encode_zk_signature(zk_sig);
-            bytes.extend(encode_ed25519_signature(ed25519_sig));
-            bytes
+            } => {
+                let mut bytes = encode_zk_signature(zk_sig);
+                bytes.extend(encode_ed25519_signature(ed25519_sig));
+                bytes
+            }
+            OpProof::ZkSig(sig) => encode_zk_signature(sig),
+            OpProof::PoC(poc) => encode_poc(poc),
         }
-        (
-            OpProof::ZkSig(sig),
-            Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
-        ) => encode_zk_signature(sig),
-        (OpProof::PoC(poc), Op::LeaderClaim(_)) => encode_poc(poc),
-        _ => {
-            panic!("Mismatch between proof type and operation type");
-        }
+    } else {
+        panic!("Mismatch between proof type and operation type");
     }
 }
 
@@ -722,24 +512,31 @@ mod tests {
     use std::{collections::HashMap, panic};
 
     use ark_ff::AdditiveGroup as _;
-    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::bounded_vec::BoundedError;
+    use multiaddr::Multiaddr;
     use num_bigint::BigUint;
 
     use super::*;
     use crate::{
         mantle::{
             Transaction as _,
-            ops::channel::{
-                ChannelId, MsgId,
-                config::{ChannelConfigOp, Keys},
-                inscribe::{self, Inscription, InscriptionOp},
-                withdraw::ChannelWithdrawOp,
+            nom::NomArray,
+            ops::{
+                channel::{
+                    ChannelId, MsgId,
+                    config::{ChannelConfigOp, Keys},
+                    inscribe::{self, Inscription, InscriptionOp},
+                    withdraw::ChannelWithdrawOp,
+                },
+                sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             },
             tx::GasPrices,
         },
-        sdp::blend::ActivityProof,
+        sdp::{
+            ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId,
+            ServiceType, blend::ActivityProof,
+        },
     };
 
     fn dbg_test_vector(actual: &str, expected: &str) {
@@ -777,20 +574,20 @@ mod tests {
         assert!(remaining.is_empty());
 
         // Test UINT32
-        let data = encode_uint32(123u32);
-        let (remaining, value) = decode_uint32(&data).unwrap();
+        let data = 123u32.encode();
+        let (remaining, value) = u32::decode(&data).unwrap();
         assert_eq!(value, 123u32);
         assert!(remaining.is_empty());
 
         // Test Byte
-        let data = encode_byte(0xAB);
-        let (remaining, value) = decode_byte(&data).unwrap();
+        let data = 0xABu8.encode();
+        let (remaining, value) = u8::decode(&data).unwrap();
         assert_eq!(value, 0xAB);
         assert!(remaining.is_empty());
 
         // Test Hash32
-        let data = encode_hash32(&[0x42u8; 32]);
-        let (remaining, value) = decode_hash32(&data).unwrap();
+        let data = NomArray::<u8, _>::from(&[0x42u8; 32]).encode();
+        let (remaining, value) = NomArray::<u8, _>::decode(&data).unwrap();
         assert_eq!(value, [0x42u8; 32]);
         assert!(remaining.is_empty());
 
@@ -1453,18 +1250,14 @@ mod tests {
             pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::LeaderClaim(
-            leader_claim_op.clone(),
-        )]));
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::LeaderClaim(leader_claim_op)]));
 
         let empty_gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &empty_gas_context);
 
-        let poc_proof = Groth16LeaderClaimProof::new(
-            CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-            leader_claim_op.voucher_nullifier,
-        );
+        let poc_proof =
+            Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
 
         // Construct directly to skip proof verification (dummy proof won't verify)
         let signed_tx = SignedMantleTx {
@@ -1481,15 +1274,12 @@ mod tests {
         use crate::proofs::leader_claim_proof::Groth16LeaderClaimProof;
 
         let proof_bytes: [u8; 128] = core::array::from_fn(|i| i as u8);
-        let voucher_nf = VoucherNullifier::default();
-        let poc_proof = Groth16LeaderClaimProof::new(
-            CompressedGroth16Proof::from_bytes(&proof_bytes),
-            voucher_nf,
-        );
+        let poc_proof =
+            Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&proof_bytes));
 
         let leader_claim_op = LeaderClaimOp {
             rewards_root: RewardsRoot::default(),
-            voucher_nullifier: voucher_nf,
+            voucher_nullifier: VoucherNullifier::default(),
             pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
         let op = Op::LeaderClaim(leader_claim_op);
@@ -1503,7 +1293,6 @@ mod tests {
             decoded,
             OpProof::PoC(Groth16LeaderClaimProof::new(
                 CompressedGroth16Proof::from_bytes(&proof_bytes),
-                voucher_nf,
             ))
         );
     }
@@ -1591,34 +1380,6 @@ mod tests {
         // Try to decode - should fail with TooLarge error
         let result = InscriptionOp::decode(&malicious_input);
         assert!(result.is_err(), "Should reject oversized inscription");
-
-        // Verify it fails with the right error kind
-        match result {
-            Err(nom::Err::Error(e)) => {
-                assert_eq!(e.code, ErrorKind::TooLarge);
-            }
-            _ => panic!("Expected TooLarge error"),
-        }
-    }
-
-    #[test]
-    fn test_decode_reject_oversized_metadata() {
-        // Create a malicious input with metadata_len = MAX_METADATA_SIZE + 1
-        let mut malicious_input = Vec::new();
-
-        // DeclarationId (32 bytes)
-        malicious_input.extend_from_slice(&[0x42; 32]);
-
-        // Nonce (u64)
-        malicious_input.extend_from_slice(&42u64.to_le_bytes());
-
-        // Metadata length (u32) - exceeds MAX_METADATA_SIZE
-        let oversized_len = MAX_ENCODE_DECODE_METADATA_SIZE + 1;
-        malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
-
-        // Try to decode - should fail with TooLarge error
-        let result = decode_sdp_active(&malicious_input);
-        assert!(result.is_err(), "Should reject oversized metadata");
 
         // Verify it fails with the right error kind
         match result {
@@ -1723,7 +1484,7 @@ mod tests {
         malicious_input2.extend_from_slice(&42u64.to_le_bytes()); // Nonce
         malicious_input2.extend_from_slice(&huge_len.to_le_bytes());
 
-        let result2 = decode_sdp_active(&malicious_input2);
+        let result2 = SDPActiveOp::decode(&malicious_input2);
         assert!(result2.is_err(), "Should reject huge metadata length");
     }
 
@@ -1793,46 +1554,6 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_reject_excessive_sdp_declare() {
-        let locator: Multiaddr = "/dns4/example.com/tcp/443".parse().unwrap();
-        let sdp_declare_op = SDPDeclareOp {
-            service_type: ServiceType::BlendNetwork,
-            locators: vec![Locator::new_unchecked(locator); u8::MAX as usize + 1]
-                .try_into()
-                .unwrap(), /* excessive locator count */
-            provider_id: ProviderId(Ed25519Key::from_bytes(&[1; 32]).public_key()),
-            zk_id: ZkKey::zero().to_public_key(),
-            locked_note_id: NoteId(BigUint::from(111u64).into()),
-        };
-
-        // Should panic
-        let result = panic::catch_unwind(|| {
-            encode_sdp_declare(&sdp_declare_op);
-        });
-        assert!(result.is_err(), "Should reject excessive output count");
-    }
-
-    #[test]
-    fn test_encode_reject_excessive_sdp_active() {
-        let blend_proof = ActivityProof {
-            epoch: u32::MAX.into(),
-            signing_key: Ed25519Key::from_bytes(&[1; 32]).public_key(),
-            proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0u8; 160]).into(),
-            proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0u8; 32]).into(),
-        };
-        let sdp_active_op = SDPActiveOp {
-            declaration_id: DeclarationId([0x33; 32]),
-            nonce: u64::MAX,
-            metadata: ActivityMetadata::Blend(Box::new(blend_proof)),
-        };
-        assert_eq!(
-            sdp_active_op.metadata.to_metadata_bytes().len(),
-            MAX_ENCODE_DECODE_METADATA_SIZE as usize,
-            "`ActiveMessage` has a fixed size of 234 bytes"
-        );
-    }
-
-    #[test]
     fn test_decode_reject_oversized_locator() {
         // Create a malicious input with oversized locator
         let mut malicious_input = Vec::new();
@@ -1843,20 +1564,20 @@ mod tests {
         // LocatorCount (1 byte) - just 1 locator
         malicious_input.push(1);
 
-        let oversized_len = (LOCATOR_BYTES_SIZE_LIMIT + 1) as u16;
+        let oversized_len = (MAX_LOCATOR_BYTE_SIZE + 1) as u16;
         malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
 
         // Add the oversized data
-        malicious_input.extend_from_slice(&vec![0x01; LOCATOR_BYTES_SIZE_LIMIT + 1]);
+        malicious_input.extend_from_slice(&vec![0x01; MAX_LOCATOR_BYTE_SIZE + 1]);
 
         // ... rest of SDPDeclare fields ...
 
-        let result = decode_sdp_declare(&malicious_input);
+        let result = SDPDeclareOp::decode(&malicious_input);
         if let Err(nom::Err::Error(ref e)) = result {
             assert_eq!(
                 e.code,
-                ErrorKind::LengthValue,
-                "Should reject at `LOCATOR_BYTES_SIZE_LIMIT + 1`"
+                ErrorKind::TooLarge,
+                "Should reject at `MAX_LOCATOR_BYTE_SIZE + 1`"
             );
         } else {
             panic!("Should reject oversized locator");
@@ -1874,20 +1595,20 @@ mod tests {
         // LocatorCount (1 byte) - just 1 locator
         malicious_input.push(1);
 
-        let oversized_len = (LOCATOR_BYTES_SIZE_LIMIT) as u16;
+        let oversized_len = MAX_LOCATOR_BYTE_SIZE as u16;
         malicious_input.extend_from_slice(&oversized_len.to_le_bytes());
 
         // Add the oversized data
-        malicious_input.extend_from_slice(&vec![0x01; LOCATOR_BYTES_SIZE_LIMIT]);
+        malicious_input.extend_from_slice(&vec![0x01; MAX_LOCATOR_BYTE_SIZE]);
 
         // ... rest of SDPDeclare fields ...
 
-        let result = decode_sdp_declare(&malicious_input);
+        let result = SDPDeclareOp::decode(&malicious_input);
         if let Err(nom::Err::Error(ref e)) = result {
             assert_ne!(
                 e.code,
                 ErrorKind::LengthValue,
-                "Should not reject at `LOCATOR_BYTES_SIZE_LIMIT`"
+                "Should not reject at `MAX_LOCATOR_BYTE_SIZE`"
             );
         }
         assert!(result.is_err(), "Should reject invalid declaration");
@@ -1906,11 +1627,11 @@ mod tests {
             locked_note_id: NoteId(BigUint::from(111u64).into()),
         };
 
-        let encoded = encode_sdp_declare(&op);
-        let result = decode_sdp_declare(&encoded);
+        let encoded = op.encode();
+        let result = SDPDeclareOp::decode(&encoded);
 
         match result {
-            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::Fail),
+            Err(nom::Err::Error(e)) => assert_eq!(e.code, ErrorKind::MapRes),
             _ => panic!("Expected Verify error for invalid locator"),
         }
     }

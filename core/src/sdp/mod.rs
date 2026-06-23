@@ -11,9 +11,8 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::LowerBoundedVec;
+use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
-use nom::{IResult, Parser as _, bytes::complete::take};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
@@ -26,8 +25,6 @@ use crate::{
 
 pub type StakeThreshold = u64;
 
-const ACTIVE_METADATA_BLEND_TYPE: u8 = 0x01;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct MinStake {
     pub threshold: StakeThreshold,
@@ -36,8 +33,8 @@ pub struct MinStake {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServiceParameters {
-    /// Maximum epochs during which an activity message must be sent
-    pub inactivity_period: NumberOfEpochs,
+    /// Maximum epochs during which an activity message must be sent.
+    pub inactivity_period: InactivityPeriod,
     /// Epochs after which a declaration can be safely deleted by Garbage
     /// Collection
     pub retention_period: NumberOfEpochs,
@@ -47,29 +44,143 @@ pub struct ServiceParameters {
 
 pub type NumberOfEpochs = Epoch;
 
-// TODO: Check spec for max limit once we migrate the SDP Declare op to use the
-// `NomEncode` and `NomDecode` traits.
-pub type Locators = LowerBoundedVec<Locator, 1>;
+/// Number of epochs without an activity message before a declaration is
+/// considered inactive
+///
+/// Invariant: must be at least [`SNAPSHOT_FINALIZATION_DELAY`].
+/// Otherwise, the declaration may be excluded from the active set before
+/// the [`Declaration::active`] value (refreshed by an activity message)
+/// is reflected in the next snapshot.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "NumberOfEpochs")]
+pub struct InactivityPeriod(NumberOfEpochs);
+
+impl InactivityPeriod {
+    pub const fn new(period: NumberOfEpochs) -> Result<Self, InactivityPeriodTooSmall> {
+        if period.into_inner() < SNAPSHOT_FINALIZATION_DELAY.into_inner() {
+            Err(InactivityPeriodTooSmall { period })
+        } else {
+            Ok(Self(period))
+        }
+    }
+
+    #[must_use]
+    pub const fn into_inner(self) -> NumberOfEpochs {
+        self.0
+    }
+}
+
+impl TryFrom<u32> for InactivityPeriod {
+    type Error = InactivityPeriodTooSmall;
+
+    fn try_from(period: u32) -> Result<Self, Self::Error> {
+        Self::new(period.into())
+    }
+}
+
+impl TryFrom<NumberOfEpochs> for InactivityPeriod {
+    type Error = InactivityPeriodTooSmall;
+
+    fn try_from(period: NumberOfEpochs) -> Result<Self, Self::Error> {
+        Self::new(period)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "inactivity_period must be >= SNAPSHOT_FINALIZATION_DELAY ({SNAPSHOT_FINALIZATION_DELAY:?}); got {period:?}"
+)]
+pub struct InactivityPeriodTooSmall {
+    pub period: NumberOfEpochs,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
-pub struct Locator(Multiaddr);
+struct BoundedMultiaddr<const MAX_SIZE: usize>(Multiaddr);
+
+impl<const MAX_SIZE: usize> AsRef<Multiaddr> for BoundedMultiaddr<MAX_SIZE> {
+    fn as_ref(&self) -> &Multiaddr {
+        &self.0
+    }
+}
+
+impl<const MAX_SIZE: usize> TryFrom<Multiaddr> for BoundedMultiaddr<MAX_SIZE> {
+    type Error = String;
+
+    fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
+        if value.len() > MAX_SIZE {
+            return Err(format!(
+                "Multiaddr must not exceed {MAX_LOCATOR_BYTE_SIZE} bytes: {value}"
+            ));
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl<const MAX_SIZE: usize> TryFrom<Vec<u8>> for BoundedMultiaddr<MAX_SIZE> {
+    type Error = String;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let multiaddr =
+            Multiaddr::try_from(value).map_err(|e| format!("Invalid multiaddr: {e}"))?;
+        Self::try_from(multiaddr)
+    }
+}
+
+impl<const MAX_SIZE: usize, const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>>
+    for BoundedMultiaddr<MAX_SIZE>
+{
+    type Error = String;
+
+    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
+        const {
+            assert!(
+                MAX <= MAX_LOCATOR_BYTE_SIZE,
+                "Max size cannot be more than the maximum allowed byte size for a multiaddr."
+            );
+        }
+        Self::try_from(value.into_inner())
+    }
+}
+
+pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "Multiaddr")]
+pub struct Locator(BoundedMultiaddr<MAX_LOCATOR_BYTE_SIZE>);
 
 impl Locator {
     #[must_use]
     pub const fn new_unchecked(addr: Multiaddr) -> Self {
-        Self(addr)
+        Self(BoundedMultiaddr(addr))
     }
 
     #[must_use]
     pub fn into_inner(self) -> Multiaddr {
-        self.0
+        self.0.0
+    }
+
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.0.0.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.0.0.is_empty()
     }
 }
 
 impl AsRef<Multiaddr> for Locator {
     fn as_ref(&self) -> &Multiaddr {
-        &self.0
+        self.0.as_ref()
+    }
+}
+
+impl AsRef<[u8]> for Locator {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref().as_ref()
     }
 }
 
@@ -77,7 +188,10 @@ impl TryFrom<Multiaddr> for Locator {
     type Error = String;
 
     fn try_from(value: Multiaddr) -> Result<Self, Self::Error> {
-        for protocol in &value {
+        let bounded_multiaddr = BoundedMultiaddr::<MAX_LOCATOR_BYTE_SIZE>::try_from(value.clone())
+            .map_err(|e| format!("Invalid multiaddr: {e}"))?;
+
+        for protocol in bounded_multiaddr.as_ref() {
             match protocol {
                 Protocol::Ip4(ip) if ip.is_unspecified() => {
                     return Err(format!(
@@ -98,7 +212,31 @@ impl TryFrom<Multiaddr> for Locator {
             }
         }
 
-        Ok(Self(value))
+        Ok(Self(bounded_multiaddr))
+    }
+}
+
+impl TryFrom<Vec<u8>> for Locator {
+    type Error = String;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let multiaddr =
+            Multiaddr::try_from(value).map_err(|e| format!("Invalid multiaddr: {e}"))?;
+        Self::try_from(multiaddr)
+    }
+}
+
+impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for Locator {
+    type Error = String;
+
+    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
+        const {
+            assert!(
+                MAX <= MAX_LOCATOR_BYTE_SIZE,
+                "Max size cannot be more than the maximum allowed byte size for a locator."
+            );
+        }
+        Self::try_from(value.into_inner())
     }
 }
 
@@ -115,7 +253,7 @@ impl FromStr for Locator {
 
 impl Display for Locator {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
+        self.0.0.fmt(f)
     }
 }
 
@@ -133,10 +271,38 @@ impl AsRef<str> for ServiceType {
     }
 }
 
-impl From<ServiceType> for usize {
-    fn from(service_type: ServiceType) -> Self {
-        match service_type {
-            ServiceType::BlendNetwork => 0,
+impl TryFrom<u8> for ServiceType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::BlendNetwork),
+            _ => Err(()),
+        }
+    }
+}
+
+impl AsRef<u8> for ServiceType {
+    fn as_ref(&self) -> &u8 {
+        match self {
+            Self::BlendNetwork => &0,
+        }
+    }
+}
+
+#[cfg(test)]
+mod service_type_tests {
+    use strum::IntoEnumIterator as _;
+
+    use crate::sdp::ServiceType;
+
+    #[test]
+    // We make sure the two directions never diverge.
+    fn u8_roundtrip() {
+        for service_type in ServiceType::iter() {
+            let encoded: &u8 = service_type.as_ref();
+            let decoded = ServiceType::try_from(*encoded).expect("valid byte");
+            assert_eq!(service_type, decoded);
         }
     }
 }
@@ -189,9 +355,18 @@ pub struct Declaration {
     pub locked_note_id: NoteId,
     pub locators: Locators,
     pub zk_id: ZkPublicKey,
+    /// The epoch of the block that contained the declaration
     pub created: Epoch,
+    /// The latest epoch for which the active message was sent.
+    ///
+    /// This is used only for checking if the declaration should
+    /// be marked as inactive, not for checking if it becomes active.
+    /// Idle->Active transition must be handled by the `EpochState`
+    /// snapshot logic.
+    // TODO: Use Option<Epoch> with a better name.
     pub active: Epoch,
-    pub withdrawn: Option<Epoch>,
+    /// The epoch at which the declaration is scheduled to be withdrawn.
+    pub withdraw_at: Option<Epoch>,
     pub nonce: Nonce,
 }
 
@@ -214,7 +389,7 @@ impl Declaration {
             zk_id: declaration_msg.zk_id,
             created: epoch,
             active: epoch.strict_add(SNAPSHOT_FINALIZATION_DELAY),
-            withdrawn: None,
+            withdraw_at: None,
             nonce: 0,
         }
     }
@@ -228,6 +403,14 @@ impl Declarations {
         &self,
     ) -> impl Iterator<Item = (&ServiceType, &HashMap<DeclarationId, Declaration>)> {
         self.0.iter()
+    }
+
+    #[must_use]
+    pub fn for_service(
+        &self,
+        service_type: &ServiceType,
+    ) -> Option<&HashMap<DeclarationId, Declaration>> {
+        self.0.get(service_type)
     }
 }
 
@@ -260,6 +443,9 @@ impl TryFrom<Declarations> for Bytes {
         this.to_bytes()
     }
 }
+
+pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
+pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DeclarationMessage {
@@ -313,65 +499,14 @@ pub enum ActivityMetadata {
     Blend(Box<blend::ActivityProof>),
 }
 
-impl ActivityMetadata {
-    #[must_use]
-    pub fn to_metadata_bytes(&self) -> Vec<u8> {
-        match self {
-            Self::Blend(proof) => proof.to_metadata_bytes(),
-        }
-    }
-
-    pub fn from_metadata_bytes(bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
-        if bytes.is_empty() {
-            return Err("empty metadata bytes".to_owned().into());
-        }
-
-        // Read metadata type byte to determine variant
-        let metadata_type = bytes[0];
-
-        match metadata_type {
-            ACTIVE_METADATA_BLEND_TYPE => {
-                let proof_opt = blend::ActivityProof::from_metadata_bytes(bytes)?;
-                Ok(Self::Blend(Box::new(proof_opt)))
-            }
-            _ => Err(format!("Unknown metadata type: {metadata_type:#x}").into()),
-        }
-    }
-}
-
-fn parse_epoch(input: &[u8]) -> IResult<&[u8], Epoch> {
-    let (input, bytes) = take(size_of::<Epoch>()).parse(input)?;
-    let epoch_bytes: [u8; 4] = bytes
-        .try_into()
-        .map_err(|_| nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Fail)))?;
-    Ok((input, u32::from_le_bytes(epoch_bytes).into()))
-}
-
 #[cfg(test)]
 mod tests {
+    use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{AdditiveGroup as _, Fr};
-    use lb_key_management_system_keys::keys::Ed25519Key;
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkPublicKey};
+    use multiaddr::Multiaddr;
 
-    use super::*;
-
-    #[test]
-    fn test_activity_metadata_empty_bytes() {
-        let result = ActivityMetadata::from_metadata_bytes(&[]);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_activity_metadata_unknown_type() {
-        let bytes = vec![0xFF]; // Unknown type
-        let result = ActivityMetadata::from_metadata_bytes(&bytes);
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("Unknown metadata type")
-        );
-    }
+    use crate::sdp::{Declaration, DeclarationMessage, Locator, Locators, ServiceType};
 
     #[test]
     fn locator_rejects_multiaddr_with_peer_id() {
@@ -456,7 +591,7 @@ mod tests {
         assert_eq!(declaration.zk_id, msg.zk_id);
         assert_eq!(declaration.created, Epoch::new(10));
         assert_eq!(declaration.active, Epoch::new(12)); // created + SNAPSHOT_FINALIZATION_DELAY
-        assert_eq!(declaration.withdrawn, None);
+        assert_eq!(declaration.withdraw_at, None);
         assert_eq!(declaration.nonce, 0);
     }
 }

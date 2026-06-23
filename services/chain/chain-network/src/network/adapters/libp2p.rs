@@ -1,6 +1,6 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData, time::Instant};
+use std::{collections::HashSet, fmt::Debug, hash::Hash, iter, marker::PhantomData, time::Instant};
 
-use futures::{FutureExt as _, TryStreamExt as _, future::select_ok};
+use futures::{FutureExt as _, TryStreamExt as _, future::select_ok, stream};
 use lb_chain_service_common::NetworkMessage;
 use lb_core::{
     block::{Block, Proposal},
@@ -272,6 +272,55 @@ where
             .and_then(|response| response.map_err(Into::into));
 
         metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
+    }
+
+    async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
+        use futures::stream::StreamExt as FuturesStreamExt;
+        let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
+            Ok(peers) => peers,
+            Err(e) => {
+                tracing::warn!("tip poll: failed to fetch connected peers: {e}");
+                return Box::new(stream::empty::<GetTipResponse>());
+            }
+        };
+
+        let sampled: Vec<PeerId> = connected_peers
+            .into_iter()
+            .choose_multiple(&mut thread_rng(), max_peers);
+
+        if sampled.is_empty() {
+            debug!("tip poll: no connected peers to sample");
+            return Box::new(stream::empty::<GetTipResponse>());
+        }
+        let result_stream = FuturesStreamExt::filter_map(
+            stream::iter(
+                sampled
+                    .into_iter()
+                    .zip(iter::repeat(self.network_relay.clone())),
+            ),
+            async |(peer, relay)| {
+                let (reply_sender, receiver) = oneshot::channel();
+                if let Err((e, _)) = relay
+                    .send(NetworkMsg::Process(Command::ChainSync(
+                        ChainSyncCommand::RequestTip { peer, reply_sender },
+                    )))
+                    .await
+                {
+                    debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                    None
+                } else {
+                    match receiver.await.ok() {
+                        None => None,
+                        Some(Err(e)) => {
+                            debug!("tip poll: failed to send GetTip to peer {peer:?}: {e}");
+                            None
+                        }
+                        Some(Ok(tip)) => Some(tip),
+                    }
+                }
+            },
+        );
+        Box::new(Box::pin(result_stream))
     }
 
     async fn request_blocks_from_peer(

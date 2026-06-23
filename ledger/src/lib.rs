@@ -6,7 +6,7 @@ mod config;
 pub mod cryptarchia;
 pub mod mantle;
 
-use std::{collections::HashMap, hash::Hash, num::NonZeroU128};
+use std::{hash::Hash, num::NonZeroU128};
 
 pub use config::Config;
 use cryptarchia::LedgerState as CryptarchiaLedger;
@@ -32,6 +32,7 @@ use lb_core::{
 use lb_cryptarchia_engine::Slot;
 use lb_groth16::{AdditiveGroup as _, Fr};
 use mantle::LedgerState as MantleLedger;
+use rpds::HashTrieMapSync;
 use thiserror::Error;
 
 use crate::mantle::helpers::MantleOperationVerificationHelper;
@@ -117,7 +118,7 @@ pub enum LedgerError<Id> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ledger<Id: Eq + Hash> {
-    states: HashMap<Id, LedgerState>,
+    states: HashTrieMapSync<Id, LedgerState>,
     config: Config,
 }
 
@@ -127,7 +128,7 @@ where
 {
     pub fn new(id: Id, state: LedgerState, config: Config) -> Self {
         Self {
-            states: std::iter::once((id, state)).collect(),
+            states: HashTrieMapSync::new_sync().insert(id, state),
             config,
         }
     }
@@ -164,7 +165,7 @@ where
 
     /// Commits a new [`LedgerState`] created by [`Self::prepare_update`].
     pub fn commit_update(&mut self, id: Id, state: LedgerState) {
-        self.states.insert(id, state);
+        self.states.insert_mut(id, state);
     }
 
     pub fn state(&self, id: &Id) -> Option<&LedgerState> {
@@ -189,16 +190,7 @@ where
     ///
     /// `true` if the state was successfully removed, `false` otherwise.
     pub fn prune_state_at(&mut self, block: &Id) -> bool {
-        self.states.remove(block).is_some()
-    }
-
-    /// Shrinks the map of ledger states to free up memory that has been pruned
-    /// so far.
-    ///
-    /// This shouldn't be called frequently since the entire map is
-    /// reconstructed.
-    pub fn shrink(&mut self) {
-        self.states.shrink_to_fit();
+        self.states.remove_mut(block)
     }
 }
 
@@ -431,7 +423,7 @@ impl LedgerState {
         let mantle_ledger = MantleLedger::new(config, cryptarchia_ledger.epoch_state());
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
         // ledger, which only exists after the mantle ledger is built.
-        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(mantle_ledger.sdp.clone());
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Self {
             block_number: 0,
             cryptarchia_ledger,
@@ -453,7 +445,7 @@ impl LedgerState {
         )?;
         // Seed the genesis epoch-state membership snapshots from the genesis SDP
         // ledger (which carries the genesis declarations applied above).
-        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(mantle_ledger.sdp.clone());
+        let cryptarchia_ledger = cryptarchia_ledger.with_genesis_sdp(&mantle_ledger.sdp, config);
         Ok((
             Self {
                 block_number: 0,
@@ -633,6 +625,7 @@ impl LedgerState {
                         .execute(WithdrawExecutionContext {
                             channels: channels.clone(),
                             utxos: utxos.clone(),
+                            tx_hash,
                         })
                         .map_err(mantle::Error::Channel)?;
                     self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
@@ -691,6 +684,7 @@ impl LedgerState {
                             reward_amount: self.mantle_ledger.leaders.reward_amount(),
                             claimable_rewards: self.mantle_ledger.leaders.claimable_rewards(),
                             utxos: self.cryptarchia_ledger.latest_utxos().clone(),
+                            tx_hash,
                         })
                         .map_err(mantle::Error::LeaderClaim)?;
                     self.mantle_ledger
@@ -733,10 +727,10 @@ mod tests {
     use lb_core::{
         events::{Event, EventPayload},
         mantle::{
-            MantleTx, Note, SignedMantleTx, Transaction as _,
+            MantleTx, Note, SignedMantleTx, Transaction as _, TxHash,
             encoding::Ops,
             gas::MainnetGasConstants,
-            ledger::{Inputs, Outputs},
+            ledger::{Inputs, Outputs, Utxos},
             ops::{
                 OpId as _,
                 channel::{
@@ -746,16 +740,30 @@ mod tests {
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
                 },
+                leader_claim::{LeaderClaimError, LeaderClaimOp},
+                sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
         },
-        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+        proofs::{
+            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+            leader_claim_proof::Groth16LeaderClaimProof,
+        },
+        sdp::{ActivityMetadata, DeclarationId, Nonce, blend::ActivityProof},
     };
+    use lb_cryptarchia_engine::Epoch;
+    use lb_groth16::{CompressedGroth16Proof, Field as _};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519PublicKey, ZkKey, ZkPublicKey};
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::cryptarchia::tests::utxo_with_sk;
+    use crate::{
+        cryptarchia::tests::{
+            apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot,
+            ledger, update_ledger, utxo_with_sk,
+        },
+        mantle::leader::LeaderState,
+    };
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
         create_test_keys_with_seed(0)
@@ -785,16 +793,31 @@ mod tests {
         (ledger, [0; 32], utxo)
     }
 
-    /// The genesis epoch-state membership snapshots must be seeded from the
-    /// genesis SDP ledger, not left as the empty `SdpLedger::new` placeholder
-    /// the cryptarchia genesis constructor initializes them with.
+    /// The genesis epoch-state active-declarations snapshots must be seeded
+    /// from the genesis SDP ledger, not left as the empty default the
+    /// cryptarchia genesis constructor initializes them with.
     #[test]
     fn genesis_seeds_epoch_state_sdp_from_mantle() {
         let config = config();
         let ledger = LedgerState::from_utxos([utxo()], &config);
 
-        assert_eq!(ledger.epoch_state().sdp, ledger.mantle_ledger.sdp);
-        assert_eq!(ledger.next_epoch_state().sdp, ledger.mantle_ledger.sdp);
+        let expected_for_epoch_0 = ledger
+            .mantle_ledger
+            .sdp
+            .active_declarations(0.into(), &config.sdp_config.service_params);
+        let expected_for_epoch_1 = ledger
+            .mantle_ledger
+            .sdp
+            .active_declarations(1.into(), &config.sdp_config.service_params);
+
+        assert_eq!(
+            *ledger.epoch_state().active_declarations,
+            expected_for_epoch_0
+        );
+        assert_eq!(
+            *ledger.next_epoch_state().active_declarations,
+            expected_for_epoch_1
+        );
     }
 
     fn create_test_keys_with_seed(seed: u8) -> (Ed25519Key, Ed25519PublicKey) {
@@ -870,6 +893,46 @@ mod tests {
             )
             .unwrap()
             .0
+    }
+
+    #[expect(clippy::too_many_arguments, reason = "test fn")]
+    fn apply_and_add_utxo_and_activity(
+        ledger: &mut Ledger<HeaderId>,
+        parent: HeaderId,
+        slot: impl Into<Slot>,
+        utxo_proof: Utxo,
+        utxo_add: Utxo,
+        declaration_id: DeclarationId,
+        zk_key: ZkKey,
+        nonce: Nonce,
+    ) -> HeaderId {
+        use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+
+        let id = apply_and_add_utxo(ledger, parent, slot, utxo_proof, utxo_add);
+
+        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let active_op = SDPActiveOp {
+            declaration_id,
+            nonce,
+            metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
+                // TODO: Create real proofs once the blend rewards module is enabled
+                epoch: 0.into(),
+                signing_key: signing_key.public_key(),
+                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]).into(),
+                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([1; _]).into(),
+            })),
+        };
+        let tx_hash = TxHash::from([1u8; 32]);
+        let zk_sig = ZkKey::multi_sign(&[zk_key], &tx_hash.to_fr()).unwrap();
+        let config = ledger.config().clone();
+        let block_ledger = ledger.states.get_mut(&id).unwrap();
+        block_ledger.mantle_ledger = block_ledger
+            .mantle_ledger
+            .clone()
+            .try_apply_sdp_active(&active_op, &zk_sig, tx_hash, &config)
+            .unwrap()
+            .0;
+        id
     }
 
     #[test]
@@ -1061,24 +1124,32 @@ mod tests {
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);
-        let Event::Tx {
-            tx_hash,
+        let Some(Event::Tx {
+            tx_hash: event_tx_hash,
             op_id,
-            payload,
-        } = events.iter().next().unwrap().clone()
+            payload:
+                EventPayload::Deposit {
+                    channel_id: event_channel_id,
+                    amount,
+                    metadata,
+                },
+        }) = events.iter().find(|event| {
+            matches!(
+                event,
+                Event::Tx {
+                    payload: EventPayload::Deposit { .. },
+                    ..
+                }
+            )
+        })
         else {
-            panic!("expected a Tx event")
+            panic!("events should include deposit event")
         };
-        assert_eq!(tx_hash, tx.hash());
-        assert_eq!(op_id, deposit.op_id());
-        let EventPayload::Deposit {
-            channel_id,
-            amount,
-            metadata,
-        } = payload;
-        assert_eq!(channel_id, deposit.channel_id);
-        assert_eq!(amount, utxo.note.value);
-        assert_eq!(metadata, deposit.metadata);
+        assert_eq!(*event_tx_hash, tx.hash());
+        assert_eq!(*op_id, deposit.op_id());
+        assert_eq!(*event_channel_id, deposit.channel_id);
+        assert_eq!(*amount, utxo.note.value);
+        assert_eq!(*metadata, deposit.metadata);
     }
 
     #[test]
@@ -1169,7 +1240,28 @@ mod tests {
             .expect("withdraw should have at least one utxo")
             .id();
         assert!(new_state.latest_utxos().contains(&withdraw_utxo));
-        assert!(events.is_empty());
+        assert_eq!(events.len(), 1);
+        let Event::Tx {
+            tx_hash,
+            op_id,
+            payload,
+        } = events.iter().next().unwrap().clone()
+        else {
+            panic!("expected a Tx event")
+        };
+        assert_eq!(tx_hash, withdraw_tx_hash);
+        assert_eq!(op_id, withdraw.op_id());
+        let EventPayload::Withdraw {
+            channel_id,
+            amount,
+            utxos,
+        } = payload
+        else {
+            panic!("expected Withdraw event")
+        };
+        assert_eq!(channel_id, withdraw.channel_id);
+        assert_eq!(amount, withdraw_note.value);
+        assert_eq!(utxos, withdraw.outputs.utxos(&withdraw).collect::<Vec<_>>());
     }
 
     #[test]
@@ -1489,6 +1581,87 @@ mod tests {
         );
     }
 
+    /// Tests the snapshot-finalization-delay scenario behind the
+    /// `inactivity_period >= SNAPSHOT_FINALIZATION_DELAY` invariant:
+    ///
+    ///   - A declaration is created at epoch 3 — `active = created +
+    ///     SNAPSHOT_FINALIZATION_DELAY = 5`.
+    ///   - An activity message accepted at epoch 6 refreshes the live SDP's
+    ///     `active` to 6.
+    ///   - But the snapshot for epoch 7 was built at the 5→6 transition, before
+    ///     the activity message landed. The snapshot sees the decl with
+    ///     `active=5`, not 6.
+    ///
+    /// With `inactivity_period = SNAPSHOT_FINALIZATION_DELAY = 2`, the
+    /// filter at epoch 7 is `5 + 2 ≥ 7` → INCLUDED. The decl survives the
+    /// finalization-delay gap.
+    #[test]
+    fn snapshot_includes_decl_when_active_refresh_lags_finalization() {
+        let leader_utxo = utxo();
+        let (sdp_utxo_key, sdp_utxo) = utxo_with_sk();
+        let new_utxo_1 = utxo();
+        let new_utxo_2 = utxo();
+        let config = config();
+        let epoch_length = config.epoch_length();
+        let (mut ledger, genesis) = ledger(&[leader_utxo, sdp_utxo], config);
+
+        // Declare at the first slot of epoch 3 — `active = 3 + 2 = 5`.
+        let (h_3, declare, zk_key) = apply_and_add_utxo_and_declaration(
+            &mut ledger,
+            genesis,
+            3 * epoch_length,
+            leader_utxo,
+            new_utxo_1,
+            sdp_utxo,
+            sdp_utxo_key,
+        );
+
+        // Advance to the first slot of epoch 6 and submit an Active message.
+        // This sets the live SDP's `active` to 6.
+        let h_6 = apply_and_add_utxo_and_activity(
+            &mut ledger,
+            h_3,
+            6 * epoch_length,
+            leader_utxo,
+            new_utxo_2,
+            declare.id(),
+            zk_key,
+            1,
+        );
+
+        // Advance to epoch 7. The snapshot for epoch 7 was built at the 5→6
+        // transition, before the epoch-6 Active was applied.
+        let h_7 = update_ledger(&mut ledger, h_6, 7 * epoch_length, leader_utxo).unwrap();
+        assert_eq!(
+            ledger.states[&h_7].cryptarchia_ledger.epoch_state.epoch,
+            Epoch::new(7)
+        );
+        let decl = declaration_in_snapshot(&ledger, &h_7, &declare.id()).expect(
+            "decl must be in the epoch-7 because inactivity_period >= SNAPSHOT_FINALIZATION_DELAY",
+        );
+        assert_eq!(
+            decl.active,
+            Epoch::new(5),
+            "decl must have active=5 because the snapshot was taken at the end of epoch 5 before the activity message was accepted"
+        );
+
+        // Advance to epoch 8. The snapshot for epoch 8 was built at the 6→7
+        // transition, after the epoch-6 Active was applied.
+        let h_8 = update_ledger(&mut ledger, h_7, 8 * epoch_length, leader_utxo).unwrap();
+        assert_eq!(
+            ledger.states[&h_8].cryptarchia_ledger.epoch_state.epoch,
+            Epoch::new(8)
+        );
+        let decl = declaration_in_snapshot(&ledger, &h_8, &declare.id()).expect(
+            "decl must be in the epoch-7 because inactivity_period >= SNAPSHOT_FINALIZATION_DELAY",
+        );
+        assert_eq!(
+            decl.active,
+            Epoch::new(6),
+            "decl must have active=6 because the snapshot was taken at the end of epoch 6 after the activity message was accepted"
+        );
+    }
+
     // TODO: Update this test to work with the new SDP API
     // This test needs to be rewritten to use the new SDP ledger API which no longer
     // exposes get_declaration() or uses declaration_id() methods.
@@ -1601,5 +1774,100 @@ mod tests {
                 .get_pending_rewards()
         );
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn test_leader_claim_operation() {
+        let leaders = LeaderState::new();
+        // Add 3 vouchers (blocks) at epoch 1
+        let leaders = leaders.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
+        let leaders = leaders.try_apply_header(1.into(), Fr::ONE.into()).unwrap();
+        let leaders = leaders
+            .try_apply_header(1.into(), Fr::from(2u64).into())
+            .unwrap();
+        // Advance to epoch 2 by adding a voucher (block)
+        let mut leaders = leaders
+            .try_apply_header(2.into(), Fr::from(3u64).into())
+            .unwrap();
+        // Set rewards to 300 which can be distributed to the 3 vouchers
+        // collected so far (during epoch 1).
+        leaders.update_rewards(300);
+
+        // For each of the 3 vouchers, claim the reward.
+        for nf in [Fr::ZERO, Fr::ONE, Fr::from(2u64)] {
+            assert_eq!(leaders.reward_amount(), 100);
+            let op = LeaderClaimOp {
+                rewards_root: leaders.vouchers_snapshot_root(),
+                voucher_nullifier: nf.into(),
+                pk: ZkPublicKey::zero(),
+            };
+            // Skip `op.validate` in this test to avoid having to generate a valid proof
+            let (result, _events) = op
+                .execute(LeaderClaimExecutionContext {
+                    nullifiers: leaders.nullifiers_cloned(),
+                    reward_amount: leaders.reward_amount(),
+                    claimable_rewards: leaders.claimable_rewards(),
+                    utxos: Utxos::new(),
+                    tx_hash: TxHash::from([0u8; 32]),
+                })
+                .unwrap();
+            leaders.update_nullifiers(result.nullifiers);
+            leaders.update_rewards(result.claimable_rewards);
+
+            assert_eq!(result.utxos.size(), 1);
+            let (_, (utxo, _)) = result.utxos.utxos().iter().next().unwrap();
+            assert_eq!(utxo.note.value, 100);
+        }
+
+        // All rewards have been claimed.
+        assert_eq!(leaders.claimable_rewards(), 0);
+    }
+
+    #[test]
+    fn test_duplicate_leader_claim_is_rejected() {
+        let leaders = LeaderState::new();
+        // Add a voucher (block) at epoch 1
+        let leaders = leaders.try_apply_header(1.into(), Fr::ZERO.into()).unwrap();
+        // Advance to epoch 2 by adding a voucher (block)
+        let mut leaders = leaders.try_apply_header(2.into(), Fr::ONE.into()).unwrap();
+        // Set rewards to 100 which can be distributed to the vouchers
+        // collected so far (during epoch 1).
+        leaders.update_rewards(100);
+
+        // Claim the reward for the 1st voucher.
+        let op = LeaderClaimOp {
+            rewards_root: leaders.vouchers_snapshot_root(),
+            voucher_nullifier: Fr::ZERO.into(), // nf of the 1st voucher
+            pk: ZkPublicKey::zero(),
+        };
+        // Skip `op.validate` in this test to avoid having to generate a valid proof
+        let (result, _events) = op
+            .execute(LeaderClaimExecutionContext {
+                nullifiers: leaders.nullifiers_cloned(),
+                reward_amount: leaders.reward_amount(),
+                claimable_rewards: leaders.claimable_rewards(),
+                utxos: Utxos::new(),
+                tx_hash: TxHash::from([0u8; 32]),
+            })
+            .unwrap();
+        leaders.update_nullifiers(result.nullifiers);
+        leaders.update_rewards(result.claimable_rewards);
+        assert_eq!(result.utxos.size(), 1);
+        let (_, (utxo, _)) = result.utxos.utxos().iter().next().unwrap();
+        assert_eq!(utxo.note.value, 100);
+
+        // Try to claim the reward using the same nullifier.
+        let err = op
+            .validate(&LeaderClaimValidationContext {
+                nullifiers: leaders.nullifiers(),
+                claimable_vouchers_root: &leaders.vouchers_snapshot_root(),
+                // Use a dummy proof since duplication is detected before proof verification
+                proof_of_claim: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
+                    &[0u8; 128],
+                )),
+                tx_hash: &TxHash::from([0u8; 32]),
+            })
+            .unwrap_err();
+        assert_eq!(err, LeaderClaimError::DuplicatedVoucherNullifier);
     }
 }

@@ -1,6 +1,6 @@
 mod utils;
 
-use futures::StreamExt as _;
+use futures::{StreamExt as _, stream::repeat};
 use lb_blend::{
     message::reward::{ActivityProof, BlendingToken, EpochBlendingTokenCollector},
     proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
@@ -10,11 +10,8 @@ use lb_blend::{
     },
 };
 use lb_chain_service::Epoch;
-use lb_core::{
-    codec::SerializeOp as _, crypto::ZkHash, proofs::leader_proof::LeaderPublic,
-    sdp::ActivityMetadata,
-};
-use lb_groth16::{AdditiveGroup as _, Fr};
+use lb_core::{codec::SerializeOp as _, crypto::ZkHash, sdp::ActivityMetadata};
+use lb_groth16::AdditiveGroup as _;
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_poq::CORE_MERKLE_TREE_HEIGHT;
 use lb_utils::blake_rng::BlakeRng;
@@ -609,7 +606,7 @@ async fn test_handle_epoch_event() {
         ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
-        None,
+        &mut None,
     )
     .await;
     let HandleEpochEventOutput::Transitioning {
@@ -652,7 +649,7 @@ async fn test_handle_epoch_event() {
         new_recovery_checkpoint,
         &mut backend,
         &sdp_relay,
-        None,
+        &mut None,
     )
     .await;
     let HandleEpochEventOutput::TransitionCompleted {
@@ -700,7 +697,7 @@ async fn test_handle_epoch_event() {
         new_recovery_checkpoint,
         &mut backend,
         &sdp_relay,
-        None,
+        &mut None,
     )
     .await;
     let HandleEpochEventOutput::Retiring {
@@ -782,7 +779,7 @@ async fn test_handle_epoch_event_membership_change_rewires_backend_and_generator
         ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
-        None,
+        &mut None,
     )
     .await;
 
@@ -852,8 +849,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
 
     let secret_info = PolEpochInfo {
         epoch: secret_epoch,
-        poq_public_inputs: LeaderPublic::new(Fr::ZERO, Fr::ZERO, Fr::ZERO, 0, Fr::ZERO, Fr::ZERO),
-        poq_private_inputs: dummy_pol_private_inputs(),
+        winning_pol_info_stream: Box::pin(repeat(dummy_pol_private_inputs())),
     };
 
     // Isolate the `set_epoch_private` calls made by `handle_epoch_event`.
@@ -876,7 +872,7 @@ async fn transition_to_new_epoch_with_secret(secret_epoch: Epoch) -> Vec<Epoch> 
         ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
-        Some(&secret_info),
+        &mut Some(secret_info),
     )
     .await;
     recorded_set_epoch_private_calls()
@@ -956,7 +952,7 @@ async fn test_handle_epoch_event_empty_epoch_retires() {
         ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
-        None,
+        &mut None,
     )
     .await;
     let HandleEpochEventOutput::Retiring {
@@ -1029,7 +1025,7 @@ async fn test_handle_epoch_event_non_empty_without_local_core_path_retires() {
         ServiceState::with_epoch(epoch, token_collector, None, state_updater.clone()).unwrap(),
         &mut backend,
         &sdp_relay,
-        None,
+        &mut None,
     )
     .await;
 

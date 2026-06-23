@@ -4,7 +4,7 @@ pub mod keys;
 pub mod participate;
 
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
 };
 
@@ -19,9 +19,11 @@ use crate::{
         keys::{AddKeyArgs, GenerateKeyArgs, RemoveKeyArgs},
     },
     config::{
-        ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, DeploymentType,
-        LogArgs, NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, update_api, update_blend,
-        update_cryptarchia, update_network, update_sdp, update_state, update_tracing,
+        ApiArgs, BlendArgs, CryptarchiaArgs, DeploymentArgs, DeploymentSettings, LogArgs,
+        NetworkArgs, RunConfig, SdpArgs, StateArgs, UserConfig, api::serde::AxumBackendSettings,
+        blend::serde::core::BackendConfig as BlendCoreConfig, network::serde::SwarmConfig,
+        update_api, update_blend, update_cryptarchia, update_network, update_sdp, update_state,
+        update_tracing,
     },
 };
 
@@ -93,20 +95,20 @@ pub struct CliArgs {
 
 impl CliArgs {
     #[must_use]
-    pub fn config_path(&self) -> &Path {
+    pub fn user_config_path(&self) -> &Path {
         self.config
             .as_deref()
             .expect("config path is required when not using a subcommand")
     }
 
     #[must_use]
-    pub const fn dry_run(&self) -> bool {
-        self.check_config_only
+    pub const fn deployment_config_path(&self) -> &Option<PathBuf> {
+        &self.deployment.custom_deployment_path
     }
 
     #[must_use]
-    pub const fn deployment_type(&self) -> &DeploymentType {
-        self.deployment.deployment_type()
+    pub const fn dry_run(&self) -> bool {
+        self.check_config_only
     }
 }
 
@@ -223,11 +225,8 @@ impl From<EmbeddedInitArgs> for InitArgs {
             .clone_from(&args.external_address);
         init_args.network.initial_peers = Some(args.initial_peers.clone());
 
-        init_args.blend.blend_addr = Some(
-            format!("/ip4/0.0.0.0/tcp/{}", args.blend_port)
-                .parse()
-                .expect("Valid multiaddr structure"),
-        );
+        init_args.blend.blend_addr =
+            Some(BlendCoreConfig::default_listening_address(args.blend_port));
 
         init_args.cryptarchia.ibd = args.ibd;
         init_args.api.addr = Some(args.http_addr);
@@ -242,9 +241,11 @@ impl Default for EmbeddedInitArgs {
         Self {
             initial_peers: Vec::new(),
             output: PathBuf::from("user_config.yaml"),
-            net_port: 3000,
-            blend_port: 3400,
-            http_addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3000),
+            net_port: SwarmConfig::default_port(),
+            blend_port: BlendCoreConfig::default_port(),
+            http_addr: AxumBackendSettings::default_listening_address(
+                AxumBackendSettings::default_port(),
+            ),
             external_address: None,
             state_path: None,
             ibd: false,
@@ -288,6 +289,21 @@ pub struct UpdateArgs {
 
     #[clap(flatten)]
     state: StateArgs,
+}
+
+impl UpdateArgs {
+    /// Creates arguments programmatically (e.g. from the c-bindings crate),
+    /// leaving all config overrides at their defaults. `auto_approve` skips
+    /// interactive prompts.
+    #[must_use]
+    pub fn new(user_config: PathBuf, keystore: PathBuf, auto_approve: bool) -> Self {
+        Self {
+            user_config,
+            keystore,
+            yes: auto_approve,
+            ..Default::default()
+        }
+    }
 }
 
 // Custom default implementation to require keystore path initialized from clap.
@@ -338,6 +354,25 @@ pub struct MigrateArgs {
 
     #[clap(flatten)]
     state: StateArgs,
+}
+
+impl MigrateArgs {
+    /// Creates arguments programmatically (e.g. from the c-bindings crate),
+    /// leaving all config overrides at their defaults.
+    #[must_use]
+    pub fn new(output: PathBuf, keystore: PathBuf) -> Self {
+        Self {
+            output,
+            keystore,
+            log: LogArgs::default(),
+            network: NetworkArgs::default(),
+            blend: BlendArgs::default(),
+            cryptarchia: CryptarchiaArgs::default(),
+            sdp: SdpArgs::default(),
+            api: ApiArgs::default(),
+            state: StateArgs::default(),
+        }
+    }
 }
 
 impl From<MigrateArgs> for InitArgs {
@@ -408,14 +443,9 @@ pub fn build_run_config(mut user_config: UserConfig, args: CliArgs) -> Result<Ru
     update_api(&mut user_config.api, api_args);
     update_state(&mut user_config.state, state_args);
 
-    let deployment_settings = match deployment_args.deployment_type() {
-        DeploymentType::WellKnown(well_known_deployment) => (*well_known_deployment).into(),
-        DeploymentType::Custom(custom_deployment_config_path) => {
-            deserialize_value_at_path::<DeploymentSettings>(
-                custom_deployment_config_path,
-                OnUnknownKeys::Fail,
-            )?
-        }
+    let deployment_settings = match deployment_args.custom_deployment_path {
+        None => DeploymentSettings::default(),
+        Some(path) => deserialize_value_at_path::<DeploymentSettings>(&path, OnUnknownKeys::Fail)?,
     };
 
     Ok(RunConfig {

@@ -15,7 +15,7 @@ use lb_core::{
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp},
     },
 };
-use lb_node::config::deployment::{DeploymentSettings, WellKnownDeployment};
+use lb_node::config::deployment::DeploymentSettings;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_from_reader};
 use logos_blockchain_tools::{
     genesis::{
@@ -83,9 +83,9 @@ pub struct CeremonyArgs {
     #[arg(long, value_name = "FILE")]
     pub faucet: PathBuf,
 
-    /// The base deployment config (e.g., 'devnet' or path/to/config.yaml).
-    #[arg(long, value_name = "NAME_OR_PATH")]
-    pub deployment: String,
+    /// The path to a custom deployment config.
+    #[arg(long = "deployment", value_name = "FILE")]
+    pub custom_deployment_path: Option<PathBuf>,
 
     /// Optional overrides for the deployment config.
     #[arg(long = "override", value_name = "KEY=VALUE|FILE", num_args = 1)]
@@ -101,10 +101,9 @@ pub struct CeremonyArgs {
 
 #[derive(Parser, Debug)]
 struct ConfigArgs {
-    /// Base config source: a well-known deployment name (e.g. 'devnet') or a
-    /// path to an existing YAML deployment config file.
-    #[arg(long, value_name = "NAME_OR_PATH")]
-    deployment: String,
+    /// The path to a custom deployment config.
+    #[arg(long = "deployment", value_name = "FILE")]
+    pub custom_deployment_path: Option<PathBuf>,
 
     /// Override to apply on top of the base config. Each occurrence is either
     /// a dot-notation key=value pair (e.g. `cryptarchia.security_param=60`)
@@ -240,7 +239,7 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
         .context("Failed to calculate distribution during ceremony")?;
     let notes: Vec<Note> = transfer_op.notes().collect();
 
-    let mut config_value = load_base_config(&args.deployment)?;
+    let mut config_value = load_base_config(args.custom_deployment_path.as_ref())?;
     for raw in &args.overrides {
         let patch = resolve_override(raw)?;
         config_value = overwrite_yaml(config_value, patch);
@@ -271,7 +270,7 @@ fn run_ceremony(args: &CeremonyArgs) -> Result<()> {
 // ─────────────────────────────────────────────────────
 
 fn run_config(args: &ConfigArgs) -> Result<()> {
-    let mut config = load_base_config(&args.deployment)?;
+    let mut config = load_base_config(args.custom_deployment_path.as_ref())?;
 
     for raw in &args.overrides {
         let patch = resolve_override(raw)?;
@@ -285,15 +284,14 @@ fn run_config(args: &ConfigArgs) -> Result<()> {
 
 /// Load a deployment config as a raw YAML value.
 ///
-/// `source` is first matched against the known well-known deployment names; if
-/// it does not match, it is treated as a file path.
-fn load_base_config(source: &str) -> Result<Value> {
-    if let Ok(well_known) = source.parse::<WellKnownDeployment>() {
-        let settings = DeploymentSettings::from(well_known);
-        return struct_to_yaml_value(&settings);
-    }
+/// If `path` is `None`, returns the default config as a YAML value. Otherwise,
+/// loads the YAML file at `path` and returns it as a `Value`.
+fn load_base_config(path: Option<&PathBuf>) -> Result<Value> {
+    let Some(path) = path else {
+        let default_config = DeploymentSettings::default();
+        return struct_to_yaml_value(&default_config);
+    };
 
-    let path = Path::new(source);
     let content = fs::read_to_string(path)
         .with_context(|| format!("cannot read config file '{}'", path.display()))?;
     serde_yml::from_str(&content)

@@ -1,18 +1,14 @@
-use core::{
-    fmt::{Debug, Display},
-    future::ready,
-};
+use core::fmt::{Debug, Display};
 
 use async_trait::async_trait;
 use futures::{Stream, StreamExt as _};
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_blend_service::epoch_info::{PolEpochInfo, PolInfoProvider as PolInfoProviderTrait};
-use lb_chain_leader_service::LeaderMsg;
+use lb_chain_leader_service::{LeaderMsg, WinningPolEpochSlots};
 use lb_pol::{PolChainInputsData, PolWalletInputsData, PolWitnessInputsData};
 use lb_services_utils::wait_until_services_are_ready;
 use overwatch::{overwatch::OverwatchHandle, services::AsServiceId};
 use tokio::sync::oneshot::channel;
-use tokio_stream::wrappers::WatchStream;
 
 use crate::CryptarchiaLeaderService;
 
@@ -28,8 +24,10 @@ where
 {
     type Stream = Box<dyn Stream<Item = PolEpochInfo> + Send + Unpin>;
 
-    /// Subscribes to a stream of potential winning `PoL` epoch slots, and
-    /// filters out `None` values (initial state) and already processed epochs.
+    /// Subscribes to the chain-leader's per-epoch winning-slot handoffs (one
+    /// per epoch) and maps each into a [`PolEpochInfo`], converting that
+    /// epoch's stream of winning leadership inputs into the Blend
+    /// leadership-quota inputs.
     async fn subscribe(
         overwatch_handle: &OverwatchHandle<RuntimeServiceId>,
     ) -> Option<Self::Stream> {
@@ -51,55 +49,45 @@ where
             .send(LeaderMsg::PotentialWinningPolEpochSlotStreamSubscribe { sender })
             .await
             .ok()?;
-        let pol_winning_slot_receiver = receiver.await.ok()?;
-        // Return a `WatchStream` that filters out `None`s (i.e., at the very beginning
-        // of chain leader start), and any leader info that belongs to an already
-        // processed epoch.
-        Some(Box::new(
-            WatchStream::new(pol_winning_slot_receiver)
-                .filter_map(ready)
-                .scan(
-                    None,
-                    |processed_epoch, (leader_private, leader_public, epoch)| {
-                        let should_yield_new_epoch =
-                            processed_epoch.is_none_or(|processed_epoch| processed_epoch < epoch);
-                        if !should_yield_new_epoch {
-                            return ready(Some(None));
-                        }
+        let winning_pol_epoch_slots_stream = receiver.await.ok()?;
+        Some(Box::new(winning_pol_epoch_slots_stream.map(
+            |WinningPolEpochSlots { epoch, slots }| {
+                PolEpochInfo {
+                    epoch,
+                    // Just drive each per-slot future and drop the non-winners.
+                    winning_pol_info_stream: Box::pin(
+                        slots
+                            .filter_map(|winning_slot| winning_slot)
+                            .map(|leader_private| {
+                                let PolWitnessInputsData {
+                                    wallet:
+                                        PolWalletInputsData {
+                                            aged_path,
+                                            aged_selectors,
+                                            note_value,
+                                            output_number,
+                                            secret_key,
+                                            transaction_hash,
+                                            ..
+                                        },
+                                    chain: PolChainInputsData { slot_number, .. },
+                                } = leader_private.input();
 
-                        *processed_epoch = Some(epoch);
-                        let PolWitnessInputsData {
-                            wallet:
-                                PolWalletInputsData {
-                                    aged_path,
-                                    aged_selectors,
-                                    note_value,
-                                    output_number,
-                                    secret_key,
-                                    transaction_hash,
-                                    ..
-                                },
-                            chain: PolChainInputsData { slot_number, .. },
-                        } = leader_private.input();
+                                let aged_path_and_selectors =
+                                    core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
 
-                        let aged_path_and_selectors =
-                            core::array::from_fn(|i| (aged_path[i], aged_selectors[i]));
-
-                        ready(Some(Some(PolEpochInfo {
-                            epoch,
-                            poq_public_inputs: leader_public,
-                            poq_private_inputs: ProofOfLeadershipQuotaInputs {
-                                aged_path_and_selectors,
-                                note_value: *note_value,
-                                output_number: *output_number,
-                                secret_key: *secret_key,
-                                slot: *slot_number,
-                                transaction_hash: *transaction_hash,
-                            },
-                        })))
-                    },
-                )
-                .filter_map(ready),
-        ))
+                                ProofOfLeadershipQuotaInputs {
+                                    aged_path_and_selectors,
+                                    note_value: *note_value,
+                                    output_number: *output_number,
+                                    secret_key: *secret_key,
+                                    slot: *slot_number,
+                                    transaction_hash: *transaction_hash,
+                                }
+                            }),
+                    ),
+                }
+            },
+        )))
     }
 }

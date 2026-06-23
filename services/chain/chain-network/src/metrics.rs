@@ -85,12 +85,24 @@ pub fn orphan_blocks_removed_total() {
     lb_tracing::increase_counter_u64!(orphan_blocks_removed_total, 1);
 }
 
+pub fn orphan_blocks_replaced_total() {
+    lb_tracing::increase_counter_u64!(orphan_blocks_replaced_total, 1);
+}
+
 pub fn orphan_blocks_received_total() {
     lb_tracing::increase_counter_u64!(orphan_blocks_received_total, 1);
 }
 
 pub fn orphan_blocks_fetch_failed_total() {
     lb_tracing::increase_counter_u64!(orphan_blocks_fetch_failed_total, 1);
+}
+
+pub fn tip_poll_triggered_total() {
+    lb_tracing::increase_counter_u64!(tip_poll_triggered_total, 1);
+}
+
+pub fn tip_poll_enqueued_total() {
+    lb_tracing::increase_counter_u64!(tip_poll_enqueued_total, 1);
 }
 
 pub fn chainsync_observe_download_blocks_ok(duration: Duration, blocks_downloaded: u64) {

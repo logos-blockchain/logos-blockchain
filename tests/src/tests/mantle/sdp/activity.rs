@@ -104,7 +104,7 @@ async fn sdp_blend_activity() {
     }
 }
 
-const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
+const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
 const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 
 fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
@@ -136,7 +136,7 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
         .service_params
         .get_mut(&ServiceType::BlendNetwork)
         .expect("blend network params should exist");
-    blend_params.inactivity_period = INACTIVITY_PERIOD;
+    blend_params.inactivity_period = INACTIVITY_PERIOD.try_into().unwrap();
     blend_params.retention_period = RETENTION_PERIOD;
 
     // Shorten Blend delay to speed up the test

@@ -4,7 +4,7 @@ use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use logos_blockchain_node::{
     UserConfig,
     cli::{CliArgs, Command, build_run_config},
-    config::{DeploymentType, deployment::DeploymentSettings},
+    config::deployment::DeploymentSettings,
     get_services_to_start, run_node_from_config,
 };
 
@@ -58,13 +58,13 @@ async fn main() -> Result<()> {
     if is_dry_run {
         // Check user config.
         drop(deserialize_value_at_path::<UserConfig>(
-            cli_args.config_path(),
+            cli_args.user_config_path(),
             OnUnknownKeys::Fail,
         )?);
         // If custom, check deployment config.
-        if let DeploymentType::Custom(custom_deployment_config_file) = cli_args.deployment_type() {
+        if let Some(custom_deployment_path) = cli_args.deployment_config_path() {
             drop(deserialize_value_at_path::<DeploymentSettings>(
-                custom_deployment_config_file,
+                custom_deployment_path,
                 OnUnknownKeys::Fail,
             )?);
         }
@@ -80,11 +80,13 @@ async fn main() -> Result<()> {
     }
 
     let run_config = {
-        let user_config =
-            deserialize_value_at_path::<UserConfig>(cli_args.config_path(), OnUnknownKeys::Fail)
-                .inspect_err(|e| {
-                    eprintln!("\nExiting... {e}.\n");
-                })?;
+        let user_config = deserialize_value_at_path::<UserConfig>(
+            cli_args.user_config_path(),
+            OnUnknownKeys::Fail,
+        )
+        .inspect_err(|e| {
+            eprintln!("\nExiting... {e}.\n");
+        })?;
         build_run_config(user_config, cli_args)?
     };
 

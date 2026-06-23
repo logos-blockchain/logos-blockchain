@@ -1,30 +1,39 @@
-use std::fmt::{Debug, Display};
+use std::{
+    fmt::{Debug, Display},
+    sync::Arc,
+};
 
+use futures::{StreamExt as _, stream};
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
+    header::HeaderId,
     mantle::Utxo,
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_service::{
-    backend::preload::KeyId, keys::Ed25519Key,
+    api::KmsServiceApi, backend::preload::KeyId, keys::Ed25519Key,
     operators::zk::leader::BuildPrivateInputsWithLeaderKey,
 };
 use lb_ledger::{EpochState, UtxoTree};
-use lb_wallet_service::{UtxoWithKeyId, api::WalletApi};
-use overwatch::services::AsServiceId;
+use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
+use lb_wallet_service::{
+    UtxoWithKeyId,
+    api::{WalletApi, WalletServiceData},
+};
+use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::rngs::OsRng;
-use tokio::{
-    sync::{oneshot, watch::Sender},
-    time::Instant,
+use tokio::sync::{mpsc, oneshot};
+
+use crate::{
+    LOG_TARGET, WinningPolEpochSlots, WinningPolSlotStream, WinningSlotFuture,
+    kms::{KmsAdapter, PreloadKmsService},
 };
 
-use crate::{WinningPolInfo, kms::KmsAdapter};
-
-/// Return a leadership proof and signing key if the current slot is a
-/// winning one, and notifies consumers of winning slot info.
+/// Return a leadership proof and signing key if the current slot is a winning
+/// one for any of the eligible UTXOs, for use in a block proposal.
 ///
-/// If the slot is not a winning one, it returns `None` and no consumer is
-/// notified.
+/// If the slot is not a winning one, it returns `None`.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
@@ -34,12 +43,11 @@ pub async fn build_proof_for<Wallet, RuntimeServiceId>(
     latest_tree: &UtxoTree,
     epoch_state: &EpochState,
     slot: Slot,
-    winning_pol_info_notifier: &PotentialWinningPoLSlotNotifier<'_>,
     wallet: &WalletApi<Wallet, RuntimeServiceId>,
     kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
 ) -> Option<(Groth16LeaderProof, Ed25519Key)>
 where
-    Wallet: lb_wallet_service::api::WalletServiceData,
+    Wallet: WalletServiceData,
     RuntimeServiceId: Debug + Display + Sync + AsServiceId<Wallet>,
 {
     for UtxoWithKeyId { utxo, key_id } in utxos {
@@ -82,13 +90,6 @@ where
                     continue;
                 }
             };
-
-            winning_pol_info_notifier.notify_about_winning_slot(
-                private_inputs.clone(),
-                public_inputs,
-                epoch_state.epoch,
-                slot,
-            );
 
             let res = tokio::task::spawn_blocking(move || {
                 Groth16LeaderProof::prove(private_inputs, voucher_cm)
@@ -177,187 +178,248 @@ pub enum PrivateInputsError {
     LatestNoteNotFound,
 }
 
-/// Process every tick and reacts to the very first one received and the first
-/// one of every new epoch.
+/// The per-epoch chain state needed to check winning slots, shared by the
+/// per-slot block-proposal path and the per-epoch winning-slot scan.
 ///
-/// Reacting to a tick means pre-calculating the potential winning slots for the
-/// epoch and notifying all consumers via the provided sender channel.
-///
-/// The term *potential* means that winning slots are computed based on the
-/// notes available at tick-processing time. A note may later be spent before
-/// the slot is reached, in which case it will not actually win. This notifier
-/// does not account for such cases.
-pub struct PotentialWinningPoLSlotNotifier<'service> {
-    ledger_config: &'service lb_ledger::Config,
-    sender: &'service Sender<Option<WinningPolInfo>>,
-    /// Keeps track of the last processed epoch, if any, and for it the first
-    /// potential winning slot that was pre-computed, if any.
-    last_processed_epoch_and_found_first_winning_slot: Option<(Epoch, Option<Slot>)>,
+/// These inputs are all fixed for the whole epoch: `epoch_state` (including the
+/// aged UTXO tree) and the wallet's leader-eligible notes (aged at the end of
+/// the previous epoch). The block-proposal path additionally needs the *latest*
+/// ledger state (to prove a note is still unspent), which it fetches separately
+/// per slot; the Blend winning-slot scan does not, since the leadership quota
+/// proof only attests that a note was aged, not that it is unspent.
+pub struct SlotContext {
+    pub tip: HeaderId,
+    pub epoch_state: EpochState,
+    pub eligible_aged: Vec<UtxoWithKeyId>,
 }
 
-impl<'service> PotentialWinningPoLSlotNotifier<'service> {
-    pub(super) const fn new(
-        ledger_config: &'service lb_ledger::Config,
-        sender: &'service Sender<Option<WinningPolInfo>>,
-    ) -> Self {
-        Self {
-            ledger_config,
-            sender,
-            last_processed_epoch_and_found_first_winning_slot: None,
-        }
+/// Per-subscriber background task that hands one lazy winning-slot stream per
+/// epoch.
+///
+/// On subscribe it starts at the *current* slot and, for each epoch, hands the
+/// subscriber a lazy [`WinningPolSlotStream`] over that epoch's slot range
+/// (from the current slot for the ongoing epoch — so a mid-epoch start wastes
+/// no work — and in full for each later epoch). The stream is lazy: no slot is
+/// scanned until the subscriber drives it, and the subscriber decides how far
+/// ahead to pre-compute (e.g. via the `Buffered` adapter), so the whole epoch
+/// is never materialized here. This task only produces the cheap per-epoch
+/// handoffs; it exits when the subscriber drops its stream.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "TODO: address this in a dedicated refactor"
+)]
+pub async fn search_for_winning_slots<CryptarchiaService, Wallet, RuntimeServiceId>(
+    cryptarchia_api: CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    wallet_api: WalletApi<Wallet, RuntimeServiceId>,
+    kms: KmsServiceApi<PreloadKmsService<RuntimeServiceId>, RuntimeServiceId>,
+    time_relay: OutboundRelay<TimeServiceMessage>,
+    ledger_config: lb_ledger::Config,
+    epoch_handoff_sender: mpsc::Sender<WinningPolEpochSlots>,
+) where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    Wallet: WalletServiceData,
+    RuntimeServiceId: AsServiceId<Wallet>
+        + AsServiceId<PreloadKmsService<RuntimeServiceId>>
+        + Debug
+        + Display
+        + Send
+        + Sync
+        + 'static,
+{
+    // Subscribe to future slot ticks (used to detect epoch boundaries) and read
+    // the current slot to start scanning from immediately.
+    let Some(mut slot_timer) = async {
+        let (sender, receiver) = oneshot::channel();
+        time_relay
+            .send(TimeServiceMessage::Subscribe { sender })
+            .await
+            .ok()?;
+        receiver.await.ok()
     }
+    .await
+    else {
+        tracing::error!(target: LOG_TARGET, "Failed to subscribe to slot ticks; winning slots subscriber cannot run.");
+        return;
+    };
 
-    /// It processes a new unprocessed epoch, and sends over the channel the
-    /// first identified winning slot for this epoch, if any.
-    pub(super) async fn process_epoch<RuntimeServiceId>(
-        &mut self,
-        utxos: &[UtxoWithKeyId],
-        latest_tree: &UtxoTree,
-        epoch_state: &EpochState,
-        kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-    ) {
-        if let Some((last_processed_epoch, _)) =
-            self.last_processed_epoch_and_found_first_winning_slot
-        {
-            if last_processed_epoch == epoch_state.epoch {
-                tracing::trace!("Skipping already processed epoch.");
-                return;
-            } else if last_processed_epoch > epoch_state.epoch {
-                tracing::error!(
-                    "Received an epoch smaller than the last process one. This is invalid."
-                );
-                return;
-            }
-        }
-        tracing::debug!("Processing new epoch: {:?}", epoch_state.epoch);
+    // Process one epoch at a time, starting from whichever slot is current when
+    // we subscribe. Each iteration handles a single epoch; the `tokio::select!`
+    // at the end yields the first tick of the next epoch to process, or `None`
+    // when the tick stream ends (which ends the loop).
+    let mut current_slot_tick = slot_timer.next().await;
+    while let Some(SlotTick { slot, epoch }) = current_slot_tick {
+        let Some(slot_context) =
+            fetch_slot_context(&cryptarchia_api, &wallet_api, &ledger_config, slot).await
+        else {
+            tracing::debug!(target: LOG_TARGET, "Could not fetch slot context for slot {slot:?}; retrying on the next tick.");
+            current_slot_tick = slot_timer.next().await;
+            continue;
+        };
 
-        self.check_epoch_winning_utxos(utxos, latest_tree, epoch_state, kms)
-            .await;
-    }
-
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
-    async fn check_epoch_winning_utxos<RuntimeServiceId>(
-        &mut self,
-        utxos: &[UtxoWithKeyId],
-        latest_tree: &UtxoTree,
-        epoch_state: &EpochState,
-        kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-    ) {
-        let slots_per_epoch = self.ledger_config.epoch_length();
-        let epoch_starting_slot: u64 = self
-            .ledger_config
-            .epoch_config
-            .starting_slot(&epoch_state.epoch, self.ledger_config.base_period_length())
-            .into();
-
-        let mut first_winning_slot: Option<Slot> = None;
-        let start = Instant::now();
-        for UtxoWithKeyId { utxo, key_id } in utxos {
-            for offset in 0..slots_per_epoch {
-                let slot = epoch_starting_slot
-                    .checked_add(offset)
-                    .expect("Slot calculation overflow.");
-                let public_inputs = public_inputs_for_slot(epoch_state, slot.into(), latest_tree);
-                let winning = kms
-                    .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
-                    .await;
-                if !winning {
-                    continue;
-                }
-                tracing::trace!("Found winning utxo with ID {:?} for slot {slot}", utxo.id());
-
-                // Note: We discard the signing key here since this is just for pre-computing
-                // winning slots. The actual signing key will be generated when building the
-                // proof.
-                let private_inputs_result = kms
-                    .build_private_inputs_for_winning_utxo_and_slot(
-                        key_id.clone(),
-                        utxo,
-                        epoch_state,
-                        public_inputs,
-                        latest_tree,
-                    )
-                    .await;
-                let (leader_private, _signing_key) = match private_inputs_result {
-                    Ok(result) => result,
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
-                            utxo.id(),
-                        );
-                        continue;
-                    }
-                };
-
-                if self
-                    .sender
-                    .send(Some((leader_private, public_inputs, epoch_state.epoch)))
-                    .is_err()
-                {
-                    tracing::trace!(
-                        "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
-                    );
-                } else {
-                    // We stop the iteration as soon as the first winning slot for this epoch is
-                    // found and was successfully communicated to consumers.
-                    first_winning_slot = Some(slot.into());
-                    break;
-                }
-            }
-        }
-        tracing::debug!(
-            "Found all winning utxos for epoch {:?} in {:?} ms",
-            epoch_state.epoch,
-            start.elapsed().as_millis()
+        // Hand the subscriber a *lazy* stream over this epoch's slot range. No
+        // slot is scanned until the subscriber drives the stream, and it decides
+        // how far ahead to pre-compute, so the whole epoch is never materialized
+        // here. A scan made stale by an epoch rollover is implicitly abandoned:
+        // the subscriber just stops polling it once it moves to the next epoch.
+        let winning_slots_stream = epoch_winning_slots_stream(
+            &ledger_config,
+            slot_context.epoch_state,
+            &slot_context.eligible_aged,
+            kms.clone(),
+            slot,
         );
-
-        if first_winning_slot.is_none() {
-            tracing::debug!(
-                "Found no winning slots for epoch {:?} across {} wallet UTXOs",
-                epoch_state.epoch,
-                utxos.len()
-            );
-        }
-
-        self.last_processed_epoch_and_found_first_winning_slot =
-            Some((epoch_state.epoch, first_winning_slot));
-    }
-
-    /// Send the information about a winning slot to consumers.
-    ///
-    /// No check is performed on whether the slot is actually a winning one.
-    pub(super) fn notify_about_winning_slot(
-        &self,
-        private_inputs: LeaderPrivate,
-        public_inputs: LeaderPublic,
-        epoch: Epoch,
-        slot: Slot,
-    ) {
-        // If we are trying to notify about the first winning slot that we already
-        // pre-computed, ignore it.
-        if let Some((_, Some(first_epoch_winning_slot))) =
-            self.last_processed_epoch_and_found_first_winning_slot
-            && first_epoch_winning_slot == slot
+        if epoch_handoff_sender
+            .send(WinningPolEpochSlots {
+                epoch,
+                slots: winning_slots_stream,
+            })
+            .await
+            .is_err()
         {
-            tracing::warn!(
-                "Skipping notifying about winning slot {slot:?} because it was already processed"
-            );
+            tracing::debug!(target: LOG_TARGET, "Winning slots subscriber dropped its handoff stream; exiting.");
             return;
         }
 
-        if self
-            .sender
-            .send(Some((private_inputs, public_inputs, epoch)))
-            .is_err()
-        {
-            tracing::trace!(
-                "No active listeners for pre-calculated PoL winning slots. Not broadcasting."
-            );
+        // Wait for the first tick of the next epoch to produce a new winning slot
+        // stream and pass it to consumers.
+        current_slot_tick = next_epoch_tick(&mut slot_timer, epoch).await;
+    }
+
+    tracing::trace!(target: LOG_TARGET, "Slot tick stream ended; winning slots subscriber exiting.");
+}
+
+/// Awaits the first slot tick belonging to an epoch other than `epoch` (i.e.
+/// the first tick of the next epoch), returning it, or `None` if the tick
+/// stream ends.
+async fn next_epoch_tick(
+    slot_timer: &mut EpochSlotTickStream,
+    current_epoch: Epoch,
+) -> Option<SlotTick> {
+    loop {
+        match slot_timer.next().await {
+            Some(tick) if tick.epoch > current_epoch => return Some(tick),
+            Some(_) => {}
+            None => return None,
         }
     }
+}
+
+/// Fetches the [`SlotContext`] for `slot` from the tip: the tip header, the
+/// slot's epoch state, and the wallet's eligible leader UTXOs (with the faucet
+/// UTXO filtered out). Returns `None` if any lookup fails.
+pub async fn fetch_slot_context<CryptarchiaService, Wallet, RuntimeServiceId>(
+    cryptarchia_api: &CryptarchiaServiceApi<CryptarchiaService, RuntimeServiceId>,
+    wallet_api: &WalletApi<Wallet, RuntimeServiceId>,
+    ledger_config: &lb_ledger::Config,
+    slot: Slot,
+) -> Option<SlotContext>
+where
+    CryptarchiaService: CryptarchiaServiceData<Tx: Send + Sync>,
+    Wallet: WalletServiceData,
+    RuntimeServiceId: AsServiceId<Wallet> + Debug + Display + Sync,
+{
+    let tip = cryptarchia_api.info().await.ok()?.cryptarchia_info.tip;
+    let epoch_state = cryptarchia_api.get_epoch_state(slot).await.ok()?.ok()?;
+    let eligible_utxos = wallet_api.get_leader_aged_notes(Some(tip)).await.ok()?;
+    let eligible = match &ledger_config.faucet_pk {
+        Some(faucet_pk) => eligible_utxos
+            .response
+            .into_iter()
+            .filter(|utxo| utxo.utxo.note.pk != *faucet_pk)
+            .collect(),
+        None => eligible_utxos.response,
+    };
+    Some(SlotContext {
+        tip,
+        epoch_state,
+        eligible_aged: eligible,
+    })
+}
+
+/// Builds a *lazy* stream of one epoch's per-slot leadership-proof work: one
+/// [`WinningSlotFuture`] per slot from `start_slot` to the epoch's last slot.
+///
+/// The stream does no work until polled. Each item is a future that, when
+/// driven, performs the KMS lottery check for that slot and — on a win — builds
+/// the leadership private inputs, resolving to `Some(LeaderPrivate)` for a
+/// winning slot or `None` otherwise. The consumer drives the futures (and
+/// decides how far ahead to pre-compute, e.g. via the `Buffered` adapter), so
+/// the whole epoch is never materialized at once.
+///
+/// The winning check uses the aged UTXO tree (`epoch_state.utxos`), since the
+/// leadership quota proof only attests that a note was aged at the end of the
+/// previous epoch, not that it is unspent. Slots earlier than `start_slot` are
+/// skipped so a mid-epoch subscriber wastes no work.
+fn epoch_winning_slots_stream<RuntimeServiceId>(
+    ledger_config: &lb_ledger::Config,
+    epoch_state: EpochState,
+    eligible_aged: &[UtxoWithKeyId],
+    kms: impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Send + Sync + 'static,
+    start_slot: Slot,
+) -> WinningPolSlotStream {
+    let slots_per_epoch = ledger_config.epoch_length();
+    let epoch_first_slot: u64 = ledger_config
+        .epoch_config
+        .starting_slot(&epoch_state.epoch, ledger_config.base_period_length())
+        .into();
+    let epoch_last_slot = epoch_first_slot
+        .checked_add(slots_per_epoch)
+        .expect("Epoch slot calculation overflow.")
+        - 1;
+    // Skip slots earlier than the start slot: a mid-epoch subscriber does not
+    // waste work on slots it has already passed.
+    let scan_starting_slot = u64::from(start_slot).max(epoch_first_slot);
+
+    // Share the read-only per-epoch inputs across all per-slot futures.
+    // `UtxoWithKeyId` is not `Clone`, so collect owned `(Utxo, KeyId)` pairs
+    // (`Utxo` is `Copy`, `KeyId` is `Clone`).
+    let epoch_state = Arc::new(epoch_state);
+    let eligible_aged: Arc<Vec<(Utxo, KeyId)>> = Arc::new(
+        eligible_aged
+            .iter()
+            .map(|UtxoWithKeyId { utxo, key_id }| (*utxo, key_id.clone()))
+            .collect(),
+    );
+    let kms = Arc::new(kms);
+
+    let stream = stream::iter(scan_starting_slot..=epoch_last_slot).map(move |slot| {
+        let epoch_state = Arc::clone(&epoch_state);
+        let eligible_aged = Arc::clone(&eligible_aged);
+        let kms = Arc::clone(&kms);
+        let is_slot_winning_task: WinningSlotFuture = Box::pin(async move {
+            let public_inputs = public_inputs_for_slot(&epoch_state, slot.into(), &epoch_state.utxos);
+            for (utxo, key_id) in eligible_aged.iter() {
+                if !kms
+                    .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
+                    .await
+                {
+                    continue;
+                }
+                tracing::trace!(target: LOG_TARGET, "Found winning utxo with ID {:?} for slot {slot}", utxo.id());
+                match kms
+                    .build_private_inputs_for_winning_utxo_and_slot(
+                        key_id.clone(),
+                        utxo,
+                        &epoch_state,
+                        public_inputs,
+                        &epoch_state.utxos,
+                    )
+                    .await
+                {
+                    Ok((leader_private, _)) => return Some(leader_private),
+                    Err(e) => tracing::error!(
+                        target: LOG_TARGET,
+                        "Failed to build private inputs for winning utxo {:?} at slot {slot}: {e:?}",
+                        utxo.id(),
+                    ),
+                }
+            }
+            None
+        });
+        is_slot_winning_task
+    });
+
+    Box::pin(stream)
 }
 
 #[cfg(test)]
@@ -367,7 +429,6 @@ mod pol_tests {
         fmt::Formatter,
         num::{NonZero, NonZeroU64},
         slice,
-        sync::Arc,
     };
 
     use lb_core::{
@@ -385,13 +446,11 @@ mod pol_tests {
         Config as SdpConfig, ServiceRewardsParameters, rewards::blend::RewardsParameters,
     };
     use lb_utils::math::{NonNegativeF64, NonNegativeRatio};
-    use lb_wallet_service::{WalletMsg, WalletServiceSettings, api::WalletServiceData};
+    use lb_wallet_service::{WalletMsg, WalletServiceSettings};
     use overwatch::services::{
         ServiceData,
-        relay::OutboundRelay,
         state::{NoOperator, NoState},
     };
-    use tokio::sync::{mpsc, watch};
 
     use super::*;
 
@@ -428,12 +487,8 @@ mod pol_tests {
             total_stake,
             lottery_0,
             lottery_1,
-            sdp: lb_ledger::mantle::sdp::SdpLedger::new(1.into()),
+            active_declarations: Arc::new(lb_core::sdp::Declarations::default()),
         };
-
-        // Create notifier channel (not used in this test)
-        let (sender, _receiver) = watch::channel(None);
-        let notifier = PotentialWinningPoLSlotNotifier::new(&config, &sender);
 
         // Create dummy wallet service
         let wallet = DummyWallet::spawn();
@@ -444,7 +499,6 @@ mod pol_tests {
             UtxoWithKeyId { utxo, key_id },
             &epoch_state,
             &latest_tree,
-            &notifier,
             &wallet,
             &kms,
         )
@@ -473,7 +527,6 @@ mod pol_tests {
         utxo: UtxoWithKeyId,
         epoch_state: &EpochState,
         latest_tree: &UtxoTree,
-        notifier: &PotentialWinningPoLSlotNotifier<'_>,
         wallet: &WalletApi<DummyWallet, TestRuntimeServiceId>,
         kms: &(impl KmsAdapter<TestRuntimeServiceId, KeyId = KeyId> + Sync),
     ) -> Option<(Groth16LeaderProof, Slot)> {
@@ -483,7 +536,6 @@ mod pol_tests {
                 latest_tree,
                 epoch_state,
                 slot,
-                notifier,
                 wallet,
                 kms,
             )
@@ -493,6 +545,109 @@ mod pol_tests {
             }
         }
         None
+    }
+
+    /// Build an [`EpochState`] and a winning UTXO for `scan` tests.
+    fn scan_test_fixtures() -> (
+        lb_ledger::Config,
+        DummyKms,
+        Vec<UtxoWithKeyId>,
+        UtxoTree,
+        EpochState,
+    ) {
+        let config = test_config();
+        let kms = DummyKms;
+        let key_id = KeyId::from("0");
+        let sk = UnsecuredZkKey::new(Fr::from(0u64));
+        let pk = sk.to_public_key();
+
+        let transfer = TransferOp::new(Inputs::empty(), Outputs::new([Note::new(1000u64, pk)]));
+        let utxo = transfer.outputs.utxo_by_index(0, &transfer).unwrap();
+
+        let aged_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
+        let latest_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
+
+        let total_stake =
+            NonZeroU64::new(utxo.note.value).expect("utxo note value must be non-zero");
+        let (lottery_0, lottery_1) = config
+            .lottery_constants()
+            .compute_lottery_values(total_stake);
+        let epoch_state = EpochState {
+            epoch: 1.into(),
+            nonce: Fr::from(999u64),
+            utxos: aged_tree,
+            total_stake,
+            lottery_0,
+            lottery_1,
+            active_declarations: Arc::new(lb_core::sdp::Declarations::default()),
+        };
+
+        (
+            config,
+            kms,
+            vec![UtxoWithKeyId { utxo, key_id }],
+            latest_tree,
+            epoch_state,
+        )
+    }
+
+    /// The scan only emits winning slots within `[start_slot, epoch_end)`: it
+    /// skips past slots (so a mid-epoch start wastes no work) and never runs
+    /// off the end of the epoch.
+    #[tokio::test]
+    async fn scan_emits_only_slots_in_range() {
+        let (config, kms, eligible, _, epoch_state) = scan_test_fixtures();
+
+        let epoch_starting_slot: u64 = config
+            .epoch_config
+            .starting_slot(&epoch_state.epoch, config.base_period_length())
+            .into();
+        let epoch_end = epoch_starting_slot + config.epoch_length();
+        let start_slot = epoch_starting_slot + config.epoch_length() / 2;
+
+        // Drive every per-slot future and keep the winning ones.
+        let winners: Vec<_> =
+            epoch_winning_slots_stream(&config, epoch_state, &eligible, kms, start_slot.into())
+                .filter_map(|winning_slot| winning_slot)
+                .collect()
+                .await;
+
+        for leader_private in &winners {
+            let slot = leader_private.input().chain.slot_number;
+            assert!(
+                slot >= start_slot && slot < epoch_end,
+                "winning slot {slot} outside [{start_slot}, {epoch_end})",
+            );
+        }
+        // With the easy test lottery (f = 1) and a mid-epoch start, there is at
+        // least one winning slot to emit.
+        assert!(
+            !winners.is_empty(),
+            "expected at least one winning slot in range"
+        );
+    }
+
+    /// Starting the scan at the epoch's end emits nothing.
+    #[tokio::test]
+    async fn scan_past_epoch_end_emits_nothing() {
+        let (config, kms, eligible, _, epoch_state) = scan_test_fixtures();
+
+        let epoch_starting_slot: u64 = config
+            .epoch_config
+            .starting_slot(&epoch_state.epoch, config.base_period_length())
+            .into();
+        let epoch_end = epoch_starting_slot + config.epoch_length();
+
+        let winners: Vec<_> =
+            epoch_winning_slots_stream(&config, epoch_state, &eligible, kms, epoch_end.into())
+                .filter_map(|winning_slot| winning_slot)
+                .collect()
+                .await;
+
+        assert!(
+            winners.is_empty(),
+            "no winning slots should be emitted when starting past the epoch end",
+        );
     }
 
     fn test_config() -> lb_ledger::Config {
@@ -512,7 +667,7 @@ mod pol_tests {
                     [(
                         ServiceType::BlendNetwork,
                         ServiceParameters {
-                            inactivity_period: 20.into(),
+                            inactivity_period: 20.try_into().unwrap(),
                             retention_period: 100.into(),
                             epoch: 0.into(),
                         },

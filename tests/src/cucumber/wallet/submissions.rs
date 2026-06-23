@@ -1,6 +1,6 @@
 //! Cucumber wallet transaction submission workflow.
 //!
-//! This adapter resolves scenario wallets, syncs spendable state, applies
+//! This adapter resolves scenario wallets, reads spendable state, applies
 //! scenario fee policy, submits signed transactions, and records reservations.
 
 use std::{collections::HashSet, time::Duration};
@@ -13,7 +13,7 @@ use lb_core::{
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount, is_truthy_env};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     common::{
@@ -31,7 +31,7 @@ use crate::{
         wallet::{
             TARGET,
             best_node::{BestNodeInfo, sanitize_best_node_info_with_feed},
-            sync::sync_available_utxos_for_user_wallets,
+            sync::current_available_utxos_for_user_wallets,
         },
         world::{CucumberWorld, WalletInfo, WalletType},
     },
@@ -289,7 +289,6 @@ pub(crate) async fn prepare_user_wallet_transaction_submission(
     step: &str,
     sender_wallet_name: &str,
     transaction_intent: WalletTransactionIntent,
-    best_node_info: Option<&BestNodeInfo>,
     in_memory_available_utxos: Option<&WalletUtxos>,
 ) -> Result<PreparedUserWalletSubmission, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
@@ -311,8 +310,7 @@ pub(crate) async fn prepare_user_wallet_transaction_submission(
     let available_utxos = if let Some(cache) = in_memory_available_utxos {
         cache
     } else {
-        synced_available_utxos =
-            sync_available_utxos_for_user_wallets(world, step, best_node_info).await?;
+        synced_available_utxos = current_available_utxos_for_user_wallets(world, step).await?;
         &synced_available_utxos
     };
     let sender_available_utxos =
@@ -353,7 +351,6 @@ async fn submit_user_wallet_transaction(
         &wallet.wallet_name,
         WalletTransactionIntent::transfer(receivers, DEFAULT_STORAGE_GAS_PRICE)
             .map_err(wallet_transaction_error)?,
-        best_node_info,
         in_memory_available_utxos.as_deref(),
     )
     .await?;
@@ -428,6 +425,16 @@ fn record_wallet_submission(
             signed_submission.spent_fee(),
         )
     })?;
+
+    debug!(
+        target: TARGET,
+        wallet = wallet_name,
+        tx_hash = ?signed_submission.tx_hash(),
+        sender_inputs = recorded.sender_reserved_inputs().len(),
+        fee_sponsor_inputs = recorded.fee_sponsor_reserved_inputs().len(),
+        spent_fee = signed_submission.spent_fee(),
+        "Recorded wallet submission"
+    );
 
     world.fee_state.reserve_for_wallet(
         wallet_name.to_owned(),

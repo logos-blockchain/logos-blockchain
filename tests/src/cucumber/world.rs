@@ -2,6 +2,7 @@ use std::{
     collections::{BTreeSet, HashMap, HashSet},
     env,
     fmt::Debug,
+    hash::BuildHasher,
     num::NonZero,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -48,10 +49,15 @@ use crate::{
             set_default_env,
         },
         error::{StepError, StepResult},
-        fee_reserve::ScenarioFeeState,
-        steps::manual_zone::runner::{Event, InscriptionId, SequencerCheckpoint, SequencerClient},
+        fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
+        steps::manual_zone::runner::{
+            Event, InscriptionId, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
+        },
         utils::{make_builder, shared_host_bin_path},
-        wallet::feed::{CucumberWalletBlockFeed, CucumberWalletBlockFeedError},
+        wallet::{
+            feed::{CucumberWalletBlockFeed, CucumberWalletBlockFeedError},
+            sync::track_wallet_feed_batches_with_backfill,
+        },
     },
     non_zero,
 };
@@ -60,7 +66,7 @@ type ScenarioBuilderWith = ScenarioBuilder;
 type ConsensusLiveness = workloads::ConsensusLiveness;
 pub type SharedTrackedWallets = Arc<Mutex<TrackedWallets>>;
 pub type SharedWalletBlockFeedTracker = Arc<Mutex<WalletBlockFeedTracker>>;
-pub type SharedScannedTransactionHashes = Arc<Mutex<HashSet<TxHash>>>;
+pub type SharedObservedTransactionHashes = Arc<Mutex<HashSet<TxHash>>>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeployerKind {
@@ -150,13 +156,14 @@ pub struct ZoneSequencerIdentity {
 }
 
 pub struct ZoneSequencerRuntime {
-    client: SequencerClient<ZoneNodeHttpClient>,
+    client: SequencerClient,
     task: JoinHandle<()>,
     events: tokio::sync::broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
+    tx_status_rx: Option<tokio::sync::broadcast::Receiver<TxStatusUpdate>>,
     discarded_payloads: Option<ZoneDiscardedPayloads>,
 }
 
@@ -187,6 +194,7 @@ pub struct ZoneState {
     saved_checkpoints: HashMap<String, SequencerCheckpoint>,
     latest_checkpoints: HashMap<String, SequencerCheckpoint>,
     sequencer_startups: HashMap<String, ZoneSequencerStartup>,
+    observed_mempool_pending: HashMap<String, HashSet<InscriptionId>>,
     sorted_total_payloads: Option<usize>,
     sorted_expected_by_sequencer: Option<HashMap<String, Vec<Inscription>>>,
 }
@@ -437,6 +445,47 @@ impl ZoneState {
             .collect()
     }
 
+    pub fn message_tx_hashes_for_aliases(
+        &self,
+        aliases: &[String],
+    ) -> Result<Vec<InscriptionId>, StepError> {
+        aliases
+            .iter()
+            .map(|alias| {
+                self.published_messages
+                    .get(alias)
+                    .and_then(|message| message.inscription_id)
+                    .ok_or(StepError::LogicalError {
+                        message: format!(
+                            "Zone message alias '{alias}' does not have a tracked tx hash"
+                        ),
+                    })
+            })
+            .collect()
+    }
+
+    pub fn record_mempool_pending(
+        &mut self,
+        sequencer_alias: impl Into<String>,
+        tx_hashes: impl IntoIterator<Item = InscriptionId>,
+    ) {
+        self.observed_mempool_pending
+            .entry(sequencer_alias.into())
+            .or_default()
+            .extend(tx_hashes);
+    }
+
+    #[must_use]
+    pub fn has_observed_mempool_pending(
+        &self,
+        sequencer_alias: &str,
+        tx_hash: &InscriptionId,
+    ) -> bool {
+        self.observed_mempool_pending
+            .get(sequencer_alias)
+            .is_some_and(|observed| observed.contains(tx_hash))
+    }
+
     pub fn published_message_payloads(&self) -> Result<Vec<Inscription>, StepError> {
         self.message_payloads_for_aliases(&self.published_order)
     }
@@ -507,6 +556,24 @@ impl ZoneState {
             .map(|runtime| runtime.checkpoint_rx.clone())
     }
 
+    pub fn take_sequencer_tx_status_rx(
+        &mut self,
+        sequencer_alias: &str,
+    ) -> Result<tokio::sync::broadcast::Receiver<TxStatusUpdate>, StepError> {
+        self.runtimes
+            .get_mut(sequencer_alias)
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!("Zone sequencer '{sequencer_alias}' is not running"),
+            })?
+            .tx_status_rx
+            .take()
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!(
+                    "Zone sequencer '{sequencer_alias}' tx-status receiver was already consumed"
+                ),
+            })
+    }
+
     pub fn resolve_checkpoint(
         &self,
         alias: impl AsRef<str>,
@@ -529,13 +596,14 @@ impl ZoneState {
     pub fn set_sequencer_runtime(
         &mut self,
         alias: String,
-        sequencer_client: SequencerClient<ZoneNodeHttpClient>,
+        sequencer_client: SequencerClient,
         sequencer_task: JoinHandle<()>,
         sequencer_events: tokio::sync::broadcast::Receiver<Event>,
         checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
         ready_rx: tokio::sync::watch::Receiver<bool>,
         channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
         turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
+        tx_status_rx: tokio::sync::broadcast::Receiver<TxStatusUpdate>,
         discarded_payloads: Option<ZoneDiscardedPayloads>,
     ) {
         if let Some(runtime) = self.runtimes.remove(&alias) {
@@ -552,6 +620,7 @@ impl ZoneState {
                 ready_rx,
                 channel_view_rx,
                 turn_to_write_rx,
+                tx_status_rx: Some(tx_status_rx),
                 discarded_payloads,
             },
         );
@@ -605,10 +674,7 @@ impl ZoneState {
         Ok(())
     }
 
-    pub fn sequencer_client(
-        &self,
-        alias: &str,
-    ) -> Result<&SequencerClient<ZoneNodeHttpClient>, StepError> {
+    pub fn sequencer_client(&self, alias: &str) -> Result<&SequencerClient, StepError> {
         self.runtimes
             .get(alias)
             .map(|runtime| &runtime.client)
@@ -824,9 +890,8 @@ pub struct CucumberWorld {
     pub submitted_transactions: HashMap<String, TxHash>,
     /// Manual: Exact signed transactions prepared for later submission.
     pub prepared_transactions: HashMap<String, SignedMantleTx>,
-    /// Manual: Transaction hashes observed while wallet/block sync scanned
-    /// blocks.
-    pub scanned_transaction_hashes: SharedScannedTransactionHashes,
+    /// Manual: Transaction hashes observed in blocks by the wallet block feed.
+    pub observed_transaction_hashes: SharedObservedTransactionHashes,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -986,8 +1051,8 @@ impl Debug for CucumberWorld {
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
             .field(
-                "scanned_transaction_hashes",
-                &self.scanned_transaction_hashes_len(),
+                "observed_transaction_hashes",
+                &self.observed_transaction_hashes_len(),
             )
             .field("wallet_utxos_by_block", &wallet_utxo_snapshot_count)
             .field("wallet_pending_states", &wallet_pending_count)
@@ -1269,7 +1334,7 @@ impl CucumberWorld {
         let feed = CucumberWalletBlockFeed::start(
             Arc::clone(&self.wallets),
             Arc::clone(&self.wallet_feed_tracker),
-            Arc::clone(&self.scanned_transaction_hashes),
+            Arc::clone(&self.observed_transaction_hashes),
             self.genesis_block_utxos.clone(),
         )
         .await
@@ -1281,12 +1346,12 @@ impl CucumberWorld {
         }
 
         self.wallet_block_feed = Some(feed);
-        self.track_known_wallets_with_block_feed()?;
+        self.track_known_wallets_with_block_feed().await?;
 
         Ok(())
     }
 
-    pub fn register_wallet_block_feed_source(
+    pub async fn register_wallet_block_feed_source(
         &self,
         node_name: &str,
         client: NodeHttpClient,
@@ -1297,7 +1362,7 @@ impl CucumberWorld {
 
         feed.register_source(node_name, client)
             .map_err(|error| wallet_block_feed_error(&error))?;
-        self.track_known_wallets_with_block_feed()
+        self.track_known_wallets_with_block_feed().await
     }
 
     pub fn wallet_block_feed(&self) -> Result<BlockFeed, StepError> {
@@ -1321,7 +1386,7 @@ impl CucumberWorld {
     /// background without letting unrelated fork sources overwrite the same
     /// wallet. Legacy sync-style steps can still add best-node tracking
     /// explicitly when needed.
-    pub fn track_known_wallets_with_block_feed(&self) -> StepResult {
+    pub async fn track_known_wallets_with_block_feed(&self) -> StepResult {
         if self.wallet_block_feed.is_none()
             || self.nodes_info.is_empty()
             || self.wallet_info.is_empty()
@@ -1335,24 +1400,7 @@ impl CucumberWorld {
         }
 
         let genesis_utxos = self.genesis_block_utxos.clone();
-        let tracking = self
-            .with_wallet_feed_state_mut(|tracker, wallets| {
-                tracker.track_wallets(wallets, &tracking_batches, &genesis_utxos)
-            })?
-            .map_err(|error| StepError::LogicalError {
-                message: error.to_string(),
-            })?;
-
-        if tracking.needs_backfill() {
-            warn!(
-                target: TARGET,
-                "Wallet block feed tracking needs direct backfill for {} source tracker(s); \
-                the next wallet observation will rebuild them",
-                tracking.backfill_batches().len(),
-            );
-        }
-
-        Ok(())
+        track_wallet_feed_batches_with_backfill(self, &tracking_batches, &genesis_utxos).await
     }
 
     fn known_wallet_tracking_batches(&self) -> Result<Vec<WalletFeedTrackingBatch>, StepError> {
@@ -1367,15 +1415,29 @@ impl CucumberWorld {
                 continue;
             }
 
+            let group_key = self
+                .node_to_group
+                .get(&source_node_name)
+                .cloned()
+                .unwrap_or_default();
+
             let mut wallet_keys = TrackedWalletKeysBySource::new();
             for (wallet_name, public_key) in wallets {
-                wallet_keys.add_wallet(&source_node_name, wallet_name, public_key);
+                wallet_keys.add_wallet(&group_key, wallet_name, public_key);
             }
 
-            tracking_batches.extend(wallet_keys.batches().map(|source_wallet_keys| {
+            if let Some(fee_wallet_account) = self.fee_state.wallet_account.clone() {
+                wallet_keys.add_wallet(
+                    &group_key,
+                    SCENARIO_FEE_ACCOUNT_NAME,
+                    fee_wallet_account.public_key(),
+                );
+            }
+
+            tracking_batches.extend(wallet_keys.batches().map(|wallet_keys_for_group| {
                 WalletFeedTrackingBatch::new(
                     source_node_name.clone(),
-                    source_wallet_keys.wallet_keys().iter().cloned(),
+                    wallet_keys_for_group.wallet_keys().iter().cloned(),
                 )
             }));
         }
@@ -1753,23 +1815,26 @@ impl CucumberWorld {
     }
 
     #[must_use]
-    pub fn scanned_transaction_hashes_len(&self) -> usize {
-        self.scanned_transaction_hashes
+    pub fn observed_transaction_hashes_len(&self) -> usize {
+        self.observed_transaction_hashes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
 
-    pub fn missing_scanned_transaction_hashes(&self, expected: &HashSet<TxHash>) -> Vec<TxHash> {
-        let scanned_transaction_hashes = self
-            .scanned_transaction_hashes
+    pub fn missing_observed_transaction_hashes<S: BuildHasher>(
+        &self,
+        expected: &HashSet<TxHash, S>,
+    ) -> Vec<TxHash> {
+        let observed_transaction_hashes = self
+            .observed_transaction_hashes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
 
         expected
             .iter()
             .copied()
-            .filter(|hash| !scanned_transaction_hashes.contains(hash))
+            .filter(|hash| !observed_transaction_hashes.contains(hash))
             .collect()
     }
 
@@ -1954,8 +2019,8 @@ impl CucumberWorld {
             )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field(
-                "scanned_transaction_hashes",
-                &self.scanned_transaction_hashes_len(),
+                "observed_transaction_hashes",
+                &self.observed_transaction_hashes_len(),
             )
             .field(
                 "wallet_utxos_by_block",

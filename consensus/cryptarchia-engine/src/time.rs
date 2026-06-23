@@ -49,6 +49,16 @@ impl Epoch {
     pub const fn strict_add(self, rhs: Self) -> Self {
         Self(self.0.strict_add(rhs.0))
     }
+
+    /// Strict epoch subtraction, panicking if overflow occurred.
+    ///
+    /// # Panics
+    /// This function will always panic on overflow, regardless of whether
+    /// overflow checks are enabled.
+    #[must_use]
+    pub const fn strict_sub(self, rhs: Self) -> Self {
+        Self(self.0.strict_sub(rhs.0))
+    }
 }
 
 impl Display for Epoch {
@@ -78,6 +88,12 @@ impl PartialOrd<u32> for Epoch {
 impl PartialOrd<Epoch> for u32 {
     fn partial_cmp(&self, other: &Epoch) -> Option<Ordering> {
         self.partial_cmp(&other.0)
+    }
+}
+
+impl AsRef<u32> for Epoch {
+    fn as_ref(&self) -> &u32 {
+        &self.0
     }
 }
 

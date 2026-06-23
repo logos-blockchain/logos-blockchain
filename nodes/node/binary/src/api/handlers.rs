@@ -37,6 +37,9 @@ use lb_http_api_common::{
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
         wallet::{
             balance::WalletBalanceResponseBody,
+            claimable_vouchers::{
+                ClaimableVoucherInfoResponseBody, WalletClaimableVouchersResponseBody,
+            },
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
@@ -1567,6 +1570,44 @@ pub mod wallet {
                 "The requested address could not be found in the wallet",
             )
                 .into_response(),
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        }
+    }
+
+    #[utoipa::path(
+    get,
+    path = paths::LEADER_CLAIM_VOUCHERS,
+    responses(
+        (status = 200, description = "Get claimable wallet vouchers"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+    )]
+    pub async fn get_claimable_vouchers<WalletService, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Query(query): Query<TipQuery>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData + 'static,
+        RuntimeServiceId: Debug + Send + Sync + Display + 'static + AsServiceId<WalletService>,
+    {
+        let wallet_relay = match get_relay_or_500::<WalletService, _>(&handle).await {
+            Ok(relay) => relay,
+            Err(error_response) => return error_response,
+        };
+        let wallet_api = WalletApi::<WalletService, RuntimeServiceId>::new(wallet_relay);
+
+        match wallet_api.get_claimable_vouchers(query.tip).await {
+            Ok(lb_wallet_service::TipResponse { tip, response }) => {
+                let vouchers = response
+                    .into_iter()
+                    .map(|voucher| ClaimableVoucherInfoResponseBody {
+                        commitment: voucher.commitment,
+                        nullifier: voucher.nullifier,
+                    })
+                    .collect();
+
+                WalletClaimableVouchersResponseBody { tip, vouchers }.into_response()
+            }
             Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
         }
     }

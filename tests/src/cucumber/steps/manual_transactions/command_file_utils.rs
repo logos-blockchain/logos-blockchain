@@ -60,7 +60,10 @@ use crate::{
                 utils::{BestNodeInfo, WalletOutputState, extend_tx_hash_set},
             },
         },
-        wallet::best_node::{get_best_node_info, get_best_node_info_choose},
+        wallet::{
+            best_node::{get_best_node_info, get_best_node_info_choose},
+            checks::wait_for_observed_transaction_hashes,
+        },
         world::{CucumberWorld, WalletInfo},
     },
 };
@@ -196,10 +199,8 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
 
     let mut all_next_wallet_tx_hashes = HashSet::new();
     for cycle in 0..cycles {
-        let best_node_info = get_best_node_info_choose(world, &wallet_names).await?;
         let mut available_utxos =
-            utils::sync_available_utxos_for_user_wallets(world, step, Some(&best_node_info))
-                .await?;
+            utils::current_available_utxos_for_user_wallets(world, step).await?;
 
         let cycle_tx_hashes = execute_ring_send_round_with_utxo_cache(
             world,
@@ -215,7 +216,6 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
         verify_transactions_mined(
             world,
             step,
-            wallet_names.as_ref(),
             &cycle_tx_hashes,
             wallet_names.len() * transactions_per_wallet,
             Some(cycle + 1),
@@ -225,14 +225,6 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
         .await?;
 
         extend_tx_hash_set(&mut all_next_wallet_tx_hashes, &cycle_tx_hashes)?;
-
-        info!(
-            target: TARGET,
-            "CONTINUOUS NEXT WALLET cycle {} E: Refresh user wallet balances",
-            cycle + 1
-        );
-        let best_node_info = get_best_node_info_choose(world, &wallet_names).await?;
-        utils::sync_available_utxos_for_user_wallets(world, step, Some(&best_node_info)).await?;
     }
 
     let expected_total = cycles * wallet_names.len() * transactions_per_wallet;
@@ -257,11 +249,9 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments, reason = "Need all args")]
 async fn verify_transactions_mined(
     world: &mut CucumberWorld,
     step: &str,
-    wallet_names: &[String],
     tx_hashes: &HashSet<TxHash>,
     expected_tx_count: usize,
     cycle: Option<usize>,
@@ -280,19 +270,12 @@ async fn verify_transactions_mined(
 
     info!(
         target: TARGET,
-        "{tag}{} {phase}: Wait for {} submitted transaction hashes to be observed in scanned blocks",
+        "{tag}{} {phase}: Wait for {} submitted transaction hashes to be observed in chain blocks",
         cycle.map_or_else(String::new, |cycle| format!(" cycle {cycle}")),
         tx_hashes.len(),
     );
 
-    wait_for_scanned_transaction_hashes(
-        world,
-        step,
-        wallet_names,
-        tx_hashes,
-        Duration::from_mins(3),
-    )
-    .await
+    wait_for_observed_transaction_hashes(world, step, tx_hashes, Duration::from_mins(3)).await
 }
 
 #[expect(
@@ -331,7 +314,6 @@ async fn execute_ring_send_round_with_utxo_cache(
                 value_per_transaction: value,
             },
             Some(available_utxos),
-            Some(&best_node_info),
         )
         .await?;
 
@@ -379,17 +361,7 @@ async fn wait_wallet_send_ready(
     required_available: u64,
     readiness: WalletSendReadiness,
     mut available_utxos: Option<&mut WalletUtxos>,
-    best_node_info: Option<&BestNodeInfo>,
 ) -> Result<(), StepError> {
-    let wallet = world.resolve_wallet(wallet_name)?;
-    let wallet_pk = wallet.public_key()?;
-
-    let best_node_name = if let Some(info) = best_node_info {
-        info.best_node_for_wallet(world, wallet_name)?
-    } else {
-        wallet.node_name.clone()
-    };
-
     let start = Instant::now();
 
     let mut last_available_value = 0u64;
@@ -402,9 +374,7 @@ async fn wait_wallet_send_ready(
     } = readiness;
 
     while start.elapsed() < Duration::from_secs(timeout_seconds) {
-        let mut fresh =
-            utils::sync_wallet_available_state(world, wallet_name, &best_node_name, wallet_pk)
-                .await?;
+        let mut fresh = utils::current_wallet_available_state(world, wallet_name).await?;
 
         // Prefer smaller UTXOs first. The transaction builder selects sufficient
         // inputs, so this helps consume smaller/dustier outputs before large
@@ -474,20 +444,19 @@ async fn execute_non_stop_manual_command(
         } => execute_coin_split(world, step, wallet, *outputs, *value, None).await,
         ManualCommand::Verify { .. } => handle_verify_command(world, step, command).await,
         ManualCommand::WalletBalance { wallet_name } => {
-            utils::sync_available_utxos_for_wallet(world, step, wallet_name).await?;
-            Ok(())
+            log_wallet_balance(world, step, wallet_name).await
         }
         ManualCommand::WalletBalanceAllUserWallets => {
-            utils::sync_available_utxos_for_user_wallets(world, step, None).await?;
-            Ok(())
+            log_wallet_balances(world, step, world.all_user_wallets()).await
         }
         ManualCommand::WalletBalanceAllFundingWallets => {
-            utils::sync_available_utxos_for_funding_wallets(world, step).await?;
-            Ok(())
+            log_wallet_balances(world, step, world.all_funding_wallets()).await
         }
         ManualCommand::WalletBalanceAllWallets => {
-            utils::sync_available_utxos_for_all_wallets(world, step, None).await?;
-            Ok(())
+            let mut wallets = world.all_user_wallets();
+            wallets.extend(world.all_funding_wallets());
+
+            log_wallet_balances(world, step, wallets).await
         }
         ManualCommand::ClearEncumbrances { wallet_name } => {
             clear_wallet_encumbrances(world, step, wallet_name)
@@ -542,6 +511,49 @@ async fn execute_non_stop_manual_command(
         }
         ManualCommand::Stop => Ok(()),
     }
+}
+
+async fn log_wallet_balances(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallets: Vec<WalletInfo>,
+) -> StepResult {
+    for wallet in wallets {
+        log_wallet_balance(world, step, &wallet.wallet_name).await?;
+    }
+
+    Ok(())
+}
+
+async fn log_wallet_balance(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+) -> StepResult {
+    let available =
+        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::Available)
+            .await?;
+
+    let reserved =
+        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::Reserved)
+            .await?;
+
+    let on_chain =
+        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::OnChain).await?;
+
+    info!(
+        target: TARGET,
+        "Wallet `{wallet_name}` [Available] {}/{} LGO, [Encumbered] {}/{} LGO, \
+        [On-chain] {}/{} LGO",
+        available.output_count,
+        available.value,
+        reserved.output_count,
+        reserved.value,
+        on_chain.output_count,
+        on_chain.value,
+    );
+
+    Ok(())
 }
 
 fn clear_wallet_encumbrances(
@@ -893,7 +905,6 @@ async fn execute_continuous_round_robin(
                     value_per_transaction: value,
                 },
                 Some(&mut available_utxos),
-                Some(&best_node_info),
             )
             .await
             {
@@ -937,7 +948,6 @@ async fn execute_continuous_round_robin(
         verify_transactions_mined(
             world,
             step,
-            wallet_names.as_ref(),
             &cycle_tx_hashes,
             wallet_names.len() * transactions,
             Some(cycle + 1),
@@ -951,18 +961,17 @@ async fn execute_continuous_round_robin(
     }
 
     // Final drain: verify submitted D-phase transaction hashes are observed in
-    // scanned blocks.
+    // chain blocks.
     info!(
         target: TARGET,
         "CONTINUOUS ROUND ROBIN final: Verify {} submitted round-robin transaction(s) were observed \
-        in scanned blocks",
+        in chain blocks",
         all_round_robin_tx_hashes.len(),
     );
 
-    wait_for_scanned_transaction_hashes(
+    wait_for_observed_transaction_hashes(
         world,
         step,
-        wallet_names.as_ref(),
         &all_round_robin_tx_hashes,
         Duration::from_mins(3),
     )
@@ -970,7 +979,7 @@ async fn execute_continuous_round_robin(
 
     info!(
         target: TARGET,
-        "CONTINUOUS ROUND ROBIN scenario complete: {} transaction(s) verified from scanned block transaction hashes across {} cycle(s)",
+        "CONTINUOUS ROUND ROBIN scenario complete: {} transaction(s) verified from observed chain block transaction hashes across {} cycle(s)",
         all_round_robin_tx_hashes.len(),
         cycles
     );
@@ -1027,51 +1036,6 @@ async fn send_round_robin_with_utxo_cache(
     Ok(tx_hashes)
 }
 
-async fn wait_for_scanned_transaction_hashes(
-    world: &mut CucumberWorld,
-    step: &str,
-    wallet_names: &[String],
-    expected_hashes: &HashSet<TxHash>,
-    timeout: Duration,
-) -> Result<(), StepError> {
-    let start = Instant::now();
-
-    loop {
-        let missing = world.missing_scanned_transaction_hashes(expected_hashes);
-        let observed = expected_hashes.len().saturating_sub(missing.len());
-        let best_node_info = get_best_node_info_choose(world, wallet_names).await?;
-        utils::sync_available_utxos_for_user_wallets(world, step, Some(&best_node_info)).await?;
-
-        if missing.is_empty() {
-            info!(
-                target: TARGET,
-                "Step `{}` observed {}/{} submitted transaction hash(es) in scanned blocks",
-                step,
-                observed,
-                expected_hashes.len(),
-            );
-
-            return Ok(());
-        }
-
-        if start.elapsed() >= timeout {
-            let missing_set = missing.into_iter().collect::<HashSet<_>>();
-
-            let msg = format!(
-                "Step `{step}` transaction inclusion timeout: submitted={} \
-                scanned_observed={observed} missing={}",
-                expected_hashes.len(),
-                missing_set.len(),
-            );
-            warn!(target: TARGET, "{msg}");
-
-            return Err(StepError::Timeout { message: msg });
-        }
-
-        sleep(Duration::from_millis(250)).await;
-    }
-}
-
 async fn wait_for_available_value(
     world: &mut CucumberWorld,
     step: &str,
@@ -1080,16 +1044,10 @@ async fn wait_for_available_value(
     timeout_seconds: u64,
 ) -> Result<(), StepError> {
     let start = Instant::now();
-    let best_node_info = get_best_node_info(world, wallet_name).await?;
     while start.elapsed() < Duration::from_secs(timeout_seconds) {
-        let balance = utils::sync_wallet_balance(
-            world,
-            step,
-            wallet_name,
-            WalletOutputState::Available,
-            Some(&best_node_info),
-        )
-        .await?;
+        let balance =
+            utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::Available)
+                .await?;
         if balance.value >= required_value {
             return Ok(());
         }

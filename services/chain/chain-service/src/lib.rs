@@ -431,15 +431,6 @@ impl Cryptarchia {
         log_pruned_ledger_states(pruned_states_count);
     }
 
-    /// Shrinks the memory held by the ledger states.
-    ///
-    /// This should be called after a significant number of ledger states have
-    /// been pruned by [`Self::prune_ledger_states`] to free up memory. This
-    /// should not be called frequently since it is an expensive operation.
-    fn shrink_ledger_states(&mut self) {
-        self.ledger.shrink();
-    }
-
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
         let mut cryptarchia = Self {
@@ -449,10 +440,7 @@ impl Cryptarchia {
         };
 
         // Prune the ledger states of all the pruned blocks.
-        // Also, shrink the set of ledger states to free up memory,
-        // assuming that many blocks have been pruned during bootstrapping.
         cryptarchia.prune_ledger_states(pruned_blocks.all());
-        cryptarchia.shrink_ledger_states();
 
         (cryptarchia, pruned_blocks)
     }
@@ -1047,12 +1035,12 @@ where
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
+        let mut candidate = cryptarchia.clone();
         let (pruned_blocks, reorged_blocks, events) =
-            cryptarchia.try_apply_block(&block, current_slot)?;
-        let new_lib = cryptarchia.lib();
+            candidate.try_apply_block(&block, current_slot)?;
+        let new_lib = candidate.lib();
 
         let tx_count = block.transactions().count();
-        metrics::emit_block_transactions_metric(tx_count);
 
         relays
             .storage_adapter()
@@ -1064,10 +1052,13 @@ where
             &pruned_blocks,
             Some(prev_lib),
             new_lib,
-            cryptarchia.consensus.lib_branch().slot(),
+            candidate.consensus.lib_branch().slot(),
             relays.storage_adapter(),
         )
         .await?;
+
+        *cryptarchia = candidate;
+        metrics::emit_block_transactions_metric(tx_count);
 
         let processed_block_event = {
             let tip = cryptarchia.tip_branch();

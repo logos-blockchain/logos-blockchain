@@ -132,6 +132,11 @@ impl ServiceConfig {
                 orphan: lb_chain_network_service::OrphanConfig {
                     max_orphan_cache_size: self.user.network.sync.orphan.max_orphan_cache_size,
                 },
+                tip_poll: lb_chain_network_service::TipPollConfig {
+                    enabled: self.user.network.sync.tip_poll.enabled,
+                    lag_threshold_blocks: self.user.network.sync.tip_poll.lag_threshold_blocks,
+                    max_peers_to_sample: self.user.network.sync.tip_poll.max_peers_to_sample,
+                },
             },
         };
         let chain_leader_settings = lb_chain_leader_service::LeaderSettings {

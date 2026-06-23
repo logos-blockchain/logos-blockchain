@@ -1,12 +1,9 @@
 use axum::async_trait;
 use lb_blend::{
     message::crypto::key_ext::Ed25519SecretKeyExt as _,
-    proofs::{
-        quota::{VerifiedProofOfQuota, inputs::prove::private::ProofOfLeadershipQuotaInputs},
-        selection::VerifiedProofOfSelection,
-    },
+    proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection},
     scheduling::message_blend::provers::{
-        BlendLayerProof, ProofsGeneratorSettings,
+        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
         core_and_leader::RealCoreAndLeaderProofsGenerator,
         leader::{LeaderProofsGenerator, RealLeaderProofsGenerator},
     },
@@ -40,17 +37,17 @@ pub struct MockLeaderProofsGenerator;
 impl LeaderProofsGenerator for MockLeaderProofsGenerator {
     fn new(
         _settings: ProofsGeneratorSettings,
-        _private_inputs: ProofOfLeadershipQuotaInputs,
+        _winning_pol_info_stream: WinningPolInfoStream,
     ) -> Self {
         Self
     }
 
-    async fn get_next_proof(&mut self) -> BlendLayerProof {
-        BlendLayerProof {
+    async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(BlendLayerProof {
             proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]),
             proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([0; _]),
             ephemeral_signing_key: UnsecuredEd25519Key::generate_with_blake_rng(),
-        }
+        })
     }
 }
 

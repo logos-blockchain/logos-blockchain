@@ -25,7 +25,7 @@ pub use lb_cryptarchia_engine::{Epoch, Slot};
 pub use lb_ledger::EpochState;
 use lb_network_service::NetworkService;
 use lb_services_utils::wait_until_services_are_ready;
-use lb_time_service::TimeService;
+use lb_time_service::{TimeService, TimeServiceMessage};
 use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
@@ -40,19 +40,26 @@ use overwatch::{
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use tokio::{sync::oneshot, time::sleep};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+    time::sleep,
+};
 use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
 pub use crate::{
     bootstrap::config::{BootstrapConfig, IbdConfig},
-    sync::config::{OrphanConfig, SyncConfig},
+    sync::config::{OrphanConfig, SyncConfig, TipPollConfig},
 };
 use crate::{
     bootstrap::ibd::InitialBlockDownload,
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
     relays::ChainNetworkRelays,
-    sync::orphan_handler::OrphanBlocksDownloader,
+    sync::{
+        orphan_handler::OrphanBlocksDownloader,
+        tip_poll::{PolledTip, TipPollParams, poll_peer_tips_if_behind},
+    },
 };
 
 const SERVICE_ID: &str = "ChainNetwork";
@@ -300,10 +307,55 @@ where
         let mut incoming_proposals = network_adapter.proposals_stream().await?;
         let mut chainsync_events = network_adapter.chainsync_events_stream().await?;
 
+        // Keep a handle to the adapter for the proactive tip-poll watchdog before
+        // the downloader takes ownership of it.
+        let tip_poll_adapter = network_adapter.clone();
+
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
             network_adapter,
             sync_config.orphan.max_orphan_cache_size,
         ));
+
+        // Set up the proactive tip-poll lag watchdog: subscribe to slot ticks and
+        // derive the polling cadence / lag threshold from the active slot
+        // coefficient `f`. If it can't be derived (or polling is disabled), the
+        // watchdog stays inert and the slot-tick arm is gated off.
+        let mut slot_ticks = {
+            let (sender, receiver) = oneshot::channel();
+            relays
+                .time_relay()
+                .send(TimeServiceMessage::Subscribe { sender })
+                .await
+                .map_err(|(e, _)| {
+                    DynError::from(format!("failed to subscribe to slot ticks: {e}"))
+                })?;
+            receiver
+                .await
+                .map_err(|e| DynError::from(format!("failed to receive slot tick stream: {e}")))?
+        };
+        let tip_poll_params = if sync_config.tip_poll.enabled {
+            match TipPollParams::derive(&sync_config.tip_poll, relays.cryptarchia()).await {
+                Ok(params) => {
+                    info!(
+                        target: LOG_TARGET,
+                        cadence_slots = params.cadence_slots,
+                        lag_threshold_slots = params.lag_threshold_slots,
+                        max_peers = params.max_peers,
+                        "Tip-poll lag watchdog enabled"
+                    );
+                    Some(params)
+                }
+                Err(e) => {
+                    error!(target: LOG_TARGET, %e, "Failed to derive tip-poll params; watchdog disabled");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let (polled_tip_tx, mut polled_tip_rx) = mpsc::channel::<PolledTip>(32);
+        let mut tip_poll_task: Option<JoinHandle<()>> = None;
 
         self.notify_service_ready();
 
@@ -324,6 +376,15 @@ where
                         if let Err(e) = relays.cryptarchia().handle_chainsync_event(event).await {
                             error!(target: LOG_TARGET, "Failed to forward chainsync event to chain-service: {e}");
                         }
+                    }
+
+                    Some(polled) = polled_tip_rx.recv() => {
+                        Self::enqueue_polled_tip(
+                            orphan_downloader.as_mut().get_mut(),
+                            polled.tip,
+                            polled.height,
+                            &polled.local,
+                        );
                     }
 
                     Some(block) = orphan_downloader.next(), if orphan_downloader.should_poll() => {
@@ -353,6 +414,36 @@ where
                                 orphan_downloader.cancel_active_download();
                             }
                         }
+                    }
+
+                    Some(tick) = slot_ticks.next(), if tip_poll_params.is_some() => {
+                        // Don't start a new poll if the previous one is still running.
+                        if tip_poll_task.as_ref().is_some_and(|handle| !handle.is_finished()) {
+                            continue;
+                        }
+
+                        let params = *tip_poll_params
+                            .as_ref()
+                            .expect("tip_poll_params is Some, guaranteed by the select arm condition");
+
+                        // Spawn a task to not block this event loop.
+                        // The task makes `GetTip` requests handled by this event loop in peers' side.
+                        // All two nodes make `GetTip` requests simultaneously to each other,
+                        // `poll_peer_tips_if_behind` will cause deadlock unless it's spawned off.
+                        let adapter = tip_poll_adapter.clone();
+                        let cryptarchia = relays.cryptarchia().clone();
+                        let tx = polled_tip_tx.clone();
+                        tip_poll_task = Some(tokio::spawn(async move {
+                            if let Some(polled) = poll_peer_tips_if_behind(
+                                &adapter,
+                                &cryptarchia,
+                                tick,
+                                &params,
+                            )
+                            .await && let Err(e) = tx.send(polled).await {
+                                error!(target: LOG_TARGET, %e, "the polled-tip receiver has been dropped");
+                            }
+                        }));
                     }
 
                     Some(msg) = self.service_resources_handle.inbound_relay.next() => {
@@ -481,7 +572,9 @@ where
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing. Trying to enqueue block for orphan processing",
                 );
-                if let Err(e) = orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib) {
+                if let Err(e) =
+                    orphan_downloader.enqueue_orphan(block_id, Some(parent), info.tip, info.lib)
+                {
                     error!(
                         target: LOG_TARGET, %e, ?block_id, ?parent,
                         "Failed to enqueue block for orphan processing",
@@ -579,6 +672,32 @@ where
             histogram.received_blocks_data = content_size,
             transactions = transactions,
         );
+    }
+
+    /// Hand a tip discovered by the watchdog to the orphan downloader and
+    /// record the outcome. `chosen_tip`/`chosen_height` describe the polled
+    /// tip; `local` is the local chain info it is being caught up against.
+    fn enqueue_polled_tip(
+        orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+        chosen_tip: HeaderId,
+        chosen_height: u64,
+        local: &lb_chain_service::CryptarchiaInfo,
+    ) where
+        RuntimeServiceId: Send + Sync + 'static,
+    {
+        match orphan_downloader.enqueue_orphan(chosen_tip, None, local.tip, local.lib) {
+            Ok(()) => {
+                info!(
+                    target: LOG_TARGET,
+                    tip = ?chosen_tip, height = chosen_height, local_height = local.height,
+                    "tip poll: enqueued peer tip for catch-up"
+                );
+                metrics::tip_poll_enqueued_total();
+            }
+            Err(e) => {
+                debug!(target: LOG_TARGET, %e, tip = ?chosen_tip, "tip poll: did not enqueue polled tip");
+            }
+        }
     }
 
     async fn handle_message(

@@ -120,6 +120,7 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator, ProofsVerifier> DerefMut
 mod test {
     use std::num::NonZeroU64;
 
+    use futures::{StreamExt as _, stream::repeat};
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
@@ -145,8 +146,8 @@ mod test {
 
     /// `set_epoch_private` propagates private inputs for leader proof
     /// generation.
-    #[test]
-    fn set_epoch_private_updates_generator() {
+    #[tokio::test]
+    async fn set_epoch_private_updates_generator() {
         let initial_leader = LeaderInputs {
             message_quota: 1,
             pol_epoch_nonce: ZkHash::ZERO,
@@ -191,8 +192,17 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.set_epoch_private(private_inputs.clone(), Epoch::new(1));
+        processor.set_epoch_private(Box::pin(repeat(private_inputs.clone())), Epoch::new(1));
 
-        assert!(processor.proofs_generator().0 == Some(private_inputs));
+        // The generator now stores the winning-slot stream; pulling its first item
+        // yields the inputs we provided.
+        let first_slot = processor
+            .proofs_generator_mut()
+            .0
+            .as_mut()
+            .unwrap()
+            .next()
+            .await;
+        assert!(first_slot == Some(private_inputs));
     }
 }

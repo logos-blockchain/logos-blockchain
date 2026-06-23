@@ -215,9 +215,8 @@ where
     Backend: BlendBackend<NodeId, BlakeRng, RuntimeServiceId> + Send + Sync,
     NodeId: membership::node_id::TryFrom + Clone + Debug + Send + Eq + Hash + Sync + 'static,
     Network: NetworkAdapter<RuntimeServiceId, BroadcastSettings: Eq + Hash + Unpin> + Send + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>>
-        + Send
-        + Sync,
+    ProofsGenerator:
+        CoreAndLeaderProofsGenerator<PreloadKMSBackendCorePoQGenerator<RuntimeServiceId>> + Send,
     SdpService: ServiceData<Message = SdpMessage> + Send,
     ProofsVerifier: ProofsVerifierTrait + Clone + Send + Sync,
     TimeBackend: lb_time_service::backends::TimeBackend + Send,
@@ -787,7 +786,7 @@ where
                                    + Sync
                                    + Unpin,
         > + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send + Sync,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Sync + Send,
@@ -803,6 +802,10 @@ where
     let mut latest_secret_pol_info: Option<PolEpochInfo> = None;
 
     loop {
+        // `old_epoch` captured here so we can drop the `Sync` requirement.
+        let old_epoch = old_epoch_crypto_processor
+            .as_ref()
+            .map(CoreCryptographicProcessor::epoch);
         tokio::select! {
             Some(msg) = inbound_relay.next() => {
                 match msg {
@@ -828,9 +831,9 @@ where
                 recovery_checkpoint = handle_release_round(round_info, &mut crypto_processor, rng, backend, network_adapter, recovery_checkpoint).await;
             }
             Some((Some(processed_messages_to_release), previous_epoch)) = async {
-                match (&mut old_epoch_message_scheduler, &old_epoch_crypto_processor) {
-                    (Some(old_scheduler), Some(old_crypto_processor)) => {
-                        Some((old_scheduler.next().await, old_crypto_processor.epoch()))
+                match (&mut old_epoch_message_scheduler, old_epoch) {
+                    (Some(old_scheduler), Some(old_epoch)) => {
+                        Some((old_scheduler.next().await, old_epoch))
                     },
                     _ => None
                 }
@@ -839,12 +842,17 @@ where
             }
             Some(pol_secret_info) = secret_pol_info_stream.next() => {
                 if current_epoch_info.epoch == pol_secret_info.epoch {
-                    crypto_processor.set_epoch_private(pol_secret_info.poq_private_inputs.clone(), pol_secret_info.epoch);
+                    // Apply now: move the winning-slot stream into the current processor.
+                    crypto_processor.set_epoch_private(pol_secret_info.winning_pol_info_stream, pol_secret_info.epoch);
+                    latest_secret_pol_info = None;
+                } else {
+                    // Belongs to an upcoming epoch: keep it to seed that epoch's
+                    // processor when the rotation happens.
+                    latest_secret_pol_info = Some(pol_secret_info);
                 }
-                latest_secret_pol_info = Some(pol_secret_info);
             }
             Some(epoch_event) = remaining_epoch_stream.next() => {
-                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, latest_secret_pol_info.as_ref()).await {
+                match handle_epoch_event(epoch_event, blend_config, crypto_processor, message_scheduler, current_epoch_info, recovery_checkpoint, backend, sdp_relay, &mut latest_secret_pol_info).await {
                     // Current epoch info updated to new one
                     HandleEpochEventOutput::Transitioning { new_crypto_processor, old_crypto_processor, new_scheduler, old_scheduler, new_epoch_info, new_recovery_checkpoint } => {
                         crypto_processor = new_crypto_processor;
@@ -931,7 +939,7 @@ async fn retire<
                                    + Unpin,
         > + Send
         + Sync,
-    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send + Sync,
+    ProofsGenerator: CoreAndLeaderProofsGenerator<CorePoQGenerator> + Send,
     CorePoQGenerator: Send + Sync,
     ProofsVerifier: ProofsVerifierTrait + Send + Sync,
     RuntimeServiceId: Send + Sync,
@@ -993,7 +1001,7 @@ async fn handle_epoch_event<
     current_recovery_checkpoint: ServiceState<Backend::Settings, BroadcastSettings>,
     backend: &mut Backend,
     sdp_relay: &OutboundRelay<SdpMessage>,
-    current_secret_info: Option<&PolEpochInfo>,
+    current_secret_info: &mut Option<PolEpochInfo>,
 ) -> HandleEpochEventOutput<
     NodeId,
     Rng,
@@ -1068,11 +1076,16 @@ where
                 new_epoch_info.epoch,
             ) {
                 Ok(mut new_processor) => {
-                    if let Some(current_secret_info) = current_secret_info
-                        && current_secret_info.epoch == new_epoch_info.epoch
+                    if current_secret_info
+                        .as_ref()
+                        .is_some_and(|secret| secret.epoch == new_epoch_info.epoch)
                     {
+                        // We consume the stream by `take()`ing only if the epochs match.
+                        let current_secret_info = current_secret_info
+                            .take()
+                            .expect("Secret PoL info presence checked above.");
                         new_processor.set_epoch_private(
-                            current_secret_info.poq_private_inputs.clone(),
+                            current_secret_info.winning_pol_info_stream,
                             new_epoch_info.epoch,
                         );
                     }

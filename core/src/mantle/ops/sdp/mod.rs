@@ -17,8 +17,6 @@ pub type SDPDeclareOp = crate::sdp::DeclarationMessage;
 pub type SDPWithdrawOp = crate::sdp::WithdrawMessage;
 pub type SDPActiveOp = crate::sdp::ActiveMessage;
 
-pub(crate) const MAX_DECLARATION_LOCATOR: usize = 8;
-
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum SdpError {
     #[error("Note: {0:?} isn't in the ledger")]
@@ -29,8 +27,6 @@ pub enum SdpError {
     InvalidEddsaSignature,
     #[error("Duplicate sdp declaration id: {0:?}")]
     DuplicateDeclaration(DeclarationId),
-    #[error("Sdp declaration has more than {MAX_DECLARATION_LOCATOR:?} locators")]
-    TooMuchLocators,
     #[error("Note {note_id:?} insufficient value: {value}")]
     NoteInsufficientValue { note_id: NoteId, value: u64 },
     #[error("Note {note_id:?} already used for service {service_type:?}")]
@@ -45,11 +41,11 @@ pub enum SdpError {
     #[error("Sdp declaration id not found: {0:?}")]
     DeclarationNotFound(DeclarationId),
     #[error(
-        "Sdp declaration has been already withdrawn: {declaration_id:?} at epoch {withdrawn_epoch:?}"
+        "Sdp declaration has been already scheduled to be withdrawn: {declaration_id:?} at epoch {withdraw_at:?}"
     )]
     DeclarationWithdrawn {
         declaration_id: DeclarationId,
-        withdrawn_epoch: Epoch,
+        withdraw_at: Epoch,
     },
     #[error(
         "Invalid sdp message nonce: message_nonce={message_nonce:?}, declaration_nonce={declaration_nonce:?}"

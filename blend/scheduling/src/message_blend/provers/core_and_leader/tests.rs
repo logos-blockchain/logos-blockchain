@@ -1,3 +1,4 @@
+use futures::stream::repeat;
 use lb_blend_proofs::selection::inputs::VerifyInputs;
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
@@ -73,7 +74,8 @@ async fn proof_generation() {
         encapsulation_layers: 1.try_into().unwrap(),
         epoch: Epoch::new(0),
     });
-    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(0));
+    core_and_leader_proofs_generator
+        .set_epoch_private(Box::pin(repeat(leadership_private_inputs)), Epoch::new(0));
 
     for _ in 0..leadership_quota {
         let proof = core_and_leader_proofs_generator
@@ -131,7 +133,8 @@ async fn epoch_private_info() {
         epoch: Epoch::new(0),
     });
 
-    core_and_leader_proofs_generator.set_epoch_private(leadership_private_inputs, Epoch::new(0));
+    core_and_leader_proofs_generator
+        .set_epoch_private(Box::pin(repeat(leadership_private_inputs)), Epoch::new(0));
 
     // Leadership proof should be generated and verified correctly.
     let proof = core_and_leader_proofs_generator

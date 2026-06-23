@@ -33,6 +33,7 @@ rand                             = { workspace = true }
 serde                            = { workspace = true }
 thiserror                        = { workspace = true }
 tokio                            = { workspace = true }
+tokio-stream                     = { workspace = true }
 tracing                          = { workspace = true }
 tracing-futures                  = { workspace = true }
 
@@ -42,3 +43,6 @@ lb-utils   = { workspace = true }
 
 [features]
 default = []
+# Suppresses publishing of locally-proposed blocks over the blend network.
+# The block is still self-applied to this node's chain. Test-only build flag.
+testing-disable-proposal-publish = []

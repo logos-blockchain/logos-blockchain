@@ -1,9 +1,10 @@
+use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use nom::{
-    IResult, Parser as _,
-    combinator::{map, map_res},
+    IResult,
     error::{Error, ErrorKind},
-    number::complete::{le_u16, le_u32, u8},
+    number::complete::{le_u16, le_u32, le_u64, u8},
 };
 
 use crate::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
@@ -12,6 +13,7 @@ pub mod array;
 pub use self::array::NomArray;
 pub mod bounded_vec;
 pub use self::bounded_vec::NomBoundedVec;
+pub mod sdp;
 
 pub trait NomEncode {
     // TODO: This could be turned into a `BoundedVec<u8, MAX_BYTES>` if we are
@@ -69,6 +71,20 @@ impl NomDecode for u32 {
     }
 }
 
+impl NomEncode for u64 {
+    fn encode(&self) -> Vec<u8> {
+        self.to_le_bytes().to_vec()
+    }
+}
+
+impl NomDecode for u64 {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        le_u64(bytes)
+    }
+}
+
 // Simple utility to encode a slice of `NomEncode` items by encoding each item
 // and concatenating the results. Not implemented on the slice type directly
 // `[T]` since that could be misleading.
@@ -86,10 +102,12 @@ impl NomDecode for Fr {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map_res(NomArray::<u8, 32>::decode, |bytes: [u8; 32]| {
-            fr_from_bytes(&bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
-        })
-        .parse(bytes)
+        let (remaining_bytes, inner) = NomArray::<u8, 32>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            fr_from_bytes(&inner)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
     }
 }
 
@@ -103,7 +121,8 @@ impl NomDecode for ChannelId {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map(NomArray::<u8, 32>::decode, Self::from).parse(bytes)
+        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        Ok((bytes, Self::from(inner)))
     }
 }
 
@@ -117,7 +136,8 @@ impl NomDecode for MsgId {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map(NomArray::<u8, 32>::decode, Self::from).parse(bytes)
+        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        Ok((bytes, Self::from(inner)))
     }
 }
 
@@ -132,9 +152,41 @@ impl NomDecode for Ed25519PublicKey {
     type Output = Self;
 
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        map_res(NomArray::<u8, 32>::decode, |key_bytes: [u8; 32]| {
-            Self::from_bytes(&key_bytes).map_err(|_| Error::new(bytes, ErrorKind::Fail))
-        })
-        .parse(bytes)
+        let (remaining_bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::from_bytes(&inner)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
+impl NomEncode for ZkPublicKey {
+    fn encode(&self) -> Vec<u8> {
+        self.as_fr().encode()
+    }
+}
+
+impl NomDecode for ZkPublicKey {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        let (bytes, inner) = Fr::decode(bytes)?;
+        Ok((bytes, Self::new(inner)))
+    }
+}
+
+impl NomEncode for Epoch {
+    fn encode(&self) -> Vec<u8> {
+        self.as_ref().encode()
+    }
+}
+
+impl NomDecode for Epoch {
+    type Output = Self;
+
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+        let (bytes, inner) = u32::decode(bytes)?;
+        Ok((bytes, Self::new(inner)))
     }
 }

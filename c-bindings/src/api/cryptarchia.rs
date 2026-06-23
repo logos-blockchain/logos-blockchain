@@ -29,6 +29,9 @@ impl From<lb_chain_service::ChainServiceMode> for State {
 pub type Hash = [u8; 32];
 pub type HeaderId = Hash;
 pub type TxHash = Hash;
+/// A note (UTXO) identifier, as 32 little-endian bytes. The FFI representation
+/// of [`lb_core::mantle::NoteId`].
+pub type NoteId = Hash;
 
 /// Converts a raw pointer to a `TxHash` into a `lb_core::mantle::TxHash`.
 ///

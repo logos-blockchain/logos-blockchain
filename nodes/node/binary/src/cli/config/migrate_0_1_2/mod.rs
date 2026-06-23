@@ -51,6 +51,26 @@ pub struct MigrateArgs {
     state: StateArgs,
 }
 
+impl MigrateArgs {
+    /// Creates arguments programmatically (e.g. from the c-bindings crate),
+    /// leaving all config overrides at their defaults.
+    #[must_use]
+    pub fn new(new_config: PathBuf, old_config: PathBuf, keystore: PathBuf) -> Self {
+        Self {
+            new_config,
+            old_config,
+            keystore,
+            log: LogArgs::default(),
+            network: NetworkArgs::default(),
+            blend: BlendArgs::default(),
+            cryptarchia: CryptarchiaArgs::default(),
+            sdp: SdpArgs::default(),
+            api: ApiArgs::default(),
+            state: StateArgs::default(),
+        }
+    }
+}
+
 impl From<MigrateArgs> for InitArgs {
     fn from(migrate: MigrateArgs) -> Self {
         Self {

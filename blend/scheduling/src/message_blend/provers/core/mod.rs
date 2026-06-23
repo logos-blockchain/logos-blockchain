@@ -60,8 +60,15 @@ where
 
     async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
         let start = Instant::now();
-        self.remaining_quota = self.remaining_quota.checked_sub(1)?;
-        let proof = self.proofs_stream.next().await?;
+        let Some(remaining_quota) = self.remaining_quota.checked_sub(1) else {
+            tracing::warn!(target: LOG_TARGET, "Core quota exhausted. No proof is generated.");
+            return None;
+        };
+        self.remaining_quota = remaining_quota;
+        let Some(proof) = self.proofs_stream.next().await else {
+            tracing::warn!(target: LOG_TARGET, "No proof available from the stream.");
+            return None;
+        };
         tracing::trace!(target: LOG_TARGET, "Generated core Blend layer proof with key nullifier {:?} addressed to node at index {:?} in {:?} ms.", hex::encode(fr_to_bytes(&proof.proof_of_quota.key_nullifier())), proof.proof_of_selection.expected_index(self.settings.membership_size), start.elapsed().as_millis());
         Some(proof)
     }

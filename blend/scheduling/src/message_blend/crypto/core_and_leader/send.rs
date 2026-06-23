@@ -5,7 +5,6 @@ use lb_blend_message::{
     Error, PaddedPayloadBody, PayloadType, crypto::proofs::PoQVerificationInputsMinusSigningKey,
     input::EncapsulationInput,
 };
-use lb_blend_proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::fr_to_bytes;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
@@ -16,7 +15,10 @@ use crate::{
         crypto::{
             EncapsulatedMessageWithVerifiedPublicHeader, EpochCryptographicProcessorSettings,
         },
-        provers::{ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator},
+        provers::{
+            ProofsGeneratorSettings, WinningPolInfoStream,
+            core_and_leader::CoreAndLeaderProofsGenerator,
+        },
     },
 };
 
@@ -47,6 +49,11 @@ impl<NodeId, CorePoQGenerator, ProofsGenerator>
     #[cfg(test)]
     pub const fn proofs_generator(&self) -> &ProofsGenerator {
         &self.proofs_generator
+    }
+
+    #[cfg(test)]
+    pub const fn proofs_generator_mut(&mut self) -> &mut ProofsGenerator {
+        &mut self.proofs_generator
     }
 }
 
@@ -88,11 +95,11 @@ where
 
     pub fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         target_epoch: Epoch,
     ) {
         self.proofs_generator
-            .set_epoch_private(new_epoch_private, target_epoch);
+            .set_epoch_private(winning_pol_info_stream, target_epoch);
     }
 }
 
@@ -133,7 +140,7 @@ where
             PayloadType::Cover => {
                 for _ in 0..self.num_blend_layers.into() {
                     let Some(proof) = self.proofs_generator.get_next_core_proof().await else {
-                        return Err(Error::NoMoreProofOfQuotas);
+                        return Err(Error::ProofNotAvailable);
                     };
                     proofs.push(proof);
                 }
@@ -141,7 +148,7 @@ where
             PayloadType::Data => {
                 for _ in 0..self.num_blend_layers.into() {
                     let Some(proof) = self.proofs_generator.get_next_leader_proof().await else {
-                        return Err(Error::NoLeadershipInfoProvided);
+                        return Err(Error::ProofNotAvailable);
                     };
                     proofs.push(proof);
                 }
@@ -200,6 +207,7 @@ where
 mod test {
     use std::num::NonZeroU64;
 
+    use futures::{StreamExt as _, stream::repeat};
     use lb_blend_message::crypto::proofs::PoQVerificationInputsMinusSigningKey;
     use lb_blend_proofs::quota::inputs::prove::{
         private::ProofOfLeadershipQuotaInputs,
@@ -221,8 +229,8 @@ mod test {
         },
     };
 
-    #[test]
-    fn set_epoch_private() {
+    #[tokio::test]
+    async fn set_epoch_private() {
         let leader_inputs = LeaderInputs {
             message_quota: 1,
             pol_epoch_nonce: ZkHash::ZERO,
@@ -262,8 +270,11 @@ mod test {
             transaction_hash: ZkHash::ONE,
         };
 
-        processor.set_epoch_private(new_private_inputs.clone(), Epoch::new(1));
+        processor.set_epoch_private(Box::pin(repeat(new_private_inputs.clone())), Epoch::new(1));
 
-        assert!(processor.proofs_generator.0 == Some(new_private_inputs));
+        // The generator now stores the winning-slot stream; pulling its first item
+        // yields the inputs we provided.
+        let first_slot = processor.proofs_generator.0.as_mut().unwrap().next().await;
+        assert!(first_slot == Some(new_private_inputs));
     }
 }

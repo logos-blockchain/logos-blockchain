@@ -1,7 +1,7 @@
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 
-use super::{MAX_DECLARATION_LOCATOR, SDPDeclareOp, SdpError};
+use super::{SDPDeclareOp, SdpError};
 use crate::{
     events::Events,
     mantle::{
@@ -37,11 +37,6 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         // Check that the declaration doesn't already exist
         if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
-        }
-
-        // Ensure it has no more than 8 locators.
-        if self.locators.len() > MAX_DECLARATION_LOCATOR {
-            return Err(SdpError::TooMuchLocators);
         }
 
         // Ensure value of locked note is sufficient for joining the service.
