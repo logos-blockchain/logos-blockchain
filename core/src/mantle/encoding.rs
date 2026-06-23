@@ -157,11 +157,8 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
         }
 
         // ProofOfClaimProof = Groth16
-        Op::LeaderClaim(leader_claim_op) => map(decode_groth16, |proof| {
-            OpProof::PoC(Groth16LeaderClaimProof::new(
-                proof,
-                leader_claim_op.voucher_nullifier,
-            ))
+        Op::LeaderClaim(_) => map(decode_groth16, |proof| {
+            OpProof::PoC(Groth16LeaderClaimProof::new(proof))
         })
         .parse(input),
 
@@ -1253,18 +1250,14 @@ mod tests {
             pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
 
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::LeaderClaim(
-            leader_claim_op.clone(),
-        )]));
+        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::LeaderClaim(leader_claim_op)]));
 
         let empty_gas_context =
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &empty_gas_context);
 
-        let poc_proof = Groth16LeaderClaimProof::new(
-            CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-            leader_claim_op.voucher_nullifier,
-        );
+        let poc_proof =
+            Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&[0u8; 128]));
 
         // Construct directly to skip proof verification (dummy proof won't verify)
         let signed_tx = SignedMantleTx {
@@ -1281,15 +1274,12 @@ mod tests {
         use crate::proofs::leader_claim_proof::Groth16LeaderClaimProof;
 
         let proof_bytes: [u8; 128] = core::array::from_fn(|i| i as u8);
-        let voucher_nf = VoucherNullifier::default();
-        let poc_proof = Groth16LeaderClaimProof::new(
-            CompressedGroth16Proof::from_bytes(&proof_bytes),
-            voucher_nf,
-        );
+        let poc_proof =
+            Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&proof_bytes));
 
         let leader_claim_op = LeaderClaimOp {
             rewards_root: RewardsRoot::default(),
-            voucher_nullifier: voucher_nf,
+            voucher_nullifier: VoucherNullifier::default(),
             pk: ZkPublicKey::from(BigUint::from(0u64)),
         };
         let op = Op::LeaderClaim(leader_claim_op);
@@ -1303,7 +1293,6 @@ mod tests {
             decoded,
             OpProof::PoC(Groth16LeaderClaimProof::new(
                 CompressedGroth16Proof::from_bytes(&proof_bytes),
-                voucher_nf,
             ))
         );
     }

@@ -1838,10 +1838,9 @@ mod tests {
                 nullifiers: leaders.nullifiers(),
                 claimable_vouchers_root: &leaders.vouchers_snapshot_root(),
                 // Use a dummy proof since duplication is detected before proof verification
-                proof_of_claim: &Groth16LeaderClaimProof::new(
-                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
-                    Fr::ZERO.into(),
-                ),
+                proof_of_claim: &Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(
+                    &[0u8; 128],
+                )),
                 tx_hash: &TxHash::from([0u8; 32]),
             })
             .unwrap_err();
