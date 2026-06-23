@@ -1,3 +1,4 @@
+use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
 use lb_key_management_system_keys::keys::ZkPublicKey;
@@ -7,11 +8,10 @@ use nom::{
     number::complete::{le_u16, le_u32, le_u64, u8},
 };
 
-use crate::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
+use crate::mantle::ops::channel::Ed25519PublicKey;
 
 pub mod array;
 pub mod bounded_vec;
-pub mod sdp;
 
 pub trait NomEncode {
     // TODO: This could be turned into a `BoundedVec<u8, MAX_BYTES>` if we are
@@ -97,32 +97,6 @@ impl NomDecode for Fr {
     }
 }
 
-impl NomEncode for ChannelId {
-    fn encode(&self) -> Vec<u8> {
-        self.as_ref().encode()
-    }
-}
-
-impl NomDecode for ChannelId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = <[u8; _]>::decode(bytes)?;
-        Ok((bytes, Self::from(inner)))
-    }
-}
-
-impl NomEncode for MsgId {
-    fn encode(&self) -> Vec<u8> {
-        self.as_ref().encode()
-    }
-}
-
-impl NomDecode for MsgId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = <[u8; _]>::decode(bytes)?;
-        Ok((bytes, Self::from(inner)))
-    }
-}
-
 // Ed25519PublicKey = 32BYTE
 impl NomEncode for Ed25519PublicKey {
     fn encode(&self) -> Vec<u8> {
@@ -164,5 +138,39 @@ impl NomDecode for Epoch {
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, inner) = u32::decode(bytes)?;
         Ok((bytes, Self::new(inner)))
+    }
+}
+
+impl NomEncode for ProofOfQuota {
+    fn encode(&self) -> Vec<u8> {
+        <[u8; _]>::from(self).encode()
+    }
+}
+
+impl NomDecode for ProofOfQuota {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = <[u8; _]>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
+impl NomEncode for ProofOfSelection {
+    fn encode(&self) -> Vec<u8> {
+        <[u8; _]>::from(self).encode()
+    }
+}
+
+impl NomDecode for ProofOfSelection {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = <[u8; _]>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
     }
 }
