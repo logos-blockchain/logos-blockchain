@@ -164,9 +164,7 @@ impl NomEncode for Op {
 }
 
 impl NomDecode for Op {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, opcode) = u8::decode(bytes)?;
 
         match opcode {

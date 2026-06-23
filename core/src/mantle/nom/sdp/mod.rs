@@ -7,7 +7,7 @@ use nom::{
 };
 
 use crate::{
-    mantle::nom::{NomArray, NomDecode, NomEncode},
+    mantle::nom::{NomDecode, NomEncode},
     sdp::{ActivityMetadata, DeclarationId, blend},
 };
 
@@ -17,15 +17,13 @@ pub mod withdraw;
 
 impl NomEncode for DeclarationId {
     fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(&self.0).encode()
+        self.0.encode()
     }
 }
 
 impl NomDecode for DeclarationId {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, value) = NomArray::<u8, _>::decode(bytes)?;
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, value) = <[u8; _]>::decode(bytes)?;
         Ok((bytes, Self(value)))
     }
 }
@@ -45,9 +43,7 @@ impl NomEncode for ActivityMetadata {
 }
 
 impl NomDecode for ActivityMetadata {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (remaining_bytes, metadata_type) = u8::decode(bytes)?;
         match metadata_type {
             ACTIVE_METADATA_BLEND_TYPE => {
@@ -73,9 +69,7 @@ impl NomEncode for blend::ActivityProof {
 }
 
 impl NomDecode for blend::ActivityProof {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (remaining_bytes, proof_version) = u8::decode(bytes)?;
         if proof_version != BLEND_ACTIVE_METADATA_VERSION_BYTE {
             return Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail)));

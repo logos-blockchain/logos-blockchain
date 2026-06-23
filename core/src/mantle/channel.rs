@@ -40,9 +40,7 @@ impl NomEncode for SlotTimeframe {
 }
 
 impl NomDecode for SlotTimeframe {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, inner) = u32::decode(bytes)?;
         Ok((bytes, Self(inner)))
     }
@@ -70,9 +68,7 @@ impl NomEncode for SlotTimeout {
 }
 
 impl NomDecode for SlotTimeout {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, inner) = u32::decode(bytes)?;
         Ok((bytes, Self(inner)))
     }

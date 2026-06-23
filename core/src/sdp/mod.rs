@@ -11,15 +11,23 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec};
+use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
+use nom::{
+    IResult,
+    error::{Error, ErrorKind},
+};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
-    mantle::{NoteId, ops::channel::Ed25519PublicKey},
+    mantle::{
+        NoteId,
+        nom::{NomDecode, NomEncode},
+        ops::channel::Ed25519PublicKey,
+    },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -144,6 +152,24 @@ impl<const MAX_SIZE: usize, const MIN: usize, const MAX: usize> TryFrom<BoundedV
     }
 }
 
+impl<const MAX_SIZE: usize> NomEncode for BoundedMultiaddr<MAX_SIZE> {
+    fn encode(&self) -> Vec<u8> {
+        let bounded_bytes = UpperBoundedVec::<_, MAX_SIZE>::new_unchecked(self.0.to_vec());
+        bounded_bytes.encode()
+    }
+}
+
+impl<const MAX_SIZE: usize> NomDecode for BoundedMultiaddr<MAX_SIZE> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = UpperBoundedVec::<u8, MAX_SIZE>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
 pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -254,6 +280,19 @@ impl FromStr for Locator {
 impl Display for Locator {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         self.0.0.fmt(f)
+    }
+}
+
+impl NomEncode for Locator {
+    fn encode(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+}
+
+impl NomDecode for Locator {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = BoundedMultiaddr::<MAX_LOCATOR_BYTE_SIZE>::decode(bytes)?;
+        Ok((remaining_bytes, Self(value)))
     }
 }
 

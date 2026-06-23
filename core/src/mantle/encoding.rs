@@ -15,7 +15,7 @@ use time::OffsetDateTime;
 use crate::{
     mantle::{
         MantleTx, Note, NoteId, SignedMantleTx,
-        nom::{NomBoundedVec, NomDecode as _, NomEncode as _},
+        nom::{NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
             leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
@@ -38,17 +38,12 @@ use crate::{
 
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
-type NomOps<'a> = NomBoundedVec<'a, Op, { Ops::MIN }, { Ops::MAX }, 1>;
 const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
 const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
 pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
 pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
-pub type NomInputs<'a> =
-    NomBoundedVec<'a, NoteId, { BoundedInputs::MIN }, { BoundedInputs::MAX }, 1>;
 
 pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
-pub type NomOutputs<'a> =
-    NomBoundedVec<'a, Note, { BoundedOutputs::MIN }, { BoundedOutputs::MAX }, 1>;
 
 // ==============================================================================
 // Top-Level Transaction Decoders
@@ -67,7 +62,7 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
 
 pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     // MantleTx = Ops ExecutionGasPrice StorageGasPrice
-    let (input, ops) = NomOps::decode(input)?;
+    let (input, ops) = Ops::decode(input)?;
 
     Ok((input, MantleTx(ops)))
 }
@@ -97,13 +92,13 @@ pub(crate) fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp>
 // ==============================================================================
 
 fn decode_inputs(input: &[u8]) -> IResult<&[u8], Inputs> {
-    let (input, bounded_inputs) = NomInputs::decode(input)?;
+    let (input, bounded_inputs) = BoundedInputs::decode(input)?;
 
     Ok((input, Inputs::new(bounded_inputs)))
 }
 
 fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
-    let (input, bounded_outputs) = NomOutputs::decode(input)?;
+    let (input, bounded_outputs) = BoundedOutputs::decode(input)?;
 
     Ok((input, Outputs::new(bounded_outputs)))
 }
@@ -451,7 +446,7 @@ fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
 /// Encode top-level transactions
 #[must_use]
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
-    NomOps::from(tx.ops()).encode()
+    tx.ops().encode()
 }
 
 #[must_use]
@@ -521,7 +516,6 @@ mod tests {
     use crate::{
         mantle::{
             Transaction as _,
-            nom::NomArray,
             ops::{
                 channel::{
                     ChannelId, MsgId,
@@ -586,8 +580,8 @@ mod tests {
         assert!(remaining.is_empty());
 
         // Test Hash32
-        let data = NomArray::<u8, _>::from(&[0x42u8; 32]).encode();
-        let (remaining, value) = NomArray::<u8, _>::decode(&data).unwrap();
+        let data = [0x42u8; 32].encode();
+        let (remaining, value) = <[u8; 32]>::decode(&data).unwrap();
         assert_eq!(value, [0x42u8; 32]);
         assert!(remaining.is_empty());
 
@@ -1422,7 +1416,7 @@ mod tests {
         let valid_input = vec![u8::MAX];
 
         // Should not fail with TooLarge error (will fail with incomplete data)
-        let result = NomOps::decode(&valid_input);
+        let result = Ops::decode(&valid_input);
         if let Err(nom::Err::Error(e)) = result {
             assert_ne!(e.code, ErrorKind::TooLarge, "Should not reject at u8::MAX]");
         }

@@ -1,28 +1,20 @@
-use lb_blend_proofs::{
-    quota::{PROOF_OF_QUOTA_SIZE, ProofOfQuota},
-    selection::{PROOF_OF_SELECTION_SIZE, ProofOfSelection},
-};
+use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use nom::{
     IResult,
     error::{Error, ErrorKind},
 };
 
-use crate::mantle::nom::{NomArray, NomDecode, NomEncode};
-
-type ProofOfQuotaNom<'a> = NomArray<'a, u8, PROOF_OF_QUOTA_SIZE>;
+use crate::mantle::nom::{NomDecode, NomEncode};
 
 impl NomEncode for ProofOfQuota {
     fn encode(&self) -> Vec<u8> {
-        let proof_bytes = <[u8; PROOF_OF_QUOTA_SIZE]>::from(self);
-        ProofOfQuotaNom::from(&proof_bytes).encode()
+        <[u8; _]>::from(self).encode()
     }
 }
 
 impl NomDecode for ProofOfQuota {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (remaining_bytes, value) = ProofOfQuotaNom::decode(bytes)?;
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = <[u8; _]>::decode(bytes)?;
         Ok((
             remaining_bytes,
             Self::try_from(value)
@@ -31,20 +23,15 @@ impl NomDecode for ProofOfQuota {
     }
 }
 
-type ProofOfSelectionNom<'a> = NomArray<'a, u8, PROOF_OF_SELECTION_SIZE>;
-
 impl NomEncode for ProofOfSelection {
     fn encode(&self) -> Vec<u8> {
-        let proof_bytes = <[u8; PROOF_OF_SELECTION_SIZE]>::from(self);
-        ProofOfSelectionNom::from(&proof_bytes).encode()
+        <[u8; _]>::from(self).encode()
     }
 }
 
 impl NomDecode for ProofOfSelection {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (remaining_bytes, value) = ProofOfSelectionNom::decode(bytes)?;
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = <[u8; _]>::decode(bytes)?;
         Ok((
             remaining_bytes,
             Self::try_from(value)

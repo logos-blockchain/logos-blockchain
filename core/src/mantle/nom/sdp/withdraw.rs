@@ -19,9 +19,7 @@ impl NomEncode for SDPWithdrawOp {
 }
 
 impl NomDecode for SDPWithdrawOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
         let (bytes, nonce) = u64::decode(bytes)?;
         let (bytes, locked_note_id) = NoteId::decode(bytes)?;

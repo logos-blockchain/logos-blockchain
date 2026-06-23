@@ -7,6 +7,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded_vec::BoundedError;
 use lb_utxotree::UtxoTree;
+use nom::IResult;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -15,7 +16,7 @@ use crate::{
     crypto::{Hash, ZkHasher},
     events::Events,
     mantle::{
-        encoding::{BoundedInputs, BoundedOutputs, NomInputs},
+        encoding::{BoundedInputs, BoundedOutputs},
         nom::{NomDecode, NomEncode},
         ops::OpId,
     },
@@ -170,6 +171,19 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
+impl NomEncode for Outputs {
+    fn encode(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+}
+
+impl NomDecode for Outputs {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, items) = BoundedOutputs::decode(bytes)?;
+        Ok((bytes, Self(items)))
+    }
+}
+
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
 pub struct Inputs(BoundedInputs);
 
@@ -305,15 +319,13 @@ impl<'input> IntoIterator for &'input Inputs {
 
 impl NomEncode for Inputs {
     fn encode(&self) -> Vec<u8> {
-        NomInputs::from(&self.0).encode()
+        self.0.encode()
     }
 }
 
 impl NomDecode for Inputs {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        let (bytes, items) = NomInputs::decode(bytes)?;
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, items) = BoundedInputs::decode(bytes)?;
         Ok((bytes, Self(items)))
     }
 }
@@ -353,9 +365,7 @@ impl NomEncode for NoteId {
 }
 
 impl NomDecode for NoteId {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, inner) = Fr::decode(bytes)?;
         Ok((bytes, Self(inner)))
     }
@@ -389,9 +399,7 @@ impl NomEncode for Note {
 }
 
 impl NomDecode for Note {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, value) = u64::decode(bytes)?;
         let (bytes, pk) = ZkPublicKey::decode(bytes)?;
         Ok((bytes, Self::new(value, pk)))

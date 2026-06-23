@@ -10,9 +10,7 @@ use nom::{
 use crate::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
 
 pub mod array;
-pub use self::array::NomArray;
 pub mod bounded_vec;
-pub use self::bounded_vec::NomBoundedVec;
 pub mod sdp;
 
 pub trait NomEncode {
@@ -23,10 +21,8 @@ pub trait NomEncode {
     fn encode(&self) -> Vec<u8>;
 }
 
-pub trait NomDecode {
-    type Output;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output>;
+pub trait NomDecode: Sized {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self>;
 }
 
 impl NomEncode for u8 {
@@ -36,9 +32,7 @@ impl NomEncode for u8 {
 }
 
 impl NomDecode for u8 {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         u8(bytes)
     }
 }
@@ -50,9 +44,7 @@ impl NomEncode for u16 {
 }
 
 impl NomDecode for u16 {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         le_u16(bytes)
     }
 }
@@ -64,9 +56,7 @@ impl NomEncode for u32 {
 }
 
 impl NomDecode for u32 {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         le_u32(bytes)
     }
 }
@@ -78,9 +68,7 @@ impl NomEncode for u64 {
 }
 
 impl NomDecode for u64 {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         le_u64(bytes)
     }
 }
@@ -94,15 +82,13 @@ fn encode_slice<T: NomEncode>(items: &[T]) -> Vec<u8> {
 
 impl NomEncode for Fr {
     fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(&fr_to_bytes(self)).encode()
+        fr_to_bytes(self).encode()
     }
 }
 
 impl NomDecode for Fr {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (remaining_bytes, inner) = NomArray::<u8, 32>::decode(bytes)?;
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, inner) = <[u8; 32]>::decode(bytes)?;
         Ok((
             remaining_bytes,
             fr_from_bytes(&inner)
@@ -113,30 +99,26 @@ impl NomDecode for Fr {
 
 impl NomEncode for ChannelId {
     fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(self.as_ref()).encode()
+        self.as_ref().encode()
     }
 }
 
 impl NomDecode for ChannelId {
-    type Output = Self;
-
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        let (bytes, inner) = <[u8; _]>::decode(bytes)?;
         Ok((bytes, Self::from(inner)))
     }
 }
 
 impl NomEncode for MsgId {
     fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(self.as_ref()).encode()
+        self.as_ref().encode()
     }
 }
 
 impl NomDecode for MsgId {
-    type Output = Self;
-
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        let (bytes, inner) = <[u8; _]>::decode(bytes)?;
         Ok((bytes, Self::from(inner)))
     }
 }
@@ -144,15 +126,13 @@ impl NomDecode for MsgId {
 // Ed25519PublicKey = 32BYTE
 impl NomEncode for Ed25519PublicKey {
     fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(&self.to_bytes()).encode()
+        self.to_bytes().encode()
     }
 }
 
 impl NomDecode for Ed25519PublicKey {
-    type Output = Self;
-
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
+        let (remaining_bytes, inner) = <[u8; 32]>::decode(bytes)?;
         Ok((
             remaining_bytes,
             Self::from_bytes(&inner)
@@ -168,9 +148,7 @@ impl NomEncode for ZkPublicKey {
 }
 
 impl NomDecode for ZkPublicKey {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, inner) = Fr::decode(bytes)?;
         Ok((bytes, Self::new(inner)))
     }
@@ -183,9 +161,7 @@ impl NomEncode for Epoch {
 }
 
 impl NomDecode for Epoch {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, inner) = u32::decode(bytes)?;
         Ok((bytes, Self::new(inner)))
     }

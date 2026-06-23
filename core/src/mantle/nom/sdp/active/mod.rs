@@ -20,9 +20,7 @@ impl NomEncode for SDPActiveOp {
 }
 
 impl NomDecode for SDPActiveOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
         let (bytes, nonce) = Nonce::decode(bytes)?;
         let (bytes, metadata) = ActivityMetadata::decode(bytes)?;
