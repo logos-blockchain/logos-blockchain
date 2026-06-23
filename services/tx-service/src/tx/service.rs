@@ -5,7 +5,7 @@ pub mod openapi {
 }
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fmt::{Debug, Display},
     marker::PhantomData,
     pin::Pin,
@@ -453,28 +453,33 @@ where
         pool: &Pool,
         hashes: Vec<Pool::Key>,
     ) -> Result<TransactionsByHashesResponse<Pool::Item, Pool::Key>, MempoolError> {
-        let keys_set: BTreeSet<Pool::Key> = hashes.into_iter().collect();
+        let unique_hashes: BTreeSet<Pool::Key> = hashes.iter().cloned().collect();
 
-        let items_stream = pool
-            .get_items_by_keys(keys_set.iter().cloned())
-            .await
-            .map_err(|e| {
-                MempoolError::StorageError(format!("Failed to get items by keys: {e:?}"))
-            })?;
+        let items_stream = pool.get_items_by_keys(unique_hashes).await.map_err(|e| {
+            MempoolError::StorageError(format!("Failed to get items by keys: {e:?}"))
+        })?;
 
-        let found_transactions: Vec<Pool::Item> = items_stream.collect().await;
+        let mut fetched_by_hash = items_stream
+            .map(|tx| (Transaction::hash(&tx), tx))
+            .collect::<BTreeMap<_, _>>()
+            .await;
 
-        if found_transactions.len() == keys_set.len() {
-            return Ok(TransactionsByHashesResponse::new(
-                found_transactions,
-                BTreeSet::new(),
-            ));
+        let mut seen_hashes = BTreeSet::new();
+        let mut found_transactions = Vec::new();
+        let mut not_found_hashes = BTreeSet::new();
+
+        for hash in hashes {
+            if !seen_hashes.insert(hash.clone()) {
+                continue;
+            }
+
+            match fetched_by_hash.remove(&hash) {
+                Some(tx) => found_transactions.push(tx),
+                None => {
+                    not_found_hashes.insert(hash);
+                }
+            }
         }
-
-        let found_hashes: BTreeSet<Pool::Key> =
-            found_transactions.iter().map(Transaction::hash).collect();
-
-        let not_found_hashes: BTreeSet<Pool::Key> = &keys_set - &found_hashes;
 
         Ok(TransactionsByHashesResponse::new(
             found_transactions,
