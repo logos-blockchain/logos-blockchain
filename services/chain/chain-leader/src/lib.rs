@@ -20,7 +20,7 @@ use lb_core::{
     block::{Block, Error as BlockError, MAX_BLOCK_SIZE, MAX_BLOCK_TRANSACTIONS},
     header::HeaderId,
     mantle::{
-        AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash, TxSelect,
+        AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash,
         gas::MainnetGasConstants,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
@@ -146,9 +146,7 @@ impl Debug for LeaderMsg {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct LeaderSettings<Ts, BlendBroadcastSettings> {
-    #[serde(default)]
-    pub transaction_selector_settings: Ts,
+pub struct LeaderSettings<BlendBroadcastSettings> {
     pub config: lb_ledger::Config,
     pub blend_broadcast_settings: BlendBroadcastSettings,
     pub wallet_config: LeaderWalletConfig,
@@ -159,7 +157,6 @@ pub struct CryptarchiaLeader<
     BlendService,
     Mempool,
     MempoolNetAdapter,
-    TxS,
     TimeBackend,
     CryptarchiaService,
     ChainNetwork,
@@ -176,8 +173,6 @@ pub struct CryptarchiaLeader<
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    TxS: TxSelect<Tx = Mempool::Item>,
-    TxS::Settings: Send,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData,
@@ -191,7 +186,6 @@ impl<
     BlendService,
     Mempool,
     MempoolNetAdapter,
-    TxS,
     TimeBackend,
     CryptarchiaService,
     ChainNetwork,
@@ -202,7 +196,6 @@ impl<
         BlendService,
         Mempool,
         MempoolNetAdapter,
-        TxS,
         TimeBackend,
         CryptarchiaService,
         ChainNetwork,
@@ -219,15 +212,13 @@ where
     MempoolNetAdapter:
         MempoolNetworkAdapter<RuntimeServiceId, Payload = Mempool::Item, Key = Mempool::Key>,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    TxS: TxSelect<Tx = Mempool::Item>,
-    TxS::Settings: Send,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData,
     ChainNetwork: ChainNetworkServiceData,
     Wallet: lb_wallet_service::api::WalletServiceData,
 {
-    type Settings = LeaderSettings<TxS::Settings, BlendService::BroadcastSettings>;
+    type Settings = LeaderSettings<BlendService::BroadcastSettings>;
     type State = overwatch::services::state::NoState<Self::Settings>;
     type StateOperator = overwatch::services::state::NoOperator<Self::State>;
     type Message = LeaderMsg;
@@ -238,7 +229,6 @@ impl<
     BlendService,
     Mempool,
     MempoolNetAdapter,
-    TxS,
     TimeBackend,
     CryptarchiaService,
     ChainNetwork,
@@ -249,7 +239,6 @@ impl<
         BlendService,
         Mempool,
         MempoolNetAdapter,
-        TxS,
         TimeBackend,
         CryptarchiaService,
         ChainNetwork,
@@ -292,8 +281,6 @@ where
         + Sync
         + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
-    TxS: TxSelect<Tx = Mempool::Item> + Clone + Send + Sync + 'static,
-    TxS::Settings: Send + Sync + 'static,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync + 'static,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item> + 'static,
@@ -352,7 +339,6 @@ where
 
         let LeaderSettings {
             config: ledger_config,
-            transaction_selector_settings,
             blend_broadcast_settings,
             wallet_config,
         } = self
@@ -375,8 +361,6 @@ where
                 .await
                 .expect("Relay with KMS service should be available."),
         );
-
-        let tx_selector = TxS::new(transaction_selector_settings);
 
         let blend_adapter = BlendAdapter::<BlendService>::new(
             relays.blend_relay().clone(),
@@ -464,7 +448,6 @@ where
                                 slot,
                                 proof,
                                 &signing_key,
-                                tx_selector.clone(),
                                 &relays,
                                 tip_state,
                                 &ledger_config,
@@ -506,7 +489,6 @@ impl<
     BlendService,
     Mempool,
     MempoolNetAdapter,
-    TxS,
     TimeBackend,
     CryptarchiaService,
     ChainNetwork,
@@ -517,7 +499,6 @@ impl<
         BlendService,
         Mempool,
         MempoolNetAdapter,
-        TxS,
         TimeBackend,
         CryptarchiaService,
         ChainNetwork,
@@ -560,8 +541,6 @@ where
         + 'static,
     <MempoolNetAdapter as MempoolNetworkAdapter<RuntimeServiceId>>::Settings: Send + Sync,
     <Mempool as MemPool>::Storage: MempoolStorageAdapter<RuntimeServiceId> + Clone + Send + Sync,
-    TxS: TxSelect<Tx = Mempool::Item> + Clone + Send + Sync + 'static,
-    TxS::Settings: Send + Sync + 'static,
     TimeBackend: lb_time_service::backends::TimeBackend,
     TimeBackend::Settings: Clone + Send + Sync,
     CryptarchiaService: CryptarchiaServiceData<Tx = Mempool::Item> + 'static,
@@ -575,21 +554,15 @@ where
         + AsServiceId<Wallet>
         + AsServiceId<PreloadKmsService<RuntimeServiceId>>,
 {
-    #[expect(clippy::allow_attributes_without_reason)]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "All arguments are required for proposing a block"
-    )]
     #[instrument(
         level = "debug",
-        skip(tx_selector, relays, ledger_state, ledger_config, proof, signing_key)
+        skip(relays, ledger_state, ledger_config, proof, signing_key)
     )]
     async fn propose_block(
         parent: HeaderId,
         slot: Slot,
         proof: Groth16LeaderProof,
         signing_key: &Ed25519Key,
-        tx_selector: TxS,
         relays: &CryptarchiaConsensusRelays<
             BlendService,
             Mempool,
@@ -666,7 +639,7 @@ where
         }
 
         let valid_tx_stream = stream::iter(valid_txs);
-        let txs = txs_for_block(tx_selector.select_tx_from(valid_tx_stream)).await;
+        let txs = txs_for_block(valid_tx_stream).await;
 
         let block = Block::create(parent, slot, proof, txs, signing_key)?;
 
