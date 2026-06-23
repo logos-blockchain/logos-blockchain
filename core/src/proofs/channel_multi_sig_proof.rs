@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::HashSet};
+use std::cmp::Ordering;
 
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use serde::{Deserialize, Serialize};
@@ -46,57 +46,62 @@ impl Ord for IndexedSignature {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Duplicate indices found: {0:?}.")]
-    DuplicateIndices(Vec<ChannelKeyIndex>),
+    #[error("Signature indices are not strictly increasing: {0:?}.")]
+    IndicesNotStrictlyIncreasing(Vec<ChannelKeyIndex>),
     #[error("Too many signatures: got {actual}, maximum allowed is {maximum}.")]
     TooManySignatures { actual: usize, maximum: usize },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ChannelMultiSigProof {
-    // Invariant: signatures are sorted by index (then signature) with no duplicates
+    // Invariant: signature indices are strictly increasing (hence ordered and
+    // unique), as required by the spec. Upheld by `new` AND by the custom
+    // `Deserialize` impl below, so a non-monotonic proof is unrepresentable no
+    // matter how it is constructed — every consumer can rely on the invariant
+    // without re-checking.
     signatures: Vec<IndexedSignature>,
+}
+
+impl<'de> Deserialize<'de> for ChannelMultiSigProof {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Deserialize the raw fields, then route through `new` so the well-formedness
+        // invariant holds for serde paths too (e.g. the JSON mempool path). Without
+        // this, the derived `Deserialize` would let a caller construct a proof with
+        // non-monotonic / duplicate signature indices, defeating threshold checks.
+        #[derive(Deserialize)]
+        struct Raw {
+            signatures: Vec<IndexedSignature>,
+        }
+        let Raw { signatures } = Raw::deserialize(deserializer)?;
+        Self::new(signatures).map_err(serde::de::Error::custom)
+    }
 }
 
 impl ChannelMultiSigProof {
     pub fn new(signatures: Vec<IndexedSignature>) -> Result<Self, Error> {
-        let signatures = Self::normalize_signatures(signatures);
         Self::validate_well_formedness(&signatures)?;
         Ok(Self { signatures })
     }
 
-    /// Sorts and removes duplicate signatures.
-    ///
-    /// This is required for the Proof to be well-formed, but it's not
-    /// sufficient for the Proof to be valid.
-    fn normalize_signatures(mut signatures: Vec<IndexedSignature>) -> Vec<IndexedSignature> {
-        signatures.sort_unstable();
-        signatures.dedup();
-        signatures
-    }
-
-    /// Validates that the proof is structurally well-formed.
-    ///
-    /// Must be called after [`Self::normalize_signatures`].
-    ///
-    /// # Checks
-    ///
-    /// - No duplicate indices (each index appears at most once)
-    /// - Signature count doesn't exceed `ChannelKeyIndex::MAX`
-    ///
-    /// # Note
+    /// Validates that the proof is structurally well-formed: signature indices
+    /// must be strictly increasing (so they are ordered and unique, per the
+    /// `CHANNEL_CONFIG` / `CHANNEL_WITHDRAW` spec), and the count must not
+    /// exceed `ChannelKeyIndex::MAX`.
     ///
     /// This validates structural correctness only. Cryptographic validity
-    /// (e.g.: signature verification, threshold requirements, index-to-key
+    /// (signature verification, threshold requirements, index-to-key
     /// correspondence) must be checked separately.
     fn validate_well_formedness(signatures: &[IndexedSignature]) -> Result<(), Error> {
-        let mut seen = HashSet::with_capacity(signatures.len());
-        for sig in signatures {
-            if !seen.insert(sig.channel_key_index) {
-                return Err(Error::DuplicateIndices(
-                    signatures.iter().map(|s| s.channel_key_index).collect(),
-                ));
-            }
+        if signatures
+            .windows(2)
+            .any(|w| w[0].channel_key_index >= w[1].channel_key_index)
+        {
+            return Err(Error::IndicesNotStrictlyIncreasing(
+                signatures.iter().map(|s| s.channel_key_index).collect(),
+            ));
         }
         let max_signatures_allowed = usize::from(ChannelKeyIndex::MAX) + 1;
         if signatures.len() > max_signatures_allowed {
@@ -131,38 +136,73 @@ mod tests {
     }
 
     #[test]
-    fn rejects_same_index_with_different_signatures() {
-        // Same index, distinct signatures: survives `dedup` (full-equality), so
-        // `validate_well_formedness` must reject it.
+    fn rejects_repeated_index() {
+        // Same index twice (distinct sigs): not strictly increasing, so rejected.
         let signatures = vec![
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(0, sig(2)),
         ];
         assert!(matches!(
             ChannelMultiSigProof::new(signatures),
-            Err(Error::DuplicateIndices(_))
+            Err(Error::IndicesNotStrictlyIncreasing(_))
         ));
     }
 
     #[test]
-    fn accepts_distinct_indices() {
+    fn rejects_unsorted_indices() {
+        // Unique but not strictly increasing (descending): rejected (we no longer
+        // silently sort — the spec asserts monotonic order).
+        let signatures = vec![
+            IndexedSignature::new(1, sig(1)),
+            IndexedSignature::new(0, sig(2)),
+        ];
+        assert!(matches!(
+            ChannelMultiSigProof::new(signatures),
+            Err(Error::IndicesNotStrictlyIncreasing(_))
+        ));
+    }
+
+    #[test]
+    fn accepts_strictly_increasing_indices() {
         let signatures = vec![
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(1, sig(2)),
         ];
-        let proof =
-            ChannelMultiSigProof::new(signatures).expect("distinct indices are well-formed");
+        let proof = ChannelMultiSigProof::new(signatures)
+            .expect("strictly-increasing indices are well-formed");
         assert_eq!(proof.signatures().len(), 2);
     }
 
+    /// Regression test for #2985: a non-monotonic proof must be unrepresentable
+    /// via serde too, not just via `new`. The derived `Deserialize` would have
+    /// let the JSON mempool path bypass the well-formedness check; the custom
+    /// `Deserialize` routes through `new`, so deserialization fails.
     #[test]
-    fn deduplicates_identical_signatures() {
-        let signatures = vec![
+    fn deserialize_rejects_non_monotonic_indices() {
+        // Two distinct signatures sharing index 0 — not strictly increasing, so
+        // `new` (and now `Deserialize`) must reject it.
+        let raw = vec![
             IndexedSignature::new(0, sig(1)),
-            IndexedSignature::new(0, sig(1)),
+            IndexedSignature::new(0, sig(2)),
         ];
-        let proof =
-            ChannelMultiSigProof::new(signatures).expect("identical signatures are deduplicated");
-        assert_eq!(proof.signatures().len(), 1);
+        let json = format!(
+            "{{\"signatures\":{}}}",
+            serde_json::to_string(&raw).expect("serialize signatures")
+        );
+        assert!(
+            serde_json::from_str::<ChannelMultiSigProof>(&json).is_err(),
+            "a non-monotonic proof must not be deserializable"
+        );
+
+        // A well-formed proof still round-trips.
+        let ok = ChannelMultiSigProof::new(vec![
+            IndexedSignature::new(0, sig(1)),
+            IndexedSignature::new(1, sig(2)),
+        ])
+        .expect("distinct indices are well-formed");
+        let round_tripped: ChannelMultiSigProof =
+            serde_json::from_str(&serde_json::to_string(&ok).expect("serialize proof"))
+                .expect("well-formed proof round-trips");
+        assert_eq!(round_tripped, ok);
     }
 }
