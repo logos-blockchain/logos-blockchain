@@ -52,31 +52,44 @@ pub enum Error {
     TooManySignatures { actual: usize, maximum: usize },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+// Serde goes through `ChannelMultiSigProofRepr` via `try_from`/`into`: `Deserialize`
+// routes through `new`, so the well-formedness invariant (strictly-increasing
+// indices) is upheld on every serde path too — a non-monotonic proof is
+// unrepresentable no matter how it is constructed, and no consumer needs to
+// re-check. The repr keeps the `{ "signatures": [..] }` wire form.
+#[serde(
+    try_from = "ChannelMultiSigProofRepr",
+    into = "ChannelMultiSigProofRepr"
+)]
 pub struct ChannelMultiSigProof {
     // Invariant: signature indices are strictly increasing (hence ordered and
-    // unique), as required by the spec. Upheld by `new` AND by the custom
-    // `Deserialize` impl below, so a non-monotonic proof is unrepresentable no
-    // matter how it is constructed — every consumer can rely on the invariant
-    // without re-checking.
+    // unique), as required by the spec.
     signatures: Vec<IndexedSignature>,
 }
 
-impl<'de> Deserialize<'de> for ChannelMultiSigProof {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // Deserialize the raw fields, then route through `new` so the well-formedness
-        // invariant holds for serde paths too (e.g. the JSON mempool path). Without
-        // this, the derived `Deserialize` would let a caller construct a proof with
-        // non-monotonic / duplicate signature indices, defeating threshold checks.
-        #[derive(Deserialize)]
-        struct Raw {
-            signatures: Vec<IndexedSignature>,
+/// Serde wire representation of [`ChannelMultiSigProof`] — a struct with a
+/// `signatures` field. Kept separate so the public type's (de)serialization
+/// is forced through `new` (via the `TryFrom`/`From` impls below) while
+/// preserving the `{ "signatures": [..] }` JSON shape.
+#[derive(Serialize, Deserialize)]
+struct ChannelMultiSigProofRepr {
+    signatures: Vec<IndexedSignature>,
+}
+
+impl TryFrom<ChannelMultiSigProofRepr> for ChannelMultiSigProof {
+    type Error = Error;
+
+    fn try_from(repr: ChannelMultiSigProofRepr) -> Result<Self, Self::Error> {
+        Self::new(repr.signatures)
+    }
+}
+
+impl From<ChannelMultiSigProof> for ChannelMultiSigProofRepr {
+    fn from(proof: ChannelMultiSigProof) -> Self {
+        Self {
+            signatures: proof.signatures,
         }
-        let Raw { signatures } = Raw::deserialize(deserializer)?;
-        Self::new(signatures).map_err(serde::de::Error::custom)
     }
 }
 
@@ -174,9 +187,10 @@ mod tests {
     }
 
     /// Regression test for #2985: a non-monotonic proof must be unrepresentable
-    /// via serde too, not just via `new`. The derived `Deserialize` would have
-    /// let the JSON mempool path bypass the well-formedness check; the custom
-    /// `Deserialize` routes through `new`, so deserialization fails.
+    /// via serde too, not just via `new`. A derived `Deserialize` would have
+    /// let the JSON mempool path bypass the well-formedness check; routing
+    /// serde through `new` (via `#[serde(try_from)]`) makes deserialization
+    /// fail.
     #[test]
     fn deserialize_rejects_non_monotonic_indices() {
         // Two distinct signatures sharing index 0 — not strictly increasing, so
@@ -194,15 +208,20 @@ mod tests {
             "a non-monotonic proof must not be deserializable"
         );
 
-        // A well-formed proof still round-trips.
+        // A well-formed proof still round-trips, and keeps the `{ "signatures": [..] }`
+        // JSON shape.
         let ok = ChannelMultiSigProof::new(vec![
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(1, sig(2)),
         ])
         .expect("distinct indices are well-formed");
+        let serialized = serde_json::to_string(&ok).expect("serialize proof");
+        assert!(
+            serialized.starts_with("{\"signatures\":"),
+            "expected the `{{ signatures: [..] }}` shape, got {serialized}"
+        );
         let round_tripped: ChannelMultiSigProof =
-            serde_json::from_str(&serde_json::to_string(&ok).expect("serialize proof"))
-                .expect("well-formed proof round-trips");
+            serde_json::from_str(&serialized).expect("well-formed proof round-trips");
         assert_eq!(round_tripped, ok);
     }
 }
