@@ -34,6 +34,8 @@ pub struct GenerateConfigArgs {
     pub http_addr: *const c_char,
     pub external_address: *const c_char,
     pub state_path: *const c_char,
+    pub storage_path: *const c_char,
+    pub logs_path: *const c_char,
     pub ibd: *const bool,
     pub log_filter: *const c_char,
     pub kms_file: *const c_char,
@@ -100,6 +102,18 @@ impl From<GenerateConfigArgs> for EmbeddedInitArgs {
         if !value.state_path.is_null() {
             let state_path = unsafe { CStr::from_ptr(value.state_path) };
             init_args.state_path = Some(state_path.to_string_lossy().to_string().into());
+        }
+
+        // ---- storage_path ----
+        if !value.storage_path.is_null() {
+            let storage_path = unsafe { CStr::from_ptr(value.storage_path) };
+            init_args.storage_path = Some(storage_path.to_string_lossy().to_string().into());
+        }
+
+        // ---- logs_path ----
+        if !value.logs_path.is_null() {
+            let logs_path = unsafe { CStr::from_ptr(value.logs_path) };
+            init_args.logs_path = Some(logs_path.to_string_lossy().to_string().into());
         }
 
         // ---- ibd ----
