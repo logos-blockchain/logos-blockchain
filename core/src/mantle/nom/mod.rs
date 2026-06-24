@@ -114,7 +114,7 @@ where
             decoded == fixture.value,
             "{type_name}: decode(bytes) != value\n  bytes (hex): {bytes}\n  decoded:  {decoded:?}\n  expected: {expected_value:?}",
             bytes = hex::encode(expected),
-            expected_value = fixture.value,
+            expected_value = &fixture.value,
         );
 
         // Round-trip: encode then decode is the identity (independent of the
