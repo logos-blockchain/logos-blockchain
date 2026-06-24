@@ -241,6 +241,37 @@ async fn get_block_ids() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn recovery_blocks_fall_back_to_lib_when_tip_missing_from_storage() {
+    let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
+    let (storage_tx, storage_rx) = mpsc::channel(10);
+    let _storage_svc = spawn_storage_service(storage_rx);
+    let (time_tx, _time_rx) = mpsc::channel(10);
+    let relays =
+        CryptarchiaConsensusRelays::<SignedMantleTx, RocksBackend, TestRuntimeServiceId>::new(
+            OutboundRelay::new(broadcast_tx),
+            OutboundRelay::new(storage_tx),
+            OutboundRelay::new(time_tx),
+        )
+        .await;
+
+    let lib = [0; 32].into();
+    let missing_tip = [1; 32].into();
+
+    let recovery_blocks = CryptarchiaConsensus::<
+        _,
+        RocksBackend,
+        SystemTimeBackend,
+        TestRuntimeServiceId,
+    >::load_recovery_blocks_or_fall_back_to_lib(
+        missing_tip, lib, relays.storage_adapter().clone()
+    )
+    .await;
+
+    assert!(recovery_blocks.fell_back_to_lib);
+    assert!(recovery_blocks.blocks.is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn process_block_does_not_mutate_state_when_storage_send_fails() {
     let (broadcast_tx, _broadcast_rx) = mpsc::channel(10);
     let (storage_tx, storage_rx) = mpsc::channel(10);

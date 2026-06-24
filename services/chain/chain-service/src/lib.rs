@@ -105,6 +105,17 @@ pub enum Error {
     ParentIdNotFound(HeaderId),
 }
 
+struct InitializedCryptarchia {
+    cryptarchia: Cryptarchia,
+    pruned_blocks: PrunedBlocks<HeaderId>,
+    fell_back_to_lib: bool,
+}
+
+struct RecoveryBlocks<Tx> {
+    blocks: Vec<Block<Tx>>,
+    fell_back_to_lib: bool,
+}
+
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub enum ConsensusMsg<Tx> {
@@ -595,7 +606,11 @@ where
 
         let (mut current_slot, mut slot_timer) = Self::get_slot_timer(&relays).await?;
 
-        let (mut cryptarchia, pruned_blocks) = self
+        let InitializedCryptarchia {
+            mut cryptarchia,
+            pruned_blocks,
+            fell_back_to_lib,
+        } = self
             .initialize_cryptarchia(
                 &bootstrap_config,
                 ledger_config.clone(),
@@ -612,6 +627,14 @@ where
             relays.storage_adapter(),
         )
         .await;
+
+        if fell_back_to_lib {
+            Self::update_state(
+                &cryptarchia,
+                storage_blocks_to_remove.clone(),
+                &self.service_resources_handle.state_updater,
+            );
+        }
 
         let sync_blocks_provider: BlockProvider<_, _> =
             BlockProvider::new(relays.storage_adapter().storage_relay.clone());
@@ -1227,6 +1250,63 @@ where
         ))
     }
 
+    async fn load_recovery_blocks_from_storage(
+        tip: HeaderId,
+        lib: HeaderId,
+        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> Result<Vec<Block<Tx>>, Error> {
+        let ids = Self::load_block_ids_from_storage(tip, lib, storage.clone())
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let mut blocks = Vec::new();
+        for id in ids.into_iter().rev().skip(1) {
+            let block = storage
+                .get_block(&id)
+                .await
+                .ok_or(Error::HeaderIdNotFound(id))?;
+            blocks.push(block);
+        }
+
+        Ok(blocks)
+    }
+
+    async fn load_recovery_blocks_or_fall_back_to_lib(
+        tip: HeaderId,
+        lib: HeaderId,
+        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> RecoveryBlocks<Tx> {
+        if tip == lib {
+            return RecoveryBlocks {
+                blocks: Vec::new(),
+                fell_back_to_lib: false,
+            };
+        }
+
+        match Self::load_recovery_blocks_from_storage(tip, lib, storage).await {
+            Ok(blocks) => RecoveryBlocks {
+                blocks,
+                fell_back_to_lib: false,
+            },
+            Err(error @ (Error::ParentIdNotFound(_) | Error::HeaderIdNotFound(_))) => {
+                warn!(
+                    target: LOG_TARGET, ?tip, ?lib, ?error,
+                    "could not reconstruct recovered tip branch from storage; falling back to recovered LIB",
+                );
+
+                RecoveryBlocks {
+                    blocks: Vec::new(),
+                    fell_back_to_lib: true,
+                }
+            }
+            Err(error) => {
+                panic!(
+                    "failed to load recovery blocks from storage during initialization: {error:?}"
+                );
+            }
+        }
+    }
+
     /// Initialize cryptarchia
     /// It initialize cryptarchia from the LIB (initially genesis) +
     /// (optionally) known blocks which were received before the service
@@ -1248,7 +1328,7 @@ where
         ledger_config: lb_ledger::Config,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         current_slot: Slot,
-    ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
+    ) -> InitializedCryptarchia {
         info!(
             target: LOG_TARGET, tip = ?self.state.tip, lib = ?self.state.lib, lib_height = self.state.lib_block_length, genesis = ?self.state.genesis_id,
             "initializing cryptarchia from state recovery",
@@ -1288,36 +1368,26 @@ where
             warn!("No new-block subscribers to notify: {e}");
         }
 
-        // Phase 1: Collect only block IDs in (LIB, tip].
+        // Phase 1: Collect and load blocks in (LIB, tip].
         info!(
             target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
-            "loading block IDs from storage: (lib, tip]",
+            "loading blocks from storage: (lib, tip]",
         );
-        let ids: Vec<HeaderId> = Self::load_block_ids_from_storage(
+        let RecoveryBlocks {
+            blocks,
+            fell_back_to_lib,
+        } = Self::load_recovery_blocks_or_fall_back_to_lib(
             self.state.tip,
             lib_id,
             relays.storage_adapter().clone(),
         )
-        .try_collect()
-        .await
-        .unwrap_or_else(|e| {
-            panic!("Failed to load block IDs from storage during initialization: {e:?}");
-        });
-        // Reverse to get LIB->tip order, and skip LIB since we already have it
-        let ids = ids.into_iter().rev().skip(1);
-        info!(target: LOG_TARGET, "collected {} block IDs from storage: (lib, tip]", ids.len());
+        .await;
+        info!(target: LOG_TARGET, "loaded {} blocks from storage: (lib, tip]", blocks.len());
 
-        // Phase 2: Load each block individually (lib→tip order) and apply it.
+        // Phase 2: Apply each block in lib->tip order.
         let mut pruned_blocks = PrunedBlocks::new();
-        let n_blocks = ids.len();
-        for (i, id) in ids.enumerate() {
-            let block = relays
-                .storage_adapter()
-                .get_block(&id)
-                .await
-                .unwrap_or_else(|| {
-                    panic!("Could not retrieve block {id:?} from storage during initialization")
-                });
+        let n_blocks = blocks.len();
+        for (i, block) in blocks.into_iter().enumerate() {
             match Self::process_block(
                 &mut cryptarchia,
                 block,
@@ -1343,7 +1413,11 @@ where
             "{n_blocks} blocks recovered. finishing initialization",
         );
 
-        (cryptarchia, pruned_blocks)
+        InitializedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            fell_back_to_lib,
+        }
     }
 
     /// Remove the stale blocks from the storage layer.
