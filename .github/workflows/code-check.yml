@@ -134,16 +134,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
 
-      - name: Purge old circuits
-        run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
-            rm -rf ~/.cache/logos/blockchain/
-          elif [[ "$RUNNER_OS" == "macOS" ]]; then
-            rm -rf ~/Library/Caches/logos/blockchain/
-          else
-            echo "Unsupported OS: $RUNNER_OS"
-          fi
-
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
         uses: ./.github/actions/prune-disk-space

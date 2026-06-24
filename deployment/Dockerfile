@@ -2,9 +2,6 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-# Cache directory used by the circuits. Not meant to be overridden.
-ARG LB_CACHE=/root/.cache/logos/blockchain
-
 # ===========================
 # BUILD IMAGE
 # ===========================
@@ -35,8 +32,6 @@ RUN cargo build --locked --release
 # ===========================
 FROM debian:bookworm-slim
 
-ARG LB_CACHE
-
 LABEL maintainer="augustinas@status.im" \
     source="https://github.com/logos-blockchain/logos-blockchain" \
     description="Logos Blockchain node and other binaries image"
@@ -45,11 +40,6 @@ RUN apt-get update && apt-get install -yq \
     libstdc++6 libssl3 ca-certificates \
     python3 python3-pip curl git \
     && rm -rf /var/lib/apt/lists/*
-
-# Copies the entire cache dir.
-# We only need the circuits, but this is currently much simpler than just copying the circuits subdir.
-# This might be addressed later, after the circuits directories structure is standardised.
-COPY --from=builder $LB_CACHE $LB_CACHE
 
 # Copy Binaries
 COPY --from=builder /logos-blockchain/target/release/logos-blockchain-node /usr/bin/
