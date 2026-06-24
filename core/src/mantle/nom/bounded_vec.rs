@@ -7,6 +7,7 @@ use nom::{
 
 use crate::mantle::nom::{NomDecode, NomEncode, encode_slice};
 
+#[derive(Debug, Clone, Copy)]
 enum NOfBytes {
     One,
     Two,
@@ -28,19 +29,41 @@ const fn length_prefix_width<const MAX_LENGTH: usize>() -> NOfBytes {
 
 fn encode_length_prefix<const MAX_LENGTH: usize>(actual_length: usize) -> Vec<u8> {
     match length_prefix_width::<MAX_LENGTH>() {
-        NOfBytes::One => (actual_length as u8).encode(),
-        NOfBytes::Two => (actual_length as u16).encode(),
-        NOfBytes::Four => (actual_length as u32).encode(),
-        NOfBytes::Eight => (actual_length as u64).encode(),
+        // Encode as `u8`
+        NOfBytes::One => (u8::try_from(actual_length)
+            .expect("Actual length should be smaller than u8 MAX_LENGTH"))
+        .encode(),
+        // Encode as `u16`
+        NOfBytes::Two => (u16::try_from(actual_length)
+            .expect("Actual length should be smaller than u16 MAX_LENGTH"))
+        .encode(),
+        // Encode as `u32`
+        NOfBytes::Four => (u32::try_from(actual_length)
+            .expect("Actual length should be smaller than u32 MAX_LENGTH"))
+        .encode(),
+        // Encode as `u64`
+        NOfBytes::Eight => (u64::try_from(actual_length)
+            .expect("Actual length should be smaller than u64 MAX_LENGTH"))
+        .encode(),
     }
 }
 
 fn decode_length_prefix<const MAX_LENGTH: usize>(bytes: &[u8]) -> IResult<&[u8], usize> {
     match length_prefix_width::<MAX_LENGTH>() {
-        NOfBytes::One => u8::decode(bytes).map(|(rest, len)| (rest, len as usize)),
-        NOfBytes::Two => u16::decode(bytes).map(|(rest, len)| (rest, len as usize)),
-        NOfBytes::Four => u32::decode(bytes).map(|(rest, len)| (rest, len as usize)),
-        NOfBytes::Eight => u64::decode(bytes).map(|(rest, len)| (rest, len as usize)),
+        NOfBytes::One => u8::decode(bytes).map(|(rest, len)| (rest, len.into())),
+        NOfBytes::Two => u16::decode(bytes).map(|(rest, len)| (rest, len.into())),
+        NOfBytes::Four => u32::decode(bytes).map(|(rest, len)| {
+            (
+                rest,
+                len.try_into().expect("usize should be able to hold u32"),
+            )
+        }),
+        NOfBytes::Eight => u64::decode(bytes).map(|(rest, len)| {
+            (
+                rest,
+                len.try_into().expect("usize should be able to hold u64"),
+            )
+        }),
     }
 }
 
@@ -175,6 +198,14 @@ mod tests {
     }
 
     #[test]
+    fn decode_fails_when_the_length_prefix_is_truncated() {
+        // A 2-byte prefix is expected (by using a vec with `u16::MAX` as the maximum
+        // length), but only 1 byte is available.
+        type WideCodec = BoundedVec<u8, MIN, { u16::MAX as usize }>;
+        assert!(WideCodec::decode(&[0]).is_err());
+    }
+
+    #[test]
     fn decode_fails_when_the_payload_is_truncated() {
         // The prefix promises 3 items but only 1 byte follows.
         let err = Bounded::decode(&[3, 1]).unwrap_err();
@@ -196,7 +227,7 @@ mod tests {
         let original: U16Codec = U16Codec::new_unchecked(vec![0x0102, 0x0304, 0xABCD]);
 
         let bytes = original.encode();
-        // 1-byte length prefix (3) followed by three little-endian `u16`s.
+        // 1-byte length prefix (3) (MAX == 4) followed by three little-endian `u16`s.
         assert_eq!(bytes, vec![3, 0x02, 0x01, 0x04, 0x03, 0xCD, 0xAB]);
 
         let (rest, decoded) = U16Codec::decode(&bytes).unwrap();
