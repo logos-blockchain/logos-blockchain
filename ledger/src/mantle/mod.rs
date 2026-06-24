@@ -5,9 +5,9 @@ pub mod sdp;
 
 use lb_core::{
     crypto::ZkHasher,
-    events::{HeaderEvent, TxEvent},
+    events::TxEvent,
     mantle::{
-        GenesisTx, NoteId, TxHash, Utxo, Value,
+        GenesisTx, NoteId, TxHash, Value,
         ledger::Operation as _,
         ops::{
             channel::{
@@ -32,7 +32,7 @@ use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
 
-use crate::{Config, EpochState, UtxoTree};
+use crate::{Config, EpochState, UtxoTree, mantle::sdp::HeaderEffect};
 
 const LOG_TARGET: &str = "ledger::mantle";
 
@@ -146,13 +146,13 @@ impl LedgerState {
         epoch_state: &EpochState,
         voucher: VoucherCm,
         config: &Config,
-    ) -> Result<(Self, Vec<Utxo>, Vec<HeaderEvent>), Error> {
+    ) -> Result<(Self, HeaderEffect), Error> {
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
-        let (new_sdp, reward_utxos, events) =
+        let (new_sdp, effect) =
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
-        Ok((self, reward_utxos, events))
+        Ok((self, effect))
     }
 
     pub fn try_apply_channel_inscription(

@@ -253,7 +253,7 @@ impl LedgerState {
                 &self.mantle_ledger.sdp,
                 config,
             )?;
-        let (mantle_ledger, reward_utxos, events) = self.mantle_ledger.try_apply_header(
+        let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
             &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
@@ -261,7 +261,7 @@ impl LedgerState {
         )?;
 
         // Insert reward UTXOs into the cryptarchia ledger
-        for utxo in reward_utxos {
+        for utxo in effect.reward_utxos {
             cryptarchia_ledger.utxos = cryptarchia_ledger.utxos.insert(utxo.id(), utxo).0;
         }
 
@@ -274,7 +274,7 @@ impl LedgerState {
                 cryptarchia_ledger,
                 mantle_ledger,
             },
-            events,
+            effect.events,
         ))
     }
 

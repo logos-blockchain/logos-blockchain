@@ -383,7 +383,7 @@ impl SdpLedger {
         config: &Config,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
-    ) -> Result<(Self, Vec<Utxo>, Vec<HeaderEvent>), Error> {
+    ) -> Result<(Self, HeaderEffect), Error> {
         let mut all_reward_utxos = Vec::new();
         let mut all_events = Vec::new();
         let mut locked_notes = self.locked_notes().clone();
@@ -415,8 +415,10 @@ impl SdpLedger {
                 services,
                 locked_notes,
             },
-            all_reward_utxos,
-            all_events,
+            HeaderEffect {
+                reward_utxos: all_reward_utxos,
+                events: all_events,
+            },
         ))
     }
 
@@ -666,6 +668,11 @@ impl SdpLedger {
     }
 }
 
+pub struct HeaderEffect {
+    pub reward_utxos: Vec<Utxo>,
+    pub events: Vec<HeaderEvent>,
+}
+
 #[cfg(test)]
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
@@ -816,7 +823,7 @@ mod tests {
         // initializes to created + 2 = 3.
         let mut last_epoch_state = epoch0.clone();
         let new_epoch_state = next_epoch_state(1.into(), epoch0);
-        (ledger, _, _) = ledger
+        (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
         last_epoch_state = new_epoch_state;
@@ -847,7 +854,7 @@ mod tests {
         let mut ledger = ledger;
         for epoch in 2..=6 {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (ledger, _, _) = ledger
+            (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
             last_epoch_state = new_epoch_state;
@@ -934,7 +941,7 @@ mod tests {
         // initializes to created + 2 = 3.
         let last_epoch_state = epoch0.clone();
         let new_epoch_state = next_epoch_state(1.into(), epoch0);
-        (ledger, _, _) = ledger
+        (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
 
@@ -1021,7 +1028,7 @@ mod tests {
         // Move forward to the epoch 1
         let mut last_epoch_state = epoch0.clone();
         let new_epoch_state = next_epoch_state(1.into(), epoch0);
-        (ledger, _, _) = ledger
+        (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
         last_epoch_state = new_epoch_state;
@@ -1055,7 +1062,7 @@ mod tests {
         // (The provider is expected to provide the service from epoch 3)
         for epoch in 2..=4 {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (ledger, _, _) = ledger
+            (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
             last_epoch_state = new_epoch_state;
@@ -1086,7 +1093,7 @@ mod tests {
         // because the activity message was accepted at epoch 4.
         for epoch in 5..=7 {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (ledger, _, _) = ledger
+            (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
             last_epoch_state = new_epoch_state;
@@ -1098,7 +1105,7 @@ mod tests {
         // applying another header within the same epoch 7 must be a no-op
         // (GC and unlock are gated to epoch transitions only).
         let ledger_before = ledger.clone();
-        (ledger, _, _) = ledger
+        (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &last_epoch_state)
             .unwrap();
         assert_eq!(
@@ -1109,7 +1116,7 @@ mod tests {
         // Move forward to epoch 8 where declaration should be removed
         // because no activity message has been submitted since epoch 4
         let new_epoch_state = next_epoch_state(8.into(), last_epoch_state.clone());
-        (ledger, _, _) = ledger
+        (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
@@ -1232,7 +1239,7 @@ mod tests {
         for epoch in 1..=withdrawn_epoch.into_inner() {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             let events;
-            (sdp_ledger, _, events) = sdp_ledger
+            (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
             let unlock_events = events.into_iter().filter_map(|event| {
@@ -1275,7 +1282,7 @@ mod tests {
             .strict_add(Epoch::new(1));
         for epoch in (withdrawn_epoch.into_inner() + 1)..target_epoch.into_inner() {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (sdp_ledger, _, _) = sdp_ledger
+            (sdp_ledger, _) = sdp_ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
             last_epoch_state = new_epoch_state;
@@ -1288,7 +1295,7 @@ mod tests {
         // Move forward one more epoch. Now, `snapshot_finalization + retention_period`
         // has passed. Check that the declaration has been removed.
         let new_epoch_state = next_epoch_state(target_epoch, last_epoch_state.clone());
-        (sdp_ledger, _, _) = sdp_ledger
+        (sdp_ledger, _) = sdp_ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
         assert!(
