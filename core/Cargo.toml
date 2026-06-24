@@ -19,7 +19,6 @@ bincode                       = { workspace = true }
 blake2                        = { workspace = true }
 bytes                         = { workspace = true }
 const-hex                     = { features = ["alloc"], workspace = true }
-futures                       = { features = ["alloc"], workspace = true }
 hex                           = { features = ["alloc"], workspace = true }
 lb-blend-proofs               = { workspace = true }
 lb-cryptarchia-engine         = { workspace = true }

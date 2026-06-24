@@ -700,6 +700,13 @@ fn update_storage_market(
     let new_ema: Gas =
         (((total_storage_gas + previous_ema) / STORAGE_MARKET_EMA_DENOMINATOR) as Value).into();
     let new_ema_unsigned = u128::from(new_ema.into_inner());
+    // Hold the price while the effective target is zero (genesis / sustained
+    // zero usage). Without this guard `comparator <= 7*ema` is `0 <= 0` (true),
+    // wrongly taking the clamp-down branch and ratcheting the price down 12.5%
+    // every zero-usage epoch instead of holding it at P_STR(0).
+    if new_ema_unsigned == 0 {
+        return (storage_gas_price, new_ema);
+    }
     let comparator = STORAGE_MARKET_CLAMP_DENOMINATOR * total_storage_gas;
     let new_price = if comparator <= STORAGE_MARKET_CLAMP_DOWN_NUMERATOR * new_ema_unsigned {
         ((previous_price * STORAGE_MARKET_CLAMP_DOWN_NUMERATOR / STORAGE_MARKET_CLAMP_DENOMINATOR)
@@ -1133,6 +1140,28 @@ pub mod tests {
             .active_declarations
             .for_service(&ServiceType::BlendNetwork)
             .and_then(|m| m.get(declaration_id))
+    }
+
+    #[test]
+    fn storage_price_held_when_effective_target_is_zero() {
+        // Failure case for the missing guard: with zero usage and a zero EMA the
+        // effective target is 0, so the price must be HELD at P_STR(0). Without
+        // the `effective_target == 0` guard, `8*0 <= 7*0` takes the clamp-down
+        // branch and ratchets the price down 12.5% (1000 -> 875) every
+        // zero-usage epoch.
+        let price: GasPrice = 1000.into();
+        let (new_price, new_ema) = update_storage_market(price, 0.into(), 0.into());
+        assert_eq!(
+            new_price, price,
+            "price must hold while the effective target (EMA) is zero"
+        );
+        assert_eq!(new_ema, Gas::from(0));
+
+        // Sanity: once there is a real (non-zero) EMA, the price still adjusts —
+        // the guard only fires at a zero target. Zero usage against a non-zero
+        // EMA clamps down as before.
+        let (clamped, _) = update_storage_market(price, 0.into(), 800.into());
+        assert_eq!(clamped, GasPrice::from(875), "non-zero target still clamps");
     }
 
     #[test]

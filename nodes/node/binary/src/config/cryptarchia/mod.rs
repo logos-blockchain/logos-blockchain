@@ -33,7 +33,7 @@ impl ServiceConfig {
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
-        lb_chain_leader_service::LeaderSettings<(), Libp2pBroadcastSettings>,
+        lb_chain_leader_service::LeaderSettings<Libp2pBroadcastSettings>,
     ) {
         let ledger_config = lb_ledger::Config {
             consensus_config: self.deployment.consensus_config(),
@@ -144,7 +144,6 @@ impl ServiceConfig {
                 topic: self.deployment.gossipsub_protocol,
             },
             config: ledger_config,
-            transaction_selector_settings: (),
             wallet_config: lb_chain_leader_service::LeaderWalletConfig {
                 funding_pk: self.user.leader.wallet.funding_pk,
                 max_tx_fee: self.user.leader.wallet.max_tx_fee,

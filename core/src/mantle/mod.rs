@@ -1,6 +1,5 @@
-use std::{hash::Hash, pin::Pin};
+use std::hash::Hash;
 
-use futures::Stream;
 use thiserror::Error;
 
 pub mod channel;
@@ -10,7 +9,6 @@ pub mod genesis_tx;
 pub mod ledger;
 pub mod mock;
 pub mod ops;
-pub mod select;
 pub mod tx;
 pub mod tx_builder;
 
@@ -174,16 +172,6 @@ impl<T: GenesisTx> GenesisTx for &T {
     fn mantle_tx(&self) -> &MantleTx {
         T::mantle_tx(self)
     }
-}
-
-pub trait TxSelect {
-    type Tx: Transaction;
-    type Settings: Clone;
-    fn new(settings: Self::Settings) -> Self;
-
-    fn select_tx_from<'i, S>(&self, txs: S) -> Pin<Box<dyn Stream<Item = Self::Tx> + Send + 'i>>
-    where
-        S: Stream<Item = Self::Tx> + Send + 'i;
 }
 
 #[derive(Debug, Error)]
