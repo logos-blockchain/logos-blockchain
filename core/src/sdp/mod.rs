@@ -554,12 +554,12 @@ impl DeclarationMessage {
         locked_note_id: Fr::from(1u64).into(),
         nonce: 2u64
     },
-    "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000200000000000000",
+    "000000000000000000000000000000000000000000000000000000000000000002000000000000000100000000000000000000000000000000000000000000000000000000000000",
 ))]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
-    pub locked_note_id: NoteId,
     pub nonce: Nonce,
+    pub locked_note_id: NoteId,
 }
 
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
