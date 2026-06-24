@@ -23,7 +23,7 @@ WORKDIR /logos-blockchain/deployment/l2-sequencer-archival-demo/webapp
 RUN bun install --frozen-lockfile
 RUN VITE_SEQUENCER_URL=/api/sequencer VITE_ARCHIVER_URL=/api/archiver bun run build
 
-# Build Rust Binaries & Circuits
+# Build Rust Binaries
 WORKDIR /logos-blockchain
 RUN cargo build --locked --release
 
