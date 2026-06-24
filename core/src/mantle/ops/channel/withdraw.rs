@@ -14,14 +14,14 @@ use crate::{
 
 // ChannelWithdraw = ChannelId Outputs WithdrawNonce — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
-#[nom_fixture(
-    value = ChannelWithdrawOp {
+#[nom_fixtures((
+    ChannelWithdrawOp {
         channel_id: ChannelId([0u8; 32]),
         outputs: Outputs::empty(),
         withdraw_nonce: 0u32,
     },
-    bytes = "00000000000000000000000000000000000000000000000000000000000000000000000000"
-)]
+    "00000000000000000000000000000000000000000000000000000000000000000000000000",
+))]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub outputs: Outputs,

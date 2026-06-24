@@ -5,16 +5,15 @@ pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use nom::IResult;
-
-use crate::{
-    mantle::nom::{NomDecode, NomEncode, wire_fixture},
-    utils::serde_bytes_newtype,
-};
+use crate::{mantle::nom::NomCodec, utils::serde_bytes_newtype};
 
 pub type ChannelKeyIndex = u16;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
+#[nom_fixtures(
+    (ChannelId([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"),
+    (ChannelId([0xFF; 32]), "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
+)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
 
@@ -25,21 +24,9 @@ impl Display for ChannelId {
     }
 }
 
-impl NomEncode for ChannelId {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for ChannelId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = <[u8; _]>::decode(bytes)?;
-        Ok((bytes, Self::from(inner)))
-    }
-}
-
 /// The id of the previous message in the channel
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
+#[nom_fixtures((MsgId([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"))]
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 
@@ -49,30 +36,6 @@ impl Display for MsgId {
         write!(f, "{hex_string}")
     }
 }
-
-impl NomEncode for MsgId {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for MsgId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = <[u8; _]>::decode(bytes)?;
-        Ok((bytes, Self::from(inner)))
-    }
-}
-
-wire_fixture!(
-    ChannelId,
-    ChannelId([0u8; 32]),
-    "0000000000000000000000000000000000000000000000000000000000000000"
-);
-wire_fixture!(
-    MsgId,
-    MsgId([0u8; 32]),
-    "0000000000000000000000000000000000000000000000000000000000000000"
-);
 
 pub type Ed25519PublicKey = lb_key_management_system_keys::keys::Ed25519PublicKey;
 

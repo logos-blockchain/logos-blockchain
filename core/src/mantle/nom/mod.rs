@@ -2,8 +2,9 @@ use std::borrow::Cow;
 
 // Re-exported so call sites can `use crate::mantle::nom::{NomCodec, wire_fixture}`.
 // Both macros are the blessed way to declare a codec: each emits the mandatory
-// `WireExamples` fixture (see below) alongside the impls.
+// `WireExamples` fixtures (see below) alongside the impls.
 pub use lb_core_macros::{NomCodec, wire_fixture};
+use lb_utils::bounded_vec::LowerBoundedVec;
 use nom::IResult;
 
 pub mod array;
@@ -33,29 +34,21 @@ pub trait NomDecode: WireExamples {
 // ==============================================================================
 // Well-known fixtures
 // ==============================================================================
-// Every wire codec must ship a *well-known fixture*: a canonical value together
-// with its exact wire bytes. The fixture pins the encoding against silent drift
-// and feeds the generated round-trip test (`assert_wire_fixtures`).
+// Every wire codec must ship at least one *well-known fixture*: a value
+// together with its exact wire bytes. Fixtures pin the encoding against silent
+// drift and feed the generated round-trip test (`assert_wire_fixtures`).
 //
 // `WireExamples` is the prerequisite that makes a fixture impossible to forget.
 // It is sealed (`sealed::Sealed`), so the only ways to satisfy it are
 // `#[derive(NomCodec)]` and `wire_fixture!`, both of which demand a fixture. It
 // is a supertrait of both codec traits (above), so `impl NomEncode for Foo`
 // without a fixture is a `cargo build` error (E0277).
-//
-// The one gap the type system cannot close: a NEW monomorphization of an
-// already-sealed generic (e.g. `BoundedVec<NewType, 0, 99>`) gets fixture
-// existence from the blanket impl but no hand-pinned drift fixture. A CI lint
-// counting `impl NomEncode` sites is the intended backstop there.
 
-/// A single golden vector: a canonical value and its exact wire bytes.
-///
-/// `bytes` is a [`Cow`] so leaf fixtures can borrow a `&'static` slice (emitted
-/// by the macros) while generic blanket impls build theirs from the element's
-/// fixture ([`Cow::Owned`]).
-pub struct WireFixture<T> {
-    pub value: T,
-    pub bytes: Cow<'static, [u8]>,
+/// Carries the mandatory [`WireFixtures`] for a codec. The non-empty return
+/// type means a codec cannot exist without at least one fixture.
+pub trait WireExamples: sealed::Sealed + Sized {
+    #[must_use]
+    fn fixtures() -> WireFixtures<Self>;
 }
 
 pub(crate) mod sealed {
@@ -65,27 +58,20 @@ pub(crate) mod sealed {
     pub trait Sealed {}
 }
 
-/// Carries the mandatory [`WireFixture`]s for a codec. No default body for
-/// [`Self::canonical_fixture`] means a codec cannot exist without one.
-pub trait WireExamples: sealed::Sealed + Sized {
-    /// The canonical fixture every codec must provide.
-    #[must_use]
-    fn canonical_fixture() -> WireFixture<Self>;
-
-    /// Additional fixtures (edge cases, alternate encodings). Optional.
-    #[must_use]
-    fn extra_fixtures() -> Vec<WireFixture<Self>> {
-        Vec::new()
-    }
-
-    /// The canonical fixture followed by any extras.
-    #[must_use]
-    fn fixtures() -> Vec<WireFixture<Self>> {
-        let mut all = vec![Self::canonical_fixture()];
-        all.extend(Self::extra_fixtures());
-        all
-    }
+/// A single golden vector: a value and its exact wire bytes.
+///
+/// `bytes` is a [`Cow`] so leaf fixtures can borrow a `&'static` slice (emitted
+/// by the macros) while generic blanket impls build theirs from the element's
+/// fixtures ([`Cow::Owned`]).
+pub struct WireFixture<T> {
+    pub value: T,
+    pub bytes: Cow<'static, [u8]>,
 }
+
+/// A codec's well-known fixtures: at least one `(value, bytes)` pair, up to as
+/// many as needed. The `1`-lower-bounded type is what makes "a codec cannot
+/// exist without a fixture" part of the contract.
+pub type WireFixtures<T> = LowerBoundedVec<WireFixture<T>, 1>;
 
 /// Drives every fixture of `T` through the wire-format invariants. Called by
 /// the round-trip test the macros generate, and reusable for hand-written tests
@@ -95,27 +81,56 @@ pub(crate) fn assert_wire_fixtures<T>()
 where
     T: NomEncode + NomDecode + WireExamples + PartialEq + ::core::fmt::Debug,
 {
+    let type_name = ::core::any::type_name::<T>();
+
     for fixture in T::fixtures() {
-        // Golden encode: the value serializes to exactly the pinned bytes.
+        let expected = fixture.bytes.as_ref();
+
+        // Golden encode: the value serializes to exactly the pinned bytes. On a
+        // mismatch we print both sides hex-encoded — the `assert_eq!` default
+        // would dump raw `[u8]` arrays in decimal.
         let encoded = fixture.value.encode();
-        assert_eq!(
-            encoded.as_slice(),
-            fixture.bytes.as_ref(),
-            "encode(value) drifted from the well-known bytes",
+        assert!(
+            encoded.as_slice() == expected,
+            "{type_name}: encode(value) drifted from the well-known bytes\n  actual   (hex): {actual}\n  expected (hex): {expected_hex}",
+            actual = hex::encode(&encoded),
+            expected_hex = hex::encode(expected),
         );
 
         // Golden decode: the pinned bytes decode back to the value, leaving
         // nothing behind.
-        let (rest, decoded) =
-            T::decode(fixture.bytes.as_ref()).expect("well-known bytes failed to decode");
-        assert!(rest.is_empty(), "well-known bytes left trailing data");
-        assert_eq!(decoded, fixture.value, "decode(bytes) != value");
+        let (rest, decoded) = T::decode(expected).unwrap_or_else(|err| {
+            panic!(
+                "{type_name}: well-known bytes failed to decode: {err:?}\n  bytes (hex): {}",
+                hex::encode(expected),
+            )
+        });
+        assert!(
+            rest.is_empty(),
+            "{type_name}: well-known bytes left trailing data (hex): {}",
+            hex::encode(rest),
+        );
+        assert!(
+            decoded == fixture.value,
+            "{type_name}: decode(bytes) != value\n  bytes (hex): {bytes}\n  decoded:  {decoded:?}\n  expected: {expected_value:?}",
+            bytes = hex::encode(expected),
+            expected_value = fixture.value,
+        );
 
         // Round-trip: encode then decode is the identity (independent of the
         // pinned bytes, so it catches encode/decode asymmetry directly).
-        let (rest, round_tripped) = T::decode(&encoded).expect("round-trip decode failed");
-        assert!(rest.is_empty(), "round-trip left trailing data");
-        assert_eq!(round_tripped, fixture.value, "round-trip changed the value");
+        let (rest, round_tripped) = T::decode(&encoded)
+            .unwrap_or_else(|err| panic!("{type_name}: round-trip decode failed: {err:?}"));
+        assert!(
+            rest.is_empty(),
+            "{type_name}: round-trip left trailing data (hex): {}",
+            hex::encode(rest),
+        );
+        assert!(
+            round_tripped == fixture.value,
+            "{type_name}: round-trip changed the value\n  before: {before:?}\n  after:  {round_tripped:?}",
+            before = fixture.value,
+        );
     }
 }
 

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -9,7 +8,7 @@ use crate::{
     mantle::{
         Value,
         ledger::{self, Operation as _},
-        nom::{NomDecode, NomEncode, wire_fixture},
+        nom::NomCodec,
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -18,7 +17,8 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
+#[nom_fixtures((SlotTimeframe::from(0x0403_0201u32), "01020304"))]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -33,20 +33,8 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-impl NomEncode for SlotTimeframe {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for SlotTimeframe {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = u32::decode(bytes)?;
-        Ok((bytes, Self(inner)))
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
+#[nom_fixtures((SlotTimeout::from(0x0403_0201u32), "01020304"))]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {
@@ -60,26 +48,6 @@ impl From<SlotTimeout> for u32 {
         slot.0
     }
 }
-
-impl NomEncode for SlotTimeout {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for SlotTimeout {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = u32::decode(bytes)?;
-        Ok((bytes, Self(inner)))
-    }
-}
-
-wire_fixture!(
-    SlotTimeframe,
-    SlotTimeframe::from(0x0403_0201u32),
-    "01020304"
-);
-wire_fixture!(SlotTimeout, SlotTimeout::from(0x0403_0201u32), "01020304");
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {

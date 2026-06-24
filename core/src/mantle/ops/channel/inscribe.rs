@@ -22,19 +22,16 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
-// ChannelInscribe = ChannelId Inscription Parent Signer.
-// `NomCodec` derives `NomEncode`/`NomDecode` (field-order concatenation) and
-// requires the well-known fixture below.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
-#[nom_fixture(
-    value = Self {
+#[nom_fixtures((
+    Self {
         channel_id: ChannelId([0u8; 32]),
         inscription: b"genesis".into(),
         parent: MsgId([0u8; 32]),
-        signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        signer: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
     },
-    bytes = "00000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-)]
+    "00000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+))]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain

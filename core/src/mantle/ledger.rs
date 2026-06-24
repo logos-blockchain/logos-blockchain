@@ -7,7 +7,6 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
 use lb_utils::bounded_vec::BoundedError;
 use lb_utxotree::UtxoTree;
-use nom::IResult;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -17,7 +16,7 @@ use crate::{
     events::Events,
     mantle::{
         encoding::{BoundedInputs, BoundedOutputs},
-        nom::{NomCodec, NomDecode, NomEncode, wire_fixture},
+        nom::NomCodec,
         ops::OpId,
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -72,7 +71,8 @@ pub enum LedgerError {
     Outputs(#[from] OutputsError),
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, NomCodec)]
+#[nom_fixtures((Outputs::new([Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)))]), "01e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"))]
 pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
@@ -171,20 +171,8 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
-impl NomEncode for Outputs {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for Outputs {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, items) = BoundedOutputs::decode(bytes)?;
-        Ok((bytes, Self(items)))
-    }
-}
-
-#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[nom_fixtures((Inputs::new([NoteId(BigUint::from(123u64).into())]), "017b00000000000000000000000000000000000000000000000000000000000000"))]
 pub struct Inputs(BoundedInputs);
 
 impl Inputs {
@@ -317,21 +305,11 @@ impl<'input> IntoIterator for &'input Inputs {
     }
 }
 
-impl NomEncode for Inputs {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for Inputs {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, items) = BoundedInputs::decode(bytes)?;
-        Ok((bytes, Self(items)))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, NomCodec,
+)]
 #[serde(transparent)]
+#[nom_fixtures((NoteId(BigUint::from(123u64).into()), "7b00000000000000000000000000000000000000000000000000000000000000"))]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
 
 impl NoteId {
@@ -358,42 +336,8 @@ impl From<Fr> for NoteId {
     }
 }
 
-impl NomEncode for NoteId {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for NoteId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = Fr::decode(bytes)?;
-        Ok((bytes, Self(inner)))
-    }
-}
-
-// Newtype wrappers (and the `BoundedVec`-backed collections) keep their
-// hand-written delegating codecs; only the fixture is attached.
-wire_fixture!(
-    NoteId,
-    NoteId(BigUint::from(123u64).into()),
-    "7b00000000000000000000000000000000000000000000000000000000000000"
-);
-wire_fixture!(
-    Outputs,
-    Outputs::new([Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)))]),
-    "01e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"
-);
-wire_fixture!(
-    Inputs,
-    Inputs::new([NoteId(BigUint::from(123u64).into())]),
-    "017b00000000000000000000000000000000000000000000000000000000000000"
-);
-
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, NomCodec)]
-#[nom_fixture(
-    value = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64))),
-    bytes = "e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"
-)]
+#[nom_fixtures((Note::new(1000, ZkPublicKey::from(BigUint::from(42u64))), "e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"))]
 pub struct Note {
     pub value: Value,
     pub pk: ZkPublicKey,

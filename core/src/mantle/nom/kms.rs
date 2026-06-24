@@ -25,6 +25,11 @@ impl NomDecode for Ed25519PublicKey {
     }
 }
 
+wire_fixture!(
+    Ed25519PublicKey,
+    Ed25519PublicKey::from_bytes(&[1u8; 32]).unwrap() => "0101010101010101010101010101010101010101010101010101010101010101"
+);
+
 impl NomEncode for ZkPublicKey {
     fn encode(&self) -> Vec<u8> {
         self.as_fr().encode()
@@ -39,12 +44,6 @@ impl NomDecode for ZkPublicKey {
 }
 
 wire_fixture!(
-    Ed25519PublicKey,
-    Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-    "0000000000000000000000000000000000000000000000000000000000000000"
-);
-wire_fixture!(
     ZkPublicKey,
-    ZkPublicKey::new(Fr::from(1u64)),
-    "0100000000000000000000000000000000000000000000000000000000000000"
+    Fr::from(1u64).into() => "0100000000000000000000000000000000000000000000000000000000000000"
 );

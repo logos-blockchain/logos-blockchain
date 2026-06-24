@@ -22,17 +22,17 @@ pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 // PostingTimeout ConfigThreshold WithdrawThreshold — a plain field-order
 // concatenation, so `NomCodec` derives the codec.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
-#[nom_fixture(
-    value = ChannelConfigOp {
+#[nom_fixtures((
+    ChannelConfigOp {
         channel: ChannelId([0u8; 32]),
-        keys: vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()].try_into().unwrap(),
+        keys: [Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()].into(),
         posting_timeframe: SlotTimeframe::from(0u32),
         posting_timeout: SlotTimeout::from(0u32),
         configuration_threshold: 0u16,
         withdraw_threshold: 0u16,
     },
-    bytes = "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-)]
+    "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+))]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Keys,

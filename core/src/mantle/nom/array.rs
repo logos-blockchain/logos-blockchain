@@ -2,7 +2,9 @@ use std::borrow::Cow;
 
 use nom::{IResult, Parser as _, multi::count};
 
-use crate::mantle::nom::{NomDecode, NomEncode, WireExamples, WireFixture, encode_slice, sealed};
+use crate::mantle::nom::{
+    NomDecode, NomEncode, WireExamples, WireFixture, WireFixtures, encode_slice, sealed,
+};
 
 impl<T, const N: usize> NomEncode for [T; N]
 where
@@ -36,17 +38,20 @@ impl<T, const N: usize> WireExamples for [T; N]
 where
     T: WireExamples,
 {
-    fn canonical_fixture() -> WireFixture<Self> {
+    fn fixtures() -> WireFixtures<Self> {
         let mut bytes = Vec::new();
         let value = ::core::array::from_fn(|_| {
-            let item = T::canonical_fixture();
+            let item = T::fixtures()
+                .into_iter()
+                .next()
+                .expect("`WireExamples::fixtures` is non-empty");
             bytes.extend_from_slice(item.bytes.as_ref());
             item.value
         });
 
-        WireFixture {
+        WireFixtures::<Self>::new_unchecked(vec![WireFixture {
             value,
             bytes: Cow::Owned(bytes),
-        }
+        }])
     }
 }

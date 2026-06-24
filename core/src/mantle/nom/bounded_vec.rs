@@ -7,7 +7,9 @@ use nom::{
     multi::count,
 };
 
-use crate::mantle::nom::{NomDecode, NomEncode, WireExamples, WireFixture, encode_slice, sealed};
+use crate::mantle::nom::{
+    NomDecode, NomEncode, WireExamples, WireFixture, WireFixtures, encode_slice, sealed,
+};
 
 #[derive(Debug, Clone, Copy)]
 enum NOfBytes {
@@ -120,26 +122,29 @@ impl<T, const MIN: usize, const MAX: usize> WireExamples for BoundedVec<T, MIN, 
 where
     T: WireExamples,
 {
-    fn canonical_fixture() -> WireFixture<Self> {
-        // Build the elements from `T`'s own fixture. We call it per element
-        // (rather than cloning one value) so the bound stays at `T: WireExamples`
-        // — no `Clone` — which is what lets the supertrait flip go through: a
-        // `BoundedVec<T, ..>: NomEncode` impl only knows `T: NomEncode`, and after
-        // the flip that gives `T: WireExamples` but not `T: Clone`.
+    fn fixtures() -> WireFixtures<Self> {
+        // Build the elements from `T`'s own fixtures. We draw `T`'s first fixture
+        // once per element (rather than cloning one value) so the bound stays at
+        // `T: WireExamples` — no `Clone` — which is what lets the supertrait
+        // bound hold: a `BoundedVec<T, ..>: NomEncode` impl only knows
+        // `T: NomEncode`, and that gives `T: WireExamples` but not `T: Clone`.
         let count = MIN.max(1);
 
         let mut values = Vec::with_capacity(count);
         let mut bytes = encode_length_prefix::<MAX>(count);
         for _ in 0..count {
-            let item = T::canonical_fixture();
+            let item = T::fixtures()
+                .into_iter()
+                .next()
+                .expect("`WireExamples::fixtures` is non-empty");
             bytes.extend_from_slice(item.bytes.as_ref());
             values.push(item.value);
         }
 
-        WireFixture {
+        WireFixtures::<Self>::new_unchecked(vec![WireFixture {
             value: Self::new_unchecked(values),
             bytes: Cow::Owned(bytes),
-        }
+        }])
     }
 }
 

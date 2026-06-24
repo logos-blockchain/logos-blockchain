@@ -1,4 +1,7 @@
-use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
+use lb_blend_proofs::{
+    quota::{ProofOfQuota, VerifiedProofOfQuota},
+    selection::{ProofOfSelection, VerifiedProofOfSelection},
+};
 use nom::{
     IResult,
     error::{Error, ErrorKind},
@@ -23,6 +26,11 @@ impl NomDecode for ProofOfQuota {
     }
 }
 
+wire_fixture!(
+    ProofOfQuota,
+    VerifiedProofOfQuota::from_bytes_unchecked([0u8; _]).into() => "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+);
+
 impl NomEncode for ProofOfSelection {
     fn encode(&self) -> Vec<u8> {
         <[u8; _]>::from(self).encode()
@@ -41,12 +49,6 @@ impl NomDecode for ProofOfSelection {
 }
 
 wire_fixture!(
-    ProofOfQuota,
-    lb_blend_proofs::quota::VerifiedProofOfQuota::from_bytes_unchecked([0u8; _]).into(),
-    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-);
-wire_fixture!(
     ProofOfSelection,
-    lb_blend_proofs::selection::VerifiedProofOfSelection::from_bytes_unchecked([0u8; _]).into(),
-    "0000000000000000000000000000000000000000000000000000000000000000"
+    VerifiedProofOfSelection::from_bytes_unchecked([0u8; _]).into() => "0000000000000000000000000000000000000000000000000000000000000000"
 );
