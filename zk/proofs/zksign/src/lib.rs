@@ -8,7 +8,9 @@ use std::error::Error;
 
 pub use inputs::ZkSignWitnessInputs;
 use lb_circuits_prover::Prover as _;
-use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
+use lb_groth16::{
+    CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser, groth16_batch_verify,
+};
 use lb_log_targets::proofs;
 pub use private::ZkSignPrivateKeysData;
 pub use public::ZkSignVerifierInputs;
@@ -122,6 +124,27 @@ pub fn verify(
     .map_err(|e| VerifyError::ProofVerify(Box::new(e)))
 }
 
+pub fn batch_verify(
+    proofs: &[ZkSignProof],
+    public_inputs: &[ZkSignVerifierInputs],
+) -> Result<bool, VerifyError> {
+    let inputs: Vec<Vec<_>> = public_inputs
+        .iter()
+        .map(|pi| pi.as_inputs().to_vec())
+        .collect();
+
+    let expanded_proofs: Vec<Groth16Proof> = proofs
+        .iter()
+        .map(|p| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
+        .collect::<Result<Vec<_>, _>>()?; // short-circuits on first failure
+
+    Ok(groth16_batch_verify(
+        verification_key::ZKSIGN_VK.as_ref(),
+        &expanded_proofs,
+        &inputs,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use lb_groth16::Fr;
@@ -144,5 +167,8 @@ mod tests {
         let input = ZkSignWitnessInputs::from_witness_data_and_message_hash(sks, msg_hash);
         let (proof, verifier_inputs) = prove(input).unwrap();
         assert!(verify(&proof, &verifier_inputs).unwrap());
+        assert!(
+            batch_verify(&[proof, proof], &[verifier_inputs.clone(), verifier_inputs]).unwrap()
+        );
     }
 }

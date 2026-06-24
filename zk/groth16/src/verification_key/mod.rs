@@ -75,6 +75,34 @@ impl<E: Pairing> PreparedVerificationKey<E> {
 
         bytes
     }
+
+    pub const fn alpha_g1(&self) -> &E::G1Affine {
+        &self.vk.vk.alpha_g1
+    }
+
+    pub const fn beta_g2(&self) -> &E::G2Affine {
+        &self.vk.vk.beta_g2
+    }
+
+    pub const fn delta_g2(&self) -> &E::G2Affine {
+        &self.vk.vk.delta_g2
+    }
+
+    pub const fn gamma_abc_g1(&self) -> &Vec<E::G1Affine> {
+        &self.vk.vk.gamma_abc_g1
+    }
+
+    pub const fn alpha_g1_beta_g2(&self) -> &E::TargetField {
+        &self.vk.alpha_g1_beta_g2
+    }
+
+    pub const fn gamma_g2_neg_pc(&self) -> &E::G2Prepared {
+        &self.vk.gamma_g2_neg_pc
+    }
+
+    pub const fn delta_g2_neg_pc(&self) -> &E::G2Prepared {
+        &self.vk.delta_g2_neg_pc
+    }
 }
 
 impl<E: Pairing> From<VerificationKey<E>> for ark_groth16::VerifyingKey<E> {
