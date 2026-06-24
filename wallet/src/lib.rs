@@ -421,7 +421,7 @@ fn group_events(
     Vec<HeaderEvent>,
     HashMap<TxHash, HashMap<Hash, TxEventPayload>>,
 ) {
-    let mut ledger_events = Vec::new();
+    let mut header_events = Vec::new();
     let mut tx_events: HashMap<TxHash, HashMap<Hash, TxEventPayload>> = HashMap::new();
     for event in events.iter() {
         match event {
@@ -435,10 +435,10 @@ fn group_events(
                     .or_default()
                     .insert(*op_id, payload.clone());
             }
-            Event::Header(payload) => ledger_events.push(payload.clone()),
+            Event::Header(event) => header_events.push(event.clone()),
         }
     }
-    (ledger_events, tx_events)
+    (header_events, tx_events)
 }
 
 /// Build a [`HeaderOp`] for a wallet-relevant header event. Returns `None`
