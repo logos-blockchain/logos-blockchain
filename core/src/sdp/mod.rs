@@ -342,6 +342,7 @@ impl NomDecode for ServiceType {
     }
 }
 
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
 wire_fixture!(ServiceType, ServiceType::BlendNetwork => "00");
 
 #[cfg(test)]
@@ -617,12 +618,13 @@ impl NomDecode for ActivityMetadata {
     }
 }
 
-// TODO: Remove once `NomCodec` macro supports enums.
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags and
+// enums.
 wire_fixture!(
     ActivityMetadata,
     ActivityMetadata::Blend(Box::new(blend::ActivityProof {
         epoch: Epoch::new(10),
-        signing_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        signing_key: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked(
             [0u8; _]
         )

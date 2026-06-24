@@ -55,8 +55,7 @@ impl NomDecode for ActivityProof {
     }
 }
 
-// ActivityProof prepends a version byte before its fields, so it is not a plain
-// field-order concat — keep the hand-written codec; attach only the fixture.
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
 wire_fixture!(
     ActivityProof,
     ActivityProof {

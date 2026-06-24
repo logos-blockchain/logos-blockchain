@@ -142,7 +142,7 @@ where
         }
 
         [WireFixture {
-            value: Self::new_unchecked(values),
+            value: values.try_into().unwrap(),
             bytes: Cow::Owned(bytes),
         }]
         .into()

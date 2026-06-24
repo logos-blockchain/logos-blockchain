@@ -21,7 +21,7 @@ pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
     ChannelConfigOp {
-        channel: ChannelId([0u8; 32]),
+        channel: ChannelId([0u8; _]),
         keys: [Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()].into(),
         posting_timeframe: SlotTimeframe::from(0u32),
         posting_timeout: SlotTimeout::from(0u32),

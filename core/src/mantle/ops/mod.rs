@@ -196,11 +196,13 @@ impl NomDecode for Op {
     }
 }
 
-// TODO: Remove once the `NomCodec` macro supports enums
+// We just check that the enum discriminant tag is encoded correctly, so a
+// single fixture is fine here.
+// TODO: Remove once the `NomCodec` macro supports enums.
 wire_fixture!(
     Op,
     Op::ChannelInscribe(
-        <InscriptionOp as crate::mantle::nom::WireExamples>::fixtures()
+        InscriptionOp::fixtures()
             .into_iter()
             .next()
             .expect("InscriptionOp has a fixture")

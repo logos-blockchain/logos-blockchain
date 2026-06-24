@@ -25,7 +25,7 @@ pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
     Self {
-        channel_id: ChannelId([0u8; 32]),
+        channel_id: ChannelId([0u8; _]),
         inscription: b"genesis".into(),
         parent: MsgId([0u8; _]),
         signer: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),

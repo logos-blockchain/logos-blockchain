@@ -19,9 +19,6 @@ impl NomDecode for u8 {
     }
 }
 
-// Well-known fixtures for the hand-written primitive codecs. These also satisfy
-// the `T: WireExamples` bound that the `BoundedVec<T, ..>` / `[T; N]` blanket
-// fixtures rely on.
 wire_fixture!(u8, 0x07u8 => "07", 0u8 => "00");
 
 impl NomEncode for u16 {

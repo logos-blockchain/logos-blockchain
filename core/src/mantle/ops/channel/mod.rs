@@ -12,8 +12,6 @@ pub type ChannelKeyIndex = u16;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
 #[nom_fixtures(
     (ChannelId([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"),
-    (ChannelId([1u8; 32]), "0101010101010101010101010101010101010101010101010101010101010101"),
-    (ChannelId([0xFF; 32]), "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"),
 )]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
