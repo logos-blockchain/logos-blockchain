@@ -1040,20 +1040,24 @@ where
 
         let tx_count = block.transactions().count();
 
-        relays
-            .storage_adapter()
-            .store_block(header.id(), header.parent(), block.clone(), events)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to store block: {e}")))?;
-
-        Self::store_immutable_blocks_index(
+        let immutable_blocks = Self::immutable_blocks_index(
             &pruned_blocks,
             Some(prev_lib),
             new_lib,
             candidate.consensus.lib_branch().slot(),
-            relays.storage_adapter(),
-        )
-        .await?;
+        );
+
+        relays
+            .storage_adapter()
+            .store_block_data(
+                header.id(),
+                header.parent(),
+                block.clone(),
+                events,
+                immutable_blocks,
+            )
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to store block data: {e}")))?;
 
         *cryptarchia = candidate;
         metrics::emit_block_transactions_metric(tx_count);
@@ -1133,6 +1137,21 @@ where
         new_lib_slot: Slot,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) -> Result<(), Error> {
+        let immutable_blocks =
+            Self::immutable_blocks_index(pruned_blocks, prev_lib, new_lib, new_lib_slot);
+
+        storage_adapter
+            .store_immutable_block_ids(immutable_blocks)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
+    }
+
+    fn immutable_blocks_index(
+        pruned_blocks: &PrunedBlocks<HeaderId>,
+        prev_lib: Option<HeaderId>,
+        new_lib: HeaderId,
+        new_lib_slot: Slot,
+    ) -> BTreeMap<Slot, HeaderId> {
         let mut immutable_blocks = pruned_blocks.immutable_blocks().clone();
         // The new LIB is also immutable and should be immediately queryable by slot.
         // prune_immutable_blocks() only returns blocks older than the new LIB,
@@ -1140,10 +1159,8 @@ where
         if prev_lib.is_none_or(|prev| prev != new_lib) {
             immutable_blocks.insert(new_lib_slot, new_lib);
         }
-        storage_adapter
-            .store_immutable_block_ids(immutable_blocks)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
+
+        immutable_blocks
     }
 
     /// Returns block IDs from descendant (inclusive) to ancestor

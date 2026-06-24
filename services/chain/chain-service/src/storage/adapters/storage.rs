@@ -94,32 +94,40 @@ where
         }
     }
 
-    async fn store_block(
+    async fn store_block_data(
         &self,
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
         events: Self::Events,
+        immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), overwatch::DynError> {
         let block = block
             .try_into()
             .map_err(|_| "Failed to convert block to storage format")?;
+
         let events = events
             .try_into()
             .map_err(|_| "Failed to convert events to storage format")?;
+
         let (sender, receiver) = oneshot::channel();
 
         self.storage_relay
-            .send(StorageMsg::store_block_request(
-                header_id, parent_id, block, events, sender,
+            .send(StorageMsg::store_block_data_request(
+                header_id,
+                parent_id,
+                block,
+                events,
+                immutable_ids,
+                sender,
             ))
             .await
-            .map_err(|_| "Failed to send store block request to storage relay")?;
+            .map_err(|_| "Failed to send store block data request to storage relay")?;
 
         receiver
             .await
-            .map_err(|e| format!("Failed to receive store block response from storage: {e}"))?
-            .map_err(|e| format!("Failed to store block in storage: {e}").into())
+            .map_err(|e| format!("Failed to receive store block data response from storage: {e}"))?
+            .map_err(|e| format!("Failed to store block data in storage: {e}").into())
     }
 
     async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId> {

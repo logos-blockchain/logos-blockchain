@@ -32,12 +32,13 @@ pub trait StorageAdapter<RuntimeServiceId> {
     /// The block with the given header id. If no block is found, returns None.
     async fn get_block(&self, key: &HeaderId) -> Option<Self::Block>;
 
-    async fn store_block(
+    async fn store_block_data(
         &self,
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
         events: Self::Events,
+        immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), overwatch::DynError>;
 
     async fn get_block_parent(&self, header_id: &HeaderId) -> Option<HeaderId>;

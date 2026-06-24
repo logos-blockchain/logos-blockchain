@@ -918,11 +918,12 @@ mod tests {
             let (sender, receiver) = oneshot::channel();
 
             self.storage_relay
-                .send(StorageMsg::store_block_request(
+                .send(StorageMsg::store_block_data_request(
                     header_id,
                     parent_id,
                     store_result.unwrap(),
                     Events::new().try_into().unwrap(),
+                    BTreeMap::new(),
                     sender,
                 ))
                 .await
