@@ -440,15 +440,8 @@ Feature: Zone SDK
     When I submit zone message "MSG_A_2" to sequencer "SEQ_A" with data "seq_a-msg2" immediately
     When I submit zone message "MSG_B_2" to sequencer "SEQ_B" with data "seq_b-msg2" immediately
     When I submit zone message "MSG_C_2" to sequencer "SEQ_C" with data "seq_c-msg2" immediately
-    # Final check: all messages on chain, exact once.
-    Then the zone indexer returns messages in any order in 120 seconds:
-      | alias |
-      | MSG_A_1 |
-      | MSG_A_2 |
-      | MSG_B_1 |
-      | MSG_B_2 |
-      | MSG_C_1 |
-      | MSG_C_2 |
+    # Final check: all messages on chain, exactly once (catches duplicate republishes).
+    Then the zone indexer returns all zone messages exactly once in any order in 120 seconds
     And I stop all nodes
 
   @zone_ci

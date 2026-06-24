@@ -247,9 +247,11 @@ pub fn start_sorted_conflict_policy(
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
-/// Inline policy: republish any orphaned inscriptions. Plain inscriptions
-/// only — bundles are not auto-republished (callers that issue bundles
-/// re-prepare with fresh withdraw nonces themselves).
+/// Inline policy: republish orphaned inscriptions that aren't already back on
+/// the canonical chain. Plain inscriptions only — bundles are not
+/// auto-republished (callers that issue bundles re-prepare with fresh withdraw
+/// nonces themselves). Assumes unique payloads, so the payload identifies the
+/// message; for repeating payloads see [`RepublishLineagePolicy`].
 struct OrphanRepublishPolicy;
 
 impl<Node> runner::Policy<Node> for OrphanRepublishPolicy
@@ -260,10 +262,19 @@ where
         let Event::BlocksProcessed { channel_update, .. } = event else {
             return;
         };
+        // `orphaned` is the full block-delta, so a reorg that re-includes an
+        // inscription surfaces the old instance here and the new one in
+        // `adopted`. Skip orphans whose payload is already back on chain —
+        // republishing them would duplicate.
+        let adopted: HashSet<&Inscription> =
+            channel_update.adopted.iter().map(|i| &i.payload).collect();
         for entry in &channel_update.orphaned {
             let OrphanedTx::Inscription(info) = entry else {
                 continue;
             };
+            if adopted.contains(&info.payload) {
+                continue;
+            }
             if let Err(error) = sequencer.handle().publish(info.payload.clone()) {
                 warn!(%error, "Failed to re-publish orphaned zone payload");
             }
