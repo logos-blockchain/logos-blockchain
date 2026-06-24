@@ -58,7 +58,7 @@ impl NomDecode for ActivityProof {
 // TODO: Remove once the `NomCodec` macro supports logic for custom tags.
 wire_fixture!(
     ActivityProof,
-    ActivityProof {
+    Self {
         epoch: Epoch::new(10),
         signing_key: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked(

@@ -11,7 +11,7 @@ pub type ChannelKeyIndex = u16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
 #[nom_fixtures(
-    (ChannelId([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"),
+    (Self([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"),
 )]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
@@ -25,7 +25,7 @@ impl Display for ChannelId {
 
 /// The id of the previous message in the channel
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
-#[nom_fixtures((MsgId([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((Self([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"))]
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 

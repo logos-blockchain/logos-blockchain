@@ -289,7 +289,7 @@ impl NomDecode for Locator {
 
 wire_fixture!(
     Locator,
-    Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap()) => "0b00047f00000191020bb8cd03"
+    Self::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap()) => "0b00047f00000191020bb8cd03"
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
@@ -343,7 +343,7 @@ impl NomDecode for ServiceType {
 }
 
 // TODO: Remove once the `NomCodec` macro supports logic for custom tags.
-wire_fixture!(ServiceType, ServiceType::BlendNetwork => "00");
+wire_fixture!(ServiceType, Self::BlendNetwork => "00");
 
 #[cfg(test)]
 mod service_type_tests {
@@ -365,7 +365,7 @@ mod service_type_tests {
 pub type Nonce = u64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
-#[nom_fixtures((ProviderId(Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()), "0000000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((Self(Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()), "0000000000000000000000000000000000000000000000000000000000000000"))]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 #[derive(Debug)]
@@ -400,7 +400,7 @@ impl Ord for ProviderId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, NomCodec)]
-#[nom_fixtures((DeclarationId([0u8; _]), "0000000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((Self([0u8; _]), "0000000000000000000000000000000000000000000000000000000000000000"))]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -506,7 +506,7 @@ pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
-    DeclarationMessage {
+    Self {
         service_type: ServiceType::BlendNetwork,
         locators: [Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap())].into(),
         provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()),
@@ -565,7 +565,7 @@ pub struct WithdrawMessage {
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
-    ActiveMessage {
+    Self {
         declaration_id: DeclarationId([0u8; _]),
         nonce: 0u64,
         metadata: ActivityMetadata::Blend(Box::new(blend::ActivityProof {
@@ -622,7 +622,7 @@ impl NomDecode for ActivityMetadata {
 // enums.
 wire_fixture!(
     ActivityMetadata,
-    ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+    Self::Blend(Box::new(blend::ActivityProof {
         epoch: Epoch::new(10),
         signing_key: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
         proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked(

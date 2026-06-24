@@ -19,7 +19,7 @@ pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
-    DepositOp {
+    Self {
         channel_id: ChannelId([0u8; 32]),
         inputs: Inputs::empty(),
         metadata: Metadata::empty(),

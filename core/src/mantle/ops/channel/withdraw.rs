@@ -15,7 +15,7 @@ use crate::{
 // ChannelWithdraw = ChannelId Outputs WithdrawNonce — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
-    ChannelWithdrawOp {
+    Self {
         channel_id: ChannelId([0u8; 32]),
         outputs: Outputs::empty(),
         withdraw_nonce: 0u32,

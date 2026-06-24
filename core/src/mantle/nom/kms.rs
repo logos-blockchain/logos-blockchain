@@ -27,7 +27,7 @@ impl NomDecode for Ed25519PublicKey {
 
 wire_fixture!(
     Ed25519PublicKey,
-    Ed25519PublicKey::from_bytes(&[1u8; _]).unwrap() => "0101010101010101010101010101010101010101010101010101010101010101"
+    Self::from_bytes(&[1u8; _]).unwrap() => "0101010101010101010101010101010101010101010101010101010101010101"
 );
 
 impl NomEncode for ZkPublicKey {

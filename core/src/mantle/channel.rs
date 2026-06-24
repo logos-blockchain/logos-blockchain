@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
-#[nom_fixtures((SlotTimeframe::from(0x0403_0201u32), "01020304"))]
+#[nom_fixtures((Self::from(0x0403_0201u32), "01020304"))]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -34,7 +34,7 @@ impl From<SlotTimeframe> for u32 {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
-#[nom_fixtures((SlotTimeout::from(0x0403_0201u32), "01020304"))]
+#[nom_fixtures((Self::from(0x0403_0201u32), "01020304"))]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {

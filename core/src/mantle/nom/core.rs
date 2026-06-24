@@ -16,4 +16,4 @@ impl NomDecode for Epoch {
     }
 }
 
-wire_fixture!(Epoch, Epoch::new(1) => "01000000");
+wire_fixture!(Epoch, Self::new(1) => "01000000");

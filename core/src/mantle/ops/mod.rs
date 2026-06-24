@@ -201,7 +201,7 @@ impl NomDecode for Op {
 // TODO: Remove once the `NomCodec` macro supports enums.
 wire_fixture!(
     Op,
-    Op::ChannelInscribe(
+    Self::ChannelInscribe(
         InscriptionOp::fixtures()
             .into_iter()
             .next()

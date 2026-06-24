@@ -72,7 +72,7 @@ pub enum LedgerError {
 }
 
 #[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, NomCodec)]
-#[nom_fixtures((Outputs::new([Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)))]), "01e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((Self::new([Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)))]), "01e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"))]
 pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
@@ -172,7 +172,7 @@ impl<'output> IntoIterator for &'output Outputs {
 }
 
 #[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
-#[nom_fixtures((Inputs::new([NoteId(BigUint::from(123u64).into())]), "017b00000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((Self::new([NoteId(BigUint::from(123u64).into())]), "017b00000000000000000000000000000000000000000000000000000000000000"))]
 pub struct Inputs(BoundedInputs);
 
 impl Inputs {
@@ -309,7 +309,7 @@ impl<'input> IntoIterator for &'input Inputs {
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, NomCodec,
 )]
 #[serde(transparent)]
-#[nom_fixtures((NoteId(BigUint::from(123u64).into()), "7b00000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((Self(BigUint::from(123u64).into()), "7b00000000000000000000000000000000000000000000000000000000000000"))]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
 
 impl NoteId {
@@ -337,7 +337,7 @@ impl From<Fr> for NoteId {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, NomCodec)]
-#[nom_fixtures((Note::new(1000, ZkPublicKey::from(BigUint::from(42u64))), "e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((Self::new(1000, ZkPublicKey::from(BigUint::from(42u64))), "e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"))]
 pub struct Note {
     pub value: Value,
     pub pk: ZkPublicKey,
