@@ -8,7 +8,7 @@ use std::fmt::{Display, Formatter};
 use nom::IResult;
 
 use crate::{
-    mantle::nom::{NomDecode, NomEncode},
+    mantle::nom::{NomDecode, NomEncode, wire_fixture},
     utils::serde_bytes_newtype,
 };
 
@@ -62,6 +62,17 @@ impl NomDecode for MsgId {
         Ok((bytes, Self::from(inner)))
     }
 }
+
+wire_fixture!(
+    ChannelId,
+    ChannelId([0u8; 32]),
+    "0000000000000000000000000000000000000000000000000000000000000000"
+);
+wire_fixture!(
+    MsgId,
+    MsgId([0u8; 32]),
+    "0000000000000000000000000000000000000000000000000000000000000000"
+);
 
 pub type Ed25519PublicKey = lb_key_management_system_keys::keys::Ed25519PublicKey;
 

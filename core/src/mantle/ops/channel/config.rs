@@ -1,6 +1,5 @@
 use lb_cryptarchia_engine::Slot;
 use lb_utils::bounded_vec::NonEmptyBoundedVec;
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
@@ -11,7 +10,7 @@ use crate::{
         TxHash,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
-        nom::{NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -19,7 +18,21 @@ use crate::{
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+// ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
+// PostingTimeout ConfigThreshold WithdrawThreshold — a plain field-order
+// concatenation, so `NomCodec` derives the codec.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[nom_fixture(
+    value = ChannelConfigOp {
+        channel: ChannelId([0u8; 32]),
+        keys: vec![Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()].try_into().unwrap(),
+        posting_timeframe: SlotTimeframe::from(0u32),
+        posting_timeout: SlotTimeout::from(0u32),
+        configuration_threshold: 0u16,
+        withdraw_threshold: 0u16,
+    },
+    bytes = "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+)]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Keys,
@@ -35,44 +48,6 @@ impl ChannelConfigOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode());
         MsgId(hasher.finalize().into())
-    }
-}
-
-// ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
-// PostingTimeout ConfigThreshold WithdrawThreshold
-impl NomEncode for ChannelConfigOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.channel.encode());
-        bytes.extend(self.keys.encode());
-        bytes.extend(self.posting_timeframe.encode());
-        bytes.extend(self.posting_timeout.encode());
-        bytes.extend(self.configuration_threshold.encode());
-        bytes.extend(self.withdraw_threshold.encode());
-        bytes
-    }
-}
-
-impl NomDecode for ChannelConfigOp {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, channel) = ChannelId::decode(bytes)?;
-        let (bytes, keys) = Keys::decode(bytes)?;
-        let (bytes, posting_timeframe) = SlotTimeframe::decode(bytes)?;
-        let (bytes, posting_timeout) = SlotTimeout::decode(bytes)?;
-        let (bytes, configuration_threshold) = u16::decode(bytes)?;
-        let (bytes, withdraw_threshold) = u16::decode(bytes)?;
-
-        Ok((
-            bytes,
-            Self {
-                channel,
-                keys,
-                posting_timeframe,
-                posting_timeout,
-                configuration_threshold,
-                withdraw_threshold,
-            },
-        ))
     }
 }
 

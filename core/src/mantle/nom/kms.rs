@@ -5,7 +5,7 @@ use nom::{
     error::{Error, ErrorKind},
 };
 
-use crate::mantle::nom::{NomDecode, NomEncode};
+use crate::mantle::nom::{NomDecode, NomEncode, wire_fixture};
 
 // Ed25519PublicKey = 32BYTE
 impl NomEncode for Ed25519PublicKey {
@@ -37,3 +37,14 @@ impl NomDecode for ZkPublicKey {
         Ok((bytes, Self::new(inner)))
     }
 }
+
+wire_fixture!(
+    Ed25519PublicKey,
+    Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+    "0000000000000000000000000000000000000000000000000000000000000000"
+);
+wire_fixture!(
+    ZkPublicKey,
+    ZkPublicKey::new(Fr::from(1u64)),
+    "0100000000000000000000000000000000000000000000000000000000000000"
+);

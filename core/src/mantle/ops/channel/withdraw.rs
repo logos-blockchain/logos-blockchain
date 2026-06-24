@@ -1,4 +1,3 @@
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -7,13 +6,22 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         ledger::{Operation, Outputs, Utxos},
-        nom::{NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+// ChannelWithdraw = ChannelId Outputs WithdrawNonce — plain field-order concat.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
+#[nom_fixture(
+    value = ChannelWithdrawOp {
+        channel_id: ChannelId([0u8; 32]),
+        outputs: Outputs::empty(),
+        withdraw_nonce: 0u32,
+    },
+    bytes = "00000000000000000000000000000000000000000000000000000000000000000000000000"
+)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub outputs: Outputs,
@@ -23,32 +31,6 @@ pub struct ChannelWithdrawOp {
 impl OpId for ChannelWithdrawOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
-    }
-}
-
-impl NomEncode for ChannelWithdrawOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.channel_id.encode());
-        bytes.extend(self.outputs.encode());
-        bytes.extend(self.withdraw_nonce.encode());
-        bytes
-    }
-}
-
-impl NomDecode for ChannelWithdrawOp {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, outputs) = Outputs::decode(bytes)?;
-        let (bytes, withdraw_nonce) = u32::decode(bytes)?;
-        Ok((
-            bytes,
-            Self {
-                channel_id,
-                outputs,
-                withdraw_nonce,
-            },
-        ))
     }
 }
 

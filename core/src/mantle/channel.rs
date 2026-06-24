@@ -9,7 +9,7 @@ use crate::{
     mantle::{
         Value,
         ledger::{self, Operation as _},
-        nom::{NomDecode, NomEncode},
+        nom::{NomDecode, NomEncode, wire_fixture},
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -73,6 +73,13 @@ impl NomDecode for SlotTimeout {
         Ok((bytes, Self(inner)))
     }
 }
+
+wire_fixture!(
+    SlotTimeframe,
+    SlotTimeframe::from(0x0403_0201u32),
+    "01020304"
+);
+wire_fixture!(SlotTimeout, SlotTimeout::from(0x0403_0201u32), "01020304");
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {

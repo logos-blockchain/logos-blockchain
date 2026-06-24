@@ -32,7 +32,7 @@ use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
         encoding::{decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op},
-        nom::{NomDecode, NomEncode},
+        nom::{NomDecode, NomEncode, wire_fixture},
         ops::{
             internal::{OpDe, OpSer},
             transfer::TransferOp,
@@ -195,6 +195,17 @@ impl NomDecode for Op {
         }
     }
 }
+
+// The `Op` enum keeps its hand-written tag-dispatch codec. Its canonical
+// fixture reuses `InscriptionOp`'s so the two stay in lockstep: on the wire it
+// is the `INSCRIBE` opcode byte followed by the `InscriptionOp` bytes.
+wire_fixture!(
+    Op,
+    Op::ChannelInscribe(
+        <InscriptionOp as crate::mantle::nom::WireExamples>::canonical_fixture().value
+    ),
+    "1100000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+);
 
 impl Op {
     #[must_use]

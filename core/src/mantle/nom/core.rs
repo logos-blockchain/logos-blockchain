@@ -1,7 +1,7 @@
 use lb_cryptarchia_engine::Epoch;
 use nom::IResult;
 
-use crate::mantle::nom::{NomDecode, NomEncode};
+use crate::mantle::nom::{NomDecode, NomEncode, wire_fixture};
 
 impl NomEncode for Epoch {
     fn encode(&self) -> Vec<u8> {
@@ -15,3 +15,5 @@ impl NomDecode for Epoch {
         Ok((bytes, Self::new(inner)))
     }
 }
+
+wire_fixture!(Epoch, Epoch::new(0x0403_0201), "01020304");

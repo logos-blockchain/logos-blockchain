@@ -25,7 +25,7 @@ use crate::{
     codec::{self, DeserializeOp as _, SerializeOp as _},
     mantle::{
         NoteId,
-        nom::{NomDecode, NomEncode},
+        nom::{NomCodec, NomDecode, NomEncode, wire_fixture},
         ops::channel::Ed25519PublicKey,
     },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
@@ -285,6 +285,12 @@ impl NomDecode for Locator {
     }
 }
 
+wire_fixture!(
+    Locator,
+    Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap()),
+    "0b00047f00000191020bb8cd03"
+);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
 pub enum ServiceType {
     #[serde(rename = "BN")]
@@ -335,6 +341,8 @@ impl NomDecode for ServiceType {
     }
 }
 
+wire_fixture!(ServiceType, ServiceType::BlendNetwork, "00");
+
 #[cfg(test)]
 mod service_type_tests {
     use strum::IntoEnumIterator as _;
@@ -369,6 +377,12 @@ impl NomDecode for ProviderId {
         Ok((bytes, Self(value)))
     }
 }
+
+wire_fixture!(
+    ProviderId,
+    ProviderId(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
+    "0000000000000000000000000000000000000000000000000000000000000000"
+);
 
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
@@ -418,6 +432,12 @@ impl NomDecode for DeclarationId {
         Ok((bytes, Self(value)))
     }
 }
+
+wire_fixture!(
+    DeclarationId,
+    DeclarationId([0u8; 32]),
+    "0000000000000000000000000000000000000000000000000000000000000000"
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {
@@ -518,7 +538,21 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+// Declaration = ServiceType Locators ProviderId ZkId LockedNoteId — plain
+// field-order concat, so `NomCodec` derives the codec.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[nom_fixture(
+    value = DeclarationMessage {
+        service_type: ServiceType::BlendNetwork,
+        locators: vec![Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap())]
+            .try_into()
+            .unwrap(),
+        provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
+        zk_id: ZkPublicKey::new(lb_groth16::Fr::from(1u64)),
+        locked_note_id: lb_groth16::Fr::from(0u64).into(),
+    },
+    bytes = "00010b00047f00000191020bb8cd03000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -551,38 +585,9 @@ impl DeclarationMessage {
     }
 }
 
-impl NomEncode for DeclarationMessage {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.service_type.encode();
-        bytes.extend(self.locators.encode());
-        bytes.extend(self.provider_id.encode());
-        bytes.extend(self.zk_id.encode());
-        bytes.extend(self.locked_note_id.encode());
-        bytes
-    }
-}
-
-impl NomDecode for DeclarationMessage {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, service_type) = ServiceType::decode(bytes)?;
-        let (bytes, locators) = Locators::decode(bytes)?;
-        let (bytes, provider_id) = ProviderId::decode(bytes)?;
-        let (bytes, zk_id) = ZkPublicKey::decode(bytes)?;
-        let (bytes, locked_note_id) = NoteId::decode(bytes)?;
-
-        Ok((
-            bytes,
-            Self {
-                service_type,
-                locators,
-                provider_id,
-                zk_id,
-                locked_note_id,
-            },
-        ))
-    }
-}
-
+// WithdrawMessage encodes `nonce` before `locked_note_id` — i.e. NOT in field
+// declaration order — so it keeps its hand-written codec; only the fixture is
+// attached.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
@@ -616,37 +621,38 @@ impl NomDecode for WithdrawMessage {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+wire_fixture!(
+    WithdrawMessage,
+    WithdrawMessage {
+        declaration_id: DeclarationId([0u8; 32]),
+        locked_note_id: lb_groth16::Fr::from(0u64).into(),
+        nonce: 0u64,
+    },
+    "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+);
+
+// ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[nom_fixture(
+    value = ActiveMessage {
+        declaration_id: DeclarationId([0u8; 32]),
+        nonce: 0u64,
+        metadata: ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+            epoch: Epoch::new(10),
+            signing_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            proof_of_quota:
+                lb_blend_proofs::quota::VerifiedProofOfQuota::from_bytes_unchecked([0u8; _]).into(),
+            proof_of_selection:
+                lb_blend_proofs::selection::VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
+                    .into(),
+        })),
+    },
+    bytes = "0000000000000000000000000000000000000000000000000000000000000000000000000000000001010a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101"
+)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
     pub metadata: ActivityMetadata,
-}
-
-impl NomEncode for ActiveMessage {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.declaration_id.encode();
-        bytes.extend(self.nonce.encode());
-        bytes.extend(self.metadata.encode());
-        bytes
-    }
-}
-
-impl NomDecode for ActiveMessage {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
-        let (bytes, nonce) = Nonce::decode(bytes)?;
-        let (bytes, metadata) = ActivityMetadata::decode(bytes)?;
-
-        Ok((
-            bytes,
-            Self {
-                declaration_id,
-                nonce,
-                metadata,
-            },
-        ))
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -680,6 +686,22 @@ impl NomDecode for ActivityMetadata {
         }
     }
 }
+
+wire_fixture!(
+    ActivityMetadata,
+    ActivityMetadata::Blend(Box::new(blend::ActivityProof {
+        epoch: Epoch::new(10),
+        signing_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        proof_of_quota: lb_blend_proofs::quota::VerifiedProofOfQuota::from_bytes_unchecked(
+            [0u8; _]
+        )
+        .into(),
+        proof_of_selection:
+            lb_blend_proofs::selection::VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
+                .into(),
+    })),
+    "01010a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101"
+);
 
 #[cfg(test)]
 mod tests {

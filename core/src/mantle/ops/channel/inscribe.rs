@@ -3,7 +3,6 @@ use std::sync::Arc;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded_vec::UpperBoundedVec;
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
@@ -15,7 +14,7 @@ use crate::{
         TxHash,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
-        nom::{NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
         ops::channel::config::Keys,
     },
 };
@@ -23,7 +22,19 @@ use crate::{
 pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+// ChannelInscribe = ChannelId Inscription Parent Signer.
+// `NomCodec` derives `NomEncode`/`NomDecode` (field-order concatenation) and
+// requires the well-known fixture below.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[nom_fixture(
+    value = Self {
+        channel_id: ChannelId([0u8; 32]),
+        inscription: b"genesis".into(),
+        parent: MsgId([0u8; 32]),
+        signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+    },
+    bytes = "00000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
@@ -40,35 +51,6 @@ impl InscriptionOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode().as_slice());
         MsgId(hasher.finalize().into())
-    }
-}
-
-// ChannelInscribe = ChannelId Inscription Parent Signer
-impl NomEncode for InscriptionOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.channel_id.encode();
-        bytes.extend(self.inscription.encode());
-        bytes.extend(self.parent.encode());
-        bytes.extend(self.signer.encode());
-        bytes
-    }
-}
-
-impl NomDecode for InscriptionOp {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, inscription) = Inscription::decode(bytes)?;
-        let (bytes, parent) = MsgId::decode(bytes)?;
-        let (bytes, signer) = Ed25519PublicKey::decode(bytes)?;
-        Ok((
-            bytes,
-            Self {
-                channel_id,
-                inscription,
-                parent,
-                signer,
-            },
-        ))
     }
 }
 
@@ -181,6 +163,7 @@ mod tests {
     use lb_utils::bounded_vec::BoundedError;
 
     use super::*;
+    use crate::mantle::nom::NomDecode as _;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {

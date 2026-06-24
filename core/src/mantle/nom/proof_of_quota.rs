@@ -4,7 +4,7 @@ use nom::{
     error::{Error, ErrorKind},
 };
 
-use crate::mantle::nom::{NomDecode, NomEncode};
+use crate::mantle::nom::{NomDecode, NomEncode, wire_fixture};
 
 impl NomEncode for ProofOfQuota {
     fn encode(&self) -> Vec<u8> {
@@ -39,3 +39,14 @@ impl NomDecode for ProofOfSelection {
         ))
     }
 }
+
+wire_fixture!(
+    ProofOfQuota,
+    lb_blend_proofs::quota::VerifiedProofOfQuota::from_bytes_unchecked([0u8; _]).into(),
+    "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+);
+wire_fixture!(
+    ProofOfSelection,
+    lb_blend_proofs::selection::VerifiedProofOfSelection::from_bytes_unchecked([0u8; _]).into(),
+    "0000000000000000000000000000000000000000000000000000000000000000"
+);

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use lb_utils::bounded_vec::BoundedVec;
 use nom::{
     IResult, Parser as _,
@@ -5,7 +7,7 @@ use nom::{
     multi::count,
 };
 
-use crate::mantle::nom::{NomDecode, NomEncode, encode_slice};
+use crate::mantle::nom::{NomDecode, NomEncode, WireExamples, WireFixture, encode_slice, sealed};
 
 #[derive(Debug, Clone, Copy)]
 enum NOfBytes {
@@ -97,6 +99,47 @@ where
 
         let (bytes, items) = count(T::decode, len).parse_complete(bytes)?;
         Ok((bytes, Self::new_unchecked(items)))
+    }
+}
+
+impl<T, const MIN: usize, const MAX: usize> sealed::Sealed for BoundedVec<T, MIN, MAX> where
+    T: WireExamples
+{
+}
+
+// The fixture is derived from the element's fixture, giving *every*
+// `BoundedVec` monomorphization compile-time fixture existence for free. It
+// exercises `T`'s codec and element concatenation, but reuses
+// `encode_length_prefix`, so it is circular w.r.t. the length prefix — prefix
+// drift is covered by the hand-pinned `#[test]`s below, which assert exact
+// prefix bytes.
+//
+// `MIN` may be 0 (`UpperBoundedVec`), so we force at least one element;
+// otherwise the fixture would be empty and never touch `T`'s codec.
+impl<T, const MIN: usize, const MAX: usize> WireExamples for BoundedVec<T, MIN, MAX>
+where
+    T: WireExamples,
+{
+    fn canonical_fixture() -> WireFixture<Self> {
+        // Build the elements from `T`'s own fixture. We call it per element
+        // (rather than cloning one value) so the bound stays at `T: WireExamples`
+        // — no `Clone` — which is what lets the supertrait flip go through: a
+        // `BoundedVec<T, ..>: NomEncode` impl only knows `T: NomEncode`, and after
+        // the flip that gives `T: WireExamples` but not `T: Clone`.
+        let count = MIN.max(1);
+
+        let mut values = Vec::with_capacity(count);
+        let mut bytes = encode_length_prefix::<MAX>(count);
+        for _ in 0..count {
+            let item = T::canonical_fixture();
+            bytes.extend_from_slice(item.bytes.as_ref());
+            values.push(item.value);
+        }
+
+        WireFixture {
+            value: Self::new_unchecked(values),
+            bytes: Cow::Owned(bytes),
+        }
     }
 }
 
@@ -219,6 +262,14 @@ mod tests {
         let (rest, decoded) = Bounded::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
+    }
+
+    /// Exercises the blanket [`WireExamples`](crate::mantle::nom::WireExamples)
+    /// fixture for a concrete monomorphization (the element fixture comes from
+    /// `u8`'s `wire_fixture!`).
+    #[test]
+    fn well_known_fixture_roundtrips() {
+        crate::mantle::nom::assert_wire_fixtures::<Bounded>();
     }
 
     #[test]

@@ -17,7 +17,7 @@ use crate::{
     events::Events,
     mantle::{
         encoding::{BoundedInputs, BoundedOutputs},
-        nom::{NomDecode, NomEncode},
+        nom::{NomCodec, NomDecode, NomEncode, wire_fixture},
         ops::OpId,
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -371,7 +371,29 @@ impl NomDecode for NoteId {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+// Newtype wrappers (and the `BoundedVec`-backed collections) keep their
+// hand-written delegating codecs; only the fixture is attached.
+wire_fixture!(
+    NoteId,
+    NoteId(BigUint::from(123u64).into()),
+    "7b00000000000000000000000000000000000000000000000000000000000000"
+);
+wire_fixture!(
+    Outputs,
+    Outputs::new([Note::new(1000, ZkPublicKey::from(BigUint::from(42u64)))]),
+    "01e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"
+);
+wire_fixture!(
+    Inputs,
+    Inputs::new([NoteId(BigUint::from(123u64).into())]),
+    "017b00000000000000000000000000000000000000000000000000000000000000"
+);
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, NomCodec)]
+#[nom_fixture(
+    value = Note::new(1000, ZkPublicKey::from(BigUint::from(42u64))),
+    bytes = "e8030000000000002a00000000000000000000000000000000000000000000000000000000000000"
+)]
 pub struct Note {
     pub value: Value,
     pub pk: ZkPublicKey,
@@ -386,23 +408,6 @@ impl Note {
     #[must_use]
     pub fn as_fr_components(&self) -> [Fr; 2] {
         [BigUint::from(self.value).into(), *self.pk.as_fr()]
-    }
-}
-
-impl NomEncode for Note {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.value.encode());
-        bytes.extend(self.pk.encode());
-        bytes
-    }
-}
-
-impl NomDecode for Note {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, value) = u64::decode(bytes)?;
-        let (bytes, pk) = ZkPublicKey::decode(bytes)?;
-        Ok((bytes, Self::new(value, pk)))
     }
 }
 

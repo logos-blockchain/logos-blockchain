@@ -39,6 +39,7 @@ members = [
   "consensus/cryptarchia-engine",
   "consensus/cryptarchia-sync",
   "core",
+  "core/macros",
   "deployment/cfgsync",
   "deployment/faucet",
   "deployment/l2-sequencer-archival-demo/archiver",
@@ -121,6 +122,7 @@ lb-circuits-verifier               = { default-features = false, package = "logo
 lb-common-http-client              = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 lb-config                          = { default-features = false, package = "logos-blockchain-config", path = "./tools/config" }
 lb-core                            = { default-features = false, package = "logos-blockchain-core", path = "./core" }
+lb-core-macros                     = { default-features = false, package = "logos-blockchain-core-macros", path = "./core/macros" }
 lb-cryptarchia-engine              = { default-features = false, package = "logos-blockchain-cryptarchia-engine", path = "./consensus/cryptarchia-engine" }
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
 lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./deployment/l2-sequencer-archival-demo/archiver" }

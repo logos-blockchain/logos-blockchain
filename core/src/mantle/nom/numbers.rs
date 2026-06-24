@@ -5,7 +5,7 @@ use nom::{
     number::complete::{le_u16, le_u32, le_u64, u8},
 };
 
-use crate::mantle::nom::{NomDecode, NomEncode};
+use crate::mantle::nom::{NomDecode, NomEncode, wire_fixture};
 
 impl NomEncode for u8 {
     fn encode(&self) -> Vec<u8> {
@@ -18,6 +18,19 @@ impl NomDecode for u8 {
         u8(bytes)
     }
 }
+
+// Well-known fixtures for the hand-written primitive codecs. These also satisfy
+// the `T: WireExamples` bound that the `BoundedVec<T, ..>` / `[T; N]` blanket
+// fixtures rely on.
+wire_fixture!(u8, 0x07u8, "07");
+wire_fixture!(u16, 0x0201u16, "0102");
+wire_fixture!(u32, 0x0403_0201u32, "01020304");
+wire_fixture!(u64, 0x0807_0605_0403_0201u64, "0102030405060708");
+wire_fixture!(
+    Fr,
+    Fr::from(1u64),
+    "0100000000000000000000000000000000000000000000000000000000000000"
+);
 
 impl NomEncode for u16 {
     fn encode(&self) -> Vec<u8> {

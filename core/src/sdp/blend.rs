@@ -7,7 +7,7 @@ use nom::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::nom::{NomDecode, NomEncode};
+use crate::mantle::nom::{NomDecode, NomEncode, wire_fixture};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ActivityProof {
@@ -51,6 +51,24 @@ impl NomDecode for ActivityProof {
         ))
     }
 }
+
+// ActivityProof prepends a version byte before its fields, so it is not a plain
+// field-order concat — keep the hand-written codec; attach only the fixture.
+wire_fixture!(
+    ActivityProof,
+    ActivityProof {
+        epoch: Epoch::new(10),
+        signing_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+        proof_of_quota: lb_blend_proofs::quota::VerifiedProofOfQuota::from_bytes_unchecked(
+            [0u8; _]
+        )
+        .into(),
+        proof_of_selection:
+            lb_blend_proofs::selection::VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
+                .into(),
+    },
+    "010a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101"
+);
 
 #[cfg(test)]
 mod tests {
