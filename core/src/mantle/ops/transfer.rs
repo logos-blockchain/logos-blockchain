@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         encoding::encode_transfer_op,
@@ -93,12 +93,12 @@ impl Operation<TransferValidationContext<'_>> for TransferOp {
     fn execute(
         &self,
         mut utxos: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Remove inputs from the ledger
         utxos = self.inputs.execute(utxos)?;
         // Add outputs from the ledger
         utxos = self.outputs.execute(utxos, self);
-        Ok((utxos, Events::new()))
+        Ok((utxos, Vec::new()))
     }
 }
 

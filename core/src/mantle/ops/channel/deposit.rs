@@ -4,7 +4,7 @@ use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::{Event, EventPayload, Events},
+    events::{TxEvent, TxEventPayload},
     mantle::{
         TxHash,
         channel::{Channels, Error},
@@ -105,7 +105,7 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Get the amount deposited
         let amount_deposited = self.inputs.amount(&ctx.utxos)?;
 
@@ -125,10 +125,10 @@ impl Operation<DepositValidationContext<'_>> for DepositOp {
             })
         }?;
 
-        let events = std::iter::once(Event::from_tx(
+        let events = std::iter::once(TxEvent::new(
             ctx.tx_hash,
             self.op_id(),
-            EventPayload::Deposit {
+            TxEventPayload::Deposit {
                 channel_id: self.channel_id,
                 amount: amount_deposited,
                 metadata: self.metadata.clone(),

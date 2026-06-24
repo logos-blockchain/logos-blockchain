@@ -3,11 +3,12 @@ use std::{collections::HashMap, pin::Pin};
 use async_trait::async_trait;
 use futures::{Stream, stream};
 use lb_common_http_client::{
-    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, EventPayload, Events,
-    ProcessedBlockEvent, Slot, TimeInfo,
+    ApiBlock, BlockInfo, ChainServiceInfo, CommonHttpClient, Error, Event, Events,
+    ProcessedBlockEvent, Slot, TimeInfo, TxEventPayload,
 };
 use lb_core::{
     crypto::Hash,
+    events::TxEvent,
     header::HeaderId,
     mantle::{
         Op, SignedMantleTx, Transaction as _, TxHash, Value,
@@ -232,12 +233,12 @@ pub(crate) fn build_deposit_amounts(events: &Events) -> HashMap<(TxHash, Hash), 
     events
         .iter()
         .filter_map(|event| match event {
-            Event::Tx {
+            Event::Tx(TxEvent {
                 tx_hash,
                 op_id,
-                payload: EventPayload::Deposit { amount, .. },
-            } => Some(((*tx_hash, *op_id), *amount)),
-            Event::Tx { .. } | Event::Ledger(_) => None,
+                payload: TxEventPayload::Deposit { amount, .. },
+            }) => Some(((*tx_hash, *op_id), *amount)),
+            Event::Tx { .. } | Event::Header(_) => None,
         })
         .collect()
 }

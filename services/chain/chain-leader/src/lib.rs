@@ -607,7 +607,7 @@ where
 
         let tx_stream: Pin<Box<_>> = Box::pin(txs_stream);
 
-        ledger_state = ledger_state
+        (ledger_state, _) = ledger_state
             .clone()
             .try_apply_header::<Groth16LeaderProof, HeaderId>(slot, &proof, ledger_config)?;
 

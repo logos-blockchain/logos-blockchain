@@ -10,7 +10,7 @@ use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
     block::MAX_BLOCK_SIZE,
     crypto::{Digest as _, Hasher},
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{ChannelState, Channels, Error},
@@ -140,7 +140,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels
@@ -175,7 +175,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 ..channel
             },
         );
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }
 
