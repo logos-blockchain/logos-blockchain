@@ -115,7 +115,6 @@ pub(super) fn resolve_bootstrap_image() -> (String, Option<String>) {
     (image, platform)
 }
 
-
 fn base_volumes() -> Vec<String> {
     let mut volumes = vec!["./stack:/etc/logos".into()];
     if let Some(host_log_dir) = repository_root()
