@@ -738,19 +738,33 @@ async fn publish_zone_messages_with_republish_policy(
 ) -> StepResult {
     let grouped = group_zone_messages_by_sequencer(&rows);
 
-    for sequencer_alias in grouped.keys() {
+    for (sequencer_alias, messages) in &grouped {
+        let planned = messages
+            .iter()
+            .map(|message| message.payload.clone())
+            .collect();
         start_named_sequencer_with_pending_submit_depth(
             world,
             step,
             sequencer_alias,
             None,
-            DriveMode::Republish,
+            DriveMode::RepublishLineage { planned },
             usize::MAX,
         )
         .await?;
     }
 
-    publish_zone_messages_concurrently(world, step, rows).await
+    // Each sequencer's lineage policy owns publishing its own copies; the step
+    // only records the messages so the indexer assertions can find them.
+    for row in rows {
+        world
+            .zone
+            .remember_zone_message(row.message_alias, row.payload, None, None, None);
+    }
+    if world.zone.indexer().is_err() {
+        initialize_zone_indexer(world, step, DEFAULT_ZONE_SEQUENCER)?;
+    }
+    Ok(())
 }
 
 #[when("the following zone messages are published concurrently with sorted conflict policy:")]

@@ -22,8 +22,11 @@ use crate::message::Msg;
 /// resuming from a persisted state and re-receiving backfill is harmless.
 pub trait ZoneState: Send {
     fn on_adopted(&mut self, adopted: &[InscriptionInfo]);
-    /// Remove our orphaned entry from `published`. Caller is expected to
-    /// auto-republish via `sequencer.handle().publish`.
+    /// Drop an orphaned inscription: remove it from our outbox (`published`,
+    /// so the caller can auto-republish via `sequencer.handle().publish`) and
+    /// from the channel view (`adopted`, since it fell off canonical). An
+    /// orphan we never applied to `adopted` (our never-landed pending) is
+    /// simply absent there, so that removal is a no-op.
     fn on_orphaned(&mut self, msg_id: &MsgId);
     fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]);
 
@@ -58,6 +61,9 @@ impl ZoneState for InMemoryZoneState {
     fn on_orphaned(&mut self, msg_id: &MsgId) {
         if let Some(i) = self.published.iter().position(|m| &m.msg_id == msg_id) {
             self.published.remove(i);
+        }
+        if let Some(i) = self.adopted.iter().position(|m| &m.msg_id == msg_id) {
+            self.adopted.remove(i);
         }
     }
 

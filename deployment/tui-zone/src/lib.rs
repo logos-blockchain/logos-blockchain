@@ -2,7 +2,7 @@ mod message;
 mod state;
 mod ui;
 
-use std::{fs, path::Path};
+use std::{collections::HashSet, fs, path::Path};
 
 use clap::Parser;
 use lb_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
@@ -165,8 +165,12 @@ fn apply_channel_update(
         return;
     }
     state.on_adopted(&adopted);
+    // Orphans already back on the channel (same payload, fresh `this_msg`) are
+    // in `adopted` — reverting them from state still applies, but republishing
+    // would duplicate. Payloads carry a `tx_uuid`, so they're unique.
+    let readopted: HashSet<&[u8]> = adopted.iter().map(|i| i.payload.as_slice()).collect();
     for entry in &orphaned {
-        handle_orphan(state, sequencer, entry);
+        handle_orphan(state, sequencer, entry, &readopted);
     }
     ui::render_state(state);
     ui::prompt();
@@ -176,22 +180,38 @@ fn handle_orphan(
     state: &mut InMemoryZoneState,
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
     entry: &OrphanedTx,
+    readopted: &HashSet<&[u8]>,
 ) {
-    match entry {
-        OrphanedTx::Inscription(info) => {
-            state.on_orphaned(&info.this_msg);
-            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
-            match sequencer.handle().publish(info.payload.clone()) {
-                Ok((result, checkpoint)) => {
-                    state.on_published(result.tx.inscription());
-                    state.save_checkpoint(checkpoint);
-                }
-                Err(e) => error!("failed to auto-republish: {e}"),
-            }
+    let OrphanedTx::Inscription(info) = entry else {
+        // The full delta can surface bundle orphans from other publishers; the
+        // TUI only publishes text inscriptions, so nothing to do.
+        debug!("ignoring atomic-withdraw orphan - TUI does not publish bundles");
+        return;
+    };
+
+    // It fell off the channel: drop it from our outbox (so we republish it)
+    // and from the adopted view.
+    state.on_orphaned(&info.this_msg);
+
+    if readopted.contains(info.payload.as_slice()) {
+        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Orphan re-adopted; not republishing");
+        return;
+    }
+    republish_orphan(state, sequencer, info);
+}
+
+fn republish_orphan(
+    state: &mut InMemoryZoneState,
+    sequencer: &mut ZoneSequencer<NodeHttpClient>,
+    info: &InscriptionInfo,
+) {
+    debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
+    match sequencer.handle().publish(info.payload.clone()) {
+        Ok((result, checkpoint)) => {
+            state.on_published(result.tx.inscription());
+            state.save_checkpoint(checkpoint);
         }
-        OrphanedTx::AtomicWithdraw(_) => {
-            error!("unexpected atomic-withdraw orphan - TUI does not publish bundles");
-        }
+        Err(e) => error!("failed to auto-republish: {e}"),
     }
 }
 

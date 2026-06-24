@@ -3,6 +3,8 @@
     reason = "`ZoneSequencer`'s public API lives in zone_sequencer.rs; internal handlers live here."
 )]
 
+use std::collections::HashSet;
+
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::mantle::channel::ChannelState;
 use tracing::{debug, error, warn};
@@ -13,8 +15,8 @@ use super::{
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
     types::{
-        ChannelUpdate, Error, Event, FinalizedTx, SequencerChannelView, SequencerCheckpoint,
-        TurnNotification, TxSource, TxStatus,
+        ChannelUpdate, Error, Event, FinalizedTx, OrphanedTx, SequencerChannelView,
+        SequencerCheckpoint, TurnNotification, TxSource, TxStatus,
     },
     zone_sequencer::{ZoneSequencer, build_checkpoint},
 };
@@ -539,23 +541,32 @@ where
         }
     }
 
-    /// Build the [`ChannelUpdate`]. `orphaned` contains only our own pending
-    /// whose original signed tx is permanently invalid — items the SDK has
-    /// given up on (parent slot claimed by a competing inscription, or
-    /// parent transitively off canonical). Block-delta orphans whose
-    /// original tx is still valid (the SDK keeps retrying them) are not
-    /// surfaced. `adopted` is the raw block-delta — consumers dedupe by
-    /// `this_msg` against the outbox they built from their own publish-call
-    /// return values.
+    /// Build the [`ChannelUpdate`].
+    ///
+    /// `orphaned` is the union (deduped by `tx_hash`) of the block delta of
+    /// inscriptions removed from the channel and our pending that can no longer
+    /// land ([`TxState::shed_off_branch_pending`]) — the latter including
+    /// pending that never landed, which is absent from the block delta. A tx in
+    /// both halves keeps the shed variant: it carries the `AtomicWithdraw`
+    /// bundle metadata the block delta lacks.
+    ///
+    /// `adopted` is the block delta of inscriptions added to the channel.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
-        let orphaned = match (self.state.as_mut(), self.current_tip) {
+        let shed = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
             _ => Vec::new(),
         };
-        let typed_orphaned = orphaned.into_iter().map(orphan_from_shed).collect();
+        let mut orphaned: Vec<OrphanedTx> = shed.into_iter().map(orphan_from_shed).collect();
+
+        let mut seen: HashSet<_> = orphaned.iter().map(OrphanedTx::tx_hash).collect();
+        for info in u.orphaned {
+            if seen.insert(info.tx_hash) {
+                orphaned.push(OrphanedTx::Inscription(info));
+            }
+        }
 
         ChannelUpdate {
-            orphaned: typed_orphaned,
+            orphaned,
             adopted: u.adopted,
         }
     }
