@@ -49,9 +49,10 @@ where
             item.value
         });
 
-        WireFixtures::<Self>::new_unchecked(vec![WireFixture {
+        [WireFixture {
             value,
             bytes: Cow::Owned(bytes),
-        }])
+        }]
+        .into()
     }
 }

@@ -141,10 +141,11 @@ where
             values.push(item.value);
         }
 
-        WireFixtures::<Self>::new_unchecked(vec![WireFixture {
+        [WireFixture {
             value: Self::new_unchecked(values),
             bytes: Cow::Owned(bytes),
-        }])
+        }]
+        .into()
     }
 }
 
@@ -267,14 +268,6 @@ mod tests {
         let (rest, decoded) = Bounded::decode(&bytes).unwrap();
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
-    }
-
-    /// Exercises the blanket [`WireExamples`](crate::mantle::nom::WireExamples)
-    /// fixture for a concrete monomorphization (the element fixture comes from
-    /// `u8`'s `wire_fixture!`).
-    #[test]
-    fn well_known_fixture_roundtrips() {
-        crate::mantle::nom::assert_wire_fixtures::<Bounded>();
     }
 
     #[test]

@@ -18,9 +18,6 @@ use crate::{
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 
-// ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
-// PostingTimeout ConfigThreshold WithdrawThreshold — a plain field-order
-// concatenation, so `NomCodec` derives the codec.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
     ChannelConfigOp {

@@ -22,7 +22,7 @@ impl NomDecode for u8 {
 // Well-known fixtures for the hand-written primitive codecs. These also satisfy
 // the `T: WireExamples` bound that the `BoundedVec<T, ..>` / `[T; N]` blanket
 // fixtures rely on.
-wire_fixture!(u8, 0x07u8 => "07", 0x00u8 => "00");
+wire_fixture!(u8, 0x07u8 => "07", 0u8 => "00");
 
 impl NomEncode for u16 {
     fn encode(&self) -> Vec<u8> {
@@ -36,7 +36,7 @@ impl NomDecode for u16 {
     }
 }
 
-wire_fixture!(u16, 0x0201u16 => "0102");
+wire_fixture!(u16, 1u16 => "0100", 0x0201u16 => "0102");
 
 impl NomEncode for u32 {
     fn encode(&self) -> Vec<u8> {
@@ -50,7 +50,7 @@ impl NomDecode for u32 {
     }
 }
 
-wire_fixture!(u32, 0x0403_0201u32 => "01020304");
+wire_fixture!(u32, 1u32 => "01000000", 0x0403_0201u32 => "01020304");
 
 impl NomEncode for u64 {
     fn encode(&self) -> Vec<u8> {
@@ -64,7 +64,7 @@ impl NomDecode for u64 {
     }
 }
 
-wire_fixture!(u64, 0x0807_0605_0403_0201u64 => "0102030405060708");
+wire_fixture!(u64, 1u64 => "0100000000000000", 0x0807_0605_0403_0201u64 => "0102030405060708");
 
 impl NomEncode for Fr {
     fn encode(&self) -> Vec<u8> {

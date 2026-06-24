@@ -196,9 +196,7 @@ impl NomDecode for Op {
     }
 }
 
-// The `Op` enum keeps its hand-written tag-dispatch codec. Its canonical
-// fixture reuses `InscriptionOp`'s so the two stay in lockstep: on the wire it
-// is the `INSCRIBE` opcode byte followed by the `InscriptionOp` bytes.
+// TODO: Remove once the `NomCodec` macro supports enums
 wire_fixture!(
     Op,
     Op::ChannelInscribe(

@@ -1,4 +1,7 @@
-use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
+use lb_blend_proofs::{
+    quota::{ProofOfQuota, VerifiedProofOfQuota},
+    selection::{ProofOfSelection, VerifiedProofOfSelection},
+};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use nom::{
@@ -58,13 +61,13 @@ wire_fixture!(
     ActivityProof,
     ActivityProof {
         epoch: Epoch::new(10),
-        signing_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-        proof_of_quota: lb_blend_proofs::quota::VerifiedProofOfQuota::from_bytes_unchecked(
+        signing_key: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
+        proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked(
             [0u8; _]
         )
         .into(),
         proof_of_selection:
-            lb_blend_proofs::selection::VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
+            VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
                 .into(),
     } => "010a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101"
 );

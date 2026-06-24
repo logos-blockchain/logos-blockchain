@@ -9,7 +9,9 @@ use std::{collections::HashMap, hash::Hash};
 
 use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
+use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
 use lb_cryptarchia_engine::Epoch;
+use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
@@ -362,7 +364,7 @@ mod service_type_tests {
 pub type Nonce = u64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
-#[nom_fixtures((ProviderId(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()), "0000000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((ProviderId(Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()), "0000000000000000000000000000000000000000000000000000000000000000"))]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 #[derive(Debug)]
@@ -397,7 +399,7 @@ impl Ord for ProviderId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, NomCodec)]
-#[nom_fixtures((DeclarationId([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"))]
+#[nom_fixtures((DeclarationId([0u8; _]), "0000000000000000000000000000000000000000000000000000000000000000"))]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -501,18 +503,14 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-// Declaration = ServiceType Locators ProviderId ZkId LockedNoteId — plain
-// field-order concat, so `NomCodec` derives the codec.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
     DeclarationMessage {
         service_type: ServiceType::BlendNetwork,
-        locators: vec![Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap())]
-            .try_into()
-            .unwrap(),
-        provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap()),
-        zk_id: ZkPublicKey::new(lb_groth16::Fr::from(1u64)),
-        locked_note_id: lb_groth16::Fr::from(0u64).into(),
+        locators: [Locator::new_unchecked("/ip4/127.0.0.1/udp/3000/quic-v1".parse().unwrap())].into(),
+        provider_id: ProviderId(Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()),
+        zk_id: ZkPublicKey::new(Fr::from(1u64)),
+        locked_note_id: Fr::from(0u64).into(),
     },
     "00010b00047f00000191020bb8cd03000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 ))]
@@ -548,64 +546,34 @@ impl DeclarationMessage {
     }
 }
 
-// WithdrawMessage encodes `nonce` before `locked_note_id` — i.e. NOT in field
-// declaration order — so it keeps its hand-written codec; only the fixture is
-// attached.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
+#[nom_fixtures((
+    Self {
+        declaration_id: DeclarationId([0u8; _]),
+        locked_note_id: Fr::from(1u64).into(),
+        nonce: 2u64
+    },
+    "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000200000000000000",
+))]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub locked_note_id: NoteId,
     pub nonce: Nonce,
 }
 
-impl NomEncode for WithdrawMessage {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.declaration_id.encode();
-        bytes.extend(self.nonce.encode());
-        bytes.extend(self.locked_note_id.encode());
-        bytes
-    }
-}
-
-impl NomDecode for WithdrawMessage {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
-        let (bytes, nonce) = u64::decode(bytes)?;
-        let (bytes, locked_note_id) = NoteId::decode(bytes)?;
-
-        Ok((
-            bytes,
-            Self {
-                declaration_id,
-                locked_note_id,
-                nonce,
-            },
-        ))
-    }
-}
-
-wire_fixture!(
-    WithdrawMessage,
-    WithdrawMessage {
-        declaration_id: DeclarationId([0u8; 32]),
-        locked_note_id: lb_groth16::Fr::from(0u64).into(),
-        nonce: 0u64,
-    } => "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-);
-
 // ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 #[nom_fixtures((
     ActiveMessage {
-        declaration_id: DeclarationId([0u8; 32]),
+        declaration_id: DeclarationId([0u8; _]),
         nonce: 0u64,
         metadata: ActivityMetadata::Blend(Box::new(blend::ActivityProof {
             epoch: Epoch::new(10),
-            signing_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+            signing_key: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
             proof_of_quota:
-                lb_blend_proofs::quota::VerifiedProofOfQuota::from_bytes_unchecked([0u8; _]).into(),
+                VerifiedProofOfQuota::from_bytes_unchecked([0u8; _]).into(),
             proof_of_selection:
-                lb_blend_proofs::selection::VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
+                VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
                     .into(),
         })),
     },
@@ -649,17 +617,18 @@ impl NomDecode for ActivityMetadata {
     }
 }
 
+// TODO: Remove once `NomCodec` macro supports enums.
 wire_fixture!(
     ActivityMetadata,
     ActivityMetadata::Blend(Box::new(blend::ActivityProof {
         epoch: Epoch::new(10),
         signing_key: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
-        proof_of_quota: lb_blend_proofs::quota::VerifiedProofOfQuota::from_bytes_unchecked(
+        proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked(
             [0u8; _]
         )
         .into(),
         proof_of_selection:
-            lb_blend_proofs::selection::VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
+            VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
                 .into(),
     })) => "01010a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101"
 );

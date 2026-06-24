@@ -9,18 +9,12 @@
 //!   each field in order then `Self { .. }` / `Self(..)`), the sealed
 //!   `WireExamples` fixtures, and a `#[cfg(test)]` round-trip test. The decode
 //!   is infallible positional construction, so newtypes needing a fallible
-//!   `try_from` stay on `wire_fixture!`. The fixtures are pinned with a single
-//!   `#[nom_fixtures((<value>, "<hex>"), ...)]`; omitting it is a compile
-//!   error.
+//!   `try_from` stay on `wire_fixture!` for now. The fixtures are pinned with a
+//!   single `#[nom_fixtures((<value>, "<hex>"), ...)]`; omitting it is a
+//!   compile error.
 //! - [`wire_fixture!`] — for hand-written / foreign codec impls (primitives,
 //!   newtypes, the generic blanket impls' element types). Generates the sealed
 //!   `WireExamples` fixture and a round-trip test next to the existing impl.
-//!
-//! Generated code references the traits via `crate::mantle::nom::…`, so these
-//! macros are intended for use *within* the `logos-blockchain-core` crate
-//! (matching the existing `kms/macros` convention). Cross-crate use would
-//! require switching the anchor to `::logos_blockchain_core::…` plus a
-//! re-export shim.
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -40,8 +34,8 @@ use syn::{
 /// `#[nom_fixtures((<expr>, "<hex>"), (<expr>, "<hex>"), ...)]`.
 #[proc_macro_derive(NomCodec, attributes(nom_fixtures))]
 pub fn derive_nom_codec(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    match expand_derive(&input) {
+    let parsed_input = parse_macro_input!(input as DeriveInput);
+    match expand_derive(&parsed_input) {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
@@ -104,9 +98,7 @@ fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         #[automatically_derived]
         impl crate::mantle::nom::WireExamples for #ident {
             fn fixtures() -> crate::mantle::nom::WireFixtures<Self> {
-                crate::mantle::nom::WireFixtures::<Self>::new_unchecked(
-                    ::std::vec![ #(#fixture_exprs),* ]
-                )
+                [ #(#fixture_exprs),* ].into()
             }
         }
 
@@ -277,9 +269,7 @@ pub fn wire_fixture(input: TokenStream) -> TokenStream {
         #[automatically_derived]
         impl crate::mantle::nom::WireExamples for #ty {
             fn fixtures() -> crate::mantle::nom::WireFixtures<Self> {
-                crate::mantle::nom::WireFixtures::<Self>::new_unchecked(
-                    ::std::vec![ #(#fixture_exprs),* ]
-                )
+                [ #(#fixture_exprs),* ].into()
             }
         }
 

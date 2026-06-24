@@ -27,7 +27,7 @@ pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
     Self {
         channel_id: ChannelId([0u8; 32]),
         inscription: b"genesis".into(),
-        parent: MsgId([0u8; 32]),
+        parent: MsgId([0u8; _]),
         signer: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
     },
     "00000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
