@@ -129,7 +129,7 @@ where
         assert!(
             round_tripped == fixture.value,
             "{type_name}: round-trip changed the value\n  before: {before:?}\n  after:  {round_tripped:?}",
-            before = fixture.value,
+            before = &fixture.value,
         );
     }
 }
