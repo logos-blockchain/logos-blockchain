@@ -26,17 +26,16 @@ pub struct BootstrapConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct IbdConfig {
-    /// Peers to download blocks from.
+    /// Peers to query for the chain tip during IBD.
     pub peers: HashSet<PeerId>,
-    /// Delay before attempting the next download
-    /// when no download is needed at the moment from a peer.
+    /// Deprecated: no longer used. Kept for YAML backward compatibility.
     pub delay_before_new_download: Duration,
 }
 
 impl Default for IbdConfig {
     fn default() -> Self {
         Self {
-            peers: HashSet::default(),
+            peers: HashSet::new(),
             delay_before_new_download: Duration::from_secs(10),
         }
     }

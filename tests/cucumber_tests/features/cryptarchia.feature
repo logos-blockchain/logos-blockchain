@@ -47,6 +47,21 @@ Feature: Cryptarchia
     Then I stop all nodes
 
   @cryptarchia_ci
+  Scenario: IBD scales across discovered peers under trusted-peer bottleneck
+    Given I have a cluster with capacity of 4 nodes
+    And no nodes are declared as blend providers
+    And we use IBD peers
+    And I have user config override "network.backend.swarm.chain_sync.max_inbound_requests" as "1"
+    And all peers must be mode online after startup in 30 seconds
+    And I start node "NODE_1"
+    When node "NODE_1" is at height 4 in 300 seconds
+    And I immediate start peer node "NODE_2" connected to node "NODE_1"
+    And I immediate start peer node "NODE_3" connected to node "NODE_1"
+    And I immediate start peer node "NODE_4" connected to node "NODE_1"
+    Then all nodes have at least 4 blocks and converged to within 1 blocks in 300 seconds
+    Then I stop all nodes
+
+  @cryptarchia_ci
   Scenario: Orphan staggered start
     Given I have a cluster with capacity of 5 nodes
     And no nodes are declared as blend providers

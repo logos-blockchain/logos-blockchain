@@ -111,12 +111,6 @@ impl ServiceConfig {
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: lb_chain_network_service::BootstrapConfig {
                 ibd: lb_chain_network_service::IbdConfig {
-                    delay_before_new_download: self
-                        .user
-                        .network
-                        .bootstrap
-                        .ibd
-                        .delay_before_new_download,
                     peers: self.user.network.bootstrap.ibd.peers,
                 },
             },

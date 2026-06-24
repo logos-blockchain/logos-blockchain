@@ -4238,6 +4238,7 @@ name = "logos-blockchain-chain-network-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "backon",
  "futures",
  "logos-blockchain-chain-service",
  "logos-blockchain-chain-service-common",
