@@ -441,8 +441,7 @@ fn group_events(
     (header_events, tx_events)
 }
 
-/// Build a [`HeaderOp`] for a wallet-relevant header event. Returns `None`
-/// for header events the wallet doesn't track.
+/// Build a [`HeaderOp`] for a wallet-relevant header event.
 const fn transform_header_event(event: &HeaderEvent) -> HeaderOp {
     match event {
         HeaderEvent::SdpNoteUnlocked { note_id, .. } => HeaderOp::Unlock(*note_id),
