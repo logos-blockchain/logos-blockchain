@@ -234,4 +234,37 @@ mod tests {
         assert!(rest.is_empty());
         assert_eq!(decoded, original);
     }
+
+    #[test]
+    fn two_byte_length_prefix() {
+        type TwoByteBounded = BoundedVec<u8, 1, { u16::MAX as usize }>;
+        let original: TwoByteBounded = [10].into();
+        let bytes = original.encode();
+        assert_eq!(bytes, vec![1, 0, 10]); // 2-byte length prefix (1) followed by a single `u8` (10)
+        let (rest, decoded) = TwoByteBounded::decode(&bytes).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn four_byte_length_prefix() {
+        type FourByteBounded = BoundedVec<u8, 1, { u32::MAX as usize }>;
+        let original: FourByteBounded = FourByteBounded::new_unchecked(vec![10]);
+        let bytes = original.encode();
+        assert_eq!(bytes, vec![1, 0, 0, 0, 10]); // 4-byte length prefix (1) followed by a single `u8` (10)
+        let (rest, decoded) = FourByteBounded::decode(&bytes).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn eight_byte_length_prefix() {
+        type EightByteBounded = BoundedVec<u8, 1, { u64::MAX as usize }>;
+        let original: EightByteBounded = EightByteBounded::new_unchecked(vec![10]);
+        let bytes = original.encode();
+        assert_eq!(bytes, vec![1, 0, 0, 0, 0, 0, 0, 0, 10]); // 8-byte length prefix (1) followed by a single `u8` (10)
+        let (rest, decoded) = EightByteBounded::decode(&bytes).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(decoded, original);
+    }
 }
