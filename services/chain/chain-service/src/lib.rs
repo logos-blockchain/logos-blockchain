@@ -1260,6 +1260,9 @@ where
             .await?;
 
         let mut blocks = Vec::new();
+        // `load_block_ids_from_storage` walks from tip back to LIB and includes LIB.
+        // Replay recovery blocks in LIB->tip order, skipping LIB because Cryptarchia
+        // is already initialized from it.
         for id in ids.into_iter().rev().skip(1) {
             let block = storage
                 .get_block(&id)
@@ -1277,6 +1280,7 @@ where
         storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) -> RecoveryBlocks<Tx> {
         if tip == lib {
+            // Cryptarchia already starts from LIB, so there is no branch to replay.
             return RecoveryBlocks {
                 blocks: Vec::new(),
                 fell_back_to_lib: false,
