@@ -979,10 +979,6 @@ async fn step_all_nodes_agree_on_lib(
 
 #[when("I wait for all nodes to be synced to the chain")]
 #[then("I wait for all nodes to be synced to the chain")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
 async fn step_wait_for_all_nodes_to_be_synced_to_the_chain(
     world: &mut CucumberWorld,
     step: &Step,
