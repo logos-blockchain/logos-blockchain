@@ -17,6 +17,7 @@ use tokio::{
     task::JoinHandle,
     time::{error::Elapsed, timeout},
 };
+use tracing::warn;
 
 use super::{
     errors::{log_step_error, zone_step_error},
@@ -130,7 +131,7 @@ pub(super) async fn start_nodes_with_zone_resources(
 
     let nodes = collect_zone_nodes_to_start(&rows);
     let nodes = start_nodes_order_respecting_dependencies(nodes).inspect_err(|error| {
-        tracing::warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+        warn!(target: TARGET, "Step `{}` error: {error}", step.value);
     })?;
 
     for (node_name, wallet_start_info, mut initial_peers) in nodes {

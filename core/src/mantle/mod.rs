@@ -8,11 +8,10 @@ pub mod gas;
 pub mod genesis_tx;
 pub mod ledger;
 pub mod mock;
+pub mod nom;
 pub mod ops;
 pub mod tx;
 pub mod tx_builder;
-
-mod nom;
 
 pub use gas::{GasCalculator, GasConstants};
 pub use genesis_tx::CryptarchiaParameter;

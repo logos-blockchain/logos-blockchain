@@ -11,14 +11,13 @@ use crate::{
         TxHash,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        nom::{NomDecode, NomEncode},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
-type NomKeys<'a> = NomBoundedVec<'a, Ed25519PublicKey, { Keys::MIN }, { Keys::MAX }, 2>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ChannelConfigOp {
@@ -45,7 +44,7 @@ impl NomEncode for ChannelConfigOp {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(self.channel.encode());
-        bytes.extend(NomKeys::from(&self.keys).encode());
+        bytes.extend(self.keys.encode());
         bytes.extend(self.posting_timeframe.encode());
         bytes.extend(self.posting_timeout.encode());
         bytes.extend(self.configuration_threshold.encode());
@@ -55,11 +54,9 @@ impl NomEncode for ChannelConfigOp {
 }
 
 impl NomDecode for ChannelConfigOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, channel) = ChannelId::decode(bytes)?;
-        let (bytes, keys) = NomKeys::decode(bytes)?;
+        let (bytes, keys) = Keys::decode(bytes)?;
         let (bytes, posting_timeframe) = SlotTimeframe::decode(bytes)?;
         let (bytes, posting_timeout) = SlotTimeout::decode(bytes)?;
         let (bytes, configuration_threshold) = u16::decode(bytes)?;

@@ -13,15 +13,17 @@ use lb_core::{
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount, is_truthy_env};
+use tokio::{task::JoinSet, time::timeout};
 use tracing::{debug, info, warn};
 
 use crate::{
     common::{
         chain,
         wallet::{
-            PreparedWalletTransaction, SignedWalletTransaction, WalletFundingResources,
-            WalletFundingSource, WalletTransactionError, WalletTransactionIntent, WalletUtxos,
-            prepare_wallet_transaction,
+            PreparedWalletTransaction, PreparedWalletTransactionWorkItem, SignedWalletTransaction,
+            WalletFundingResources, WalletFundingSource, WalletReservedInputs,
+            WalletTransactionError, WalletTransactionIntent, WalletUtxos,
+            finalize_prepared_wallet_transaction, prepare_wallet_transaction_work_item,
         },
     },
     cucumber::{
@@ -47,6 +49,11 @@ pub(crate) struct SignedUserWalletSubmission {
     submission: SignedWalletTransaction,
 }
 
+pub(crate) struct ReservedUserWalletSubmission {
+    wallet: WalletInfo,
+    submission: PreparedWalletTransactionWorkItem,
+}
+
 impl PreparedUserWalletSubmission {
     pub(crate) const fn tx_hash(&self) -> TxHash {
         self.submission.tx_hash()
@@ -61,6 +68,149 @@ impl SignedUserWalletSubmission {
     pub(crate) const fn signed_tx(&self) -> &SignedMantleTx {
         self.submission.signed_tx()
     }
+}
+
+impl ReservedUserWalletSubmission {
+    #[must_use]
+    pub fn reserved_inputs(&self) -> WalletReservedInputs {
+        self.submission.reserved_inputs()
+    }
+}
+
+pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    receivers: &[(ZkPublicKey, u64)],
+    available_utxos: &mut WalletUtxos,
+) -> Result<ReservedUserWalletSubmission, StepError> {
+    let reserved = reserve_user_wallet_transaction_submission(
+        world,
+        step,
+        sender_wallet_name,
+        WalletTransactionIntent::transfer(receivers, DEFAULT_STORAGE_GAS_PRICE)
+            .map_err(wallet_transaction_error)?,
+        Some(available_utxos),
+    )
+    .await?;
+    apply_reserved_inputs_to_utxo_cache(available_utxos, reserved.reserved_inputs());
+    Ok(reserved)
+}
+
+pub(crate) async fn finalize_reserved_user_wallet_submissions_concurrently(
+    step: &str,
+    reserved_submissions: Vec<ReservedUserWalletSubmission>,
+) -> Result<Vec<SignedUserWalletSubmission>, StepError> {
+    if reserved_submissions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut join_set = JoinSet::new();
+    for reserved_submission in reserved_submissions {
+        let step = step.to_owned();
+        join_set.spawn_blocking(move || {
+            finalize_reserved_user_wallet_submission(&step, reserved_submission)
+        });
+    }
+
+    let mut signed_submissions = Vec::new();
+    let mut first_error = None;
+
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok(signed_submission)) => signed_submissions.push(signed_submission),
+            Ok(Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            Err(error) => {
+                first_error.get_or_insert_with(|| StepError::LogicalError {
+                    message: format!("Concurrent transaction preparation task failed: {error}"),
+                });
+            }
+        }
+    }
+
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+
+    Ok(signed_submissions)
+}
+
+pub(crate) async fn submit_signed_user_wallet_submissions_concurrently(
+    world: &mut CucumberWorld,
+    signed_submissions: Vec<SignedUserWalletSubmission>,
+    best_node_info: Option<&BestNodeInfo>,
+) -> Result<Vec<(String, TxHash)>, StepError> {
+    if signed_submissions.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut join_set = JoinSet::new();
+    world.ensure_wallet_block_feed().await?;
+    let feed = world.wallet_block_feed()?;
+    let selection_wallet_name = signed_submissions[0].wallet.wallet_name.clone();
+    let (_, node_client, _) = sanitize_best_node_info_with_feed(
+        world,
+        &selection_wallet_name,
+        best_node_info,
+        Some(&feed),
+    )
+    .await?;
+    let node_client = node_client.clone();
+
+    for signed_submission in signed_submissions {
+        let wallet = signed_submission.wallet.clone();
+        let node_client = node_client.clone();
+
+        join_set.spawn(async move {
+            timeout(
+                Duration::from_secs(15),
+                node_client.submit_transaction(signed_submission.signed_tx()),
+            )
+            .await
+            .map_err(|_| StepError::Timeout {
+                message: format!(
+                    "Submit transaction '{}/{}' ",
+                    wallet.wallet_name, wallet.node_name
+                ),
+            })??;
+
+            Ok::<_, StepError>(signed_submission)
+        });
+    }
+
+    let mut accepted = Vec::new();
+    let mut first_error = None;
+
+    while let Some(result) = join_set.join_next().await {
+        match result {
+            Ok(Ok(signed_submission)) => accepted.push(signed_submission),
+            Ok(Err(error)) => {
+                first_error.get_or_insert(error);
+            }
+            Err(error) => {
+                first_error.get_or_insert_with(|| StepError::LogicalError {
+                    message: format!("Concurrent transaction submission task failed: {error}"),
+                });
+            }
+        }
+    }
+
+    let mut tx_hashes = Vec::with_capacity(accepted.len());
+    for signed_submission in &accepted {
+        tx_hashes.push((
+            signed_submission.wallet.wallet_name.clone(),
+            signed_submission.tx_hash(),
+        ));
+        record_signed_user_wallet_submission(world, signed_submission)?;
+    }
+
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+
+    Ok(tx_hashes)
 }
 
 pub async fn create_and_submit_transaction(
@@ -272,6 +422,24 @@ pub(crate) fn sign_prepared_user_wallet_transaction(
     })
 }
 
+fn finalize_reserved_user_wallet_submission(
+    step: &str,
+    reserved: ReservedUserWalletSubmission,
+) -> Result<SignedUserWalletSubmission, StepError> {
+    let ReservedUserWalletSubmission { wallet, submission } = reserved;
+    let submission = finalize_prepared_wallet_transaction(submission)
+        .map_err(wallet_transaction_error)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step);
+        })?;
+
+    sign_prepared_user_wallet_transaction(
+        step,
+        PreparedUserWalletSubmission { wallet, submission },
+        Vec::new(),
+    )
+}
+
 pub(crate) fn record_signed_user_wallet_submission(
     world: &mut CucumberWorld,
     signed_submission: &SignedUserWalletSubmission,
@@ -291,6 +459,31 @@ pub(crate) async fn prepare_user_wallet_transaction_submission(
     transaction_intent: WalletTransactionIntent,
     in_memory_available_utxos: Option<&WalletUtxos>,
 ) -> Result<PreparedUserWalletSubmission, StepError> {
+    let reserved = reserve_user_wallet_transaction_submission(
+        world,
+        step,
+        sender_wallet_name,
+        transaction_intent,
+        in_memory_available_utxos,
+    )
+    .await?;
+    let ReservedUserWalletSubmission { wallet, submission } = reserved;
+    let submission = finalize_prepared_wallet_transaction(submission)
+        .map_err(wallet_transaction_error)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{}` error: {e}", step);
+        })?;
+
+    Ok(PreparedUserWalletSubmission { wallet, submission })
+}
+
+async fn reserve_user_wallet_transaction_submission(
+    world: &mut CucumberWorld,
+    step: &str,
+    sender_wallet_name: &str,
+    transaction_intent: WalletTransactionIntent,
+    in_memory_available_utxos: Option<&WalletUtxos>,
+) -> Result<ReservedUserWalletSubmission, StepError> {
     let wallet = world.resolve_wallet(sender_wallet_name).inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step);
     })?;
@@ -328,13 +521,13 @@ pub(crate) async fn prepare_user_wallet_transaction_submission(
         sender_available_utxos,
         scenario_fee_funds,
     );
-    let submission = prepare_wallet_transaction(transaction_intent, funding_resources)
+    let submission = prepare_wallet_transaction_work_item(transaction_intent, funding_resources)
         .map_err(wallet_transaction_error)
         .inspect_err(|e| {
             warn!(target: TARGET, "Step `{}` error: {e}", step);
         })?;
 
-    Ok(PreparedUserWalletSubmission { wallet, submission })
+    Ok(ReservedUserWalletSubmission { wallet, submission })
 }
 
 async fn submit_user_wallet_transaction(
@@ -428,12 +621,12 @@ fn record_wallet_submission(
 
     debug!(
         target: TARGET,
+        "Recorded wallet submission: {wallet}, {tx_hash:?}, {sender_inputs}, {fee_sponsor_inputs}, {spent_fee}",
         wallet = wallet_name,
-        tx_hash = ?signed_submission.tx_hash(),
+        tx_hash = signed_submission.tx_hash(),
         sender_inputs = recorded.sender_reserved_inputs().len(),
         fee_sponsor_inputs = recorded.fee_sponsor_reserved_inputs().len(),
         spent_fee = signed_submission.spent_fee(),
-        "Recorded wallet submission"
     );
 
     world.fee_state.reserve_for_wallet(
@@ -449,7 +642,13 @@ fn apply_submitted_inputs_to_utxo_cache(
     cache: &mut WalletUtxos,
     signed_submission: &SignedWalletTransaction,
 ) {
-    let reserved_inputs = signed_submission.reserved_inputs();
+    apply_reserved_inputs_to_utxo_cache(cache, signed_submission.reserved_inputs());
+}
+
+fn apply_reserved_inputs_to_utxo_cache(
+    cache: &mut WalletUtxos,
+    reserved_inputs: WalletReservedInputs,
+) {
     let (sender_inputs, fee_sponsor_inputs) = reserved_inputs.into_sender_and_fee_sponsor_inputs();
 
     let spent_note_ids = sender_inputs

@@ -9,7 +9,7 @@ use crate::{
         TxHash,
         channel::{Channels, Error},
         ledger::{Inputs, Operation, Utxos},
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        nom::{NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
     },
     sdp::locked_notes::LockedNotes,
@@ -17,7 +17,6 @@ use crate::{
 
 pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
-type NomMetadata<'a> = NomBoundedVec<'a, u8, { Metadata::MIN }, { Metadata::MAX }, 4>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct DepositOp {
@@ -37,18 +36,16 @@ impl NomEncode for DepositOp {
         let mut bytes = Vec::new();
         bytes.extend(self.channel_id.encode());
         bytes.extend(self.inputs.encode());
-        bytes.extend(NomMetadata::from(&self.metadata).encode());
+        bytes.extend(self.metadata.encode());
         bytes
     }
 }
 
 impl NomDecode for DepositOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, channel_id) = ChannelId::decode(bytes)?;
         let (bytes, inputs) = Inputs::decode(bytes)?;
-        let (bytes, metadata) = NomMetadata::decode(bytes)?;
+        let (bytes, metadata) = Metadata::decode(bytes)?;
         Ok((
             bytes,
             Self {

@@ -364,6 +364,12 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                 tracing.logger.stderr = true;
             }
         }
+    } else if let Some(directory) = directory
+        && let Some(file) = tracing.logger.file.as_mut()
+    {
+        // No backend switch requested: apply a standalone directory override to
+        // the existing file logger (used by `init`/c-bindings config setup).
+        file.directory = directory;
     }
 
     update_tracing_level_and_filter(tracing, level.as_deref(), filter.as_deref())?;
