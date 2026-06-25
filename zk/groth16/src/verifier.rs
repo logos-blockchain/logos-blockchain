@@ -29,7 +29,9 @@ pub fn groth16_batch_verify<E: Pairing>(
 
     let pis_c: Vec<E::G1Affine> = proofs.iter().map(|proof| proof.pi_c).collect();
 
-    let batched_pi_c = E::G1::msm(&pis_c, &ri).unwrap().into_affine();
+    let batched_pi_c = E::G1::msm(&pis_c, &ri)
+        .expect("msm fails only when slice length differ")
+        .into_affine();
 
     let batched_public_inputs: Vec<E::ScalarField> = std::iter::once(r_sum)
         .chain((0..vk.gamma_abc_g1().len() - 1).map(|i| {
@@ -41,7 +43,7 @@ pub fn groth16_batch_verify<E: Pairing>(
         .collect();
 
     let batched_ic = E::G1::msm(vk.gamma_abc_g1(), &batched_public_inputs)
-        .unwrap()
+        .expect("msm fails only when slice length differ")
         .into_affine();
 
     let (g1_terms, g2_terms): (Vec<_>, Vec<_>) = proofs
