@@ -781,6 +781,18 @@ mod tests {
         }
     }
 
+    fn epoch_snapshot_contains(
+        decl_id: &DeclarationId,
+        epoch: Epoch,
+        ledger: &SdpLedger,
+        config: &Config,
+    ) -> bool {
+        ledger
+            .active_declarations(epoch, &config.service_params)
+            .for_service(&ServiceType::BlendNetwork)
+            .is_some_and(|m| m.contains_key(decl_id))
+    }
+
     /// `active_declarations` must drop entries that have gone inactive (i.e.,
     /// `active + inactivity_period < snapshot_epoch`).
     #[test]
@@ -837,11 +849,13 @@ mod tests {
         assert!(ledger.get_declaration(&declaration_id).is_some());
         // ... but active_declarations at epoch 6 must filter it out.
         assert!(
-            ledger
-                .active_declarations(6.into(), &config.service_params)
-                .for_service(&ServiceType::BlendNetwork)
-                .is_none_or(|m| !m.contains_key(&declaration_id)),
-            "inactive declaration must be excluded from the active-declarations snapshot"
+            !epoch_snapshot_contains(&declaration_id, 6.into(), &ledger, &config),
+            "inactive declaration must be excluded from the epoch-6 active snapshot"
+        );
+        // whereas active_declarations at epoch 5 must include it.
+        assert!(
+            epoch_snapshot_contains(&declaration_id, 5.into(), &ledger, &config),
+            "declaration must be included in the epoch-5 active snapshot"
         );
     }
 
@@ -884,10 +898,7 @@ mod tests {
         // At epoch 0 and 1, the declaration must be included in the active set.
         for epoch in [0u32, 1] {
             assert!(
-                ledger
-                    .active_declarations(epoch.into(), &config.service_params)
-                    .for_service(&ServiceType::BlendNetwork)
-                    .is_some_and(|m| m.contains_key(&declaration_id)),
+                epoch_snapshot_contains(&declaration_id, epoch.into(), &ledger, &config),
                 "genesis declaration must be active at epoch {epoch}"
             );
         }
@@ -960,10 +971,7 @@ mod tests {
         // include the declaration.
         for epoch in 0..withdraw_at.into_inner() {
             assert!(
-                ledger
-                    .active_declarations(epoch.into(), &config.service_params)
-                    .for_service(&ServiceType::BlendNetwork)
-                    .is_some_and(|m| m.contains_key(&declaration_id)),
+                epoch_snapshot_contains(&declaration_id, epoch.into(), &ledger, &config),
                 "withdrawn-but-not-yet-effective declaration must be active at epoch {epoch}"
             );
         }
@@ -971,10 +979,7 @@ mod tests {
         // Snapshot at `withdrawn_epoch` (and beyond) must exclude it.
         for epoch in withdraw_at.into_inner()..=withdraw_at.into_inner() + 2 {
             assert!(
-                ledger
-                    .active_declarations(epoch.into(), &config.service_params)
-                    .for_service(&ServiceType::BlendNetwork)
-                    .is_none_or(|m| !m.contains_key(&declaration_id)),
+                !epoch_snapshot_contains(&declaration_id, epoch.into(), &ledger, &config),
                 "withdrawn declaration must be excluded from the snapshot at epoch {epoch}"
             );
         }
@@ -1036,9 +1041,12 @@ mod tests {
                 .unwrap();
             last_epoch_state = new_epoch_state;
         }
-        // Check that the declaration is still present.
+        // Check that the declaration is still present (with `active=3`).
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
-        assert!(declarations.contains_key(&declaration_id));
+        assert_eq!(
+            declarations.get(&declaration_id).unwrap().active,
+            Epoch::new(3)
+        );
 
         // Submit an activity message at epoch 4
         let active_op = SDPActiveOp {
@@ -1052,24 +1060,39 @@ mod tests {
             })),
         };
         let mut ledger = apply_active_with_dummies(ledger, &active_op, zk_key, &config).unwrap();
-        let declaration = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
+        let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert_eq!(
-            declaration.get(&declaration_id).unwrap().active,
+            declarations.get(&declaration_id).unwrap().active,
             Epoch::new(4) // epoch when the activity message is submitted/accepted
         );
 
-        // Move forward to the epoch 8 where declaration will become inactive.
-        // Nevertheless, the declaration should be still present because it has not
-        // been withdrawn.
-        for epoch in 5..=8 {
+        // Move forward to the epoch 7 where declaration will become inactive
+        // (active=4, inactivity=2 -> 4+2 < 7).
+        for epoch in 5..=7 {
             let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
             (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
             last_epoch_state = new_epoch_state;
         }
+        // Nevertheless, the declaration should be still present because no withdraw
+        // message was submitted.
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
+        assert_eq!(
+            declarations.get(&declaration_id).unwrap().active,
+            Epoch::new(4) // not changed
+        );
+        // but active_declarations at epoch 7 must filter it out.
+        assert!(
+            !epoch_snapshot_contains(&declaration_id, 7.into(), &ledger, &config),
+            "inactive declaration must be excluded from the epoch-7 active snapshot"
+        );
+        // whereas active_declarations at epoch 6 must include it.
+        assert!(
+            epoch_snapshot_contains(&declaration_id, 6.into(), &ledger, &config),
+            "declaration must be included in the epoch-6 active snapshot"
+        );
     }
 
     /// Regression test: the per-epoch membership build must not panic on an
