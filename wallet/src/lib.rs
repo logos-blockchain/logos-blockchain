@@ -64,6 +64,15 @@ pub enum HeaderOp {
     Unlock(NoteId),
 }
 
+/// Build a [`HeaderOp`] for a wallet-relevant header event.
+impl From<&HeaderEvent> for HeaderOp {
+    fn from(event: &HeaderEvent) -> Self {
+        match event {
+            HeaderEvent::SdpNoteUnlocked { note_id, .. } => Self::Unlock(*note_id),
+        }
+    }
+}
+
 /// A wallet-relevant effect extracted from a tx.
 ///
 /// Some variants correspond directly to a Mantle op; others are derived by
@@ -97,7 +106,7 @@ impl WalletBlock {
             parent: block.header().parent(),
             epoch,
             voucher_cm: *block.header().leader_proof().voucher_cm(),
-            header_ops: header_events.iter().map(transform_header_event).collect(),
+            header_ops: header_events.iter().map(Into::into).collect(),
             txs: transform_txs(block.transactions(), tx_events).collect(),
         }
     }
@@ -441,13 +450,6 @@ fn group_events(
     (header_events, tx_events)
 }
 
-/// Build a [`HeaderOp`] for a wallet-relevant header event.
-const fn transform_header_event(event: &HeaderEvent) -> HeaderOp {
-    match event {
-        HeaderEvent::SdpNoteUnlocked { note_id, .. } => HeaderOp::Unlock(*note_id),
-    }
-}
-
 // TODO: move this to Op after implementing OpId for all operations
 fn op_id(op: &Op) -> Option<Hash> {
     match op {
@@ -479,7 +481,7 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
         )),
         // `Op::SDPWithdraw` is ignored in this function. The note will be unlocked
         // after the delay and the corresponding event will be handled by
-        // [`transform_header_event`].
+        // [`HeaderOp::from`].
         Op::ChannelInscribe(_) | Op::ChannelConfig(_) | Op::SDPWithdraw(_) | Op::SDPActive(_) => {
             None
         }
