@@ -269,18 +269,13 @@ pub enum TxSource {
 /// `adopted` only.
 ///
 /// Consumer pattern:
-/// 1. On publish-return: optimistically apply your own inscription to local
-///    state and record its `this_msg`.
-/// 2. On [`Event::BlocksProcessed`]: rebuild state by reverting every
-///    `orphaned` entry you had applied and applying every `adopted` entry
-///    (dedup `adopted` by `this_msg` against your outbox so you don't
-///    double-apply your own publishes). Entries in `orphaned` that you never
-///    applied (our never-landed pending) are a no-op for state — key your
-///    rollback by `this_msg` so they simply don't match.
-/// 3. Republish the orphans you still want, **skipping any whose payload is
-///    already in `adopted`** (back on the channel under a different
-///    `this_msg`). Republishing an orphan you didn't submit is harmless — the
-///    SDK re-chains it onto the current tip — so no ownership filter is needed.
+/// 1. On [`Event::BlocksProcessed`]: mirror the canonical channel by reverting
+///    every `orphaned` entry and applying every `adopted` entry. Both empty
+///    means nothing changed.
+/// 2. Process the orphans so that no useful information is lost — e.g. if your
+///    inscriptions are Zone blocks, extract the Zone transactions and re-insert
+///    them into your mempool. Reprocessing is idempotent: anything still valid
+///    is already pending and no-ops, so only genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
     /// Inscriptions removed from the channel — the block delta plus our pending

@@ -48,9 +48,8 @@ pub fn render_state(state: &InMemoryZoneState) {
         eprintln!("  Tip message: {}", hex::encode(view.tip_message.as_ref()));
         eprintln!();
     }
+    print_section("Pending", state.pending());
     print_section("Finalized", state.finalized());
-    print_section("Adopted", state.adopted());
-    print_section("Published", state.published());
 }
 
 fn print_section(label: &str, msgs: &[Msg]) {

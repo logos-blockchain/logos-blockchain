@@ -86,7 +86,6 @@ pub async fn run(args: InscribeArgs) {
                     Ok((result, checkpoint)) => {
                         let info = result.tx.inscription();
                         debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
-                        state.on_published(info);
                         state.save_checkpoint(checkpoint);
                         ui::render_state(&state);
                         eprintln!("  \x1b[90mpending...\x1b[0m");
@@ -207,8 +206,7 @@ fn republish_orphan(
 ) {
     debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
     match sequencer.handle().publish(info.payload.clone()) {
-        Ok((result, checkpoint)) => {
-            state.on_published(result.tx.inscription());
+        Ok((_, checkpoint)) => {
             state.save_checkpoint(checkpoint);
         }
         Err(e) => error!("failed to auto-republish: {e}"),
