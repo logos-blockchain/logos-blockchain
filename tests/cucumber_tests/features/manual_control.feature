@@ -170,7 +170,7 @@ Feature: Manual control of transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 10200 in 30000 seconds
-    When node "NODE_2" is at height 1022 in 30000 seconds
+    When node "NODE_2" is at height 10200 in 30000 seconds
     When I restart node "NODE_1"
     When I restart node "NODE_2"
     When node "NODE_1" is at height 10300 in 30000 seconds

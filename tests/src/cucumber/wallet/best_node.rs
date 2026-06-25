@@ -39,6 +39,10 @@ pub struct BestGroupNode {
     pub tip: String,
     /// Chain height at selection time.
     pub height: u64,
+    /// All nodes in the selected group that shared this winning tip at
+    /// resolution time. Includes `node_name`, sorted lexicographically, and
+    /// deduplicated for stable fanout.
+    pub same_tip_nodes: Vec<String>,
 }
 
 impl BestNodeInfo {
@@ -95,6 +99,7 @@ pub async fn sanitize_best_node_info_with_feed<'a>(
 ) -> Result<(String, &'a NodeHttpClient, CryptarchiaInfo), StepError> {
     let wallet_node_name = world.resolve_wallet_node_name(wallet_name)?;
 
+    let mut last_msg = String::new();
     if let Some(best_info) = best_node_info
         && let Some(node) = best_info.for_wallet_node(&wallet_node_name, &world.node_to_group)
     {
@@ -102,11 +107,11 @@ pub async fn sanitize_best_node_info_with_feed<'a>(
             return Ok(selection);
         }
 
-        let refreshed = determine_best_node(world, &wallet_node_name).await?;
+        let refreshed = determine_best_node(world, &wallet_node_name, Some(&mut last_msg)).await?;
         return resolve_selected_best_node(world, &wallet_node_name, &refreshed).await;
     }
 
-    let refreshed = determine_best_node(world, &wallet_node_name).await?;
+    let refreshed = determine_best_node(world, &wallet_node_name, Some(&mut last_msg)).await?;
     resolve_selected_best_node(world, &wallet_node_name, &refreshed).await
 }
 
@@ -127,6 +132,7 @@ pub async fn sanitize_best_node_info_for_group_with_feed<'a>(
     let group_key = source_id.as_str();
     let representative_node = representative_node_for_group(world, group_key)?;
 
+    let mut last_msg = String::new();
     if let Some(best_info) = best_node_info
         && let Some(node) = best_info
             .best_nodes
@@ -137,11 +143,12 @@ pub async fn sanitize_best_node_info_for_group_with_feed<'a>(
             return Ok(selection);
         }
 
-        let refreshed = determine_best_node(world, &representative_node).await?;
+        let refreshed =
+            determine_best_node(world, &representative_node, Some(&mut last_msg)).await?;
         return resolve_selected_best_node(world, &representative_node, &refreshed).await;
     }
 
-    let refreshed = determine_best_node(world, &representative_node).await?;
+    let refreshed = determine_best_node(world, &representative_node, Some(&mut last_msg)).await?;
     resolve_selected_best_node(world, &representative_node, &refreshed).await
 }
 
@@ -158,6 +165,7 @@ pub async fn sanitize_best_node_info_for_group_with_feed<'a>(
 pub async fn determine_best_node(
     world: &CucumberWorld,
     wallet_node_name: &str,
+    last_verbose_msg: Option<&mut String>,
 ) -> Result<BestNodeInfo, StepError> {
     let (group_key, candidates) = resolve_candidate_nodes(world, wallet_node_name)?;
     if candidates.is_empty() {
@@ -190,14 +198,18 @@ pub async fn determine_best_node(
             if let Some(majority_group) = select_majority_tip_group(&snapshots)
                 && let Some(best_idx) = select_best_snapshot_index(&snapshots, &majority_group)
             {
+                let same_tip_nodes = stable_unique_node_names(
+                    majority_group
+                        .iter()
+                        .map(|idx| snapshots[*idx].node_name.clone()),
+                );
                 let best_snapshot = snapshots.swap_remove(best_idx);
                 let best_node_name = best_snapshot.node_name;
                 let best_consensus = best_snapshot.consensus;
                 let majority_size = majority_group.len();
 
                 if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
-                    info!(
-                        target: TARGET,
+                    let this_msg = format!(
                         "Chosen best node {best_node_name} in group '{}' with block height: '{}' \
                         header id: '{}' (majority {}/{})",
                         display_group_key(&group_key),
@@ -206,6 +218,14 @@ pub async fn determine_best_node(
                         majority_size,
                         responsive_count
                     );
+                    if let Some(last) = last_verbose_msg {
+                        if last != &this_msg {
+                            last.clone_from(&this_msg);
+                            info!(target: TARGET, "{this_msg}");
+                        }
+                    } else {
+                        info!(target: TARGET, "{this_msg}");
+                    }
                 }
 
                 return Ok(BestNodeInfo {
@@ -215,6 +235,7 @@ pub async fn determine_best_node(
                             node_name: best_node_name,
                             tip: best_consensus.tip.encode_hex::<String>(),
                             height: best_consensus.height,
+                            same_tip_nodes,
                         },
                     )]),
                 });
@@ -257,22 +278,10 @@ pub async fn determine_best_node(
 pub async fn get_best_node_info(
     world: &CucumberWorld,
     wallet_name: &str,
+    last_verbose_msg: Option<&mut String>,
 ) -> Result<BestNodeInfo, StepError> {
     let wallet = world.resolve_wallet(wallet_name)?;
-    determine_best_node(world, &wallet.node_name).await
-}
-
-/// Get best-node info for a random wallet's fork group. All wallets in the list
-/// should be in the same form group.
-pub async fn get_best_node_info_choose(
-    world: &CucumberWorld,
-    wallet_names: &[String],
-) -> Result<BestNodeInfo, StepError> {
-    let wallet_name = wallet_names
-        .choose(&mut rand::thread_rng())
-        .expect("'wallet_names' cannot be empty");
-    let wallet = world.resolve_wallet(wallet_name)?;
-    determine_best_node(world, &wallet.node_name).await
+    determine_best_node(world, &wallet.node_name, last_verbose_msg).await
 }
 
 #[derive(Debug)]
@@ -581,4 +590,35 @@ fn normalize_header_id_str(header_id: &str) -> String {
         .trim()
         .trim_start_matches("0x")
         .to_ascii_lowercase()
+}
+
+fn stable_unique_node_names(node_names: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut node_names = node_names.into_iter().collect::<Vec<_>>();
+    node_names.sort();
+    node_names.dedup();
+    node_names
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stable_unique_node_names;
+
+    #[test]
+    fn stable_unique_node_names_sorts_and_deduplicates() {
+        let node_names = vec![
+            "NODE_3".to_owned(),
+            "NODE_1".to_owned(),
+            "NODE_2".to_owned(),
+            "NODE_1".to_owned(),
+        ];
+
+        assert_eq!(
+            stable_unique_node_names(node_names),
+            vec![
+                "NODE_1".to_owned(),
+                "NODE_2".to_owned(),
+                "NODE_3".to_owned(),
+            ]
+        );
+    }
 }

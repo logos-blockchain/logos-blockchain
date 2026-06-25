@@ -1,7 +1,7 @@
 use std::cmp::Reverse;
 
 use lb_core::mantle::{
-    Note, Utxo,
+    Note, NoteId, Utxo,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
 };
@@ -313,6 +313,18 @@ impl WalletReservedInputs {
     #[must_use]
     pub fn into_sender_and_fee_sponsor_inputs(self) -> (Vec<Utxo>, Vec<Utxo>) {
         (self.sender, self.fee_sponsor)
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        self.sender.extend(other.sender);
+        self.fee_sponsor.extend(other.fee_sponsor);
+    }
+
+    #[must_use]
+    pub fn input_note_ids_list(&self) -> Vec<NoteId> {
+        let mut input_notes = self.sender.iter().map(Utxo::id).collect::<Vec<_>>();
+        input_notes.extend_from_slice(&self.fee_sponsor.iter().map(Utxo::id).collect::<Vec<_>>());
+        input_notes
     }
 }
 
