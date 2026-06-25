@@ -15,14 +15,13 @@ use crate::{
         TxHash,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        nom::{NomDecode, NomEncode},
         ops::channel::config::Keys,
     },
 };
 
 pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
-type NomInscription<'a> = NomBoundedVec<'a, u8, { Inscription::MIN }, { Inscription::MAX }, 4>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct InscriptionOp {
@@ -48,7 +47,7 @@ impl InscriptionOp {
 impl NomEncode for InscriptionOp {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = self.channel_id.encode();
-        bytes.extend(NomInscription::from(&self.inscription).encode());
+        bytes.extend(self.inscription.encode());
         bytes.extend(self.parent.encode());
         bytes.extend(self.signer.encode());
         bytes
@@ -56,11 +55,9 @@ impl NomEncode for InscriptionOp {
 }
 
 impl NomDecode for InscriptionOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, inscription) = NomInscription::decode(bytes)?;
+        let (bytes, inscription) = Inscription::decode(bytes)?;
         let (bytes, parent) = MsgId::decode(bytes)?;
         let (bytes, signer) = Ed25519PublicKey::decode(bytes)?;
         Ok((

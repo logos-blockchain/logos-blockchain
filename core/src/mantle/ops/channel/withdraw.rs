@@ -6,7 +6,6 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        encoding::NomOutputs,
         ledger::{Operation, Outputs, Utxos},
         nom::{NomDecode, NomEncode},
         ops::{OpId, channel::ChannelId},
@@ -31,24 +30,22 @@ impl NomEncode for ChannelWithdrawOp {
     fn encode(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend(self.channel_id.encode());
-        bytes.extend(NomOutputs::from(self.outputs.as_ref()).encode());
+        bytes.extend(self.outputs.encode());
         bytes.extend(self.withdraw_nonce.encode());
         bytes
     }
 }
 
 impl NomDecode for ChannelWithdrawOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, outputs) = NomOutputs::decode(bytes)?;
+        let (bytes, outputs) = Outputs::decode(bytes)?;
         let (bytes, withdraw_nonce) = u32::decode(bytes)?;
         Ok((
             bytes,
             Self {
                 channel_id,
-                outputs: Outputs::new(outputs),
+                outputs,
                 withdraw_nonce,
             },
         ))

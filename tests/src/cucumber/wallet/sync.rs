@@ -5,7 +5,8 @@ use std::{
 
 use lb_core::mantle::Utxo;
 use lb_key_management_system_service::keys::ZkPublicKey;
-use lb_testing_framework::BlockFeed;
+use lb_testing_framework::{BlockFeed, NodeHttpClient};
+use tokio::time::timeout;
 use tracing::{debug, warn};
 
 use crate::{
@@ -24,6 +25,7 @@ use crate::{
 
 const CURRENT_WALLET_STATE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(10);
 const WALLET_BLOCK_FEED_SOURCE_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
+const WALLET_BACKFILL_FALLBACK_SELECTION_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct FreshWalletAvailableState {
     pub observation: WalletStateView,
@@ -304,6 +306,9 @@ async fn backfill_wallet_feed_batch(
         source_node_name.clone(),
         node.started_node.client.clone(),
         tip,
+    )
+    .with_fallback(
+        backfill_fallback_client(world, &source_node_name, &tip.to_string(), height).await?,
     );
     let (wallet_utxos, transaction_hashes, new_blocks) =
         wallet_utxos_from_chain(&mut source, tracking_batch.wallet_keys(), genesis_utxos)
@@ -338,6 +343,56 @@ async fn backfill_wallet_feed_batch(
             Ok(())
         })?
         .map_err(wallet_feed_error)
+}
+
+async fn backfill_fallback_client(
+    world: &CucumberWorld,
+    source_node_name: &str,
+    expected_tip: &str,
+    expected_height: u64,
+) -> Result<Option<(String, NodeHttpClient)>, StepError> {
+    let mut candidates = world.node_to_group.get(source_node_name).map_or_else(
+        || world.all_node_names(),
+        |group_name| {
+            world
+                .node_groups
+                .get(group_name)
+                .into_iter()
+                .flat_map(|nodes| nodes.iter().cloned())
+                .collect::<Vec<_>>()
+        },
+    );
+    candidates.sort();
+
+    for candidate_name in candidates {
+        if candidate_name == source_node_name {
+            continue;
+        }
+
+        let Some(candidate) = world.nodes_info.get(&candidate_name) else {
+            continue;
+        };
+
+        let Ok(Ok(consensus)) = timeout(
+            WALLET_BACKFILL_FALLBACK_SELECTION_TIMEOUT,
+            candidate.started_node.client.consensus_info(),
+        )
+        .await
+        else {
+            continue;
+        };
+
+        if consensus.cryptarchia_info.height == expected_height
+            && consensus.cryptarchia_info.tip.to_string() == expected_tip
+        {
+            return Ok(Some((
+                candidate_name,
+                candidate.started_node.client.clone(),
+            )));
+        }
+    }
+
+    Ok(None)
 }
 
 fn wallet_states_waiting_for_reserved_outputs(

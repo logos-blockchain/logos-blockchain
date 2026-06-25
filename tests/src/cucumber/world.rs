@@ -784,7 +784,7 @@ impl ZoneState {
 
 #[derive(Debug, Clone)]
 pub struct PublicCryptarchiaEndpointPeer {
-    pub url: String,
+    pub base_url: String,
     pub username: String,
     pub password: String,
 }
@@ -942,12 +942,6 @@ pub struct CucumberWorld {
     /// Manual: Faucet base URL configuration for manual transactions, if
     /// applicable.
     pub faucet_base_url: Option<String>,
-    /// Manual: Faucet username configuration for manual transactions, if
-    /// applicable.
-    pub faucet_username: Option<String>,
-    /// Manual: Faucet password configuration for manual transactions, if
-    /// applicable.
-    pub faucet_password: Option<String>,
     /// Manual: Task handles for dynamically spawned faucet funding tasks.
     #[derivative(Default(value = "None"))]
     pub faucet_task_handles: Option<Vec<JoinHandle<()>>>,
@@ -1037,8 +1031,6 @@ impl Debug for CucumberWorld {
             .field("genesis_tokens", &self.genesis_tokens.len())
             .field("wallet_info", &self.wallet_info.len())
             .field("faucet_base_url", &format!("{:?}", self.faucet_base_url))
-            .field("faucet_username", &format!("{:?}", self.faucet_username))
-            .field("faucet_password", &format!("{:?}", self.faucet_password))
             .field(
                 "faucet_task_handles",
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
@@ -1955,10 +1947,6 @@ impl CucumberWorld {
         format!("{:?}", FullDebugInfo(self))
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Debug output intentionally enumerates world state fields for diagnostics"
-    )]
     pub fn full_debug_info(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let wallet_diagnostics = self
             .wallet_diagnostics_for_debug()
@@ -2006,8 +1994,6 @@ impl CucumberWorld {
             .field("genesis_tokens", &format!("{:?}", self.genesis_tokens))
             .field("wallet_info", &wallet_info_display(&self.wallet_info))
             .field("faucet_base_url", &format!("{:?}", self.faucet_base_url))
-            .field("faucet_username", &format!("{:?}", self.faucet_username))
-            .field("faucet_password", &format!("{:?}", self.faucet_password))
             .field(
                 "faucet_task_handles",
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
@@ -2302,7 +2288,7 @@ fn public_cryptarchia_endpoint_peers_display(
         |&peers| {
             let peers_str = peers
                 .iter()
-                .map(|peer| format!("{} (user: {})", peer.url, peer.username))
+                .map(|peer| format!("{} (user: {})", peer.base_url, peer.username))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("Vec<PublicCryptarchiaEndpointPeer>({peers_str})")

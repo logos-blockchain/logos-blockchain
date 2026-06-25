@@ -11,15 +11,23 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec};
+use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
+use nom::{
+    IResult,
+    error::{Error, ErrorKind},
+};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
-    mantle::{NoteId, ops::channel::Ed25519PublicKey},
+    mantle::{
+        NoteId,
+        nom::{NomDecode, NomEncode},
+        ops::channel::Ed25519PublicKey,
+    },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -257,6 +265,26 @@ impl Display for Locator {
     }
 }
 
+impl NomEncode for Locator {
+    fn encode(&self) -> Vec<u8> {
+        let bounded_bytes = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::new_unchecked(
+            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
+        );
+        bounded_bytes.encode()
+    }
+}
+
+impl NomDecode for Locator {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
 pub enum ServiceType {
     #[serde(rename = "BN")]
@@ -290,6 +318,23 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
+impl NomEncode for ServiceType {
+    fn encode(&self) -> Vec<u8> {
+        <Self as AsRef<u8>>::as_ref(self).encode()
+    }
+}
+
+impl NomDecode for ServiceType {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = u8::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod service_type_tests {
     use strum::IntoEnumIterator as _;
@@ -311,6 +356,19 @@ pub type Nonce = u64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct ProviderId(pub Ed25519PublicKey);
+
+impl NomEncode for ProviderId {
+    fn encode(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+}
+
+impl NomDecode for ProviderId {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, value) = Ed25519PublicKey::decode(bytes)?;
+        Ok((bytes, Self(value)))
+    }
+}
 
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
@@ -347,6 +405,19 @@ impl Ord for ProviderId {
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
+
+impl NomEncode for DeclarationId {
+    fn encode(&self) -> Vec<u8> {
+        self.0.encode()
+    }
+}
+
+impl NomDecode for DeclarationId {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, value) = <[u8; _]>::decode(bytes)?;
+        Ok((bytes, Self(value)))
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {
@@ -480,11 +551,69 @@ impl DeclarationMessage {
     }
 }
 
+impl NomEncode for DeclarationMessage {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = self.service_type.encode();
+        bytes.extend(self.locators.encode());
+        bytes.extend(self.provider_id.encode());
+        bytes.extend(self.zk_id.encode());
+        bytes.extend(self.locked_note_id.encode());
+        bytes
+    }
+}
+
+impl NomDecode for DeclarationMessage {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, service_type) = ServiceType::decode(bytes)?;
+        let (bytes, locators) = Locators::decode(bytes)?;
+        let (bytes, provider_id) = ProviderId::decode(bytes)?;
+        let (bytes, zk_id) = ZkPublicKey::decode(bytes)?;
+        let (bytes, locked_note_id) = NoteId::decode(bytes)?;
+
+        Ok((
+            bytes,
+            Self {
+                service_type,
+                locators,
+                provider_id,
+                zk_id,
+                locked_note_id,
+            },
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
     pub locked_note_id: NoteId,
     pub nonce: Nonce,
+}
+
+impl NomEncode for WithdrawMessage {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = self.declaration_id.encode();
+        bytes.extend(self.nonce.encode());
+        bytes.extend(self.locked_note_id.encode());
+        bytes
+    }
+}
+
+impl NomDecode for WithdrawMessage {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
+        let (bytes, nonce) = u64::decode(bytes)?;
+        let (bytes, locked_note_id) = NoteId::decode(bytes)?;
+
+        Ok((
+            bytes,
+            Self {
+                declaration_id,
+                locked_note_id,
+                nonce,
+            },
+        ))
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -494,9 +623,62 @@ pub struct ActiveMessage {
     pub metadata: ActivityMetadata,
 }
 
+impl NomEncode for ActiveMessage {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = self.declaration_id.encode();
+        bytes.extend(self.nonce.encode());
+        bytes.extend(self.metadata.encode());
+        bytes
+    }
+}
+
+impl NomDecode for ActiveMessage {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
+        let (bytes, nonce) = Nonce::decode(bytes)?;
+        let (bytes, metadata) = ActivityMetadata::decode(bytes)?;
+
+        Ok((
+            bytes,
+            Self {
+                declaration_id,
+                nonce,
+                metadata,
+            },
+        ))
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum ActivityMetadata {
     Blend(Box<blend::ActivityProof>),
+}
+
+const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
+
+impl NomEncode for ActivityMetadata {
+    fn encode(&self) -> Vec<u8> {
+        match self {
+            Self::Blend(blend_activity_proof) => {
+                let mut bytes = vec![ACTIVE_METADATA_BLEND_TYPE];
+                bytes.extend(blend_activity_proof.encode());
+                bytes
+            }
+        }
+    }
+}
+
+impl NomDecode for ActivityMetadata {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, metadata_type) = u8::decode(bytes)?;
+        match metadata_type {
+            ACTIVE_METADATA_BLEND_TYPE => {
+                let (bytes, blend_activity_proof) = blend::ActivityProof::decode(remaining_bytes)?;
+                Ok((bytes, Self::Blend(Box::new(blend_activity_proof))))
+            }
+            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
+        }
+    }
 }
 
 #[cfg(test)]

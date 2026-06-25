@@ -1,19 +1,11 @@
-use lb_cryptarchia_engine::Epoch;
-use lb_groth16::{Fr, fr_from_bytes, fr_to_bytes};
-use lb_key_management_system_keys::keys::ZkPublicKey;
-use nom::{
-    IResult,
-    error::{Error, ErrorKind},
-    number::complete::{le_u16, le_u32, le_u64, u8},
-};
-
-use crate::mantle::ops::channel::{ChannelId, Ed25519PublicKey, MsgId};
+use nom::IResult;
 
 pub mod array;
-pub use self::array::NomArray;
 pub mod bounded_vec;
-pub use self::bounded_vec::NomBoundedVec;
-pub mod sdp;
+pub mod core;
+pub mod kms;
+pub mod numbers;
+pub mod proof_of_quota;
 
 pub trait NomEncode {
     // TODO: This could be turned into a `BoundedVec<u8, MAX_BYTES>` if we are
@@ -23,66 +15,8 @@ pub trait NomEncode {
     fn encode(&self) -> Vec<u8>;
 }
 
-pub trait NomDecode {
-    type Output;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output>;
-}
-
-impl NomEncode for u8 {
-    fn encode(&self) -> Vec<u8> {
-        vec![*self]
-    }
-}
-
-impl NomDecode for u8 {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        u8(bytes)
-    }
-}
-
-impl NomEncode for u16 {
-    fn encode(&self) -> Vec<u8> {
-        self.to_le_bytes().to_vec()
-    }
-}
-
-impl NomDecode for u16 {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        le_u16(bytes)
-    }
-}
-
-impl NomEncode for u32 {
-    fn encode(&self) -> Vec<u8> {
-        self.to_le_bytes().to_vec()
-    }
-}
-
-impl NomDecode for u32 {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        le_u32(bytes)
-    }
-}
-
-impl NomEncode for u64 {
-    fn encode(&self) -> Vec<u8> {
-        self.to_le_bytes().to_vec()
-    }
-}
-
-impl NomDecode for u64 {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        le_u64(bytes)
-    }
+pub trait NomDecode: Sized {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self>;
 }
 
 // Simple utility to encode a slice of `NomEncode` items by encoding each item
@@ -90,103 +24,4 @@ impl NomDecode for u64 {
 // `[T]` since that could be misleading.
 fn encode_slice<T: NomEncode>(items: &[T]) -> Vec<u8> {
     items.iter().flat_map(NomEncode::encode).collect()
-}
-
-impl NomEncode for Fr {
-    fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(&fr_to_bytes(self)).encode()
-    }
-}
-
-impl NomDecode for Fr {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (remaining_bytes, inner) = NomArray::<u8, 32>::decode(bytes)?;
-        Ok((
-            remaining_bytes,
-            fr_from_bytes(&inner)
-                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
-        ))
-    }
-}
-
-impl NomEncode for ChannelId {
-    fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(self.as_ref()).encode()
-    }
-}
-
-impl NomDecode for ChannelId {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
-        Ok((bytes, Self::from(inner)))
-    }
-}
-
-impl NomEncode for MsgId {
-    fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(self.as_ref()).encode()
-    }
-}
-
-impl NomDecode for MsgId {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
-        Ok((bytes, Self::from(inner)))
-    }
-}
-
-// Ed25519PublicKey = 32BYTE
-impl NomEncode for Ed25519PublicKey {
-    fn encode(&self) -> Vec<u8> {
-        NomArray::<u8, 32>::from(&self.to_bytes()).encode()
-    }
-}
-
-impl NomDecode for Ed25519PublicKey {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, inner) = NomArray::<u8, _>::decode(bytes)?;
-        Ok((
-            remaining_bytes,
-            Self::from_bytes(&inner)
-                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
-        ))
-    }
-}
-
-impl NomEncode for ZkPublicKey {
-    fn encode(&self) -> Vec<u8> {
-        self.as_fr().encode()
-    }
-}
-
-impl NomDecode for ZkPublicKey {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, inner) = Fr::decode(bytes)?;
-        Ok((bytes, Self::new(inner)))
-    }
-}
-
-impl NomEncode for Epoch {
-    fn encode(&self) -> Vec<u8> {
-        self.as_ref().encode()
-    }
-}
-
-impl NomDecode for Epoch {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, inner) = u32::decode(bytes)?;
-        Ok((bytes, Self::new(inner)))
-    }
 }

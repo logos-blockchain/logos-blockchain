@@ -34,9 +34,16 @@
 //! STOP
 //! ```
 
-use std::{collections::HashSet, env, num::NonZero, path::Path, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    env,
+    num::NonZero,
+    path::Path,
+    time::Duration,
+};
 
 use lb_core::mantle::TxHash;
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_wallet::WalletError;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
@@ -122,17 +129,19 @@ pub(crate) async fn execute_coin_splits_all_user_wallets(
         });
     }
     wallet_names.sort();
+    let mut available_utxos = utils::current_available_utxos_for_user_wallets(world, step).await?;
 
     for wallet_name in &wallet_names {
         for _ in 0..splits_per_wallet {
             let best_node_info = get_best_node_info(world, wallet_name).await?;
-            execute_coin_split(
+            execute_coin_split_with_utxo_cache(
                 world,
                 step,
                 wallet_name,
                 outputs,
                 value,
                 Some(&best_node_info),
+                &mut available_utxos,
             )
             .await?;
         }
@@ -224,7 +233,7 @@ pub(crate) async fn execute_continuous_next_wallet_user_wallet(
         )
         .await?;
 
-        extend_tx_hash_set(&mut all_next_wallet_tx_hashes, &cycle_tx_hashes)?;
+        extend_tx_hash_set(&mut all_next_wallet_tx_hashes, &cycle_tx_hashes);
     }
 
     let expected_total = cycles * wallet_names.len() * transactions_per_wallet;
@@ -278,6 +287,29 @@ async fn verify_transactions_mined(
     wait_for_observed_transaction_hashes(world, step, tx_hashes, Duration::from_mins(3)).await
 }
 
+fn log_phase_d_counts(tag: &str, cycle: usize, kind: &str, counts: &BTreeMap<String, usize>) {
+    log_phase_counts(tag, cycle, "D", kind, counts);
+}
+
+fn log_phase_counts(
+    tag: &str,
+    cycle: usize,
+    phase: &str,
+    kind: &str,
+    counts: &BTreeMap<String, usize>,
+) {
+    let counts = counts
+        .iter()
+        .map(|(wallet, count)| format!("{wallet}={count}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    info!(
+        target: TARGET,
+        "{tag} cycle {} {phase}: {kind} tx counts by sender wallet: {counts}",
+        cycle + 1,
+    );
+}
+
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
@@ -291,10 +323,10 @@ async fn execute_ring_send_round_with_utxo_cache(
     cycle: usize,
     available_utxos: &mut WalletUtxos,
 ) -> Result<HashSet<TxHash>, StepError> {
-    let mut cycle_tx_hashes = HashSet::with_capacity(wallet_names.len() * transactions_per_wallet);
+    let mut signed_submissions = Vec::with_capacity(wallet_names.len() * transactions_per_wallet);
+    let mut prepared_counts = BTreeMap::new();
 
     for i in 0..wallet_names.len() {
-        let best_node_info = get_best_node_info(world, &wallet_names[i]).await?;
         info!(
             target: TARGET,
             "CONTINUOUS NEXT WALLET cycle {} A: Await funds",
@@ -319,26 +351,61 @@ async fn execute_ring_send_round_with_utxo_cache(
 
         info!(
             target: TARGET,
-            "CONTINUOUS NEXT WALLET cycle {} B: Send transactions to next wallet",
+            "CONTINUOUS NEXT WALLET cycle {} B: Prepare transactions to next wallet concurrently",
             cycle + 1
         );
-        let submitted_hashes = execute_send_with_utxo_cache(
+        let mut prepared = prepare_ring_send_round_send_with_utxo_cache(
             world,
             step,
             transactions_per_wallet,
             value,
             from,
             to,
-            Some(&best_node_info),
             available_utxos,
         )
         .await?;
-        extend_tx_hash_set(&mut cycle_tx_hashes, &submitted_hashes)?;
+        prepared_counts.insert(from.clone(), prepared.len());
+        signed_submissions.append(&mut prepared);
     }
+
+    log_phase_d_counts(
+        "CONTINUOUS NEXT WALLET",
+        cycle,
+        "prepared",
+        &prepared_counts,
+    );
 
     info!(
         target: TARGET,
-        "CONTINUOUS NEXT WALLET cycle {} C: submitted {} transaction(s)",
+        "CONTINUOUS NEXT WALLET cycle {} C: Submit {} transaction(s) concurrently",
+        cycle + 1,
+        signed_submissions.len()
+    );
+    let best_node_info = get_best_node_info_choose(world, wallet_names).await?;
+    let submitted_hashes = utils::submit_signed_user_wallet_submissions_concurrently(
+        world,
+        signed_submissions,
+        Some(&best_node_info),
+    )
+    .await?;
+    let mut submitted_counts = BTreeMap::new();
+    for (sender, _) in &submitted_hashes {
+        *submitted_counts.entry(sender.clone()).or_insert(0usize) += 1;
+    }
+    log_phase_d_counts(
+        "CONTINUOUS NEXT WALLET",
+        cycle,
+        "submitted",
+        &submitted_counts,
+    );
+    let cycle_tx_hashes = submitted_hashes
+        .into_iter()
+        .map(|(_, tx_hash)| tx_hash)
+        .collect::<HashSet<_>>();
+
+    info!(
+        target: TARGET,
+        "CONTINUOUS NEXT WALLET cycle {} D: submitted {} transaction(s)",
         cycle + 1,
         cycle_tx_hashes.len()
     );
@@ -441,7 +508,9 @@ async fn execute_non_stop_manual_command(
             wallet,
             outputs,
             value,
-        } => execute_coin_split(world, step, wallet, *outputs, *value, None).await,
+        } => execute_coin_split(world, step, wallet, *outputs, *value, None)
+            .await
+            .map(|_| ()),
         ManualCommand::Verify { .. } => handle_verify_command(world, step, command).await,
         ManualCommand::WalletBalance { wallet_name } => {
             log_wallet_balance(world, step, wallet_name).await
@@ -696,13 +765,95 @@ async fn execute_coin_split(
     outputs: usize,
     value: u64,
     best_node_info: Option<&BestNodeInfo>,
-) -> Result<(), StepError> {
+) -> Result<Vec<TxHash>, StepError> {
     let wallet = world.resolve_wallet(wallet_name)?;
     let self_pk = wallet.public_key()?;
     let receivers = vec![(self_pk, value); outputs];
-    utils::create_and_submit_transaction(world, step, wallet_name, &receivers, best_node_info)
-        .await?;
-    Ok(())
+    utils::create_and_submit_transaction_hashes(
+        world,
+        step,
+        wallet_name,
+        &receivers,
+        best_node_info,
+    )
+    .await
+}
+
+async fn execute_coin_split_with_utxo_cache(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    outputs: usize,
+    value: u64,
+    best_node_info: Option<&BestNodeInfo>,
+    available_utxos: &mut WalletUtxos,
+) -> Result<Vec<TxHash>, StepError> {
+    let wallet = world.resolve_wallet(wallet_name)?;
+    let self_pk = wallet.public_key()?;
+    let receivers = vec![(self_pk, value); outputs];
+    utils::create_and_submit_transaction_hashes_with_utxo_cache(
+        world,
+        step,
+        wallet_name,
+        &receivers,
+        best_node_info,
+        Some(available_utxos),
+    )
+    .await
+}
+
+async fn prepare_signed_submissions_with_utxo_cache(
+    world: &mut CucumberWorld,
+    step: &str,
+    requests: Vec<(String, Vec<(ZkPublicKey, u64)>)>,
+    available_utxos: &mut WalletUtxos,
+) -> Result<Vec<utils::SignedUserWalletSubmission>, StepError> {
+    let mut reserved_submissions = Vec::with_capacity(requests.len());
+
+    for (sender, receivers) in requests {
+        let reserved_submission =
+            utils::reserve_user_wallet_transaction_submission_with_utxo_cache(
+                world,
+                step,
+                &sender,
+                &receivers,
+                available_utxos,
+            )
+            .await?;
+        reserved_submissions.push(reserved_submission);
+    }
+
+    utils::finalize_reserved_user_wallet_submissions_concurrently(step, reserved_submissions).await
+}
+
+async fn prepare_coin_splits_all_wallets_with_utxo_cache(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_names: &[String],
+    outputs: usize,
+    value: u64,
+    available_utxos: &mut WalletUtxos,
+) -> Result<
+    (
+        Vec<utils::SignedUserWalletSubmission>,
+        BTreeMap<String, usize>,
+    ),
+    StepError,
+> {
+    let mut requests = Vec::with_capacity(wallet_names.len());
+    let mut prepared_counts = BTreeMap::new();
+
+    for wallet_name in wallet_names {
+        let wallet = world.resolve_wallet(wallet_name)?;
+        let self_pk = wallet.public_key()?;
+        let receivers = vec![(self_pk, value); outputs];
+        *prepared_counts.entry(wallet_name.clone()).or_insert(0usize) += 1;
+        requests.push((wallet_name.clone(), receivers));
+    }
+
+    let signed_submissions =
+        prepare_signed_submissions_with_utxo_cache(world, step, requests, available_utxos).await?;
+    Ok((signed_submissions, prepared_counts))
 }
 
 async fn execute_send(
@@ -738,43 +889,42 @@ async fn execute_send(
     Ok(())
 }
 
-#[expect(clippy::too_many_arguments, reason = "Need all args")]
-async fn execute_send_with_utxo_cache(
+async fn prepare_ring_send_round_send_with_utxo_cache(
     world: &mut CucumberWorld,
     step: &str,
     transactions: usize,
     value: u64,
     from: &str,
     to: &str,
-    best_node_info: Option<&BestNodeInfo>,
     available_utxos: &mut WalletUtxos,
-) -> Result<HashSet<TxHash>, StepError> {
+) -> Result<Vec<utils::SignedUserWalletSubmission>, StepError> {
     let receiver_wallet = world.resolve_wallet(to)?;
     let receiver_pk = receiver_wallet.public_key()?;
-    let mut tx_hashes = HashSet::with_capacity(transactions);
+    let mut reserved_submissions = Vec::with_capacity(transactions);
 
     for i in 0..transactions {
         let sender_utxo_count_before = available_utxos.get(from).map_or(0usize, Vec::len);
 
-        let result = utils::create_and_submit_transaction_hashes_with_utxo_cache(
-            world,
-            step,
-            from,
-            &[(receiver_pk, value)],
-            best_node_info,
-            Some(available_utxos),
-        )
-        .await;
-
-        if let Err(StepError::WalletError(WalletError::InsufficientFunds { available })) = result {
-            return Err(StepError::FundsDeficit {
-                available,
-                num_utxos_required: transactions - i,
-                value_per_utxos_required: value,
-            });
-        }
-
-        let submitted_hashes = result?;
+        let receivers = vec![(receiver_pk, value)];
+        let reserved_submission =
+            utils::reserve_user_wallet_transaction_submission_with_utxo_cache(
+                world,
+                step,
+                from,
+                &receivers,
+                available_utxos,
+            )
+            .await
+            .map_err(|error| match error {
+                StepError::WalletError(WalletError::InsufficientFunds { available }) => {
+                    StepError::FundsDeficit {
+                        available,
+                        num_utxos_required: transactions - i,
+                        value_per_utxos_required: value,
+                    }
+                }
+                error => error,
+            })?;
         let sender_utxo_count_after = available_utxos.get(from).map_or(0usize, Vec::len);
 
         if transactions > 1 && sender_utxo_count_after >= sender_utxo_count_before {
@@ -786,10 +936,10 @@ async fn execute_send_with_utxo_cache(
             });
         }
 
-        extend_tx_hash_set(&mut tx_hashes, &submitted_hashes)?;
+        reserved_submissions.push(reserved_submission);
     }
 
-    Ok(tx_hashes)
+    utils::finalize_reserved_user_wallet_submissions_concurrently(step, reserved_submissions).await
 }
 
 fn destructure_round_robin_command(
@@ -863,23 +1013,28 @@ async fn execute_continuous_round_robin(
             }
         }
 
-        info!(target: TARGET, "CONTINUOUS ROUND ROBIN cycle {} B: Perform coin splits all wallets", cycle + 1);
+        let split_tx_hashes = coin_splits_for_round_robin(
+            world,
+            step,
+            &wallet_names,
+            coin_split_outputs,
+            coin_split_value,
+            cycle,
+        )
+        .await?;
+        wait_for_n_blocks_or_warn(world, step, &wallet_names, Duration::from_mins(3), 2, cycle)
+            .await?;
 
-        let best_node_info = get_best_node_info_choose(world, &wallet_names).await?;
-        for sender in &wallet_names {
-            if let Err(e) = execute_coin_split(
-                world,
-                step,
-                sender,
-                coin_split_outputs,
-                coin_split_value,
-                Some(&best_node_info),
-            )
-            .await
-            {
-                warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
-            }
-        }
+        verify_transactions_mined(
+            world,
+            step,
+            &split_tx_hashes,
+            wallet_names.len(),
+            Some(cycle + 1),
+            "CONTINUOUS ROUND ROBIN",
+            "B",
+        )
+        .await?;
 
         info!(
             target: TARGET,
@@ -918,31 +1073,58 @@ async fn execute_continuous_round_robin(
             cycle + 1
         );
 
-        // Send transactions using cache-aware helper
-        let mut cycle_tx_hashes = HashSet::new();
+        let mut signed_submissions = Vec::with_capacity(wallet_names.len() * transactions);
+        let mut prepared_counts = BTreeMap::new();
         for sender in &wallet_names {
             let recipients = recipient_wallets(&wallet_names, sender)?;
-            let submitted = send_round_robin_with_utxo_cache(
+            let prepared = prepare_round_robin_with_utxo_cache(
                 world,
                 step,
                 sender,
                 &recipients,
                 transactions,
                 value,
-                Some(&best_node_info),
                 &mut available_utxos,
             )
             .await;
 
-            match submitted {
-                Ok(hashes) => {
-                    extend_tx_hash_set(&mut cycle_tx_hashes, &hashes)?;
+            match prepared {
+                Ok(mut prepared) => {
+                    prepared_counts.insert(sender.clone(), prepared.len());
+                    signed_submissions.append(&mut prepared);
                 }
                 Err(e) => {
                     warn!(target: TARGET, "Step `{}` error in cycle {}: {e}", step, cycle + 1);
                 }
             }
         }
+        log_phase_d_counts(
+            "CONTINUOUS ROUND ROBIN",
+            cycle,
+            "prepared",
+            &prepared_counts,
+        );
+
+        let submitted_hashes = utils::submit_signed_user_wallet_submissions_concurrently(
+            world,
+            signed_submissions,
+            Some(&best_node_info),
+        )
+        .await?;
+        let mut submitted_counts = BTreeMap::new();
+        for (sender, _) in &submitted_hashes {
+            *submitted_counts.entry(sender.clone()).or_insert(0usize) += 1;
+        }
+        log_phase_d_counts(
+            "CONTINUOUS ROUND ROBIN",
+            cycle,
+            "submitted",
+            &submitted_counts,
+        );
+        let cycle_tx_hashes = submitted_hashes
+            .into_iter()
+            .map(|(_, tx_hash)| tx_hash)
+            .collect::<HashSet<_>>();
 
         // Assert transaction count
         verify_transactions_mined(
@@ -957,7 +1139,7 @@ async fn execute_continuous_round_robin(
         .await?;
 
         // Collect hashes for final drain verification
-        extend_tx_hash_set(&mut all_round_robin_tx_hashes, &cycle_tx_hashes)?;
+        extend_tx_hash_set(&mut all_round_robin_tx_hashes, &cycle_tx_hashes);
     }
 
     // Final drain: verify submitted D-phase transaction hashes are observed in
@@ -987,6 +1169,101 @@ async fn execute_continuous_round_robin(
     Ok(())
 }
 
+async fn wait_for_n_blocks_or_warn(
+    world: &CucumberWorld,
+    step: &str,
+    wallet_names: &[String],
+    time_out: Duration,
+    blocks_to_wait: u64,
+    cycle: usize,
+) -> Result<(), StepError> {
+    if wallet_names.is_empty() {
+        return Err(StepError::InvalidArgument {
+            message: "No wallet names provided for wait_for_n_blocks".to_owned(),
+        });
+    }
+    let best_node_info = get_best_node_info_choose(world, wallet_names).await?;
+    let node = world
+        .resolve_node_http_client(&best_node_info.best_node_for_wallet(world, &wallet_names[0])?)?;
+    let start_height = node.consensus_info().await?.cryptarchia_info.height;
+    let start = Instant::now();
+    loop {
+        sleep(Duration::from_millis(200)).await;
+        let best_node_info = get_best_node_info_choose(world, wallet_names).await?;
+        let node = world.resolve_node_http_client(
+            &best_node_info.best_node_for_wallet(world, &wallet_names[0])?,
+        )?;
+        let height = node.consensus_info().await?.cryptarchia_info.height;
+        if height >= start_height + blocks_to_wait {
+            return Ok(());
+        }
+        if start.elapsed() > time_out {
+            warn!(
+                target: TARGET,
+                "Step `{step}` cycle {}: Chain could not grow by {blocks_to_wait} blocks in {time_out:.2?}",
+                cycle + 1
+            );
+            return Ok(());
+        }
+    }
+}
+
+async fn coin_splits_for_round_robin(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_names: &[String],
+    coin_split_outputs: usize,
+    coin_split_value: u64,
+    cycle: usize,
+) -> Result<HashSet<TxHash>, StepError> {
+    info!(target: TARGET, "CONTINUOUS ROUND ROBIN cycle {} B: Perform coin splits all wallets", cycle + 1);
+
+    let best_node_info = get_best_node_info_choose(world, wallet_names).await?;
+    let mut split_available_utxos =
+        utils::current_available_utxos_for_user_wallets(world, step).await?;
+    let (signed_split_submissions, prepared_split_counts) =
+        prepare_coin_splits_all_wallets_with_utxo_cache(
+            world,
+            step,
+            wallet_names,
+            coin_split_outputs,
+            coin_split_value,
+            &mut split_available_utxos,
+        )
+        .await?;
+    log_phase_counts(
+        "CONTINUOUS ROUND ROBIN",
+        cycle,
+        "B",
+        "split prepared",
+        &prepared_split_counts,
+    );
+
+    let submitted_split_hashes = utils::submit_signed_user_wallet_submissions_concurrently(
+        world,
+        signed_split_submissions,
+        Some(&best_node_info),
+    )
+    .await?;
+    let mut submitted_split_counts = BTreeMap::new();
+    for (sender, _) in &submitted_split_hashes {
+        *submitted_split_counts
+            .entry(sender.clone())
+            .or_insert(0usize) += 1;
+    }
+    log_phase_counts(
+        "CONTINUOUS ROUND ROBIN",
+        cycle,
+        "B",
+        "split submitted",
+        &submitted_split_counts,
+    );
+    Ok(submitted_split_hashes
+        .into_iter()
+        .map(|(_, tx_hash)| tx_hash)
+        .collect::<HashSet<_>>())
+}
+
 fn recipient_wallets(wallet_names: &[String], sender: &str) -> Result<Vec<String>, StepError> {
     let recipients: Vec<_> = wallet_names
         .iter()
@@ -1002,38 +1279,37 @@ fn recipient_wallets(wallet_names: &[String], sender: &str) -> Result<Vec<String
     Ok(recipients)
 }
 
-#[expect(clippy::too_many_arguments, reason = "Need all args")]
-async fn send_round_robin_with_utxo_cache(
+async fn prepare_round_robin_with_utxo_cache(
     world: &mut CucumberWorld,
     step: &str,
     sender: &str,
     recipients: &[String],
     transactions: usize,
     value: u64,
-    best_node_info: Option<&BestNodeInfo>,
     available_utxos: &mut WalletUtxos,
-) -> Result<HashSet<TxHash>, StepError> {
-    let mut tx_hashes = HashSet::with_capacity(transactions);
+) -> Result<Vec<utils::SignedUserWalletSubmission>, StepError> {
+    let mut reserved_submissions = Vec::with_capacity(transactions);
 
     for i in 0..transactions {
         let receiver_name = &recipients[i % recipients.len()];
         let receiver_wallet = world.resolve_wallet(receiver_name)?;
         let receiver_pk = receiver_wallet.public_key()?;
 
-        let submitted_hashes = utils::create_and_submit_transaction_hashes_with_utxo_cache(
-            world,
-            step,
-            sender,
-            &[(receiver_pk, value)],
-            best_node_info,
-            Some(available_utxos),
-        )
-        .await?;
+        let receivers = vec![(receiver_pk, value)];
+        let reserved_submission =
+            utils::reserve_user_wallet_transaction_submission_with_utxo_cache(
+                world,
+                step,
+                sender,
+                &receivers,
+                available_utxos,
+            )
+            .await?;
 
-        extend_tx_hash_set(&mut tx_hashes, &submitted_hashes)?;
+        reserved_submissions.push(reserved_submission);
     }
 
-    Ok(tx_hashes)
+    utils::finalize_reserved_user_wallet_submissions_concurrently(step, reserved_submissions).await
 }
 
 async fn wait_for_available_value(

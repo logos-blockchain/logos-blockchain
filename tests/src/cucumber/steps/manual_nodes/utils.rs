@@ -386,13 +386,13 @@ async fn fetch_public_peer_consensus_snapshots(
     for peer in peers {
         match fetch_public_peer_consensus(client, peer).await {
             Ok(info) => snapshots.push(PublicPeerConsensusSnapshot {
-                peer_url: peer.url.clone(),
+                peer_url: peer.base_url.clone(),
                 stats: SyncTargetStats::from_cryptarchia_info(&info),
             }),
             Err(e) => warn!(
                 target: TARGET,
                 "Failed to fetch public cryptarchia info from '{}': {e}",
-                peer.url
+                peer.base_url
             ),
         }
     }
@@ -400,23 +400,25 @@ async fn fetch_public_peer_consensus_snapshots(
     snapshots
 }
 
-async fn fetch_public_peer_consensus(
+/// Fetch the current consensus info from a public cryptarchia endpoint peer.
+/// Returns an error if the request fails or the response is invalid.
+pub async fn fetch_public_peer_consensus(
     client: &Client,
     peer: &PublicCryptarchiaEndpointPeer,
 ) -> Result<CryptarchiaInfo, StepError> {
     let request_url = Url::parse(&format!(
         "{peer_url}/{path}",
-        peer_url = peer.url.as_str(),
+        peer_url = peer.base_url.as_str(),
         path = CRYPTARCHIA_INFO.trim_start_matches('/')
     ))
     .map_err(|e| StepError::InvalidArgument {
         message: format!(
             "Invalid public cryptarchia info URL for '{}': {e}",
-            peer.url.as_str()
+            peer.base_url.as_str()
         ),
     })?;
 
-    client
+    Ok(client
         .get(request_url)
         .basic_auth(&peer.username, Some(&peer.password))
         .send()
@@ -424,8 +426,8 @@ async fn fetch_public_peer_consensus(
         .error_for_status()?
         .json::<ChainServiceInfo>()
         .await
-        .map(|info| info.cryptarchia_info)
-        .map_err(Into::into)
+        .map_err(StepError::from)?
+        .cryptarchia_info)
 }
 
 fn select_majority_public_sync_target(
