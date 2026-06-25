@@ -111,7 +111,7 @@ async fn sdp_ops_e2e() {
     };
     let declaration_id = declaration.id();
 
-    let (declare_mantle_tx, declare_signing_keys) = fund_sdp_transaction(
+    let declare_mantle_tx = fund_sdp_transaction(
         &node0,
         &genesis_utxos,
         &funding_wallet,
@@ -129,21 +129,14 @@ async fn sdp_ops_e2e() {
         &declare_hash.to_fr(),
     )
     .expect("SDP declare zk proof should build");
-    // The SDP declare op is proven first. With zero gas prices the funding step
-    // adds no input, so there is no trailing transfer op to prove; only attach a
-    // transfer proof when funding actually pulled in inputs.
-    let mut declare_proofs = vec![OpProof::ZkAndEd25519Sigs {
-        zk_sig: declare_zk_sig,
-        ed25519_sig: declare_ed25519_sig,
-    }];
-    if !declare_signing_keys.is_empty() {
-        declare_proofs.push(OpProof::ZkSig(
-            ZkKey::multi_sign(&declare_signing_keys, &declare_hash.to_fr())
-                .expect("transfer proof should build"),
-        ));
-    }
-    let declare_tx = SignedMantleTx::new(declare_mantle_tx, declare_proofs)
-        .expect("funded SDP declare transaction should be valid");
+    let declare_tx = SignedMantleTx::new(
+        declare_mantle_tx,
+        vec![OpProof::ZkAndEd25519Sigs {
+            zk_sig: declare_zk_sig,
+            ed25519_sig: declare_ed25519_sig,
+        }],
+    )
+    .expect("funded SDP declare transaction should be valid");
 
     node0
         .submit_transaction(&declare_tx)
@@ -167,7 +160,7 @@ async fn sdp_ops_e2e() {
         nonce: declaration_created.nonce + 1,
     };
 
-    let (withdraw_mantle_tx, withdraw_signing_keys) = fund_sdp_transaction(
+    let withdraw_mantle_tx = fund_sdp_transaction(
         &node0,
         &genesis_utxos,
         &funding_wallet,
@@ -182,15 +175,9 @@ async fn sdp_ops_e2e() {
     )
     .expect("SDP withdraw zk proof should build");
 
-    let mut withdraw_proofs = vec![OpProof::ZkSig(withdraw_zk_sig)];
-    if !withdraw_signing_keys.is_empty() {
-        withdraw_proofs.push(OpProof::ZkSig(
-            ZkKey::multi_sign(&withdraw_signing_keys, &withdraw_hash.to_fr())
-                .expect("transfer proof should build"),
-        ));
-    }
-    let withdraw_tx = SignedMantleTx::new(withdraw_mantle_tx, withdraw_proofs)
-        .expect("funded SDP withdraw transaction should be valid");
+    let withdraw_tx =
+        SignedMantleTx::new(withdraw_mantle_tx, vec![OpProof::ZkSig(withdraw_zk_sig)])
+            .expect("funded SDP withdraw transaction should be valid");
 
     node0
         .submit_transaction(&withdraw_tx)
@@ -482,7 +469,7 @@ async fn fund_sdp_transaction(
     genesis_utxos: &[Utxo],
     funding_wallet: &WalletAccount,
     extra_op: Op,
-) -> (MantleTx, Vec<ZkKey>) {
+) -> MantleTx {
     let funding_source = current_wallet_funding_source(node, genesis_utxos, funding_wallet.clone())
         .await
         .expect("funding wallet source should sync from chain");
@@ -506,16 +493,9 @@ async fn fund_sdp_transaction(
     let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder)
         .expect("funding mixed-op transaction should succeed");
 
-    let signing_keys = funded_builder
-        .ledger_inputs()
-        .iter()
-        .map(|_| funding_wallet.secret_key.clone())
-        .collect::<Vec<_>>();
-
-    (
-        funded_builder
-            .build()
-            .expect("funded mixed-op builder should build"),
-        signing_keys,
-    )
+    // With zero gas prices the funding step adds no input, so the built tx carries
+    // no trailing transfer op — the SDP op is the only op, and the only proof.
+    funded_builder
+        .build()
+        .expect("funded mixed-op builder should build")
 }
