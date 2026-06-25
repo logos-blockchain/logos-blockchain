@@ -259,7 +259,7 @@ impl WalletState {
                 HeaderOp::Unlock(note_id) => {
                     // When unlocking notes, we don't check if the notes are owned
                     // by the wallet because they will be ignored automatically.
-                    locked_notes = locked_notes.remove(note_id);
+                    locked_notes.remove_mut(note_id);
                 }
             }
         }
@@ -287,7 +287,7 @@ impl WalletState {
                     }
                     WalletOp::Lock(note_id) => {
                         if utxos.contains_key(note_id) {
-                            locked_notes = locked_notes.insert(*note_id);
+                            locked_notes.insert_mut(*note_id);
                         }
                     }
                     WalletOp::LeaderClaim(utxo) => {
@@ -496,7 +496,7 @@ fn remove_spent_utxo(
     };
 
     let pk = utxo.note.pk;
-    *utxos = utxos.remove(spent_id);
+    utxos.remove_mut(spent_id);
 
     let Some(note_set) = pk_index.get(&pk) else {
         return;
@@ -504,9 +504,9 @@ fn remove_spent_utxo(
 
     let updated_set = note_set.remove(spent_id);
     if updated_set.is_empty() {
-        *pk_index = pk_index.remove(&pk);
+        pk_index.remove_mut(&pk);
     } else {
-        *pk_index = pk_index.insert(pk, updated_set);
+        pk_index.insert_mut(pk, updated_set);
     }
 }
 
