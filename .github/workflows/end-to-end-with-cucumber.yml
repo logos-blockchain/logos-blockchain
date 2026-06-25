@@ -71,11 +71,6 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      # Set environment variables for circuits path - expand $HOME first since GitHub Actions env: blocks don't expand
-      # shell variables
-      - name: Set circuits path environment variable (new)
-        run: echo "LOGOS_BLOCKCHAIN_CIRCUITS=$HOME/.logos-blockchain-circuits" >> $GITHUB_ENV
-
       # Prune before any builds.
       - name: Prune disk space (cache-aware, self-hosted)
         uses: ./.github/actions/prune-disk-space

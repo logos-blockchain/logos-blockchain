@@ -970,6 +970,7 @@ where
     ) -> Result<Groth16LeaderClaimProof, WalletServiceError> {
         Ok(Groth16LeaderClaimProof::prove(LeaderClaimPrivate::new(
             LeaderClaimPublic {
+                voucher_nullifier: VoucherNullifier::from_secret(voucher_secret).into(),
                 voucher_root: rewards_root.into(),
                 mantle_tx_hash: tx_hash.to_fr(),
             },

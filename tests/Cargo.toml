@@ -73,10 +73,6 @@ testing_framework    = []
 tip_poll_self_heal   = []
 
 [[test]]
-name = "blend_devnet_setup"
-path = "src/tests/blend/devnet.rs"
-
-[[test]]
 name = "test_cli_restart"
 path = "src/tests/cli/restart.rs"
 

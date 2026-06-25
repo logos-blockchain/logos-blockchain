@@ -65,7 +65,7 @@
           src = pkgs.lib.cleanSourceWith {
             src = craneLib.path ./.;
             filter = path: type:
-              (pkgs.lib.hasSuffix "nodes/node/binary/src/config/deployment/devnet/deployment.yaml" path) ||
+              (pkgs.lib.hasSuffix "nodes/node/binary/src/config/deployment/settings.yaml" path) ||
               (craneLib.filterCargoSources path type);
           };
           crateName = craneLib.crateNameFromCargoToml { inherit src; };

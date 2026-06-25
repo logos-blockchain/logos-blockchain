@@ -274,17 +274,19 @@ pub(crate) fn record_observed_transaction_hashes<S: BuildHasher>(
     let after = sink.len();
     drop(sink);
     let new = after.saturating_sub(before);
-    if let Some(num) = num_of_blocks
-        && num > 0
-    {
-        info!(
-            target: TARGET,
-            "observed blocks={num}, new transactions={new} total recorded transactions={after}",
-        );
-    } else {
-        info!(
-            target: TARGET,
-            "new transactions={new} total recorded transactions={after}",
-        );
+    if new > 0 {
+        if let Some(num) = num_of_blocks
+            && num > 0
+        {
+            info!(
+                target: TARGET,
+                "observed blocks={num}, new transactions={new} total recorded transactions={after}",
+            );
+        } else {
+            info!(
+                target: TARGET,
+                "new transactions={new} total recorded transactions={after}",
+            );
+        }
     }
 }

@@ -3,28 +3,26 @@ use std::sync::Arc;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded_vec::UpperBoundedVec;
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
     block::MAX_BLOCK_SIZE,
     crypto::{Digest as _, Hasher},
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{ChannelState, Channels, Error},
         ledger::Operation,
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
         ops::channel::config::Keys,
     },
 };
 
 pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
-type NomInscription<'a> = NomBoundedVec<'a, u8, { Inscription::MIN }, { Inscription::MAX }, 4>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain
@@ -41,37 +39,6 @@ impl InscriptionOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode().as_slice());
         MsgId(hasher.finalize().into())
-    }
-}
-
-// ChannelInscribe = ChannelId Inscription Parent Signer
-impl NomEncode for InscriptionOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.channel_id.encode();
-        bytes.extend(NomInscription::from(&self.inscription).encode());
-        bytes.extend(self.parent.encode());
-        bytes.extend(self.signer.encode());
-        bytes
-    }
-}
-
-impl NomDecode for InscriptionOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, inscription) = NomInscription::decode(bytes)?;
-        let (bytes, parent) = MsgId::decode(bytes)?;
-        let (bytes, signer) = Ed25519PublicKey::decode(bytes)?;
-        Ok((
-            bytes,
-            Self {
-                channel_id,
-                inscription,
-                parent,
-                signer,
-            },
-        ))
     }
 }
 
@@ -140,7 +107,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it
         let channel = ctx
             .channels
@@ -175,7 +142,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
                 ..channel
             },
         );
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }
 
@@ -184,6 +151,7 @@ mod tests {
     use lb_utils::bounded_vec::BoundedError;
 
     use super::*;
+    use crate::mantle::nom::NomDecode as _;
 
     fn sample() -> InscriptionOp {
         InscriptionOp {

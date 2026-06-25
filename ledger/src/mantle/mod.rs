@@ -5,9 +5,9 @@ pub mod sdp;
 
 use lb_core::{
     crypto::ZkHasher,
-    events::Events,
+    events::TxEvent,
     mantle::{
-        GenesisTx, NoteId, TxHash, Utxo, Value,
+        GenesisTx, NoteId, TxHash, Value,
         ledger::Operation as _,
         ops::{
             channel::{
@@ -32,7 +32,7 @@ use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
 
-use crate::{Config, EpochState, UtxoTree};
+use crate::{Config, EpochState, UtxoTree, mantle::sdp::HeaderEffect};
 
 const LOG_TARGET: &str = "ledger::mantle";
 
@@ -79,8 +79,8 @@ impl LedgerState {
         config: &Config,
         utxo_tree: &UtxoTree,
         epoch_state: &EpochState,
-    ) -> Result<(Self, Events), Error> {
-        let mut tx_events = Events::new();
+    ) -> Result<(Self, Vec<TxEvent>), Error> {
+        let mut tx_events = Vec::new();
 
         let (channels, events) = channel::Channels::from_genesis(tx.genesis_inscription())?;
         tx_events.extend(events);
@@ -146,13 +146,13 @@ impl LedgerState {
         epoch_state: &EpochState,
         voucher: VoucherCm,
         config: &Config,
-    ) -> Result<(Self, Vec<Utxo>), Error> {
+    ) -> Result<(Self, HeaderEffect), Error> {
         self.leaders = self.leaders.try_apply_header(epoch_state.epoch, voucher)?;
-        let (new_sdp, reward_utxos) =
+        let (new_sdp, effect) =
             self.sdp
                 .try_apply_header(&config.sdp_config, last_epoch_state, epoch_state)?;
         self.sdp = new_sdp;
-        Ok((self, reward_utxos))
+        Ok((self, effect))
     }
 
     pub fn try_apply_channel_inscription(
@@ -161,7 +161,7 @@ impl LedgerState {
         inscription_sig: &Ed25519Signature,
         tx_hash: TxHash,
         block_slot: Slot,
-    ) -> Result<(Self, Events), Error> {
+    ) -> Result<(Self, Vec<TxEvent>), Error> {
         //validate the inscription
         inscription_op.validate(&InscriptionValidationContext {
             channels: &self.channels,
@@ -190,7 +190,7 @@ impl LedgerState {
         config_sigs: &ChannelMultiSigProof,
         tx_hash: &TxHash,
         block_slot: Slot,
-    ) -> Result<(Self, Events), Error> {
+    ) -> Result<(Self, Vec<TxEvent>), Error> {
         // Validate the SetKeys
         config_op.validate(&ChannelConfigValidationContext {
             channels: &self.channels,
@@ -220,7 +220,7 @@ impl LedgerState {
         utxo_tree: &UtxoTree,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<(Self, Events), Error> {
+    ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (result, events) = self
             .sdp
             .try_apply_sdp_declaration(
@@ -244,7 +244,7 @@ impl LedgerState {
         sdp_active_zk_sig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<(Self, Events), Error> {
+    ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (result, events) = self
             .sdp
             .apply_active_msg(
@@ -266,7 +266,7 @@ impl LedgerState {
         sdp_withdraw_zk_sig: &ZkSignature,
         tx_hash: TxHash,
         config: &Config,
-    ) -> Result<(Self, Events), Error> {
+    ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (result, events) = self
             .sdp
             .apply_withdrawn_msg(

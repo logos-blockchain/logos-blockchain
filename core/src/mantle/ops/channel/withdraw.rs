@@ -1,20 +1,19 @@
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        encoding::NomOutputs,
         ledger::{Operation, Outputs, Utxos},
-        nom::{NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+// ChannelWithdraw = ChannelId Outputs WithdrawNonce — plain field-order concat.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub outputs: Outputs,
@@ -27,34 +26,6 @@ impl OpId for ChannelWithdrawOp {
     }
 }
 
-impl NomEncode for ChannelWithdrawOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.channel_id.encode());
-        bytes.extend(NomOutputs::from(self.outputs.as_ref()).encode());
-        bytes.extend(self.withdraw_nonce.encode());
-        bytes
-    }
-}
-
-impl NomDecode for ChannelWithdrawOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, channel_id) = ChannelId::decode(bytes)?;
-        let (bytes, outputs) = NomOutputs::decode(bytes)?;
-        let (bytes, withdraw_nonce) = u32::decode(bytes)?;
-        Ok((
-            bytes,
-            Self {
-                channel_id,
-                outputs: Outputs::new(outputs),
-                withdraw_nonce,
-            },
-        ))
-    }
-}
-
 pub struct WithdrawValidationContext<'a> {
     pub channels: &'a Channels,
     pub tx_hash: &'a TxHash,
@@ -64,6 +35,7 @@ pub struct WithdrawValidationContext<'a> {
 pub struct WithdrawExecutionContext {
     pub channels: Channels,
     pub utxos: Utxos,
+    pub tx_hash: TxHash,
 }
 
 impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
@@ -130,7 +102,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Get the amount withdraw
         let amount_withdraw = self.outputs.amount()?;
 
@@ -151,9 +123,9 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
             })
         }?;
 
-        // Add the ouputs to the ledger
+        // Add the outputs to the ledger
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }

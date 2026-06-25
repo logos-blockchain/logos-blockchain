@@ -44,7 +44,7 @@ jobs:
             --providers deployment/ceremony/genesis/$LB_TARGET_ENV/providers.yaml \
             --faucet deployment/ceremony/genesis/$LB_TARGET_ENV/faucet.yaml \
             --deployment /tmp/deployment-generated.yaml \
-            --output nodes/node/binary/src/config/deployment/devnet/deployment.yaml
+            --output nodes/node/binary/src/config/deployment/settings.yaml
 
       - name: Commit and Push changes
         run: |
@@ -52,7 +52,7 @@ jobs:
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
 
-          git add nodes/node/binary/src/config/deployment/devnet/deployment.yaml
+          git add nodes/node/binary/src/config/deployment/settings.yaml
 
           # Only commit and push if there are actual changes
           if git diff --staged --quiet; then
