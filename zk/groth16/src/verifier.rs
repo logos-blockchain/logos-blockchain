@@ -44,22 +44,19 @@ pub fn groth16_batch_verify<E: Pairing>(
         .unwrap()
         .into_affine();
 
-    let mut g1_terms: Vec<_> = Vec::with_capacity(proofs.len() + 3);
-    let mut g2_terms: Vec<_> = Vec::with_capacity(proofs.len() + 3);
+    let (g1_terms, g2_terms): (Vec<_>, Vec<_>) = proofs
+        .iter()
+        .enumerate()
+        .map(|(i, proof)| (proof.pi_a.mul(ri[i]).into_affine(), proof.pi_b.into()))
+        .chain([
+            ((-vk.alpha_g1().mul(r_sum)).into(), vk.beta_g2().into()),
+            (batched_ic, vk.gamma_g2_neg_pc().clone()),
+            (batched_pi_c, vk.delta_g2_neg_pc().clone()),
+        ])
+        .unzip();
 
-    for (i, proof) in proofs.iter().enumerate() {
-        g1_terms.push(proof.pi_a.mul(ri[i]).into_affine());
-        g2_terms.push(proof.pi_b.into());
-    }
-    g1_terms.push((-vk.alpha_g1().mul(r_sum)).into());
-    g2_terms.push(vk.beta_g2().into());
-    g1_terms.push(batched_ic);
-    g2_terms.push(vk.gamma_g2_neg_pc().clone());
-    g1_terms.push(batched_pi_c);
-    g2_terms.push(vk.delta_g2_neg_pc().clone());
-
-    let test = E::multi_pairing(g1_terms, g2_terms);
-    test.is_zero()
+    let check = E::multi_pairing(g1_terms, g2_terms);
+    check.is_zero()
 }
 
 #[cfg(test)]
