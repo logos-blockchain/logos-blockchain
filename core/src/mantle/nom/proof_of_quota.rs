@@ -1,13 +1,10 @@
-use lb_blend_proofs::{
-    quota::{ProofOfQuota, VerifiedProofOfQuota},
-    selection::{ProofOfSelection, VerifiedProofOfSelection},
-};
+use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use nom::{
     IResult,
     error::{Error, ErrorKind},
 };
 
-use crate::mantle::nom::{NomDecode, NomEncode, wire_fixture};
+use crate::mantle::nom::{NomDecode, NomEncode};
 
 impl NomEncode for ProofOfQuota {
     fn encode(&self) -> Vec<u8> {
@@ -26,11 +23,6 @@ impl NomDecode for ProofOfQuota {
     }
 }
 
-wire_fixture!(
-    ProofOfQuota,
-    VerifiedProofOfQuota::from_bytes_unchecked([1u8; _]).into() => "01010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101"
-);
-
 impl NomEncode for ProofOfSelection {
     fn encode(&self) -> Vec<u8> {
         <[u8; _]>::from(self).encode()
@@ -47,8 +39,3 @@ impl NomDecode for ProofOfSelection {
         ))
     }
 }
-
-wire_fixture!(
-    ProofOfSelection,
-    VerifiedProofOfSelection::from_bytes_unchecked([1u8; _]).into() => "0101010101010101010101010101010101010101010101010101010101010101"
-);

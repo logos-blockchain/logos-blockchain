@@ -1,7 +1,4 @@
-use lb_blend_proofs::{
-    quota::{ProofOfQuota, VerifiedProofOfQuota},
-    selection::{ProofOfSelection, VerifiedProofOfSelection},
-};
+use lb_blend_proofs::{quota::ProofOfQuota, selection::ProofOfSelection};
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use nom::{
@@ -10,7 +7,7 @@ use nom::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::mantle::nom::{NomDecode, NomEncode, wire_fixture};
+use crate::mantle::nom::{NomDecode, NomEncode};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct ActivityProof {
@@ -56,20 +53,6 @@ impl NomDecode for ActivityProof {
 }
 
 // TODO: Remove once the `NomCodec` macro supports logic for custom tags.
-wire_fixture!(
-    ActivityProof,
-    Self {
-        epoch: Epoch::new(10),
-        signing_key: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
-        proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked(
-            [0u8; _]
-        )
-        .into(),
-        proof_of_selection:
-            VerifiedProofOfSelection::from_bytes_unchecked([1u8; _])
-                .into(),
-    } => "010a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000101010101010101010101010101010101010101010101010101010101010101"
-);
 
 #[cfg(test)]
 mod tests {

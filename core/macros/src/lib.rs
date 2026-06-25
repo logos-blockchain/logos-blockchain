@@ -1,20 +1,16 @@
 //! Procedural macros for the Mantle wire codec (`NomEncode`/`NomDecode`).
 //!
-//! Two entry points, both of which make a *well-known fixture* a prerequisite
-//! to declaring a codec — so encode/decode cannot be added without a golden
-//! vector and a round-trip test:
-//!
 //! - [`macro@NomCodec`] — `#[derive(NomCodec)]` for named or tuple structs.
-//!   Generates `NomEncode` (field-order concatenation), `NomDecode` (decode
-//!   each field in order then `Self { .. }` / `Self(..)`), the sealed
-//!   `WireExamples` fixtures, and a `#[cfg(test)]` round-trip test. The decode
-//!   is infallible positional construction, so newtypes needing a fallible
-//!   `try_from` stay on `wire_fixture!` for now. The fixtures are pinned with a
-//!   single `#[nom_fixtures((<value>, "<hex>"), ...)]`; omitting it is a
-//!   compile error.
-//! - [`wire_fixture!`] — for hand-written / foreign codec impls (primitives,
-//!   newtypes, the generic blanket impls' element types). Generates the sealed
-//!   `WireExamples` fixture and a round-trip test next to the existing impl.
+//!   Generates *only* the codec: `NomEncode` (field-order concatenation) and
+//!   `NomDecode` (decode each field in order then `Self { .. }` / `Self(..)`).
+//!   The decode is infallible positional construction, so a newtype needing a
+//!   fallible `try_from` keeps a hand-written impl. The well-known fixture is
+//!   supplied separately by [`nom_wire_fixtures!`]; because both codec traits
+//!   require `WireExamples`, a derived type that lacks a `nom_wire_fixtures!`
+//!   does not compile.
+//! - [`nom_wire_fixtures!`] — the single source of fixtures. Emits the sealed
+//!   `WireExamples` impl and a `#[cfg(test)]` round-trip test for any codec
+//!   (derived, hand-written, primitive, or foreign).
 
 use proc_macro::TokenStream;
 use proc_macro2::{Span, TokenStream as TokenStream2};
@@ -23,16 +19,14 @@ use syn::{
     Data, DeriveInput, Expr, Fields, Ident, LitStr, Token, Type,
     parse::{Parse, ParseStream},
     parse_macro_input,
-    punctuated::Punctuated,
 };
 
-/// Derive `NomEncode` + `NomDecode` + the mandatory `WireExamples` fixtures for
-/// a named or tuple struct with an infallible positional decode.
+/// Derive `NomEncode` + `NomDecode` for a named or tuple struct with an
+/// infallible positional decode.
 ///
-/// Fixtures are pinned with a single attribute holding one or more
-/// `(value, "hex")` pairs:
-/// `#[nom_fixtures((<expr>, "<hex>"), (<expr>, "<hex>"), ...)]`.
-#[proc_macro_derive(NomCodec, attributes(nom_fixtures))]
+/// Both codec traits require `WireExamples`, so a derived type must also pin
+/// its well-known fixture with [`nom_wire_fixtures!`] or it will not compile.
+#[proc_macro_derive(NomCodec)]
 pub fn derive_nom_codec(input: TokenStream) -> TokenStream {
     let parsed_input = parse_macro_input!(input as DeriveInput);
     match expand_derive(&parsed_input) {
@@ -48,7 +42,7 @@ fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         return Err(syn::Error::new_spanned(
             &input.generics,
             "`#[derive(NomCodec)]` does not yet support generic types; use a \
-             hand-written impl plus `wire_fixture!`",
+             hand-written impl plus `nom_wire_fixtures!`",
         ));
     }
 
@@ -65,10 +59,6 @@ fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
         decode_bindings,
         constructor,
     } = field_layout(ident, &data.fields)?;
-
-    let fixtures = parse_fixtures(ident, &input.attrs)?;
-    let fixture_exprs = fixtures.iter().map(fixture_tokens);
-    let test_mod = Ident::new(&format!("__nom_codec_fixtures_{ident}"), Span::call_site());
 
     Ok(quote! {
         #[automatically_derived]
@@ -91,25 +81,6 @@ fn expand_derive(input: &DeriveInput) -> syn::Result<TokenStream2> {
                 ::core::result::Result::Ok((input, #constructor))
             }
         }
-
-        #[automatically_derived]
-        impl crate::mantle::nom::sealed::Sealed for #ident {}
-
-        #[automatically_derived]
-        impl crate::mantle::nom::WireExamples for #ident {
-            fn fixtures() -> crate::mantle::nom::WireFixtures<Self> {
-                [ #(#fixture_exprs),* ].into()
-            }
-        }
-
-        #[cfg(test)]
-        mod #test_mod {
-            use super::*;
-            #[test]
-            fn wire_fixtures_round_trip() {
-                crate::mantle::nom::assert_wire_fixtures::<#ident>();
-            }
-        }
     })
 }
 
@@ -126,7 +97,7 @@ struct FieldLayout<'a> {
 /// Compute the [`FieldLayout`] for a struct. Handles named structs
 /// (`Self { a, b }`) and tuple structs (`Self(a, b)`) alike; the decode is
 /// always the infallible positional form, so a newtype that needs a fallible
-/// `try_from` (e.g. `Locator`) stays on `wire_fixture!` for now.
+/// `try_from` (e.g. `Locator`) stays on `nom_wire_fixtures!` for now.
 fn field_layout<'a>(ident: &Ident, fields: &'a Fields) -> syn::Result<FieldLayout<'a>> {
     Ok(match fields {
         Fields::Named(named) => {
@@ -167,58 +138,6 @@ fn field_layout<'a>(ident: &Ident, fields: &'a Fields) -> syn::Result<FieldLayou
     })
 }
 
-/// Parse the single `#[nom_fixtures((<value>, "<hex>"), ...)]` attribute into
-/// its list of fixtures (at least one).
-fn parse_fixtures(ident: &Ident, attrs: &[syn::Attribute]) -> syn::Result<Vec<Fixture>> {
-    let mut found: Option<&syn::Attribute> = None;
-    for attr in attrs {
-        if attr.path().is_ident("nom_fixtures") {
-            if found.is_some() {
-                return Err(syn::Error::new_spanned(
-                    attr,
-                    "expected a single `#[nom_fixtures(...)]` attribute",
-                ));
-            }
-            found = Some(attr);
-        }
-    }
-
-    let Some(attr) = found else {
-        return Err(syn::Error::new_spanned(
-            ident,
-            "`#[derive(NomCodec)]` requires `#[nom_fixtures((<value>, \"<hex>\"), ...)]` \
-             with at least one fixture",
-        ));
-    };
-
-    let pairs = attr.parse_args_with(Punctuated::<FixturePair, Token![,]>::parse_terminated)?;
-    if pairs.is_empty() {
-        return Err(syn::Error::new_spanned(
-            attr,
-            "`#[nom_fixtures]` needs at least one `(<value>, \"<hex>\")` pair",
-        ));
-    }
-    Ok(pairs.into_iter().map(|pair| pair.0).collect())
-}
-
-/// One `(<value>, "<hex>")` element of a `#[nom_fixtures(...)]` list.
-struct FixturePair(Fixture);
-
-impl Parse for FixturePair {
-    fn parse(input: ParseStream) -> syn::Result<Self> {
-        let content;
-        syn::parenthesized!(content in input);
-        let value: Expr = content.parse()?;
-        content.parse::<Token![,]>()?;
-        let lit: LitStr = content.parse()?;
-        let _: Option<Token![,]> = content.parse()?; // tolerate a trailing comma in the pair
-        let bytes = hex::decode(lit.value()).map_err(|err| {
-            syn::Error::new(lit.span(), format!("`bytes` is not valid hex: {err}"))
-        })?;
-        Ok(Self(Fixture { value, bytes }))
-    }
-}
-
 /// A single parsed well-known fixture: a value expression and its canonical
 /// wire bytes (decoded from hex at macro-expansion time).
 struct Fixture {
@@ -247,11 +166,11 @@ fn fixture_tokens(fixture: &Fixture) -> TokenStream2 {
 /// one or more `value => "hex"` pairs.
 ///
 /// ```ignore
-/// wire_fixture!(u32, 0x0403_0201_u32 => "01020304");
-/// wire_fixture!(u8, 0x07_u8 => "07", 0x00_u8 => "00");
+/// nom_wire_fixtures!(u32, 0x0403_0201_u32 => "01020304");
+/// nom_wire_fixtures!(u8, 0x07_u8 => "07", 0x00_u8 => "00");
 /// ```
 #[proc_macro]
-pub fn wire_fixture(input: TokenStream) -> TokenStream {
+pub fn nom_wire_fixtures(input: TokenStream) -> TokenStream {
     let WireFixtureInput { ty, fixtures } = parse_macro_input!(input as WireFixtureInput);
     let fixture_exprs = fixtures.iter().map(fixture_tokens);
 
@@ -277,16 +196,16 @@ pub fn wire_fixture(input: TokenStream) -> TokenStream {
         mod #test_mod {
             use super::*;
             #[test]
-            fn wire_fixture_round_trip() {
-                crate::mantle::nom::assert_wire_fixtures::<#ty>();
+            fn nom_wire_fixtures_round_trip() {
+                crate::mantle::nom::assert_nom_wire_fixtures::<#ty>();
             }
         }
     }
     .into()
 }
 
-/// Parsed input of [`wire_fixture!`]: `Type, value => "hex", value => "hex", …`
-/// — at least one `value => "hex"` pair.
+/// Parsed input of [`nom_wire_fixtures!`]: `Type, value => "hex", value =>
+/// "hex", …` — at least one `value => "hex"` pair.
 struct WireFixtureInput {
     ty: Type,
     fixtures: Vec<Fixture>,
@@ -314,7 +233,9 @@ impl Parse for WireFixtureInput {
         }
 
         if fixtures.is_empty() {
-            return Err(input.error("`wire_fixture!` needs at least one `value => \"hex\"` pair"));
+            return Err(
+                input.error("`nom_wire_fixtures!` needs at least one `value => \"hex\"` pair")
+            );
         }
         Ok(Self { ty, fixtures })
     }

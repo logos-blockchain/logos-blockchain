@@ -19,17 +19,6 @@ pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
-#[nom_fixtures((
-    Self {
-        channel: ChannelId([0u8; _]),
-        keys: [Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap()].into(),
-        posting_timeframe: SlotTimeframe::from(0u32),
-        posting_timeout: SlotTimeout::from(0u32),
-        configuration_threshold: 0u16,
-        withdraw_threshold: 0u16,
-    },
-    "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-))]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Keys,

@@ -32,7 +32,7 @@ use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
         encoding::{decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op},
-        nom::{NomDecode, NomEncode, wire_fixture},
+        nom::{NomDecode, NomEncode},
         ops::{
             internal::{OpDe, OpSer},
             transfer::TransferOp,
@@ -199,16 +199,6 @@ impl NomDecode for Op {
 // We just check that the enum discriminant tag is encoded correctly, so a
 // single fixture is fine here.
 // TODO: Remove once the `NomCodec` macro supports enums.
-wire_fixture!(
-    Op,
-    Self::ChannelInscribe(
-        InscriptionOp::fixtures()
-            .into_iter()
-            .next()
-            .expect("InscriptionOp has a fixture")
-            .value
-    ) => "1100000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
-);
 
 impl Op {
     #[must_use]

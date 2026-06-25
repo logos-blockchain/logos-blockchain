@@ -18,14 +18,6 @@ pub const MAX_METADATA_SIZE: usize = u32::MAX as usize;
 pub type Metadata = UpperBoundedVec<u8, { MAX_METADATA_SIZE }>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
-#[nom_fixtures((
-    Self {
-        channel_id: ChannelId([0u8; 32]),
-        inputs: Inputs::empty(),
-        metadata: Metadata::empty(),
-    },
-    "00000000000000000000000000000000000000000000000000000000000000000000000000",
-))]
 pub struct DepositOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,

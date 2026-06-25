@@ -5,7 +5,7 @@ use nom::{
     number::complete::{le_u16, le_u32, le_u64, u8},
 };
 
-use crate::mantle::nom::{NomDecode, NomEncode, wire_fixture};
+use crate::mantle::nom::{NomDecode, NomEncode};
 
 impl NomEncode for u8 {
     fn encode(&self) -> Vec<u8> {
@@ -19,8 +19,6 @@ impl NomDecode for u8 {
     }
 }
 
-wire_fixture!(u8, 0x07u8 => "07", 0u8 => "00");
-
 impl NomEncode for u16 {
     fn encode(&self) -> Vec<u8> {
         self.to_le_bytes().to_vec()
@@ -32,8 +30,6 @@ impl NomDecode for u16 {
         le_u16(bytes)
     }
 }
-
-wire_fixture!(u16, 1u16 => "0100", 0x0201u16 => "0102");
 
 impl NomEncode for u32 {
     fn encode(&self) -> Vec<u8> {
@@ -47,8 +43,6 @@ impl NomDecode for u32 {
     }
 }
 
-wire_fixture!(u32, 1u32 => "01000000", 0x0403_0201u32 => "01020304");
-
 impl NomEncode for u64 {
     fn encode(&self) -> Vec<u8> {
         self.to_le_bytes().to_vec()
@@ -60,8 +54,6 @@ impl NomDecode for u64 {
         le_u64(bytes)
     }
 }
-
-wire_fixture!(u64, 1u64 => "0100000000000000", 0x0807_0605_0403_0201u64 => "0102030405060708");
 
 impl NomEncode for Fr {
     fn encode(&self) -> Vec<u8> {
@@ -79,8 +71,3 @@ impl NomDecode for Fr {
         ))
     }
 }
-
-wire_fixture!(
-    Fr,
-    Self::from(1u64) => "0100000000000000000000000000000000000000000000000000000000000000"
-);

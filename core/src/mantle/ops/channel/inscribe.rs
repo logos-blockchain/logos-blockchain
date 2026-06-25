@@ -23,15 +23,6 @@ pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
-#[nom_fixtures((
-    Self {
-        channel_id: ChannelId([0u8; _]),
-        inscription: b"genesis".into(),
-        parent: MsgId([0u8; _]),
-        signer: Ed25519PublicKey::from_bytes(&[0u8; _]).unwrap(),
-    },
-    "00000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-))]
 pub struct InscriptionOp {
     pub channel_id: ChannelId,
     /// Message to be written in the blockchain

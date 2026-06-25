@@ -5,14 +5,14 @@ pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use crate::{mantle::nom::NomCodec, utils::serde_bytes_newtype};
+use crate::{
+    mantle::nom::NomCodec,
+    utils::serde_bytes_newtype,
+};
 
 pub type ChannelKeyIndex = u16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
-#[nom_fixtures(
-    (Self([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"),
-)]
 pub struct ChannelId([u8; 32]);
 serde_bytes_newtype!(ChannelId, 32);
 
@@ -25,7 +25,6 @@ impl Display for ChannelId {
 
 /// The id of the previous message in the channel
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, NomCodec)]
-#[nom_fixtures((Self([0u8; 32]), "0000000000000000000000000000000000000000000000000000000000000000"))]
 pub struct MsgId([u8; 32]);
 serde_bytes_newtype!(MsgId, 32);
 

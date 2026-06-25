@@ -1,9 +1,9 @@
 use std::borrow::Cow;
 
-// Re-exported so call sites can `use crate::mantle::nom::{NomCodec, wire_fixture}`.
+// Re-exported so call sites can `use crate::mantle::nom::{NomCodec, nom_wire_fixtures}`.
 // Both macros are the blessed way to declare a codec: each emits the mandatory
 // `WireExamples` fixtures (see below) alongside the impls.
-pub use lb_core_macros::{NomCodec, wire_fixture};
+pub use lb_core_macros::{NomCodec, nom_wire_fixtures};
 use lb_utils::bounded_vec::LowerBoundedVec;
 use nom::IResult;
 
@@ -14,11 +14,13 @@ pub mod kms;
 pub mod numbers;
 pub mod proof_of_quota;
 
+mod fixtures;
+
 // Both codec traits require `WireExamples` (see below): a type cannot be a wire
 // codec without also pinning a well-known fixture. Because `WireExamples` is
 // sealed, the only ways to satisfy it are `#[derive(NomCodec)]` and
-// `wire_fixture!`, both of which demand a fixture — so `impl NomEncode for Foo`
-// without a fixture is a `cargo build` error.
+// `nom_wire_fixtures!`, both of which demand a fixture — so `impl NomEncode for
+// Foo` without a fixture is a `cargo build` error.
 pub trait NomEncode: WireExamples {
     // TODO: This could be turned into a `BoundedVec<u8, MAX_BYTES>` if we are
     // always able to set an upper limit on everything that goes through NOM
@@ -36,13 +38,13 @@ pub trait NomDecode: WireExamples {
 // ==============================================================================
 // Every wire codec must ship at least one *well-known fixture*: a value
 // together with its exact wire bytes. Fixtures pin the encoding against silent
-// drift and feed the generated round-trip test (`assert_wire_fixtures`).
+// drift and feed the generated round-trip test (`assert_nom_wire_fixtures`).
 //
 // `WireExamples` is the prerequisite that makes a fixture impossible to forget.
 // It is sealed (`sealed::Sealed`), so the only ways to satisfy it are
-// `#[derive(NomCodec)]` and `wire_fixture!`, both of which demand a fixture. It
-// is a supertrait of both codec traits (above), so `impl NomEncode for Foo`
-// without a fixture is a `cargo build` error (E0277).
+// `#[derive(NomCodec)]` and `nom_wire_fixtures!`, both of which demand a
+// fixture. It is a supertrait of both codec traits (above), so `impl NomEncode
+// for Foo` without a fixture is a `cargo build` error (E0277).
 
 /// Carries the mandatory [`WireFixtures`] for a codec. The non-empty return
 /// type means a codec cannot exist without at least one fixture.
@@ -53,8 +55,8 @@ pub trait WireExamples: sealed::Sealed + Sized {
 
 pub(crate) mod sealed {
     /// Implementable only by the blessed macro path (`#[derive(NomCodec)]` /
-    /// `wire_fixture!`). Being `pub(crate)` it is unnameable downstream, which
-    /// seals [`super::WireExamples`] against external impls.
+    /// `nom_wire_fixtures!`). Being `pub(crate)` it is unnameable downstream,
+    /// which seals [`super::WireExamples`] against external impls.
     pub trait Sealed {}
 }
 
@@ -77,7 +79,7 @@ pub type WireFixtures<T> = LowerBoundedVec<WireFixture<T>, 1>;
 /// the round-trip test the macros generate, and reusable for hand-written tests
 /// of generic monomorphizations (e.g. `BoundedVec<u8, 2, 4>`).
 #[cfg(test)]
-pub(crate) fn assert_wire_fixtures<T>()
+pub(crate) fn assert_nom_wire_fixtures<T>()
 where
     T: NomEncode + NomDecode + WireExamples + PartialEq + ::core::fmt::Debug,
 {
