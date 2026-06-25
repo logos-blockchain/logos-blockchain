@@ -5,10 +5,7 @@ pub mod withdraw;
 
 use std::fmt::{Display, Formatter};
 
-use crate::{
-    mantle::nom::NomCodec,
-    utils::serde_bytes_newtype,
-};
+use crate::{mantle::nom::NomCodec, utils::serde_bytes_newtype};
 
 pub type ChannelKeyIndex = u16;
 
