@@ -74,7 +74,7 @@ pub enum Error {
     #[error("Missing parent while applying block {parent}, {info:?}")]
     ParentMissing {
         parent: HeaderId,
-        info: CryptarchiaInfo,
+        info: Box<CryptarchiaInfo>,
     },
     #[error("Block from future slot({block_slot:?}): current_slot:{current_slot:?}")]
     FutureBlock {
@@ -154,6 +154,7 @@ pub enum ConsensusMsg<Tx> {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 pub struct CryptarchiaInfo {
     pub lib: HeaderId,
+    pub lib_slot: Slot,
     pub tip: HeaderId,
     pub slot: Slot,
     pub height: u64,
@@ -239,6 +240,7 @@ impl Cryptarchia {
 
         CryptarchiaInfo {
             lib: self.lib(),
+            lib_slot: self.consensus.lib_branch().slot(),
             tip: self.tip(),
             slot: tip_branch.slot(),
             height: tip_branch.length(),
@@ -292,7 +294,7 @@ impl Cryptarchia {
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
                     parent,
-                    info: self.info(),
+                    info: Box::new(self.info()),
                 },
                 err => Error::Ledger(err),
             })?;
@@ -306,7 +308,7 @@ impl Cryptarchia {
             .map_err(|err| match err {
                 lb_cryptarchia_engine::Error::ParentMissing(parent) => Error::ParentMissing {
                     parent,
-                    info: self.info(),
+                    info: Box::new(self.info()),
                 },
                 err => Error::Consensus(err),
             })?;

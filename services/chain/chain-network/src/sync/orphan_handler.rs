@@ -7,6 +7,7 @@ use std::{
 
 use futures::{Stream, StreamExt as _};
 use lb_core::header::HeaderId;
+use lb_cryptarchia_engine::Slot;
 use overwatch::DynError;
 use tracing::error;
 
@@ -53,14 +54,18 @@ struct OrphanInfo {
     tip: HeaderId,
     /// The latest immutable block
     lib: HeaderId,
+    /// Slot of the latest immutable block at enqueue time. Used to detect when
+    /// a download's ancestry diverges below the immutable boundary.
+    lib_slot: Slot,
 }
 
 impl OrphanInfo {
-    const fn new(block_id: HeaderId, local_tip: HeaderId, lib: HeaderId) -> Self {
+    const fn new(block_id: HeaderId, local_tip: HeaderId, lib: HeaderId, lib_slot: Slot) -> Self {
         Self {
             orphan_id: block_id,
             tip: local_tip,
             lib,
+            lib_slot,
         }
     }
 }
@@ -111,7 +116,13 @@ where
         }
     }
 
-    pub fn enqueue_orphan(&mut self, block_id: HeaderId, current_tip: HeaderId, lib: HeaderId) {
+    pub fn enqueue_orphan(
+        &mut self,
+        block_id: HeaderId,
+        current_tip: HeaderId,
+        lib: HeaderId,
+        lib_slot: Slot,
+    ) {
         if self.pending_orphans_queue.len() >= self.max_pending_orphans.get() {
             return;
         }
@@ -126,11 +137,29 @@ where
             return;
         }
 
-        self.pending_orphans_queue
-            .insert(block_id, OrphanInfo::new(block_id, current_tip, lib));
+        self.pending_orphans_queue.insert(
+            block_id,
+            OrphanInfo::new(block_id, current_tip, lib, lib_slot),
+        );
 
         if let Some(waker) = &self.waker {
             waker.wake_by_ref();
+        }
+    }
+
+    /// Returns the in-flight download's orphan id, the LIB slot recorded when
+    /// it was enqueued, and how many blocks it has yielded so far. Returns
+    /// `None` when no download is active.
+    #[must_use]
+    pub const fn active_download(&self) -> Option<(HeaderId, Slot, usize)> {
+        if let DownloaderState::Downloading(download) = &self.state {
+            Some((
+                download.orphan_info.orphan_id,
+                download.orphan_info.lib_slot,
+                download.total_blocks_received,
+            ))
+        } else {
+            None
         }
     }
 
@@ -539,7 +568,7 @@ mod tests {
         let mut added_orphans = Vec::new();
         for i in 0..downloader.max_pending_orphans.get() {
             let orphan = [i as u8; 32].into();
-            downloader.enqueue_orphan(orphan, TEST_TIP.into(), TEST_LIB.into());
+            downloader.enqueue_orphan(orphan, TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
             added_orphans.push(orphan);
         }
 
@@ -553,7 +582,12 @@ mod tests {
         }
 
         let extra_orphan = [255u8; 32].into();
-        downloader.enqueue_orphan(extra_orphan, TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(
+            extra_orphan,
+            TEST_TIP.into(),
+            TEST_LIB.into(),
+            Slot::from(0u64),
+        );
 
         assert_eq!(
             downloader.pending_orphans_queue.len(),
@@ -595,8 +629,8 @@ mod tests {
                 ),
             ],
         );
-        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into());
-        downloader.enqueue_orphan(chain[6], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
+        downloader.enqueue_orphan(chain[6], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut downloader = pin::pin!(downloader);
         let received_blocks = receive_blocks(&mut downloader, 6).await;
@@ -621,8 +655,8 @@ mod tests {
             vec![(2, vec![vec![0, 1, 2]]), (7, vec![vec![5, 6, 7]])],
         );
 
-        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into());
-        downloader.enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
+        downloader.enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut downloader = pin::pin!(downloader);
         let received_blocks = receive_blocks(&mut downloader, 6).await;
@@ -645,7 +679,7 @@ mod tests {
         let mut downloader =
             create_downloader_with_responses(&chain, vec![(4, vec![vec![0, 1, 2], vec![3, 4]])]);
 
-        downloader.enqueue_orphan(chain[4], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[4], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut downloader = pin::pin!(downloader);
         let received_blocks = receive_blocks(&mut downloader, 5).await;
@@ -662,7 +696,7 @@ mod tests {
             vec![(9, vec![vec![0, 1, 2], vec![3, 4, 5], Vec::<usize>::new()])],
         );
 
-        downloader.enqueue_orphan(chain[9], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[9], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut downloader = pin::pin!(downloader);
 
@@ -693,8 +727,8 @@ mod tests {
             vec![(2, vec![vec![0, 1, 2]]), (7, vec![vec![5, 6, 7]])],
         );
 
-        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into());
-        downloader.enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
+        downloader.enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut received_blocks = Vec::new();
         let mut downloader = pin::pin!(downloader);
@@ -733,7 +767,7 @@ mod tests {
         let mut downloader =
             create_downloader_with_responses(&chain, vec![(4, vec![vec![0, 1, 2, 3, 4]])]);
 
-        downloader.enqueue_orphan(chain[4], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[4], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut downloader = pin::pin!(downloader);
 
@@ -742,6 +776,7 @@ mod tests {
                 chain[4],
                 [20u8; 32].into(),
                 [21u8; 32].into(),
+                Slot::from(0u64),
             );
 
             assert!(
@@ -771,8 +806,8 @@ mod tests {
             vec![(3, vec![vec![0, 1, 2, 3]]), (7, vec![vec![4, 5, 6, 7]])],
         );
 
-        downloader.enqueue_orphan(chain[3], TEST_TIP.into(), TEST_LIB.into());
-        downloader.enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[3], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
+        downloader.enqueue_orphan(chain[7], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut received_blocks = Vec::new();
         let mut downloader = pin::pin!(downloader);
@@ -806,7 +841,7 @@ mod tests {
             vec![(2, vec![vec![0, 1, 2]]), (5, vec![vec![3, 4, 5]])],
         );
 
-        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut downloader = pin::pin!(downloader);
 
@@ -814,10 +849,12 @@ mod tests {
         let expected = &chain[0..=2];
         assert_eq!(&first_batch, expected);
 
-        downloader
-            .as_mut()
-            .get_mut()
-            .enqueue_orphan(chain[5], TEST_TIP.into(), TEST_LIB.into());
+        downloader.as_mut().get_mut().enqueue_orphan(
+            chain[5],
+            TEST_TIP.into(),
+            TEST_LIB.into(),
+            Slot::from(0u64),
+        );
 
         let second_batch = receive_blocks(&mut downloader, 3).await;
         let expected = &chain[3..=5];
@@ -833,7 +870,7 @@ mod tests {
         let mut downloader =
             create_downloader_with_responses(&chain, vec![(2, vec![vec![0, 1, 2, 3, 4]])]);
 
-        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into());
+        downloader.enqueue_orphan(chain[2], TEST_TIP.into(), TEST_LIB.into(), Slot::from(0u64));
 
         let mut downloader = pin::pin!(downloader);
         let received_blocks = receive_blocks(&mut downloader, 3).await;

@@ -1,6 +1,7 @@
 pub mod api;
 mod bootstrap;
 mod mempool;
+mod negative_cache;
 pub mod network;
 mod relays;
 mod sync;
@@ -48,6 +49,7 @@ pub use crate::{
 use crate::{
     bootstrap::ibd::InitialBlockDownload,
     mempool::{MempoolAdapter as _, adapter::MempoolAdapter},
+    negative_cache::NegativeCache,
     relays::ChainNetworkRelays,
     sync::orphan_handler::OrphanBlocksDownloader,
 };
@@ -55,6 +57,10 @@ use crate::{
 const CRYPTARCHIA_ID: &str = "Cryptarchia";
 
 pub(crate) const LOG_TARGET: &str = "cryptarchia::service";
+
+/// Maximum number of dead-fork block ids retained in the in-memory negative
+/// cache. At ~32 bytes per id this bounds the cache to a few MB.
+const NEGATIVE_CACHE_CAPACITY: usize = 100_000;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -308,12 +314,18 @@ where
 
         self.notify_service_ready();
 
+        // Negative cache of block ids known to be on dead forks (forks that
+        // diverge below LIB and can never become canonical). Dropping these on
+        // arrival prevents the orphan-cascade reprocessing storm.
+        let mut negative_cache = NegativeCache::new(NEGATIVE_CACHE_CAPACITY);
+
         let async_loop = async {
             loop {
                 tokio::select! {
                     Some(proposal) = incoming_proposals.next() => {
                         self.handle_incoming_proposal(
                             proposal,
+                            &mut negative_cache,
                             orphan_downloader.as_mut().get_mut(),
                             &relays,
                         )
@@ -330,6 +342,20 @@ where
                     Some(block) = orphan_downloader.next(), if orphan_downloader.should_poll() => {
                         let header_id = block.header().id();
                         info!("Processing block from orphan downloader: {header_id:?}");
+
+                        // Rule 3: if the first block of the active download diverges below
+                        // LIB, the orphan is on a dead fork that can never become canonical.
+                        // Blacklist the orphan tip and drop the stream so we stop fetching it
+                        // and so re-gossip of the tip (and its descendants) is dropped.
+                        if let Some((orphan_id, lib_slot, blocks_received)) =
+                            orphan_downloader.active_download()
+                            && blocks_received == 1
+                            && block.header().slot() < lib_slot
+                        {
+                            negative_cache.insert(orphan_id);
+                            orphan_downloader.cancel_active_download();
+                            continue;
+                        }
 
                         if !should_process_block(relays.cryptarchia(), block.header().id()).await {
                             continue;
@@ -419,6 +445,7 @@ where
     async fn handle_incoming_proposal(
         &self,
         proposal: Proposal,
+        negative_cache: &mut NegativeCache,
         orphan_downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
         relays: &ChainNetworkRelays<
             Cryptarchia,
@@ -431,6 +458,19 @@ where
         RuntimeServiceId: Send + Sync + 'static,
     {
         let block_id = proposal.header().id();
+        let parent_id = proposal.header().parent();
+
+        // Rule 1: the block is already known to be on a dead fork; drop it.
+        if negative_cache.contains(&block_id) {
+            return;
+        }
+
+        // Rule 2: the block extends a dead-fork block, so it is dead too. Record
+        // it (so its own descendants are dropped by rule 1) and drop it.
+        if negative_cache.contains(&parent_id) {
+            negative_cache.insert(block_id);
+            return;
+        }
 
         if !should_process_block(relays.cryptarchia(), block_id).await {
             info!(
@@ -465,7 +505,7 @@ where
     {
         match err {
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
-                orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib);
+                orphan_downloader.enqueue_orphan(block_id, info.tip, info.lib, info.lib_slot);
 
                 error!(
                     target: LOG_TARGET,
