@@ -6,6 +6,8 @@ The Logos blockchain Docker Compose deployment contains four distinct service ty
 
 ## Building
 
+Run all the `docker compose` commands below from this `deployment/` directory, where the Compose files (`compose.yml`, `compose.run.yml`, `compose.setup.yml`) live.
+
 Upon making modifications to the codebase or the Dockerfile, the Logos blockchain images must be rebuilt:
 
 ```bash
@@ -14,7 +16,7 @@ docker compose build
 
 ## Configuring
 
-Configuration of the Docker deployment is accomplished using an `.env` file next to `compose.yml` at the repo root. A documented example is in `.env.example`, and each environment has its own file (`.env.devnet`, `.env.testnet`); select one by pointing Compose at it, e.g. `docker compose --env-file .env.devnet up`, or by copying it to the default `.env`.
+Configuration of the Docker deployment is accomplished using an `.env` file next to `compose.yml` in this directory. A documented example is in `.env.example`, and each environment has its own file (`.env.devnet`, `.env.testnet`); select one by pointing Compose at it, e.g. `docker compose --env-file .env.devnet up`, or by copying it to the default `.env`.
 
 To adjust the count of Logos blockchain nodes, modify the variable:
 
@@ -83,8 +85,8 @@ deployment/ceremony/genesis/
       faucet.yaml                 #   faucet identity + funds
 ```
 
-The per-environment `.env` files (`.env.devnet`, `.env.testnet`) live at the repo
-root next to `compose.yml`, since they are consumed by Docker Compose.
+The per-environment `.env` files (`.env.devnet`, `.env.testnet`) live in
+`deployment/` next to `compose.yml`, since they are consumed by Docker Compose.
 
 The genesis ceremony (`logos-blockchain-tools-genesis ceremony`,
 `tools/blockchain-tools/src/bin/genesis.rs`) reads `inscribe.yaml` plus all of
@@ -100,7 +102,7 @@ tests validate:
 ### 1. Template for all deployments (any type)
 Shared blueprints reused by every deployment type; not edited per release.
 
-- `compose.yml`, `compose.run.yml`, `compose.setup.yml`, `deployment/compose.tracing.yml`
+- `deployment/compose.yml`, `deployment/compose.run.yml`, `deployment/compose.setup.yml`, `deployment/compose.tracing.yml`
 - `Dockerfile`, `deployment/Dockerfile`
 - `deployment/cfgsync.yaml`, `deployment/cfgsync/deployment-settings.yaml`
 - `deployment/nginx/*`, `deployment/scripts/*`, `deployment/systemd/*`

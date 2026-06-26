@@ -34,7 +34,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the testnet settings.
 - [ ] Checkout and hard reset the `testnet` branch to point to the latest commit of the current release branch
-- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
+- [ ] Create a new symlink `deployment/compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml deployment/compose.static.yml`
 - [ ] Commit and push to `testnet` branch to trigger the cleanup
 - [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Testnet web UI][testnet-web-ui] and make sure it's in setup mode.
 
@@ -65,8 +65,8 @@ Most of the template content is the same or very similar to what is in `release-
 
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z` tag.
-- [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml compose.static.yml`
-- [ ] Update `.env.testnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to version being released
+- [ ] Checkout `testnet` branch again and change the `deployment/compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml deployment/compose.static.yml`
+- [ ] Update `deployment/.env.testnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to version being released
 - [ ] Commit and push the changes to trigger environment re-deployment
 - [ ] Wait around 1 minute for deployment to be updated. Environment is now live.
 - [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://testnet.blockchain.logos.co/internal/node-data/](https://testnet.blockchain.logos.co/internal/node-data/)
