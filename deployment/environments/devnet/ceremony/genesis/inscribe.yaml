@@ -1,5 +1,3 @@
-# Genesis inscription parameters. Fields are grouped by how often they change.
-
 # === TEMPLATE: shared default, do not edit per release ===
 entropy_sources:
   - "0000000000000000000000000000000000000000000000000000000000000001"
