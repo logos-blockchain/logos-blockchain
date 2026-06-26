@@ -2,8 +2,9 @@ use std::num::NonZeroUsize;
 
 use lb_core::header::HeaderId;
 use lru::LruCache;
+use tracing::debug;
 
-use crate::metrics;
+use crate::{metrics, sync::LOG_TARGET};
 
 /// Bounded LRU of block IDs that the orphan pipeline should skip
 /// (known-invalid or older-than-LIB).
@@ -31,6 +32,7 @@ impl RejectedBlocks {
 
     pub fn insert(&mut self, block_id: HeaderId) {
         if self.cache.put(block_id, ()).is_none() {
+            debug!(target: LOG_TARGET, ?block_id, "inserted rejected block into cache");
             metrics::orphan_blocks_rejected_inserted_total();
         }
     }
