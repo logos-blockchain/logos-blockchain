@@ -54,12 +54,17 @@ pub struct SyncConfig {
 pub struct OrphanConfig {
     /// The maximum number of pending orphans to keep in the cache.
     pub max_orphan_cache_size: NonZeroUsize,
+    /// The maximum number of block IDs to remember in the rejected-blocks
+    /// negative cache. The orphan pipeline consults this cache to short-circuit
+    /// known-bad/older-than-LIB blocks before enqueuing or downloading them.
+    pub max_rejected_cache_size: NonZeroUsize,
 }
 
 impl Default for OrphanConfig {
     fn default() -> Self {
         Self {
             max_orphan_cache_size: NonZeroUsize::new(1000).unwrap(),
+            max_rejected_cache_size: NonZeroUsize::new(1000).unwrap(),
         }
     }
 }

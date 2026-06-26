@@ -314,6 +314,7 @@ where
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
             network_adapter,
             sync_config.orphan.max_orphan_cache_size,
+            sync_config.orphan.max_rejected_cache_size,
         ));
 
         // Set up the proactive tip-poll lag watchdog: subscribe to slot ticks and
@@ -398,6 +399,7 @@ where
                         )
                         .await
                         {
+                            orphan_downloader.insert_rejected_block(header_id);
                             continue;
                         }
 
@@ -411,6 +413,9 @@ where
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
+                                if !is_recoverable_apply_error(&e) {
+                                    orphan_downloader.insert_rejected_block(header_id);
+                                }
                                 orphan_downloader.cancel_active_download();
                             }
                         }
@@ -528,6 +533,7 @@ where
 
         if !should_process_block(relays.cryptarchia(), block_id, block_slot).await {
             metrics::consensus_proposals_ignored_total("already_processed", "network");
+            orphan_downloader.insert_rejected_block(block_id);
             return;
         }
 
@@ -595,6 +601,9 @@ where
                     target: LOG_TARGET, %err, ?block_id,
                     "Error processing reconstructed block",
                 );
+                if !is_recoverable_apply_error(&err) {
+                    orphan_downloader.insert_rejected_block(block_id);
+                }
             }
         }
     }
@@ -795,6 +804,26 @@ where
 
 fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
     block_slot <= lib_slot
+}
+
+/// Apply-time errors that must NOT mark the block as rejected:
+/// - `ParentMissing` / `FutureBlock`: transient — the block may become
+///   applicable once an ancestor arrives or the local clock catches up.
+/// - `CommsFailure`: relay failure has nothing to do with block validity; a
+///   blanket "reject" here would poison the cache whenever chain-service is
+///   temporarily unreachable.
+///
+/// Other apply errors (e.g. validation failures surfaced as
+/// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
+const fn is_recoverable_apply_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Cryptarchia(
+            lb_chain_service::api::ApiError::ParentMissing { .. }
+                | lb_chain_service::api::ApiError::FutureBlock { .. }
+                | lb_chain_service::api::ApiError::CommsFailure(_),
+        ),
+    )
 }
 
 /// Retry applying a block when `Cryptarchia` reports it as a `FutureBlock`.

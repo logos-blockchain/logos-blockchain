@@ -131,6 +131,7 @@ impl ServiceConfig {
             sync: lb_chain_network_service::SyncConfig {
                 orphan: lb_chain_network_service::OrphanConfig {
                     max_orphan_cache_size: self.user.network.sync.orphan.max_orphan_cache_size,
+                    max_rejected_cache_size: self.user.network.sync.orphan.max_rejected_cache_size,
                 },
                 tip_poll: lb_chain_network_service::TipPollConfig {
                     enabled: self.user.network.sync.tip_poll.enabled,

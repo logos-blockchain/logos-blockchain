@@ -4251,6 +4251,7 @@ dependencies = [
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "lru",
  "overwatch",
  "rand 0.8.6",
  "serde",

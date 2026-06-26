@@ -130,6 +130,7 @@ cryptarchia:
     sync:
       orphan:
         max_orphan_cache_size: 1000
+        max_rejected_cache_size: 1000
     network:
       max_connected_peers_to_try_download: 16
       max_discovered_peers_to_try_download: 16
