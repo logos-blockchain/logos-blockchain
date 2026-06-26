@@ -28,7 +28,7 @@ Most of the template content is the same or very similar to what is in `release-
 
 ## Testnet genesis (optional, only whenever a new testnet deployment - with a new genesis - is required)
 
-- [ ] Update the inscription file at `deployment/ceremony/genesis/testnet/inscribe.yaml` by setting the `chain_id` field to `X.Y.Z` and the `genesis_time` field to be approximately 10 mins in the future, following the existing [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) datetime format. No need to change the `entropy_sources`
+- [ ] Update the inscription file at `deployment/testnet/ceremony/genesis/inscribe.yaml` by setting the `chain_id` field to `X.Y.Z` and the `genesis_time` field to be approximately 10 mins in the future, following the existing [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) datetime format. No need to change the `entropy_sources`
 - [ ] Commit and push the changes
 - [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch specifying the `testnet` image tag and the right version number `X.Y.Z`
 - [ ] Post the link to the workflow run to this issue for easier review
@@ -66,7 +66,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z` tag.
 - [ ] Checkout `testnet` branch again and change the `compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml compose.static.yml`
-- [ ] Update `.env.testnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to version being released
+- [ ] Update `deployment/testnet/.env` file to contain `NODE_IMAGE_LABEL=X.Y.Z` set to version being released
 - [ ] Commit and push the changes to trigger environment re-deployment
 - [ ] Wait around 1 minute for deployment to be updated. Environment is now live.
 - [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://testnet.blockchain.logos.co/internal/node-data/](https://testnet.blockchain.logos.co/internal/node-data/)
