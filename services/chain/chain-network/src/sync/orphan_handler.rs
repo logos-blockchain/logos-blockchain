@@ -125,7 +125,7 @@ where
     pub fn new(
         network_adapter: NetAdapter,
         max_pending_orphans: NonZeroUsize,
-        max_rejected_cache_size: NonZeroUsize,
+        max_rejected_cache_size: usize,
     ) -> Self {
         Self {
             pending_orphans_queue: HashMap::new(),
@@ -717,11 +717,28 @@ mod tests {
     const ORPHAN_CACHE_SIZE: NonZeroUsize =
         NonZeroUsize::new(5).expect("ORPHAN_CACHE_SIZE must be non-zero");
 
-    const REJECTED_CACHE_SIZE: NonZeroUsize =
-        NonZeroUsize::new(16).expect("REJECTED_CACHE_SIZE must be non-zero");
+    const REJECTED_CACHE_SIZE: usize = 16;
 
     const TEST_TIP: [u8; 32] = [10u8; 32];
     const TEST_LIB: [u8; 32] = [11u8; 32];
+
+    #[tokio::test]
+    async fn test_disabled_rejected_cache_is_noop() {
+        // capacity = 0 disables the cache: inserts and lookups must be no-ops.
+        let network = MockNetworkAdapter::new();
+        let mut downloader: OrphanBlocksDownloader<_, usize> =
+            OrphanBlocksDownloader::new(network, ORPHAN_CACHE_SIZE, 0);
+
+        let block: HeaderId = [1u8; 32].into();
+        downloader.insert_rejected_block(block);
+
+        // Even though we just "inserted", the disabled cache should not block
+        // the enqueue.
+        downloader
+            .enqueue_orphan(block, None, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+        assert!(downloader.pending_orphans_queue.contains_key(&block));
+    }
 
     #[tokio::test]
     async fn test_enqueue_rejects_block_in_rejected_cache() {

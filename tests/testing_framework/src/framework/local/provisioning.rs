@@ -646,8 +646,7 @@ fn build_cryptarchia_user_config(
                 orphan: network::OrphanConfig {
                     max_orphan_cache_size: NonZeroUsize::new(1000)
                         .expect("max orphan cache size must be non-zero"),
-                    max_rejected_cache_size: NonZeroUsize::new(1000)
-                        .expect("max rejected cache size must be non-zero"),
+                    max_rejected_cache_size: 1000,
                 },
                 tip_poll: network::TipPollConfig::default(),
             },
