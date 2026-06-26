@@ -86,6 +86,7 @@ pub async fn run(args: InscribeArgs) {
                     Ok((result, checkpoint)) => {
                         let info = result.tx.inscription();
                         debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Published");
+                        state.on_published(info);
                         state.save_checkpoint(checkpoint);
                         ui::render_state(&state);
                         eprintln!("  \x1b[90mpending...\x1b[0m");
@@ -128,10 +129,14 @@ fn handle_event(
             channel_update,
             finalized,
         } => {
-            apply_channel_update(channel_update, state, sequencer);
+            // Pin finalized first so the re-publish dedup below can see them: a
+            // finalized inscription has left the above-LIB `channel_update`
+            // window, so this is the only signal that its payload is permanently
+            // on chain.
             if !finalized.is_empty() {
                 apply_finalized(&finalized, state);
             }
+            apply_channel_update(channel_update, state, sequencer);
             state.save_checkpoint(checkpoint);
         }
         Event::MempoolPending(_) | Event::TurnNotification { .. } => {}
@@ -160,19 +165,16 @@ fn apply_channel_update(
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
 ) {
     let ChannelUpdate { orphaned, adopted } = update;
-    if orphaned.is_empty() && adopted.is_empty() {
+    if orphaned.is_empty() {
         return;
     }
-    state.on_adopted(&adopted);
-    // Orphans already back on the channel (same payload, fresh `this_msg`) are
-    // in `adopted` — reverting them from state still applies, but republishing
-    // would duplicate. Payloads carry a `tx_uuid`, so they're unique.
+    // Orphans already back on the channel under a fresh `this_msg` appear in
+    // `adopted`; republishing them would duplicate. Payloads carry a `tx_uuid`,
+    // so they're unique.
     let readopted: HashSet<&[u8]> = adopted.iter().map(|i| i.payload.as_slice()).collect();
     for entry in &orphaned {
         handle_orphan(state, sequencer, entry, &readopted);
     }
-    ui::render_state(state);
-    ui::prompt();
 }
 
 fn handle_orphan(
@@ -182,18 +184,15 @@ fn handle_orphan(
     readopted: &HashSet<&[u8]>,
 ) {
     let OrphanedTx::Inscription(info) = entry else {
-        // The full delta can surface bundle orphans from other publishers; the
-        // TUI only publishes text inscriptions, so nothing to do.
-        debug!("ignoring atomic-withdraw orphan - TUI does not publish bundles");
+        debug!("ignoring atomic-withdraw orphan; TUI does not publish bundles");
         return;
     };
-
-    // It fell off the channel: drop it from our outbox (so we republish it)
-    // and from the adopted view.
-    state.on_orphaned(&info.this_msg);
-
     if readopted.contains(info.payload.as_slice()) {
-        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Orphan re-adopted; not republishing");
+        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "orphan re-adopted; not republishing");
+        return;
+    }
+    if state.is_finalized(info.payload.as_slice()) {
+        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "orphan already finalized; not republishing");
         return;
     }
     republish_orphan(state, sequencer, info);
@@ -204,11 +203,8 @@ fn republish_orphan(
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
     info: &InscriptionInfo,
 ) {
-    debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
     match sequencer.handle().publish(info.payload.clone()) {
-        Ok((_, checkpoint)) => {
-            state.save_checkpoint(checkpoint);
-        }
+        Ok((_, checkpoint)) => state.save_checkpoint(checkpoint),
         Err(e) => error!("failed to auto-republish: {e}"),
     }
 }

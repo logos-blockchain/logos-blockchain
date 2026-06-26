@@ -15,8 +15,8 @@ use super::{
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
     types::{
-        ChannelUpdate, Error, Event, FinalizedTx, OrphanedTx, SequencerChannelView,
-        SequencerCheckpoint, TurnNotification, TxSource, TxStatus,
+        ChannelUpdate, Error, Event, FinalizedTx, InscriptionInfo, OrphanedTx,
+        SequencerChannelView, SequencerCheckpoint, TurnNotification, TxSource, TxStatus,
     },
     zone_sequencer::{ZoneSequencer, build_checkpoint},
 };
@@ -99,7 +99,7 @@ where
         // so callers may rely on them.
         self.connected = true;
         let became_ready = self.maybe_signal_ready();
-        let (channel_update, finalized) = self.apply_block_result(result);
+        let (channel_update, finalized, mined) = self.apply_block_result(result);
 
         // Failed posts (still `!posted`) get retried by the turn-change
         // handler and the `resubmit_interval` self-heal tick. Don't queue
@@ -111,7 +111,7 @@ where
         // arrives.
         self.publish_channel_view();
 
-        self.queue_block_status_events(&channel_update, &finalized);
+        self.queue_block_status_events(&channel_update, &finalized, &mined);
 
         let block_event = self
             .publish_checkpoint()
@@ -463,7 +463,7 @@ where
     fn apply_block_result(
         &mut self,
         result: BlockEventResult,
-    ) -> (ChannelUpdate, Vec<FinalizedTx>) {
+    ) -> (ChannelUpdate, Vec<FinalizedTx>, Vec<InscriptionInfo>) {
         let channel_update = match result.channel_update {
             Some(update) => {
                 Self::log_channel_update(&update);
@@ -484,13 +484,18 @@ where
                 adopted: Vec::new(),
             },
         };
-        (channel_update, result.finalized_items)
+        (
+            channel_update,
+            result.finalized_items,
+            result.mined_inscriptions,
+        )
     }
 
     fn queue_block_status_events(
         &mut self,
         channel_update: &ChannelUpdate,
         finalized: &[FinalizedTx],
+        mined: &[InscriptionInfo],
     ) {
         for tx in &channel_update.orphaned {
             let tx_hash = tx.tx_hash();
@@ -500,7 +505,11 @@ where
                 .map_or(TxSource::Other, |state| state.tx_source(&tx_hash));
             self.queue_tx_status(tx_hash, TxStatus::Orphaned(source));
         }
-        for info in &channel_update.adopted {
+        // `OnChain` is a per-tx lifecycle signal — it fires when an inscription
+        // lands in a block, independent of whether it moved the channel lineage.
+        // Our own publishes are already in the lineage, so they never appear in
+        // `adopted`; drive `OnChain` from what was actually mined this block.
+        for info in mined {
             let source = self
                 .state
                 .as_ref()

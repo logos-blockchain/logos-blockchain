@@ -49,10 +49,26 @@ use tokio::{
 use tracing::warn;
 
 use super::runner::{
-    self, ChannelUpdate, Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx, PendingTx,
-    PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerClient, SequencerConfig,
-    TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
+    self, ChannelUpdate, Event, FinalizedOp, FinalizedTx, InscriptionId, InscriptionInfo,
+    OrphanedTx, PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
+    SequencerClient, SequencerConfig, TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
 };
+
+/// Inscriptions in the just-finalized txs — the permanent, settled part of the
+/// channel. Once a payload finalizes it's on chain forever, independent of
+/// which L1 branch was canonical; a policy must pin these so it never re-homes
+/// a payload that has already landed for good. (Finalized inscriptions leave
+/// the above-LIB `channel_update` window, so this is the only signal that
+/// carries them across the LIB boundary.)
+fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &InscriptionInfo> {
+    finalized
+        .iter()
+        .flat_map(|tx| tx.ops.iter())
+        .filter_map(|op| match op {
+            FinalizedOp::Inscription(info) => Some(info),
+            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+        })
+}
 use crate::common::{
     chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
     wallet::build_wallet_funded_transfer,
@@ -197,7 +213,7 @@ pub fn start_sequencer_event_loop(
     republish_orphans: bool,
 ) -> PolicyRuntime {
     if republish_orphans {
-        to_policy_runtime(runner::spawn(sequencer, OrphanRepublishPolicy))
+        to_policy_runtime(runner::spawn(sequencer, OrphanRepublishPolicy::default()))
     } else {
         to_policy_runtime(runner::spawn(sequencer, runner::PassivePolicy))
     }
@@ -252,27 +268,41 @@ pub fn start_sorted_conflict_policy(
 /// auto-republished (callers that issue bundles re-prepare with fresh withdraw
 /// nonces themselves). Assumes unique payloads, so the payload identifies the
 /// message; for repeating payloads see [`RepublishLineagePolicy`].
-struct OrphanRepublishPolicy;
+#[derive(Default)]
+struct OrphanRepublishPolicy {
+    /// Payloads that have finalized — pinned permanently so a payload that
+    /// already landed for good is never re-homed when it later flickers off a
+    /// non-canonical branch.
+    finalized: HashSet<Inscription>,
+}
 
 impl<Node> runner::Policy<Node> for OrphanRepublishPolicy
 where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlocksProcessed { channel_update, .. } = event else {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
             return;
         };
-        // `orphaned` is the full block-delta, so a reorg that re-includes an
-        // inscription surfaces the old instance here and the new one in
-        // `adopted`. Skip orphans whose payload is already back on chain —
-        // republishing them would duplicate.
+        // Pin finalized payloads first — they've left the above-LIB
+        // `channel_update` window, so this is the only place we learn they're
+        // permanently on chain.
+        self.finalized
+            .extend(finalized_inscriptions(finalized).map(|i| i.payload.clone()));
+        // Skip orphans whose payload is already back on chain (re-adopted) or
+        // finalized — republishing them would duplicate.
         let adopted: HashSet<&Inscription> =
             channel_update.adopted.iter().map(|i| &i.payload).collect();
         for entry in &channel_update.orphaned {
             let OrphanedTx::Inscription(info) = entry else {
                 continue;
             };
-            if adopted.contains(&info.payload) {
+            if adopted.contains(&info.payload) || self.finalized.contains(&info.payload) {
                 continue;
             }
             if let Err(error) = sequencer.handle().publish(info.payload.clone()) {
@@ -299,6 +329,9 @@ struct LineageTracker {
     intent_root: HashMap<MsgId, MsgId>,
     /// Per intent root, the `this_msg`s currently live.
     live: HashMap<MsgId, HashSet<MsgId>>,
+    /// Intent roots that have finalized — permanently landed, so the intent is
+    /// considered live forever and never re-homed again.
+    finalized_roots: HashSet<MsgId>,
 }
 
 impl LineageTracker {
@@ -333,17 +366,30 @@ impl LineageTracker {
         }
     }
 
+    /// Pin the intents of any finalized `this_msg`s of ours as permanently
+    /// live — once a member finalizes the payload is on chain for good.
+    fn observe_finalized(&mut self, finalized: impl Iterator<Item = MsgId>) {
+        for this_msg in finalized {
+            if let Some(&root) = self.intent_root.get(&this_msg) {
+                self.finalized_roots.insert(root);
+            }
+        }
+    }
+
     /// True if `this_msg` is one of ours.
     fn is_ours(&self, this_msg: &MsgId) -> bool {
         self.intent_root.contains_key(this_msg)
     }
 
-    /// True if the intent of `this_msg` still has a live member.
+    /// True if the intent of `this_msg` has finalized, or still has a live
+    /// member.
     fn intent_live(&self, this_msg: &MsgId) -> bool {
         let root = self.intent_root.get(this_msg).copied().unwrap_or(*this_msg);
-        self.live
-            .get(&root)
-            .is_some_and(|members| !members.is_empty())
+        self.finalized_roots.contains(&root)
+            || self
+                .live
+                .get(&root)
+                .is_some_and(|members| !members.is_empty())
     }
 }
 
@@ -377,7 +423,13 @@ where
                     }
                 }
             }
-            Event::BlocksProcessed { channel_update, .. } => {
+            Event::BlocksProcessed {
+                channel_update,
+                finalized,
+                ..
+            } => {
+                self.lineage
+                    .observe_finalized(finalized_inscriptions(finalized).map(|i| i.this_msg));
                 self.lineage.observe(channel_update);
                 for entry in &channel_update.orphaned {
                     let OrphanedTx::Inscription(info) = entry else {
@@ -421,7 +473,13 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        if let Event::BlocksProcessed { channel_update, .. } = event {
+        if let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        {
+            self.balances.record_finalized_payloads(finalized);
             let ChannelUpdate { orphaned, adopted } = channel_update;
             let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
                 .iter()
@@ -477,9 +535,17 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlocksProcessed { channel_update, .. } = event else {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
             return;
         };
+        // Pin finalized payloads first — a finalized payload is on the channel
+        // for good, so it must never be reverted, re-homed, or discarded again.
+        self.state.record_finalized(finalized);
         let ChannelUpdate { orphaned, adopted } = channel_update;
         let orphaned_inscriptions: Vec<&InscriptionInfo> = orphaned
             .iter()
@@ -493,26 +559,32 @@ where
         self.state.revert_orphaned(&orphaned_inscriptions);
         self.state.record_adoptions(adopted).await;
 
-        // Orphans already back on the channel are in `adopted` — skip them.
         let readopted: HashSet<&Inscription> = adopted.iter().map(|i| &i.payload).collect();
 
-        for inscription in orphaned_inscriptions {
-            if readopted.contains(&inscription.payload) {
+        // Consider this round's fresh orphans together with everything parked,
+        // in sorted order (a `BTreeSet` iterates ascending). A payload parked
+        // under a higher floor on another branch then slots in ahead of a higher
+        // fresh orphan instead of being locked out, and the chain stays sorted.
+        // Finalized payloads are excluded — they're already permanently landed.
+        let mut candidates: BTreeSet<Inscription> = orphaned_inscriptions
+            .iter()
+            .map(|i| i.payload.clone())
+            .filter(|payload| !readopted.contains(payload) && !self.state.is_finalized(payload))
+            .collect();
+        candidates.extend(self.state.discarded_snapshot().await);
+
+        for payload in candidates {
+            if self.state.is_finalized(&payload) {
                 continue;
             }
-            if self.state.already_discarded(&inscription.payload).await {
-                continue;
-            }
-            if self.state.preserves_order(inscription) {
-                if let Err(error) = sequencer.handle().publish(inscription.payload.clone()) {
+            if self.state.preserves_order(&payload) {
+                if let Err(error) = sequencer.handle().publish(payload.clone()) {
                     warn!(%error, "Failed to re-publish sorted zone payload");
                     continue;
                 }
-                self.state
-                    .record_published_payload(inscription.payload.clone())
-                    .await;
+                self.state.record_published_payload(payload).await;
             } else {
-                self.state.discard(inscription.payload.clone()).await;
+                self.state.discard(payload).await;
             }
         }
     }
@@ -521,6 +593,9 @@ where
 struct BalanceAwareState {
     initial_balances: ZoneAccountBalances,
     applied: HashMap<String, HashMap<String, i64>>,
+    /// uuids that have finalized — their delta is pinned in `applied` (never
+    /// removed by an orphan) and they are never re-homed again.
+    finalized: HashSet<String>,
 }
 
 impl BalanceAwareState {
@@ -528,6 +603,18 @@ impl BalanceAwareState {
         Self {
             initial_balances,
             applied: HashMap::new(),
+            finalized: HashSet::new(),
+        }
+    }
+
+    /// Pin finalized payloads: keep their delta applied permanently and mark
+    /// the uuid so it's never re-homed.
+    fn record_finalized_payloads(&mut self, finalized: &[FinalizedTx]) {
+        for inscription in finalized_inscriptions(finalized) {
+            if let Some((uuid, _, _)) = parse_balance_payload(&inscription.payload) {
+                self.finalized.insert(uuid);
+            }
+            self.record_applied_payload(&inscription.payload);
         }
     }
 
@@ -544,6 +631,11 @@ impl BalanceAwareState {
             let Some((uuid, account, _)) = parse_balance_payload(&inscription.payload) else {
                 continue;
             };
+
+            // A finalized delta is permanent — never drop it on an orphan.
+            if self.finalized.contains(&uuid) {
+                continue;
+            }
 
             if let Some(account_updates) = self.applied.get_mut(&account) {
                 account_updates.remove(&uuid);
@@ -562,7 +654,7 @@ impl BalanceAwareState {
             return false;
         };
 
-        if self.account_updates(&account).contains_key(&uuid) {
+        if self.finalized.contains(&uuid) || self.account_updates(&account).contains_key(&uuid) {
             return false;
         }
 
@@ -590,20 +682,39 @@ struct SortedConflictState {
     /// the order floor for republishing is the max (`.last()`).
     on_chain: BTreeSet<Inscription>,
     discarded: DiscardedPayloads,
+    /// Payloads that have finalized — pinned in `on_chain` permanently and
+    /// never re-homed or discarded again.
+    finalized: HashSet<Inscription>,
 }
 
 impl SortedConflictState {
-    const fn new(discarded: DiscardedPayloads) -> Self {
+    fn new(discarded: DiscardedPayloads) -> Self {
         Self {
             on_chain: BTreeSet::new(),
             discarded,
+            finalized: HashSet::new(),
         }
     }
 
+    /// Pin finalized payloads into the on-chain set permanently.
+    fn record_finalized(&mut self, finalized: &[FinalizedTx]) {
+        for inscription in finalized_inscriptions(finalized) {
+            self.finalized.insert(inscription.payload.clone());
+            self.on_chain.insert(inscription.payload.clone());
+        }
+    }
+
+    fn is_finalized(&self, payload: &Inscription) -> bool {
+        self.finalized.contains(payload)
+    }
+
     /// Drop orphaned payloads from the on-chain set — the order floor falls
-    /// back to the max of whatever remains.
+    /// back to the max of whatever remains. Finalized payloads stay put.
     fn revert_orphaned(&mut self, orphaned: &[&InscriptionInfo]) {
         for inscription in orphaned {
+            if self.finalized.contains(&inscription.payload) {
+                continue;
+            }
             self.on_chain.remove(&inscription.payload);
         }
     }
@@ -620,18 +731,16 @@ impl SortedConflictState {
         self.on_chain.insert(payload);
     }
 
-    async fn already_discarded(&self, payload: &Inscription) -> bool {
-        self.discarded.lock().await.contains(payload)
-    }
-
-    fn preserves_order(&self, inscription: &InscriptionInfo) -> bool {
-        self.on_chain
-            .last()
-            .is_none_or(|max| inscription.payload >= *max)
+    fn preserves_order(&self, payload: &Inscription) -> bool {
+        self.on_chain.last().is_none_or(|max| payload >= max)
     }
 
     async fn discard(&self, payload: Inscription) {
         self.discarded.lock().await.insert(payload);
+    }
+
+    async fn discarded_snapshot(&self) -> Vec<Inscription> {
+        self.discarded.lock().await.iter().cloned().collect()
     }
 }
 

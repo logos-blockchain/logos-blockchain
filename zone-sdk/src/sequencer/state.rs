@@ -506,8 +506,8 @@ impl TxState {
     #[must_use]
     pub fn publish_parent(&self, tip: HeaderId) -> MsgId {
         let channel_tip = self.channel_tip_at(tip);
-        self.pending_publish_tail(channel_tip)
-            .unwrap_or(channel_tip)
+        let tail = self.pending_publish_tail(channel_tip);
+        tail.unwrap_or(channel_tip)
     }
 
     /// Walk local pending lineage from `from_msg` to find the tail,
@@ -559,41 +559,36 @@ impl TxState {
 
     /// Detect a channel update between old and new L1 tips.
     ///
-    /// Returns the linear block-level delta between the two canonical chains:
-    /// - `orphaned`: inscriptions on blocks of the old canonical chain that are
-    ///   not on blocks of the new canonical chain (revert from state).
-    /// - `adopted`: inscriptions on blocks of the new canonical chain that are
-    ///   not on blocks of the old canonical chain (apply to state).
+    /// Diffs the two channel *lineages*. `old_lineage` must be captured by the
+    /// caller via [`Self::channel_lineage`] **before** this event's block is
+    /// inserted, so the "before" side isn't contaminated by the just-added
+    /// block; `new_lineage` is computed here, after the insert.
+    /// - `adopted`: inscriptions that entered the channel branch (first mined).
+    /// - `orphaned`: inscriptions that left it (replaced by a conflict). A bare
+    ///   un-mine is a no-op — the link stays in the lineage via its held block.
     ///
     /// Returns `None` if no channel state change.
     #[must_use]
     pub fn detect_channel_update(
         &self,
-        old_tip: HeaderId,
+        old_lineage: Vec<InscriptionInfo>,
         new_tip: HeaderId,
     ) -> Option<ChannelUpdateInfo> {
-        let old_channel_tip = self.channel_tip_at(old_tip);
         let new_channel_tip = self.channel_tip_at(new_tip);
+        let new_lineage = self.channel_lineage(new_tip);
 
-        if old_channel_tip == new_channel_tip {
-            return None;
-        }
+        let old_ids: HashSet<MsgId> = old_lineage.iter().map(|i| i.this_msg).collect();
+        let new_ids: HashSet<MsgId> = new_lineage.iter().map(|i| i.this_msg).collect();
 
-        let new_branch = self.collect_inscriptions_on_branch(new_tip);
-        let old_branch = self.collect_inscriptions_on_branch(old_tip);
-
-        let new_chain: HashSet<MsgId> = new_branch.iter().map(|i| i.this_msg).collect();
-        let old_chain: HashSet<MsgId> = old_branch.iter().map(|i| i.this_msg).collect();
-
-        let adopted: Vec<InscriptionInfo> = new_branch
+        let adopted: Vec<InscriptionInfo> = new_lineage
             .iter()
-            .filter(|i| !old_chain.contains(&i.this_msg))
+            .filter(|i| !old_ids.contains(&i.this_msg))
             .cloned()
             .collect();
 
-        let orphaned: Vec<InscriptionInfo> = old_branch
+        let orphaned: Vec<InscriptionInfo> = old_lineage
             .into_iter()
-            .filter(|i| !new_chain.contains(&i.this_msg))
+            .filter(|i| !new_ids.contains(&i.this_msg))
             .collect();
 
         if orphaned.is_empty() && adopted.is_empty() {
@@ -605,6 +600,54 @@ impl TxState {
             adopted,
             new_channel_tip,
         })
+    }
+
+    /// The channel lineage at an L1 tip: the mined chain extended forward
+    /// through links that haven't been replaced — un-mined records whose
+    /// slot is still open. Built from on-chain records only
+    /// (`block_inscriptions`), **not** our pending, so an inscription joins
+    /// the lineage when it first mines, not when we publish it. We keep
+    /// un-mined records rather than evict them, so a transient un-mine —
+    /// even the same block leaving and later returning — leaves the lineage
+    /// unchanged.
+    ///
+    /// Capture this at the *old* tip before inserting a new block; computing it
+    /// afterwards would let the just-added block bridge into the "before" view.
+    #[must_use]
+    pub(crate) fn channel_lineage(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
+        let mut lineage = self.collect_inscriptions_on_branch(tip);
+        let mut ids: HashSet<MsgId> = lineage.iter().map(|i| i.this_msg).collect();
+
+        // Index every on-chain record we still hold — including off-canonical
+        // un-mined ones — by `this_msg` and by parent, so the walk can extend
+        // through slots that currently have no mined occupant.
+        let mut by_msg: HashMap<MsgId, InscriptionInfo> = HashMap::new();
+        let mut children: HashMap<MsgId, HashSet<MsgId>> = HashMap::new();
+        for inscriptions in self.block_inscriptions.values() {
+            for info in inscriptions {
+                children
+                    .entry(info.parent_msg)
+                    .or_default()
+                    .insert(info.this_msg);
+                by_msg.entry(info.this_msg).or_insert_with(|| info.clone());
+            }
+        }
+
+        // Walk forward from the mined tip, extending only through a slot that has
+        // a single un-replaced occupant; a contested slot ends the walk.
+        let mut current = self.channel_tip_at(tip);
+        while let Some(kids) = children.get(&current) {
+            let mut candidates = kids.iter().filter(|id| !ids.contains(*id));
+            let (Some(&next), None) = (candidates.next(), candidates.next()) else {
+                break;
+            };
+            if let Some(info) = by_msg.get(&next) {
+                lineage.push(info.clone());
+            }
+            ids.insert(next);
+            current = next;
+        }
+        lineage
     }
 
     /// Collect ALL pending inscriptions reachable from `from_msg`.
@@ -927,8 +970,9 @@ mod tests {
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
+        let old_lineage = state.channel_lineage(block1);
         let update = state
-            .detect_channel_update(block1, block2)
+            .detect_channel_update(old_lineage, block2)
             .expect("should detect channel update");
 
         assert!(update.orphaned.is_empty(), "extension never orphans");
@@ -964,7 +1008,8 @@ mod tests {
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
-        let update = state.detect_channel_update(block1, block2).unwrap();
+        let old_lineage = state.channel_lineage(block1);
+        let update = state.detect_channel_update(old_lineage, block2).unwrap();
         assert!(update.orphaned.is_empty());
         assert_eq!(update.adopted.len(), 1);
         assert_eq!(update.adopted[0].this_msg, c1_msg);
