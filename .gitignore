@@ -13,7 +13,6 @@ store.*
 sim_config.json
 *.txt
 .env
-!deployment/environments/*/.env
 .idea/
 .vscode/
 .cache/

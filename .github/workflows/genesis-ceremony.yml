@@ -29,7 +29,7 @@ jobs:
 
       - name: Inject Variables into Template
         run: |
-          cp deployment/environments/$LB_TARGET_ENV/ceremony/genesis/template/deployment-template.yaml \
+          cp deployment/ceremony/genesis/$LB_TARGET_ENV/template/deployment-template.yaml \
             /tmp/deployment-generated.yaml
 
           # We use '|' as a delimiter so that slashes in paths don't break the command
@@ -39,10 +39,10 @@ jobs:
       - name: Run Ceremony
         run: |
           cargo run --locked --bin logos-blockchain-tools-genesis -- ceremony \
-            --inscription-params deployment/environments/$LB_TARGET_ENV/ceremony/genesis/inscribe.yaml \
-            --stake-holders deployment/environments/$LB_TARGET_ENV/ceremony/genesis/template/stakeholders.yaml \
-            --providers deployment/environments/$LB_TARGET_ENV/ceremony/genesis/template/providers.yaml \
-            --faucet deployment/environments/$LB_TARGET_ENV/ceremony/genesis/template/faucet.yaml \
+            --inscription-params deployment/ceremony/genesis/$LB_TARGET_ENV/inscribe.yaml \
+            --stake-holders deployment/ceremony/genesis/$LB_TARGET_ENV/template/stakeholders.yaml \
+            --providers deployment/ceremony/genesis/$LB_TARGET_ENV/template/providers.yaml \
+            --faucet deployment/ceremony/genesis/$LB_TARGET_ENV/template/faucet.yaml \
             --deployment /tmp/deployment-generated.yaml \
             --output nodes/node/binary/src/config/deployment/settings.yaml
 
