@@ -87,6 +87,8 @@ pub enum Error {
         block_slot: Slot,
         current_slot: Slot,
     },
+    #[error("Block {0} has already been applied")]
+    AlreadyApplied(HeaderId),
     #[error("Ledger error: {0}")]
     Ledger(#[from] lb_ledger::LedgerError<HeaderId>),
     #[error("Consensus error: {0}")]
@@ -354,6 +356,10 @@ impl Cryptarchia {
         let id = header.id();
         let parent = header.parent();
         let slot = header.slot();
+
+        if self.ledger.state(&id).is_some() {
+            return Err(Error::AlreadyApplied(id));
+        }
 
         // Reject blocks from future slots
         if slot > current_slot {
