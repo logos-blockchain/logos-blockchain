@@ -5,7 +5,7 @@ mod notifier;
 mod relays;
 mod states;
 pub mod storage;
-pub mod sync;
+mod sync;
 #[cfg(test)]
 mod tests;
 
