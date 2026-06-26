@@ -14,7 +14,7 @@ docker compose build
 
 ## Configuring
 
-Configuration of the Docker deployment is accomplished using an `.env` file. A documented example can be found in `.env.example` at the repo root. Each deployment environment keeps its own env file at `deployment/<env>/.env` (e.g. `deployment/devnet/.env`); select one by pointing Compose at it, e.g. `docker compose --env-file deployment/devnet/.env up`, or by copying it to the default `.env`.
+Configuration of the Docker deployment is accomplished using an `.env` file. A documented example can be found in `.env.example` at the repo root. Each deployment environment keeps its own env file at `deployment/environments/<env>/.env` (e.g. `deployment/environments/devnet/.env`); select one by pointing Compose at it, e.g. `docker compose --env-file deployment/environments/devnet/.env up`, or by copying it to the default `.env`.
 
 To adjust the count of Logos blockchain nodes, modify the variable:
 
@@ -67,11 +67,11 @@ every release.
 
 ### Per-environment layout
 
-Everything specific to a deployment environment lives under `deployment/<env>/`
+Everything specific to a deployment environment lives under `deployment/environments/<env>/`
 (`env` ∈ `devnet`, `testnet`, `standalone`):
 
 ```
-deployment/<env>/
+deployment/environments/<env>/
   .env                            # PER-TYPE infra + PER-RELEASE NODE_IMAGE_LABEL
                                   #   (devnet / testnet only; standalone has none)
   ceremony/genesis/
@@ -91,8 +91,8 @@ tests validate:
 
 | Trigger | Inputs | Output (committed) |
 | --- | --- | --- |
-| `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/<env>/ceremony/genesis/{inscribe.yaml,template/*}` | `nodes/node/binary/src/config/deployment/settings.yaml` |
-| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/standalone/ceremony/genesis/{inscribe.yaml,template/*}` | `nodes/node/standalone-deployment-config.yaml` |
+| `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/environments/<env>/ceremony/genesis/{inscribe.yaml,template/*}` | `nodes/node/binary/src/config/deployment/settings.yaml` |
+| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/environments/standalone/ceremony/genesis/{inscribe.yaml,template/*}` | `nodes/node/standalone-deployment-config.yaml` |
 
 ### 1. Template for all deployments (any type)
 Shared blueprints reused by every deployment type; not edited per release.
@@ -101,20 +101,20 @@ Shared blueprints reused by every deployment type; not edited per release.
 - `Dockerfile`, `deployment/Dockerfile`
 - `deployment/cfgsync.yaml`, `deployment/cfgsync/deployment-settings.yaml`
 - `deployment/nginx/*`, `deployment/scripts/*`, `deployment/systemd/*`
-- the `# TEMPLATE` section (`entropy_sources`) of each `deployment/<env>/ceremony/genesis/inscribe.yaml`
+- the `# TEMPLATE` section (`entropy_sources`) of each `deployment/environments/<env>/ceremony/genesis/inscribe.yaml`
 
 ### 2. Template for a certain deployment type
 Per-type blueprints; change only when a network type is re-defined.
 
-- `deployment/<env>/ceremony/genesis/template/*`
-- The `# DEPLOYMENT TYPE` section of `deployment/<env>/.env`
+- `deployment/environments/<env>/ceremony/genesis/template/*`
+- The `# DEPLOYMENT TYPE` section of `deployment/environments/<env>/.env`
   (`TOOLS_IMAGE_LABEL`, `EXPLORER_IMAGE_LABEL`, `ENV_TITLE_STRING`,
   `PUBLIC_IP_ADDR`, `DOCKER_COMPOSE_LIBP2P_REPLICAS`, node ports)
 
 ### 3. Per-release info (edited on every release)
 
-- The `# PER-RELEASE` section (`chain_id`, `genesis_time`) of `deployment/<env>/ceremony/genesis/inscribe.yaml`
-- `NODE_IMAGE_LABEL` in `deployment/<env>/.env` (its `# PER-RELEASE` section)
+- The `# PER-RELEASE` section (`chain_id`, `genesis_time`) of `deployment/environments/<env>/ceremony/genesis/inscribe.yaml`
+- `NODE_IMAGE_LABEL` in `deployment/environments/<env>/.env` (its `# PER-RELEASE` section)
 - The `version` input of the genesis ceremony workflow (fills `VERSION_PLACEHOLDER`)
 
 Generated each release (by the ceremony, not hand-edited):

@@ -461,7 +461,8 @@ fn run_inscribe(args: &InscribeArgs) -> Result<()> {
 /// Using `serde_yaml::to_string` as an intermediate format avoids both
 /// problems: YAML is a human-readable format (fixing pitfall 1).
 /// Regarding (fixing pitfall 2): The error doesn't appear when using templates
-/// from the `deployment/<env>/ceremony/genesis` directories, but if it happens,
+/// from the `deployment/environments/<env>/ceremony/genesis` directories, but
+/// if it happens,
 /// settings override code should be refactored to use concrete genesis related
 /// types instead of operating at YAML level.
 fn struct_to_yaml_value<T: serde::Serialize>(value: &T) -> Result<Value> {
