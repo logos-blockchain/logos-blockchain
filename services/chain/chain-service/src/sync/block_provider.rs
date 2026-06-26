@@ -18,9 +18,7 @@ use thiserror::Error;
 use tokio::sync::{mpsc::Sender, oneshot};
 use tracing::{debug, error};
 
-use crate::relays::StorageRelay;
-
-const MAX_NUMBER_OF_BLOCKS: usize = 1000;
+use crate::{relays::StorageRelay, sync::config::BlockProviderConfig};
 
 #[derive(Debug, Error, Clone)]
 pub enum GetBlocksError {
@@ -57,6 +55,7 @@ where
     Tx: Clone + Eq,
 {
     storage_relay: StorageRelay<Storage>,
+    config: BlockProviderConfig,
     _phantom: PhantomData<Tx>,
 }
 
@@ -66,9 +65,11 @@ where
     <Storage as StorageChainApi>::Block: TryInto<Block<Tx>> + Into<Bytes>,
     Tx: Serialize + Clone + Eq + Send + Sync + 'static,
 {
-    pub const fn new(storage_relay: StorageRelay<Storage>) -> Self {
+    #[must_use]
+    pub const fn new(storage_relay: StorageRelay<Storage>, config: BlockProviderConfig) -> Self {
         Self {
             storage_relay,
+            config,
             _phantom: PhantomData,
         }
     }
@@ -123,7 +124,7 @@ where
     /// Creates a block stream that leads from one of the [`known_blocks`]
     /// to the [`target_block`], in parent-to-child order.
     ///
-    /// The stream includes at most [`MAX_NUMBER_OF_BLOCKS`] blocks.
+    /// The stream includes at most `batch_size` blocks.
     /// The stream may or may not reach the [`target_block`].
     ///
     /// In any error case, [`GetBlocksError`] is returned.
@@ -329,9 +330,11 @@ where
         target_info: BlockInfo,
     ) -> Result<Vec<HeaderId>, GetBlocksError> {
         // Add 1 because we remove first(known block) from the path
-        let limit = (MAX_NUMBER_OF_BLOCKS + 1)
-            .try_into()
-            .expect("MAX_NUMBER_OF_BLOCKS should be > 0");
+        let limit = self
+            .config
+            .batch_size
+            .checked_add(1)
+            .expect("batch_size + 1 must not overflow");
 
         match start_info.location {
             BlockLocation::Engine => {
@@ -728,7 +731,7 @@ mod tests {
     async fn test_path_length_limit() {
         let mut env = TestEnv::new().await;
 
-        let long_chain = env.setup_chain_with_blocks(MAX_NUMBER_OF_BLOCKS + 1).await;
+        let long_chain = env.setup_chain_with_blocks(TEST_BATCH_SIZE.get() + 1).await;
 
         let known_blocks = HashSet::from([long_chain[0]]);
         let target_block = *long_chain.last().unwrap();
@@ -739,10 +742,13 @@ mod tests {
 
         assert_eq!(
             retrieved_blocks.len(),
-            MAX_NUMBER_OF_BLOCKS,
-            "Retrieved blocks should not exceed MAX_NUMBER_OF_BLOCKS minus the skipped known block"
+            TEST_BATCH_SIZE.get(),
+            "Retrieved blocks should not exceed batch_size minus the skipped known block"
         );
     }
+
+    const TEST_BATCH_SIZE: NonZeroUsize =
+        NonZeroUsize::new(1000).expect("TEST_BATCH_SIZE must be non-zero");
 
     #[derive_services]
     pub struct TestServices {
@@ -766,7 +772,12 @@ mod tests {
                 NonNegativeRatio::new(1, 10.try_into().unwrap()),
             );
             let proof = Self::make_test_proof(&cryptarchia);
-            let provider = BlockProvider::new(storage_relay.clone());
+            let provider = BlockProvider::new(
+                storage_relay.clone(),
+                BlockProviderConfig {
+                    batch_size: TEST_BATCH_SIZE,
+                },
+            );
 
             Self {
                 service,

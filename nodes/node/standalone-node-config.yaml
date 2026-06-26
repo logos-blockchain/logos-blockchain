@@ -120,6 +120,9 @@ cryptarchia:
       offline_grace_period:
         grace_period: '5.000000000'
         state_recording_interval: '60.000000000'
+    sync:
+      block_provider:
+        batch_size: 1000
   network:
     bootstrap:
       ibd:

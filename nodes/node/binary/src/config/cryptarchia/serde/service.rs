@@ -1,4 +1,4 @@
-use core::time::Duration;
+use core::{num::NonZeroUsize, time::Duration};
 
 use lb_utils::bounded_duration::{MinimalBoundedDuration, SECOND};
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,29 @@ use serde_with::serde_as;
 #[serde(default)]
 pub struct Config {
     pub bootstrap: BootstrapConfig,
+    pub sync: SyncConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(default)]
+pub struct SyncConfig {
+    pub block_provider: BlockProviderConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct BlockProviderConfig {
+    /// Upper bound on blocks returned per `send_blocks` request handled by
+    /// the chain-service `BlockProvider`.
+    pub batch_size: NonZeroUsize,
+}
+
+impl Default for BlockProviderConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: NonZeroUsize::new(1000).unwrap(),
+        }
+    }
 }
 
 #[serde_as]

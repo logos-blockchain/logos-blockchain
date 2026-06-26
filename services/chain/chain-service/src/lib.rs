@@ -5,7 +5,7 @@ mod notifier;
 mod relays;
 mod states;
 pub mod storage;
-mod sync;
+pub mod sync;
 #[cfg(test)]
 mod tests;
 
@@ -60,7 +60,10 @@ use tokio::{
 use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
-pub use crate::bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig};
+pub use crate::{
+    bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
+    sync::config::{BlockProviderConfig, SyncConfig},
+};
 use crate::{
     bootstrap::state::choose_engine_state,
     notifier::ChainOnlineNotifier,
@@ -474,6 +477,7 @@ pub struct CryptarchiaSettings {
     pub starting_state: StartingState,
     pub recovery_file: PathBuf,
     pub bootstrap: BootstrapConfig,
+    pub sync: SyncConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -588,6 +592,7 @@ where
             config: ledger_config,
             bootstrap: bootstrap_config,
             starting_state,
+            sync: sync_config,
             ..
         } = self
             .service_resources_handle
@@ -636,8 +641,10 @@ where
             );
         }
 
-        let sync_blocks_provider: BlockProvider<_, _> =
-            BlockProvider::new(relays.storage_adapter().storage_relay.clone());
+        let sync_blocks_provider: BlockProvider<_, _> = BlockProvider::new(
+            relays.storage_adapter().storage_relay.clone(),
+            sync_config.block_provider,
+        );
 
         // Chain start timer will prevent the chain service to process and produce
         // blocks if the starting state is GenesisBlock and has chain start time

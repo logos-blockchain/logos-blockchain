@@ -659,6 +659,12 @@ fn build_cryptarchia_user_config(
                 },
                 prolonged_bootstrap_period: consensus.prolonged_bootstrap_period,
             },
+            sync: service::SyncConfig {
+                block_provider: service::BlockProviderConfig {
+                    batch_size: NonZeroUsize::new(1000)
+                        .expect("block_provider batch_size must be non-zero"),
+                },
+            },
         },
         leader: LeaderConfig {
             wallet: leader::WalletConfig {
