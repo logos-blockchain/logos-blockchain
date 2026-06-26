@@ -1,4 +1,4 @@
-chain_id: "standalone-local"
-genesis_time: "2026-05-08T22:54:09Z"
+chain_id: "standalone/X.Y.Z-rc.N"
+genesis_time: "YYYY-MM-DDTHH:MM:SSZ"
 entropy_sources:
   - "0000000000000000000000000000000000000000000000000000000000000001"

@@ -58,3 +58,35 @@ After running `docker compose up`, the randomly assigned ports can be viewed wit
 ```bash
 docker compose ps 
 ```
+
+## Release & deployment file taxonomy
+
+Deployment files fall into three categories by **how often they change**. This
+makes it clear which files are reusable blueprints and which must be touched on
+every release.
+
+### 1. Template for all deployments (any type)
+Shared blueprints reused by every deployment type; not edited per release.
+
+- `compose.yml`, `compose.run.yml`, `compose.setup.yml`, `deployment/compose.tracing.yml`
+- `Dockerfile`, `deployment/Dockerfile`
+- `deployment/cfgsync.yaml`, `deployment/cfgsync/deployment-settings.yaml`
+- `deployment/nginx/*`, `deployment/scripts/*`, `deployment/systemd/*`
+
+### 2. Template for a certain deployment type
+Per-type blueprints; change only when a network type is re-defined.
+
+- `deployment/ceremony/genesis/<env>/template/*` — see [`ceremony/genesis/README.md`](ceremony/genesis/README.md)
+- The `# DEPLOYMENT TYPE` section of `.env.devnet` / `.env.testnet`
+  (`TOOLS_IMAGE_LABEL`, `EXPLORER_IMAGE_LABEL`, `ENV_TITLE_STRING`,
+  `PUBLIC_IP_ADDR`, `DOCKER_COMPOSE_LIBP2P_REPLICAS`, node ports)
+
+### 3. Per-release info (edited on every release)
+
+- `deployment/ceremony/genesis/<env>/inscribe.yaml` — `chain_id`, `genesis_time`
+- `NODE_IMAGE_LABEL` in `.env.devnet` / `.env.testnet` (the `# PER-RELEASE` section)
+- The `version` input of the genesis ceremony workflow (fills `VERSION_PLACEHOLDER`)
+
+Generated each release (by the ceremony, not hand-edited):
+`nodes/node/binary/src/config/deployment/settings.yaml`,
+`nodes/node/standalone-deployment-config.yaml`.
