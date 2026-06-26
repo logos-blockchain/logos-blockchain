@@ -19,14 +19,12 @@ pub enum OperationStatusCode {
     ValidationError = 0xC,
 }
 
-/// Result of an FFI operation: a status code plus an optional human-readable
-/// message describing what went wrong.
 #[derive(Default)]
 #[repr(C)]
 pub struct OperationStatus {
     pub code: OperationStatusCode,
-    /// A NUL-terminated description of the error, or null when `code` is
-    /// `Ok` or no message is available.
+
+    /// A NUL-terminated description of the error.
     ///
     /// The caller must free this with
     /// [`free_cstring`](crate::api::memory::free_cstring).
