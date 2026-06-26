@@ -10,8 +10,7 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use crate::{
     LogosBlockchainNode,
     api::sdp::post_declaration_sync,
-    errors::OperationStatus,
-    logging,
+    errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
@@ -33,24 +32,30 @@ unsafe fn parse_provider_id(ptr: *const u8) -> Result<ProviderId, OperationStatu
         .try_into()
         .expect("slice is exactly KEY_SIZE bytes");
     ProviderId::try_from(bytes).map_err(|_| {
-        logging::error!("parse_provider_id", "Invalid `provider_id` bytes.");
-        OperationStatus::ValidationError
+        OperationStatus::error(
+            OperationStatusCode::ValidationError,
+            "Invalid `provider_id` bytes.",
+        )
     })
 }
 
 unsafe fn parse_zk_id(ptr: *const u8) -> Result<ZkPublicKey, OperationStatus> {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, KEY_SIZE) };
     fr_from_bytes(bytes).map(ZkPublicKey::new).map_err(|_| {
-        logging::error!("parse_zk_id", "Invalid `zk_id` bytes.");
-        OperationStatus::ValidationError
+        OperationStatus::error(
+            OperationStatusCode::ValidationError,
+            "Invalid `zk_id` bytes.",
+        )
     })
 }
 
 unsafe fn parse_locked_note_id(ptr: *const u8) -> Result<NoteId, OperationStatus> {
     let bytes = unsafe { std::slice::from_raw_parts(ptr, KEY_SIZE) };
     fr_from_bytes(bytes).map(NoteId).map_err(|_| {
-        logging::error!("parse_locked_note_id", "Invalid `locked_note_id` bytes.");
-        OperationStatus::ValidationError
+        OperationStatus::error(
+            OperationStatusCode::ValidationError,
+            "Invalid `locked_note_id` bytes.",
+        )
     })
 }
 
@@ -59,23 +64,31 @@ unsafe fn parse_locators(ptrs: *const *const c_char, len: usize) -> StatusResult
     let mut parsed = Vec::with_capacity(len);
     for (i, &ptr) in locator_ptrs.iter().enumerate() {
         if ptr.is_null() {
-            logging::error!("parse_locators", "Null pointer at `locators[{i}]`.");
-            return Err(OperationStatus::NullPointer);
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                format!("Null pointer at `locators[{i}]`."),
+            ));
         }
         let c_str = unsafe { std::ffi::CStr::from_ptr(ptr) };
         let Ok(s) = c_str.to_str() else {
-            logging::error!("parse_locators", "`locators[{i}]` is not valid UTF-8.");
-            return Err(OperationStatus::ValidationError);
+            return Err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                format!("`locators[{i}]` is not valid UTF-8."),
+            ));
         };
         let Ok(addr) = s.parse::<Locator>() else {
-            logging::error!("parse_locators", "`locators[{i}]` is not a valid locator.");
-            return Err(OperationStatus::ValidationError);
+            return Err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                format!("`locators[{i}]` is not a valid locator."),
+            ));
         };
         parsed.push(addr);
     }
     let Ok(locators) = parsed.try_into() else {
-        logging::error!("parse_locators", "Cannot use empty list of locators.");
-        return Err(OperationStatus::ValidationError);
+        return Err(OperationStatus::error(
+            OperationStatusCode::ValidationError,
+            "Cannot use empty list of locators.",
+        ));
     };
     Ok(locators)
 }
@@ -111,12 +124,12 @@ pub unsafe extern "C" fn blend_join_as_core_node(
     locators: *const *const c_char,
     locators_len: usize,
 ) -> FfiStatusResult<DeclarationId> {
-    return_error_if_null_pointer!("blend_join_as_core_node", node);
-    return_error_if_null_pointer!("blend_join_as_core_node", provider_id);
-    return_error_if_null_pointer!("blend_join_as_core_node", zk_id);
-    return_error_if_null_pointer!("blend_join_as_core_node", locked_note_id);
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(provider_id);
+    return_error_if_null_pointer!(zk_id);
+    return_error_if_null_pointer!(locked_note_id);
     if locators_len > 0 {
-        return_error_if_null_pointer!("blend_join_as_core_node", locators);
+        return_error_if_null_pointer!(locators);
     }
 
     let provider_id = unwrap_or_return_error!(unsafe { parse_provider_id(provider_id) });
@@ -134,13 +147,6 @@ pub unsafe extern "C" fn blend_join_as_core_node(
         locked_note_id,
     };
     post_declaration_sync(node, join_blend_as_core_node_message)
-        .inspect_err(|(message, _operation_status)| {
-            logging::error!(
-                "blend_join_as_core_node",
-                "Failed to post declaration: {message}"
-            );
-        })
-        .map_err(|(_message, operation_status)| operation_status)
         .map(DeclarationId::from)
         .into()
 }

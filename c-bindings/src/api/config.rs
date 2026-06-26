@@ -10,7 +10,7 @@ use lb_node::cli::{EmbeddedInitArgs, InitArgs, MigrateArgs, ParticipateArgs, Upd
 use multiaddr::Multiaddr;
 use tokio::runtime::Runtime;
 
-use crate::{OperationStatus, logging, return_error_if_null_pointer};
+use crate::{OperationStatus, errors::OperationStatusCode, return_error_if_null_pointer};
 
 /// Converts a non-null C string pointer into a [`PathBuf`].
 ///
@@ -143,11 +143,11 @@ pub fn generate_config_sync(args: EmbeddedInitArgs) -> OperationStatus {
     let runtime = Runtime::new().expect("Failed to create Tokio runtime.");
     let run_result = runtime.block_on(async move { lb_node::cli::config::init::run(init_args) });
     match run_result {
-        Ok(()) => OperationStatus::Ok,
-        Err(error) => {
-            logging::error!("generate_config_sync", "Error generating config: {error:?}");
-            OperationStatus::ConfigurationError
-        }
+        Ok(()) => OperationStatus::OK,
+        Err(error) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error generating config: {error:?}"),
+        ),
     }
 }
 
@@ -196,8 +196,8 @@ pub unsafe extern "C" fn update_user_config(
     user_config_path: *const c_char,
     keystore_path: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!("update_user_config", user_config_path);
-    return_error_if_null_pointer!("update_user_config", keystore_path);
+    return_error_if_null_pointer!(user_config_path);
+    return_error_if_null_pointer!(keystore_path);
 
     let args = UpdateArgs::new(
         unsafe { cstr_to_path(user_config_path) },
@@ -206,11 +206,11 @@ pub unsafe extern "C" fn update_user_config(
     );
 
     match lb_node::cli::config::update::run(args) {
-        Ok(()) => OperationStatus::Ok,
-        Err(error) => {
-            logging::error!("update_user_config", "Error updating config: {error:?}");
-            OperationStatus::ConfigurationError
-        }
+        Ok(()) => OperationStatus::OK,
+        Err(error) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error updating config: {error:?}"),
+        ),
     }
 }
 
@@ -237,19 +237,19 @@ pub unsafe extern "C" fn migrate_user_config(
     output_path: *const c_char,
     keystore_path: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!("migrate_user_config", output_path);
-    return_error_if_null_pointer!("migrate_user_config", keystore_path);
+    return_error_if_null_pointer!(output_path);
+    return_error_if_null_pointer!(keystore_path);
 
     let args = MigrateArgs::new(unsafe { cstr_to_path(output_path) }, unsafe {
         cstr_to_path(keystore_path)
     });
 
     match lb_node::cli::config::migrate::run(args) {
-        Ok(()) => OperationStatus::Ok,
-        Err(error) => {
-            logging::error!("migrate_user_config", "Error migrating config: {error:?}");
-            OperationStatus::ConfigurationError
-        }
+        Ok(()) => OperationStatus::OK,
+        Err(error) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error migrating config: {error:?}"),
+        ),
     }
 }
 
@@ -279,9 +279,9 @@ pub unsafe extern "C" fn migrate_user_config_0_1_2(
     old_config_path: *const c_char,
     keystore_path: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!("migrate_user_config_0_1_2", new_config_path);
-    return_error_if_null_pointer!("migrate_user_config_0_1_2", old_config_path);
-    return_error_if_null_pointer!("migrate_user_config_0_1_2", keystore_path);
+    return_error_if_null_pointer!(new_config_path);
+    return_error_if_null_pointer!(old_config_path);
+    return_error_if_null_pointer!(keystore_path);
 
     let args = lb_node::cli::config::migrate_0_1_2::MigrateArgs::new(
         unsafe { cstr_to_path(new_config_path) },
@@ -290,14 +290,11 @@ pub unsafe extern "C" fn migrate_user_config_0_1_2(
     );
 
     match lb_node::cli::config::migrate_0_1_2::run(args) {
-        Ok(()) => OperationStatus::Ok,
-        Err(error) => {
-            logging::error!(
-                "migrate_user_config_0_1_2",
-                "Error migrating config: {error:?}"
-            );
-            OperationStatus::ConfigurationError
-        }
+        Ok(()) => OperationStatus::OK,
+        Err(error) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error migrating config: {error:?}"),
+        ),
     }
 }
 
@@ -328,9 +325,9 @@ pub unsafe extern "C" fn participate(
     output_dir: *const c_char,
     external_address: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!("participate", config_path);
-    return_error_if_null_pointer!("participate", keystore_path);
-    return_error_if_null_pointer!("participate", output_dir);
+    return_error_if_null_pointer!(config_path);
+    return_error_if_null_pointer!(keystore_path);
+    return_error_if_null_pointer!(output_dir);
 
     let external_address = if external_address.is_null() {
         None
@@ -339,11 +336,10 @@ pub unsafe extern "C" fn participate(
         match address.parse::<Ipv4Addr>() {
             Ok(address) => Some(address),
             Err(error) => {
-                logging::error!(
-                    "participate",
-                    "Invalid external address '{address}': {error}"
+                return OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Invalid external address '{address}': {error}"),
                 );
-                return OperationStatus::ValidationError;
             }
         }
     };
@@ -356,14 +352,11 @@ pub unsafe extern "C" fn participate(
     };
 
     match lb_node::cli::participate::run(&args) {
-        Ok(()) => OperationStatus::Ok,
-        Err(error) => {
-            logging::error!(
-                "participate",
-                "Error generating participation data: {error:?}"
-            );
-            OperationStatus::ConfigurationError
-        }
+        Ok(()) => OperationStatus::OK,
+        Err(error) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error generating participation data: {error:?}"),
+        ),
     }
 }
 

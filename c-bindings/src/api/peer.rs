@@ -1,8 +1,8 @@
 use std::ffi::{CString, c_char};
 
 use crate::{
-    OperationStatus, api::config::cstr_to_path, logging, result::FfiStatusResult,
-    return_error_if_null_pointer,
+    OperationStatus, api::config::cstr_to_path, errors::OperationStatusCode,
+    result::FfiStatusResult, return_error_if_null_pointer,
 };
 
 /// Result type for [`get_peer_id`]. On success, `value` is a pointer to a
@@ -34,23 +34,25 @@ pub type FfiGetPeerIdResult = FfiStatusResult<*mut c_char>;
 #[must_use]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peer_id(config_path: *const c_char) -> FfiGetPeerIdResult {
-    return_error_if_null_pointer!("get_peer_id", config_path);
+    return_error_if_null_pointer!(config_path);
 
     let config_path = unsafe { cstr_to_path(config_path) };
 
     let peer_id = match lb_node::cli::get_peer_id::peer_id_from_config(&config_path) {
         Ok(peer_id) => peer_id,
         Err(error) => {
-            logging::error!("get_peer_id", "Error deriving peer id: {error:?}");
-            return FfiGetPeerIdResult::err(OperationStatus::ConfigurationError);
+            return FfiGetPeerIdResult::err(OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error deriving peer id: {error:?}"),
+            ));
         }
     };
 
     match CString::new(peer_id.to_string()) {
         Ok(peer_id) => FfiGetPeerIdResult::ok(peer_id.into_raw()),
-        Err(error) => {
-            logging::error!("get_peer_id", "Failed to create CString: {error}");
-            FfiGetPeerIdResult::err(OperationStatus::RuntimeError)
-        }
+        Err(error) => FfiGetPeerIdResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create CString: {error}"),
+        )),
     }
 }

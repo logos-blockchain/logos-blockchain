@@ -4,7 +4,10 @@ use lb_node::RuntimeServiceId;
 use overwatch::overwatch::{Overwatch, OverwatchHandle};
 use tokio::runtime::{Handle, Runtime};
 
-use crate::{errors::OperationStatus, logging};
+use crate::{
+    errors::{OperationStatus, OperationStatusCode},
+    logging,
+};
 
 // Define an opaque type for the complex Overwatch type
 type LogosBlockchainOverwatch = Overwatch<RuntimeServiceId>;
@@ -60,11 +63,13 @@ impl LogosBlockchainNode {
     pub(crate) fn stop(self) -> OperationStatus {
         let runtime_handle = self.get_runtime_handle();
         let overwatch_handle = self.get_overwatch_handle();
-        if let Err(e) = runtime_handle.block_on(overwatch_handle.stop_all_services()) {
-            logging::error!("stop", "Could not stop services: {e}");
-            return OperationStatus::StopError;
+        if let Err(error) = runtime_handle.block_on(overwatch_handle.stop_all_services()) {
+            return OperationStatus::error(
+                OperationStatusCode::StopError,
+                format!("Could not stop services: {error}"),
+            );
         }
-        OperationStatus::Ok
+        OperationStatus::OK
     }
 }
 
