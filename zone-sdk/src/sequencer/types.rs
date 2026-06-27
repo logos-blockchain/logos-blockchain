@@ -282,8 +282,8 @@ pub enum TxSource {
 ///    genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
-    /// Inscriptions removed from the channel: inscriptions that were on chain
-    /// and our own pending that can no longer finalize, because a conflicting
+    /// Inscriptions removed from the channel: ones that were on chain, plus our
+    /// own pending that can no longer finalize because a conflicting
     /// inscription took their place in the chain (a parent double-spend).
     /// Revert from state and treat as republish candidates.
     ///
