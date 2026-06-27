@@ -955,6 +955,10 @@ mod tests {
 
         state.process_block(block1, genesis, genesis, vec![], vec![]);
 
+        // Capture the old lineage before inserting block2, mirroring the real
+        // caller; computing it after would let c1 bridge into the "before" view.
+        let old_lineage = state.channel_lineage(block1);
+
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
@@ -964,7 +968,6 @@ mod tests {
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
-        let old_lineage = state.channel_lineage(block1);
         let update = state
             .detect_channel_update(old_lineage, block2)
             .expect("should detect channel update");
@@ -993,6 +996,10 @@ mod tests {
 
         state.process_block(block1, genesis, genesis, vec![], vec![]);
 
+        // Capture the old lineage before inserting block2, mirroring the real
+        // caller; computing it after would let c1 bridge into the "before" view.
+        let old_lineage = state.channel_lineage(block1);
+
         let c1_msg = msg_id(20);
         let c1_inscription = InscriptionInfo {
             tx_hash: make_dummy_tx(99).mantle_tx.hash(),
@@ -1002,7 +1009,6 @@ mod tests {
         };
         state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
 
-        let old_lineage = state.channel_lineage(block1);
         let update = state.detect_channel_update(old_lineage, block2).unwrap();
         assert!(update.orphaned.is_empty());
         assert_eq!(update.adopted.len(), 1);
