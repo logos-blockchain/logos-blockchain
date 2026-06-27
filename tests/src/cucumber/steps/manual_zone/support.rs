@@ -55,11 +55,9 @@ use super::runner::{
 };
 
 /// Inscriptions in the just-finalized txs — the permanent, settled part of the
-/// channel. Once a payload finalizes it's on chain forever, independent of
-/// which L1 branch was canonical; a policy must pin these so it never re-homes
-/// a payload that has already landed for good. (Finalized inscriptions leave
-/// the above-LIB `channel_update` window, so this is the only signal that
-/// carries them across the LIB boundary.)
+/// channel. Once a payload finalizes it's on chain for good, so a policy pins
+/// these and never re-homes a finalized payload when it later drops off a
+/// non-canonical branch.
 fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &InscriptionInfo> {
     finalized
         .iter()
@@ -270,9 +268,6 @@ pub fn start_sorted_conflict_policy(
 /// message; for repeating payloads see [`RepublishLineagePolicy`].
 #[derive(Default)]
 struct OrphanRepublishPolicy {
-    /// Payloads that have finalized — pinned permanently so a payload that
-    /// already landed for good is never re-homed when it later flickers off a
-    /// non-canonical branch.
     finalized: HashSet<Inscription>,
 }
 
@@ -289,13 +284,11 @@ where
         else {
             return;
         };
-        // Pin finalized payloads first — they've left the above-LIB
-        // `channel_update` window, so this is the only place we learn they're
-        // permanently on chain.
+        // Add finalized payloads to state first.
         self.finalized
             .extend(finalized_inscriptions(finalized).map(|i| i.payload.clone()));
-        // Skip orphans whose payload is already back on chain (re-adopted) or
-        // finalized — republishing them would duplicate.
+        // Skip orphans whose payload is already on chain (adopted) or finalized
+        // — republishing them would duplicate.
         let adopted: HashSet<&Inscription> =
             channel_update.adopted.iter().map(|i| &i.payload).collect();
         for entry in &channel_update.orphaned {
@@ -460,8 +453,8 @@ where
 /// The balance view is rebuilt from the full delta — every orphaned op is
 /// removed and every adopted op applied — so affordability reflects all
 /// inscriptions on the channel. Removing an orphan we never applied (never-
-/// landed pending) is a no-op, and a re-adopted op is skipped because its id is
-/// already in the applied set after `record_adopted_payloads`.
+/// landed pending) is a no-op, and an already-adopted op is skipped because its
+/// id is already in the applied set after `record_adopted_payloads`.
 struct BalanceAwarePolicy {
     balances: BalanceAwareState,
     planned: VecDeque<Inscription>,
@@ -543,8 +536,7 @@ where
         else {
             return;
         };
-        // Pin finalized payloads first — a finalized payload is on the channel
-        // for good, so it must never be reverted, re-homed, or discarded again.
+        // Pin finalized payloads first.
         self.state.record_finalized(finalized);
         let ChannelUpdate { orphaned, adopted } = channel_update;
         let orphaned_inscriptions: Vec<&InscriptionInfo> = orphaned
@@ -593,8 +585,6 @@ where
 struct BalanceAwareState {
     initial_balances: ZoneAccountBalances,
     applied: HashMap<String, HashMap<String, i64>>,
-    /// uuids that have finalized — their delta is pinned in `applied` (never
-    /// removed by an orphan) and they are never re-homed again.
     finalized: HashSet<String>,
 }
 
@@ -607,8 +597,7 @@ impl BalanceAwareState {
         }
     }
 
-    /// Pin finalized payloads: keep their delta applied permanently and mark
-    /// the uuid so it's never re-homed.
+    /// Pin finalized payloads.
     fn record_finalized_payloads(&mut self, finalized: &[FinalizedTx]) {
         for inscription in finalized_inscriptions(finalized) {
             if let Some((uuid, _, _)) = parse_balance_payload(&inscription.payload) {
@@ -678,12 +667,8 @@ impl BalanceAwareState {
 static EMPTY_BALANCE_UPDATES: LazyLock<HashMap<String, i64>> = LazyLock::new(HashMap::new);
 
 struct SortedConflictState {
-    /// Payloads currently on the channel, rebuilt from each delta. Sorted, so
-    /// the order floor for republishing is the max (`.last()`).
     on_chain: BTreeSet<Inscription>,
     discarded: DiscardedPayloads,
-    /// Payloads that have finalized — pinned in `on_chain` permanently and
-    /// never re-homed or discarded again.
     finalized: HashSet<Inscription>,
 }
 

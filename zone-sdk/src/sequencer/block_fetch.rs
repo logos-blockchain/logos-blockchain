@@ -34,9 +34,9 @@ pub(super) struct BlockEventResult {
     /// inscription+withdraw bundle).
     pub(super) finalized_items: Vec<FinalizedTx>,
     pub(super) channel_update: Option<ChannelUpdateInfo>,
-    /// Inscriptions mined in this block — surfaced so the consumer gets an
-    /// `OnChain` tx-status when a tx lands, independent of whether it moved the
-    /// channel lineage (our own publishes are already in the lineage).
+    /// Inscriptions that appeared in this block. Surfaced so a consumer learns
+    /// its tx reached the chain (`OnChain` status) even when the tx didn't move
+    /// the canonical channel chain.
     pub(super) mined_inscriptions: Vec<InscriptionInfo>,
 }
 

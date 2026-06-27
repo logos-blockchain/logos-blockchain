@@ -34,9 +34,6 @@ pub trait ZoneState: Send {
 pub struct InMemoryZoneState {
     pending: Vec<Msg>,
     finalized: Vec<Msg>,
-    /// Payload bytes of finalized inscriptions, pinned permanently. Keyed on
-    /// the raw payload (which carries the `tx_uuid`) so a finalized payload
-    /// is never re-published when a losing competitor is later orphaned.
     finalized_payloads: HashSet<Vec<u8>>,
     checkpoint: Option<SequencerCheckpoint>,
     channel_view: Option<SequencerChannelView>,

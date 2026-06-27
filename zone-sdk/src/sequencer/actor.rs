@@ -550,16 +550,19 @@ where
         }
     }
 
-    /// Build the [`ChannelUpdate`].
+    /// Build the [`ChannelUpdate`] returned to the consumer.
     ///
-    /// `orphaned` is the union (deduped by `tx_hash`) of the block delta of
-    /// inscriptions removed from the channel and our pending that can no longer
-    /// land ([`TxState::shed_off_branch_pending`]) — the latter including
-    /// pending that never landed, which is absent from the block delta. A tx in
-    /// both halves keeps the shed variant: it carries the `AtomicWithdraw`
-    /// bundle metadata the block delta lacks.
+    /// `orphaned` combines two sources, deduped by `tx_hash`:
+    /// - inscriptions that left the channel chain between the old and new
+    ///   canonical tip, and
+    /// - our own pending that can no longer land on the new tip
+    ///   ([`TxState::shed_off_branch_pending`]), including pending that never
+    ///   mined and so appears in no on-chain delta.
     ///
-    /// `adopted` is the block delta of inscriptions added to the channel.
+    /// A tx in both keeps the shed variant: it carries the `AtomicWithdraw`
+    /// bundle metadata the on-chain delta lacks.
+    ///
+    /// `adopted` is the inscriptions added to the channel chain.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
         let shed = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),

@@ -129,13 +129,8 @@ fn handle_event(
             channel_update,
             finalized,
         } => {
-            // Pin finalized first so the re-publish dedup below can see them: a
-            // finalized inscription has left the above-LIB `channel_update`
-            // window, so this is the only signal that its payload is permanently
-            // on chain.
-            if !finalized.is_empty() {
-                apply_finalized(&finalized, state);
-            }
+            // Pin finalized payloads before the re-publish dedup below.
+            apply_finalized(&finalized, state);
             apply_channel_update(channel_update, state, sequencer);
             state.save_checkpoint(checkpoint);
         }
@@ -154,6 +149,9 @@ fn apply_finalized(items: &[FinalizedTx], state: &mut InMemoryZoneState) {
             FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
         })
         .collect();
+    if inscriptions.is_empty() {
+        return;
+    }
     state.on_finalized(&inscriptions);
     ui::render_state(state);
     ui::prompt();
@@ -168,12 +166,11 @@ fn apply_channel_update(
     if orphaned.is_empty() {
         return;
     }
-    // Orphans already back on the channel under a fresh `this_msg` appear in
-    // `adopted`; republishing them would duplicate. Payloads carry a `tx_uuid`,
-    // so they're unique.
-    let readopted: HashSet<&[u8]> = adopted.iter().map(|i| i.payload.as_slice()).collect();
+    // Dedup by payload (carries a unique tx_uuid): an orphan already back on
+    // the channel reappears in `adopted`, so don't republish it.
+    let adopted_payloads: HashSet<&[u8]> = adopted.iter().map(|i| i.payload.as_slice()).collect();
     for entry in &orphaned {
-        handle_orphan(state, sequencer, entry, &readopted);
+        handle_orphan(state, sequencer, entry, &adopted_payloads);
     }
 }
 
@@ -181,14 +178,14 @@ fn handle_orphan(
     state: &mut InMemoryZoneState,
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
     entry: &OrphanedTx,
-    readopted: &HashSet<&[u8]>,
+    adopted_payloads: &HashSet<&[u8]>,
 ) {
     let OrphanedTx::Inscription(info) = entry else {
         debug!("ignoring atomic-withdraw orphan; TUI does not publish bundles");
         return;
     };
-    if readopted.contains(info.payload.as_slice()) {
-        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "orphan re-adopted; not republishing");
+    if adopted_payloads.contains(info.payload.as_slice()) {
+        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "orphan already on channel; not republishing");
         return;
     }
     if state.is_finalized(info.payload.as_slice()) {

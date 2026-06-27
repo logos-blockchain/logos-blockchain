@@ -602,14 +602,9 @@ impl TxState {
         })
     }
 
-    /// The channel lineage at an L1 tip: the mined chain extended forward
-    /// through links that haven't been replaced — un-mined records whose
-    /// slot is still open. Built from on-chain records only
-    /// (`block_inscriptions`), **not** our pending, so an inscription joins
-    /// the lineage when it first mines, not when we publish it. We keep
-    /// un-mined records rather than evict them, so a transient un-mine —
-    /// even the same block leaving and later returning — leaves the lineage
-    /// unchanged.
+    /// The channel's inscription chain at an L1 tip: the mined inscriptions,
+    /// extended forward through on-chain links we still hold whose position
+    /// hasn't been taken by a competing inscription.
     ///
     /// Capture this at the *old* tip before inserting a new block; computing it
     /// afterwards would let the just-added block bridge into the "before" view.
@@ -620,7 +615,7 @@ impl TxState {
 
         // Index every on-chain record we still hold — including off-canonical
         // un-mined ones — by `this_msg` and by parent, so the walk can extend
-        // through slots that currently have no mined occupant.
+        // through a chain position that currently has no mined inscription.
         let mut by_msg: HashMap<MsgId, InscriptionInfo> = HashMap::new();
         let mut children: HashMap<MsgId, HashSet<MsgId>> = HashMap::new();
         for inscriptions in self.block_inscriptions.values() {
@@ -633,8 +628,9 @@ impl TxState {
             }
         }
 
-        // Walk forward from the mined tip, extending only through a slot that has
-        // a single un-replaced occupant; a contested slot ends the walk.
+        // Walk forward from the mined tip, extending only where a single
+        // un-replaced inscription chains off the current link; a contested
+        // position (two competing children) ends the walk.
         let mut current = self.channel_tip_at(tip);
         while let Some(kids) = children.get(&current) {
             let mut candidates = kids.iter().filter(|id| !ids.contains(*id));

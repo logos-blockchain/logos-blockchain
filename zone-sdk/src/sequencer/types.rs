@@ -259,29 +259,33 @@ pub enum TxSource {
     Other,
 }
 
-/// Channel state delta from one [`Event::BlocksProcessed`].
+/// How the channel changed across one [`Event::BlocksProcessed`].
 ///
-/// `orphaned` and `adopted` are the block delta: inscriptions removed from the
-/// channel and inscriptions added to it. Apply the whole delta to any state you
-/// derive from the channel — revert `orphaned`, apply `adopted`. Both empty
-/// means nothing changed. A conflict (another inscription took a slot you were
-/// building on) shows up as a non-empty `orphaned`; a plain extension is
-/// `adopted` only.
+/// The channel is an ordered chain of inscriptions. It can momentarily fork —
+/// competing inscriptions chain off the same parent — and this reports how the
+/// canonical chain moved since the last event:
+///
+/// - `adopted`: inscriptions now on the channel that weren't before — apply
+///   them.
+/// - `orphaned`: inscriptions that were on the channel (or that you published
+///   and were still waiting to land) and no longer are — revert them and treat
+///   them as republish candidates.
+///
+/// Both empty means nothing changed.
 ///
 /// Consumer pattern:
-/// 1. On [`Event::BlocksProcessed`]: mirror the canonical channel by reverting
-///    every `orphaned` entry and applying every `adopted` entry. Both empty
-///    means nothing changed.
-/// 2. Process the orphans so that no useful information is lost — e.g. if your
-///    inscriptions are Zone blocks, extract the Zone transactions and re-insert
-///    them into your mempool. Reprocessing is idempotent: anything still valid
-///    is already pending and no-ops, so only genuinely-dead work is re-sent.
+/// 1. On each event, mirror the channel: revert every `orphaned` entry and
+///    apply every `adopted` entry.
+/// 2. Process the orphans so no useful work is lost — e.g. if your inscriptions
+///    carry Zone transactions, return them to your mempool. Reprocessing is
+///    idempotent: anything still valid is already pending and no-ops, so only
+///    genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
-    /// Inscriptions removed from the channel — the block delta plus our pending
-    /// that can no longer land (including pending that never landed, so it
-    /// appears nowhere else). Revert from state and treat as republish
-    /// candidates.
+    /// Inscriptions removed from the channel: inscriptions that were on chain
+    /// and our own pending that can no longer finalize, because a conflicting
+    /// inscription took their place in the chain (a parent double-spend).
+    /// Revert from state and treat as republish candidates.
     ///
     /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
     /// via [`super::SequencerHandle::publish`]. For
@@ -291,9 +295,9 @@ pub struct ChannelUpdate {
     /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
     /// `withdraw_nonce` internally on each publish.
     pub orphaned: Vec<OrphanedTx>,
-    /// Inscriptions added to the channel (block delta). Includes entries this
-    /// instance submitted — consumers dedup by `this_msg` against the values
-    /// returned from their publish calls.
+    /// Inscriptions added to the channel. Includes entries this instance
+    /// submitted — consumers dedup by `this_msg` against the values returned
+    /// from their publish calls.
     pub adopted: Vec<InscriptionInfo>,
 }
 
