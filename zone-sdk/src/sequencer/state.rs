@@ -613,9 +613,7 @@ impl TxState {
         let mut lineage = self.collect_inscriptions_on_branch(tip);
         let mut ids: HashSet<MsgId> = lineage.iter().map(|i| i.this_msg).collect();
 
-        // Index every on-chain record we still hold — including off-canonical
-        // un-mined ones — by `this_msg` and by parent, so the walk can extend
-        // through a chain position that currently has no mined inscription.
+        // Index every inscription we hold to form the channel lineage.
         let mut by_msg: HashMap<MsgId, InscriptionInfo> = HashMap::new();
         let mut children: HashMap<MsgId, HashSet<MsgId>> = HashMap::new();
         for inscriptions in self.block_inscriptions.values() {
