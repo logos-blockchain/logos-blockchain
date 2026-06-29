@@ -1,5 +1,5 @@
 use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_utils::bounded_vec::UpperBoundedVec;
 use nom::{
     IResult, Parser as _,
@@ -16,11 +16,7 @@ use crate::{
     mantle::{
         MantleTx, Note, NoteId, SignedMantleTx,
         nom::{NomDecode as _, NomEncode as _},
-        ops::{
-            Op, OpProof,
-            leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
-            transfer::TransferOp,
-        },
+        ops::{Op, OpProof, transfer::TransferOp},
     },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
 };
@@ -65,26 +61,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     let (input, ops) = Ops::decode(input)?;
 
     Ok((input, MantleTx(ops)))
-}
-
-// ==============================================================================
-// Leader Operation Decoders
-// ==============================================================================
-
-pub(crate) fn decode_leader_claim(input: &[u8]) -> IResult<&[u8], LeaderClaimOp> {
-    // LeaderClaim = RewardsRoot VoucherNullifier
-    let (input, rewards_root_fr) = decode_field_element(input)?;
-    let (input, voucher_nullifier_fr) = decode_field_element(input)?;
-    let (input, pk) = decode_zk_public_key(input)?;
-
-    Ok((
-        input,
-        LeaderClaimOp {
-            rewards_root: RewardsRoot::from(rewards_root_fr),
-            voucher_nullifier: VoucherNullifier::from(voucher_nullifier_fr),
-            pk,
-        },
-    ))
 }
 
 // ==============================================================================
@@ -183,11 +159,6 @@ fn decode_groth16(input: &[u8]) -> IResult<&[u8], CompressedGroth16Proof> {
         |proof: [u8; GROTH16_BYTES]| CompressedGroth16Proof::from_bytes(&proof),
     )
     .parse(input)
-}
-
-pub(crate) fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
-    // ZkPublicKey = FieldElement
-    map(decode_field_element, ZkPublicKey::new).parse(input)
 }
 
 const ED25519_SIG_BYTES: usize = 64;
@@ -350,16 +321,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
     bytes
 }
 
-/// Encode leader operations
-#[must_use]
-pub fn encode_leader_claim(op: &LeaderClaimOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_field_element(&op.rewards_root.into()));
-    bytes.extend(encode_field_element(&op.voucher_nullifier.into()));
-    bytes.extend(encode_field_element(op.pk.as_fr()));
-    bytes
-}
-
 /// Encode transfer operation
 fn encode_note(note: &Note) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -507,7 +468,7 @@ mod tests {
     use std::{collections::HashMap, panic};
 
     use ark_ff::AdditiveGroup as _;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
     use lb_utils::bounded_vec::BoundedError;
     use multiaddr::Multiaddr;
     use num_bigint::BigUint;
@@ -523,6 +484,7 @@ mod tests {
                     inscribe::{self, Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
+                leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             },
             tx::GasPrices,
