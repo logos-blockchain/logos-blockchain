@@ -2,22 +2,45 @@
 
 ### 📦 Prerequisites
 
-1. Download and unzip the **node binary** for your architecture:
+1. Download `logos-core` binaries:
 
-   ```bash
-    tar -xzf logos-blockchain-node-<arch>-<version>.tar.gz
-   ```
+- `lgpd` (Logos Package Downloader): https://github.com/logos-co/logos-package-downloader/releases/tag/0.2.0
+- `lgpm` (Logos Package Manager): https://github.com/logos-co/logos-package-manager/releases/tag/0.2.0
+- `logoscore` (Logos Core CLI): https://github.com/logos-co/logos-logoscore-cli/releases/tag/0.2.0
+
+2. Download the Logos Blockchain module using the Logos Package Downloader:
+
+```bash
+lgpd download blockchain_module --version 0.2.0 --output ./
+# writes ./blockchain_module-0.2.0.lgx
+```
+
+3. Install the Logos Blockchain module using the Logos Package Manager:
+
+```bash
+lgpm --modules-dir ./modules install --file blockchain_module-0.2.0.lgx
+```
+
+4. Launch the Logos Core CLI in daemon mode and load the blockchain module:
+
+```bash
+logoscore -m ./modules -D &
+logoscore load-module blockchain_module
+```
 
 ### ⚙️ Initialize Your Node
 
 Generate a default configuration by connecting to the bootstrap peers:
 
 ```bash
-./logos-blockchain-node init-config \
-    -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/{TODO} \
-    -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/{TODO} \
-    -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/{TODO} \
-    -p /ip4/65.108.203.235/udp/50001/quic-v1/p2p/{TODO}
+logoscore call blockchain_module generate_user_config '{
+  "initial_peers": [
+    "/ip4/65.109.51.37/udp/3000/quic-v1/p2p/{TODO}",
+    "/ip4/65.109.51.37/udp/3001/quic-v1/p2p/{TODO}",
+    "/ip4/65.109.51.37/udp/3002/quic-v1/p2p/{TODO}",
+    "/ip4/65.109.51.37/udp/50001/quic-v1/p2p/{TODO}"
+  ]
+}'
 ```
 
 If your node has a known public IP address and you want to disable NAT traversal, you can add `--external-address /ip4/<public-ip>/udp/<port>/quic-v1` to the previous command. Nodes behind NAT or CG-NAT require no extra flags — NAT traversal is enabled by default.
@@ -29,17 +52,17 @@ This takes a few seconds and produces a `user_config.yaml` file.
 Run the node:
 
 ```bash
-./logos-blockchain-node user_config.yaml
+logoscore call blockchain_module start user_config.yaml ""
 ```
 
 The node writes rotating log files (one per hour).
 
 ### ✅ Verify It Works
 
-Check your local consensus state by querying your node's API, by default listening on port `8080`:
+Check your local consensus state by querying your node's API:
 
 ```
-curl -w "\n" http://localhost:8080/cryptarchia/info
+logoscore call blockchain_module get_cryptarchia_info | jq -r .result.value | jq .
 ```
 
 Your node should be in `Bootstrapping` mode for a few minutes, with both `slot` and `height` steadily increasing.
@@ -121,13 +144,27 @@ Having issues? Reach out to the Logos Blockchain team on [Discord][testnet-disco
     * For a release candidate (for devnet), you must use:
 
         ```
-            ./logos-blockchain-node init-config \
-                -p /ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8 \
-                -p /ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ \
-                -p /ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf \
-                -p /ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH
+            logoscore call blockchain_module generate_user_config '{
+                "initial_peers": [
+                    "/ip4/65.108.203.235/udp/3000/quic-v1/p2p/12D3KooWNbZTQ86TZ9MrZ2wm6iUFFj25AFTzFLUD7i6XkZHoUzU8",
+                    "/ip4/65.108.203.235/udp/3001/quic-v1/p2p/12D3KooWNhXaH4XTX6Pp66NDQZxZpXYQzeruwwraMvTxojz1QXPJ",
+                    "/ip4/65.108.203.235/udp/3002/quic-v1/p2p/12D3KooWNTLPg5uYPKgZCDvzyaWNwZNcwVKmfS2bNv52E9L9P7Hf",
+                    "/ip4/65.108.203.235/udp/50001/quic-v1/p2p/12D3KooWMULUG8RXC2esnfLcVzGHohf6KNPSswkCKa1mdpXz4tHH"
+                ]
+            }'
         ```
-    * For a release (for testnet), copy-paste the new testnet addresses from the [testnet dashboard][testnet-dashboard]
+    * For a release (for testnet), you must use:
+
+        ```
+            logoscore call blockchain_module generate_user_config '{
+                "initial_peers": [
+                    "/ip4/65.109.51.37/udp/3000/quic-v1/p2p/12D3KooWFrouXfmrR4nsLMtE7wu15DoMJ6VtoUtHinREZCvbWHar",
+                    "/ip4/65.109.51.37/udp/3001/quic-v1/p2p/12D3KooWJRGau8M1rjT7R5e4YYsgdFhsMX35nRDtMwCDjxQkXAHz",
+                    "/ip4/65.109.51.37/udp/3002/quic-v1/p2p/12D3KooWQXJavMDTRscjauFSgVAB1VLB6Rzpy2uY5SU9Tk7927tb",
+                    "/ip4/65.109.51.37/udp/50001/quic-v1/p2p/12D3KooWSQc7CcGtvWDPF1yCbBthFnQjprfCVHmfmNDUrSmqQsU1"
+                ]
+            }'
+        ```
 - [ ] Delete this checklist and publish
 
 [release-notion]: https://www.notion.so/nomos-tech/Internal-Devnet-Launch-February-2026-2fe261aa09df8025ad94e380933b4cf9#2ff261aa09df8058935ecb85aa587564
