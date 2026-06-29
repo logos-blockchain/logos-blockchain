@@ -666,6 +666,10 @@ mod tests {
             unimplemented!()
         }
 
+        async fn discovered_peers(&self) -> Result<HashSet<Self::PeerId>, DynError> {
+            Ok(HashSet::new())
+        }
+
         async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
             Box::new(stream::empty())
         }

@@ -112,6 +112,21 @@ impl ServiceConfig {
             bootstrap: lb_chain_network_service::BootstrapConfig {
                 ibd: lb_chain_network_service::IbdConfig {
                     peers: self.user.network.bootstrap.ibd.peers,
+                    peer_discovery_wait_timeout: self
+                        .user
+                        .network
+                        .bootstrap
+                        .ibd
+                        .peer_discovery_wait_timeout,
+                    tips_fetch_max_attempts: self
+                        .user
+                        .network
+                        .bootstrap
+                        .ibd
+                        .tips_fetch_max_attempts,
+                    tips_fetch_min_delay: self.user.network.bootstrap.ibd.tips_fetch_min_delay,
+                    tips_fetch_max_delay: self.user.network.bootstrap.ibd.tips_fetch_max_delay,
+                    round_delay: self.user.network.bootstrap.ibd.round_delay,
                 },
             },
             network: LibP2pAdapterSettings {

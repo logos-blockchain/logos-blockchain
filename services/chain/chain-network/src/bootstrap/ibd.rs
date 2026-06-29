@@ -136,6 +136,78 @@ where
             config.peers.len()
         );
 
+        self.wait_for_peer_discovery_with_timeout(
+            &config.peers,
+            config.peer_discovery_wait_timeout,
+        )
+        .await;
+
+        self.download_blocks(config, orphan_config).await?;
+        Ok(self.block_processor)
+    }
+
+    /// Waits until peers beyond the configured IBD peer set are discovered,
+    /// or until the timeout expires.
+    ///
+    /// This is necessary to not overload the configured IBD peers with block
+    /// download requests. Orphan downloader fans out across discovered peers.
+    async fn wait_for_peer_discovery_with_timeout(
+        &self,
+        ibd_peers: &HashSet<NetAdapter::PeerId>,
+        timeout: Duration,
+    ) {
+        let interval = Duration::from_millis(500).min(timeout.div_f32(2.0));
+
+        info!(
+            ?timeout,
+            ?interval,
+            "IBD: waiting until peers are discovered"
+        );
+
+        if tokio::time::timeout(timeout, async {
+            self.wait_for_peer_discovery(ibd_peers, interval).await;
+        })
+        .await
+        .is_err()
+        {
+            warn!("IBD: peer discovery warmup timed out");
+        }
+    }
+
+    /// Waits until Kademlia discovery has produced at least one peer beyond
+    /// the configured IBD peer set.
+    async fn wait_for_peer_discovery(
+        &self,
+        ibd_peers: &HashSet<NetAdapter::PeerId>,
+        interval: Duration,
+    ) {
+        loop {
+            match self.network.discovered_peers().await {
+                Ok(peers) if !peers.is_subset(ibd_peers) => {
+                    info!(
+                        "IBD: peer discovery warmed up ({} discovered, {} beyond IBD peer set)",
+                        peers.len(),
+                        peers.difference(ibd_peers).count(),
+                    );
+                    return;
+                }
+                Ok(_) => {}
+                Err(e) => debug!("IBD: discovered_peers query failed: {e}"),
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }
+
+    /// Start downloading blocks:
+    /// 1. Fetch tips from configured peers
+    /// 2. Enqueue tips into orphan downloader
+    /// 3. Drain orphan downloader, downloading/applying blocks.
+    /// 4. Repeat 1~3 until all tips are present in the local tree
+    async fn download_blocks(
+        &mut self,
+        config: IbdConfig<NetAdapter::PeerId>,
+        orphan_config: &OrphanConfig,
+    ) -> Result<(), Error> {
         let mut downloader = OrphanBlocksDownloader::new(
             self.network.clone(),
             config.peers.len().try_into().unwrap(),
@@ -143,15 +215,17 @@ where
         );
 
         loop {
-            self.drain_downloader(&mut downloader).await;
-
-            let unsynced_tips = self.collect_unsynced_tips(&config.peers).await?;
+            let unsynced_tips = self.collect_unsynced_tips(&config).await?;
             if unsynced_tips.is_empty() {
                 info!("IBD complete: all configured peer tips are present in the local tree");
-                return Ok(self.block_processor);
+                return Ok(());
             }
             let info = self.block_processor.info().await?;
             enqueue_tips(&mut downloader, unsynced_tips, &info);
+
+            self.drain_downloader(&mut downloader).await;
+
+            tokio::time::sleep(config.round_delay).await;
         }
     }
 
@@ -193,11 +267,14 @@ where
     /// across every retry attempt.
     async fn collect_unsynced_tips(
         &self,
-        peers: &HashSet<NetAdapter::PeerId>,
+        config: &IbdConfig<NetAdapter::PeerId>,
     ) -> Result<HashSet<HeaderId>, Error> {
-        debug!("IBD: collecting unsynced tips from {} peers", peers.len());
+        debug!(
+            "IBD: collecting unsynced tips from {} peers",
+            config.peers.len()
+        );
 
-        let tips = fetch_tips_with_retry(&self.network, peers)
+        let tips = fetch_tips_with_retry(&self.network, config)
             .await
             .inspect_err(|_| error!("IBD: no configured peer returned a tip this round"))?;
 
@@ -216,21 +293,19 @@ where
 /// nothing.
 async fn fetch_tips_with_retry<NetAdapter, RuntimeServiceId>(
     network: &NetAdapter,
-    peers: &HashSet<NetAdapter::PeerId>,
+    config: &IbdConfig<NetAdapter::PeerId>,
 ) -> Result<HashSet<HeaderId>, AllPeersFailed>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
-    NetAdapter::PeerId: Copy + Debug + Send + Sync,
+    NetAdapter::PeerId: Copy + Clone + Eq + Hash + Debug + Send + Sync,
     RuntimeServiceId: Sync,
 {
-    (|| fetch_tips(network, peers.iter().copied()))
+    (|| fetch_tips(network, config.peers.iter().copied()))
         .retry(
-            // TODO: make this configurable.
-            // Hardcoded for now to not break YAML backward compatibility.
             ExponentialBuilder::default()
-                .with_min_delay(Duration::from_millis(250))
-                .with_max_delay(Duration::from_secs(1))
-                .with_max_times(3)
+                .with_min_delay(config.tips_fetch_min_delay)
+                .with_max_delay(config.tips_fetch_max_delay)
+                .with_max_times(config.tips_fetch_max_attempts)
                 .with_jitter(),
         )
         .notify(|_, delay| debug!("IBD: tip fetch returned no tips; retrying in {delay:?}"))
@@ -587,7 +662,14 @@ mod tests {
     struct NodeId(usize);
 
     fn config(peers: HashSet<NodeId>) -> IbdConfig<NodeId> {
-        IbdConfig { peers }
+        IbdConfig {
+            peers,
+            peer_discovery_wait_timeout: Duration::from_millis(10),
+            tips_fetch_max_attempts: 3,
+            tips_fetch_min_delay: Duration::from_millis(250),
+            tips_fetch_max_delay: Duration::from_secs(1),
+            round_delay: Duration::from_secs(1),
+        }
     }
 
     fn orphan_config() -> OrphanConfig {
@@ -733,6 +815,12 @@ mod tests {
                 }),
                 Err(()) => Err(DynError::from("cannot provide tip")),
             }
+        }
+
+        async fn discovered_peers(&self) -> Result<HashSet<Self::PeerId>, DynError> {
+            // Pretend discovery has produced one peer outside the IBD set so
+            // `wait_for_peer_discovery` exits immediately in tests.
+            Ok([NodeId(usize::MAX)].into())
         }
 
         async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {

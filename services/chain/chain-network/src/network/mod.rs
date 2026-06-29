@@ -33,6 +33,9 @@ pub trait NetworkAdapter<RuntimeServiceId> {
 
     async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError>;
 
+    /// Returns peers known via discovery (Kademlia routing table).
+    async fn discovered_peers(&self) -> Result<HashSet<Self::PeerId>, DynError>;
+
     /// Sample up to `max_peers` currently-connected peers and request their
     /// chain tip via `GetTip`, concurrently. The returned stream yields each
     /// successful response as it resolves; per-peer failures are dropped.

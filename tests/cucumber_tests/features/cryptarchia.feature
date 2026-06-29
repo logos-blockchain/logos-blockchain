@@ -48,17 +48,26 @@ Feature: Cryptarchia
 
   @cryptarchia_ci
   Scenario: IBD scales across discovered peers under trusted-peer bottleneck
-    Given I have a cluster with capacity of 4 nodes
+    # After NODE_1 has produced 4 blocks, start NODE_2 first, and wait for it
+    # to become online. Then start 4 more nodes at once.
+    # Although `max_inbound_requests = 1`, IBD of the 4 new nodes should fan
+    # out across NODE_1 and NODE_2 via peer discovery.
+    Given I have a cluster with capacity of 6 nodes
     And no nodes are declared as blend providers
     And we use IBD peers
     And I have user config override "network.backend.swarm.chain_sync.max_inbound_requests" as "1"
+    And I have user config override "network.backend.swarm.identify.hide_listen_addrs" as "false"
+    And I have user config override "cryptarchia.service.bootstrap.prolonged_bootstrap_period" as "seconds(0)"
     And all peers must be mode online after startup in 30 seconds
     And I start node "NODE_1"
     When node "NODE_1" is at height 4 in 300 seconds
-    And I immediate start peer node "NODE_2" connected to node "NODE_1"
+    And I start peer node "NODE_2" connected to node "NODE_1"
+    When node "NODE_2" is at height 4 in 40 seconds
     And I immediate start peer node "NODE_3" connected to node "NODE_1"
     And I immediate start peer node "NODE_4" connected to node "NODE_1"
-    Then all nodes have at least 4 blocks and converged to within 1 blocks in 300 seconds
+    And I immediate start peer node "NODE_5" connected to node "NODE_1"
+    And I immediate start peer node "NODE_6" connected to node "NODE_1"
+    Then all nodes have at least 4 blocks and converged to within 1 blocks in 40 seconds
     Then I stop all nodes
 
   @cryptarchia_ci

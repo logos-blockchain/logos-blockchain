@@ -274,6 +274,10 @@ where
         metrics::chainsync_observe_request_tip(started_at.elapsed(), response)
     }
 
+    async fn discovered_peers(&self) -> Result<HashSet<Self::PeerId>, DynError> {
+        Self::get_discovered_peers(&self.network_relay).await
+    }
+
     async fn sample_tips(&self, max_peers: usize) -> BoxedStream<GetTipResponse> {
         use futures::stream::StreamExt as FuturesStreamExt;
         let connected_peers = match Self::get_connected_peers(&self.network_relay).await {
@@ -416,7 +420,7 @@ where
                         )
                         .await?;
 
-                    debug!("Requested orphan parents from peer: {peer}");
+                    debug!("received a stream of orphan parents from peer: {peer}");
 
                     Ok(stream)
                 }
