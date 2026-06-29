@@ -2,7 +2,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx,
         gas::{GasCost, GasOverflow},
-        tx_builder::{MantleTxBuilder, TxBuilderError},
+        transactions::{MantleTxBuilder, TxBuilderError},
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };

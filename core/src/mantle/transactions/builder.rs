@@ -4,15 +4,14 @@ use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_utils::bounded_vec::BoundedError;
 use thiserror::Error;
 
-use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
-        NoteId,
+        GasCalculator as _, GasConstants, Note, NoteId, Op, Utxo,
         encoding::BoundedUtxos,
         gas::{GasCost, GasOverflow},
         ledger::{Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
-        tx::{GasPrices, MantleTxContext},
+        transactions::{GasPrices, MantleTx, MantleTxContext},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -281,7 +280,7 @@ mod tests {
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
             },
-            tx::MantleTxGasContext,
+            transactions::MantleTxGasContext,
         },
         sdp::{DeclarationId, Locator, ProviderId, ServiceType},
     };

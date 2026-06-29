@@ -286,7 +286,7 @@ use crate::{
         Utxo,
         ledger::{Inputs, Outputs},
         ops::channel::ChannelKeyIndex,
-        tx::MantleTxGasContext,
+        transactions::MantleTxGasContext,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -525,7 +525,7 @@ mod tests {
                 },
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             },
-            tx::GasPrices,
+            transactions::GasPrices,
         },
         sdp::{
             ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId,

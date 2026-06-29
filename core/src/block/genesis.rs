@@ -13,7 +13,7 @@ use crate::{
         genesis_tx::{self, GenesisTx},
         ledger::{Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
-        tx::VerificationError,
+        transactions::VerificationError,
     },
 };
 

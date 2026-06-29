@@ -10,19 +10,19 @@ pub mod ledger;
 pub mod mock;
 pub mod nom;
 pub mod ops;
-pub mod tx;
-pub mod tx_builder;
+pub mod transactions;
 
 pub use gas::{GasCalculator, GasConstants};
 pub use genesis_tx::CryptarchiaParameter;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
-pub use tx::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 
+pub use crate::mantle::transactions::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 use crate::mantle::{
     gas::{Gas, GasCost, GasOverflow},
     ops::transfer::TransferOp,
+    transactions::OperationVerificationHelper,
 };
 
 pub const MAX_MANTLE_TXS: usize = 1024;
@@ -74,7 +74,7 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + St
 
     fn verify_ops_proofs_with_helper(
         &self,
-        helper: &impl tx::OperationVerificationHelper,
+        helper: &impl OperationVerificationHelper,
     ) -> Result<(), VerificationError>;
 }
 
@@ -143,7 +143,7 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
 
     fn verify_ops_proofs_with_helper(
         &self,
-        operation_verification_helper: &impl tx::OperationVerificationHelper,
+        operation_verification_helper: &impl OperationVerificationHelper,
     ) -> Result<(), VerificationError> {
         <T as AuthenticatedMantleTx>::verify_ops_proofs_with_helper(
             self,

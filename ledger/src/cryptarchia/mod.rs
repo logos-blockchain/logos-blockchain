@@ -750,7 +750,7 @@ pub mod tests {
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs},
             ops::{leader_claim::VoucherCm, sdp::SDPDeclareOp},
-            tx::GasPrices,
+            transactions::GasPrices,
         },
         sdp::{Declaration, DeclarationId, Locator, ServiceParameters, ServiceType},
     };

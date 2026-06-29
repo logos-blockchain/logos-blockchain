@@ -222,7 +222,7 @@ mod tests {
                     withdraw::{ChannelWithdrawOp, WithdrawExecutionContext},
                 },
             },
-            tx::{GasPrices, MantleTxGasContext},
+            transactions::{GasPrices, MantleTxGasContext},
         },
         sdp::locked_notes::LockedNotes,
     };

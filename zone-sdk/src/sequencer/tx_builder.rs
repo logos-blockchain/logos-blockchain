@@ -11,7 +11,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        tx::TxHash,
+        transactions::TxHash,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };

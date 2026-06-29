@@ -25,7 +25,7 @@ use lb_core::{
             },
             leader_claim::{LeaderClaimExecutionContext, LeaderClaimValidationContext},
         },
-        tx::{GasPrices, MantleTxContext, MantleTxGasContext},
+        transactions::{GasPrices, MantleTxContext, MantleTxGasContext},
     },
     proofs::leader_proof,
 };

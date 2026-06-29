@@ -16,7 +16,7 @@ use lb_core::mantle::{
             inscribe::{Inscription, InscriptionOp},
         },
     },
-    tx::TxHash,
+    transactions::TxHash,
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};

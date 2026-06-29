@@ -10,7 +10,7 @@ use lb_core::{
             Op, OpId as _,
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
-        tx::TxHash,
+        transactions::TxHash,
     },
 };
 use tracing::{debug, error, warn};

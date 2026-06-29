@@ -20,7 +20,7 @@ use lb_core::{
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
-        tx::TxHash,
+        transactions::TxHash,
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};

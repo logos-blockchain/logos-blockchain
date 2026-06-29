@@ -28,7 +28,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, GenesisTx as _, Transaction, TxHash, gas::MainnetGasConstants,
-        tx::GasPrices,
+        transactions::GasPrices,
     },
     sdp::{Declaration, DeclarationId},
 };
