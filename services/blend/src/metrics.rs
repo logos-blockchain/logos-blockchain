@@ -22,7 +22,11 @@ mod imp {
     }
 
     pub fn core_peers_negotiated(count: usize) {
-        lb_tracing::metric_gauge_u64!(blend_core_peers_negotiated, count as u64);
+        lb_tracing::metric_observable_gauge_u64_set!(blend_core_peers_negotiated, count as u64);
+    }
+
+    pub fn peers_negotiated_stop_reporting() {
+        lb_tracing::metric_observable_gauge_u64_clear!(blend_core_peers_negotiated);
     }
 
     pub fn outbound_publish_ok() {
