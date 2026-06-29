@@ -1112,7 +1112,7 @@ where
             }
         };
         if let Err(e) = new_block_subscription_sender.send(processed_block_event) {
-            warn!("No new-block subscribers to notify: {e}");
+            debug!("No new-block subscribers to notify: {e}");
         }
 
         if prev_lib != new_lib {
@@ -1402,7 +1402,7 @@ where
             }
         };
         if let Err(e) = self.new_block_subscription_sender.send(init_event) {
-            warn!("No new-block subscribers to notify: {e}");
+            debug!("No new-block subscribers to notify: {e}");
         }
 
         // Phase 1: Collect and load blocks in (LIB, tip].
