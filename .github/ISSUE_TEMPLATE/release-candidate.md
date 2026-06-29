@@ -69,7 +69,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Commit and push to `devnet` branch to trigger the cleanup
 - [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Devnet web UI][devnet-web-ui] and make sure it's in setup mode.
 
-### Release version deployment
+### Released version deployment
 
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z-rc.N` tag.
