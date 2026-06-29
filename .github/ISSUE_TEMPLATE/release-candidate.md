@@ -28,7 +28,7 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Branch out from the latest `master` commit with a release branch named `release/X.Y.Z`. If this is not the first release candidate for this version, HARD reset the branch on top of `master` and force-push the new tip
 - [ ] If this is not the first release candidate for this version, post the link of the previous release candidate GH release and the previous release candidate checklist. E.g., for the `X.Y.Z-rc.2` candidate, post the checklist and GH release for `X.Y.Z-rc.1`
 
-<h2 id="genesis-step">Devnet genesis (optional, only whenever a new devnet deployment - with a new genesis - is required)</h2>
+## Devnet genesis (optional, only whenever a new devnet deployment - with a new genesis - is required)
 
 - [ ] Update the inscription file at `deployment/ceremony/genesis/devnet/inscribe.yaml` by setting the `chain_id` field to `X.Y.Z-rc.N` and the `genesis_time` field to be approximately 10 mins in the future, following the existing [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) datetime format. No need to change the `entropy_sources`
 - [ ] Commit and push the changes
@@ -61,7 +61,7 @@ Most of the template content is the same or very similar to what is in `release.
 
 ## Devnet deployment
 
-### Existing state cleanup (optional, only whenever a new genesis has been created in the [genesis step][#genesis-step])
+### Existing state cleanup (optional, only whenever a new genesis has been created in the genesis step)
 
 - [ ] Checkout and hard reset the `devnet` branch to point to the latest commit of the current release branch
 - [ ] Symlink the environment file to the repo root with `ln -sf deployment/.env.devnet .env.devnet`
@@ -93,5 +93,4 @@ Most of the template content is the same or very similar to what is in `release.
 [build-logos-tools-docker-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/build-logos-tools.yml 
 [release-bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [github-release-candidate-section]: #release-candidate-publication
-[genesis-step]: #genesis-step
 [node-docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml

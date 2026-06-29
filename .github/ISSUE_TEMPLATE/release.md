@@ -26,7 +26,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Verify that the `HEAD` of the release branch `release/X.Y.Z` is the same commit that was released in the latest rc
 - [ ] Post the link of the latest release candidate GH release and the previous release candidate checklist that we are promoting to a full release
 
-<h2 id="genesis-step">Testnet genesis (optional, only whenever a new testnet deployment - with a new genesis - is required)</h2>
+## Testnet genesis (optional, only whenever a new testnet deployment - with a new genesis - is required)
 
 - [ ] Update the inscription file at `deployment/ceremony/genesis/testnet/inscribe.yaml` by setting the `chain_id` field to `X.Y.Z` and the `genesis_time` field to be approximately 10 mins in the future, following the existing [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601) datetime format. No need to change the `entropy_sources`
 - [ ] Commit and push the changes
@@ -59,7 +59,7 @@ Most of the template content is the same or very similar to what is in `release-
 
 ## Testnet deployment
 
-### Existing state cleanup (optional, only whenever a new genesis has been created in the [genesis step][#genesis-step])
+### Existing state cleanup (optional, only whenever a new genesis has been created in the genesis step)
 
 - [ ] Checkout and hard reset the `testnet` branch to point to the latest commit of the current release branch
 - [ ] Symlink the environment file to the repo root with `ln -sf deployment/.env.testnet .env.testnet`
@@ -90,5 +90,4 @@ Most of the template content is the same or very similar to what is in `release-
 [build-logos-tools-docker-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/build-logos-tools.yml 
 [release-bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [github-release-section]: #release-publication
-[genesis-step]: #genesis-step
 [node-docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml
