@@ -27,8 +27,8 @@
 //! CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, num_transactions <count>, value <amount>
 //! FAUCET_ALL_USER_WALLETS, rounds <count>
 //! FAUCET_ALL_FUNDING_WALLETS, rounds <count>
-//! CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
-//! CREATE_BLOCKCHAIN_SNAPSHOT_NODE, snapshot_name '<snapshot_name>', node_name '<node_name>'
+//! CREATE_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
+//! CREATE_SNAPSHOT_NODE, snapshot_name '<snapshot_name>', node_name '<node_name>'
 //! RESTART_NODE, node_name '<node_name>'
 //! CRYPTARCHIA_INFO_ALL_NODES
 //! WAIT_ALL_NODES_SYNCED_TO_CHAIN
@@ -59,7 +59,7 @@ use crate::{
         steps::{
             TARGET, manual_nodes,
             manual_nodes::{
-                snapshots::save_named_blockchain_snapshot,
+                snapshots::save_named_node_state_snapshot,
                 utils::{
                     create_snapshots_all_nodes, restart_node,
                     wait_for_all_nodes_to_be_synced_to_chain,
@@ -74,6 +74,7 @@ use crate::{
         wallet::{
             best_node::get_best_node_info,
             checks::wait_for_observed_transaction_hashes,
+            snapshot::save_wallet_snapshot_if_present,
             submissions::SignedUserWalletSubmission,
             sync,
             sync::{WalletSendReadiness, current_available_utxos_for_user_wallets},
@@ -434,13 +435,13 @@ async fn execute_non_stop_manual_command(
     command: &ManualCommand,
 ) -> Result<(), StepError> {
     match command {
-        ManualCommand::CreateBlockchainSnapshotAllNodes { snapshot_name } => {
-            execute_create_blockchain_snapshot_all_nodes(world, snapshot_name)
+        ManualCommand::CreateSnapshotAllNodes { snapshot_name } => {
+            execute_create_snapshot_all_nodes(world, snapshot_name)
         }
-        ManualCommand::CreateBlockchainSnapshotNode {
+        ManualCommand::CreateSnapshotNode {
             snapshot_name,
             node_name,
-        } => execute_create_blockchain_snapshot_node(world, snapshot_name, node_name),
+        } => execute_create_snapshot_node(world, snapshot_name, node_name),
         ManualCommand::CoinSplit {
             wallet,
             outputs,
@@ -772,7 +773,7 @@ fn clear_all_wallet_encumbrances(world: &mut CucumberWorld, step: &str) -> StepR
     Ok(())
 }
 
-fn execute_create_blockchain_snapshot_all_nodes(
+fn execute_create_snapshot_all_nodes(
     world: &CucumberWorld,
     snapshot_name: &str,
 ) -> Result<(), StepError> {
@@ -782,10 +783,11 @@ fn execute_create_blockchain_snapshot_all_nodes(
         });
     }
 
-    create_snapshots_all_nodes(world, snapshot_name)
+    create_snapshots_all_nodes(world, snapshot_name)?;
+    save_wallet_snapshot_if_present(snapshot_name, world)
 }
 
-fn execute_create_blockchain_snapshot_node(
+fn execute_create_snapshot_node(
     world: &CucumberWorld,
     snapshot_name: &str,
     node_name: &str,
@@ -797,10 +799,11 @@ fn execute_create_blockchain_snapshot_node(
     }
 
     if let Some(info) = world.nodes_info.get(node_name) {
-        save_named_blockchain_snapshot(snapshot_name, node_name, &info.runtime_dir)?;
+        save_named_node_state_snapshot(snapshot_name, node_name, &info.runtime_dir)?;
+        save_wallet_snapshot_if_present(snapshot_name, world)?;
         info!(
             target: TARGET,
-            "Saved blockchain snapshot `{snapshot_name}` for node {}",
+            "Saved snapshot `{snapshot_name}` for node {}",
             info.runtime_dir.display()
         );
         Ok(())

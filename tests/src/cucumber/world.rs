@@ -926,13 +926,14 @@ pub struct CucumberWorld {
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
-    /// Manual: If set, all running nodes are copied into a named snapshot when
-    /// the scenario stops them.
-    pub blockchain_snapshot_name_on_stop: Option<String>,
+    /// Manual: Snapshot work to perform when the scenario stops nodes.
+    pub snapshot_save_config: SnapshotSaveConfig,
+    /// Manual: Snapshot work to perform before starting nodes from a snapshot.
+    pub snapshot_restore_config: SnapshotRestoreConfig,
     /// Manual: If set, dynamically started nodes should initialize their chain
     /// state from this named snapshot. This is a scenario-wide startup seeding
     /// setting.
-    pub blockchain_snapshot_on_startup: Option<NodeSnapshot>,
+    pub node_snapshot_on_startup: Option<NodeSnapshot>,
     /// Manual: Whether to have dynamically started nodes join the external
     /// network
     pub join_external_network: Option<bool>,
@@ -970,6 +971,23 @@ pub struct NodeSnapshot {
     /// The node name that this snapshot corresponds to. This is used to
     /// determine which node's data directory will be used.
     pub node: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SnapshotSaveConfig {
+    /// If set, all running node state is copied into this snapshot when nodes
+    /// stop.
+    pub node_state: Option<String>,
+    /// If set, test-framework extension state is saved into this snapshot when
+    /// nodes stop.
+    pub extensions: Option<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SnapshotRestoreConfig {
+    /// If set, test-framework extension state is restored from this snapshot
+    /// before nodes start.
+    pub extensions: Option<String>,
 }
 
 impl Debug for CucumberWorld {
@@ -1091,15 +1109,11 @@ impl Debug for CucumberWorld {
                     self.deployment_config_override_path.as_ref(),
                 ),
             )
+            .field("snapshot_save_config", &self.snapshot_save_config)
+            .field("snapshot_restore_config", &self.snapshot_restore_config)
             .field(
-                "blockchain_snapshot_name_on_stop",
-                &self.blockchain_snapshot_name_on_stop,
-            )
-            .field(
-                "blockchain_snapshot_name_on_startup",
-                &blockchain_snapshot_on_startup_display(
-                    self.blockchain_snapshot_on_startup.as_ref(),
-                ),
+                "node_snapshot_on_startup",
+                &node_snapshot_on_startup_display(self.node_snapshot_on_startup.as_ref()),
             )
             .finish()
     }
@@ -1120,7 +1134,7 @@ pub struct GenesisTokens {
 }
 
 /// The wallet type can either be ussr defined or funding.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum WalletType {
     /// User defined wallets with are not tied to a specific node
     User { wallet_account: WalletAccount },
@@ -1130,7 +1144,7 @@ pub enum WalletType {
 
 /// Information about a wallet resource created in the world, which can be used
 /// to track and reference wallets across steps.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletInfo {
     /// Logical name of the wallet resource, used for referencing in steps.
     pub wallet_name: String,
@@ -2273,7 +2287,7 @@ fn ibd_peers_override_display(ibd_peers_override: Option<&HashSet<PeerId>>) -> S
     )
 }
 
-fn blockchain_snapshot_on_startup_display(node_snapshot: Option<&NodeSnapshot>) -> String {
+fn node_snapshot_on_startup_display(node_snapshot: Option<&NodeSnapshot>) -> String {
     node_snapshot.as_ref().map_or_else(
         || "None".to_owned(),
         |snapshot| format!("Some(NodeSnapshot({}-{}))", snapshot.name, snapshot.node),

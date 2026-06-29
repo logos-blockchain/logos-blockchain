@@ -26,7 +26,7 @@ use crate::{
             },
             manual_nodes::{
                 config_override::{set_deployment_config_override, set_user_config_override},
-                snapshots::{save_named_blockchain_snapshot, validate_snapshot_path_component},
+                snapshots::{save_named_node_state_snapshot, validate_snapshot_path_component},
                 utils::{
                     NodesToStartUnordered, create_snapshots_all_nodes,
                     ensure_all_nodes_agree_on_lib,
@@ -50,7 +50,10 @@ use crate::{
             blend_core_locator_from_node_yaml, blend_core_zk_pk_from_node_yaml,
             resolve_literal_or_env,
         },
-        wallet::sync::{WalletSendReadiness, wait_wallet_send_ready},
+        wallet::{
+            snapshot::save_wallet_snapshot_if_present,
+            sync::{WalletSendReadiness, wait_wallet_send_ready},
+        },
         world::{
             CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec, NodeSnapshot,
             PublicCryptarchiaEndpointPeer,
@@ -474,13 +477,13 @@ fn step_no_blend_providers(world: &mut CucumberWorld) -> StepResult {
     rebuild_pending_local_manual_cluster(world)
 }
 
-#[given(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
-#[when(expr = "I will create a blockchain snapshot {string} of all nodes when stopping")]
+#[given(expr = "I will create a snapshot {string} of all nodes when stopping")]
+#[when(expr = "I will create a snapshot {string} of all nodes when stopping")]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Required by cucumber expression"
 )]
-fn step_set_blockchain_snapshot_on_stop(
+fn step_set_snapshot_all_nodes_on_stop(
     world: &mut CucumberWorld,
     snapshot_name: String,
 ) -> StepResult {
@@ -490,7 +493,9 @@ fn step_set_blockchain_snapshot_on_stop(
         });
     }
     validate_snapshot_path_component(&snapshot_name, "Snapshot name")?;
-    world.blockchain_snapshot_name_on_stop = Some(snapshot_name.trim().to_owned());
+    let snapshot_name = snapshot_name.trim().to_owned();
+    world.snapshot_save_config.node_state = Some(snapshot_name.clone());
+    world.snapshot_save_config.extensions = Some(snapshot_name);
     Ok(())
 }
 
@@ -500,7 +505,7 @@ fn step_set_blockchain_snapshot_on_stop(
     clippy::needless_pass_by_value,
     reason = "Required by cucumber expression"
 )]
-fn step_set_blockchain_snapshot_on_startup(
+fn step_set_node_snapshot_on_startup(
     world: &mut CucumberWorld,
     snapshot_name: String,
     node_name: String,
@@ -508,15 +513,17 @@ fn step_set_blockchain_snapshot_on_startup(
     validate_snapshot_path_component(&snapshot_name, "Snapshot name")?;
     validate_snapshot_path_component(&node_name, "Node name")?;
 
-    world.blockchain_snapshot_on_startup = Some(NodeSnapshot {
-        name: snapshot_name.trim().to_owned(),
+    let snapshot_name = snapshot_name.trim().to_owned();
+    world.node_snapshot_on_startup = Some(NodeSnapshot {
+        name: snapshot_name.clone(),
         node: node_name.trim().to_owned(),
     });
+    world.snapshot_restore_config.extensions = Some(snapshot_name);
     Ok(())
 }
 
-#[given(expr = "I create a blockchain snapshot {string} of all nodes")]
-#[when(expr = "I create a blockchain snapshot {string} of all nodes")]
+#[given(expr = "I create a snapshot {string} of all nodes")]
+#[when(expr = "I create a snapshot {string} of all nodes")]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Required by cucumber expression"
@@ -525,7 +532,7 @@ fn step_set_blockchain_snapshot_on_startup(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require the world as the first `&mut` argument"
 )]
-fn step_create_blockchain_snapshot_all_nodes_now(
+fn step_create_snapshot_all_nodes_now(
     world: &mut CucumberWorld,
     snapshot_name: String,
 ) -> StepResult {
@@ -536,13 +543,14 @@ fn step_create_blockchain_snapshot_all_nodes_now(
     }
 
     create_snapshots_all_nodes(world, &snapshot_name)?;
+    save_wallet_snapshot_if_present(&snapshot_name, world)?;
 
     Ok(())
 }
 
-#[given(expr = "I create a blockchain snapshot {string} of node {string}")]
-#[when(expr = "I create a blockchain snapshot {string} of node {string}")]
-#[then(expr = "I create a blockchain snapshot {string} of node {string}")]
+#[given(expr = "I create a snapshot {string} of node {string}")]
+#[when(expr = "I create a snapshot {string} of node {string}")]
+#[then(expr = "I create a snapshot {string} of node {string}")]
 #[expect(
     clippy::needless_pass_by_value,
     reason = "Required by cucumber expression"
@@ -551,7 +559,7 @@ fn step_create_blockchain_snapshot_all_nodes_now(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require the world as the first `&mut` argument"
 )]
-fn step_create_blockchain_snapshot_node_now(
+fn step_create_snapshot_node_now(
     world: &mut CucumberWorld,
     snapshot_name: String,
     node_name: String,
@@ -563,10 +571,11 @@ fn step_create_blockchain_snapshot_node_now(
     }
 
     if let Some(info) = world.nodes_info.get(&node_name) {
-        save_named_blockchain_snapshot(&snapshot_name, &node_name, &info.runtime_dir)?;
+        save_named_node_state_snapshot(&snapshot_name, &node_name, &info.runtime_dir)?;
+        save_wallet_snapshot_if_present(&snapshot_name, world)?;
         info!(
             target: TARGET,
-            "Saved blockchain snapshot `{snapshot_name}` for node {}",
+            "Saved snapshot `{snapshot_name}` for node {}",
             info.runtime_dir.display()
         );
     } else {
@@ -1014,8 +1023,12 @@ fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     world.zone.clear();
     stop_active_manual_cluster(world)?;
 
-    if let Some(snapshot_name) = world.blockchain_snapshot_name_on_stop.as_ref() {
+    if let Some(snapshot_name) = world.snapshot_save_config.node_state.as_ref() {
         create_snapshots_all_nodes(world, snapshot_name)?;
+    }
+
+    if let Some(snapshot_name) = world.snapshot_save_config.extensions.as_ref() {
+        save_wallet_snapshot_if_present(snapshot_name, world)?;
     }
 
     for (node_name, _) in &runtime_dir_by_node_name {
