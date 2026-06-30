@@ -487,7 +487,8 @@ mod tests {
     }
 
     fn assert_send_command() {
-        let command = parse_ok("SEND, transactions 5, value 100, from 'WALLET_1A', to 'WALLET_2A'");
+        let command =
+            parse_ok("SEND, num_transactions 5, value 100, from 'WALLET_1A', to 'WALLET_2A'");
 
         assert!(matches!(
             command,
@@ -502,7 +503,7 @@ mod tests {
 
     fn assert_continuous_round_robin_user_wallets_command() {
         let command = parse_ok(
-            "CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, transactions 4, value 50, cycles 3",
+            "CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 4, value 50, cycles 3",
         );
 
         assert!(matches!(
@@ -569,7 +570,7 @@ mod tests {
 
     fn assert_continuous_next_wallet_user_wallets_command() {
         let command = parse_ok(
-            "CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles 3, transactions_per_wallet 30, value 100",
+            "CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles 3, num_transactions 30, value 100",
         );
 
         assert!(matches!(

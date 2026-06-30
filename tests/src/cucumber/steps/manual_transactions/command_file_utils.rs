@@ -17,13 +17,13 @@
 //! BALANCE_ALL_FUNDING_WALLETS
 //! CLEAR_ENCUMBRANCES, wallet '<wallet_name>'
 //! CLEAR_ENCUMBRANCES_ALL_WALLETS
-//! SEND, transactions <count>, value <amount>, from '<wallet_name>', to '<wallet_name>'
+//! SEND, num_transactions <count>, value <amount>, from '<wallet_name>', to '<wallet_name>'
 //! VERIFY_MAX, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
 //! VERIFY_MIN, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
-//! CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, transactions <count>, value <amount>, cycles <count>
+//! CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, num_transactions <count>, value <amount>, cycles <count>
 //! COIN_SPLIT_ALL_USER_WALLETS, splits_per_wallet <count>, outputs <count>, value <amount>
 //! VERIFY_MIN_AVAILABLE_OUTPUTS_ALL_USER_WALLETS, min_outputs <count>, timeout_seconds <duration_seconds>
-//! CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, transactions_per_wallet <count>, value <amount>
+//! CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, num_transactions <count>, value <amount>
 //! FAUCET_ALL_USER_WALLETS, rounds <count>
 //! FAUCET_ALL_FUNDING_WALLETS, rounds <count>
 //! CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
