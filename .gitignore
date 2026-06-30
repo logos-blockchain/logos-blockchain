@@ -51,3 +51,6 @@ services/tx-service/[0-9]*
 
 # testnet cfgsync generated local deployment file
 testnet/cfgsync/deployment-settings.yaml
+
+# Claude Code worktree admin dirs must never be tracked
+/.claude/
