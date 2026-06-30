@@ -408,7 +408,11 @@ mod tests {
         .unwrap_err()
         .to_string();
 
-        assert!(error.contains("requires 2 unique authorized signature(s), got 1"));
+        assert!(
+            error.contains("Signature indices are not strictly increasing"),
+            "Error is: {:?}",
+            error
+        );
 
         drop(fs::remove_file(intent_path));
         drop(fs::remove_file(sig_path));
