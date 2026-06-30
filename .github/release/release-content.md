@@ -8,6 +8,17 @@
     tar -xzf logos-blockchain-node-<arch>-<version>.tar.gz
    ```
 
+2. Download and unzip the **ZK circuits**, then point the node at them:
+
+   ```bash
+    tar -xzf logos-blockchain-circuits-<arch>-<version>.tar.gz
+    export LOGOS_BLOCKCHAIN_CIRCUITS="$PWD/logos-blockchain-circuits-<arch>-<version>"
+   ```
+
+   > ⚠️ The node loads proving/verifying keys at launch and **will not start** without
+   > `LOGOS_BLOCKCHAIN_CIRCUITS` pointing at a valid circuits directory. (No circuits
+   > asset is currently attached to the node release — see #3054.)
+
 ### ⚙️ Initialize Your Node
 
 Generate a default configuration by connecting to the bootstrap peers:
