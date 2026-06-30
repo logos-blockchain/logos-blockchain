@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, HashMap},
     num::NonZeroUsize,
     ops::RangeInclusive,
     pin::Pin,
@@ -202,7 +202,7 @@ impl StorageChainApi for RocksBackend {
 
     async fn get_transactions(
         &mut self,
-        tx_hashes: BTreeSet<TxHash>,
+        tx_hashes: Vec<TxHash>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, Self::Error> {
         if tx_hashes.is_empty() {
             return Ok(Box::pin(stream::empty()));

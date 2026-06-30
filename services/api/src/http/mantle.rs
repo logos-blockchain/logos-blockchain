@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{collections::BTreeSet, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
+use std::{fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all};
@@ -816,7 +816,7 @@ where
 ///
 /// - `handle`: A reference to the `OverwatchHandle` to interact with the
 ///   runtime and storage service.
-/// - `tx_hashes`: The set of [`TxHash`]es to fetch.
+/// - `tx_hashes`: The ordered [`TxHash`]es to fetch.
 ///
 /// # Returns
 ///
@@ -824,7 +824,7 @@ where
 /// Returns a boxed `DynError` if any error occurs during processing.
 pub async fn get_transactions<Transaction, StorageBackend, RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-    tx_hashes: BTreeSet<TxHash>,
+    tx_hashes: Vec<TxHash>,
 ) -> Result<
     impl Stream<Item = Transaction> + use<Transaction, StorageBackend, RuntimeServiceId>,
     super::DynError,
@@ -891,11 +891,9 @@ where
         + AsServiceId<StorageService<StorageBackend, RuntimeServiceId>>
         + 'static,
 {
-    let mut stream = get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(
-        handle,
-        BTreeSet::from([tx_hash]),
-    )
-    .await?;
+    let mut stream =
+        get_transactions::<Transaction, StorageBackend, RuntimeServiceId>(handle, vec![tx_hash])
+            .await?;
 
     // Assume only one transaction is returned
     Ok(stream.next().await)

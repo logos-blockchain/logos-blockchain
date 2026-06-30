@@ -1,9 +1,6 @@
 pub mod adapters;
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    pin::Pin,
-};
+use std::{collections::BTreeMap, pin::Pin};
 
 use futures::{Stream, future::join_all};
 use lb_core::{header::HeaderId, mantle::TxHash};
@@ -86,7 +83,7 @@ pub trait StorageAdapter<RuntimeServiceId> {
 
     async fn get_transactions(
         &self,
-        tx_hashes: BTreeSet<TxHash>,
+        tx_hashes: Vec<TxHash>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, overwatch::DynError>;
 
     async fn remove_transactions(&self, tx_hashes: &[TxHash]) -> Result<(), overwatch::DynError>;
