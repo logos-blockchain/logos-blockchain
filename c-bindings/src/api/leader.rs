@@ -7,10 +7,9 @@ use lb_node::{
 };
 
 use crate::{
-    LogosBlockchainNode,
+    LogosBlockchainNode, OperationStatus,
     api::cryptarchia::{Hash, TxHash},
-    errors::OperationStatus,
-    logging,
+    errors::OperationStatusCode,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
@@ -45,22 +44,20 @@ pub(crate) fn leader_claim_sync(
             .relay::<LeaderService>()
             .await
             .map_err(|error| {
-                logging::error!(
-                    "leader_claim_sync",
-                    "Failed to get ChainLeader relay: {error}"
-                );
-                OperationStatus::RelayError
+                OperationStatus::error(
+                    OperationStatusCode::RelayError,
+                    format!("Failed to get ChainLeader relay: {error}"),
+                )
             })?;
 
         ChainLeaderSerivceApi::<LeaderService, RuntimeServiceId>::new(relay)
             .claim()
             .await
             .map_err(|error| {
-                logging::error!(
-                    "leader_claim_sync",
-                    "Failed to claim leader rewards: {error}"
-                );
-                OperationStatus::ServiceError
+                OperationStatus::error(
+                    OperationStatusCode::ServiceError,
+                    format!("Failed to claim leader rewards: {error}"),
+                )
             })
     })
 }
@@ -85,7 +82,7 @@ pub type FfiLeaderClaimResult = FfiStatusResult<TxHash>;
 /// [`LogosBlockchainNode`] instance.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn leader_claim(node: *const LogosBlockchainNode) -> FfiLeaderClaimResult {
-    return_error_if_null_pointer!("leader_claim", node);
+    return_error_if_null_pointer!(node);
 
     let node = unsafe { &*node };
     let tx_hash = unwrap_or_return_error!(leader_claim_sync(node));
@@ -93,11 +90,10 @@ pub unsafe extern "C" fn leader_claim(node: *const LogosBlockchainNode) -> FfiLe
     let Ok(tx_hash_array): Result<Hash, _> =
         tx_hash.as_signing_bytes().iter().as_slice().try_into()
     else {
-        logging::error!(
-            "leader_claim",
-            "Failed to convert transaction hash to array."
-        );
-        return FfiLeaderClaimResult::err(OperationStatus::RuntimeError);
+        return FfiLeaderClaimResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            "Failed to convert transaction hash to array.",
+        ));
     };
 
     FfiLeaderClaimResult::ok(tx_hash_array)

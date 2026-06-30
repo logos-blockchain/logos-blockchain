@@ -164,9 +164,7 @@ impl NomEncode for Op {
 }
 
 impl NomDecode for Op {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
         let (bytes, opcode) = u8::decode(bytes)?;
 
         match opcode {
@@ -197,6 +195,10 @@ impl NomDecode for Op {
         }
     }
 }
+
+// We just check that the enum discriminant tag is encoded correctly, so a
+// single fixture is fine here.
+// TODO: Remove once the `NomCodec` macro supports enums.
 
 impl Op {
     #[must_use]

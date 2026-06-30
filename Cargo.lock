@@ -4251,6 +4251,7 @@ dependencies = [
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "lru",
  "overwatch",
  "rand 0.8.6",
  "serde",
@@ -4437,10 +4438,10 @@ dependencies = [
  "bytes",
  "const-hex",
  "divan",
- "futures",
  "hasher",
  "hex",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-core-macros",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4463,6 +4464,16 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-core-macros"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -4578,6 +4589,7 @@ dependencies = [
  "generic-array 1.4.3",
  "hex",
  "num-bigint",
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

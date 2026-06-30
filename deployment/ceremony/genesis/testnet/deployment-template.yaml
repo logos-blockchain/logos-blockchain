@@ -1,9 +1,9 @@
 blend:
   common:
     num_blend_layers: 1
-    minimum_network_size: 32
+    minimum_network_size: 2
     protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/blend/1.0.0
-    data_replication_factor: 0
+    data_replication_factor: 1
   core:
     scheduler:
       cover:
@@ -22,11 +22,11 @@ cryptarchia:
     epoch_stake_distribution_stabilization: 3
     epoch_period_nonce_buffer: 3
     epoch_period_nonce_stabilization: 4
-  security_param: 50
+  security_param: 120
   slot_activation_coeff:
     numerator: 1
     denominator: 30
-  learning_rate: 0.5
+  learning_rate: 1.0
   sdp_config:
     service_params:
       BN:

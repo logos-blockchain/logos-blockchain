@@ -13,10 +13,10 @@ use thiserror::Error;
 
 use crate::{
     crypto::{Hash, ZkHasher},
-    events::Events,
+    events::TxEvent,
     mantle::{
-        encoding::{BoundedInputs, BoundedOutputs, NomInputs},
-        nom::{NomDecode, NomEncode},
+        encoding::{BoundedInputs, BoundedOutputs},
+        nom::NomCodec,
         ops::OpId,
     },
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
@@ -31,7 +31,7 @@ pub trait Operation<ValidationContext> {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error>;
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error>;
 }
 
 pub type Utxos = UtxoTree<NoteId, Utxo, ZkHasher>;
@@ -71,7 +71,7 @@ pub enum LedgerError {
     Outputs(#[from] OutputsError),
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Eq, Debug, PartialEq, Serialize, Deserialize, NomCodec)]
 pub struct Outputs(BoundedOutputs);
 
 impl Outputs {
@@ -170,7 +170,7 @@ impl<'output> IntoIterator for &'output Outputs {
     }
 }
 
-#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Eq, Debug, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct Inputs(BoundedInputs);
 
 impl Inputs {
@@ -303,22 +303,9 @@ impl<'input> IntoIterator for &'input Inputs {
     }
 }
 
-impl NomEncode for Inputs {
-    fn encode(&self) -> Vec<u8> {
-        NomInputs::from(&self.0).encode()
-    }
-}
-
-impl NomDecode for Inputs {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        let (bytes, items) = NomInputs::decode(bytes)?;
-        Ok((bytes, Self(items)))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, NomCodec,
+)]
 #[serde(transparent)]
 pub struct NoteId(#[serde(with = "serde_fr")] pub Fr);
 
@@ -346,22 +333,7 @@ impl From<Fr> for NoteId {
     }
 }
 
-impl NomEncode for NoteId {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for NoteId {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        let (bytes, inner) = Fr::decode(bytes)?;
-        Ok((bytes, Self(inner)))
-    }
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Serialize, Deserialize, NomCodec)]
 pub struct Note {
     pub value: Value,
     pub pk: ZkPublicKey,
@@ -376,25 +348,6 @@ impl Note {
     #[must_use]
     pub fn as_fr_components(&self) -> [Fr; 2] {
         [BigUint::from(self.value).into(), *self.pk.as_fr()]
-    }
-}
-
-impl NomEncode for Note {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.value.encode());
-        bytes.extend(self.pk.encode());
-        bytes
-    }
-}
-
-impl NomDecode for Note {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self::Output> {
-        let (bytes, value) = u64::decode(bytes)?;
-        let (bytes, pk) = ZkPublicKey::decode(bytes)?;
-        Ok((bytes, Self::new(value, pk)))
     }
 }
 

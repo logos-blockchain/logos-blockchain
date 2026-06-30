@@ -1,7 +1,4 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
+use std::{env, path::Path};
 
 use anyhow::anyhow;
 use testing_framework_core::scenario::DynError;
@@ -79,13 +76,11 @@ pub(super) fn build_cfgsync_container_spec(
     image: &str,
     platform: Option<String>,
 ) -> DockerConfigServerSpec {
-    let mut mounts = vec![DockerVolumeMount::read_only(
+    let mounts = vec![DockerVolumeMount::read_only(
         testnet_dir.to_path_buf(),
         "/etc/logos".to_owned(),
     )];
-    let mut env = Vec::new();
-
-    maybe_add_circuits_mount(&mut mounts, &mut env);
+    let env: Vec<(String, String)> = Vec::new();
 
     DockerConfigServerSpec::new(
         container_name.to_owned(),
@@ -118,29 +113,6 @@ pub(super) fn resolve_bootstrap_image() -> (String, Option<String>) {
     debug!(image, platform = ?platform, "resolved compose bootstrap image");
 
     (image, platform)
-}
-
-fn maybe_add_circuits_mount(mounts: &mut Vec<DockerVolumeMount>, env: &mut Vec<(String, String)>) {
-    let circuits_dir = env::var("LBC_ROOT_DIR_DOCKER")
-        .ok()
-        .or_else(|| env::var("LBC_ROOT_DIR").ok());
-
-    let Some(circuits_dir) = circuits_dir else {
-        return;
-    };
-
-    let host_path = PathBuf::from(&circuits_dir);
-    if !host_path.exists() {
-        return;
-    }
-
-    let resolved_host_path = host_path.canonicalize().unwrap_or(host_path);
-    env.push(("LOGOS_BLOCKCHAIN_CIRCUITS".to_owned(), circuits_dir.clone()));
-
-    mounts.push(DockerVolumeMount::read_only(
-        resolved_host_path,
-        circuits_dir,
-    ));
 }
 
 fn base_volumes() -> Vec<String> {

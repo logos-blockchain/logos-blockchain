@@ -4,7 +4,7 @@ use std::{hint::black_box, ops::Deref as _, sync::LazyLock};
 #[cfg(target_arch = "x86_64")]
 use logos_blockchain_groth16::{
     Groth16Input, Groth16InputDeser, Groth16Proof, Groth16ProofJsonDeser, Groth16VerificationKey,
-    Groth16VerificationKeyJsonDeser, groth16_verify,
+    Groth16VerificationKeyJsonDeser, groth16_batch_verify, groth16_verify,
 };
 #[cfg(target_arch = "x86_64")]
 use serde_json::{Value, json};
@@ -195,4 +195,51 @@ fn poc_cpu_cycles() {
     let post = unsafe { core::arch::x86_64::_rdtsc() };
     let cycles = (post - pre) / iters;
     println!("proof-of-claim-cycles-count: {cycles} cpu cycles");
+
+    for batch_size in 1..10 {
+        let proofs_batch: Vec<Groth16Proof> = std::iter::repeat_with(|| {
+            serde_json::from_value::<Groth16ProofJsonDeser>(PROOF.deref().clone())
+                .unwrap()
+                .try_into()
+                .unwrap()
+        })
+        .take(batch_size)
+        .collect();
+
+        let pi_batch: Vec<Vec<_>> = std::iter::repeat_with(|| pi.clone())
+            .take(batch_size)
+            .collect();
+        let pre = unsafe { core::arch::x86_64::_rdtsc() };
+        for _ in 0..iters {
+            let _ = black_box(groth16_batch_verify(&pvk, &proofs_batch, &pi_batch));
+        }
+        let post = unsafe { core::arch::x86_64::_rdtsc() };
+        let cycles = (post - pre) / iters;
+        println!(
+            "batched-proof-of-claim-cycles-count: {cycles} cpu cycles for batch {batch_size} batches"
+        );
+    }
+    for batch_size in (10..201).step_by(10) {
+        let proofs_batch: Vec<Groth16Proof> = std::iter::repeat_with(|| {
+            serde_json::from_value::<Groth16ProofJsonDeser>(PROOF.deref().clone())
+                .unwrap()
+                .try_into()
+                .unwrap()
+        })
+        .take(batch_size)
+        .collect();
+
+        let pi_batch: Vec<Vec<_>> = std::iter::repeat_with(|| pi.clone())
+            .take(batch_size)
+            .collect();
+        let pre = unsafe { core::arch::x86_64::_rdtsc() };
+        for _ in 0..iters {
+            let _ = black_box(groth16_batch_verify(&pvk, &proofs_batch, &pi_batch));
+        }
+        let post = unsafe { core::arch::x86_64::_rdtsc() };
+        let cycles = (post - pre) / iters;
+        println!(
+            "batched-proof-of-claim-cycles-count: {cycles} cpu cycles for batch {batch_size} batches"
+        );
+    }
 }

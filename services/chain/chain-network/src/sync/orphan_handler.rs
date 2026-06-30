@@ -14,7 +14,7 @@ use tracing::{debug, error, warn};
 use crate::{
     metrics,
     network::{BoxedStream, NetworkAdapter},
-    sync::LOG_TARGET,
+    sync::{LOG_TARGET, rejected_blocks::RejectedBlocks},
 };
 
 type PendingNetworkRequest<Block> =
@@ -44,6 +44,9 @@ where
     state: DownloaderState<NetAdapter::Block>,
     /// Maximum number of orphans to queue
     max_pending_orphans: NonZeroUsize,
+    /// Negative cache of block IDs the orphan pipeline should skip
+    /// (known-invalid or older-than-LIB).
+    rejected_blocks: RejectedBlocks,
     /// Waker to notify when new work is available
     waker: Option<Waker>,
     _phantom: std::marker::PhantomData<RuntimeServiceId>,
@@ -54,6 +57,10 @@ where
 pub struct OrphanInfo {
     /// The orphan block ID we're fetching ancestors for
     orphan_id: HeaderId,
+    /// The orphan block's parent, when known to the enqueueing caller.
+    /// `None` for orphans enqueued from a peer-polled tip where the parent is
+    /// not yet known locally.
+    parent_id: Option<HeaderId>,
     /// Local tip
     tip: HeaderId,
     /// The latest immutable block
@@ -61,9 +68,15 @@ pub struct OrphanInfo {
 }
 
 impl OrphanInfo {
-    const fn new(block_id: HeaderId, local_tip: HeaderId, lib: HeaderId) -> Self {
+    const fn new(
+        block_id: HeaderId,
+        parent_id: Option<HeaderId>,
+        local_tip: HeaderId,
+        lib: HeaderId,
+    ) -> Self {
         Self {
             orphan_id: block_id,
+            parent_id,
             tip: local_tip,
             lib,
         }
@@ -109,15 +122,27 @@ where
     NetAdapter::Block: Clone + Send + Sync + 'static,
     RuntimeServiceId: Send + Sync + 'static,
 {
-    pub fn new(network_adapter: NetAdapter, max_pending_orphans: NonZeroUsize) -> Self {
+    pub fn new(
+        network_adapter: NetAdapter,
+        max_pending_orphans: NonZeroUsize,
+        max_rejected_cache_size: usize,
+    ) -> Self {
         Self {
             pending_orphans_queue: HashMap::new(),
             network_adapter,
             state: DownloaderState::Idle,
             max_pending_orphans,
+            rejected_blocks: RejectedBlocks::new(max_rejected_cache_size),
             waker: None,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Marks a block as rejected so the orphan pipeline will refuse to
+    /// re-enqueue it (or any descendant whose parent is this block) and will
+    /// drop it if it surfaces from the queue later.
+    pub fn insert_rejected_block(&mut self, block_id: HeaderId) {
+        self.rejected_blocks.insert(block_id);
     }
 
     #[expect(
@@ -131,6 +156,19 @@ where
         current_tip: HeaderId,
         lib: HeaderId,
     ) -> Result<(), OrphanEnqueueError> {
+        if self
+            .rejected_blocks
+            .contains_block_or_parent(&block_id, parent_id.as_ref())
+        {
+            debug!(
+                target: LOG_TARGET, ?block_id, ?parent_id,
+                "Orphan block (or its parent) is in the rejected cache, skipping enqueue"
+            );
+            self.insert_rejected_block(block_id);
+            metrics::orphan_blocks_enqueue_rejected_total();
+            return Err(OrphanEnqueueError::Rejected);
+        }
+
         if let DownloaderState::Downloading(download) = &self.state
             && download.orphan_block_id() == block_id
         {
@@ -173,8 +211,10 @@ where
             });
         }
 
-        self.pending_orphans_queue
-            .insert(block_id, OrphanInfo::new(block_id, current_tip, lib));
+        self.pending_orphans_queue.insert(
+            block_id,
+            OrphanInfo::new(block_id, parent_id, current_tip, lib),
+        );
         debug!(
             target: LOG_TARGET,
             ?block_id, ?current_tip, ?lib, queue_size = self.pending_orphans_queue.len(),
@@ -191,8 +231,23 @@ where
     }
 
     fn dequeue_next_orphan(&mut self) -> Option<OrphanInfo> {
-        let block_id = self.pending_orphans_queue.keys().next().copied()?;
-        self.remove_orphan(&block_id)
+        loop {
+            let block_id = self.pending_orphans_queue.keys().next().copied()?;
+            let orphan_info = self.remove_orphan(&block_id)?;
+            if self
+                .rejected_blocks
+                .contains_block_or_parent(&block_id, orphan_info.parent_id.as_ref())
+            {
+                debug!(
+                    target: LOG_TARGET, ?block_id, parent_id = ?orphan_info.parent_id,
+                    "dropping queued orphan: block (or its parent) is in the rejected cache"
+                );
+                self.insert_rejected_block(block_id);
+                metrics::orphan_blocks_dequeue_rejected_total();
+                continue;
+            }
+            return Some(orphan_info);
+        }
     }
 
     async fn request_blocks_stream(
@@ -433,6 +488,8 @@ pub enum OrphanEnqueueError {
     AlreadyDownloading,
     #[error("orphan block is already in the queue")]
     AlreadyInQueue,
+    #[error("orphan block (or its parent) is in the rejected cache")]
+    Rejected,
 }
 
 #[cfg(test)]
@@ -456,7 +513,7 @@ mod tests {
 
     fn create_downloader() -> OrphanBlocksDownloader<MockNetworkAdapter, usize> {
         let network = MockNetworkAdapter::new();
-        OrphanBlocksDownloader::new(network, ORPHAN_CACHE_SIZE)
+        OrphanBlocksDownloader::new(network, ORPHAN_CACHE_SIZE, REJECTED_CACHE_SIZE)
     }
 
     fn create_downloader_with_responses<T>(
@@ -486,7 +543,7 @@ mod tests {
             }
         }
 
-        OrphanBlocksDownloader::new(network, ORPHAN_CACHE_SIZE)
+        OrphanBlocksDownloader::new(network, ORPHAN_CACHE_SIZE, REJECTED_CACHE_SIZE)
     }
 
     trait IntoBlockResult {
@@ -660,8 +717,95 @@ mod tests {
     const ORPHAN_CACHE_SIZE: NonZeroUsize =
         NonZeroUsize::new(5).expect("ORPHAN_CACHE_SIZE must be non-zero");
 
+    const REJECTED_CACHE_SIZE: usize = 16;
+
     const TEST_TIP: [u8; 32] = [10u8; 32];
     const TEST_LIB: [u8; 32] = [11u8; 32];
+
+    #[tokio::test]
+    async fn test_disabled_rejected_cache_is_noop() {
+        // capacity = 0 disables the cache: inserts and lookups must be no-ops.
+        let network = MockNetworkAdapter::new();
+        let mut downloader: OrphanBlocksDownloader<_, usize> =
+            OrphanBlocksDownloader::new(network, ORPHAN_CACHE_SIZE, 0);
+
+        let block: HeaderId = [1u8; 32].into();
+        downloader.insert_rejected_block(block);
+
+        // Even though we just "inserted", the disabled cache should not block
+        // the enqueue.
+        downloader
+            .enqueue_orphan(block, None, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+        assert!(downloader.pending_orphans_queue.contains_key(&block));
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_rejects_block_in_rejected_cache() {
+        let mut downloader = create_downloader();
+        let block: HeaderId = [1u8; 32].into();
+
+        downloader.insert_rejected_block(block);
+
+        assert!(matches!(
+            downloader.enqueue_orphan(block, None, TEST_TIP.into(), TEST_LIB.into()),
+            Err(OrphanEnqueueError::Rejected)
+        ));
+        assert!(downloader.pending_orphans_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_enqueue_rejects_block_whose_parent_is_in_rejected_cache() {
+        let mut downloader = create_downloader();
+        let parent: HeaderId = [1u8; 32].into();
+        let child: HeaderId = [2u8; 32].into();
+
+        downloader.insert_rejected_block(parent);
+
+        assert!(matches!(
+            downloader.enqueue_orphan(child, Some(parent), TEST_TIP.into(), TEST_LIB.into()),
+            Err(OrphanEnqueueError::Rejected)
+        ));
+        assert!(downloader.pending_orphans_queue.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_dequeue_skips_rejected_blocks() {
+        let chain = create_chain(4);
+        // Stream covers only block index 3 (chain[3]); the other two enqueued
+        // orphans get marked rejected after being enqueued.
+        // Those two should be skipped at dequeue time.
+        let mut downloader =
+            create_downloader_with_responses(&chain, vec![(3, vec![vec![0, 1, 2, 3]])]);
+        downloader
+            .enqueue_orphan(chain[0], None, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+        downloader.insert_rejected_block(chain[0]);
+        downloader
+            .enqueue_orphan(chain[1], None, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+        downloader.insert_rejected_block(chain[1]);
+        downloader
+            .enqueue_orphan(chain[3], None, TEST_TIP.into(), TEST_LIB.into())
+            .unwrap();
+
+        let mut downloader = pin::pin!(downloader);
+        let received_blocks = receive_blocks(&mut downloader, 4).await;
+        assert_eq!(&received_blocks, &chain[0..=3]);
+
+        // Only one request should have fired — the one for the non-rejected
+        // orphan. The two rejected entries are dropped at dequeue.
+        let requests = downloader
+            .as_mut()
+            .get_mut()
+            .network_adapter
+            .requests
+            .lock()
+            .unwrap()
+            .clone();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].target, chain[3]);
+    }
 
     #[tokio::test]
     async fn test_orphan_cache_limit() {
@@ -794,7 +938,11 @@ mod tests {
         // download stays in `Downloading` waiting for `parent`.
         let network =
             MockNetworkAdapter::new().with_stream(parent, None, vec![Ok(ancestor), Ok(parent)]);
-        let downloader = OrphanBlocksDownloader::<_, usize>::new(network, ORPHAN_CACHE_SIZE);
+        let downloader = OrphanBlocksDownloader::<_, usize>::new(
+            network,
+            ORPHAN_CACHE_SIZE,
+            REJECTED_CACHE_SIZE,
+        );
         let mut downloader = pin::pin!(downloader);
 
         downloader

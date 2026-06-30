@@ -2,7 +2,7 @@ use futures::stream;
 use libp2p::{PeerId, StreamProtocol};
 use libp2p_stream::Control;
 use tokio::{sync::oneshot, time, time::Duration};
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     DownloadBlocksRequest, GetTipResponse,
@@ -67,7 +67,7 @@ impl Downloader {
         )
         .await
         .map_err(|e| {
-            error!("Timeout while receiving tip from peer {}", peer_id);
+            warn!("Timeout while receiving tip from peer {}", peer_id);
             ChainSyncError::from((peer_id, e))
         })?
         .map_err(|e| ChainSyncError::from((peer_id, e)))

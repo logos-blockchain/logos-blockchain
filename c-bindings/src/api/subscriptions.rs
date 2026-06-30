@@ -16,6 +16,7 @@ use crate::{
     LogosBlockchainNode, OperationStatus,
     api::types::block::Block,
     callbacks::{BoxedCallback, CCallback, into_boxed_callback},
+    errors::OperationStatusCode,
     logging, return_error_if_null_pointer,
 };
 
@@ -42,10 +43,11 @@ impl StorageSize for TxWithId {
     }
 }
 
+#[must_use]
 pub fn subscribe_to_new_blocks_sync(
     node: &LogosBlockchainNode,
     mut callback_per_block: BoxedCallback<*const c_char>,
-) {
+) -> OperationStatus {
     let runtime_handler = node.get_runtime_handle();
     let overwatch = node.get_overwatch_handle();
     runtime_handler.block_on(async move {
@@ -53,18 +55,16 @@ pub fn subscribe_to_new_blocks_sync(
             .relay::<CryptarchiaService<RuntimeServiceId>>()
             .await
         else {
-            logging::error!(
-                "subscribe_to_new_blocks_sync",
-                "Failed to get relay to CryptarchiaService"
+            return OperationStatus::error(
+                OperationStatusCode::RelayError,
+                "Failed to get relay to CryptarchiaService.",
             );
-            return;
         };
         let Ok(storage_relay) = overwatch.relay::<StorageService>().await else {
-            logging::error!(
-                "subscribe_to_new_blocks_sync",
-                "Failed to get relay to StorageService"
+            return OperationStatus::error(
+                OperationStatusCode::RelayError,
+                "Failed to get relay to StorageService.",
             );
-            return;
         };
         let api =
             CryptarchiaServiceApi::<CryptarchiaService<RuntimeServiceId>, RuntimeServiceId>::new(
@@ -106,15 +106,14 @@ pub fn subscribe_to_new_blocks_sync(
                         "Block stream closed, subscription to new blocks ended."
                     );
                 });
+                OperationStatus::OK
             }
-            Err(e) => {
-                logging::error!(
-                    "subscribe_to_new_blocks_sync",
-                    "Failed to subscribe to blocks: {e}"
-                );
-            }
+            Err(e) => OperationStatus::error(
+                OperationStatusCode::ServiceError,
+                format!("Failed to subscribe to blocks: {e}"),
+            ),
         }
-    });
+    })
 }
 
 /// Subscribes to new blocks on the blockchain and calls the provided callback
@@ -140,9 +139,8 @@ pub unsafe extern "C" fn subscribe_to_new_blocks(
     node: *const LogosBlockchainNode,
     callback_per_block: CCallback<*const c_char>,
 ) -> OperationStatus {
-    return_error_if_null_pointer!("subscribe_to_new_blocks", node);
+    return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
     let callback_per_block = into_boxed_callback(callback_per_block);
-    subscribe_to_new_blocks_sync(node, callback_per_block);
-    OperationStatus::Ok
+    subscribe_to_new_blocks_sync(node, callback_per_block)
 }

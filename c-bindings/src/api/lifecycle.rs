@@ -9,9 +9,8 @@ use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use tokio::runtime::Runtime;
 
 use crate::{
-    LogosBlockchainNode,
-    errors::OperationStatus,
-    logging,
+    LogosBlockchainNode, OperationStatus,
+    errors::OperationStatusCode,
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer,
 };
@@ -72,23 +71,29 @@ fn initialize_lb_node(
 
     let runtime = Runtime::new().expect("Failed to create Tokio runtime");
     let app = run_node_from_config(run_config, Some(runtime.handle().clone())).map_err(|e| {
-        logging::error!("initialize_lb_node", "Could not initialize Overwatch: {e}");
-        OperationStatus::InitializationError
+        OperationStatus::error(
+            OperationStatusCode::InitializationError,
+            format!("Could not initialize Overwatch: {e}"),
+        )
     })?;
 
     let app_handle = app.handle();
 
     runtime.block_on(async {
         let services_to_start = get_services_to_start(&app).await.map_err(|e| {
-            logging::error!("initialize_lb_node", "Could not get services to start: {e}");
-            OperationStatus::InitializationError
+            OperationStatus::error(
+                OperationStatusCode::InitializationError,
+                format!("Could not get services to start: {e}"),
+            )
         })?;
         app_handle
             .start_service_sequence(services_to_start)
             .await
             .map_err(|e| {
-                logging::error!("initialize_lb_node", "Could not start services: {e}");
-                OperationStatus::InitializationError
+                OperationStatus::error(
+                    OperationStatusCode::InitializationError,
+                    format!("Could not start services: {e}"),
+                )
             })?;
         Ok(())
     })?;
@@ -100,16 +105,17 @@ fn get_user_config(config_path: *const c_char) -> StatusResult<UserConfig> {
     let user_config_path = unsafe { std::ffi::CStr::from_ptr(config_path) }
         .to_str()
         .map_err(|e| {
-            logging::error!(
-                "get_user_config",
-                "Could not convert the config path to string: {e}"
-            );
-            OperationStatus::InitializationError
+            OperationStatus::error(
+                OperationStatusCode::InitializationError,
+                format!("Could not convert the config path to string: {e}"),
+            )
         })?;
     deserialize_value_at_path::<UserConfig>(user_config_path.as_ref(), OnUnknownKeys::Fail).map_err(
         |e| {
-            logging::error!("get_user_config", "Could not parse config file: {e}");
-            OperationStatus::InitializationError
+            OperationStatus::error(
+                OperationStatusCode::InitializationError,
+                format!("Could not parse config file: {e}"),
+            )
         },
     )
 }
@@ -122,24 +128,23 @@ fn get_deployment_config(
     } else {
         let custom_deployment_path = unsafe { std::ffi::CStr::from_ptr(custom_deployment_path) }
             .to_str()
-            .map_err(|e| {
-                logging::error!(
-                    "get_deployment_config",
-                    "Could not convert custom deployment path to string: {e}"
-                );
-                OperationStatus::InitializationError
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::InitializationError,
+                    format!("Could not convert the custom deployment path to string: {error}"),
+                )
             })?;
-        Ok(deserialize_value_at_path::<DeploymentSettings>(
+
+        deserialize_value_at_path::<DeploymentSettings>(
             custom_deployment_path.as_ref(),
             OnUnknownKeys::Fail,
         )
-        .map_err(|e| {
-            logging::error!(
-                "get_deployment_config",
-                "Could not parse deployment file: {e}"
-            );
-            OperationStatus::InitializationError
-        })?)
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::InitializationError,
+                format!("Could not parse deployment file: {error}"),
+            )
+        })
     }
 }
 
@@ -162,7 +167,7 @@ fn get_deployment_config(
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
-    return_error_if_null_pointer!("stop_node", node);
+    return_error_if_null_pointer!(node);
     let node = unsafe { Box::from_raw(node) };
     node.stop()
 }

@@ -34,6 +34,8 @@ pub enum ApiError {
         block_slot: Slot,
         current_slot: Slot,
     },
+    #[error("Block {0} has already been applied")]
+    AlreadyApplied(HeaderId),
     #[error("Failed to establish connection to chain-service: {0}")]
     CommsFailure(String),
     #[error("Unexpected Error: {0}")]
@@ -273,6 +275,7 @@ where
                     block_slot,
                     current_slot,
                 },
+                crate::Error::AlreadyApplied(block_id) => ApiError::AlreadyApplied(block_id),
                 err => ApiError::Unexpected(format!("Failure while applying block: {err:?}")),
             })
     }

@@ -162,6 +162,26 @@ async fn pending_txs(
         .await
 }
 
+async fn txs_by_hashes(
+    mempool_outbound: &OutboundRelay<<MockMempoolService as ServiceData>::Message>,
+    hashes: Vec<MockTxId>,
+) -> Vec<MockTransaction<MockMessage>> {
+    let (reply_channel, reply) = tokio::sync::oneshot::channel();
+    mempool_outbound
+        .send(MempoolMsg::GetTransactionsByHashes {
+            hashes,
+            reply_channel,
+        })
+        .await
+        .unwrap();
+
+    reply
+        .await
+        .expect("mempool should reply to tx lookup")
+        .expect("tx lookup should succeed")
+        .into_found()
+}
+
 #[derive(Clone, Default)]
 struct InMemoryStorageAdapter {
     items: Arc<Mutex<BTreeMap<MockTxId, MockTransaction<MockMessage>>>>,
@@ -441,6 +461,70 @@ fn local_submission_rejects_oversized_tx() {
                 .block_on(pending_txs(&mempool_outbound))
                 .is_empty()
         );
+
+        drop(app.runtime().handle().block_on(app.handle().shutdown()));
+        app.blocking_wait_finished();
+    });
+}
+
+#[test]
+fn get_transactions_by_hashes_preserves_request_order() {
+    let recovery_file_path = get_test_random_path();
+    run_with_recovery_teardown(&recovery_file_path, || {
+        let (settings, _temp_dir) = mock_pool_node_settings(&recovery_file_path, Vec::new());
+        let app = OverwatchRunner::<MockPoolNode>::run(settings, None)
+            .map_err(|e| eprintln!("Error encountered: {e}"))
+            .unwrap();
+
+        drop(
+            app.runtime()
+                .handle()
+                .block_on(app.handle().start_all_services()),
+        );
+
+        let mempool_outbound = app
+            .runtime()
+            .handle()
+            .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
+
+        let first_tx = MockTransaction::new(MockMessage {
+            payload: "first".to_owned(),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 1,
+        });
+
+        let second_tx = MockTransaction::new(MockMessage {
+            payload: "second".to_owned(),
+            content_topic: MOCK_TX_CONTENT_TOPIC,
+            version: 0,
+            timestamp: 2,
+        });
+
+        app.runtime()
+            .handle()
+            .block_on(add_tx(&mempool_outbound, first_tx.clone()))
+            .expect("first tx should be added");
+
+        app.runtime()
+            .handle()
+            .block_on(add_tx(&mempool_outbound, second_tx.clone()))
+            .expect("second tx should be added");
+
+        let requested_txs = if first_tx.id() < second_tx.id() {
+            vec![second_tx, first_tx]
+        } else {
+            vec![first_tx, second_tx]
+        };
+
+        let requested_hashes = requested_txs.iter().map(MockTransaction::id).collect();
+
+        let fetched_txs = app
+            .runtime()
+            .handle()
+            .block_on(txs_by_hashes(&mempool_outbound, requested_hashes));
+
+        assert_eq!(fetched_txs, requested_txs);
 
         drop(app.runtime().handle().block_on(app.handle().shutdown()));
         app.blocking_wait_finished();

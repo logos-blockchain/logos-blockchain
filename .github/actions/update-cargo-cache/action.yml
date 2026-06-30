@@ -13,18 +13,6 @@ description: Update Cargo Cache for Rust projects
 runs:
   using: composite
   steps:
-    - name: Compute LBC cache path
-      shell: bash
-      run: |
-        if [[ "$RUNNER_OS" == "macOS" ]]; then
-          echo "LBC_CACHE=$HOME/Library/Caches/logos/blockchain" >> "$GITHUB_ENV"
-        elif [[ "$RUNNER_OS" == "Windows" ]]; then
-          echo "LBC_CACHE path not defined yet for Windows runners" >&2
-          exit 1
-        else
-          echo "LBC_CACHE=${XDG_CACHE_HOME:-$HOME/.cache}/logos/blockchain" >> "$GITHUB_ENV"
-        fi
-
     - name: Log cache directory sizes
       shell: bash
       run: |
@@ -32,8 +20,6 @@ runs:
         du -sh ~/.cargo/registry/index/  2>/dev/null || echo "  index: not found"
         du -sh ~/.cargo/registry/cache/  2>/dev/null || echo "  cache: not found"
         du -sh ~/.cargo/git/db/          2>/dev/null || echo "  git/db: not found"
-        echo "=== Logos circuit cache ==="
-        du -sh "$LBC_CACHE" 2>/dev/null || echo "  logos/blockchain: not found"
         echo "=== target/debug ==="
         du -sh target/debug/.fingerprint/ 2>/dev/null || echo "  .fingerprint: not found"
         du -sh target/debug/build/        2>/dev/null || echo "  build: not found"
@@ -47,7 +33,6 @@ runs:
           ~/.cargo/registry/index/        \
           ~/.cargo/registry/cache/        \
           ~/.cargo/git/db/                \
-          "$LBC_CACHE"                    \
           target/debug/.fingerprint/      \
           target/debug/build/             \
           target/debug/deps/              \
@@ -68,7 +53,6 @@ runs:
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-          ${{ env.LBC_CACHE }}
           target/debug/.fingerprint/
           target/debug/build/
           target/debug/deps/
@@ -91,7 +75,6 @@ runs:
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
           ~/.cargo/git/db/
-          ${{ env.LBC_CACHE }}
           target/debug/.fingerprint/
           target/debug/build/
           target/debug/deps/
