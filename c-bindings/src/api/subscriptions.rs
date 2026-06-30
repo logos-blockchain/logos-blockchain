@@ -49,6 +49,7 @@ impl ElementSize for TxWithId {
         self.storage_size()
     }
 }
+
 #[must_use]
 pub fn subscribe_to_new_blocks_sync(
     node: &LogosBlockchainNode,
