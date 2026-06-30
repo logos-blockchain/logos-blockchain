@@ -410,8 +410,7 @@ mod tests {
 
         assert!(
             error.contains("Signature indices are not strictly increasing"),
-            "Error is: {:?}",
-            error
+            "Error is: {error:?}",
         );
 
         drop(fs::remove_file(intent_path));
