@@ -39,7 +39,7 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
             if let Some(Protocol::P2p(peer_id_bytes)) = peer_addr.iter().last() {
                 if let Ok(peer_id) = PeerId::from_multihash(peer_id_bytes.into()) {
                     self.swarm.kademlia_add_address(peer_id, peer_addr);
-                    tracing::debug!(
+                    tracing::trace!(
                         target: LOG_TARGET,
                         "Added peer to Kademlia: {} at {}",
                         peer_id,

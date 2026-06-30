@@ -14,7 +14,7 @@ use lb_core::{
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     Error as ChainError, IbdConfig, OrphanConfig, mempool::adapter::MempoolAdapter,
@@ -145,6 +145,11 @@ where
     /// 2. Enqueue tips into orphan downloader
     /// 3. Drain orphan downloader, downloading/applying blocks.
     /// 4. Repeat 1~3 until all tips are present in the local tree
+    ///
+    /// Between each round, sleep for `config.round_delay` to not overload the
+    /// configured peers with tip requests if the block downloads have been
+    /// rejected from all peers immediately. Also, this delay gives the node
+    /// time to discover new peers.
     async fn download_blocks(
         &mut self,
         config: IbdConfig<NetAdapter::PeerId>,
@@ -178,7 +183,7 @@ where
         &mut self,
         downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
     ) {
-        debug!("IBD: draining downloads");
+        debug!("draining downloads");
 
         // Use `timeout` because `downloader.next()` can stall forever if a
         // download fails and leaves the queue empty.
@@ -190,15 +195,15 @@ where
             match tokio::time::timeout(Duration::from_secs(1), downloader.next()).await {
                 Ok(Some(block)) => {
                     if let Err(e) = self.block_processor.process_block(block).await {
-                        warn!("IBD: failed to process block: {e:?}");
+                        warn!("failed to process block: {e:?}");
                         downloader.cancel_active_download();
                     }
                 }
                 Ok(None) => {
-                    debug!("IBD: orphan downloader returned None; re-checking should_poll");
+                    debug!("orphan downloader returned None; re-checking should_poll");
                 }
                 Err(_) => {
-                    debug!("IBD: drain timed out; re-checking should_poll");
+                    trace!("drain timed out; re-checking should_poll");
                 }
             }
         }
@@ -211,14 +216,11 @@ where
         &self,
         config: &IbdConfig<NetAdapter::PeerId>,
     ) -> Result<HashSet<HeaderId>, Error> {
-        debug!(
-            "IBD: collecting unsynced tips from {} peers",
-            config.peers.len()
-        );
+        debug!("collecting unsynced tips from {} peers", config.peers.len());
 
         let tips = fetch_tips_with_retry(&self.network, config)
             .await
-            .inspect_err(|_| error!("IBD: no configured peer returned a tip this round"))?;
+            .inspect_err(|_| error!("no configured peer returned a tip this round"))?;
 
         let mut unsynced = HashSet::new();
         for tip in tips {
@@ -230,9 +232,11 @@ where
     }
 }
 
-/// Calls [`fetch_tips`] with exponential backoff. Returns `Ok` with the first
-/// non-empty batch, or [`AllPeersFailed`] once every retry attempt produced
-/// nothing.
+/// Calls [`fetch_tips`] with exponential backoff to not overload the configured
+/// peers.
+///
+/// Returns `Ok` with the first non-empty batch, or [`AllPeersFailed`] once
+/// every retry attempt produced nothing.
 async fn fetch_tips_with_retry<NetAdapter, RuntimeServiceId>(
     network: &NetAdapter,
     config: &IbdConfig<NetAdapter::PeerId>,
@@ -250,7 +254,7 @@ where
                 .with_max_times(config.tips_fetch_max_attempts)
                 .with_jitter(),
         )
-        .notify(|_, delay| debug!("IBD: tip fetch returned no tips; retrying in {delay:?}"))
+        .notify(|_, delay| debug!("tip fetch returned no tips; retrying in {delay:?}"))
         .await
 }
 
@@ -274,7 +278,7 @@ where
             Err(e) => Err(e),
         };
         result
-            .inspect_err(|e| warn!("IBD: failed to fetch tip from {peer:?}: {e}"))
+            .inspect_err(|e| warn!("failed to fetch tip from {peer:?}: {e}"))
             .ok()
     }))
     .await
@@ -299,9 +303,9 @@ fn enqueue_tips<NetAdapter, RuntimeServiceId>(
 {
     for tip in tips {
         if let Err(e) = downloader.enqueue_orphan(tip, None, info.tip, info.lib) {
-            debug!("IBD: failed to enqueue tip {tip:?}: {e}");
+            debug!("failed to enqueue tip {tip:?}: {e}");
         } else {
-            debug!("IBD: enqueued tip {tip:?} for download");
+            debug!("enqueued tip {tip:?} for download");
         }
     }
 }
