@@ -366,9 +366,15 @@ where
         match event {
             SwarmEvent::ConnectionEstablished { peer_id, .. }
             | SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                let negotiated_count = self
+                    .swarm
+                    .behaviour()
+                    .blend
+                    .with_core()
+                    .num_negotiated_peers();
                 let connected_count = self.swarm.connected_peers().count();
-                tracing::trace!(target: LOG_TARGET, "New connection or disconnection with peer {peer_id:?}. Number of currently connected peers: {connected_count}.");
-                metrics::peers_connected(connected_count);
+                tracing::trace!(target: LOG_TARGET, "New connection or disconnection with peer {peer_id:?}. Number of core peers currently negotiated: {negotiated_count}. Number of peers currently connected: {connected_count}.");
+                metrics::core_peers_negotiated(negotiated_count);
             }
             SwarmEvent::Behaviour(BlendBehaviourEvent::Blend(NetworkBehaviourEvent::WithCore(
                 e,

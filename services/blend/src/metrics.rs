@@ -21,8 +21,8 @@ mod imp {
         lb_tracing::increase_counter_u64!(blend_mix_packets_processed_total, 1);
     }
 
-    pub fn peers_connected(count: usize) {
-        lb_tracing::metric_gauge_u64!(blend_peers_connected, count as u64);
+    pub fn core_peers_negotiated(count: usize) {
+        lb_tracing::metric_gauge_u64!(blend_core_peers_negotiated, count as u64);
     }
 
     pub fn outbound_publish_ok() {
