@@ -25,12 +25,13 @@ pub trait StorageChainApi {
 
     async fn get_block(&mut self, header_id: HeaderId) -> Result<Option<Self::Block>, Self::Error>;
 
-    async fn store_block(
+    async fn store_block_data(
         &mut self,
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
         events: Self::Events,
+        immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), Self::Error>;
 
     async fn remove_block(

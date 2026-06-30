@@ -14,7 +14,7 @@ use super::{
     block_fetch::fetch_and_process_blocks,
     slot_clock::SlotClock,
     state::TxState,
-    types::{ChannelUpdate, Error, Event, FinalizedOp},
+    types::{ChannelUpdate, Error, Event, FinalizedOp, TxSource, TxStatus},
     zone_sequencer::ZoneSequencer,
 };
 use crate::adapter;
@@ -62,7 +62,7 @@ where
                     to = batch_end,
                     "Backfill batch failed; will retry same range after delay: {e}"
                 );
-                tokio::time::sleep(self.config.reconnect_delay).await;
+                self.wait_reconnect_delay().await;
                 // Leave `backfill_from` untouched so the next tick retries
                 // the same range. Active but no event this turn.
                 return Some(None);
@@ -106,14 +106,23 @@ where
             return Some(None);
         };
 
-        Some(Some(Event::BlocksProcessed {
+        for tx in &batch.items {
+            let source = self
+                .state
+                .as_ref()
+                .map_or(TxSource::Other, |state| state.tx_source(&tx.tx_hash));
+            self.queue_tx_status(tx.tx_hash, TxStatus::Finalized(source));
+        }
+
+        self.buffered_events.push_back(Event::BlocksProcessed {
             checkpoint,
             channel_update: ChannelUpdate {
                 orphaned: Vec::new(),
                 adopted: Vec::new(),
             },
             finalized: batch.items,
-        }))
+        });
+        Some(self.buffered_events.pop_front())
     }
 
     /// Ensure the blocks stream is connected. Returns `false` if not yet
@@ -156,7 +165,7 @@ where
             Ok(info) => info,
             Err(err) => {
                 warn!(target: TARGET, "Failed to fetch time info: {err}");
-                tokio::time::sleep(self.config.reconnect_delay).await;
+                self.wait_reconnect_delay().await;
                 return false;
             }
         };
@@ -170,7 +179,7 @@ where
                 );
                 if let Err(err) = self.refresh_channel_state().await {
                     warn!(target: TARGET, "Failed to fetch initial channel state: {err}");
-                    tokio::time::sleep(self.config.reconnect_delay).await;
+                    self.wait_reconnect_delay().await;
                     return false;
                 }
                 if self.state.is_none() {
@@ -181,7 +190,7 @@ where
                         Ok(clock) => clock,
                         Err(err) => {
                             warn!(target: TARGET, "Invalid time info from node: {err}");
-                            tokio::time::sleep(self.config.reconnect_delay).await;
+                            self.wait_reconnect_delay().await;
                             return false;
                         }
                     };
@@ -191,7 +200,7 @@ where
             }
             Err(e) => {
                 warn!(target: TARGET, "Failed to fetch consensus info: {e}");
-                tokio::time::sleep(self.config.reconnect_delay).await;
+                self.wait_reconnect_delay().await;
                 false
             }
         }
@@ -237,7 +246,7 @@ where
             }
             Err(e) => {
                 warn!(target: TARGET, "Failed to connect to blocks stream: {e}");
-                tokio::time::sleep(self.config.reconnect_delay).await;
+                self.wait_reconnect_delay().await;
                 false
             }
         }

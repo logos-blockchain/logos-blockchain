@@ -18,6 +18,7 @@ use lb_core::{
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
 const DEFAULT_PUBLISH_CHANNEL_CAPACITY: usize = 256;
+const DEFAULT_MAX_LOCAL_TX_TRACKING: usize = 10_000;
 
 /// Inscription identifier.
 pub type InscriptionId = TxHash;
@@ -83,6 +84,16 @@ pub enum OrphanedTx {
     AtomicWithdraw(AtomicWithdrawInfo),
 }
 
+impl OrphanedTx {
+    #[must_use]
+    pub const fn tx_hash(&self) -> TxHash {
+        match self {
+            Self::Inscription(i) => i.tx_hash,
+            Self::AtomicWithdraw(a) => a.tx_hash,
+        }
+    }
+}
+
 /// Configuration for the zone sequencer.
 #[derive(Clone)]
 pub struct SequencerConfig {
@@ -91,6 +102,7 @@ pub struct SequencerConfig {
     pub publish_channel_capacity: usize,
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
+    pub max_local_tx_tracking: usize,
 }
 
 impl Default for SequencerConfig {
@@ -101,6 +113,7 @@ impl Default for SequencerConfig {
             publish_channel_capacity: DEFAULT_PUBLISH_CHANNEL_CAPACITY,
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
+            max_local_tx_tracking: DEFAULT_MAX_LOCAL_TX_TRACKING,
         }
     }
 }
@@ -183,11 +196,67 @@ pub enum Event {
     /// catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
     /// `BlocksProcessed` once the stream resumes.
     Ready,
+    /// Transaction was accepted by the node post API and is expected to be in
+    /// the mempool.
+    MempoolPending(TxHash),
     /// Turn-to-write status update for this sequencer.
     ///
     /// Emitted on the same change boundary as the `turn_to_write` watch
     /// channel (excluding `current_slot`-only updates).
     TurnNotification { notification: TurnNotification },
+}
+
+/// Tx-hash lifecycle status for a transaction observed by the sequencer.
+///
+/// This enum tracks the lifecycle of a specific transaction hash, not a
+/// publish intent. Republishing after an orphan or any other retry produces a
+/// new tx hash and therefore a new lifecycle.
+///
+/// Typical flows:
+/// - Plain success: `AcceptedLocally -> PendingMempool -> OnChain(_) ->
+///   Finalized(_)`
+/// - Reorg on the same hash: `... -> OnChain(_) -> Orphaned(_) -> OnChain(_) ->
+///   Finalized(_)`
+/// - Republish after orphan: original hash reaches `Orphaned(_)`; the
+///   republished tx starts over at `AcceptedLocally` under its new hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TxStatus {
+    /// Accepted by the SDK and tracked locally.
+    AcceptedLocally,
+    /// Accepted by the node post API and expected to be in the mempool.
+    PendingMempool,
+    /// Observed in the canonical non-finalized chain.
+    OnChain(TxSource),
+    /// Previously tracked tx was invalidated on the current canonical branch.
+    ///
+    /// This is branch-local, not a permanent tombstone: the same hash can
+    /// later resurface as [`TxStatus::OnChain`] or [`TxStatus::Finalized`]
+    /// after a deeper reorg.
+    Orphaned(TxSource),
+    /// Observed in finalized chain history.
+    Finalized(TxSource),
+}
+
+/// Status update for a single transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TxStatusUpdate {
+    pub tx_hash: TxHash,
+    pub status: TxStatus,
+}
+
+/// Whether an observed transaction is still attributable to this sequencer
+/// runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TxSource {
+    /// The tx was accepted locally by this sequencer or restored from its
+    /// checkpoint.
+    Local,
+    /// The tx was observed on chain but is not currently known as local to
+    /// this sequencer.
+    ///
+    /// This includes both genuinely external txs and txs that were previously
+    /// local but have since been evicted from the bounded local-tracking set.
+    Other,
 }
 
 /// Channel state delta from one [`Event::BlocksProcessed`].

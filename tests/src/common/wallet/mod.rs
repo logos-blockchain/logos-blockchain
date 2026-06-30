@@ -9,9 +9,8 @@ mod funding_from_chain;
 
 pub use chain::{
     feed::{
-        WalletBlockFeedTracker, WalletBlockFeedTrackerError, WalletFeedStateResult,
-        WalletFeedStateResults, WalletFeedTrackingBatch, WalletFeedTrackingResult,
-        WalletObservedBlock,
+        WalletBlockFeedTracker, WalletBlockFeedTrackerError, WalletFeedTrackingBatch,
+        WalletFeedTrackingResult, WalletObservedBlock,
     },
     source::{NodeHttpWalletChainSource, WalletChainSource},
     state::{TrackedWalletKeys, TrackedWalletKeysError, WalletObservedOutput, WalletObservedSpend},
@@ -44,4 +43,8 @@ pub use transaction::{
     PreparedWalletTransaction, SignedWalletTransaction, WalletTransactionError,
     WalletTransactionIntent, fund_builder_from_wallet_source, prepare_wallet_transaction,
     wallet_state_from_utxos,
+};
+pub(crate) use transaction::{
+    PreparedWalletTransactionWorkItem, finalize_prepared_wallet_transaction,
+    prepare_wallet_transaction_work_item,
 };

@@ -316,6 +316,10 @@ where
                 routing::post(leader_claim::<ChainLeader, RuntimeServiceId>),
             )
             .route(
+                paths::LEADER_CLAIM_VOUCHERS,
+                routing::get(wallet::get_claimable_vouchers::<WalletService, _>),
+            )
+            .route(
                 paths::wallet::BALANCE,
                 routing::get(wallet::get_balance::<WalletService, _>),
             )

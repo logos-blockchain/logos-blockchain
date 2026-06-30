@@ -52,11 +52,18 @@ pub struct SwarmConfig {
     pub nat: nat::Config,
 }
 
+impl SwarmConfig {
+    #[must_use]
+    pub const fn default_port() -> u16 {
+        3000
+    }
+}
+
 impl Default for SwarmConfig {
     fn default() -> Self {
         Self {
             host: Ipv4Addr::UNSPECIFIED,
-            port: 3000,
+            port: Self::default_port(),
             node_key: SecretKey::generate(),
             gossipsub: gossipsub::Config::default(),
             kademlia: kademlia::Config::default(),

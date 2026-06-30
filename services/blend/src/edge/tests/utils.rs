@@ -5,12 +5,12 @@ use async_trait::async_trait;
 use futures::StreamExt as _;
 use lb_blend::{
     message::encap::validated::EncapsulatedMessageWithVerifiedPublicHeader,
-    proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::{
         epoch::UninitializedEpochEventStream,
         membership::Membership,
         message_blend::provers::{
-            BlendLayerProof, ProofsGeneratorSettings, leader::LeaderProofsGenerator,
+            BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+            leader::LeaderProofsGenerator,
         },
     },
 };
@@ -36,13 +36,13 @@ pub struct MockLeaderProofsGenerator;
 impl LeaderProofsGenerator for MockLeaderProofsGenerator {
     fn new(
         _settings: ProofsGeneratorSettings,
-        _private_inputs: ProofOfLeadershipQuotaInputs,
+        _winning_pol_info_stream: WinningPolInfoStream,
     ) -> Self {
         Self
     }
 
-    async fn get_next_proof(&mut self) -> BlendLayerProof {
-        mock_blend_proof()
+    async fn get_next_proof(&mut self) -> Option<BlendLayerProof> {
+        Some(mock_blend_proof())
     }
 }
 

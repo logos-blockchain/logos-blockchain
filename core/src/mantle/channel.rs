@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
-use nom::{IResult, Parser as _, combinator::map};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         Value,
         ledger::{self, Operation as _},
-        nom::{NomDecode, NomEncode},
+        nom::NomCodec,
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -18,7 +17,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -33,21 +32,7 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-impl NomEncode for SlotTimeframe {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for SlotTimeframe {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map(u32::decode, Self).parse(bytes)
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {
@@ -59,20 +44,6 @@ impl From<u32> for SlotTimeout {
 impl From<SlotTimeout> for u32 {
     fn from(slot: SlotTimeout) -> Self {
         slot.0
-    }
-}
-
-impl NomEncode for SlotTimeout {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for SlotTimeout {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        map(u32::decode, Self).parse(bytes)
     }
 }
 
@@ -166,7 +137,7 @@ impl Default for Channels {
 }
 
 impl Channels {
-    pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Events), Error> {
+    pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Vec<TxEvent>), Error> {
         let (ctx, events) = op.execute(InscriptionExecutionContext {
             channels: Self::default(),
             block_slot: Slot::default(),
@@ -191,8 +162,9 @@ impl ChannelState {
     // Returns the new sequencer index and its starting slot
     #[must_use]
     pub fn round_robin(&self, block_slot: Slot) -> (u16, Slot) {
-        let elapsed_slot_since_last_tip = (block_slot - self.tip_slot).into_inner();
-        let tip_sequencer_duration = (block_slot - self.tip_sequencer_starting_slot).into_inner();
+        let elapsed_slot_since_last_tip = (block_slot.saturating_sub(self.tip_slot)).into_inner();
+        let tip_sequencer_duration =
+            (block_slot.saturating_sub(self.tip_sequencer_starting_slot)).into_inner();
         let posting_timeframe = u64::from(self.posting_timeframe.0);
         let posting_timeout = u64::from(self.posting_timeout.0);
         let num_sequencers = self.accredited_keys.len() as u64; // bounded by ChannelKeyIndex::MAX
@@ -213,10 +185,14 @@ impl ChannelState {
         // Starting slot mirrors the same priority.
         let starting_slot = sequencers_timed_out
             .filter(|_| is_timed_out)
-            .map(|sequencers_timed_out| self.tip_slot + sequencers_timed_out * posting_timeout)
+            .map(|sequencers_timed_out| {
+                self.tip_slot
+                    .strict_add((sequencers_timed_out * posting_timeout).into())
+            })
             .or_else(|| {
                 timeframe_elapsed.map(|timeframe_elapsed| {
-                    self.tip_sequencer_starting_slot + timeframe_elapsed * posting_timeframe
+                    self.tip_sequencer_starting_slot
+                        .strict_add((timeframe_elapsed * posting_timeframe).into())
                 })
             })
             .unwrap_or(self.tip_sequencer_starting_slot);
@@ -234,7 +210,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        events::{Event, EventPayload},
+        events::TxEventPayload,
         mantle::{
             Note, Utxo,
             ledger::{Outputs, Utxos},
@@ -404,24 +380,32 @@ mod tests {
         );
 
         assert_eq!(events.len(), 1);
-        let Event::Tx {
+        let Some(TxEvent {
             tx_hash,
             op_id,
-            payload,
-        } = events.iter().next().cloned().unwrap()
+            payload:
+                TxEventPayload::Deposit {
+                    channel_id: event_channel_id,
+                    amount,
+                    metadata,
+                },
+        }) = events.iter().find(|event| {
+            matches!(
+                event,
+                TxEvent {
+                    payload: TxEventPayload::Deposit { .. },
+                    ..
+                }
+            )
+        })
         else {
-            panic!("expected Tx event")
+            panic!("events should include deposit event")
         };
-        assert_eq!(tx_hash, [0; 32].into());
-        assert_eq!(op_id, deposit_op.op_id());
-        let EventPayload::Deposit {
-            channel_id,
-            amount,
-            metadata,
-        } = payload;
-        assert_eq!(channel_id, deposit_op.channel_id);
-        assert_eq!(amount, utxo.note.value);
-        assert_eq!(metadata, deposit_op.metadata);
+        assert_eq!(*tx_hash, [0; 32].into());
+        assert_eq!(*op_id, deposit_op.op_id());
+        assert_eq!(*event_channel_id, deposit_op.channel_id);
+        assert_eq!(*amount, utxo.note.value);
+        assert_eq!(*metadata, deposit_op.metadata);
     }
 
     #[test]
@@ -446,6 +430,7 @@ mod tests {
             .execute(WithdrawExecutionContext {
                 channels,
                 utxos: utxo_tree,
+                tx_hash: [1; 32].into(),
             })
             .expect("execution should succeed");
 
@@ -453,6 +438,8 @@ mod tests {
             updated.channels.channel_state(&channel_id).unwrap().balance,
             4
         );
+        // `SdpNoteUnlocked` event is not emitted immediately because the note will
+        // be unlocked after `SNAPSHOT_FINALIZATION_DELAY` epochs.
         assert!(events.is_empty());
     }
 
@@ -477,6 +464,7 @@ mod tests {
         let result = withdraw_op.execute(WithdrawExecutionContext {
             channels,
             utxos: utxo_tree,
+            tx_hash: [0; 32].into(),
         });
 
         assert!(matches!(result, Err(Error::InsufficientFunds)));
@@ -502,6 +490,7 @@ mod tests {
         let result = withdraw_op.execute(WithdrawExecutionContext {
             channels,
             utxos: utxo_tree,
+            tx_hash: [0; 32].into(),
         });
 
         assert!(matches!(result, Err(Error::ChannelNotFound { .. })));

@@ -412,9 +412,9 @@ mod tests {
                 provider2,
                 &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
                     epoch: 0.into(),
-                    proof_of_quota: new_proof_of_quota_unchecked(2),
-                    signing_key: new_signing_key(2),
-                    proof_of_selection: new_proof_of_selection_unchecked(2),
+                    proof_of_quota: new_proof_of_quota_unchecked(4),
+                    signing_key: new_signing_key(4),
+                    proof_of_selection: new_proof_of_selection_unchecked(4),
                 })),
                 &params,
             )
@@ -669,9 +669,9 @@ mod tests {
                 provider1,
                 &ActivityMetadata::Blend(Box::new(blend::ActivityProof {
                     epoch: 0.into(),
-                    proof_of_quota: new_proof_of_quota_unchecked(2),
-                    signing_key: new_signing_key(2),
-                    proof_of_selection: new_proof_of_selection_unchecked(2),
+                    proof_of_quota: new_proof_of_quota_unchecked(4),
+                    signing_key: new_signing_key(4),
+                    proof_of_selection: new_proof_of_selection_unchecked(4),
                 })),
                 &params,
             )

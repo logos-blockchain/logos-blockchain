@@ -1,5 +1,5 @@
 use tokio::sync::watch;
-use tracing::info;
+use tracing::debug;
 
 use crate::LOG_TARGET;
 
@@ -9,7 +9,7 @@ pub struct ChainOnlineNotifier {
 
 impl ChainOnlineNotifier {
     pub fn new(cryptarchia_state: lb_cryptarchia_engine::State) -> Self {
-        info!(target: LOG_TARGET, "Initializing chain online notifier with {cryptarchia_state:?}");
+        debug!(target: LOG_TARGET, "Initializing chain online notifier with {cryptarchia_state:?}");
         let (channel, _) = watch::channel(cryptarchia_state.is_online());
         Self { channel }
     }
@@ -19,7 +19,7 @@ impl ChainOnlineNotifier {
     }
 
     pub fn notify(&self) {
-        info!(target: LOG_TARGET, "Notifying chain online subscribers");
+        debug!(target: LOG_TARGET, "Notifying chain online subscribers");
 
         // NOTE: Use `send_replace` to always make a new value available for future
         // receivers, even if no receiver currently exists

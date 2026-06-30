@@ -238,3 +238,116 @@ fn poq_interaction_one_hundred_keys() {
         poq.into_inner().verify(&public_inputs).unwrap();
     }
 }
+
+#[test]
+fn same_key_different_indices() {
+    let key = UnsecuredZkKey::one();
+    let merkle_tree = MerkleTree::new(vec![key.to_public_key().into_inner()]).unwrap();
+
+    let PoQInputs {
+        public_inputs,
+        secret_inputs,
+    } = PoQInputs {
+        public_inputs: PublicInputs {
+            core: CoreInputs {
+                quota: 2,
+                zk_root: merkle_tree.root(),
+            },
+            leader: LeaderInputs::default(),
+            signing_key: Ed25519PublicKey::from_bytes(&[10; _]).unwrap(),
+        },
+        secret_inputs: [ProofOfCoreQuotaInputs {
+            core_path_and_selectors: merkle_tree
+                .get_proof_for_key(key.to_public_key().as_fr())
+                .unwrap(),
+            core_sk: key.into_inner(),
+        }],
+    };
+
+    let (poq_index_0, _) = VerifiedProofOfQuota::new(
+        &public_inputs,
+        PrivateInputs::new_proof_of_core_quota_inputs(0, secret_inputs[0].clone()),
+    )
+    .unwrap();
+    let key_nullifier_poq_index_0 = poq_index_0
+        .into_inner()
+        .verify(&public_inputs)
+        .unwrap()
+        .key_nullifier();
+
+    let (poq_index_1, _) = VerifiedProofOfQuota::new(
+        &public_inputs,
+        PrivateInputs::new_proof_of_core_quota_inputs(1, secret_inputs[0].clone()),
+    )
+    .unwrap();
+    let key_nullifier_poq_index_1 = poq_index_1
+        .into_inner()
+        .verify(&public_inputs)
+        .unwrap()
+        .key_nullifier();
+
+    // We test that the same key with different indices produces different
+    // nullifiers.
+    assert_ne!(key_nullifier_poq_index_0, key_nullifier_poq_index_1);
+}
+
+#[test]
+fn different_keys_same_index() {
+    let key = UnsecuredZkKey::one();
+    let merkle_tree = MerkleTree::new(vec![key.to_public_key().into_inner()]).unwrap();
+
+    let PoQInputs {
+        public_inputs: public_inputs_key_1,
+        secret_inputs,
+    } = PoQInputs {
+        public_inputs: PublicInputs {
+            core: CoreInputs {
+                quota: 1,
+                zk_root: merkle_tree.root(),
+            },
+            leader: LeaderInputs::default(),
+            signing_key: Ed25519PublicKey::from_bytes(&[1; _]).unwrap(),
+        },
+        secret_inputs: [ProofOfCoreQuotaInputs {
+            core_path_and_selectors: merkle_tree
+                .get_proof_for_key(key.to_public_key().as_fr())
+                .unwrap(),
+            core_sk: key.into_inner(),
+        }],
+    };
+
+    // Use same public inputs, just a different signing key.
+    let public_inputs_key_2 = {
+        let mut public_inputs_key_2 = public_inputs_key_1;
+        public_inputs_key_2.signing_key = Ed25519PublicKey::from_bytes(&[3; _]).unwrap();
+
+        public_inputs_key_2
+    };
+
+    let (poq_key_1, _) = VerifiedProofOfQuota::new(
+        &public_inputs_key_1,
+        PrivateInputs::new_proof_of_core_quota_inputs(0, secret_inputs[0].clone()),
+    )
+    .unwrap();
+    let key_nullifier_poq_key_1 = poq_key_1
+        .into_inner()
+        .verify(&public_inputs_key_1)
+        .unwrap()
+        .key_nullifier();
+
+    let (poq_key_2, _) = VerifiedProofOfQuota::new(
+        &public_inputs_key_2,
+        PrivateInputs::new_proof_of_core_quota_inputs(0, secret_inputs[0].clone()),
+    )
+    .unwrap();
+    let key_nullifier_poq_key_2 = poq_key_2
+        .into_inner()
+        .verify(&public_inputs_key_2)
+        .unwrap()
+        .key_nullifier();
+
+    // We test that different keys with the same index produce the same nullifier,
+    // so it's not possible to "cheat" the system by using different keys for the
+    // same index.
+    assert_eq!(key_nullifier_poq_key_1, key_nullifier_poq_key_2);
+}

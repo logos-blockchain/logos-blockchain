@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use futures::StreamExt as _;
 pub use lb_blend::message::{crypto::proofs::RealProofsVerifier, encap::ProofsVerifier};
 use lb_blend::scheduling::epoch::UninitializedEpochEventStream;
-use lb_chain_service::api::CryptarchiaServiceData;
+use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     mantle::NoteId,
     sdp::{DeclarationId, DeclarationMessage, Locator, ProviderId, ServiceType},
@@ -179,7 +179,8 @@ where
             &overwatch_handle,
             Some(Duration::from_mins(1)),
             PreloadKmsService<_>,
-            SdpService
+            SdpService,
+            <EdgeService as EdgeServiceComponents>::ChainService
         )
         .await?;
 
@@ -208,6 +209,24 @@ where
         let local_node_id =
             CoreService::NodeId::try_from_provider_id(non_ephemeral_signing_key_public.as_bytes())
                 .expect("non-ephemeral signing public key should decode into a valid node id");
+
+        // Wait until the chain becomes Online mode before subscribing to memberships.
+        // Chain service provides the correct epoch state only after the chain becomes
+        // Online.
+        let chain_api = CryptarchiaServiceApi::<
+            <EdgeService as EdgeServiceComponents>::ChainService,
+            RuntimeServiceId,
+        >::new(
+            overwatch_handle
+                .relay::<<EdgeService as EdgeServiceComponents>::ChainService>()
+                .await?,
+        );
+        info!(target: LOG_TARGET, "Waiting for chain to become Online mode");
+        chain_api
+            .wait_until_chain_becomes_online()
+            .await
+            .expect("Waiting for chain to be online should succeed");
+        info!(target: LOG_TARGET, "Chain is now Online.");
 
         let membership_stream = membership::chain::subscribe::<
             <EdgeService as EdgeServiceComponents>::ChainService,

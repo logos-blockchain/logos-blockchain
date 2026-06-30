@@ -334,7 +334,7 @@ where
         tokio::select! {
             Some(EpochEvent::NewEpoch(new_public_epoch_info)) = remaining_public_epoch_stream.next() => {
                 current_epoch_info = new_public_epoch_info;
-                match handle_new_epoch_event(&current_epoch_info, current_secret_epoch_info.as_ref(), &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
+                match handle_new_epoch_event(&current_epoch_info, &mut current_secret_epoch_info, &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
                         return Ok(());
@@ -348,7 +348,7 @@ where
             }
             Some(new_secret_pol_info) = secret_pol_info_stream.next() => {
                 current_secret_epoch_info = Some(new_secret_pol_info);
-                match handle_new_epoch_event(&current_epoch_info, current_secret_epoch_info.as_ref(), &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
+                match handle_new_epoch_event(&current_epoch_info, &mut current_secret_epoch_info, &mut current_epoch_message_handler, settings.clone(), overwatch_handle.clone()) {
                     Err(Error::NetworkIsTooSmall(_)) => {
                         info!(target: LOG_TARGET, "New membership does not satisfy edge node condition, edge service shutting down.");
                         return Ok(());
@@ -383,7 +383,7 @@ where
 
 fn handle_new_epoch_event<Backend, NodeId, ProofsGenerator, RuntimeServiceId>(
     current_public_epoch_info: &BlendEpochState<NodeId>,
-    current_secret_epoch_info: Option<&PolEpochInfo>,
+    maybe_current_secret_epoch_info: &mut Option<PolEpochInfo>,
     current_epoch_message_handler: &mut Option<
         MessageHandler<Backend, NodeId, ProofsGenerator, RuntimeServiceId>,
     >,
@@ -419,7 +419,7 @@ where
         return Err(Error::LocalIsCoreNode);
     }
 
-    let Some(current_secret_epoch_info) = current_secret_epoch_info else {
+    let Some(current_secret_epoch_info) = maybe_current_secret_epoch_info.take() else {
         assert!(
             current_epoch_message_handler.is_none(),
             "If there is no secret PoL info, there should not be an active message handler."
@@ -428,8 +428,12 @@ where
         return Ok(());
     };
 
-    if current_public_epoch_info.epoch != current_secret_epoch_info.epoch {
-        debug!(target: LOG_TARGET, "Public and secret epoch info on different epochs (public: {:?}, secret: {:?}). Cannot create new handler.", current_public_epoch_info.epoch, current_secret_epoch_info.epoch);
+    if current_secret_epoch_info.epoch != current_public_epoch_info.epoch {
+        debug!(target: LOG_TARGET, "Secret PoL info is for epoch {:?} which does not match the current public epoch {:?}, cannot create message handler until they line up.", current_secret_epoch_info.epoch, current_public_epoch_info.epoch);
+        // Re-instate the stream since we need it for when the new public epoch info
+        // will arrive. We chose this over not calling `.take()` here and use
+        // `.take().unwrap()` below instead.
+        *maybe_current_secret_epoch_info = Some(current_secret_epoch_info);
         return Ok(());
     }
 
@@ -456,7 +460,7 @@ where
         settings,
         current_public_epoch_info.membership_info.membership.clone(),
         new_public_inputs,
-        current_secret_epoch_info.poq_private_inputs.clone(),
+        current_secret_epoch_info.winning_pol_info_stream,
         overwatch_handle,
         current_public_epoch_info.epoch,
     )?;

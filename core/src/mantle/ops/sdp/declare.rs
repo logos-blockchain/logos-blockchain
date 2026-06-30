@@ -1,9 +1,9 @@
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 
-use super::{MAX_DECLARATION_LOCATOR, SDPDeclareOp, SdpError};
+use super::{SDPDeclareOp, SdpError};
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         Note, TxHash,
         ledger::{Declarations, Operation, Utxos},
@@ -23,7 +23,7 @@ trait SDPDeclareValidationExt {
     fn execute(
         &self,
         ctx: SDPDeclareExecutionContext,
-    ) -> Result<(SDPDeclareExecutionContext, Events), SdpError>;
+    ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError>;
 }
 
 impl SDPDeclareValidationExt for SDPDeclareOp {
@@ -37,11 +37,6 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
         // Check that the declaration doesn't already exist
         if declarations.contains_key(&self.id()) {
             return Err(SdpError::DuplicateDeclaration(self.id()));
-        }
-
-        // Ensure it has no more than 8 locators.
-        if self.locators.len() > MAX_DECLARATION_LOCATOR {
-            return Err(SdpError::TooMuchLocators);
         }
 
         // Ensure value of locked note is sufficient for joining the service.
@@ -66,7 +61,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
     fn execute(
         &self,
         mut ctx: SDPDeclareExecutionContext,
-    ) -> Result<(SDPDeclareExecutionContext, Events), SdpError> {
+    ) -> Result<(SDPDeclareExecutionContext, Vec<TxEvent>), SdpError> {
         let declaration_id = self.id();
         let declaration = Declaration::new(ctx.epoch, self);
         ctx.declarations = ctx.declarations.insert(declaration_id, declaration);
@@ -87,7 +82,7 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             )
             .map_err(|_| SdpError::UnexpectedError)?;
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }
 
@@ -160,7 +155,7 @@ impl Operation<SDPDeclareValidationContext<'_>> for SDPDeclareOp {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }
@@ -191,7 +186,7 @@ impl Operation<SDPDeclareGenesisValidationContext<'_>> for SDPDeclareOp {
     fn execute(
         &self,
         ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         SDPDeclareValidationExt::execute(self, ctx)
     }
 }

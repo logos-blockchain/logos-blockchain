@@ -31,11 +31,7 @@ use super::{
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        encoding::{
-            decode_channel_withdraw, decode_leader_claim, decode_sdp_active, decode_sdp_declare,
-            decode_sdp_withdraw, decode_transfer, encode_channel_withdraw, encode_leader_claim,
-            encode_sdp_active, encode_sdp_declare, encode_sdp_withdraw, encode_transfer_op,
-        },
+        encoding::{decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op},
         nom::{NomDecode, NomEncode},
         ops::{
             internal::{OpDe, OpSer},
@@ -143,19 +139,19 @@ impl NomEncode for Op {
             Self::ChannelDeposit(op) => {
                 bytes.extend(op.encode());
             }
-            // TODO: Use `.encode()` once implemented for all other ops
             Self::ChannelWithdraw(op) => {
-                bytes.extend(encode_channel_withdraw(op));
+                bytes.extend(op.encode());
             }
             Self::SDPDeclare(op) => {
-                bytes.extend(encode_sdp_declare(op));
+                bytes.extend(op.encode());
             }
             Self::SDPWithdraw(op) => {
-                bytes.extend(encode_sdp_withdraw(op));
+                bytes.extend(op.encode());
             }
             Self::SDPActive(op) => {
-                bytes.extend(encode_sdp_active(op));
+                bytes.extend(op.encode());
             }
+            // TODO: Use `.encode()` once implemented for all other ops
             Self::LeaderClaim(op) => {
                 bytes.extend(encode_leader_claim(op));
             }
@@ -168,26 +164,41 @@ impl NomEncode for Op {
 }
 
 impl NomDecode for Op {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (input, opcode) = u8::decode(bytes)?;
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (bytes, opcode) = u8::decode(bytes)?;
 
         match opcode {
-            INSCRIBE => map(InscriptionOp::decode, Self::ChannelInscribe).parse(input),
-            CHANNEL_CONFIG => map(ChannelConfigOp::decode, Self::ChannelConfig).parse(input),
-            CHANNEL_DEPOSIT => map(DepositOp::decode, Self::ChannelDeposit).parse(input),
+            INSCRIBE => {
+                InscriptionOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelInscribe(op)))
+            }
+            CHANNEL_CONFIG => {
+                ChannelConfigOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelConfig(op)))
+            }
+            CHANNEL_DEPOSIT => {
+                DepositOp::decode(bytes).map(|(bytes, op)| (bytes, Self::ChannelDeposit(op)))
+            }
+            CHANNEL_WITHDRAW => ChannelWithdrawOp::decode(bytes)
+                .map(|(bytes, op)| (bytes, Self::ChannelWithdraw(op))),
+            SDP_DECLARE => {
+                SDPDeclareOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPDeclare(op)))
+            }
+            SDP_WITHDRAW => {
+                SDPWithdrawOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPWithdraw(op)))
+            }
+            SDP_ACTIVE => {
+                SDPActiveOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPActive(op)))
+            }
             // TODO: Use `.decode()` once implemented for all other ops
-            CHANNEL_WITHDRAW => map(decode_channel_withdraw, Self::ChannelWithdraw).parse(input),
-            SDP_DECLARE => map(decode_sdp_declare, Self::SDPDeclare).parse(input),
-            SDP_WITHDRAW => map(decode_sdp_withdraw, Self::SDPWithdraw).parse(input),
-            SDP_ACTIVE => map(decode_sdp_active, Self::SDPActive).parse(input),
-            LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(input),
-            TRANSFER => map(decode_transfer, Self::Transfer).parse(input),
-            _ => Err(nom::Err::Error(Error::new(input, ErrorKind::Fail))),
+            LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(bytes),
+            TRANSFER => map(decode_transfer, Self::Transfer).parse(bytes),
+            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
         }
     }
 }
+
+// We just check that the enum discriminant tag is encoded correctly, so a
+// single fixture is fine here.
+// TODO: Remove once the `NomCodec` macro supports enums.
 
 impl Op {
     #[must_use]

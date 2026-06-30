@@ -6,10 +6,7 @@ use lb_blend_message::{
     crypto::proofs::PoQVerificationInputsMinusSigningKey, encap::ProofsVerifier,
 };
 use lb_blend_proofs::{
-    quota::{
-        self, ProofOfQuota, VerifiedProofOfQuota,
-        inputs::prove::{PublicInputs, private::ProofOfLeadershipQuotaInputs},
-    },
+    quota::{self, ProofOfQuota, VerifiedProofOfQuota, inputs::prove::PublicInputs},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_core::crypto::ZkHash;
@@ -19,7 +16,8 @@ use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use crate::message_blend::{
     CoreProofOfQuotaGenerator,
     provers::{
-        BlendLayerProof, ProofsGeneratorSettings, core_and_leader::CoreAndLeaderProofsGenerator,
+        BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
+        core_and_leader::CoreAndLeaderProofsGenerator,
     },
 };
 
@@ -41,7 +39,7 @@ impl CoreProofOfQuotaGenerator for MockCorePoQGenerator {
     }
 }
 
-pub struct TestEpochChangeCoreAndLeaderProofsGenerator(pub Option<ProofOfLeadershipQuotaInputs>);
+pub struct TestEpochChangeCoreAndLeaderProofsGenerator(pub Option<WinningPolInfoStream>);
 
 #[async_trait]
 impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
@@ -56,10 +54,10 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
 
     fn set_epoch_private(
         &mut self,
-        new_epoch_private: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         _target_epoch: Epoch,
     ) {
-        self.0 = Some(new_epoch_private);
+        self.0 = Some(winning_pol_info_stream);
     }
 
     async fn get_next_core_proof(&mut self) -> Option<BlendLayerProof> {

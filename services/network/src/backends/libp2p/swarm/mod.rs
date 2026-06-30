@@ -22,7 +22,10 @@ use std::{collections::HashMap, time::Duration};
 use lb_libp2p::{
     Multiaddr, PeerId, Protocol, Swarm, SwarmEvent,
     behaviour::BehaviourEvent,
-    libp2p::{kad::QueryId, swarm::ConnectionId},
+    libp2p::{
+        kad::QueryId,
+        swarm::{ConnectionId, DialError},
+    },
 };
 use lb_log_targets::network_service;
 use rand::RngCore;
@@ -144,6 +147,10 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "TODO: Address this at some point."
+    )]
     fn handle_swarm_event(&mut self, event: SwarmEvent<BehaviourEvent<R>>) {
         match event {
             SwarmEvent::ConnectionEstablished {
@@ -183,12 +190,34 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 error,
                 ..
             } => {
-                tracing::error!(
-                    target: LOG_TARGET,
-                    "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
-                );
                 crate::metrics::network_dial_failures();
-                self.retry_connect(connection_id, peer_id);
+
+                match error {
+                    // A `WrongPeerId` failure is permanent for that exact
+                    // `/p2p/<id>@addr`: the node at that address rotated its
+                    // identity key, so retrying can never succeed. Such dials are
+                    // issued by Kademlia periodic bootstrap / Identify / chain sync
+                    // (not our own `connect()`), so they have no `pending_dials`
+                    // entry and would otherwise be re-dialed forever. Evict the
+                    // stale address from Kademlia immediately instead of retrying.
+                    DialError::WrongPeerId { obtained, endpoint } => {
+                        let dial_addr = endpoint.get_remote_address();
+                        tracing::debug!(
+                            target: LOG_TARGET,
+                            "Evicting stale address after WrongPeerId (expected {peer_id:?}, obtained {obtained}): {dial_addr}"
+                        );
+                        self.remove_kademlia_address_for_dial(peer_id, dial_addr);
+                        // Drop any matching pending dial so it is not also retried.
+                        self.pending_dials.remove(&connection_id);
+                    }
+                    error => {
+                        tracing::error!(
+                            target: LOG_TARGET,
+                            "Failed to connect to peer: {peer_id:?} {connection_id:?} due to: {error}"
+                        );
+                        self.retry_connect(connection_id, peer_id);
+                    }
+                }
             }
             SwarmEvent::ExternalAddrConfirmed { address } => {
                 self.handle_external_addr_confirmed(&address);
@@ -332,7 +361,10 @@ const fn exp_backoff(retry: usize) -> Duration {
 mod tests {
     use std::{net::Ipv4Addr, sync::Once, time::Instant};
 
-    use lb_libp2p::{libp2p::swarm::DialError, protocol_name::StreamProtocol};
+    use lb_libp2p::{
+        libp2p::core::{ConnectedPoint, Endpoint, transport::PortUse},
+        protocol_name::StreamProtocol,
+    };
     use lb_utils::net::get_available_udp_port;
     use rand::rngs::OsRng;
     use tracing_subscriber::EnvFilter;
@@ -623,6 +655,77 @@ mod tests {
                 .iter()
                 .any(|p| p.peer_id == remote_peer && p.addrs.contains(&remote_addr)),
             "Expected failed dial address to be removed from Kademlia",
+        );
+    }
+
+    // A peer that rotated its identity key (e.g. redeployed without a stable
+    // `node_key`) keeps the same `IP:port` but answers with a new PeerId. Dials
+    // to its stale `/p2p/<old-id>@addr` therefore fail with `WrongPeerId`.
+    //
+    // Such dials are issued by Kademlia periodic bootstrap / Identify / chain
+    // sync, NOT by our own `connect()`, so there is no `pending_dials` entry.
+    // The stale address must still be evicted from Kademlia, otherwise periodic
+    // bootstrap re-dials it forever and spams dial errors.
+    #[tokio::test]
+    async fn removes_wrong_peer_id_address_without_pending_dial() {
+        init_tracing();
+
+        let (tx, rx) = mpsc::channel(10);
+        let (pubsub_events_tx, _) = broadcast::channel(10);
+        let (chainsync_events_tx, _) = broadcast::channel(10);
+
+        let config = create_libp2p_config(vec![], get_available_udp_port().unwrap());
+
+        let mut handler =
+            SwarmHandler::new(config, tx, rx, pubsub_events_tx, chainsync_events_tx, OsRng);
+
+        // A peer learned via discovery (Kademlia/Identify), i.e. NOT through our
+        // own `connect()` call, so there is no `pending_dials` entry for it.
+        let expected_peer = PeerId::random();
+        let remote_addr = format!(
+            "/ip4/127.0.0.1/udp/{}/quic-v1",
+            get_available_udp_port().unwrap()
+        )
+        .parse::<Multiaddr>()
+        .unwrap()
+        .with(Protocol::P2p(expected_peer));
+
+        handler.bootstrap_kad_from_peers(&vec![remote_addr.clone()]);
+
+        let before = handler.swarm.kademlia_discovered_peers();
+        assert!(
+            before
+                .iter()
+                .any(|p| p.peer_id == expected_peer && p.addrs.contains(&remote_addr)),
+            "Expected Kademlia to contain the remote address before failure handling",
+        );
+
+        // The node listening at `remote_addr` now reports a different PeerId.
+        // This mirrors a Kademlia periodic-bootstrap dial failing with
+        // `WrongPeerId`, with no corresponding `pending_dials` entry.
+        let obtained_peer = PeerId::random();
+        let event = SwarmEvent::OutgoingConnectionError {
+            peer_id: Some(expected_peer),
+            connection_id: ConnectionId::new_unchecked(1),
+            error: DialError::WrongPeerId {
+                obtained: obtained_peer,
+                endpoint: ConnectedPoint::Dialer {
+                    address: remote_addr.clone(),
+                    role_override: Endpoint::Dialer,
+                    port_use: PortUse::Reuse,
+                },
+            },
+        };
+
+        handler.handle_swarm_event(event);
+
+        let after = handler.swarm.kademlia_discovered_peers();
+        assert!(
+            !after
+                .iter()
+                .any(|p| p.peer_id == expected_peer && p.addrs.contains(&remote_addr)),
+            "Expected the stale WrongPeerId address to be removed from Kademlia, \
+             even though the dial was not initiated via `connect()`",
         );
     }
 }

@@ -19,7 +19,7 @@ pub struct Config {
     pub level: Level,
 }
 
-const DEFAULT_LOG_LEVEL: Level = Level::DEBUG;
+const DEFAULT_LOG_LEVEL: Level = Level::INFO;
 
 impl Default for Config {
     fn default() -> Self {

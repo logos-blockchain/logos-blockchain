@@ -143,6 +143,18 @@ impl TrackedWallets {
         }
     }
 
+    pub(crate) fn replace_current_wallets_utxos(
+        &mut self,
+        wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<Utxo>)>,
+    ) {
+        for (wallet_id, utxos) in wallet_utxos {
+            self.ensure_wallet(wallet_id.clone());
+            if let Some(wallet) = self.wallet_mut(wallet_id.as_str()) {
+                wallet.replace_on_chain_utxos(utxos);
+            }
+        }
+    }
+
     pub(crate) fn record_header_height(&mut self, node_name: &str, header_id: &str, height: u64) {
         self.chain_state_cache
             .record_header_height(node_name, header_id, height);
@@ -155,7 +167,7 @@ impl TrackedWallets {
     }
 
     #[must_use]
-    pub(crate) fn observe_wallets(
+    pub(crate) fn current_wallet_states(
         &self,
         tracked_wallets: impl IntoIterator<Item = TrackedWalletKeys>,
     ) -> BTreeMap<WalletId, WalletStateView> {
@@ -163,7 +175,7 @@ impl TrackedWallets {
 
         for tracked_wallet in tracked_wallets {
             let wallet_id = tracked_wallet.wallet_id();
-            let observation = self.observe_wallet(wallet_id);
+            let observation = self.current_wallet_state(wallet_id);
 
             observations.insert(wallet_id.clone(), observation);
         }
@@ -183,7 +195,7 @@ impl TrackedWallets {
         self.wallets.get_mut(wallet_id)
     }
 
-    fn observe_wallet(&self, wallet_id: &WalletId) -> WalletStateView {
+    fn current_wallet_state(&self, wallet_id: &WalletId) -> WalletStateView {
         self.wallet(wallet_id.as_str()).map_or_else(
             || WalletStateView::new(wallet_id.clone(), Vec::new(), Vec::new()),
             |wallet| wallet.state_view(wallet_id.clone()),

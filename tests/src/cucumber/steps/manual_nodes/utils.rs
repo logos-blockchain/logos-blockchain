@@ -8,11 +8,11 @@ use std::{
 use cucumber::gherkin::Table;
 use futures::future::try_join_all;
 use hex::ToHex as _;
-use lb_chain_service::{ChainServiceMode, CryptarchiaInfo, State};
+use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, State};
 use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
-use lb_node::config::{DeploymentSettings, RunConfig, WellKnownDeployment};
+use lb_node::config::{DeploymentSettings, RunConfig};
 use lb_testing_framework::{
     LbcEnv, LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
 };
@@ -38,6 +38,7 @@ use crate::cucumber::{
         display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
+    wallet::sync::current_wallet_states_for_wallets,
     world::{
         ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
         PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap, WalletType,
@@ -308,7 +309,7 @@ pub(crate) fn ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
 }
 
 pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
-    world: &CucumberWorld,
+    world: &mut CucumberWorld,
     step: &str,
 ) -> StepResult {
     let public_cryptarchia_endpoint_peers = world
@@ -347,6 +348,9 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
                 "All nodes synced to the chain in {:.2?}",
                 start.elapsed()
             );
+
+            catch_up_known_wallet_tracking_after_chain_sync(world, step).await?;
+
             return Ok(());
         }
 
@@ -363,6 +367,27 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
 
         sleep(CHAIN_SYNC_POLL_INTERVAL).await;
     }
+}
+
+async fn catch_up_known_wallet_tracking_after_chain_sync(
+    world: &mut CucumberWorld,
+    step: &str,
+) -> StepResult {
+    let wallets = world.wallet_info.values().cloned().collect::<Vec<_>>();
+    if wallets.is_empty() {
+        return Ok(());
+    }
+
+    let started_at = Instant::now();
+    current_wallet_states_for_wallets(world, step, &wallets).await?;
+
+    info!(
+        target: TARGET,
+        "Wallet state refreshed after chain sync in {:.2?}",
+        started_at.elapsed()
+    );
+
+    Ok(())
 }
 
 pub(crate) fn parse_url(raw: &str) -> Result<String, String> {
@@ -386,13 +411,13 @@ async fn fetch_public_peer_consensus_snapshots(
     for peer in peers {
         match fetch_public_peer_consensus(client, peer).await {
             Ok(info) => snapshots.push(PublicPeerConsensusSnapshot {
-                peer_url: peer.url.clone(),
+                peer_url: peer.base_url.clone(),
                 stats: SyncTargetStats::from_cryptarchia_info(&info),
             }),
             Err(e) => warn!(
                 target: TARGET,
                 "Failed to fetch public cryptarchia info from '{}': {e}",
-                peer.url
+                peer.base_url
             ),
         }
     }
@@ -400,31 +425,34 @@ async fn fetch_public_peer_consensus_snapshots(
     snapshots
 }
 
-async fn fetch_public_peer_consensus(
+/// Fetch the current consensus info from a public cryptarchia endpoint peer.
+/// Returns an error if the request fails or the response is invalid.
+pub async fn fetch_public_peer_consensus(
     client: &Client,
     peer: &PublicCryptarchiaEndpointPeer,
 ) -> Result<CryptarchiaInfo, StepError> {
     let request_url = Url::parse(&format!(
         "{peer_url}/{path}",
-        peer_url = peer.url.as_str(),
+        peer_url = peer.base_url.as_str(),
         path = CRYPTARCHIA_INFO.trim_start_matches('/')
     ))
     .map_err(|e| StepError::InvalidArgument {
         message: format!(
             "Invalid public cryptarchia info URL for '{}': {e}",
-            peer.url.as_str()
+            peer.base_url.as_str()
         ),
     })?;
 
-    client
+    Ok(client
         .get(request_url)
         .basic_auth(&peer.username, Some(&peer.password))
         .send()
         .await?
         .error_for_status()?
-        .json::<CryptarchiaInfo>()
+        .json::<ChainServiceInfo>()
         .await
-        .map_err(Into::into)
+        .map_err(StepError::from)?
+        .cryptarchia_info)
 }
 
 fn select_majority_public_sync_target(
@@ -719,7 +747,9 @@ pub async fn start_node(
             immediate_start,
         },
     );
-    world.register_wallet_block_feed_source(node_name, client.clone())?;
+    world
+        .register_wallet_block_feed_source(node_name, client.clone())
+        .await?;
 
     // All nodes are required to be network ready responsive, and bootstrap nodes
     // must be `Mode::OnLine` for IBD of other peers to succeed
@@ -760,6 +790,38 @@ pub async fn start_node(
         }
     }
 
+    Ok(())
+}
+
+/// Stop a node and leave it down.
+///
+/// Unlike [`restart_node`], which brings it back up and waits for readiness,
+/// this leaves the node down, useful to exercise reconnect behavior while the
+/// node is down.
+pub async fn stop_node(world: &CucumberWorld, step: &str, node_name: &str) -> StepResult {
+    let cluster = world
+        .local_cluster
+        .as_ref()
+        .ok_or(StepError::LogicalError {
+            message: "No local cluster available".into(),
+        })?;
+    let started_node_name = world
+        .resolve_node_runtime_name(node_name)
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+
+    cluster
+        .stop_node(&started_node_name)
+        .await
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
+
+    info!(
+        target: TARGET,
+        "Stopped node `{node_name}` (runtime name `{started_node_name}`)"
+    );
     Ok(())
 }
 
@@ -913,7 +975,7 @@ fn prepare_config_patch(
     if join_external_network {
         config.deployment = deployment_override
             .cloned()
-            .unwrap_or_else(|| DeploymentSettings::from(WellKnownDeployment::Devnet));
+            .unwrap_or_else(DeploymentSettings::default);
     } else if let Some(deployment_override) = deployment_override {
         config.deployment = deployment_override.clone();
     }

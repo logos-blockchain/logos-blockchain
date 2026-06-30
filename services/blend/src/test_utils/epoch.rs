@@ -1,5 +1,9 @@
 use async_trait::async_trait;
-use futures::{Stream, future::ready, stream::once};
+use futures::{
+    Stream,
+    future::ready,
+    stream::{once, repeat},
+};
 use lb_blend::proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs;
 use lb_chain_service::Epoch;
 use lb_core::crypto::ZkHash;
@@ -19,14 +23,14 @@ impl<RuntimeServiceId> PolInfoProvider<RuntimeServiceId> for OncePolStreamProvid
     ) -> Option<Self::Stream> {
         Some(Box::new(once(ready(PolEpochInfo {
             epoch: Epoch::new(0),
-            poq_private_inputs: ProofOfLeadershipQuotaInputs {
+            winning_pol_info_stream: Box::pin(repeat(ProofOfLeadershipQuotaInputs {
                 slot: 1,
                 note_value: 1,
                 transaction_hash: ZkHash::ZERO,
                 output_number: 1,
                 aged_path_and_selectors: [(ZkHash::ZERO, false); _],
                 secret_key: ZkHash::ZERO,
-            },
+            })),
         }))))
     }
 }

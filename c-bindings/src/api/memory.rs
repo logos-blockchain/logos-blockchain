@@ -9,10 +9,13 @@ use crate::{OperationStatus, return_error_if_null_pointer};
 /// - `pointer`: A pointer to the memory to be freed.
 pub fn free<Type>(pointer: *mut Type) -> OperationStatus {
     if pointer.is_null() {
-        return OperationStatus::NullPointer;
+        return OperationStatus::error(
+            crate::errors::OperationStatusCode::NullPointer,
+            "Received a null pointer.",
+        );
     }
     unsafe { drop(Box::from_raw(pointer)) };
-    OperationStatus::Ok
+    OperationStatus::OK
 }
 
 /// Frees a C string allocated by this library.
@@ -31,7 +34,7 @@ pub fn free<Type>(pointer: *mut Type) -> OperationStatus {
 /// Passing a pointer from any other source will cause undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_cstring(pointer: *mut c_char) -> OperationStatus {
-    return_error_if_null_pointer!("free_cstring", pointer);
+    return_error_if_null_pointer!(pointer);
     drop(unsafe { CString::from_raw(pointer) });
-    OperationStatus::Ok
+    OperationStatus::OK
 }

@@ -1,6 +1,7 @@
 use std::fmt::{Debug, Formatter};
 
-use lb_key_management_system_keys::keys::Ed25519Signature;
+use lb_groth16::CompressedGroth16Proof;
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_utils::bounded_vec::BoundedError;
 
 use crate::{
@@ -1148,7 +1149,21 @@ impl GenesisBlockBuilder<WithAll> {
         };
         let signed_tx = SignedMantleTx::new_unverified(
             MantleTx(capped_ops),
-            vec![OpProof::Ed25519Sig(Ed25519Signature::zero()); n],
+            vec![
+                OpProof::ZkSig(ZkSignature::new(CompressedGroth16Proof::from_bytes(
+                    &[0u8; 128],
+                ))),
+                OpProof::Ed25519Sig(Ed25519Signature::zero()),
+            ]
+            .into_iter()
+            .chain(vec![
+                OpProof::ZkAndEd25519Sigs {
+                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                    ed25519_sig: Ed25519Signature::zero(),
+                };
+                n - 2
+            ])
+            .collect(),
         );
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
@@ -1252,11 +1267,21 @@ mod tests {
             Op::ChannelInscribe(valid_inscription()),
         ];
         ops.extend(extra_ops);
-        let n = ops.len();
-        SignedMantleTx::new_unverified(
-            MantleTx(Ops::new_unchecked(ops)),
-            vec![OpProof::Ed25519Sig(Ed25519Signature::from_bytes(&[0u8; 64])); n],
-        )
+        let ops_proofs = ops
+            .iter()
+            .map(|op| match op {
+                Op::ChannelInscribe(_) => OpProof::Ed25519Sig(Ed25519Signature::zero()),
+                Op::Transfer(_) => OpProof::ZkSig(ZkSignature::new(
+                    CompressedGroth16Proof::from_bytes(&[0u8; 128]),
+                )),
+                Op::SDPDeclare(_) => OpProof::ZkAndEd25519Sigs {
+                    zk_sig: ZkSignature::new(CompressedGroth16Proof::from_bytes(&[0u8; 128])),
+                    ed25519_sig: Ed25519Signature::zero(),
+                },
+                other => unreachable!("unexpected genesis op in tests: {}", other.as_str()),
+            })
+            .collect();
+        SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {

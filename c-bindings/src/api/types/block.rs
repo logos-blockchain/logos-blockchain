@@ -1,6 +1,8 @@
 use std::ffi::{CString, c_char};
 
-use lb_core::{block::Block as CoreBlock, mantle::SignedMantleTx};
+use lb_core::block::Block as CoreBlock;
+
+use crate::api::subscriptions::TxWithId;
 
 #[repr(C)]
 pub struct Block(CString); // JSON representation of a block
@@ -11,8 +13,8 @@ impl Block {
     }
 }
 
-impl From<CoreBlock<SignedMantleTx>> for Block {
-    fn from(value: CoreBlock<SignedMantleTx>) -> Self {
+impl From<CoreBlock<TxWithId>> for Block {
+    fn from(value: CoreBlock<TxWithId>) -> Self {
         Self(
             CString::new(
                 serde_json::to_string(&value)

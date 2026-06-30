@@ -2,12 +2,11 @@ use std::{hash::Hash, marker::PhantomData};
 
 use lb_blend::{
     message::crypto::proofs::PoQVerificationInputsMinusSigningKey,
-    proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::{
         membership::Membership,
         message_blend::{
             crypto::leader::send::EpochCryptographicProcessor,
-            provers::leader::LeaderProofsGenerator,
+            provers::{WinningPolInfoStream, leader::LeaderProofsGenerator},
         },
     },
 };
@@ -54,7 +53,7 @@ where
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Result<Self, Error>
@@ -71,7 +70,7 @@ where
                 settings,
                 membership,
                 public_info,
-                private_info,
+                winning_pol_info_stream,
                 overwatch_handle,
                 epoch,
             ))
@@ -82,7 +81,7 @@ where
         settings: Settings<Backend, NodeId, RuntimeServiceId>,
         membership: Membership<NodeId>,
         public_info: PoQVerificationInputsMinusSigningKey,
-        private_info: ProofOfLeadershipQuotaInputs,
+        winning_pol_info_stream: WinningPolInfoStream,
         overwatch_handle: OverwatchHandle<RuntimeServiceId>,
         epoch: Epoch,
     ) -> Self {
@@ -90,7 +89,7 @@ where
             settings.num_blend_layers,
             membership.clone(),
             public_info,
-            private_info,
+            winning_pol_info_stream,
             epoch,
         );
         let backend = Backend::new(

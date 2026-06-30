@@ -76,7 +76,7 @@ where
         last_slot: Option<Slot>,
     ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_, Error> {
         let lib_slot = self.node.consensus_info().await?.cryptarchia_info.lib_slot;
-        let start_slot = last_slot.map_or_else(Slot::genesis, |s| s + 1);
+        let start_slot = last_slot.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
 
         #[expect(
             closure_returning_async_block,
@@ -101,7 +101,7 @@ where
                 .zone_messages_in_blocks(current_slot, end_slot, self.channel_id)
                 .await
             {
-                Ok(messages) => Some((messages, end_slot + 1)),
+                Ok(messages) => Some((messages, end_slot.strict_add(1.into()))),
                 Err(e) => {
                     warn!(target: TARGET,
                         ?current_slot, ?end_slot, err = ?e,

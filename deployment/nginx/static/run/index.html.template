@@ -21,6 +21,8 @@
                 <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/0/cryptarchia/info" target="_blank">Cryptarchia Info</a>
                 <span class="divider">|</span>
                 <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/0/network/info" target="_blank">Network Info</a>
+                <span class="divider">|</span>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/0/blend/info" target="_blank">Blend Info</a>
             </div>
         </li>
 
@@ -30,6 +32,8 @@
                 <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/1/cryptarchia/info" target="_blank">Cryptarchia Info</a>
                 <span class="divider">|</span>
                 <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/1/network/info" target="_blank">Network Info</a>
+                <span class="divider">|</span>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/1/blend/info" target="_blank">Blend Info</a>
             </div>
         </li>
 
@@ -39,6 +43,8 @@
                 <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/2/cryptarchia/info" target="_blank">Cryptarchia Info</a>
                 <span class="divider">|</span>
                 <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/2/network/info" target="_blank">Network Info</a>
+                <span class="divider">|</span>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/2/blend/info" target="_blank">Blend Info</a>
             </div>
         </li>
 
@@ -48,6 +54,8 @@
                 <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/3/cryptarchia/info" target="_blank">Cryptarchia Info</a>
                 <span class="divider">|</span>
                 <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/3/network/info" target="_blank">Network Info</a>
+                <span class="divider">|</span>
+                <a href="https://$ENV_TITLE_STRING.blockchain.logos.co/node/3/blend/info" target="_blank">Blend Info</a>
             </div>
         </li>
     </ul>

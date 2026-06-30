@@ -62,6 +62,15 @@ where
     R: AsyncReadExt + Unpin,
 {
     let data_length = read_data_length(reader).await?;
+    // Bound the peer-supplied length before allocating, otherwise a malicious
+    // peer can send a ~4 GiB length prefix and OOM the node. `MAX_MSG_LEN` is the
+    // same cap `pack_to_writer` enforces on the send side.
+    if data_length > MAX_MSG_LEN {
+        return Err(PackingError::MessageTooLarge {
+            max: MAX_MSG_LEN,
+            actual: data_length,
+        });
+    }
     let mut data = vec![0u8; data_length];
     reader.read_exact(&mut data).await?;
     Ok(Message::from_bytes(&data)?)

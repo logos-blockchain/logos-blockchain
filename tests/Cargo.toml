@@ -40,6 +40,7 @@ lb-libp2p                        = { workspace = true }
 lb-mmr                           = { workspace = true }
 lb-node                          = { features = ["testing"], workspace = true }
 lb-testing-framework             = { workspace = true }
+lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }
 lb-zksign                        = { workspace = true }
@@ -69,10 +70,7 @@ cucumber             = []
 cucumber_stand_alone = []
 mantle_sdp           = []
 testing_framework    = []
-
-[[test]]
-name = "blend_devnet_setup"
-path = "src/tests/blend/devnet.rs"
+tip_poll_self_heal   = []
 
 [[test]]
 name = "test_cli_restart"
@@ -81,6 +79,11 @@ path = "src/tests/cli/restart.rs"
 [[test]]
 name = "test_cryptarchia_blocks_streaming"
 path = "src/tests/cryptarchia/blocks_streaming.rs"
+
+[[test]]
+name              = "test_cryptarchia_tip_poll_self_heal"
+path              = "src/tests/cryptarchia/tip_poll_self_heal.rs"
+required-features = ["tip_poll_self_heal"]
 
 [[test]]
 name = "test_mantle_chain_start"

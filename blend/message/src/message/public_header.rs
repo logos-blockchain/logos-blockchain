@@ -166,7 +166,7 @@ impl PublicHeaderWithVerifiedSignature {
     }
 
     pub const fn id(&self) -> MessageIdentifier {
-        self.signing_pubkey
+        self.proof_of_quota.key_nullifier()
     }
 
     #[cfg(any(feature = "unsafe-test-functions", test))]
@@ -252,7 +252,7 @@ impl VerifiedPublicHeader {
     }
 
     pub const fn id(&self) -> MessageIdentifier {
-        self.signing_pubkey
+        self.proof_of_quota.key_nullifier()
     }
 
     #[cfg(any(feature = "unsafe-test-functions", test))]

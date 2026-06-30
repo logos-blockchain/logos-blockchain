@@ -21,15 +21,6 @@ struct ZkNode<NodeId> {
 
 /// Build [`MembershipInfo`] from the SDP membership snapshot frozen into
 /// `epoch_state`.
-///
-/// This is the chain-derived replacement for the pushed [`ActiveProviders`]
-/// broadcast: the membership for the epoch is read from `EpochState.sdp`
-/// instead of a broadcast stream.
-///
-/// Note: this intentionally duplicates the node/Merkle construction in
-/// `Adapter::subscribe` rather than sharing it, because the broadcast
-/// `subscribe` path is slated for removal once this becomes the membership
-/// source; sharing logic with code about to be deleted is not worth the churn.
 #[must_use]
 pub fn membership_info_from_epoch_state<NodeId>(
     epoch_state: &EpochState,
@@ -39,11 +30,11 @@ pub fn membership_info_from_epoch_state<NodeId>(
 where
     NodeId: node_id::TryFrom + Clone + Hash + Eq,
 {
-    let declarations = epoch_state.sdp.declarations();
-    let mut nodes: Vec<ZkNode<NodeId>> = declarations
+    let mut nodes: Vec<ZkNode<NodeId>> = epoch_state
+        .active_declarations
+        .for_service(&ServiceType::BlendNetwork)
         .iter()
-        .filter(|(service_type, _)| matches!(service_type, ServiceType::BlendNetwork))
-        .flat_map(|(_, declarations)| declarations.values())
+        .flat_map(|declarations| declarations.values())
         .filter_map(|declaration| {
             let provider_info = ProviderInfo {
                 locators: declaration.locators.clone(),

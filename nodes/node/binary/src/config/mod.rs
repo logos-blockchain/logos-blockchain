@@ -1,4 +1,3 @@
-use core::{convert::Infallible, str::FromStr};
 use std::{
     net::{IpAddr, SocketAddr, ToSocketAddrs as _},
     path::PathBuf,
@@ -22,18 +21,12 @@ use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
 
 pub use crate::config::{
-    api::serde::Config as ApiConfig,
-    blend::serde::Config as BlendConfig,
-    cryptarchia::serde::Config as CryptarchiaConfig,
-    deployment::{DeploymentSettings, WellKnownDeployment},
-    kms::serde::Config as KmsConfig,
-    network::serde::Config as NetworkConfig,
-    sdp::serde::Config as SdpConfig,
-    state::Config as StateConfig,
-    storage::serde::Config as StorageConfig,
-    time::serde::Config as TimeConfig,
-    tracing::serde::Config as TracingConfig,
-    wallet::serde::Config as WalletConfig,
+    api::serde::Config as ApiConfig, blend::serde::Config as BlendConfig,
+    cryptarchia::serde::Config as CryptarchiaConfig, deployment::DeploymentSettings,
+    kms::serde::Config as KmsConfig, network::serde::Config as NetworkConfig,
+    sdp::serde::Config as SdpConfig, state::Config as StateConfig,
+    storage::serde::Config as StorageConfig, time::serde::Config as TimeConfig,
+    tracing::serde::Config as TracingConfig, wallet::serde::Config as WalletConfig,
 };
 use crate::config::{
     network::serde::nat,
@@ -303,61 +296,8 @@ pub struct StateArgs {
 
 #[derive(Parser, Debug, Clone)]
 pub struct DeploymentArgs {
-    #[clap(long = "deployment", env = "DEPLOYMENT", default_value = DeploymentType::default())]
-    deployment_type: DeploymentType,
-}
-
-impl DeploymentArgs {
-    #[must_use]
-    pub const fn deployment_type(&self) -> &DeploymentType {
-        &self.deployment_type
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum DeploymentType {
-    WellKnown(WellKnownDeployment),
-    Custom(PathBuf),
-}
-
-impl Default for DeploymentType {
-    fn default() -> Self {
-        WellKnownDeployment::default().into()
-    }
-}
-
-impl From<WellKnownDeployment> for DeploymentType {
-    fn from(deployment: WellKnownDeployment) -> Self {
-        Self::WellKnown(deployment)
-    }
-}
-
-impl From<PathBuf> for DeploymentType {
-    fn from(path: PathBuf) -> Self {
-        Self::Custom(path)
-    }
-}
-
-#[expect(clippy::fallible_impl_from, reason = "`From` impl required by clap.")]
-impl From<DeploymentType> for OsStr {
-    fn from(value: DeploymentType) -> Self {
-        match value {
-            DeploymentType::WellKnown(well_known_deployment) => {
-                well_known_deployment.to_string().into()
-            }
-            DeploymentType::Custom(path) => path.to_str().unwrap().to_owned().into(),
-        }
-    }
-}
-
-impl FromStr for DeploymentType {
-    type Err = Infallible;
-
-    // Try to parse as a well-known deployment first, otherwise treat as a path.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(s.parse::<WellKnownDeployment>()
-            .map_or_else(|()| PathBuf::from(s).into(), Into::into))
-    }
+    #[clap(long = "deployment", env = "DEPLOYMENT")]
+    pub custom_deployment_path: Option<PathBuf>,
 }
 
 pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Result<()> {
@@ -424,6 +364,12 @@ pub fn update_tracing(tracing: &mut TracingConfig, tracing_args: LogArgs) -> Res
                 tracing.logger.stderr = true;
             }
         }
+    } else if let Some(directory) = directory
+        && let Some(file) = tracing.logger.file.as_mut()
+    {
+        // No backend switch requested: apply a standalone directory override to
+        // the existing file logger (used by `init`/c-bindings config setup).
+        file.directory = directory;
     }
 
     update_tracing_level_and_filter(tracing, level.as_deref(), filter.as_deref())?;
@@ -445,7 +391,7 @@ pub fn update_tracing_level_and_filter(
     if let Some(filter) = filter {
         tracing.filter = parse_log_filter_layer(filter)?;
     } else {
-        apply_default_debug_log_filter(tracing);
+        apply_default_log_filter(tracing);
     }
 
     Ok(())
@@ -478,7 +424,7 @@ fn parse_log_filter_layer(raw: &str) -> Result<Layer> {
 
 /// Applies the built-in verbose filter policy only when no explicit filter was
 /// configured.
-fn apply_default_debug_log_filter(tracing: &mut TracingConfig) {
+fn apply_default_log_filter(tracing: &mut TracingConfig) {
     if !matches!(tracing.filter, Layer::None) {
         return;
     }

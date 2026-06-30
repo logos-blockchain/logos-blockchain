@@ -15,6 +15,9 @@ mod signing;
 pub use builder_funding::{fund_builder_from_wallet_source, wallet_state_from_utxos};
 pub use error::WalletTransactionError;
 pub use intent::WalletTransactionIntent;
-pub use prepare::prepare_wallet_transaction;
+pub use prepare::{
+    PreparedWalletTransactionWorkItem, finalize_prepared_wallet_transaction,
+    prepare_wallet_transaction, prepare_wallet_transaction_work_item,
+};
 pub use prepared::PreparedWalletTransaction;
 pub use signed::SignedWalletTransaction;

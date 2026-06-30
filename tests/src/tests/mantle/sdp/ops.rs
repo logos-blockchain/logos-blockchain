@@ -48,7 +48,7 @@ use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
 
-const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(Epoch::new(1));
+const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 
 /// High-level SDP flow covered by this E2E:
 /// - submit a `Declare` transaction backed by an unused genesis note and wait
@@ -111,7 +111,7 @@ async fn sdp_ops_e2e() {
     };
     let declaration_id = declaration.id();
 
-    let (declare_mantle_tx, declare_signing_keys) = fund_sdp_transaction(
+    let declare_mantle_tx = fund_sdp_transaction(
         &node0,
         &genesis_utxos,
         &funding_wallet,
@@ -129,19 +129,12 @@ async fn sdp_ops_e2e() {
         &declare_hash.to_fr(),
     )
     .expect("SDP declare zk proof should build");
-    let declare_transfer_proof = OpProof::ZkSig(
-        ZkKey::multi_sign(&declare_signing_keys, &declare_hash.to_fr())
-            .expect("transfer proof should build"),
-    );
     let declare_tx = SignedMantleTx::new(
         declare_mantle_tx,
-        vec![
-            OpProof::ZkAndEd25519Sigs {
-                zk_sig: declare_zk_sig,
-                ed25519_sig: declare_ed25519_sig,
-            },
-            declare_transfer_proof,
-        ],
+        vec![OpProof::ZkAndEd25519Sigs {
+            zk_sig: declare_zk_sig,
+            ed25519_sig: declare_ed25519_sig,
+        }],
     )
     .expect("funded SDP declare transaction should be valid");
 
@@ -167,7 +160,7 @@ async fn sdp_ops_e2e() {
         nonce: declaration_created.nonce + 1,
     };
 
-    let (withdraw_mantle_tx, withdraw_signing_keys) = fund_sdp_transaction(
+    let withdraw_mantle_tx = fund_sdp_transaction(
         &node0,
         &genesis_utxos,
         &funding_wallet,
@@ -182,16 +175,9 @@ async fn sdp_ops_e2e() {
     )
     .expect("SDP withdraw zk proof should build");
 
-    let withdraw_transfer_proof = OpProof::ZkSig(
-        ZkKey::multi_sign(&withdraw_signing_keys, &withdraw_hash.to_fr())
-            .expect("transfer proof should build"),
-    );
-
-    let withdraw_tx = SignedMantleTx::new(
-        withdraw_mantle_tx,
-        vec![OpProof::ZkSig(withdraw_zk_sig), withdraw_transfer_proof],
-    )
-    .expect("funded SDP withdraw transaction should be valid");
+    let withdraw_tx =
+        SignedMantleTx::new(withdraw_mantle_tx, vec![OpProof::ZkSig(withdraw_zk_sig)])
+            .expect("funded SDP withdraw transaction should be valid");
 
     node0
         .submit_transaction(&withdraw_tx)
@@ -207,13 +193,13 @@ async fn sdp_ops_e2e() {
         .await
         .expect("API must succeed")
         .expect("declaration must still exist even after withdrawal because GC shouldn't remove it immediately")
-        .withdrawn
-        .expect("withdraw epoch must be set after withdraw tx is accepted");
+        .withdraw_at
+        .expect("withdraw_at must be set after withdraw tx is accepted");
 
     // Wait for the snapshot finalization delay and the retention period to pass.
     wait_for_tip_slot(
         &node0,
-        (u64::from((withdraw_epoch + RETENTION_PERIOD + Epoch::new(1)).into_inner())
+        (u64::from((withdraw_epoch.strict_add(RETENTION_PERIOD).strict_add(Epoch::new(1))).into_inner())
             * slots_per_epoch)
             .into(),
         Duration::from_mins(3),
@@ -462,7 +448,7 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
         .service_params
         .get_mut(&ServiceType::BlendNetwork)
         .expect("blend network params should exist");
-    service_params.inactivity_period = 10.into();
+    service_params.inactivity_period = 10.try_into().unwrap();
     service_params.retention_period = RETENTION_PERIOD;
 
     config.deployment.blend.common.num_blend_layers = 1.try_into().unwrap();
@@ -483,7 +469,7 @@ async fn fund_sdp_transaction(
     genesis_utxos: &[Utxo],
     funding_wallet: &WalletAccount,
     extra_op: Op,
-) -> (MantleTx, Vec<ZkKey>) {
+) -> MantleTx {
     let funding_source = current_wallet_funding_source(node, genesis_utxos, funding_wallet.clone())
         .await
         .expect("funding wallet source should sync from chain");
@@ -507,16 +493,9 @@ async fn fund_sdp_transaction(
     let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder)
         .expect("funding mixed-op transaction should succeed");
 
-    let signing_keys = funded_builder
-        .ledger_inputs()
-        .iter()
-        .map(|_| funding_wallet.secret_key.clone())
-        .collect::<Vec<_>>();
-
-    (
-        funded_builder
-            .build()
-            .expect("funded mixed-op builder should build"),
-        signing_keys,
-    )
+    // With zero gas prices the funding step adds no input, so the built tx carries
+    // no trailing transfer op — the SDP op is the only op, and the only proof.
+    funded_builder
+        .build()
+        .expect("funded mixed-op builder should build")
 }

@@ -1,11 +1,11 @@
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_log_targets::mantle;
-use tracing::debug;
+use tracing::info;
 
 use super::{SDPActiveOp, SdpError};
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         ledger::{Declarations, Operation},
@@ -40,13 +40,13 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
         };
 
         // Check the declaration hasn't been withdrawn
-        // (Return error if `withdrawn` epoch has passed)
-        if let Some(withdrawn) = declaration.withdrawn
-            && withdrawn <= ctx.epoch
+        // (Return error if `scheduled_withdrawal_epoch` epoch has passed)
+        if let Some(withdraw_at) = declaration.withdraw_at
+            && withdraw_at <= ctx.epoch
         {
             return Err(SdpError::DeclarationWithdrawn {
                 declaration_id: self.declaration_id,
-                withdrawn_epoch: withdrawn,
+                withdraw_at,
             });
         }
 
@@ -70,7 +70,7 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         let declaration = ctx
             .declarations
             .get_mut(&self.declaration_id)
@@ -78,7 +78,7 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
 
         declaration.active = ctx.epoch;
         declaration.nonce = self.nonce;
-        debug!(
+        info!(
             target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
             active = ?declaration.active,
@@ -86,6 +86,6 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
             "updated declaration with active message"
         );
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }

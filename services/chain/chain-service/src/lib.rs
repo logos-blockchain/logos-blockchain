@@ -60,7 +60,10 @@ use tokio::{
 use tracing::{Level, debug, error, info, instrument, span, trace, warn};
 use tracing_futures::Instrument as _;
 
-pub use crate::bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig};
+pub use crate::{
+    bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
+    sync::config::{BlockProviderConfig, SyncConfig},
+};
 use crate::{
     bootstrap::state::choose_engine_state,
     notifier::ChainOnlineNotifier,
@@ -87,6 +90,8 @@ pub enum Error {
         block_slot: Slot,
         current_slot: Slot,
     },
+    #[error("Block {0} has already been applied")]
+    AlreadyApplied(HeaderId),
     #[error("Ledger error: {0}")]
     Ledger(#[from] lb_ledger::LedgerError<HeaderId>),
     #[error("Consensus error: {0}")]
@@ -103,6 +108,17 @@ pub enum Error {
     HeaderIdNotFound(HeaderId),
     #[error("Parent header ID not found for child={0}")]
     ParentIdNotFound(HeaderId),
+}
+
+struct InitializedCryptarchia {
+    cryptarchia: Cryptarchia,
+    pruned_blocks: PrunedBlocks<HeaderId>,
+    fell_back_to_lib: bool,
+}
+
+struct RecoveryBlocks<Tx> {
+    blocks: Vec<Block<Tx>>,
+    fell_back_to_lib: bool,
 }
 
 #[derive(Derivative)]
@@ -355,6 +371,10 @@ impl Cryptarchia {
         let parent = header.parent();
         let slot = header.slot();
 
+        if self.ledger.state(&id).is_some() {
+            return Err(Error::AlreadyApplied(id));
+        }
+
         // Reject blocks from future slots
         if slot > current_slot {
             return Err(Error::FutureBlock {
@@ -429,15 +449,6 @@ impl Cryptarchia {
         log_pruned_ledger_states(pruned_states_count);
     }
 
-    /// Shrinks the memory held by the ledger states.
-    ///
-    /// This should be called after a significant number of ledger states have
-    /// been pruned by [`Self::prune_ledger_states`] to free up memory. This
-    /// should not be called frequently since it is an expensive operation.
-    fn shrink_ledger_states(&mut self) {
-        self.ledger.shrink();
-    }
-
     fn online(self) -> (Self, PrunedBlocks<HeaderId>) {
         let (consensus, pruned_blocks) = self.consensus.online();
         let mut cryptarchia = Self {
@@ -447,10 +458,7 @@ impl Cryptarchia {
         };
 
         // Prune the ledger states of all the pruned blocks.
-        // Also, shrink the set of ledger states to free up memory,
-        // assuming that many blocks have been pruned during bootstrapping.
         cryptarchia.prune_ledger_states(pruned_blocks.all());
-        cryptarchia.shrink_ledger_states();
 
         (cryptarchia, pruned_blocks)
     }
@@ -475,6 +483,7 @@ pub struct CryptarchiaSettings {
     pub starting_state: StartingState,
     pub recovery_file: PathBuf,
     pub bootstrap: BootstrapConfig,
+    pub sync: SyncConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -589,6 +598,7 @@ where
             config: ledger_config,
             bootstrap: bootstrap_config,
             starting_state,
+            sync: sync_config,
             ..
         } = self
             .service_resources_handle
@@ -607,7 +617,11 @@ where
 
         let (mut current_slot, mut slot_timer) = Self::get_slot_timer(&relays).await?;
 
-        let (mut cryptarchia, pruned_blocks) = self
+        let InitializedCryptarchia {
+            mut cryptarchia,
+            pruned_blocks,
+            fell_back_to_lib,
+        } = self
             .initialize_cryptarchia(
                 &bootstrap_config,
                 ledger_config.clone(),
@@ -625,8 +639,18 @@ where
         )
         .await;
 
-        let sync_blocks_provider: BlockProvider<_, _> =
-            BlockProvider::new(relays.storage_adapter().storage_relay.clone());
+        if fell_back_to_lib {
+            Self::update_state(
+                &cryptarchia,
+                storage_blocks_to_remove.clone(),
+                &self.service_resources_handle.state_updater,
+            );
+        }
+
+        let sync_blocks_provider: BlockProvider<_, _> = BlockProvider::new(
+            relays.storage_adapter().storage_relay.clone(),
+            sync_config.block_provider,
+        );
 
         // Chain start timer will prevent the chain service to process and produce
         // blocks if the starting state is GenesisBlock and has chain start time
@@ -680,7 +704,9 @@ where
                     }
 
                     () = async { prolonged_bootstrap_timer.as_mut().unwrap().as_mut().await }, if prolonged_bootstrap_timer.is_some() && cryptarchia.is_bootstrapping() => {
-                        info!("Prolonged Bootstrap Period has passed. Switching to Online.");
+                        info!(
+                            "Prolonged Bootstrap Period finished. Switching chain to online mode."
+                        );
                         (cryptarchia, storage_blocks_to_remove) = Self::switch_to_online(
                             cryptarchia,
                             &storage_blocks_to_remove,
@@ -699,7 +725,7 @@ where
                         match msg {
                             ConsensusMsg::IbdCompleted => {
                                 if chain_start_timer.is_none() {
-                                    info!("Received IBD completion notification. Starting prolonged bootstrap timer.");
+                                    info!("Initial Block Download completed. Starting Prolonged Bootstrap Period before going online.");
                                     // Start the prolonged bootstrap timer now that IBD is complete
                                     prolonged_bootstrap_timer = Some(Box::pin(tokio::time::sleep_until(
                                         Instant::now() + bootstrap_config.prolonged_bootstrap_period,
@@ -1041,31 +1067,38 @@ where
         new_block_subscription_sender: &broadcast::Sender<ProcessedBlockEvent>,
         lib_broadcaster: &broadcast::Sender<LibUpdate>,
     ) -> Result<(PrunedBlocks<HeaderId>, Vec<Tx>), Error> {
-        trace!("Received proposal with ID: {:?}", block.header().id());
+        debug!(target: LOG_TARGET, "Received proposal with ID: {:?}", block.header().id());
         let header = block.header();
         let prev_lib = cryptarchia.lib();
 
+        let mut candidate = cryptarchia.clone();
         let (pruned_blocks, reorged_blocks, events) =
-            cryptarchia.try_apply_block(&block, current_slot)?;
-        let new_lib = cryptarchia.lib();
+            candidate.try_apply_block(&block, current_slot)?;
+        let new_lib = candidate.lib();
 
         let tx_count = block.transactions().count();
-        metrics::emit_block_transactions_metric(tx_count);
 
-        relays
-            .storage_adapter()
-            .store_block(header.id(), header.parent(), block.clone(), events)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to store block: {e}")))?;
-
-        Self::store_immutable_blocks_index(
+        let immutable_blocks = Self::immutable_blocks_index(
             &pruned_blocks,
             Some(prev_lib),
             new_lib,
-            cryptarchia.consensus.lib_branch().slot(),
-            relays.storage_adapter(),
-        )
-        .await?;
+            candidate.consensus.lib_branch().slot(),
+        );
+
+        relays
+            .storage_adapter()
+            .store_block_data(
+                header.id(),
+                header.parent(),
+                block.clone(),
+                events,
+                immutable_blocks,
+            )
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to store block data: {e}")))?;
+
+        *cryptarchia = candidate;
+        metrics::emit_block_transactions_metric(tx_count);
 
         let processed_block_event = {
             let tip = cryptarchia.tip_branch();
@@ -1101,6 +1134,7 @@ where
                 height,
                 header_id: new_lib,
             };
+
             if let Err(e) = broadcast_finalized_block(relays.broadcast_relay(), block_info).await {
                 warn!("Failed to notify finalized-block subscribers: {e}");
             }
@@ -1142,6 +1176,21 @@ where
         new_lib_slot: Slot,
         storage_adapter: &StorageAdapter<Storage, Tx, RuntimeServiceId>,
     ) -> Result<(), Error> {
+        let immutable_blocks =
+            Self::immutable_blocks_index(pruned_blocks, prev_lib, new_lib, new_lib_slot);
+
+        storage_adapter
+            .store_immutable_block_ids(immutable_blocks)
+            .await
+            .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
+    }
+
+    fn immutable_blocks_index(
+        pruned_blocks: &PrunedBlocks<HeaderId>,
+        prev_lib: Option<HeaderId>,
+        new_lib: HeaderId,
+        new_lib_slot: Slot,
+    ) -> BTreeMap<Slot, HeaderId> {
         let mut immutable_blocks = pruned_blocks.immutable_blocks().clone();
         // The new LIB is also immutable and should be immediately queryable by slot.
         // prune_immutable_blocks() only returns blocks older than the new LIB,
@@ -1149,10 +1198,8 @@ where
         if prev_lib.is_none_or(|prev| prev != new_lib) {
             immutable_blocks.insert(new_lib_slot, new_lib);
         }
-        storage_adapter
-            .store_immutable_block_ids(immutable_blocks)
-            .await
-            .map_err(|e| Error::Storage(format!("Failed to store immutable block ids: {e}")))
+
+        immutable_blocks
     }
 
     /// Returns block IDs from descendant (inclusive) to ancestor
@@ -1236,6 +1283,67 @@ where
         ))
     }
 
+    async fn load_recovery_blocks_from_storage(
+        tip: HeaderId,
+        lib: HeaderId,
+        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> Result<Vec<Block<Tx>>, Error> {
+        let ids = Self::load_block_ids_from_storage(tip, lib, storage.clone())
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let mut blocks = Vec::new();
+        // `load_block_ids_from_storage` walks from tip back to LIB and includes LIB.
+        // Replay recovery blocks in LIB->tip order, skipping LIB because Cryptarchia
+        // is already initialized from it.
+        for id in ids.into_iter().rev().skip(1) {
+            let block = storage
+                .get_block(&id)
+                .await
+                .ok_or(Error::HeaderIdNotFound(id))?;
+            blocks.push(block);
+        }
+
+        Ok(blocks)
+    }
+
+    async fn load_recovery_blocks_or_fall_back_to_lib(
+        tip: HeaderId,
+        lib: HeaderId,
+        storage: StorageAdapter<Storage, Tx, RuntimeServiceId>,
+    ) -> RecoveryBlocks<Tx> {
+        if tip == lib {
+            // Cryptarchia already starts from LIB, so there is no branch to replay.
+            return RecoveryBlocks {
+                blocks: Vec::new(),
+                fell_back_to_lib: false,
+            };
+        }
+
+        match Self::load_recovery_blocks_from_storage(tip, lib, storage).await {
+            Ok(blocks) => RecoveryBlocks {
+                blocks,
+                fell_back_to_lib: false,
+            },
+            Err(error @ (Error::ParentIdNotFound(_) | Error::HeaderIdNotFound(_))) => {
+                warn!(
+                    target: LOG_TARGET, ?tip, ?lib, ?error,
+                    "could not reconstruct recovered tip branch from storage; falling back to recovered LIB",
+                );
+
+                RecoveryBlocks {
+                    blocks: Vec::new(),
+                    fell_back_to_lib: true,
+                }
+            }
+            Err(error) => {
+                panic!(
+                    "failed to load recovery blocks from storage during initialization: {error:?}"
+                );
+            }
+        }
+    }
+
     /// Initialize cryptarchia
     /// It initialize cryptarchia from the LIB (initially genesis) +
     /// (optionally) known blocks which were received before the service
@@ -1257,10 +1365,10 @@ where
         ledger_config: lb_ledger::Config,
         relays: &CryptarchiaConsensusRelays<Tx, Storage, RuntimeServiceId>,
         current_slot: Slot,
-    ) -> (Cryptarchia, PrunedBlocks<HeaderId>) {
+    ) -> InitializedCryptarchia {
         info!(
             target: LOG_TARGET, tip = ?self.state.tip, lib = ?self.state.lib, lib_height = self.state.lib_block_length, genesis = ?self.state.genesis_id,
-            "initializing cryptarchia from state recovery",
+            "recovering chain state",
         );
 
         let lib_id = self.state.lib;
@@ -1297,36 +1405,30 @@ where
             warn!("No new-block subscribers to notify: {e}");
         }
 
-        // Phase 1: Collect only block IDs in (LIB, tip].
+        // Phase 1: Collect and load blocks in (LIB, tip].
         info!(
             target: LOG_TARGET, lib = ?lib_id, tip = ?self.state.tip,
-            "loading block IDs from storage: (lib, tip]",
+            "loading stored blocks for chain recovery",
         );
-        let ids: Vec<HeaderId> = Self::load_block_ids_from_storage(
+        let RecoveryBlocks {
+            blocks,
+            fell_back_to_lib,
+        } = Self::load_recovery_blocks_or_fall_back_to_lib(
             self.state.tip,
             lib_id,
             relays.storage_adapter().clone(),
         )
-        .try_collect()
-        .await
-        .unwrap_or_else(|e| {
-            panic!("Failed to load block IDs from storage during initialization: {e:?}");
-        });
-        // Reverse to get LIB->tip order, and skip LIB since we already have it
-        let ids = ids.into_iter().rev().skip(1);
-        info!(target: LOG_TARGET, "collected {} block IDs from storage: (lib, tip]", ids.len());
+        .await;
+        info!(
+            target: LOG_TARGET,
+            "found {} stored blocks to replay during chain recovery",
+            blocks.len()
+        );
 
-        // Phase 2: Load each block individually (lib→tip order) and apply it.
+        // Phase 2: Apply each block in lib->tip order.
         let mut pruned_blocks = PrunedBlocks::new();
-        let n_blocks = ids.len();
-        for (i, id) in ids.enumerate() {
-            let block = relays
-                .storage_adapter()
-                .get_block(&id)
-                .await
-                .unwrap_or_else(|| {
-                    panic!("Could not retrieve block {id:?} from storage during initialization")
-                });
+        let n_blocks = blocks.len();
+        for (i, block) in blocks.into_iter().enumerate() {
             match Self::process_block(
                 &mut cryptarchia,
                 block,
@@ -1349,10 +1451,14 @@ where
 
         info!(
             target: LOG_TARGET, tip_height = cryptarchia.consensus.tip_branch().length(), lib_height = cryptarchia.consensus.lib_branch().length(),
-            "{n_blocks} blocks recovered. finishing initialization",
+            "{n_blocks} blocks replayed. Chain recovery finished",
         );
 
-        (cryptarchia, pruned_blocks)
+        InitializedCryptarchia {
+            cryptarchia,
+            pruned_blocks,
+            fell_back_to_lib,
+        }
     }
 
     /// Remove the stale blocks from the storage layer.
@@ -1517,7 +1623,7 @@ where
         chain_online_notifier: &ChainOnlineNotifier,
     ) -> (Cryptarchia, HashSet<HeaderId>) {
         let (cryptarchia, pruned_blocks) = cryptarchia.online();
-        info!("Chain switched to Online mode");
+        info!("Node is online and following the chain");
 
         chain_online_notifier.notify();
 

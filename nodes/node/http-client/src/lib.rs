@@ -3,7 +3,7 @@ use std::sync::Arc;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
-pub use lb_core::events::{Event, EventPayload, Events};
+pub use lb_core::events::{Event, Events, TxEventPayload};
 use lb_core::{
     block::MAX_BLOCK_SIZE,
     header::{ContentId, HeaderId},
@@ -19,13 +19,14 @@ use lb_http_api_common::{
         blend::JoinBlendRequestBody,
         wallet::{
             balance::WalletBalanceResponseBody,
+            claimable_vouchers::WalletClaimableVouchersResponseBody,
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
     paths::{
         BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
-        BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, MEMPOOL_ADD_TX,
-        SDP_POST_DECLARATION, TIME_INFO,
+        BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS,
+        MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -535,6 +536,26 @@ impl CommonHttpClient {
         }
 
         self.get::<(), WalletBalanceResponseBody>(request_url, None)
+            .await
+    }
+
+    /// Get claimable reward vouchers tracked by the wallet.
+    pub async fn get_claimable_vouchers(
+        &self,
+        base_url: Url,
+        tip: Option<HeaderId>,
+    ) -> Result<WalletClaimableVouchersResponseBody, Error> {
+        let mut request_url = base_url
+            .join(LEADER_CLAIM_VOUCHERS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
+        self.get::<(), WalletClaimableVouchersResponseBody>(request_url, None)
             .await
     }
 

@@ -646,7 +646,9 @@ fn build_cryptarchia_user_config(
                 orphan: network::OrphanConfig {
                     max_orphan_cache_size: NonZeroUsize::new(1000)
                         .expect("max orphan cache size must be non-zero"),
+                    max_rejected_cache_size: 1000,
                 },
+                tip_poll: network::TipPollConfig::default(),
             },
         },
         service: ServiceConfig {
@@ -657,6 +659,12 @@ fn build_cryptarchia_user_config(
                     state_recording_interval: Duration::from_mins(1),
                 },
                 prolonged_bootstrap_period: consensus.prolonged_bootstrap_period,
+            },
+            sync: service::SyncConfig {
+                block_provider: service::BlockProviderConfig {
+                    batch_size: NonZeroUsize::new(1000)
+                        .expect("block_provider batch_size must be non-zero"),
+                },
             },
         },
         leader: LeaderConfig {

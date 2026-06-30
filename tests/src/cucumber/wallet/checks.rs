@@ -1,5 +1,6 @@
-use std::{fmt::Display, time::Duration};
+use std::{collections::HashSet, fmt::Display, hash::BuildHasher, time::Duration};
 
+use lb_core::mantle::TxHash;
 use thiserror::Error;
 use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
@@ -11,7 +12,7 @@ use crate::{
         fee_reserve::SCENARIO_FEE_ACCOUNT_NAME,
         wallet::{
             TARGET,
-            sync::{sync_wallet_output_balance, sync_wallet_state_from_feed},
+            sync::{current_wallet_output_balance, current_wallet_state_for_key},
             wallet_output_state_label,
         },
         world::CucumberWorld,
@@ -140,15 +141,12 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
                 ),
             })?;
 
-    let query_node_name = world.any_started_node()?.name.clone();
-
     let initial_sponsored_balance = (sponsored_genesis_account.token_count.get() as u64)
         * sponsored_genesis_account.token_value.get();
 
-    let fee_state = sync_wallet_state_from_feed(
+    let fee_state = current_wallet_state_for_key(
         world,
         SCENARIO_FEE_ACCOUNT_NAME,
-        &query_node_name,
         fee_wallet_account.public_key(),
     )
     .await
@@ -176,6 +174,50 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     }
 
     Ok(())
+}
+
+pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
+    world: &mut CucumberWorld,
+    step: &str,
+    expected_hashes: &HashSet<TxHash, S>,
+    timeout: Duration,
+) -> Result<(), StepError> {
+    world.ensure_wallet_block_feed().await?;
+
+    let start = Instant::now();
+
+    loop {
+        let missing = world.missing_observed_transaction_hashes(expected_hashes);
+        let observed = expected_hashes.len().saturating_sub(missing.len());
+
+        if missing.is_empty() {
+            info!(
+                target: TARGET,
+                "Step `{}` observed {}/{} submitted transaction hash(es) in chain blocks",
+                step,
+                observed,
+                expected_hashes.len(),
+            );
+
+            return Ok(());
+        }
+
+        if start.elapsed() >= timeout {
+            let missing_set = missing.into_iter().collect::<HashSet<_>>();
+
+            let msg = format!(
+                "Step `{step}` transaction inclusion timeout: submitted={} \
+                chain_observed={observed} missing={}",
+                expected_hashes.len(),
+                missing_set.len(),
+            );
+            warn!(target: TARGET, "{msg}");
+
+            return Err(StepError::Timeout { message: msg });
+        }
+
+        sleep(Duration::from_millis(250)).await;
+    }
 }
 
 #[expect(
@@ -219,8 +261,7 @@ pub async fn wait_for_wallet_output_state(
 
     loop {
         let balance =
-            sync_wallet_output_balance(world, step, &wallet, &wallet_name, wallet_state_type)
-                .await?;
+            current_wallet_output_balance(world, step, &wallet, wallet_state_type).await?;
 
         if conditions_met(
             &wallet_name,

@@ -84,9 +84,10 @@ rand             = { workspace = true }
 serde_urlencoded = { workspace = true }
 
 [features]
-default   = ["tracing"]
-dhat-heap = ["dep:dhat"]
-jemalloc  = ["dep:tikv-jemallocator"]
-profiling = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
-testing   = ["lb-key-management-system-service/unsafe"]
-tracing   = []
+default                          = ["tracing"]
+dhat-heap                        = ["dep:dhat"]
+jemalloc                         = ["dep:tikv-jemallocator"]
+profiling                        = ["lb-http-api-common/profiling", "lb-tracing-service/profiling"]
+testing                          = ["lb-key-management-system-service/unsafe"]
+testing-disable-proposal-publish = ["lb-chain-leader-service/testing-disable-proposal-publish"]
+tracing                          = []

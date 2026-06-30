@@ -30,7 +30,7 @@ use lb_blend::{
         message_blend::{
             crypto::EpochCryptographicProcessorSettings,
             provers::{
-                BlendLayerProof, ProofsGeneratorSettings,
+                BlendLayerProof, ProofsGeneratorSettings, WinningPolInfoStream,
                 core_and_leader::CoreAndLeaderProofsGenerator,
             },
         },
@@ -434,7 +434,7 @@ impl<CorePoQGenerator> CoreAndLeaderProofsGenerator<CorePoQGenerator>
         Self(settings.public_inputs.leader.pol_epoch_nonce)
     }
 
-    fn set_epoch_private(&mut self, _: ProofOfLeadershipQuotaInputs, target_epoch: Epoch) {
+    fn set_epoch_private(&mut self, _: WinningPolInfoStream, target_epoch: Epoch) {
         SET_EPOCH_PRIVATE_CALLS.with(|calls| calls.borrow_mut().push(target_epoch));
     }
 

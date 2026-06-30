@@ -1,26 +1,24 @@
 use lb_cryptarchia_engine::Slot;
 use lb_utils::bounded_vec::NonEmptyBoundedVec;
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
     crypto::{Digest as _, Hasher},
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{ChannelState, Channels, Error, SlotTimeframe, SlotTimeout},
         ledger::Operation,
-        nom::{NomBoundedVec, NomDecode, NomEncode},
+        nom::{NomCodec, NomEncode as _},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
 pub const CHANNEL_MAX_KEYS: usize = u16::MAX as usize;
 pub type Keys = NonEmptyBoundedVec<Ed25519PublicKey, CHANNEL_MAX_KEYS>;
-type NomKeys<'a> = NomBoundedVec<'a, Ed25519PublicKey, { Keys::MIN }, { Keys::MAX }, 2>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct ChannelConfigOp {
     pub channel: ChannelId,
     pub keys: Keys,
@@ -36,46 +34,6 @@ impl ChannelConfigOp {
         let mut hasher = Hasher::new();
         hasher.update(self.encode());
         MsgId(hasher.finalize().into())
-    }
-}
-
-// ChannelConfig = ChannelId KeyCount *Ed25519PublicKey PostingTimeframe
-// PostingTimeout ConfigThreshold WithdrawThreshold
-impl NomEncode for ChannelConfigOp {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(self.channel.encode());
-        bytes.extend(NomKeys::from(&self.keys).encode());
-        bytes.extend(self.posting_timeframe.encode());
-        bytes.extend(self.posting_timeout.encode());
-        bytes.extend(self.configuration_threshold.encode());
-        bytes.extend(self.withdraw_threshold.encode());
-        bytes
-    }
-}
-
-impl NomDecode for ChannelConfigOp {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, channel) = ChannelId::decode(bytes)?;
-        let (bytes, keys) = NomKeys::decode(bytes)?;
-        let (bytes, posting_timeframe) = SlotTimeframe::decode(bytes)?;
-        let (bytes, posting_timeout) = SlotTimeout::decode(bytes)?;
-        let (bytes, configuration_threshold) = u16::decode(bytes)?;
-        let (bytes, withdraw_threshold) = u16::decode(bytes)?;
-
-        Ok((
-            bytes,
-            Self {
-                channel,
-                keys,
-                posting_timeframe,
-                posting_timeout,
-                configuration_threshold,
-                withdraw_threshold,
-            },
-        ))
     }
 }
 
@@ -142,7 +100,7 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // if the channel doesn't exist, create it otherwise just update the config
         if let Some(channel) = ctx.channels.channels.get_mut(&self.channel) {
             channel.accredited_keys = self.keys.clone().into();
@@ -172,6 +130,6 @@ impl Operation<ChannelConfigValidationContext<'_>> for ChannelConfigOp {
                 },
             );
         }
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }

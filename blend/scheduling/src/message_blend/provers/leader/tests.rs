@@ -1,5 +1,6 @@
 use core::time::Duration;
 
+use futures::stream::repeat;
 use lb_blend_proofs::selection::inputs::VerifyInputs;
 use lb_cryptarchia_engine::Epoch;
 use test_log::test;
@@ -26,11 +27,13 @@ async fn proof_generation() {
             encapsulation_layers: 1.try_into().unwrap(),
             epoch: Epoch::new(0),
         },
-        private_inputs,
+        // Each winning slot yields `message_quota` (= `leadership_quota`) proofs; a
+        // repeated slot stream keeps the generator supplied across messages.
+        Box::pin(repeat(private_inputs)),
     );
 
     for _ in 0..leadership_quota {
-        let proof = leader_proofs_generator.get_next_proof().await;
+        let proof = leader_proofs_generator.get_next_proof().await.unwrap();
         let verified_proof_of_quota = proof
             .proof_of_quota
             .into_inner()

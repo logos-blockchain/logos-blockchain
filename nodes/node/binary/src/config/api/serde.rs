@@ -18,7 +18,7 @@ pub struct Config {
 pub struct AxumBackendSettings {
     /// Listening address.
     pub listen_address: core::net::SocketAddr,
-    /// Allowed origins for this server deployment requests.
+    /// Allowed origins for these server deployment requests.
     pub cors_origins: Vec<String>,
     /// Timeout for API requests in seconds.
     #[serde_as(as = "serde_with::DurationSeconds<u64>")]
@@ -29,10 +29,22 @@ pub struct AxumBackendSettings {
     pub max_concurrent_requests: u64,
 }
 
+impl AxumBackendSettings {
+    #[must_use]
+    pub const fn default_port() -> u16 {
+        8080
+    }
+
+    #[must_use]
+    pub fn default_listening_address(port: u16) -> core::net::SocketAddr {
+        SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into()
+    }
+}
+
 impl Default for AxumBackendSettings {
     fn default() -> Self {
         Self {
-            listen_address: SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080).into(),
+            listen_address: Self::default_listening_address(Self::default_port()),
             cors_origins: Vec::default(),
             timeout: Duration::from_secs(30),
             max_body_size: 10 * 1024 * 1024,

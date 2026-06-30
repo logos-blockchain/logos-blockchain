@@ -4,7 +4,7 @@
 //! [`EpochState`](lb_ledger::EpochState); on each new epoch the membership and
 //! leader inputs frozen into its SDP snapshot are yielded together as a
 //! [`BlendEpochState`]. Both halves come from the same chain query, so they
-//! cannot drift — replacing the pushed `ActiveProviders` broadcast.
+//! cannot drift.
 
 use core::{hash::Hash, pin::Pin};
 use std::fmt::{Debug, Display};

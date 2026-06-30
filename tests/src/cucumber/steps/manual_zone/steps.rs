@@ -22,14 +22,18 @@ use super::{
         wait_until_sorted_conflict_settles,
     },
     errors::{log_step_error, zone_step_error},
+    runner::{TxSource, TxStatus},
     support::{
         PublishDeadline, balance_update_payload, collect_indexed_messages,
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
-        parse_balance_payload, publish_message_with_retry, wait_for_adopted_payload,
-        wait_for_adopted_payloads, wait_for_channel_view, wait_for_deposit,
-        wait_for_exact_indexed_payload_count, wait_for_finalized_deposit_via_sequencer,
-        wait_for_finalized_withdraw_via_sequencer, wait_for_lib_advance,
-        wait_for_transactions_finalized, wait_for_turn_to_write, wait_for_withdraw,
+        parse_balance_payload, publish_message_with_retry,
+        wait_for_adopted_payload_and_collect_mempool_pending,
+        wait_for_adopted_payloads_and_collect_mempool_pending, wait_for_channel_view,
+        wait_for_deposit, wait_for_exact_indexed_payload_count,
+        wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
+        wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending,
+        wait_for_lib_advance, wait_for_transactions_finalized, wait_for_turn_to_write,
+        wait_for_tx_status_lifecycle, wait_for_withdraw,
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
@@ -363,6 +367,47 @@ async fn step_publish_zone_messages_to_queue_for_sequencer(
         world
             .zone
             .remember_zone_message(message_alias, payload, None, None, None);
+    }
+
+    Ok(())
+}
+
+/// Publish via [`SequencerClient`] and record each inscription id, without
+/// waiting for on-chain inclusion.
+///
+/// Unlike `publishes the following zone messages` (which polls the node to
+/// confirm inclusion), this performs no node HTTP calls, so it can be issued
+/// while the node is down: each publish is accepted locally and posted on
+/// reconnect. Recording the ids (the publish returns them locally) lets later
+/// `... are finalized` / indexer assertions track the messages once the node is
+/// back.
+#[when(
+    expr = "sequencer {string} submits the following zone messages without waiting for inclusion:"
+)]
+async fn step_publish_zone_messages_without_inclusion_for_sequencer(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+) -> StepResult {
+    let rows = zone_message_rows(step)?;
+    let handle = world.zone.sequencer_client(&sequencer_alias)?.clone();
+
+    for (message_alias, payload) in rows {
+        let (published, _checkpoint) = handle
+            .publish(payload.clone())
+            .await
+            .map_err(|error| StepError::LogicalError {
+                message: format!(
+                    "Zone publish failed for sequencer '{sequencer_alias}' and message '{message_alias}': {error}"
+                ),
+            })?;
+        remember_published_zone_message(
+            world,
+            &sequencer_alias,
+            message_alias,
+            payload,
+            &published,
+        );
     }
 
     Ok(())
@@ -951,11 +996,15 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
     .await
     .map_err(|error| zone_step_error(step, &error))?;
 
-    let published = {
+    let (published, mempool_pending) = {
         let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-        wait_for_adopted_payloads(events, &payloads, Duration::from_secs(timeout_seconds))
-            .await
-            .map_err(|error| zone_step_error(step, &error))?
+        wait_for_adopted_payloads_and_collect_mempool_pending(
+            events,
+            &payloads,
+            Duration::from_secs(timeout_seconds),
+        )
+        .await
+        .map_err(|error| zone_step_error(step, &error))?
     };
 
     for ((message_alias, payload), published) in aliases.into_iter().zip(payloads).zip(published) {
@@ -967,15 +1016,51 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
             &published,
         );
     }
+    world
+        .zone
+        .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
 
     Ok(())
 }
 
-#[cucumber::then(expr = "sequencer {string} has {int} pending publish txs in {int} seconds")]
+#[cucumber::then(expr = "sequencer {string} observed mempool pending events for zone messages:")]
+#[expect(
+    clippy::unused_async,
+    reason = "Cucumber step functions are async even when assertion is synchronous"
+)]
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
+async fn step_sequencer_emitted_mempool_pending_events_for_zone_messages(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+) -> StepResult {
+    let aliases = single_column_table(step, "alias", "zone message aliases")?;
+    let tx_hashes = log_step_error(step, world.zone.message_tx_hashes_for_aliases(&aliases))?;
+
+    for (alias, tx_hash) in aliases.iter().zip(tx_hashes.iter()) {
+        if !world
+            .zone
+            .has_observed_mempool_pending(&sequencer_alias, tx_hash)
+        {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Sequencer '{sequencer_alias}' did not emit mempool pending event for zone message '{alias}'"
+                ),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+#[cucumber::then(expr = "sequencer {string} has {int} pending publish txs in {int} seconds")]
 async fn step_sequencer_has_pending_publish_txs(
     world: &mut CucumberWorld,
     step: &Step,
@@ -1007,14 +1092,21 @@ async fn step_sequencer_publishes_immediately_while_in_turn(
     timeout_seconds: u64,
 ) -> StepResult {
     let payload = message_payload(world, &message_alias)?;
-    let published = {
+    let (published, mempool_pending) = {
         let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-        wait_for_adopted_payload(events, &payload, Duration::from_secs(timeout_seconds))
-            .await
-            .map_err(|error| zone_step_error(step, &error))?
+        wait_for_adopted_payload_and_collect_mempool_pending(
+            events,
+            &payload,
+            Duration::from_secs(timeout_seconds),
+        )
+        .await
+        .map_err(|error| zone_step_error(step, &error))?
     };
 
     remember_published_zone_message(world, &sequencer_alias, message_alias, payload, &published);
+    world
+        .zone
+        .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
 
     Ok(())
 }
@@ -1071,6 +1163,40 @@ async fn step_all_zone_messages_are_finalized(
     wait_for_transactions_finalized(
         node_url,
         &inscription_ids,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))
+}
+
+#[cucumber::then(
+    expr = "sequencer {string} emits the full transaction lifecycle for zone messages in {int} seconds:"
+)]
+#[cucumber::when(
+    expr = "sequencer {string} emits the full transaction lifecycle for zone messages in {int} seconds:"
+)]
+async fn step_sequencer_emits_full_transaction_lifecycle(
+    world: &mut CucumberWorld,
+    step: &Step,
+    sequencer_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    let aliases = single_column_table(step, "alias", "zone message aliases")?;
+    let tx_hashes = log_step_error(step, world.zone.message_tx_hashes_for_aliases(&aliases))?;
+    let mut tx_status_rx = log_step_error(
+        step,
+        world.zone.take_sequencer_tx_status_rx(&sequencer_alias),
+    )?;
+
+    wait_for_tx_status_lifecycle(
+        &mut tx_status_rx,
+        &tx_hashes,
+        &[
+            TxStatus::AcceptedLocally,
+            TxStatus::PendingMempool,
+            TxStatus::OnChain(TxSource::Local),
+            TxStatus::Finalized(TxSource::Local),
+        ],
         Duration::from_secs(timeout_seconds),
     )
     .await
@@ -1260,14 +1386,18 @@ async fn step_zone_sequencer_finalizes_deposit(
         .clone();
     let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
 
-    wait_for_finalized_deposit_via_sequencer(
+    let mempool_pending = wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending(
         events,
         &deposit,
         amount,
         Duration::from_secs(timeout_seconds),
     )
     .await
-    .map_err(|error| zone_step_error(step, &error))
+    .map_err(|error| zone_step_error(step, &error))?;
+    world
+        .zone
+        .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
+    Ok(())
 }
 
 #[cucumber::then(expr = "sequencer {string} finalizes withdraw {string} in {int} seconds")]
@@ -1284,13 +1414,17 @@ async fn step_zone_sequencer_finalizes_withdraw(
         .clone();
     let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
 
-    wait_for_finalized_withdraw_via_sequencer(
+    let mempool_pending = wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending(
         events,
         &withdraw,
         Duration::from_secs(timeout_seconds),
     )
     .await
-    .map_err(|error| zone_step_error(step, &error))
+    .map_err(|error| zone_step_error(step, &error))?;
+    world
+        .zone
+        .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
+    Ok(())
 }
 
 #[cucumber::then(

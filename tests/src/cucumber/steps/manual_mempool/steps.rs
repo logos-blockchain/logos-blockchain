@@ -5,7 +5,7 @@ use crate::cucumber::{
     steps::manual_mempool::{
         actions::{
             prepare_transfer_transaction, submit_prepared_transaction_to_nodes,
-            try_submit_invalid_transaction,
+            try_submit_invalid_transaction, wait_for_mempool_recovery_flush,
         },
         assertions::{
             assert_transaction_not_pending_on_all_nodes, assert_transaction_pending_on_nodes,
@@ -60,6 +60,19 @@ async fn step_try_submit_invalid_transaction(
     node_name: String,
 ) -> StepResult {
     try_submit_invalid_transaction(world, &step.value, transaction_alias, node_name).await
+}
+
+#[then(expr = "mempool recovery for node {string} contains transaction {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_wait_for_pending_mempool_recovery_flush(
+    world: &mut CucumberWorld,
+    node_name: String,
+    transaction_alias: String,
+) -> StepResult {
+    wait_for_mempool_recovery_flush(world, &node_name, &transaction_alias).await
 }
 
 #[then(expr = "transaction {string} is pending in mempool of nodes in {int} seconds:")]

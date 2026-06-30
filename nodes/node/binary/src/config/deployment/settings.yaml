@@ -1,0 +1,75 @@
+blend:
+  common:
+    num_blend_layers: 1
+    minimum_network_size: 2
+    protocol_name: /logos-blockchain/blend/X.Y.Z
+    data_replication_factor: 0
+  core:
+    scheduler:
+      cover:
+        message_frequency_per_round: 1.0
+      delayer:
+        maximum_release_delay_in_rounds: 1
+    minimum_messages_coefficient: 1
+    normalization_constant: 1.03
+    activity_threshold_sensitivity: 1
+network:
+  kademlia_protocol_name: /logos-blockchain/kad/X.Y.Z
+  identify_protocol_name: /logos-blockchain/identify/X.Y.Z
+  chain_sync_protocol_name: /logos-blockchain/chainsync/X.Y.Z
+cryptarchia:
+  epoch_config:
+    epoch_stake_distribution_stabilization: 3
+    epoch_period_nonce_buffer: 3
+    epoch_period_nonce_stabilization: 4
+  security_param: 30
+  slot_activation_coeff:
+    numerator: 1
+    denominator: 20
+  learning_rate: 0.5
+  sdp_config:
+    service_params:
+      BN:
+        inactivity_period: 2
+        retention_period: 1
+        epoch: 0
+    min_stake:
+      threshold: 1
+      timestamp: 0
+  gossipsub_protocol: /logos-blockchain/cryptarchia/X.Y.Z
+  genesis_block:
+    header:
+      version: Bedrock
+      parent_block: '0000000000000000000000000000000000000000000000000000000000000000'
+      slot: 0
+      block_root: '0000000000000000000000000000000000000000000000000000000000000000'
+      proof_of_leadership:
+        proof: '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+        entropy_contribution: '0000000000000000000000000000000000000000000000000000000000000000'
+        leader_key: '0000000000000000000000000000000000000000000000000000000000000000'
+        voucher_cm: '0000000000000000000000000000000000000000000000000000000000000000'
+    signature: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+    transactions:
+    - mantle_tx:
+        ops:
+          - opcode: 0
+            payload:
+              inputs: []
+              outputs: []
+          - opcode: 17
+            payload:
+              channel_id: '0000000000000000000000000000000000000000000000000000000000000000'
+              inscription: '10000000000000007374616e64616c6f6e652d6c6f63616c9169fe69000000002d2ddf918544bca603c5a291c7dd1b902d6769ff4b00021506780e075c06051a'
+              parent: '0000000000000000000000000000000000000000000000000000000000000000'
+              signer: '0000000000000000000000000000000000000000000000000000000000000000'
+      ops_proofs:
+        - !ZkSig
+          pi_a: '0000000000000000000000000000000000000000000000000000000000000000'
+          pi_b: '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+          pi_c: '0000000000000000000000000000000000000000000000000000000000000000'
+        - !Ed25519Sig '00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'
+  faucet_pk: '0000000000000000000000000000000000000000000000000000000000000000'
+time:
+  slot_duration: '1.000000000'
+mempool:
+  pubsub_topic: /logos-blockchain/mempool/X.Y.Z

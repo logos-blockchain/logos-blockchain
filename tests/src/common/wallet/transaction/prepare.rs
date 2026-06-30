@@ -2,7 +2,9 @@
 
 use std::collections::HashMap;
 
-use lb_core::mantle::{MantleTx, NoteId, Transaction as _, Utxo};
+use lb_core::mantle::{
+    MantleTx, NoteId, Op, Transaction as _, TxHash, Utxo, tx_builder::MantleTxBuilder,
+};
 use lb_key_management_system_service::keys::ZkPublicKey;
 
 use super::{
@@ -14,10 +16,32 @@ use super::{
 };
 use crate::common::wallet::{WalletFundingResources, WalletFundingSource, WalletReservedInputs};
 
+pub struct PreparedWalletTransactionWorkItem {
+    funded_builder: MantleTxBuilder,
+    tx_hash: TxHash,
+    ops: Vec<Op>,
+    transfer_signers: WalletTransferSigners,
+    reserved_inputs: WalletReservedInputs,
+}
+
+impl PreparedWalletTransactionWorkItem {
+    #[must_use]
+    pub fn reserved_inputs(&self) -> WalletReservedInputs {
+        self.reserved_inputs.clone()
+    }
+}
+
 pub fn prepare_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
 ) -> Result<PreparedWalletTransaction, WalletTransactionError> {
+    finalize_prepared_wallet_transaction(prepare_wallet_transaction_work_item(intent, resources)?)
+}
+
+pub fn prepare_wallet_transaction_work_item(
+    intent: WalletTransactionIntent,
+    resources: WalletFundingResources,
+) -> Result<PreparedWalletTransactionWorkItem, WalletTransactionError> {
     let sender_pk = resources.sender().public_key();
     let fee_sponsor_pk = resources.fee_sponsor().map(WalletFundingSource::public_key);
     let transfer_signers = transfer_signers_for_funding(&resources);
@@ -26,13 +50,33 @@ pub fn prepare_wallet_transaction(
     let funded_builder = fund_wallet_transaction(intent, resources)?;
     let mantle_tx = funded_builder.clone().build()?;
     let tx_hash = mantle_tx.hash();
-    let transfer_proofs = build_transfer_proofs(mantle_tx.ops(), &tx_hash, &transfer_signers)?;
     let funding_inputs = funding_inputs_from_transfers(&mantle_tx, &input_utxos_by_note_id)?;
     let reserved_inputs = wallet_reserved_inputs_from_inputs(
         &funding_inputs,
         sender_pk,
         fee_sponsor_pk.unwrap_or(sender_pk),
     );
+
+    Ok(PreparedWalletTransactionWorkItem {
+        funded_builder,
+        tx_hash,
+        ops: mantle_tx.ops().to_vec(),
+        transfer_signers,
+        reserved_inputs,
+    })
+}
+
+pub fn finalize_prepared_wallet_transaction(
+    work_item: PreparedWalletTransactionWorkItem,
+) -> Result<PreparedWalletTransaction, WalletTransactionError> {
+    let PreparedWalletTransactionWorkItem {
+        funded_builder,
+        tx_hash,
+        ops,
+        transfer_signers,
+        reserved_inputs,
+    } = work_item;
+    let transfer_proofs = build_transfer_proofs(&ops, &tx_hash, &transfer_signers)?;
 
     Ok(PreparedWalletTransaction::new(
         funded_builder,
@@ -101,7 +145,7 @@ fn funding_inputs_from_transfers(
         .ops()
         .iter()
         .filter_map(|op| match op {
-            lb_core::mantle::Op::Transfer(transfer_op) => Some(transfer_op),
+            Op::Transfer(transfer_op) => Some(transfer_op),
             _ => None,
         })
         .flat_map(|transfer_op| transfer_op.inputs.iter())

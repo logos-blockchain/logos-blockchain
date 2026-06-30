@@ -1,3 +1,11 @@
+#![cfg_attr(
+    feature = "testing-disable-proposal-publish",
+    allow(
+        dead_code,
+        reason = "with proposal publishing disabled for testing, some functions and struct fields are unused"
+    )
+)]
+
 use std::marker::PhantomData;
 
 use lb_blend_service::message::{NetworkMessage, ProxyServiceMessage, ServiceMessage};
@@ -14,7 +22,11 @@ where
 {
     relay: OutboundRelay<<BlendService as ServiceData>::Message>,
     broadcast_settings: BlendService::BroadcastSettings,
-    _phantom: PhantomData<BlendService>,
+    // `fn() -> BlendService` (rather than `PhantomData<BlendService>`) so the
+    // adapter's `Send`/`Sync` do not depend on `BlendService`'s — the adapter
+    // only uses `BlendService` as a type-level tag for the relay message type,
+    // and is held by shared reference across awaits in the leader run loop.
+    _phantom: PhantomData<fn() -> BlendService>,
 }
 
 impl<BlendService> BlendAdapter<BlendService>
@@ -39,8 +51,7 @@ where
             Message = ProxyServiceMessage<
                 ServiceMessage<BlendService::BroadcastSettings, BlendService::NodeId>,
             >,
-        > + lb_blend_service::ServiceComponents
-        + Sync,
+        > + lb_blend_service::ServiceComponents,
     <BlendService as ServiceData>::Message: Send,
     BlendService::BroadcastSettings: Clone + Sync,
 {

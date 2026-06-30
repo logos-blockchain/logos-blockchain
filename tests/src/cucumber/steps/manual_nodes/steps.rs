@@ -29,7 +29,7 @@ use crate::{
                     get_cryptarchia_info_all_nodes, nodes_converged,
                     parse_genesis_wallet_tokens_row, parse_url, parse_wallet_resources_table_row,
                     poll_all_nodes_and_update_consensus_cache, restart_node, start_node,
-                    start_nodes_order_respecting_dependencies,
+                    start_nodes_order_respecting_dependencies, stop_node,
                     verify_genesis_wallet_resources_table_indexes,
                     verify_node_wallet_resources_table_indexes,
                     verify_reponsive_and_network_ready_with_timeout, wait_all_nodes_responive,
@@ -349,6 +349,15 @@ async fn step_restart_node(
     restart_node(world, &step.value, &node_name).await
 }
 
+#[when(expr = "I stop node {string}")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_stop_node(world: &mut CucumberWorld, step: &Step, node_name: String) -> StepResult {
+    stop_node(world, &step.value, &node_name).await
+}
+
 #[given(expr = "we use IBD peers")]
 #[when(expr = "we use IBD peers")]
 const fn step_we_use_ibd_peers(world: &mut CucumberWorld) {
@@ -643,7 +652,7 @@ fn step_set_public_cryptarchia_endpoint_peers(
         }
 
         endpoint_peers.push(PublicCryptarchiaEndpointPeer {
-            url,
+            base_url: url,
             username,
             password,
         });
@@ -970,10 +979,6 @@ async fn step_all_nodes_agree_on_lib(
 
 #[when("I wait for all nodes to be synced to the chain")]
 #[then("I wait for all nodes to be synced to the chain")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require the world as the first `&mut` argument"
-)]
 async fn step_wait_for_all_nodes_to_be_synced_to_the_chain(
     world: &mut CucumberWorld,
     step: &Step,

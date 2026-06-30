@@ -42,6 +42,51 @@ pub mod balance {
     }
 }
 
+pub mod claimable_vouchers {
+    use axum::{
+        http::StatusCode,
+        response::{IntoResponse, Response},
+    };
+    use lb_core::{
+        header::HeaderId,
+        mantle::ops::leader_claim::{VoucherCm, VoucherNullifier},
+    };
+    use lb_log_targets::api;
+    use serde::{Deserialize, Serialize};
+    use tracing::error;
+
+    const LOG_TARGET: &str = api::http::wallet::CLAIMABLE_VOUCHERS;
+
+    #[derive(Serialize, Deserialize)]
+    pub struct ClaimableVoucherInfoResponseBody {
+        pub commitment: VoucherCm,
+        pub nullifier: VoucherNullifier,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    pub struct WalletClaimableVouchersResponseBody {
+        pub tip: HeaderId,
+        pub vouchers: Vec<ClaimableVoucherInfoResponseBody>,
+    }
+
+    impl IntoResponse for WalletClaimableVouchersResponseBody {
+        fn into_response(self) -> Response {
+            let json = serde_json::to_string(&self).unwrap_or_else(|e| {
+                error!(
+                    target: LOG_TARGET,
+                    "WalletClaimableVouchersResponseBody serialization failed: {e}"
+                );
+                // We panic here because this should never happen, and if it does, it's a
+                // critical error that we want to be immediately visible during
+                // development and testing.
+                panic!("WalletClaimableVouchersResponseBody serialization failed: {e}")
+            });
+
+            (StatusCode::OK, json).into_response()
+        }
+    }
+}
+
 pub mod transfer_funds {
     use axum::{
         http::StatusCode,

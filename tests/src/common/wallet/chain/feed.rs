@@ -198,61 +198,6 @@ impl WalletObservedBlock {
     }
 }
 
-/// Observed wallet state for one feed source after applying retained blocks.
-pub struct WalletFeedStateResult {
-    wallet_utxos: WalletUtxos,
-    observed_blocks: Vec<WalletObservedBlock>,
-}
-
-impl WalletFeedStateResult {
-    #[must_use]
-    pub(crate) const fn from_parts(
-        wallet_utxos: WalletUtxos,
-        observed_blocks: Vec<WalletObservedBlock>,
-    ) -> Self {
-        Self {
-            wallet_utxos,
-            observed_blocks,
-        }
-    }
-
-    #[must_use]
-    pub fn observed_blocks(&self) -> &[WalletObservedBlock] {
-        &self.observed_blocks
-    }
-
-    #[must_use]
-    pub fn into_wallet_utxos(self) -> WalletUtxos {
-        self.wallet_utxos
-    }
-}
-
-/// Observed wallet state grouped across multiple feed sources.
-pub struct WalletFeedStateResults {
-    results: Vec<WalletFeedStateResult>,
-}
-
-impl WalletFeedStateResults {
-    #[must_use]
-    pub const fn new(results: Vec<WalletFeedStateResult>) -> Self {
-        Self { results }
-    }
-
-    pub fn observed_blocks(&self) -> impl Iterator<Item = &WalletObservedBlock> {
-        self.results
-            .iter()
-            .flat_map(WalletFeedStateResult::observed_blocks)
-    }
-
-    #[must_use]
-    pub fn into_wallet_utxos(self) -> WalletUtxos {
-        self.results
-            .into_iter()
-            .flat_map(|result| result.into_wallet_utxos().into_iter())
-            .collect()
-    }
-}
-
 /// Tracks wallet state by applying observed block-feed data.
 ///
 /// This type is intentionally limited to feed-backed tracking: register wallets
@@ -281,12 +226,17 @@ impl WalletBlockFeedTracker {
             }
 
             wallets.ensure_wallets_from_tracked_keys(batch.wallet_keys());
-            if let WalletSourceTracking::NeedsBackfill(batch) = self.ensure_source_tracker(
+            match self.ensure_source_tracker(
                 batch.source_node_name(),
                 batch.wallet_keys(),
                 genesis_utxos,
             )? {
-                tracking.add_backfill_batch(batch);
+                WalletSourceTracking::Ready => {
+                    self.publish_source_wallet_state(wallets, batch.source_node_name())?;
+                }
+                WalletSourceTracking::NeedsBackfill(batch) => {
+                    tracking.add_backfill_batch(batch);
+                }
             }
         }
 
@@ -417,6 +367,22 @@ impl WalletBlockFeedTracker {
                     .or_insert_with(|| Arc::clone(&event.block));
             }
         }
+    }
+
+    fn publish_source_wallet_state(
+        &self,
+        wallets: &mut TrackedWallets,
+        source_node_name: &str,
+    ) -> Result<(), WalletBlockFeedTrackerError> {
+        let source_tracker = self.source_trackers.get(source_node_name).ok_or_else(|| {
+            WalletBlockFeedTrackerError::MissingSource {
+                source_node_name: source_node_name.to_owned(),
+            }
+        })?;
+
+        wallets.replace_current_wallets_utxos(source_tracker.wallet_utxos());
+
+        Ok(())
     }
 }
 
@@ -738,6 +704,28 @@ mod tests {
         wallet_keys: impl IntoIterator<Item = TrackedWalletKeys>,
     ) -> WalletFeedTrackingBatch {
         WalletFeedTrackingBatch::new(source_node_name, wallet_keys)
+    }
+
+    #[test]
+    fn initial_tracking_publishes_seeded_wallet_state() {
+        let alice_utxo = utxo(10, 0, pk(1));
+        let alice_keys = wallet_keys("alice", pk(1));
+        let initial_batch = tracking_batch(SOURCE_NODE, [alice_keys]);
+
+        let mut wallets = TrackedWallets::default();
+        let mut tracker = WalletBlockFeedTracker::default();
+        let tracking = tracker
+            .track_wallets(&mut wallets, &[initial_batch], &[alice_utxo])
+            .expect("initial wallet tracking should succeed");
+
+        assert!(!tracking.needs_backfill());
+
+        let wallet_states = wallets.current_wallet_states([wallet_keys("alice", pk(1))]);
+        let alice_state = wallet_states
+            .get("alice")
+            .expect("alice wallet state should be published");
+
+        assert_eq!(alice_state.on_chain_utxos(), &[alice_utxo]);
     }
 
     #[test]

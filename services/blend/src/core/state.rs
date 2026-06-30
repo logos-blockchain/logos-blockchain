@@ -164,8 +164,7 @@ mod service {
 
             // Check if `old_epoch_token_collector` has the correct epoch number.
             if let Some(old_epoch_token_collector) = &old_epoch_token_collector {
-                let provided_current_epoch =
-                    old_epoch_token_collector.epoch().saturating_add(1.into());
+                let provided_current_epoch = old_epoch_token_collector.epoch().strict_add(1.into());
                 if provided_current_epoch != last_seen_epoch {
                     return Err(error::EpochMismatch {
                         last_seen: last_seen_epoch,

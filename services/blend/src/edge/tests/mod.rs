@@ -1,5 +1,6 @@
 use core::time::Duration;
 
+use futures::stream::repeat;
 use lb_blend::{
     proofs::quota::inputs::prove::private::ProofOfLeadershipQuotaInputs,
     scheduling::membership::Membership,
@@ -109,14 +110,14 @@ async fn run_fails_if_local_is_core_in_new_membership() {
 fn test_pol_epoch_info(epoch: Epoch) -> PolEpochInfo {
     PolEpochInfo {
         epoch,
-        poq_private_inputs: ProofOfLeadershipQuotaInputs {
+        winning_pol_info_stream: Box::pin(repeat(ProofOfLeadershipQuotaInputs {
             slot: 1,
             note_value: 1,
             transaction_hash: ZkHash::ZERO,
             output_number: 1,
             aged_path_and_selectors: [(ZkHash::ZERO, false); _],
             secret_key: ZkHash::ZERO,
-        },
+        })),
     }
 }
 
@@ -140,7 +141,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     let secret_2 = test_pol_epoch_info(Epoch::new(2));
     super::handle_new_epoch_event(
         &public_2,
-        Some(&secret_2),
+        &mut Some(secret_2),
         &mut handler_state,
         settings.clone(),
         overwatch.clone(),
@@ -157,7 +158,7 @@ async fn handle_new_secret_epoch_info_recreates_handler() {
     let secret_3 = test_pol_epoch_info(Epoch::new(3));
     super::handle_new_epoch_event(
         &public_3,
-        Some(&secret_3),
+        &mut Some(secret_3),
         &mut handler_state,
         settings,
         overwatch,
@@ -197,7 +198,7 @@ async fn two_publics_without_private_in_between() {
     // First public, no secret yet -> handler must stay down.
     super::handle_new_epoch_event(
         &test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
-        None,
+        &mut None,
         &mut handler_state,
         settings.clone(),
         overwatch.clone(),
@@ -211,7 +212,7 @@ async fn two_publics_without_private_in_between() {
     // Second public for a later epoch, still no secret -> handler stays down.
     super::handle_new_epoch_event(
         &test_blend_epoch_state(Epoch::new(2), membership(&[core_node], local_node)),
-        None,
+        &mut None,
         &mut handler_state,
         settings,
         overwatch,
@@ -243,7 +244,7 @@ async fn public_then_private_same_epoch_creates_handler() {
     // Public for epoch 1, no secret yet -> no handler.
     super::handle_new_epoch_event(
         &public_1,
-        None,
+        &mut None,
         &mut handler_state,
         settings.clone(),
         overwatch.clone(),
@@ -254,7 +255,7 @@ async fn public_then_private_same_epoch_creates_handler() {
     // Secret for epoch 1 arrives, same public -> handler is created.
     super::handle_new_epoch_event(
         &public_1,
-        Some(&test_pol_epoch_info(Epoch::new(1))),
+        &mut Some(test_pol_epoch_info(Epoch::new(1))),
         &mut handler_state,
         settings,
         overwatch,
@@ -285,22 +286,26 @@ async fn private_then_public_same_epoch_creates_handler() {
     > = None;
 
     // Secret for epoch 1 while public is still on epoch 0 -> epochs mismatch,
-    // no handler.
-    let secret_1 = test_pol_epoch_info(Epoch::new(1));
+    // no handler. The secret must be retained for when the public catches up.
+    let mut secret_1 = Some(test_pol_epoch_info(Epoch::new(1)));
     super::handle_new_epoch_event(
         &test_blend_epoch_state(Epoch::new(0), membership(&[core_node], local_node)),
-        Some(&secret_1),
+        &mut secret_1,
         &mut handler_state,
         settings.clone(),
         overwatch.clone(),
     )
     .unwrap();
     assert!(handler_state.is_none());
+    assert!(
+        secret_1.is_some(),
+        "Secret PoL info for a future epoch must be retained on mismatch."
+    );
 
     // Public catches up to epoch 1 -> handler is created.
     super::handle_new_epoch_event(
         &test_blend_epoch_state(Epoch::new(1), membership(&[core_node], local_node)),
-        Some(&secret_1),
+        &mut secret_1,
         &mut handler_state,
         settings,
         overwatch,

@@ -1,18 +1,19 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        encoding::encode_channel_withdraw,
         ledger::{Operation, Outputs, Utxos},
+        nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+// ChannelWithdraw = ChannelId Outputs WithdrawNonce — plain field-order concat.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
 pub struct ChannelWithdrawOp {
     pub channel_id: ChannelId,
     pub outputs: Outputs,
@@ -21,7 +22,7 @@ pub struct ChannelWithdrawOp {
 
 impl OpId for ChannelWithdrawOp {
     fn op_bytes(&self) -> Vec<u8> {
-        encode_channel_withdraw(self)
+        self.encode()
     }
 }
 
@@ -34,6 +35,7 @@ pub struct WithdrawValidationContext<'a> {
 pub struct WithdrawExecutionContext {
     pub channels: Channels,
     pub utxos: Utxos,
+    pub tx_hash: TxHash,
 }
 
 impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
@@ -100,7 +102,7 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Get the amount withdraw
         let amount_withdraw = self.outputs.amount()?;
 
@@ -121,9 +123,9 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
             })
         }?;
 
-        // Add the ouputs to the ledger
+        // Add the outputs to the ledger
         ctx.utxos = self.outputs.execute(ctx.utxos, self);
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }

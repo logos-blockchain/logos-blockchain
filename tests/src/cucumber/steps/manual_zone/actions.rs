@@ -17,6 +17,7 @@ use tokio::{
     task::JoinHandle,
     time::{error::Elapsed, timeout},
 };
+use tracing::warn;
 
 use super::{
     errors::{log_step_error, zone_step_error},
@@ -49,7 +50,7 @@ use crate::{
                 },
             },
         },
-        wallet::sync::sync_available_utxos_for_wallet,
+        wallet::sync::current_available_utxos_for_wallet,
         world::{CucumberWorld, WalletInfo},
     },
 };
@@ -97,12 +98,13 @@ struct PublishedZoneMessage {
 
 struct StartedSequencerRuntime {
     task: JoinHandle<()>,
-    client: SequencerClient<ZoneNodeHttpClient>,
+    client: SequencerClient,
     events: broadcast::Receiver<Event>,
     checkpoint_rx: tokio::sync::watch::Receiver<Option<SequencerCheckpoint>>,
     ready_rx: tokio::sync::watch::Receiver<bool>,
     channel_view_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::SequencerChannelView>,
     turn_to_write_rx: tokio::sync::watch::Receiver<lb_zone_sdk::sequencer::TurnNotification>,
+    tx_status_rx: broadcast::Receiver<lb_zone_sdk::sequencer::TxStatusUpdate>,
     discarded_payloads: Option<DiscardedPayloads>,
 }
 
@@ -129,7 +131,7 @@ pub(super) async fn start_nodes_with_zone_resources(
 
     let nodes = collect_zone_nodes_to_start(&rows);
     let nodes = start_nodes_order_respecting_dependencies(nodes).inspect_err(|error| {
-        tracing::warn!(target: TARGET, "Step `{}` error: {error}", step.value);
+        warn!(target: TARGET, "Step `{}` error: {error}", step.value);
     })?;
 
     for (node_name, wallet_start_info, mut initial_peers) in nodes {
@@ -398,7 +400,7 @@ pub(super) async fn submit_zone_deposit_transaction(
     let public_key = log_step_error(step, wallet.public_key())?;
     let available_utxos = log_step_error(
         step,
-        sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
     )?;
     let ZoneDeposit {
         deposit,
@@ -438,7 +440,7 @@ pub(super) async fn submit_atomic_zone_deposit_transaction(
     let public_key = log_step_error(step, wallet.public_key())?;
     let available_utxos = log_step_error(
         step,
-        sync_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
+        current_available_utxos_for_wallet(world, &step.value, &wallet.wallet_name).await,
     )?;
     let sequencer = log_step_error(step, world.zone.sequencer_client(sequencer_alias))?;
     let inscription_data = make_inscription(&format!("Mint {amount} to Alice"));
@@ -786,6 +788,7 @@ async fn start_named_sequencer_with_config(
         runtime.ready_rx,
         runtime.channel_view_rx,
         runtime.turn_to_write_rx,
+        runtime.tx_status_rx,
         runtime.discarded_payloads,
     );
 
@@ -852,6 +855,7 @@ fn from_policy_runtime(
         ready_rx: rt.ready_rx,
         channel_view_rx: rt.channel_view_rx,
         turn_to_write_rx: rt.turn_to_write_rx,
+        tx_status_rx: rt.tx_status_rx,
         discarded_payloads,
     }
 }

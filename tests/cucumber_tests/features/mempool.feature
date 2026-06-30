@@ -65,6 +65,7 @@ Feature: Mempool lifecycle
     Then transaction "TX_PENDING_RESTART" is pending in mempool of nodes in 30 seconds:
       | node_name |
       | NODE_1    |
+    And mempool recovery for node "NODE_1" contains transaction "TX_PENDING_RESTART"
     When I restart node "NODE_1"
     # TF only keeps the tx hash here; the node must recover the pending mempool entry.
     Then transaction "TX_PENDING_RESTART" is pending in mempool of nodes in 30 seconds:
