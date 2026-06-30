@@ -35,19 +35,17 @@
 //! STOP
 //! ```
 
-use std::{collections::HashSet, env, fs, num::NonZero, path::Path, time::Duration};
 use std::{
     collections::{BTreeMap, HashSet},
-    env,
+    env, fs,
     num::NonZero,
     path::Path,
     time::Duration,
 };
 
 use lb_core::mantle::{TxHash, Utxo};
-use lb_tui_zone::run_commands::{ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT};
-use lb_core::mantle::TxHash;
 use lb_key_management_system_service::keys::ZkPublicKey;
+use lb_tui_zone::run_commands::{ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT};
 use lb_wallet::WalletError;
 use serde::Serialize;
 use tokio::time::{Instant, sleep};
@@ -135,7 +133,7 @@ pub(crate) async fn execute_coin_splits_all_user_wallets(
         });
     }
     wallet_names.sort();
-    let mut available_utxos = utils::current_available_utxos_for_user_wallets(world, step).await?;
+    let mut available_utxos = current_available_utxos_for_user_wallets(world, step).await?;
 
     for wallet_name in &wallet_names {
         for _ in 0..splits_per_wallet {
@@ -496,6 +494,7 @@ async fn wait_wallet_send_ready(
     })
 }
 
+#[expect(clippy::too_many_lines, reason = "Test function.")]
 async fn execute_non_stop_manual_command(
     world: &mut CucumberWorld,
     step: &str,
@@ -1406,8 +1405,7 @@ async fn coin_splits_for_round_robin(
     info!(target: TARGET, "CONTINUOUS ROUND ROBIN cycle {} B: Perform coin splits all wallets", cycle + 1);
 
     let best_node_info = get_best_node_info_choose(world, wallet_names).await?;
-    let mut split_available_utxos =
-        utils::current_available_utxos_for_user_wallets(world, step).await?;
+    let mut split_available_utxos = current_available_utxos_for_user_wallets(world, step).await?;
     let (signed_split_submissions, prepared_split_counts) =
         prepare_coin_splits_all_wallets_with_utxo_cache(
             world,
