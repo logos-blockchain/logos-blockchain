@@ -19,12 +19,12 @@ use crate::{
             encode_signed_mantle_tx,
         },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
-        genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
         },
+        transactions::genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
     },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof,

@@ -3,11 +3,11 @@ use nom::IResult;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::{OpProof, SignedMantleTx, ops::sdp::SDPDeclareOp};
+use super::{SignedMantleTx, TxHash};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        MantleTx, Transaction, TransactionHasher, TxHash,
+        MantleTx, OpProof, Transaction, TransactionHasher,
         encoding::{
             decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
             encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
@@ -17,6 +17,7 @@ use crate::{
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
     },

@@ -6,7 +6,6 @@ use lb_core::{
     mantle::{
         CryptarchiaParameter, MantleTx, Note, NoteId, OpProof, Utxo,
         encoding::Ops,
-        genesis_tx::GenesisTx,
         ops::{
             Op, OpId as _,
             channel::{
@@ -15,6 +14,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
+        transactions::GenesisTx,
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };

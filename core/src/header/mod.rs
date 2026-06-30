@@ -11,7 +11,7 @@ pub const BEDROCK_VERSION: u8 = 1;
 use crate::{
     codec::SerializeOp as _,
     crypto::Hasher,
-    mantle::genesis_tx::GenesisTx,
+    mantle::transactions::GenesisTx,
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::{display_hex_bytes_newtype, merkle, serde_bytes_newtype},
 };

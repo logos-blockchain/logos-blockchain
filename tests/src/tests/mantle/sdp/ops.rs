@@ -14,9 +14,8 @@ use lb_common_http_client::Error;
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
-        genesis_tx::GENESIS_STORAGE_GAS_PRICE,
         ops::Op,
-        transactions::{GasPrices, MantleTxBuilder, MantleTxGasContext},
+        transactions::{GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxGasContext},
     },
     sdp::{
         Declaration, DeclarationMessage, Locator, NumberOfEpochs, ProviderId, ServiceType,

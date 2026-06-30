@@ -5,7 +5,6 @@ use thiserror::Error;
 pub mod channel;
 pub mod encoding;
 pub mod gas;
-pub mod genesis_tx;
 pub mod ledger;
 pub mod mock;
 pub mod nom;
@@ -13,10 +12,10 @@ pub mod ops;
 pub mod transactions;
 
 pub use gas::{GasCalculator, GasConstants};
-pub use genesis_tx::CryptarchiaParameter;
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
+pub use transactions::CryptarchiaParameter;
 
 pub use crate::mantle::transactions::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 use crate::mantle::{

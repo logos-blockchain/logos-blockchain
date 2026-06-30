@@ -10,9 +10,9 @@ use lb_core::{
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
-        genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ledger::Operation as _,
         ops::transfer::{TransferOp, TransferValidationContext},
+        transactions::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
     },
     proofs::leader_proof::{self, LeaderPublic},
     sdp::{Declarations, locked_notes::LockedNotes},
