@@ -30,9 +30,6 @@ pub struct IbdConfig {
     pub peers: HashSet<PeerId>,
     /// Deprecated: no longer used. Kept for YAML backward compatibility.
     pub delay_before_new_download: Duration,
-    /// Maximum time to wait for Kademlia to discover peers beyond the
-    /// configured IBD peer set before starting IBD.
-    pub peer_discovery_wait_timeout: Duration,
     /// Maximum number of attempts when fetching tips from IBD peers.
     pub tips_fetch_max_attempts: usize,
     /// Lower bound of the exponential backoff between tip-fetch attempts.
@@ -48,7 +45,6 @@ impl Default for IbdConfig {
         Self {
             peers: HashSet::new(),
             delay_before_new_download: Duration::from_secs(10),
-            peer_discovery_wait_timeout: Duration::from_secs(10),
             tips_fetch_max_attempts: 3,
             tips_fetch_min_delay: Duration::from_millis(250),
             tips_fetch_max_delay: Duration::from_secs(1),

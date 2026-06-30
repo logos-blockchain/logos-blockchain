@@ -136,66 +136,8 @@ where
             config.peers.len()
         );
 
-        self.wait_for_peer_discovery_with_timeout(
-            &config.peers,
-            config.peer_discovery_wait_timeout,
-        )
-        .await;
-
         self.download_blocks(config, orphan_config).await?;
         Ok(self.block_processor)
-    }
-
-    /// Waits until peers beyond the configured IBD peer set are discovered,
-    /// or until the timeout expires.
-    ///
-    /// This is necessary to not overload the configured IBD peers with block
-    /// download requests. Orphan downloader fans out across discovered peers.
-    async fn wait_for_peer_discovery_with_timeout(
-        &self,
-        ibd_peers: &HashSet<NetAdapter::PeerId>,
-        timeout: Duration,
-    ) {
-        let interval = Duration::from_millis(500).min(timeout.div_f32(2.0));
-
-        info!(
-            ?timeout,
-            ?interval,
-            "IBD: waiting until peers are discovered"
-        );
-
-        if tokio::time::timeout(timeout, async {
-            self.wait_for_peer_discovery(ibd_peers, interval).await;
-        })
-        .await
-        .is_err()
-        {
-            warn!("IBD: peer discovery warmup timed out");
-        }
-    }
-
-    /// Waits until Kademlia discovery has produced at least one peer beyond
-    /// the configured IBD peer set.
-    async fn wait_for_peer_discovery(
-        &self,
-        ibd_peers: &HashSet<NetAdapter::PeerId>,
-        interval: Duration,
-    ) {
-        loop {
-            match self.network.discovered_peers().await {
-                Ok(peers) if !peers.is_subset(ibd_peers) => {
-                    info!(
-                        "IBD: peer discovery warmed up ({} discovered, {} beyond IBD peer set)",
-                        peers.len(),
-                        peers.difference(ibd_peers).count(),
-                    );
-                    return;
-                }
-                Ok(_) => {}
-                Err(e) => debug!("IBD: discovered_peers query failed: {e}"),
-            }
-            tokio::time::sleep(interval).await;
-        }
     }
 
     /// Start downloading blocks:
@@ -664,7 +606,6 @@ mod tests {
     fn config(peers: HashSet<NodeId>) -> IbdConfig<NodeId> {
         IbdConfig {
             peers,
-            peer_discovery_wait_timeout: Duration::from_millis(10),
             tips_fetch_max_attempts: 3,
             tips_fetch_min_delay: Duration::from_millis(250),
             tips_fetch_max_delay: Duration::from_secs(1),
@@ -815,12 +756,6 @@ mod tests {
                 }),
                 Err(()) => Err(DynError::from("cannot provide tip")),
             }
-        }
-
-        async fn discovered_peers(&self) -> Result<HashSet<Self::PeerId>, DynError> {
-            // Pretend discovery has produced one peer outside the IBD set so
-            // `wait_for_peer_discovery` exits immediately in tests.
-            Ok([NodeId(usize::MAX)].into())
         }
 
         async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {

@@ -19,9 +19,6 @@ where
 {
     /// Peers to query for the chain tip during IBD.
     pub peers: HashSet<NodeId>,
-    /// Maximum time to wait for Kademlia to discover peers beyond the
-    /// configured IBD peer set before starting IBD.
-    pub peer_discovery_wait_timeout: Duration,
     /// Maximum number of attempts when fetching tips from IBD peers.
     pub tips_fetch_max_attempts: usize,
     /// Lower bound of the exponential backoff between tip-fetch attempts.

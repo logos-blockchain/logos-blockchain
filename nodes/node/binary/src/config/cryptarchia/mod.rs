@@ -112,12 +112,6 @@ impl ServiceConfig {
             bootstrap: lb_chain_network_service::BootstrapConfig {
                 ibd: lb_chain_network_service::IbdConfig {
                     peers: self.user.network.bootstrap.ibd.peers,
-                    peer_discovery_wait_timeout: self
-                        .user
-                        .network
-                        .bootstrap
-                        .ibd
-                        .peer_discovery_wait_timeout,
                     tips_fetch_max_attempts: self
                         .user
                         .network

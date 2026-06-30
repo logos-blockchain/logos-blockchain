@@ -130,9 +130,6 @@ cryptarchia:
         delay_before_new_download:
           secs: 10
           nanos: 0
-        peer_discovery_wait_timeout:
-          secs: 10
-          nanos: 0
         tips_fetch_max_attempts: 3
         tips_fetch_min_delay:
           secs: 0
