@@ -106,18 +106,17 @@ pub fn verify(proof: &PoQProof, public_inputs: PoQVerifierInput) -> Result<bool,
 }
 
 pub fn batch_verify(
-    proofs: &[PoQProof],
-    public_inputs: &[PoQVerifierInput],
+    proofs_and_inputs: &[(PoQProof, PoQVerifierInput)],
 ) -> Result<bool, VerifyError> {
-    let inputs: Vec<Vec<_>> = public_inputs
+    let inputs: Vec<Vec<_>> = proofs_and_inputs
         .iter()
         .cloned()
-        .map(|pi| pi.to_inputs().to_vec())
+        .map(|(_, pi)| pi.to_inputs().to_vec())
         .collect();
 
-    let expanded_proofs: Vec<Groth16Proof> = proofs
+    let expanded_proofs: Vec<Groth16Proof> = proofs_and_inputs
         .iter()
-        .map(|p| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
+        .map(|(p, _)| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
         .collect::<Result<Vec<_>, _>>()?; // short-circuits on first failure
 
     Ok(groth16_batch_verify(

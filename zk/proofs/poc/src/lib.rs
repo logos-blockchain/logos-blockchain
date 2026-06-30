@@ -128,17 +128,16 @@ pub fn verify(proof: &PoCProof, public_inputs: &PoCVerifierInput) -> Result<bool
 }
 
 pub fn batch_verify(
-    proofs: &[PoCProof],
-    public_inputs: &[PoCVerifierInput],
+    proofs_and_inputs: &[(PoCProof, PoCVerifierInput)],
 ) -> Result<bool, VerifyError> {
-    let inputs: Vec<Vec<_>> = public_inputs
+    let inputs: Vec<Vec<_>> = proofs_and_inputs
         .iter()
-        .map(|pi| pi.to_inputs().to_vec())
+        .map(|(_, pi)| pi.to_inputs().to_vec())
         .collect();
 
-    let expanded_proofs: Vec<Groth16Proof> = proofs
+    let expanded_proofs: Vec<Groth16Proof> = proofs_and_inputs
         .iter()
-        .map(|p| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
+        .map(|(p, _)| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
         .collect::<Result<Vec<_>, _>>()?; // short-circuits on first failure
 
     Ok(groth16_batch_verify(
@@ -313,6 +312,6 @@ mod tests {
 
         let (proof, inputs) = prove(witness_inputs).unwrap();
         assert!(verify(&proof, &inputs).unwrap());
-        assert!(batch_verify(&[proof, proof], &[inputs.clone(), inputs]).unwrap());
+        assert!(batch_verify(&[(proof, inputs.clone()), (proof, inputs)]).unwrap());
     }
 }
