@@ -17,7 +17,8 @@ use crate::{
 };
 
 pub const MAX_BLOCK_TRANSACTIONS: usize = 1024;
-pub const MAX_BLOCK_SIZE: usize = 1024 * 1024;
+// 2MB
+pub const MAX_BLOCK_SIZE: usize = 1024 * 1024 * 2;
 
 pub type BlockNumber = u64;
 

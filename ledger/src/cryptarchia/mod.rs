@@ -6,7 +6,7 @@ use std::sync::{Arc, LazyLock};
 use derivative::Derivative;
 use lb_core::{
     crypto::{ZkDigest, ZkHasher},
-    events::Events,
+    events::TxEvent,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
@@ -464,7 +464,7 @@ impl LedgerState {
         transfer_op: &TransferOp,
         transfer_sig: &ZkSignature,
         tx_hash: TxHash,
-    ) -> Result<(Self, Balance, Events), LedgerError<Id>> {
+    ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
         //validate the transfer
         transfer_op
             .validate(&TransferValidationContext {

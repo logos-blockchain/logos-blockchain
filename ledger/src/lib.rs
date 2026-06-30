@@ -13,7 +13,7 @@ use cryptarchia::LedgerState as CryptarchiaLedger;
 pub use cryptarchia::{EpochState, UtxoTree};
 use lb_core::{
     block::BlockNumber,
-    events::Events,
+    events::{Events, HeaderEvent, TxEvent},
     mantle::{
         AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
@@ -217,19 +217,27 @@ impl LedgerState {
         LeaderProof: leader_proof::LeaderProof,
         Constants: GasConstants,
     {
-        self.try_apply_header(slot, proof, config)?
-            .try_apply_contents::<_, Constants>(config, txs)
+        let (state, header_events) = self.try_apply_header(slot, proof, config)?;
+        let (state, tx_events) = state.try_apply_contents::<_, Constants>(config, txs)?;
+        let events = header_events
+            .into_iter()
+            .map(Into::into)
+            .chain(tx_events.into_iter().map(Into::into))
+            .collect::<Events>();
+        Ok((state, events))
     }
 
     /// Apply header-related changed to the ledger state. These include
     /// leadership and in general any changes that not related to
     /// transactions that should be applied before that.
+    ///
+    /// Returns any [`HeaderEvent`]s emitted while processing the header.
     pub fn try_apply_header<LeaderProof, Id>(
         self,
         slot: Slot,
         proof: &LeaderProof,
         config: &Config,
-    ) -> Result<Self, LedgerError<Id>>
+    ) -> Result<(Self, Vec<HeaderEvent>), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
     {
@@ -245,7 +253,7 @@ impl LedgerState {
                 &self.mantle_ledger.sdp,
                 config,
             )?;
-        let (mantle_ledger, reward_utxos) = self.mantle_ledger.try_apply_header(
+        let (mantle_ledger, effect) = self.mantle_ledger.try_apply_header(
             &last_epoch_state,
             cryptarchia_ledger.epoch_state(),
             *proof.voucher_cm(),
@@ -253,18 +261,21 @@ impl LedgerState {
         )?;
 
         // Insert reward UTXOs into the cryptarchia ledger
-        for utxo in reward_utxos {
+        for utxo in effect.reward_utxos {
             cryptarchia_ledger.utxos = cryptarchia_ledger.utxos.insert(utxo.id(), utxo).0;
         }
 
-        Ok(Self {
-            block_number: self
-                .block_number
-                .checked_add(1)
-                .expect("Logos blockchain lived long and prospered"),
-            cryptarchia_ledger,
-            mantle_ledger,
-        })
+        Ok((
+            Self {
+                block_number: self
+                    .block_number
+                    .checked_add(1)
+                    .expect("Logos blockchain lived long and prospered"),
+                cryptarchia_ledger,
+                mantle_ledger,
+            },
+            effect.events,
+        ))
     }
 
     #[must_use]
@@ -348,17 +359,17 @@ impl LedgerState {
         mut self,
         config: &Config,
         txs: impl Iterator<Item = impl AuthenticatedMantleTx<Context = GasPrices>>,
-    ) -> Result<(Self, Events), LedgerError<Id>> {
+    ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let mut total_block_execution_gas: Gas = 0.into();
         let mut total_fee_burned: GasCost = 0.into();
         let mut total_fee_tip: GasCost = 0.into();
-        let mut block_events = Events::new();
+        let mut tx_events = Vec::new();
 
         for tx in txs {
             let balance;
             let events;
             (self, balance, events) = self.try_apply_tx::<_, Constants>(config, &tx)?;
-            block_events.extend(events);
+            tx_events.extend(events);
 
             let gas_prices = GasPrices {
                 execution_base_gas_price: *self.cryptarchia_ledger.execution_base_fee(),
@@ -413,7 +424,7 @@ impl LedgerState {
         self = self.compute_block_rewards(total_fee_burned, total_fee_tip)?;
         // Update Execution market state
         self = self.update_execution_market(total_block_execution_gas);
-        Ok((self, block_events))
+        Ok((self, tx_events))
     }
 
     pub fn from_utxos(utxos: impl IntoIterator<Item = Utxo>, config: &Config) -> Self {
@@ -433,7 +444,7 @@ impl LedgerState {
         tx: impl GenesisTx,
         config: &Config,
         epoch_nonce: Fr,
-    ) -> Result<(Self, Events), LedgerError<Id>> {
+    ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let cryptarchia_ledger = CryptarchiaLedger::from_genesis_tx(&tx, config, epoch_nonce)?;
         let (mantle_ledger, events) = MantleLedger::from_genesis_tx(
             tx,
@@ -544,14 +555,14 @@ impl LedgerState {
         mut self,
         config: &Config,
         tx: impl AuthenticatedMantleTx,
-    ) -> Result<(Self, Balance, Events), LedgerError<Id>> {
+    ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
         let operation_verification_helper =
             MantleOperationVerificationHelper::new(&self.mantle_ledger);
         tx.verify_ops_proofs_with_helper(&operation_verification_helper)
             .map_err(LedgerError::VerificationError)?;
 
         let mut balance: Balance = 0;
-        let mut tx_events = Events::new();
+        let mut tx_events = Vec::new();
         let tx_hash = tx.hash();
         for (op, proof) in tx.ops_with_proof() {
             match (op, proof) {
@@ -723,7 +734,7 @@ impl LedgerState {
 mod tests {
     use cryptarchia::tests::{config, generate_proof, utxo};
     use lb_core::{
-        events::{Event, EventPayload},
+        events::TxEventPayload,
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _, TxHash,
             encoding::Ops,
@@ -1122,11 +1133,11 @@ mod tests {
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);
-        let Some(Event::Tx {
+        let Some(TxEvent {
             tx_hash: event_tx_hash,
             op_id,
             payload:
-                EventPayload::Deposit {
+                TxEventPayload::Deposit {
                     channel_id: event_channel_id,
                     amount,
                     metadata,
@@ -1134,8 +1145,8 @@ mod tests {
         }) = events.iter().find(|event| {
             matches!(
                 event,
-                Event::Tx {
-                    payload: EventPayload::Deposit { .. },
+                TxEvent {
+                    payload: TxEventPayload::Deposit { .. },
                     ..
                 }
             )
@@ -1238,6 +1249,8 @@ mod tests {
             .expect("withdraw should have at least one utxo")
             .id();
         assert!(new_state.latest_utxos().contains(&withdraw_utxo));
+        // `SdpNoteUnlocked` event is not emitted immediately because the note will
+        // be unlocked after `SNAPSHOT_FINALIZATION_DELAY` epochs.
         assert!(events.is_empty());
     }
 

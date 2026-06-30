@@ -49,7 +49,7 @@ use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::{
-    common::wallet::WalletUtxos,
+    common::wallet::{WalletStateView, WalletUtxos},
     cucumber::{
         error::{StepError, StepResult},
         steps::{
@@ -587,8 +587,19 @@ async fn log_wallet_balances(
     step: &str,
     wallets: Vec<WalletInfo>,
 ) -> StepResult {
-    for wallet in wallets {
-        log_wallet_balance(world, step, &wallet.wallet_name).await?;
+    let states = utils::current_wallet_states_for_wallets(world, step, &wallets).await?;
+
+    for wallet in &wallets {
+        let state =
+            states
+                .get(wallet.wallet_name.as_str())
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!(
+                        "Wallet `{}` balance state is not tracked",
+                        wallet.wallet_name
+                    ),
+                })?;
+        log_wallet_state_balance(&wallet.wallet_name, state);
     }
 
     Ok(())
@@ -599,16 +610,14 @@ async fn log_wallet_balance(
     step: &str,
     wallet_name: &str,
 ) -> StepResult {
-    let available =
-        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::Available)
-            .await?;
+    let wallet = world.resolve_wallet(wallet_name)?;
+    log_wallet_balances(world, step, vec![wallet]).await
+}
 
-    let reserved =
-        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::Reserved)
-            .await?;
-
-    let on_chain =
-        utils::current_wallet_balance(world, step, wallet_name, WalletOutputState::OnChain).await?;
+fn log_wallet_state_balance(wallet_name: &str, state: &WalletStateView) {
+    let available = state.balance(WalletOutputState::Available);
+    let reserved = state.balance(WalletOutputState::Reserved);
+    let on_chain = state.balance(WalletOutputState::OnChain);
 
     info!(
         target: TARGET,
@@ -621,8 +630,6 @@ async fn log_wallet_balance(
         on_chain.output_count,
         on_chain.value,
     );
-
-    Ok(())
 }
 
 fn clear_wallet_encumbrances(

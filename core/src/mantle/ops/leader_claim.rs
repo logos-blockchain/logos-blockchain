@@ -8,7 +8,7 @@ use thiserror::Error;
 
 use crate::{
     crypto::ZkHasher,
-    events::{Event, EventPayload, Events},
+    events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
         encoding::encode_leader_claim,
@@ -204,7 +204,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier);
 
@@ -218,15 +218,14 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
 
         Ok((
             ctx,
-            Event::from_tx(
+            vec![TxEvent::new(
                 tx_hash,
                 self.op_id(),
-                EventPayload::LeaderRewardClaimed {
+                TxEventPayload::LeaderRewardClaimed {
                     voucher_nullifier: self.voucher_nullifier,
                     utxo,
                 },
-            )
-            .into(),
+            )],
         ))
     }
 }
@@ -303,11 +302,11 @@ mod tests {
         );
 
         let mut events = events.iter();
-        let Some(Event::Tx {
+        let Some(TxEvent {
             tx_hash: event_tx_hash,
             op_id,
             payload:
-                EventPayload::LeaderRewardClaimed {
+                TxEventPayload::LeaderRewardClaimed {
                     voucher_nullifier,
                     utxo,
                 },

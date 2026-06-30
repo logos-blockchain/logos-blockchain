@@ -52,6 +52,8 @@ impl NomDecode for ActivityProof {
     }
 }
 
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
+
 #[cfg(test)]
 mod tests {
     use lb_blend_proofs::{

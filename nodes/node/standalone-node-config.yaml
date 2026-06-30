@@ -120,6 +120,9 @@ cryptarchia:
       offline_grace_period:
         grace_period: '5.000000000'
         state_recording_interval: '60.000000000'
+    sync:
+      block_provider:
+        batch_size: 1000
   network:
     bootstrap:
       ibd:
@@ -130,6 +133,7 @@ cryptarchia:
     sync:
       orphan:
         max_orphan_cache_size: 1000
+        max_rejected_cache_size: 1000
     network:
       max_connected_peers_to_try_download: 16
       max_discovered_peers_to_try_download: 16
@@ -212,6 +216,6 @@ tracing:
       hyper_util: WARN
   metrics: None
   console: None
-  level: DEBUG
+  level: "INFO"
 state:
   base_folder: ./state

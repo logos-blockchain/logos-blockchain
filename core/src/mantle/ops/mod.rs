@@ -196,6 +196,10 @@ impl NomDecode for Op {
     }
 }
 
+// We just check that the enum discriminant tag is encoded correctly, so a
+// single fixture is fine here.
+// TODO: Remove once the `NomCodec` macro supports enums.
+
 impl Op {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {

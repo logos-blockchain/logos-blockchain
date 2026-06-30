@@ -25,7 +25,7 @@ use crate::{
     codec::{self, DeserializeOp as _, SerializeOp as _},
     mantle::{
         NoteId,
-        nom::{NomDecode, NomEncode},
+        nom::{NomCodec, NomDecode, NomEncode},
         ops::channel::Ed25519PublicKey,
     },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
@@ -335,6 +335,8 @@ impl NomDecode for ServiceType {
     }
 }
 
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
+
 #[cfg(test)]
 mod service_type_tests {
     use strum::IntoEnumIterator as _;
@@ -354,21 +356,8 @@ mod service_type_tests {
 
 pub type Nonce = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
-
-impl NomEncode for ProviderId {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for ProviderId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, value) = Ed25519PublicKey::decode(bytes)?;
-        Ok((bytes, Self(value)))
-    }
-}
 
 #[derive(Debug)]
 pub struct InvalidKeyBytesError;
@@ -401,23 +390,10 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, NomCodec)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
-
-impl NomEncode for DeclarationId {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for DeclarationId {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, value) = <[u8; _]>::decode(bytes)?;
-        Ok((bytes, Self(value)))
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Declaration {
@@ -518,7 +494,7 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -551,102 +527,19 @@ impl DeclarationMessage {
     }
 }
 
-impl NomEncode for DeclarationMessage {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.service_type.encode();
-        bytes.extend(self.locators.encode());
-        bytes.extend(self.provider_id.encode());
-        bytes.extend(self.zk_id.encode());
-        bytes.extend(self.locked_note_id.encode());
-        bytes
-    }
-}
-
-impl NomDecode for DeclarationMessage {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, service_type) = ServiceType::decode(bytes)?;
-        let (bytes, locators) = Locators::decode(bytes)?;
-        let (bytes, provider_id) = ProviderId::decode(bytes)?;
-        let (bytes, zk_id) = ZkPublicKey::decode(bytes)?;
-        let (bytes, locked_note_id) = NoteId::decode(bytes)?;
-
-        Ok((
-            bytes,
-            Self {
-                service_type,
-                locators,
-                provider_id,
-                zk_id,
-                locked_note_id,
-            },
-        ))
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
-    pub locked_note_id: NoteId,
     pub nonce: Nonce,
+    pub locked_note_id: NoteId,
 }
 
-impl NomEncode for WithdrawMessage {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.declaration_id.encode();
-        bytes.extend(self.nonce.encode());
-        bytes.extend(self.locked_note_id.encode());
-        bytes
-    }
-}
-
-impl NomDecode for WithdrawMessage {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
-        let (bytes, nonce) = u64::decode(bytes)?;
-        let (bytes, locked_note_id) = NoteId::decode(bytes)?;
-
-        Ok((
-            bytes,
-            Self {
-                declaration_id,
-                locked_note_id,
-                nonce,
-            },
-        ))
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+// ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
     pub metadata: ActivityMetadata,
-}
-
-impl NomEncode for ActiveMessage {
-    fn encode(&self) -> Vec<u8> {
-        let mut bytes = self.declaration_id.encode();
-        bytes.extend(self.nonce.encode());
-        bytes.extend(self.metadata.encode());
-        bytes
-    }
-}
-
-impl NomDecode for ActiveMessage {
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (bytes, declaration_id) = DeclarationId::decode(bytes)?;
-        let (bytes, nonce) = Nonce::decode(bytes)?;
-        let (bytes, metadata) = ActivityMetadata::decode(bytes)?;
-
-        Ok((
-            bytes,
-            Self {
-                declaration_id,
-                nonce,
-                metadata,
-            },
-        ))
-    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -680,6 +573,9 @@ impl NomDecode for ActivityMetadata {
         }
     }
 }
+
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags and
+// enums.
 
 #[cfg(test)]
 mod tests {

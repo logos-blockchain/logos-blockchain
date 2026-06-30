@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
-const DEFAULT_DEBUG_TARGETS: &[&str] = &[
+const DEFAULT_LOG_TARGETS: &[&str] = &[
     "logos_blockchain",
     "chain",
     "chain_network",
@@ -44,19 +44,19 @@ pub fn create_envfilter_layer(
 }
 
 #[must_use]
-/// Returns the built-in verbose filter policy for `DEBUG` and `TRACE`.
+/// Returns the built-in filter policy for `INFO`, `DEBUG`, and `TRACE`.
 pub fn default_envfilter_config(level: Level) -> Option<EnvFilterConfig> {
-    (level >= Level::DEBUG).then(|| EnvFilterConfig {
-        filters: default_debug_log_filter(level),
+    (level >= Level::INFO).then(|| EnvFilterConfig {
+        filters: default_log_filter(level),
     })
 }
 
 #[must_use]
-/// Builds the default verbose filter policy as a typed map.
-pub fn default_debug_log_filter(level: Level) -> HashMap<String, Level> {
+/// Builds the default filter policy as a typed map.
+pub fn default_log_filter(level: Level) -> HashMap<String, Level> {
     let mut filters = HashMap::from([(ENVFILTER_GLOBAL_TARGET.to_owned(), Level::WARN)]);
     filters.extend(
-        DEFAULT_DEBUG_TARGETS
+        DEFAULT_LOG_TARGETS
             .iter()
             .map(|target| ((*target).to_owned(), level)),
     );
@@ -199,7 +199,7 @@ mod tests {
     use tracing::Level;
 
     use super::{
-        ENVFILTER_GLOBAL_TARGET, EnvFilterConfig, create_envfilter_layer, default_debug_log_filter,
+        ENVFILTER_GLOBAL_TARGET, EnvFilterConfig, create_envfilter_layer, default_envfilter_config,
         parse_filter_directives, validate_log_filter_target,
     };
 
@@ -217,10 +217,16 @@ mod tests {
     }
 
     #[test]
-    fn default_debug_log_filter_quiets_noisy_gossipsub_internals() {
-        let filters = default_debug_log_filter(Level::DEBUG);
+    fn default_envfilter_config_keeps_external_targets_quiet_at_info() {
+        let config = default_envfilter_config(Level::INFO).expect("info should use default filter");
 
-        assert_eq!(filters.get("libp2p_gossipsub"), Some(&Level::ERROR));
+        assert_eq!(
+            config.filters.get(ENVFILTER_GLOBAL_TARGET),
+            Some(&Level::WARN)
+        );
+        assert_eq!(config.filters.get("logos_blockchain"), Some(&Level::INFO));
+        assert_eq!(config.filters.get("libp2p_gossipsub"), Some(&Level::ERROR));
+        assert!(!config.filters.contains_key("overwatch"));
     }
 
     #[test]

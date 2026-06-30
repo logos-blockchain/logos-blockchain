@@ -3,7 +3,7 @@ use std::{num::NonZero, path::PathBuf, time::Duration};
 use futures::StreamExt as _;
 use lb_common_http_client::ProcessedBlockEvent;
 use lb_core::{
-    events::{Event, EventPayload, Events},
+    events::{Event, Events, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
         GenesisTx as _, MantleTx, Note, NoteId, OpProof, SignedMantleTx, Transaction as _, TxHash,
@@ -163,16 +163,16 @@ async fn channel_deposit() {
     let (channel_id, amount, metadata) = events
         .iter()
         .find_map(|event| match event {
-            Event::Tx {
+            Event::Tx(TxEvent {
                 tx_hash,
                 payload:
-                    EventPayload::Deposit {
+                    TxEventPayload::Deposit {
                         channel_id,
                         amount,
                         metadata,
                     },
                 ..
-            } if tx_hash == &deposit_tx_hash => Some((*channel_id, *amount, metadata.clone())),
+            }) if tx_hash == &deposit_tx_hash => Some((*channel_id, *amount, metadata.clone())),
             _ => None,
         })
         .expect("block events should include the deposit event");

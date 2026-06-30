@@ -4,7 +4,7 @@
 ///
 /// - `$level`: An identifier for the log level (`ERROR`, `WARN`, etc.). Printed
 ///   uppercase, left-padded to 5 characters.
-/// - `$scope`: A string literal identifying the call site (typically the
+/// - `$scope`: A string expression identifying the call site (typically the
 ///   function name).
 /// - `$($arg:tt)*`: Format string and arguments, same syntax as [`eprintln!`].
 ///
@@ -17,19 +17,19 @@
 /// // stderr: WARN  [subscribe_to_new_blocks_sync] Block stream closed
 /// ```
 macro_rules! log {
-    ($level:ident, $scope:literal, $($arg:tt)*) => {
+    ($level:ident, $scope:expr, $($arg:tt)*) => {
         ::std::eprintln!("{:<5} [{}] {}", stringify!($level), $scope, ::std::format_args!($($arg)*));
     };
 }
 
 macro_rules! error {
-    ($scope:literal, $($arg:tt)*) => {
+    ($scope:expr, $($arg:tt)*) => {
         $crate::logging::log!(ERROR, $scope, $($arg)*)
     };
 }
 
 macro_rules! warning {
-    ($scope:literal, $($arg:tt)*) => {
+    ($scope:expr, $($arg:tt)*) => {
         $crate::logging::log!(WARN, $scope, $($arg)*)
     };
 }
