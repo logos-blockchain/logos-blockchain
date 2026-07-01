@@ -149,6 +149,10 @@ pub struct InitArgs {
     #[clap(long = "keystore", short = 'k')]
     pub keystore: Option<PathBuf>,
 
+    /// Overwrite existing user config and keystore.
+    #[arg(long, default_value_t = false)]
+    pub overwrite: bool,
+
     #[clap(flatten)]
     pub log: LogArgs,
 
@@ -269,7 +273,7 @@ impl Default for EmbeddedInitArgs {
 #[derive(Parser, Debug)]
 pub struct UpdateArgs {
     /// Output file path for the generated config.
-    #[clap(long = "user-config", short = 'o', default_value = "user_config.yaml")]
+    #[clap(long = "user-config", short = 'u', default_value = "user_config.yaml")]
     pub user_config: PathBuf,
 
     /// Path for the keystore file.
@@ -404,6 +408,7 @@ impl From<MigrateArgs> for InitArgs {
             api: migrate.api,
             state: migrate.state,
             storage_path: migrate.storage_path,
+            overwrite: false,
         }
     }
 }
