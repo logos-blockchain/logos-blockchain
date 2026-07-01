@@ -36,8 +36,8 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the devnet settings.
 - [ ] Checkout and hard reset the `devnet` branch to point to the latest commit of the current release branch
-- [ ] Create a new symlink `deployment/compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml deployment/compose.static.yml`
 - [ ] Symlink the environment file to the repo root with `ln -sf deployment/.env.devnet .env.devnet`
+- [ ] Create a new symlink `deployment/compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml deployment/compose.static.yml`
 - [ ] Commit and push to `devnet` branch to trigger the cleanup
 - [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Devnet web UI][devnet-web-ui] and make sure it's in setup mode.
 
