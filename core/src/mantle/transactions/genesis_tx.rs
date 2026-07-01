@@ -8,7 +8,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         MantleTx, OpProof, Transaction, TransactionHasher,
-        encoding::{
+        codec::{
             decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
             encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
         },

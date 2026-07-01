@@ -6,7 +6,7 @@ use nom::IResult;
 
 use crate::mantle::{
     Note,
-    encoding::{
+    codec::{
         decode_field_element, decode_zk_public_key, encode_byte, encode_field_element,
         encode_uint64,
     },
