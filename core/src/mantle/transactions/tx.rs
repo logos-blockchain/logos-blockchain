@@ -14,17 +14,20 @@ use crate::{
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         channel::Channels,
-        encoding::{
-            Ops, decode_mantle_tx, decode_signed_mantle_tx, encode_mantle_tx,
-            encode_signed_mantle_tx,
-        },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
         },
-        transactions::genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+        transactions::{
+            Ops,
+            encoding::{
+                decode_mantle_tx, decode_signed_mantle_tx, encode_mantle_tx,
+                encode_signed_mantle_tx, predict_signed_mantle_tx_size,
+            },
+            genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+        },
     },
     proofs::{
         channel_multi_sig_proof::ChannelMultiSigProof,
@@ -256,7 +259,7 @@ impl GasCalculator for MantleTx {
 impl MantleTx {
     #[must_use]
     pub fn signed_serialized_size(&self, context: &<Self as GasCalculator>::Context) -> u64 {
-        crate::mantle::encoding::predict_signed_mantle_tx_size(self, context) as u64
+        predict_signed_mantle_tx_size(self, context) as u64
     }
 
     #[must_use]

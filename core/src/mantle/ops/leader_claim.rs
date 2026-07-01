@@ -11,9 +11,8 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
-        encoding::encode_leader_claim,
         ledger::{Operation, Utxos},
-        ops::OpId,
+        ops::{OpId, encoding::encode_leader_claim},
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,

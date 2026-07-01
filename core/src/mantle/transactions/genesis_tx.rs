@@ -11,7 +11,6 @@ use crate::{
         encoding::{
             decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
             encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
-            proof_matches,
         },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{
@@ -20,6 +19,7 @@ use crate::{
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
+        transactions::encoding::proof_matches,
     },
 };
 
@@ -201,19 +201,19 @@ impl GasCalculator for GenesisTx {
 }
 
 impl crate::mantle::GenesisTx for GenesisTx {
-    fn genesis_inscription(&self) -> &InscriptionOp {
-        // Safe to unwrap because we validated this in from_tx
-        match &self.mantle_tx().ops()[1] {
-            Op::ChannelInscribe(op) => op,
-            _ => unreachable!("GenesisTx always has a valid inscription as second op"),
-        }
-    }
-
     fn genesis_transfer(&self) -> &TransferOp {
         // Safe to unwrap because we validated this in from_tx
         match &self.mantle_tx().ops()[0] {
             Op::Transfer(op) => op,
             _ => unreachable!("GenesisTx always has a valid transfer as first op"),
+        }
+    }
+
+    fn genesis_inscription(&self) -> &InscriptionOp {
+        // Safe to unwrap because we validated this in from_tx
+        match &self.mantle_tx().ops()[1] {
+            Op::ChannelInscribe(op) => op,
+            _ => unreachable!("GenesisTx always has a valid inscription as second op"),
         }
     }
 
@@ -327,9 +327,9 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            encoding::Ops,
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::channel::{Ed25519PublicKey, inscribe::Inscription},
+            transactions::Ops,
         },
         sdp::{Locator, ProviderId, ServiceType},
     };

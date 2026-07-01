@@ -18,13 +18,15 @@ use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _, TxHash,
-        encoding::{decode_signed_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
         ops::{
             Op, OpProof,
             channel::{
                 ChannelId, MsgId,
                 inscribe::{Inscription, InscriptionOp},
             },
+        },
+        transactions::encoding::{
+            decode_signed_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx,
         },
     },
 };

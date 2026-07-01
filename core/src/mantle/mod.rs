@@ -3,7 +3,7 @@ use std::hash::Hash;
 use thiserror::Error;
 
 pub mod channel;
-pub mod encoding;
+pub(crate) mod encoding;
 pub mod gas;
 pub mod ledger;
 pub mod mock;

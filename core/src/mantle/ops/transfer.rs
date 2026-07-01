@@ -6,9 +6,8 @@ use crate::{
     events::TxEvent,
     mantle::{
         TxHash,
-        encoding::encode_transfer_op,
         ledger::{self, Inputs, Operation, Outputs, Utxos},
-        ops::OpId,
+        ops::{OpId, encoding::encode_transfer_op},
     },
     sdp::locked_notes::LockedNotes,
 };

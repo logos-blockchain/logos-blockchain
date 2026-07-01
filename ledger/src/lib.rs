@@ -737,7 +737,6 @@ mod tests {
         events::TxEventPayload,
         mantle::{
             MantleTx, Note, SignedMantleTx, Transaction as _, TxHash,
-            encoding::Ops,
             gas::MainnetGasConstants,
             ledger::{Inputs, Outputs, Utxos},
             ops::{
@@ -753,6 +752,7 @@ mod tests {
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
+            transactions::Ops,
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},

@@ -7,9 +7,8 @@ use thiserror::Error;
 use crate::{
     mantle::{
         GasCalculator as _, GasConstants, Note, NoteId, Op, Utxo,
-        encoding::BoundedUtxos,
         gas::{GasCost, GasOverflow},
-        ledger::{Inputs, Outputs},
+        ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
         transactions::{GasPrices, MantleTx, MantleTxContext},
     },

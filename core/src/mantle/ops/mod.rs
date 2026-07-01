@@ -5,6 +5,7 @@ pub mod transfer;
 
 pub(crate) mod internal;
 
+pub(crate) mod encoding;
 mod serde_;
 
 use std::sync::LazyLock;
@@ -31,9 +32,11 @@ use super::{
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        encoding::{decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op},
         nom::{NomDecode, NomEncode},
         ops::{
+            encoding::{
+                decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op,
+            },
             internal::{OpDe, OpSer},
             transfer::TransferOp,
         },
