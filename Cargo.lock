@@ -3968,7 +3968,6 @@ dependencies = [
  "logos-blockchain-storage-service",
  "logos-blockchain-time-service",
  "logos-blockchain-tx-service",
- "logos-blockchain-utils",
  "overwatch",
  "serde",
  "serde_json",

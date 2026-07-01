@@ -7,7 +7,6 @@ use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
-use lb_utils::storage_bounded_vec::ElementSize;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
@@ -177,12 +176,6 @@ pub struct MantleTx(pub Ops);
 impl StorageSize for MantleTx {
     fn storage_size(&self) -> usize {
         encode_mantle_tx(self).len()
-    }
-}
-
-impl ElementSize for MantleTx {
-    fn element_size(&self) -> usize {
-        self.storage_size()
     }
 }
 
@@ -657,12 +650,6 @@ impl GasCalculator for SignedMantleTx {
 impl StorageSize for SignedMantleTx {
     fn storage_size(&self) -> usize {
         self.gas_storage_size() as usize
-    }
-}
-
-impl ElementSize for SignedMantleTx {
-    fn element_size(&self) -> usize {
-        self.storage_size()
     }
 }
 

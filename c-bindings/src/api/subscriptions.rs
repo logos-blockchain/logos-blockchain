@@ -10,7 +10,6 @@ use lb_node::{
     ApiStorageAdapter, RuntimeServiceId, SignedMantleTx, StorageService,
     generic_services::CryptarchiaService,
 };
-use lb_utils::storage_bounded_vec::ElementSize;
 use serde::Serialize;
 
 use crate::{
@@ -41,12 +40,6 @@ impl Transaction for TxWithId {
 impl StorageSize for TxWithId {
     fn storage_size(&self) -> usize {
         self.tx.storage_size()
-    }
-}
-
-impl ElementSize for TxWithId {
-    fn element_size(&self) -> usize {
-        self.storage_size()
     }
 }
 
@@ -95,7 +88,7 @@ pub fn subscribe_to_new_blocks_sync(
                                 .collect();
                             let block: CoreBlock<TxWithId> = CoreBlock::reconstruct(
                                 block.header().clone(),
-                                BlockTransactions::try_from_vec(txs_with_id)
+                                BlockTransactions::try_from(txs_with_id)
                                     .expect("Block should always build from valid block"),
                                 *block.signature(),
                             )

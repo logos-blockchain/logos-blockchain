@@ -12,7 +12,6 @@ use lb_core::{
     mantle::{StorageSize, Transaction, TxHash},
 };
 use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
-use lb_utils::storage_bounded_vec::ElementSize;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -40,7 +39,6 @@ where
             + Eq
             + Transaction<Hash = TxHash>
             + StorageSize
-            + ElementSize
             + 'static,
     {
         let key: [u8; 32] = id.into();

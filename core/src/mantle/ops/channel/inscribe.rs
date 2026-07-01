@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
 use crate::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     crypto::{Digest as _, Hasher},
     events::TxEvent,
     mantle::{
@@ -19,7 +19,7 @@ use crate::{
     },
 };
 
-pub const MAX_BYTES: usize = MAX_BLOCK_SIZE * 7 / 8;
+pub const MAX_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 7 / 8;
 pub type Inscription = UpperBoundedVec<u8, MAX_BYTES>;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]

@@ -30,7 +30,7 @@ use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
-use lb_utils::storage_bounded_vec::{ElementSize, StorageBoundedError};
+use lb_utils::bounded_vec::BoundedError;
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -84,7 +84,7 @@ pub enum Error {
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
     #[error(transparent)]
-    StorageBoundedError(#[from] StorageBoundedError),
+    BoundedError(#[from] BoundedError),
 }
 
 #[derive(Debug)]
@@ -979,7 +979,7 @@ async fn reconstruct_block_from_proposal<Item>(
     mempool: &MempoolAdapter<Item>,
 ) -> Result<Block<Item>, Error>
 where
-    Item: AuthenticatedMantleTx<Hash = TxHash> + ElementSize + Clone + Send + Sync + 'static,
+    Item: AuthenticatedMantleTx<Hash = TxHash> + Clone + Send + Sync + 'static,
 {
     let mempool_hashes: Vec<TxHash> = proposal.mempool_transactions().to_vec();
     let mempool_response = mempool
@@ -995,8 +995,7 @@ where
         return Err(Error::MissingMempoolTransactions(missing_count));
     }
 
-    let reconstructed_transactions =
-        BlockTransactions::try_from_vec(mempool_response.into_found())?;
+    let reconstructed_transactions = BlockTransactions::try_from(mempool_response.into_found())?;
 
     let header = proposal.header().clone();
     let signature = *proposal.signature();

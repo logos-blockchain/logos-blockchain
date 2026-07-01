@@ -5,7 +5,7 @@ pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
 pub use lb_core::events::{Event, Events, TxEventPayload};
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     header::{ContentId, HeaderId},
     mantle::{SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
     proofs::leader_proof::Groth16LeaderProof,
@@ -484,7 +484,7 @@ impl CommonHttpClient {
         response: reqwest::Response,
     ) -> impl Stream<Item = ProcessedBlockEvent> {
         // NDJSON event upper bound; margin above max serialized single event line
-        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_SIZE * 3 / 2;
+        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
         const LOG_LINE_PREVIEW_CHARS: usize = 256;
 
         let byte_stream = response.bytes_stream().map_err(std::io::Error::other);

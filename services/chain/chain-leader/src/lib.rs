@@ -17,7 +17,7 @@ use lb_chain_service::{
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
 };
 use lb_core::{
-    block::{Block, BlockTransactions, Error as BlockError},
+    block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash,
@@ -36,7 +36,6 @@ use lb_tx_service::{
     network::NetworkAdapter as MempoolNetworkAdapter,
     storage::MempoolStorageAdapter,
 };
-use lb_utils::storage_bounded_vec::ElementSize;
 use lb_wallet_service::api::{WalletApi, WalletApiError};
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -775,18 +774,31 @@ where
 /// transaction that trips the block size or count limits.
 async fn txs_for_block<Tx, S>(mut txs: S) -> BlockTransactions<Tx>
 where
-    Tx: StorageSize + ElementSize,
+    Tx: StorageSize,
     S: Stream<Item = Tx> + Unpin,
 {
+    let mut block_transactions_size: usize = 0;
     let mut selected_txs = BlockTransactions::empty();
 
     loop {
         let Some(tx) = txs.next().await else {
             break;
         };
+
+        let tx_size = tx.storage_size();
+        let Some(next_block_transactions_size) = block_transactions_size.checked_add(tx_size)
+        else {
+            break;
+        };
+
+        if next_block_transactions_size > MAX_BLOCK_TRANSACTIONS_SIZE {
+            break;
+        }
+
         if selected_txs.try_push(tx).is_err() {
             break;
         }
+        block_transactions_size = next_block_transactions_size;
     }
 
     selected_txs
@@ -807,35 +819,26 @@ mod tests {
         }
     }
 
-    impl ElementSize for TestTx {
-        fn element_size(&self) -> usize {
-            self.storage_size()
-        }
-    }
-
     #[tokio::test]
     async fn block_tx_selection_respects_transaction_count_limit() {
         let txs = stream::iter(vec![
             TestTx { size: 1 };
-            BlockTransactions::<TestTx>::bounds().max_count + 1
+            BlockTransactions::<TestTx>::MAX + 1
         ]);
 
         let selected = txs_for_block(txs).await;
 
-        assert_eq!(
-            selected.len(),
-            BlockTransactions::<TestTx>::bounds().max_count
-        );
+        assert_eq!(selected.len(), BlockTransactions::<TestTx>::MAX);
     }
 
     #[tokio::test]
     async fn block_tx_selection_respects_block_size_limit() {
         let txs = stream::iter(vec![
             TestTx {
-                size: BlockTransactions::<TestTx>::bounds().max_size / 2,
+                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
             },
             TestTx {
-                size: BlockTransactions::<TestTx>::bounds().max_size / 2,
+                size: MAX_BLOCK_TRANSACTIONS_SIZE / 2,
             },
             TestTx { size: 1 },
         ]);
@@ -844,10 +847,7 @@ mod tests {
         let selected_size: usize = selected.iter().map(StorageSize::storage_size).sum();
 
         assert_eq!(selected.len(), 2);
-        assert_eq!(
-            selected_size,
-            BlockTransactions::<TestTx>::bounds().max_size
-        );
+        assert_eq!(selected_size, MAX_BLOCK_TRANSACTIONS_SIZE);
     }
 
     #[tokio::test]
@@ -858,7 +858,7 @@ mod tests {
         let txs = stream::iter(vec![
             TestTx { size: 10 },
             TestTx {
-                size: BlockTransactions::<TestTx>::bounds().max_size,
+                size: MAX_BLOCK_TRANSACTIONS_SIZE,
             },
             TestTx { size: 10 },
         ]);
@@ -877,7 +877,7 @@ mod tests {
         // reaching here, but the prefix invariant must hold regardless.)
         let txs = stream::iter(vec![
             TestTx {
-                size: BlockTransactions::<TestTx>::bounds().max_size + 1,
+                size: MAX_BLOCK_TRANSACTIONS_SIZE + 1,
             },
             TestTx { size: 1 },
         ]);

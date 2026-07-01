@@ -1,12 +1,11 @@
 use lb_groth16::Fr;
-use lb_utils::storage_bounded_vec::ElementSize;
 use nom::IResult;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::{GenesisTx as _, OpProof, SignedMantleTx, StorageSize, ops::sdp::SDPDeclareOp};
 use crate::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     codec::SerializeOp as _,
     crypto::{Digest as _, Hasher},
     mantle::{
@@ -56,13 +55,7 @@ impl StorageSize for GenesisTx {
         bytes.resize(bytes.len() + ops_proofs_size, 0);
         bytes.extend(self.cryptarchia_parameter().encode());
         // Clamp at MAX_BLOCK_SIZE to keep sizing bounded for genesis deserialization.
-        bytes.len().min(MAX_BLOCK_SIZE)
-    }
-}
-
-impl ElementSize for GenesisTx {
-    fn element_size(&self) -> usize {
-        self.storage_size()
+        bytes.len().min(MAX_BLOCK_TRANSACTIONS_SIZE)
     }
 }
 

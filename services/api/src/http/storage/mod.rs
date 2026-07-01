@@ -4,7 +4,6 @@ use lb_core::{
     mantle::{StorageSize, Transaction, TxHash},
 };
 use lb_storage_service::{StorageService, backends::rocksdb::RocksBackend};
-use lb_utils::storage_bounded_vec::ElementSize;
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -25,7 +24,6 @@ pub trait StorageAdapter<RuntimeServiceId> {
             + Eq
             + Transaction<Hash = TxHash>
             + StorageSize
-            + ElementSize
             + 'static;
 
     async fn get_transactions<Tx>(

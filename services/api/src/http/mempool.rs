@@ -4,7 +4,6 @@ use std::fmt::Display;
 use lb_core::{header::HeaderId, mantle::Transaction};
 use lb_network_service::backends::NetworkBackend;
 use lb_tx_service::{MempoolMsg, TxMempoolService, backend::Mempool, network::NetworkAdapter};
-use lb_utils::storage_bounded_vec::ElementSize;
 use overwatch::{DynError, services::AsServiceId};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::oneshot;
@@ -32,15 +31,7 @@ where
         + Clone
         + 'static,
     StorageAdapter::Error: Debug,
-    Item: Transaction
-        + ElementSize
-        + Clone
-        + Debug
-        + Send
-        + Sync
-        + Serialize
-        + DeserializeOwned
-        + 'static,
+    Item: Transaction + Clone + Debug + Send + Sync + Serialize + DeserializeOwned + 'static,
     Key: Clone + Debug + Ord + Hash + Send + Sync + Serialize + DeserializeOwned + 'static,
     RuntimeServiceId: Debug
         + Sync

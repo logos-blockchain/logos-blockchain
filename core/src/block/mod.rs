@@ -6,7 +6,7 @@ use core::fmt::Debug;
 use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use lb_utils::storage_bounded_vec::{ElementSize, StorageBoundedError, StorageBoundedVec};
+use lb_utils::bounded_vec::{BoundedError, BoundedVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -17,9 +17,11 @@ use crate::{
     utils::merkle,
 };
 
-pub const MAX_BLOCK_TRANSACTIONS: usize = 1024;
-// 2MB
-pub const MAX_BLOCK_SIZE: usize = 1024 * 1024 * 2;
+/// The maximum number of transactions allowed in a block.
+const MAX_BLOCK_TRANSACTIONS: usize = 1024;
+/// The maximum total size of all transactions in a block, in bytes (2 MiB).
+/// Note: This is not the total block size.
+pub const MAX_BLOCK_TRANSACTIONS_SIZE: usize = 1024 * 1024 * 2;
 
 pub type BlockNumber = u64;
 
@@ -36,7 +38,9 @@ pub enum Error {
     #[error("Validation error: {0}")]
     Validation(String),
     #[error(transparent)]
-    StorageBoundedError(#[from] StorageBoundedError),
+    BoundedError(#[from] BoundedError),
+    #[error("Total storage size {size} exceeds maximum of {max} bytes")]
+    ContentTooBig { size: usize, max: usize },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -67,7 +71,7 @@ struct RawBlock<Tx> {
 
 impl<'de, Tx> Deserialize<'de> for Block<Tx>
 where
-    Tx: Clone + Eq + Deserialize<'de> + Transaction<Hash = TxHash> + StorageSize + ElementSize,
+    Tx: Clone + Eq + Deserialize<'de> + Transaction<Hash = TxHash> + StorageSize,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -112,9 +116,9 @@ impl Proposal {
 ///
 /// `Block<Tx>` stores transactions as a plain `Vec<Tx>` because `GenesisBlock =
 /// Block<GenesisTx>` has different runtime constraints.
-/// Normal block constructors accept this wrapper to enforce count and
-/// storage-size limits before the transactions are stored internally.
-pub type BlockTransactions<Tx> = StorageBoundedVec<Tx, 0, MAX_BLOCK_TRANSACTIONS, MAX_BLOCK_SIZE>;
+/// Normal block constructors accept this wrapper to enforce count limits before
+/// the transactions are stored internally.
+pub type BlockTransactions<Tx> = BoundedVec<Tx, 0, MAX_BLOCK_TRANSACTIONS>;
 
 impl<Tx> Block<Tx> {
     pub fn create(
@@ -125,7 +129,7 @@ impl<Tx> Block<Tx> {
         signing_key: &Ed25519Key,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
+        Tx: Transaction<Hash = TxHash> + StorageSize,
     {
         let expected_public_key = proof_of_leadership.leader_key();
         let actual_public_key = signing_key.public_key();
@@ -139,11 +143,14 @@ impl<Tx> Block<Tx> {
 
         let signature = header.sign(signing_key)?;
 
-        Ok(Self {
+        let block = Self {
             header,
             signature,
             transactions: transactions.into_inner(),
-        })
+        };
+        block.validate_total_transactions_size()?;
+
+        Ok(block)
     }
 
     pub fn reconstruct(
@@ -152,7 +159,7 @@ impl<Tx> Block<Tx> {
         signature: Ed25519Signature,
     ) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
+        Tx: Transaction<Hash = TxHash> + StorageSize,
     {
         let block = Self {
             header,
@@ -166,15 +173,18 @@ impl<Tx> Block<Tx> {
 
     fn verify_internal(&self) -> Result<(), Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
+        Tx: Transaction<Hash = TxHash> + StorageSize,
     {
-        // 1. Block root matches transactions merkle hash
+        // 1. Size is ok
+        self.validate_total_transactions_size()?;
+
+        // 2. Block root matches transactions merkle hash
         let calculated_content_id = Self::calculate_content_id(&self.transactions);
         if self.header.block_root() != &calculated_content_id {
             return Err(Error::BlockRootMismatch);
         }
 
-        // 2. Signature is valid over the header bytes
+        // 3. Signature is valid over the header bytes
         let leader_public_key = self.header.leader_proof().leader_key();
         let header_bytes = self.header.to_bytes()?;
 
@@ -185,13 +195,38 @@ impl<Tx> Block<Tx> {
         Ok(())
     }
 
+    fn validate_total_transactions_size(&self) -> Result<usize, Error>
+    where
+        Tx: Transaction<Hash = TxHash> + StorageSize,
+    {
+        let mut total = 0usize;
+
+        for item in &self.transactions {
+            total = total
+                .checked_add(item.storage_size())
+                .ok_or(Error::ContentTooBig {
+                    size: usize::MAX,
+                    max: MAX_BLOCK_TRANSACTIONS_SIZE,
+                })?;
+
+            if total > MAX_BLOCK_TRANSACTIONS_SIZE {
+                return Err(Error::ContentTooBig {
+                    size: total,
+                    max: MAX_BLOCK_TRANSACTIONS_SIZE,
+                });
+            }
+        }
+
+        Ok(total)
+    }
+
     /// Convert a raw/deserialized block into a validated non-genesis block.
     ///
     /// This enforces transaction count, storage-size, block-root, and signature
     /// validation before returning the block.
     fn try_into_bounded_block(self) -> Result<Self, Error>
     where
-        Tx: Transaction<Hash = TxHash> + StorageSize + ElementSize,
+        Tx: Transaction<Hash = TxHash> + StorageSize,
     {
         let Self {
             header,
@@ -208,7 +243,7 @@ impl<Tx> Block<Tx> {
             });
         }
 
-        let txs = BlockTransactions::try_from_vec(transactions)?;
+        let txs = BlockTransactions::try_from(transactions)?;
         Self::reconstruct(header, txs, signature)
     }
 
@@ -263,15 +298,8 @@ impl<Tx> Block<Tx> {
     }
 }
 
-impl<
-    Tx: Clone
-        + Eq
-        + Serialize
-        + DeserializeOwned
-        + Transaction<Hash = TxHash>
-        + StorageSize
-        + ElementSize,
-> TryFrom<Bytes> for Block<Tx>
+impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Transaction<Hash = TxHash> + StorageSize>
+    TryFrom<Bytes> for Block<Tx>
 {
     type Error = crate::codec::Error;
 
@@ -298,7 +326,7 @@ mod tests {
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::UnsecuredZkKey;
     use lb_pol::LotteryConstants;
-    use lb_utils::{bounded_vec::BoundedError, math::NonNegativeRatio};
+    use lb_utils::math::NonNegativeRatio;
     use lb_utxotree::UtxoTree;
 
     use super::*;
@@ -432,8 +460,7 @@ mod tests {
         )
         .expect("Valid block should be created");
 
-        let transactions =
-            BlockTransactions::try_from_vec(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap();
+        let transactions = BlockTransactions::try_from(create_tx(MAX_BLOCK_TRANSACTIONS)).unwrap();
         let _valid_block: Block<MantleTx> = Block::create(
             parent_block,
             slot,
@@ -444,13 +471,13 @@ mod tests {
         .expect("Valid block should be created");
 
         let invalid_transaction_inputs_result =
-            BlockTransactions::try_from_vec(create_tx(MAX_BLOCK_TRANSACTIONS + 1));
+            BlockTransactions::<MantleTx>::try_from(create_tx(MAX_BLOCK_TRANSACTIONS + 1));
 
         assert!(invalid_transaction_inputs_result.is_err());
         let error = invalid_transaction_inputs_result.unwrap_err();
 
         match error {
-            StorageBoundedError::BoundedError(BoundedError::TooManyItems { count, max }) => {
+            BoundedError::TooManyItems { count, max } => {
                 assert_eq!(count, MAX_BLOCK_TRANSACTIONS + 1);
                 assert_eq!(max, MAX_BLOCK_TRANSACTIONS);
             }
@@ -459,13 +486,7 @@ mod tests {
     }
 
     #[derive(Clone, Copy, Debug)]
-    pub struct TestMantleTx<const SIZE: usize>;
-
-    impl<const SIZE: usize> ElementSize for TestMantleTx<SIZE> {
-        fn element_size(&self) -> usize {
-            SIZE
-        }
-    }
+    struct TestMantleTx<const SIZE: usize>;
 
     impl<const SIZE: usize> Transaction for TestMantleTx<SIZE> {
         const HASHER: TransactionHasher<Self> = |_tx| TxHash::from([0u8; 32]);
@@ -499,27 +520,35 @@ mod tests {
         )
         .expect("Valid block should be created");
 
-        let transactions =
-            BlockTransactions::try_from_vec(vec![TestMantleTx::<MAX_BLOCK_SIZE>]).unwrap();
+        let transactions: BlockTransactions<TestMantleTx<MAX_BLOCK_TRANSACTIONS_SIZE>> =
+            BlockTransactions::try_from(vec![TestMantleTx::<MAX_BLOCK_TRANSACTIONS_SIZE>]).unwrap();
         let _valid_block = Block::create(
             parent_block,
             slot,
-            proof_of_leadership,
+            proof_of_leadership.clone(),
             transactions,
             &signing_key,
         )
         .expect("Valid block should be created");
 
-        let invalid_transaction_inputs_result =
-            BlockTransactions::try_from_vec(vec![TestMantleTx::<{ MAX_BLOCK_SIZE + 1 }>]);
+        let oversized: BlockTransactions<TestMantleTx<{ MAX_BLOCK_TRANSACTIONS_SIZE + 1 }>> =
+            BlockTransactions::try_from(vec![TestMantleTx::<{ MAX_BLOCK_TRANSACTIONS_SIZE + 1 }>])
+                .unwrap();
+        let invalid_transaction_inputs_result = Block::create(
+            parent_block,
+            slot,
+            proof_of_leadership,
+            oversized,
+            &signing_key,
+        );
 
         assert!(invalid_transaction_inputs_result.is_err());
         let error = invalid_transaction_inputs_result.unwrap_err();
 
         match error {
-            StorageBoundedError::ContentTooBig { size, max } => {
-                assert_eq!(size, MAX_BLOCK_SIZE + 1);
-                assert_eq!(max, MAX_BLOCK_SIZE);
+            Error::ContentTooBig { size, max } => {
+                assert_eq!(size, MAX_BLOCK_TRANSACTIONS_SIZE + 1);
+                assert_eq!(max, MAX_BLOCK_TRANSACTIONS_SIZE);
             }
             other => panic!("unexpected error: {other:?}"),
         }
@@ -527,14 +556,7 @@ mod tests {
 
     #[test]
     fn global_block_limits_are_reflective_in_block_transaction_bounds() {
-        assert_eq!(BlockTransactions::<MantleTx>::bounds().min_count, 0);
-        assert_eq!(
-            BlockTransactions::<MantleTx>::bounds().max_count,
-            MAX_BLOCK_TRANSACTIONS
-        );
-        assert_eq!(
-            BlockTransactions::<MantleTx>::bounds().max_size,
-            MAX_BLOCK_SIZE
-        );
+        assert_eq!(BlockTransactions::<MantleTx>::MIN, 0);
+        assert_eq!(BlockTransactions::<MantleTx>::MAX, MAX_BLOCK_TRANSACTIONS);
     }
 }
