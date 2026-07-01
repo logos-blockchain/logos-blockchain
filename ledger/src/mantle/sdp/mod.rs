@@ -659,8 +659,10 @@ pub struct HeaderEffect {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use lb_core::sdp::SNAPSHOT_FINALIZATION_DELAY;
-    use lb_core::{mantle::ledger::Utxos, sdp::Locator};
+    use lb_core::{
+        mantle::ledger::Utxos,
+        sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
+    };
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use lb_utils::math::NonNegativeF64;
@@ -781,8 +783,9 @@ mod tests {
 
     /// Build the epoch state for `epoch`, snapshotting `active_declarations`
     /// from `ledger` the same way production does. Using a constant nonce and
-    /// lottery values keeps the `LeaderInputs` used by [`generate_activity_proof`]
-    /// aligned with what the rewards module computes on epoch transition.
+    /// lottery values keeps the `LeaderInputs` used by
+    /// [`generate_activity_proof`] aligned with what the rewards module
+    /// computes on epoch transition.
     fn next_epoch_state(epoch: Epoch, ledger: &SdpLedger, config: &Config) -> EpochState {
         EpochState {
             epoch,

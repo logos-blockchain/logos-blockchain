@@ -1,8 +1,11 @@
 use std::{collections::HashMap, sync::Arc};
 
-use lb_core::crypto::ZkHash;
-use lb_core::sdp::{
-    Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters, ServiceType,
+use lb_core::{
+    crypto::ZkHash,
+    sdp::{
+        Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters,
+        ServiceType,
+    },
 };
 use lb_cryptarchia_engine::Epoch;
 use lb_groth16::{AdditiveGroup as _, Fr};
