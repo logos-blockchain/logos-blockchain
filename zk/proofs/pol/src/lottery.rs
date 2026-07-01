@@ -1,4 +1,4 @@
-use std::sync::LazyLock;
+use std::{num::NonZeroU64, sync::LazyLock};
 
 use astro_float::{BigFloat, Consts, Radix, RoundingMode, Sign};
 use lb_groth16::Fr;
@@ -128,8 +128,8 @@ impl LotteryConstants {
     }
 
     /// Computes the lottery values t₀ and t₁ for a given total stake.
-    pub fn compute_lottery_values(&self, total_stake: u64) -> (Fr, Fr) {
-        let total_stake = BigUint::from(total_stake);
+    pub fn compute_lottery_values(&self, total_stake: NonZeroU64) -> (Fr, Fr) {
+        let total_stake = BigUint::from(total_stake.get());
 
         let lottery_0 = &self.t0_constant / &total_stake;
         let lottery_1 = P
@@ -185,7 +185,8 @@ mod tests {
     #[test]
     fn test_compute_lottery_values() {
         let constants = LotteryConstants::new(NonNegativeRatio::new(1, 30.try_into().unwrap()));
-        let (lottery_0, lottery_1) = constants.compute_lottery_values(1000);
+        let (lottery_0, lottery_1) =
+            constants.compute_lottery_values(NonZeroU64::new(1000).unwrap());
 
         assert_eq!(
             lottery_0,

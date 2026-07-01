@@ -1,3 +1,5 @@
+use std::num::NonZeroU64;
+
 pub const PRECISION: u64 = 1000;
 
 #[derive(Copy, Clone, serde::Serialize, serde::Deserialize)]
@@ -22,15 +24,15 @@ impl StakeInference {
 
     pub fn total_stake_inference<const PRECISION: u64>(
         &self,
-        total_stake_estimate: u64,
+        total_stake_estimate: NonZeroU64,
         measured_block_density: u64,
-    ) -> u64 {
+    ) -> NonZeroU64 {
         let learning_rate_with_precision: u64 =
             f64::trunc(self.learning_rate * PRECISION as f64) as u64;
         let slot_activation_coefficient_with_precision: i128 =
             (self.slot_activation_coefficient * PRECISION as f64).trunc() as i128;
         let total_stake_estimate_with_precision: i128 =
-            i128::from(total_stake_estimate) * i128::from(PRECISION);
+            i128::from(total_stake_estimate.get()) * i128::from(PRECISION);
         let measured_block_density_with_precision: i128 =
             i128::from(measured_block_density) * i128::from(PRECISION);
         let expected_density_with_precision: i128 =
@@ -56,10 +58,13 @@ impl StakeInference {
             "TSI update"
         );
 
-        new_total_stake_estimate
+        // Clamp to at least 1: large corrections can drive the raw estimate to 0 or
+        // negative, but total stake must always remain positive for PoL.
+        let raw: u64 = new_total_stake_estimate
             .max(1)
             .try_into()
-            .expect("After precision it should fit in a u64")
+            .expect("After precision it should fit in a u64");
+        NonZeroU64::new(raw).expect("clamped to at least 1")
     }
 }
 
@@ -83,21 +88,21 @@ mod tests {
     fn test_total_stake_inference_zero_block_density() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
         let inference = stake_inference_from(&config);
-        let total_stake_estimate = 1000u64;
+        let total_stake_estimate = NonZeroU64::new(1000).unwrap();
         let period_block_density = 0u64;
 
         let result = inference
             .total_stake_inference::<PRECISION>(total_stake_estimate, period_block_density);
 
         // minimum stake is 1
-        assert_eq!(result, 1);
+        assert_eq!(result.get(), 1);
     }
 
     #[test]
     fn test_total_stake_inference_high_block_density() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
         let inference = stake_inference_from(&config);
-        let total_stake_estimate = 1000u64;
+        let total_stake_estimate = NonZeroU64::new(1000).unwrap();
         let measured_block_density = expected_density(&inference) * 2;
 
         let result = inference
@@ -114,7 +119,7 @@ mod tests {
     fn test_total_stake_inference_exact_block_density() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
         let inference = stake_inference_from(&config);
-        let total_stake_estimate = 1000u64;
+        let total_stake_estimate = NonZeroU64::new(1000).unwrap();
         let measured_block_density = expected_density(&inference);
 
         let result = inference
@@ -129,7 +134,7 @@ mod tests {
     fn test_total_stake_inference_intermediate_block_density() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
         let inference = stake_inference_from(&config);
-        let total_stake_estimate = 1000u64;
+        let total_stake_estimate = NonZeroU64::new(1000).unwrap();
         let measured_block_density = expected_density(&inference) / 2;
 
         let result = inference
@@ -147,7 +152,7 @@ mod tests {
     fn test_total_stake_inference_very_high_stake() {
         let config = config(NonNegativeRatio::new(1, 2.try_into().unwrap()));
         let inference = stake_inference_from(&config);
-        let total_stake_estimate = u64::MAX; //maximum stake supported is half
+        let total_stake_estimate = NonZeroU64::new(u64::MAX).unwrap(); //maximum stake supported is half
         let measured_block_density = expected_density(&inference) / 2;
 
         let result = inference

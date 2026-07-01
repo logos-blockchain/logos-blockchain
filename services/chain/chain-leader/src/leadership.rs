@@ -425,7 +425,11 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
 #[cfg(test)]
 mod pol_tests {
     use core::fmt;
-    use std::{fmt::Formatter, num::NonZero, slice};
+    use std::{
+        fmt::Formatter,
+        num::{NonZero, NonZeroU64},
+        slice,
+    };
 
     use lb_core::{
         mantle::{
@@ -471,7 +475,8 @@ mod pol_tests {
         let latest_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
 
         // Create EpochState
-        let total_stake = utxo.note.value;
+        let total_stake =
+            NonZeroU64::new(utxo.note.value).expect("utxo note value must be non-zero");
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);
@@ -562,7 +567,8 @@ mod pol_tests {
         let aged_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
         let latest_tree = UtxoTree::new().insert(utxo.id(), utxo).0;
 
-        let total_stake = utxo.note.value;
+        let total_stake =
+            NonZeroU64::new(utxo.note.value).expect("utxo note value must be non-zero");
         let (lottery_0, lottery_1) = config
             .lottery_constants()
             .compute_lottery_values(total_stake);

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, num::NonZeroU64, sync::Arc};
 
 use lb_core::sdp::{
     Declaration, DeclarationId, Declarations, Locator, ProviderId, ServiceParameters, ServiceType,
@@ -43,7 +43,7 @@ pub fn create_epoch_state(
         epoch,
         nonce,
         utxos: UtxoTree::default(),
-        total_stake: 0,
+        total_stake: NonZeroU64::new((provider_ids.len() as u64 * 100).max(1)).unwrap(),
         lottery_0: Fr::ZERO,
         lottery_1: Fr::ZERO,
         active_declarations: Arc::new(active_declarations),
@@ -62,5 +62,22 @@ pub fn create_service_parameters() -> ServiceParameters {
         inactivity_period: 2.try_into().unwrap(),
         retention_period: 1.into(),
         epoch: 0.into(),
+    }
+}
+
+#[expect(dead_code, reason = "test utility, not yet called by any test")]
+pub fn dummy_epoch_state() -> EpochState {
+    dummy_epoch_state_with(0, 0)
+}
+
+pub fn dummy_epoch_state_with(epoch: u32, nonce: u64) -> EpochState {
+    EpochState {
+        epoch: epoch.into(),
+        nonce: Fr::from(BigUint::from(nonce)),
+        utxos: UtxoTree::default(),
+        total_stake: NonZeroU64::new(1).unwrap(),
+        lottery_0: Fr::ZERO,
+        lottery_1: Fr::ZERO,
+        active_declarations: Arc::new(Declarations::default()),
     }
 }

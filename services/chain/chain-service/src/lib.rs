@@ -6,6 +6,8 @@ mod relays;
 mod states;
 pub mod storage;
 mod sync;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 #[cfg(test)]
 mod tests;
 

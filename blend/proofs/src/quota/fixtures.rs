@@ -23,7 +23,7 @@ pub fn valid_proof_of_core_quota_inputs(
 ) -> (PublicInputs, ProofOfCoreQuotaInputs) {
     let (lottery_0, lottery_1) =
         LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-            .compute_lottery_values(1);
+            .compute_lottery_values(1.try_into().unwrap());
     let public_inputs = PublicInputs {
         signing_key,
         core: CoreInputs {
@@ -148,7 +148,7 @@ pub fn valid_proof_of_leadership_quota_inputs(
 ) -> (PublicInputs, ProofOfLeadershipQuotaInputs) {
     let (lottery_0, lottery_1) =
         LotteryConstants::new(NonNegativeRatio::new(1, 10.try_into().unwrap()))
-            .compute_lottery_values(1);
+            .compute_lottery_values(1.try_into().unwrap());
     let public_inputs = PublicInputs {
         signing_key,
         leader: LeaderInputs {
