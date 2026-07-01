@@ -1,7 +1,9 @@
-use std::error::Error;
+use std::{error::Error, ops::Mul as _};
 
-use ark_ec::pairing::Pairing;
+use ark_ec::{CurveGroup as _, VariableBaseMSM as _, pairing::Pairing};
+use ark_ff::{UniformRand as _, Zero as _};
 use ark_groth16::{Groth16, r1cs_to_qap::LibsnarkReduction};
+use rand::thread_rng;
 
 use crate::{proof::Proof, verification_key::PreparedVerificationKey};
 
@@ -12,6 +14,51 @@ pub fn groth16_verify<E: Pairing>(
 ) -> Result<bool, impl Error + use<E>> {
     let proof: ark_groth16::Proof<E> = proof.into();
     Groth16::<E, LibsnarkReduction>::verify_proof(vk.as_ref(), &proof, public_inputs)
+}
+
+pub fn groth16_batch_verify<E: Pairing>(
+    vk: &PreparedVerificationKey<E>,
+    proofs: &[Proof<E>],
+    public_inputs: &[Vec<E::ScalarField>],
+) -> bool {
+    let mut rng = thread_rng();
+    let ri: Vec<E::ScalarField> = std::iter::repeat_with(|| E::ScalarField::rand(&mut rng))
+        .take(proofs.len())
+        .collect();
+    let r_sum: E::ScalarField = ri.iter().sum();
+
+    let pis_c: Vec<E::G1Affine> = proofs.iter().map(|proof| proof.pi_c).collect();
+
+    let batched_pi_c = E::G1::msm(&pis_c, &ri)
+        .expect("msm fails only when slice length differ")
+        .into_affine();
+
+    let batched_public_inputs: Vec<E::ScalarField> = std::iter::once(r_sum)
+        .chain((0..vk.gamma_abc_g1().len() - 1).map(|i| {
+            ri.iter()
+                .zip(public_inputs.iter())
+                .map(|(r, pi)| *r * pi[i])
+                .sum()
+        }))
+        .collect();
+
+    let batched_ic = E::G1::msm(vk.gamma_abc_g1(), &batched_public_inputs)
+        .expect("msm fails only when slice length differ")
+        .into_affine();
+
+    let (g1_terms, g2_terms): (Vec<_>, Vec<_>) = proofs
+        .iter()
+        .enumerate()
+        .map(|(i, proof)| (proof.pi_a.mul(ri[i]).into_affine(), proof.pi_b.into()))
+        .chain([
+            ((-vk.alpha_g1().mul(r_sum)).into(), vk.beta_g2().into()),
+            (batched_ic, vk.gamma_g2_neg_pc().clone()),
+            (batched_pi_c, vk.delta_g2_neg_pc().clone()),
+        ])
+        .unzip();
+
+    let check = E::multi_pairing(g1_terms, g2_terms);
+    check.is_zero()
 }
 
 #[cfg(test)]

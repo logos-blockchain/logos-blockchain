@@ -1,5 +1,5 @@
 use clap::Parser as _;
-use logos_blockchain_tui_zone::{InscribeArgs, run};
+use logos_blockchain_tui_zone::cli::{Cli, run_cli};
 use tracing_subscriber::{
     Layer as _, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
@@ -24,6 +24,9 @@ async fn main() {
         .with(file_layer)
         .init();
 
-    let args = InscribeArgs::parse();
-    run(args).await;
+    let args = Cli::parse();
+    if let Err(error) = run_cli(args).await {
+        eprintln!("tui-zone command failed: {error}");
+        std::process::exit(1);
+    }
 }

@@ -38,7 +38,9 @@ use std::error::Error;
 pub use chain_inputs::{PoCChainInputs, PoCChainInputsData};
 pub use inputs::{PoCWitnessInputs, PoCWitnessInputsData};
 use lb_circuits_prover::Prover as _;
-use lb_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser};
+use lb_groth16::{
+    CompressedGroth16Proof, Groth16Proof, Groth16ProofJsonDeser, groth16_batch_verify,
+};
 use lb_log_targets::proofs;
 use tracing::error;
 pub use wallet_inputs::{PoCWalletInputs, PoCWalletInputsData};
@@ -123,6 +125,26 @@ pub fn verify(proof: &PoCProof, public_inputs: &PoCVerifierInput) -> Result<bool
     let expanded_proof = Groth16Proof::try_from(proof).map_err(|_| VerifyError::Expansion)?;
     lb_groth16::groth16_verify(verification_key::POC_VK.as_ref(), &expanded_proof, &inputs)
         .map_err(|e| VerifyError::ProofVerify(Box::new(e)))
+}
+
+pub fn batch_verify(
+    proofs_and_inputs: &[(PoCProof, PoCVerifierInput)],
+) -> Result<bool, VerifyError> {
+    let inputs: Vec<Vec<_>> = proofs_and_inputs
+        .iter()
+        .map(|(_, pi)| pi.to_inputs().to_vec())
+        .collect();
+
+    let expanded_proofs: Vec<Groth16Proof> = proofs_and_inputs
+        .iter()
+        .map(|(p, _)| Groth16Proof::try_from(p).map_err(|_| VerifyError::Expansion))
+        .collect::<Result<Vec<_>, _>>()?; // short-circuits on first failure
+
+    Ok(groth16_batch_verify(
+        verification_key::POC_VK.as_ref(),
+        &expanded_proofs,
+        &inputs,
+    ))
 }
 
 #[cfg(test)]
@@ -290,5 +312,6 @@ mod tests {
 
         let (proof, inputs) = prove(witness_inputs).unwrap();
         assert!(verify(&proof, &inputs).unwrap());
+        assert!(batch_verify(&[(proof, inputs.clone()), (proof, inputs)]).unwrap());
     }
 }
