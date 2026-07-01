@@ -16,7 +16,7 @@ use crate::{
     mantle::{
         MantleTx, Note, NoteId, SignedMantleTx,
         nom::{NomDecode as _, NomEncode as _},
-        ops::{Op, OpProof, transfer::TransferOp},
+        ops::{Op, OpProof},
     },
     proofs::leader_claim_proof::Groth16LeaderClaimProof,
 };
@@ -61,30 +61,6 @@ pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
     let (input, ops) = Ops::decode(input)?;
 
     Ok((input, MantleTx(ops)))
-}
-
-// ==============================================================================
-// Transfer Decoders
-// ==============================================================================
-
-fn decode_inputs(input: &[u8]) -> IResult<&[u8], Inputs> {
-    let (input, bounded_inputs) = BoundedInputs::decode(input)?;
-
-    Ok((input, Inputs::new(bounded_inputs)))
-}
-
-fn decode_outputs(input: &[u8]) -> IResult<&[u8], Outputs> {
-    let (input, bounded_outputs) = BoundedOutputs::decode(input)?;
-
-    Ok((input, Outputs::new(bounded_outputs)))
-}
-
-pub(crate) fn decode_transfer(input: &[u8]) -> IResult<&[u8], TransferOp> {
-    // Transfer = Inputs Outputs
-    let (input, inputs) = decode_inputs(input)?;
-    let (input, outputs) = decode_outputs(input)?;
-
-    Ok((input, TransferOp::new(inputs, outputs)))
 }
 
 // ==============================================================================
@@ -253,12 +229,7 @@ pub(crate) fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTi
 use lb_groth16::fr_to_bytes;
 
 use crate::{
-    mantle::{
-        Utxo,
-        ledger::{Inputs, Outputs},
-        ops::channel::ChannelKeyIndex,
-        tx::MantleTxGasContext,
-    },
+    mantle::{Utxo, ops::channel::ChannelKeyIndex, tx::MantleTxGasContext},
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 
@@ -269,10 +240,6 @@ fn encode_uint16(value: u16) -> Vec<u8> {
 
 pub(crate) fn encode_uint64(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
-}
-
-fn encode_byte(value: u8) -> Vec<u8> {
-    vec![value]
 }
 
 pub(crate) fn encode_string(s: &String) -> Vec<u8> {
@@ -318,40 +285,6 @@ fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
             .into_iter()
             .chain(encode_uint16(signature.channel_key_index))
     }));
-    bytes
-}
-
-/// Encode transfer operation
-fn encode_note(note: &Note) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_uint64(note.value));
-    bytes.extend(encode_field_element(note.pk.as_fr()));
-    bytes
-}
-
-fn encode_inputs(inputs: &BoundedInputs) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_byte(inputs.len() as u8));
-    for input in inputs {
-        bytes.extend(encode_field_element(input.as_ref()));
-    }
-    bytes
-}
-
-fn encode_outputs(outputs: &BoundedOutputs) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_byte(outputs.len() as u8));
-    for output in outputs {
-        bytes.extend(encode_note(output));
-    }
-    bytes
-}
-
-#[must_use]
-pub fn encode_transfer_op(op: &TransferOp) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_inputs(op.inputs.as_ref()));
-    bytes.extend(encode_outputs(op.outputs.as_ref()));
     bytes
 }
 
@@ -477,6 +410,7 @@ mod tests {
     use crate::{
         mantle::{
             Transaction as _,
+            ledger::{Inputs, Outputs},
             ops::{
                 channel::{
                     ChannelId, MsgId,
@@ -486,6 +420,7 @@ mod tests {
                 },
                 leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
+                transfer::TransferOp,
             },
             tx::GasPrices,
         },
@@ -1599,14 +1534,14 @@ mod tests {
         let inputs = BoundedInputs::from(inputs);
 
         // Encode should succeed
-        let encoded = encode_inputs(&inputs);
+        let encoded = inputs.encode();
         assert!(
             !encoded.is_empty(),
             "Encoding max input count should produce some output"
         );
 
         // Decode should succeed and produce the same number of inputs
-        let result = decode_inputs(&encoded);
+        let result = BoundedInputs::decode(&encoded);
         assert!(result.is_ok(), "Should decode max input count");
         let (_, decoded_inputs) = result.unwrap();
         assert_eq!(
@@ -1623,14 +1558,14 @@ mod tests {
         let outputs = BoundedOutputs::from(outputs);
 
         // Encode should succeed
-        let encoded = encode_outputs(&outputs);
+        let encoded = outputs.encode();
         assert!(
             !encoded.is_empty(),
             "Encoding max output count should produce some output"
         );
 
         // Decode should succeed and produce the same number of outputs
-        let result = decode_outputs(&encoded);
+        let result = BoundedOutputs::decode(&encoded);
         assert!(result.is_ok(), "Should decode max output count");
         let (_, decoded_outputs) = result.unwrap();
         assert_eq!(
@@ -1651,7 +1586,7 @@ mod tests {
             valid_input.extend_from_slice(&[0x01; 32]);
         }
 
-        let result = decode_inputs(&valid_input);
+        let result = BoundedInputs::decode(&valid_input);
         assert!(result.is_ok(), "Should accept max input count");
         let (_, inputs) = result.unwrap();
         assert_eq!(inputs.len(), u8::MAX as usize);
@@ -1665,7 +1600,7 @@ mod tests {
             valid_output.extend_from_slice(&[0x02; 32]); // public key
         }
 
-        let result = decode_outputs(&valid_output);
+        let result = BoundedOutputs::decode(&valid_output);
         assert!(result.is_ok(), "Should accept max output count");
         let (_, outputs) = result.unwrap();
         assert_eq!(outputs.len(), u8::MAX as usize);

@@ -15,8 +15,7 @@ use channel::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use nom::{
-    IResult, Parser as _,
-    combinator::map,
+    IResult,
     error::{Error, ErrorKind},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -31,7 +30,6 @@ use super::{
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        encoding::{decode_transfer, encode_transfer_op},
         nom::{NomDecode, NomEncode},
         ops::{
             internal::{OpDe, OpSer},
@@ -154,10 +152,7 @@ impl NomEncode for Op {
             Self::LeaderClaim(op) => {
                 bytes.extend(op.encode());
             }
-            // TODO: Use `.encode()` once implemented for all other ops
-            Self::Transfer(op) => {
-                bytes.extend(encode_transfer_op(op));
-            }
+            Self::Transfer(op) => bytes.extend(op.encode()),
         }
         bytes
     }
@@ -191,8 +186,7 @@ impl NomDecode for Op {
             LEADER_CLAIM => {
                 LeaderClaimOp::decode(bytes).map(|(bytes, op)| (bytes, Self::LeaderClaim(op)))
             }
-            // TODO: Use `.decode()` once implemented for all other ops
-            TRANSFER => map(decode_transfer, Self::Transfer).parse(bytes),
+            TRANSFER => TransferOp::decode(bytes).map(|(bytes, op)| (bytes, Self::Transfer(op))),
             _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
         }
     }
