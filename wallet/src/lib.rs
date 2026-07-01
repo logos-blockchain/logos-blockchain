@@ -62,6 +62,8 @@ pub struct WalletTx {
 pub enum HeaderOp {
     /// An SDP-locked note has been unlocked.
     Unlock(NoteId),
+    /// An SDP reward UTXO was minted.
+    SdpReward(Utxo),
 }
 
 /// Build a [`HeaderOp`] for a wallet-relevant header event.
@@ -69,6 +71,7 @@ impl From<&HeaderEvent> for HeaderOp {
     fn from(event: &HeaderEvent) -> Self {
         match event {
             HeaderEvent::SdpNoteUnlocked { note_id, .. } => Self::Unlock(*note_id),
+            HeaderEvent::SdpRewardDistributed { utxo, .. } => Self::SdpReward(*utxo),
         }
     }
 }
@@ -285,6 +288,9 @@ impl WalletState {
                     // When unlocking notes, we don't check if the notes are owned
                     // by the wallet because they will be ignored automatically.
                     locked_notes.remove_mut(note_id);
+                }
+                HeaderOp::SdpReward(utxo) => {
+                    insert_utxo_if_owned(*utxo, known_keys, &mut utxos, &mut pk_index);
                 }
             }
         }
@@ -1141,6 +1147,52 @@ mod tests {
             42
         );
         assert_eq!(wallet.balance(block.id, bob).unwrap(), None);
+    }
+
+    #[test]
+    fn test_sdp_reward_credits_owned_provider() {
+        let alice = pk(1);
+        let bob = pk(2);
+        let genesis = HeaderId::from([0; 32]);
+        let ledger = LedgerState::from_utxos([], &ledger_config());
+        let (voucher_cm, _voucher_nf) = voucher(1, 0);
+
+        // A wallet that only knows alice's key.
+        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(alice, 1)],
+            Vouchers::default(),
+            genesis,
+            &ledger,
+        );
+
+        // Two reward UTXOs — one to alice (owned), one to bob (unknown).
+        let alice_reward = Utxo::new(tx_hash(1), 0, Note::new(100, alice));
+        let bob_reward = Utxo::new(tx_hash(1), 1, Note::new(50, bob));
+
+        let block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 1.into(),
+            voucher_cm,
+            header_ops: vec![
+                HeaderOp::SdpReward(alice_reward),
+                HeaderOp::SdpReward(bob_reward),
+            ],
+            txs: vec![],
+        };
+
+        wallet.apply_block(&block).unwrap();
+
+        assert_eq!(
+            wallet.balance(block.id, alice).unwrap().unwrap().balance,
+            100,
+            "alice's reward UTXO must be credited to her balance",
+        );
+        assert_eq!(
+            wallet.balance(block.id, bob).unwrap(),
+            None,
+            "bob's key is unknown to this wallet; his reward must be ignored",
+        );
     }
 
     #[test]
