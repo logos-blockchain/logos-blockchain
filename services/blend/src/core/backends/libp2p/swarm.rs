@@ -647,7 +647,7 @@ where
             delay.as_secs()
         );
         self.pending_retries.push(Box::pin(async move {
-            tokio::time::sleep(delay).await;
+            sleep(delay).await;
             (
                 peer_id,
                 DialAttempt {
