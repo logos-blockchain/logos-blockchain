@@ -78,26 +78,25 @@ deployment/ceremony/genesis/
   shared/                         # (optional) inputs common to ALL environments
   <env>/
     inscribe.yaml                 # TEMPLATE entropy + PER-RELEASE chain_id/genesis_time
-    template/                     # PER-TYPE genesis blueprint
-      deployment-template.yaml    #   consensus / network / blend params
-      stakeholders.yaml           #   genesis stake distribution
-      providers.yaml              #   bootstrap providers (id, locators)
-      faucet.yaml                 #   faucet identity + funds
+    deployment-template.yaml      # PER-TYPE consensus / network / blend params
+    stakeholders.yaml             # PER-TYPE genesis stake distribution
+    providers.yaml                # PER-TYPE bootstrap providers (id, locators)
+    faucet.yaml                   # PER-TYPE faucet identity + funds
 ```
 
 The per-environment `.env` files (`.env.devnet`, `.env.testnet`) live in
 `deployment/` next to `compose.yml`, since they are consumed by Docker Compose.
 
 The genesis ceremony (`logos-blockchain-tools-genesis ceremony`,
-`tools/blockchain-tools/src/bin/genesis.rs`) reads `inscribe.yaml` plus all of
-`template/*` and writes a fully-resolved settings file. The generated output
+`tools/blockchain-tools/src/bin/genesis.rs`) reads all input files in the
+`<env>/` dir and writes a fully-resolved settings file. The generated output
 (not these inputs) is what the node embeds and what `code-check.yml` / config
 tests validate:
 
 | Trigger | Inputs | Output (committed) |
 | --- | --- | --- |
-| `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/{inscribe.yaml,template/*}` | `nodes/node/binary/src/config/deployment/settings.yaml` |
-| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/{inscribe.yaml,template/*}` | `nodes/node/standalone-deployment-config.yaml` |
+| `.github/workflows/genesis-ceremony.yml` (devnet / testnet) | `deployment/ceremony/genesis/<env>/*` | `nodes/node/binary/src/config/deployment/settings.yaml` |
+| `scripts/standalone-genesis-ceremony.sh` (local) | `deployment/ceremony/genesis/standalone/*` | `nodes/node/standalone-deployment-config.yaml` |
 
 ### 1. Template for all deployments (any type)
 Shared blueprints reused by every deployment type; not edited per release.
@@ -111,7 +110,7 @@ Shared blueprints reused by every deployment type; not edited per release.
 ### 2. Template for a certain deployment type
 Per-type blueprints; change only when a network type is re-defined.
 
-- `deployment/ceremony/genesis/<env>/template/*`
+- The blueprint files in `deployment/ceremony/genesis/<env>/` (`deployment-template.yaml`, `stakeholders.yaml`, `providers.yaml`, `faucet.yaml`)
 - The `# DEPLOYMENT TYPE` section of `.env.<env>`
   (`TOOLS_IMAGE_LABEL`, `EXPLORER_IMAGE_LABEL`, `ENV_TITLE_STRING`,
   `PUBLIC_IP_ADDR`, `DOCKER_COMPOSE_LIBP2P_REPLICAS`, node ports)

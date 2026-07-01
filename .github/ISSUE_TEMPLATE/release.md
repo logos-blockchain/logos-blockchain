@@ -35,6 +35,7 @@ Most of the template content is the same or very similar to what is in `release-
 - [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the testnet settings.
 - [ ] Checkout and hard reset the `testnet` branch to point to the latest commit of the current release branch
 - [ ] Create a new symlink `deployment/compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml deployment/compose.static.yml`
+- [ ] Symlink the environment file to the repo root with `ln -sf deployment/.env.testnet .env.testnet`
 - [ ] Commit and push to `testnet` branch to trigger the cleanup
 - [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Testnet web UI][testnet-web-ui] and make sure it's in setup mode.
 
