@@ -127,7 +127,10 @@ where
             return Ok(self.block_processor);
         }
 
-        info!("starting IBD with {} peers", config.peers.len());
+        info!(
+            "Starting Initial Block Download with {} peers",
+            config.peers.len()
+        );
         let downloads = self.initiate_downloads(config).await?;
         self.proceed_downloads(downloads).await
     }
@@ -152,7 +155,7 @@ where
                     downloads.add_delay(Delay::new(*peer, None));
                 }
                 Err(e) => {
-                    error!("Failed to initiate download for {peer:?}: {e}");
+                    warn!("Failed to initiate download for {peer:?}: {e}");
                 }
             }
         }
@@ -253,7 +256,7 @@ where
         // even if there are delays in progress.
         while let Some(output) = downloads.next().await {
             if let Err(e) = self.handle_downloads_output(output, &mut downloads).await {
-                error!("A peer was dropped from IBD due to error: {e:?}");
+                warn!("A peer was dropped from IBD due to error: {e:?}");
             }
         }
 
@@ -290,7 +293,7 @@ where
             }
             DownloadsOutput::Error { error, download } => {
                 crate::metrics::chainsync_observe_download_blocks_err();
-                error!("Download failed from {:?}: {}", download.peer(), error);
+                warn!("Download failed from {:?}: {}", download.peer(), error);
                 Err(Error::BlockProvider(error))
             }
         }
@@ -384,7 +387,7 @@ where
             .initiate_download(peer, latest_downloaded_block)
             .await
             .inspect_err(|e| {
-                error!("Failed to initiate next download for {peer:?}: {e}");
+                warn!("Failed to initiate next download for {peer:?}: {e}");
             })? {
             Some(download) => {
                 self.start_download(download, downloads);

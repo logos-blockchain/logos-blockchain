@@ -1,8 +1,7 @@
 use crate::{
     LogosBlockchainNode,
     api::free,
-    errors::OperationStatus,
-    logging,
+    errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
@@ -42,7 +41,7 @@ pub type NoteId = Hash;
 /// # Returns
 ///
 /// - A `lb_core::mantle::TxHash` if successful, or an
-///   `OperationStatus::ValidationError` if the conversion fails.
+///   `OperationStatusCode::ValidationError` if the conversion fails.
 ///
 /// # Safety
 ///
@@ -96,11 +95,10 @@ pub(crate) fn get_cryptarchia_info_sync(
     let Ok(info) = runtime_handle.block_on(lb_api_service::http::consensus::cryptarchia_info(
         node.get_overwatch_handle(),
     )) else {
-        logging::error!(
-            "get_cryptarchia_info_sync",
-            "Failed to get cryptarchia info."
-        );
-        return Err(OperationStatus::RelayError);
+        return Err(OperationStatus::error(
+            OperationStatusCode::RelayError,
+            "Failed to get cryptarchia info.",
+        ));
     };
 
     Ok(info)
@@ -135,7 +133,7 @@ pub type FfiCryptarchiaInfoResult = FfiStatusResult<*mut CryptarchiaInfo>;
 pub unsafe extern "C" fn get_cryptarchia_info(
     node: *const LogosBlockchainNode,
 ) -> FfiCryptarchiaInfoResult {
-    return_error_if_null_pointer!("get_cryptarchia_info", node);
+    return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
     let service_info = unwrap_or_return_error!(get_cryptarchia_info_sync(node));
     let c_info = CryptarchiaInfo::from(service_info);

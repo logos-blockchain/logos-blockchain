@@ -22,6 +22,7 @@ lb-utxotree = { workspace = true }
 
 [dependencies]
 async-trait                      = { workspace = true }
+bincode                          = { workspace = true }
 cucumber                         = { features = ["macros", "output-junit"], workspace = true }
 derivative                       = { workspace = true }
 ed25519                          = { workspace = true }
@@ -40,6 +41,7 @@ lb-libp2p                        = { workspace = true }
 lb-mmr                           = { workspace = true }
 lb-node                          = { features = ["testing"], workspace = true }
 lb-testing-framework             = { workspace = true }
+lb-tui-zone                      = { workspace = true }
 lb-tx-service                    = { workspace = true }
 lb-utils                         = { workspace = true }
 lb-wallet                        = { workspace = true }

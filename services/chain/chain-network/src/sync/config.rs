@@ -19,6 +19,12 @@ pub struct OrphanConfig {
     /// The maximum number of pending orphans to keep in the cache.
     #[serde(default = "default_max_orphan_cache_size")]
     pub max_orphan_cache_size: NonZeroUsize,
+    /// The maximum number of block IDs to remember in the rejected-blocks
+    /// negative cache. The orphan pipeline consults this cache to short-circuit
+    /// known-bad/older-than-LIB blocks before enqueuing or downloading them.
+    ///
+    /// Setting this to `0` disables the cache entirely.
+    pub max_rejected_cache_size: usize,
 }
 
 /// Configuration for the proactive tip-polling lag watchdog.

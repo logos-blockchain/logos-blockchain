@@ -8,6 +8,7 @@ Feature: Manual control of transactions
   #   COIN_SPLIT, wallet '<wallet_name>', outputs <count>, value <amount>
   #   VERIFY, wallet '<wallet_name>', outputs <count>, time_out <duration_seconds>
   #   BALANCE, wallet '<wallet_name>'
+  #   EXPORT_FUNDS, wallet '<wallet_name>', value <amount>, output '<path>', include_secret true|false
   #   BALANCE_ALL_WALLETS
   #   BALANCE_ALL_USER_WALLETS
   #   BALANCE_ALL_FUNDING_WALLETS
@@ -38,6 +39,7 @@ Feature: Manual control of transactions
   #   SEND, transactions 5, value 100, from 'WALLET_1A', to 'WALLET_2A'
   #   BALANCE, wallet 'WALLET_1A'
   #   SEND, transactions 5, value 100, from 'WALLET_2A', to 'WALLET_1A'
+  #   EXPORT_FUNDS, wallet 'WALLET_1A', value 1000, output '/tmp/tui-zone/funds-wallet-1a.json', include_secret true
   #   VERIFY_MAX, wallet 'WALLET_1A', wallet_state_type 'encumbered', outputs 0, time_out 60
   #   VERIFY_MAX, wallet 'WALLET_2A', wallet_state_type 'encumbered', outputs 0, time_out 60
   #   STOP

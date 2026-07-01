@@ -1,7 +1,7 @@
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
 use lb_log_targets::mantle;
-use tracing::debug;
+use tracing::info;
 
 use super::{SDPActiveOp, SdpError};
 use crate::{
@@ -78,7 +78,7 @@ impl Operation<SDPActiveValidationContext<'_>> for SDPActiveOp {
 
         declaration.active = ctx.epoch;
         declaration.nonce = self.nonce;
-        debug!(
+        info!(
             target: LOG_TARGET,
             provider_id = ?declaration.provider_id,
             active = ?declaration.active,

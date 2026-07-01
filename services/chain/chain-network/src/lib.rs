@@ -314,6 +314,7 @@ where
         let mut orphan_downloader = Box::pin(OrphanBlocksDownloader::new(
             network_adapter,
             sync_config.orphan.max_orphan_cache_size,
+            sync_config.orphan.max_rejected_cache_size,
         ));
 
         // Set up the proactive tip-poll lag watchdog: subscribe to slot ticks and
@@ -389,16 +390,24 @@ where
 
                     Some(block) = orphan_downloader.next(), if orphan_downloader.should_poll() => {
                         let header_id = block.header().id();
-                        info!("Processing block from orphan downloader: {header_id:?}");
+                        debug!(
+                            target: LOG_TARGET,
+                            "Processing block from orphan downloader: {header_id:?}"
+                        );
 
-                        if !should_process_block(
+                        match should_process_block(
                             relays.cryptarchia(),
                             block.header().id(),
                             block.header().slot(),
                         )
                         .await
                         {
-                            continue;
+                            Ok(()) => {}
+                            Err(DoNotProcessBlock::OlderThanLib) => {
+                                orphan_downloader.insert_rejected_block(header_id);
+                                continue;
+                            }
+                            Err(DoNotProcessBlock::AlreadyApplied) => continue,
                         }
 
                         Self::log_received_block(&block);
@@ -411,6 +420,9 @@ where
                             }
                             Err(e) => {
                                 error!(target: LOG_TARGET, "Error processing orphan downloader block: {e:?}");
+                                if !is_recoverable_apply_error(&e) {
+                                    orphan_downloader.insert_rejected_block(header_id);
+                                }
                                 orphan_downloader.cancel_active_download();
                             }
                         }
@@ -526,9 +538,17 @@ where
         let block_slot = proposal.header().slot();
         metrics::consensus_proposals_received_total("network");
 
-        if !should_process_block(relays.cryptarchia(), block_id, block_slot).await {
-            metrics::consensus_proposals_ignored_total("already_processed", "network");
-            return;
+        match should_process_block(relays.cryptarchia(), block_id, block_slot).await {
+            Ok(()) => {}
+            Err(DoNotProcessBlock::OlderThanLib) => {
+                metrics::consensus_proposals_ignored_total("older_than_lib", "network");
+                orphan_downloader.insert_rejected_block(block_id);
+                return;
+            }
+            Err(DoNotProcessBlock::AlreadyApplied) => {
+                metrics::consensus_proposals_ignored_total("already_processed", "network");
+                return;
+            }
         }
 
         let reconstruct_started_at = Instant::now();
@@ -568,7 +588,7 @@ where
     {
         match err {
             Error::Cryptarchia(lb_chain_service::api::ApiError::ParentMissing { parent, info }) => {
-                info!(
+                debug!(
                     target: LOG_TARGET, ?block_id, ?parent,
                     "Parent block missing. Trying to enqueue block for orphan processing",
                 );
@@ -595,6 +615,9 @@ where
                     target: LOG_TARGET, %err, ?block_id,
                     "Error processing reconstructed block",
                 );
+                if !is_recoverable_apply_error(&err) {
+                    orphan_downloader.insert_rejected_block(block_id);
+                }
             }
         }
     }
@@ -736,28 +759,32 @@ async fn should_process_block<Cryptarchia, RuntimeServiceId>(
     cryptarchia: &CryptarchiaServiceApi<Cryptarchia, RuntimeServiceId>,
     block_id: HeaderId,
     block_slot: Slot,
-) -> bool
+) -> Result<(), DoNotProcessBlock>
 where
     Cryptarchia: CryptarchiaServiceData,
     Cryptarchia::Tx: AuthenticatedMantleTx + Debug + Clone + Send + Sync,
     RuntimeServiceId: Send + Sync,
 {
     if !is_after_lib(cryptarchia, block_id, block_slot).await {
-        return false;
+        return Err(DoNotProcessBlock::OlderThanLib);
     }
 
     match cryptarchia.get_ledger_state(block_id).await {
-        Ok(Some(_)) => false,
-        Ok(None) => {
-            // block has not been processed
-            true
-        }
+        Ok(Some(_)) => Err(DoNotProcessBlock::AlreadyApplied),
+        Ok(None) => Ok(()),
         Err(err) => {
             error!(target: LOG_TARGET, err = ?err, "Failure when checking if block already processed");
             // block processing is idempotent, so we can safely re-process a block
-            true
+            Ok(())
         }
     }
+}
+
+/// Errors that indicate why a block should not be processed.
+#[derive(Debug)]
+enum DoNotProcessBlock {
+    OlderThanLib,
+    AlreadyApplied,
 }
 
 async fn is_after_lib<Cryptarchia, RuntimeServiceId>(
@@ -795,6 +822,30 @@ where
 
 fn is_at_or_before_lib(block_slot: Slot, lib_slot: Slot) -> bool {
     block_slot <= lib_slot
+}
+
+/// Apply-time errors that must NOT mark the block as rejected:
+/// - `ParentMissing` / `FutureBlock`: transient — the block may become
+///   applicable once an ancestor arrives or the local clock catches up.
+/// - `AlreadyApplied`: the block is already in the chain; re-processing is
+///   unnecessary. Rejecting would also block its valid descendants from
+///   entering the orphan pipeline.
+/// - `CommsFailure`: relay failure has nothing to do with block validity; a
+///   blanket "reject" here would poison the cache whenever chain-service is
+///   temporarily unreachable.
+///
+/// Other apply errors (e.g. validation failures surfaced as
+/// `ApiError::Unexpected`) are treated as terminal for the orphan pipeline.
+const fn is_recoverable_apply_error(err: &Error) -> bool {
+    matches!(
+        err,
+        Error::Cryptarchia(
+            lb_chain_service::api::ApiError::ParentMissing { .. }
+                | lb_chain_service::api::ApiError::FutureBlock { .. }
+                | lb_chain_service::api::ApiError::AlreadyApplied(_)
+                | lb_chain_service::api::ApiError::CommsFailure(_),
+        ),
+    )
 }
 
 /// Retry applying a block when `Cryptarchia` reports it as a `FutureBlock`.

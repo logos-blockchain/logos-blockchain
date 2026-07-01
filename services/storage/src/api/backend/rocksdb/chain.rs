@@ -42,18 +42,18 @@ impl StorageChainApi for RocksBackend {
         self.load(&key).await.map_err(Into::into)
     }
 
-    async fn store_block(
+    async fn store_block_data(
         &mut self,
         header_id: HeaderId,
         parent_id: HeaderId,
         block: Self::Block,
         events: Self::Events,
+        immutable_ids: BTreeMap<Slot, HeaderId>,
     ) -> Result<(), Self::Error> {
-        let header_bytes: [u8; 32] = header_id.into();
+        let header_bytes = <[u8; 32]>::from(header_id);
         let block_key = Bytes::copy_from_slice(&header_bytes);
         let parent_key = key_bytes(BLOCK_PARENT_PREFIX, header_bytes);
-        let parent_bytes: [u8; 32] = parent_id.into();
-        let parent_value = Bytes::copy_from_slice(&parent_bytes);
+        let parent_value = Bytes::copy_from_slice(&<[u8; 32]>::from(parent_id));
         let events_key = key_bytes(BLOCK_EVENTS_PREFIX, header_bytes);
 
         let db_transaction = self.txn(move |db| {
@@ -61,6 +61,7 @@ impl StorageChainApi for RocksBackend {
             batch.put(block_key, block);
             batch.put(parent_key, parent_value);
             batch.put(events_key, events);
+            insert_immutable_block_ids(&mut batch, immutable_ids);
             db.write(batch)?;
             Ok(None)
         });
@@ -119,12 +120,7 @@ impl StorageChainApi for RocksBackend {
     ) -> Result<(), Self::Error> {
         let db_transaction = self.txn(move |db| {
             let mut batch = WriteBatch::default();
-            for (slot, header_id) in ids {
-                // use be_bytes to keep prefix ordering
-                let key = key_bytes(IMMUTABLE_BLOCK_PREFIX, slot.to_be_bytes());
-                let header_id: [u8; 32] = header_id.into();
-                batch.put(key, Bytes::copy_from_slice(&header_id));
-            }
+            insert_immutable_block_ids(&mut batch, ids);
             db.write(batch)?;
             Ok(None)
         });
@@ -256,6 +252,15 @@ impl StorageChainApi for RocksBackend {
     }
 }
 
+fn insert_immutable_block_ids(batch: &mut WriteBatch, ids: BTreeMap<Slot, HeaderId>) {
+    for (slot, header_id) in ids {
+        // Use big-endian bytes to keep prefix ordering.
+        let key = key_bytes(IMMUTABLE_BLOCK_PREFIX, slot.to_be_bytes());
+        let header_id = <[u8; 32]>::from(header_id);
+        batch.put(key, Bytes::copy_from_slice(&header_id));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::iter;
@@ -269,6 +274,48 @@ mod tests {
         },
         backends::rocksdb::RocksBackendSettings,
     };
+
+    #[tokio::test]
+    async fn store_block_data_stores_block_and_indexes() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut backend = RocksBackend::new(RocksBackendSettings {
+            db_path: temp_dir.path().to_path_buf(),
+            read_only: false,
+            column_family: None,
+        })
+        .unwrap();
+
+        let header_id = HeaderId::from([1u8; 32]);
+        let parent_id = HeaderId::from([0u8; 32]);
+        let block = Bytes::from_static(b"block");
+        let events = Bytes::from_static(b"events");
+        let immutable_id = HeaderId::from([2u8; 32]);
+
+        backend
+            .store_block_data(
+                header_id,
+                parent_id,
+                block.clone(),
+                events.clone(),
+                [(Slot::new(7), immutable_id)].into(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(backend.get_block(header_id).await.unwrap(), Some(block));
+        assert_eq!(
+            backend.get_block_parent(header_id).await.unwrap(),
+            Some(parent_id)
+        );
+        assert_eq!(
+            backend.get_block_events(header_id).await.unwrap(),
+            Some(events)
+        );
+        assert_eq!(
+            backend.get_immutable_block_id(Slot::new(7)).await.unwrap(),
+            Some(immutable_id)
+        );
+    }
 
     #[tokio::test]
     async fn immutable_block_ids() {

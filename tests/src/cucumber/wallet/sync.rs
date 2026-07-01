@@ -106,6 +106,17 @@ pub async fn current_wallet_balance(
         .balance(wallet_state_type))
 }
 
+pub async fn current_wallet_states_for_wallets(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallets: &[WalletInfo],
+) -> Result<BTreeMap<WalletId, WalletStateView>, StepError> {
+    let feed_requirements = wallet_feed_source_requirements(world, wallets).await?;
+    let wallet_keys = build_tracked_wallet_keys(world, step, wallets)?;
+
+    current_wallet_state_views(world, &wallet_keys, feed_requirements).await
+}
+
 pub async fn current_wallet_available_state(
     world: &mut CucumberWorld,
     wallet_name: &str,

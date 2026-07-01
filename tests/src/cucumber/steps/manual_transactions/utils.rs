@@ -17,7 +17,7 @@ pub use crate::cucumber::wallet::{
     sync::{
         current_available_utxos_for_all_wallets, current_available_utxos_for_funding_wallets,
         current_available_utxos_for_user_wallets, current_available_utxos_for_wallet,
-        current_wallet_available_state, current_wallet_balance,
+        current_wallet_available_state, current_wallet_balance, current_wallet_states_for_wallets,
     },
 };
 pub(crate) use crate::cucumber::wallet::{

@@ -38,6 +38,7 @@ use crate::cucumber::{
         display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
+    wallet::sync::current_wallet_states_for_wallets,
     world::{
         ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
         PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap, WalletType,
@@ -308,7 +309,7 @@ pub(crate) fn ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
 }
 
 pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
-    world: &CucumberWorld,
+    world: &mut CucumberWorld,
     step: &str,
 ) -> StepResult {
     let public_cryptarchia_endpoint_peers = world
@@ -347,6 +348,9 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
                 "All nodes synced to the chain in {:.2?}",
                 start.elapsed()
             );
+
+            catch_up_known_wallet_tracking_after_chain_sync(world, step).await?;
+
             return Ok(());
         }
 
@@ -363,6 +367,27 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
 
         sleep(CHAIN_SYNC_POLL_INTERVAL).await;
     }
+}
+
+async fn catch_up_known_wallet_tracking_after_chain_sync(
+    world: &mut CucumberWorld,
+    step: &str,
+) -> StepResult {
+    let wallets = world.wallet_info.values().cloned().collect::<Vec<_>>();
+    if wallets.is_empty() {
+        return Ok(());
+    }
+
+    let started_at = Instant::now();
+    current_wallet_states_for_wallets(world, step, &wallets).await?;
+
+    info!(
+        target: TARGET,
+        "Wallet state refreshed after chain sync in {:.2?}",
+        started_at.elapsed()
+    );
+
+    Ok(())
 }
 
 pub(crate) fn parse_url(raw: &str) -> Result<String, String> {
