@@ -3,7 +3,6 @@ use std::{collections::HashMap, time::Duration};
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
 use lb_testing_framework::{BlockFeed, NodeHttpClient, is_truthy_env};
-use rand::seq::SliceRandom as _;
 use tokio::{
     task::JoinSet,
     time::{Instant, sleep, timeout},
@@ -179,7 +178,8 @@ pub async fn determine_best_node(
     let mut last_group_summary = String::from("no responsive nodes");
 
     loop {
-        let (mut snapshots, mut unreachable) = collect_group_snapshots(world, &candidates).await;
+        let (mut ordered_snapshots, mut unreachable) =
+            collect_ordered_group_snapshots(world, &candidates).await;
         unreachable.sort();
         if !unreachable.is_empty() {
             warn!(
@@ -190,20 +190,21 @@ pub async fn determine_best_node(
             );
         }
 
-        let responsive_count = snapshots.len();
+        let responsive_count = ordered_snapshots.len();
 
         if responsive_count > 0 {
-            last_group_summary = summarize_tip_groups(&snapshots);
+            last_group_summary = summarize_tip_groups(&ordered_snapshots);
 
-            if let Some(majority_group) = select_majority_tip_group(&snapshots)
-                && let Some(best_idx) = select_best_snapshot_index(&snapshots, &majority_group)
+            if let Some(majority_group) = select_majority_tip_group(&ordered_snapshots)
+                && let Some(best_idx) =
+                    select_best_snapshot_index(&ordered_snapshots, &majority_group)
             {
                 let same_tip_nodes = stable_unique_node_names(
                     majority_group
                         .iter()
-                        .map(|idx| snapshots[*idx].node_name.clone()),
+                        .map(|idx| ordered_snapshots[*idx].node_name.clone()),
                 );
-                let best_snapshot = snapshots.swap_remove(best_idx);
+                let best_snapshot = ordered_snapshots.swap_remove(best_idx);
                 let best_node_name = best_snapshot.node_name;
                 let best_consensus = best_snapshot.consensus;
                 let majority_size = majority_group.len();
@@ -455,7 +456,11 @@ fn resolve_candidate_nodes(
     Ok((group_name.clone(), candidates))
 }
 
-async fn collect_group_snapshots(
+/// Query all candidate nodes in parallel and return their consensus snapshots,
+/// sorted by node name for stable ordering. Nodes that do not respond within 2
+/// seconds are excluded from the result, and their names are returned in the
+/// `unreachable` vector.
+async fn collect_ordered_group_snapshots(
     world: &CucumberWorld,
     candidates: &[String],
 ) -> (Vec<NodeConsensusSnapshot>, Vec<String>) {
@@ -487,6 +492,7 @@ async fn collect_group_snapshots(
             snapshots.push(snapshot);
         }
     }
+    snapshots.sort_by(|a, b| a.node_name.cmp(&b.node_name));
 
     let responsive_names = snapshots
         .iter()
@@ -567,22 +573,25 @@ fn select_majority_tip_group(snapshots: &[NodeConsensusSnapshot]) -> Option<Vec<
         })
 }
 
+/// Returns the index of the best snapshot in the majority group, or None if the
+/// group is empty. If `ordered_snapshots` did not change between calls, it will
+/// always return the same best node index.
 fn select_best_snapshot_index(
-    snapshots: &[NodeConsensusSnapshot],
+    ordered_snapshots: &[NodeConsensusSnapshot],
     majority_group: &[usize],
 ) -> Option<usize> {
     let best_height = majority_group
         .iter()
-        .map(|idx| snapshots[*idx].consensus.height)
+        .map(|idx| ordered_snapshots[*idx].consensus.height)
         .max()?;
 
     let best_candidates = majority_group
         .iter()
         .copied()
-        .filter(|idx| snapshots[*idx].consensus.height == best_height)
+        .filter(|idx| ordered_snapshots[*idx].consensus.height == best_height)
         .collect::<Vec<_>>();
 
-    best_candidates.choose(&mut rand::thread_rng()).copied()
+    best_candidates.first().copied()
 }
 
 fn normalize_header_id_str(header_id: &str) -> String {
