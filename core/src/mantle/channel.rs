@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
-use nom::IResult;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         Value,
         ledger::{self, Operation as _},
-        nom::{NomDecode, NomEncode},
+        nom::NomCodec,
         ops::channel::{
             ChannelId, ChannelKeyIndex, MsgId,
             config::Keys,
@@ -18,7 +17,7 @@ use crate::{
     },
 };
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
 pub struct SlotTimeframe(u32);
 
 impl From<u32> for SlotTimeframe {
@@ -33,22 +32,7 @@ impl From<SlotTimeframe> for u32 {
     }
 }
 
-impl NomEncode for SlotTimeframe {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for SlotTimeframe {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, inner) = u32::decode(bytes)?;
-        Ok((bytes, Self(inner)))
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, Hash, NomCodec)]
 pub struct SlotTimeout(u32);
 
 impl From<u32> for SlotTimeout {
@@ -60,21 +44,6 @@ impl From<u32> for SlotTimeout {
 impl From<SlotTimeout> for u32 {
     fn from(slot: SlotTimeout) -> Self {
         slot.0
-    }
-}
-
-impl NomEncode for SlotTimeout {
-    fn encode(&self) -> Vec<u8> {
-        self.0.encode()
-    }
-}
-
-impl NomDecode for SlotTimeout {
-    type Output = Self;
-
-    fn decode(bytes: &[u8]) -> IResult<&[u8], Self::Output> {
-        let (bytes, inner) = u32::decode(bytes)?;
-        Ok((bytes, Self(inner)))
     }
 }
 
@@ -168,7 +137,7 @@ impl Default for Channels {
 }
 
 impl Channels {
-    pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Events), Error> {
+    pub fn from_genesis(op: &InscriptionOp) -> Result<(Self, Vec<TxEvent>), Error> {
         let (ctx, events) = op.execute(InscriptionExecutionContext {
             channels: Self::default(),
             block_slot: Slot::default(),
@@ -241,7 +210,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        events::{Event, EventPayload},
+        events::TxEventPayload,
         mantle::{
             Note, Utxo,
             ledger::{Outputs, Utxos},
@@ -411,11 +380,11 @@ mod tests {
         );
 
         assert_eq!(events.len(), 1);
-        let Some(Event::Tx {
+        let Some(TxEvent {
             tx_hash,
             op_id,
             payload:
-                EventPayload::Deposit {
+                TxEventPayload::Deposit {
                     channel_id: event_channel_id,
                     amount,
                     metadata,
@@ -423,8 +392,8 @@ mod tests {
         }) = events.iter().find(|event| {
             matches!(
                 event,
-                Event::Tx {
-                    payload: EventPayload::Deposit { .. },
+                TxEvent {
+                    payload: TxEventPayload::Deposit { .. },
                     ..
                 }
             )
@@ -469,31 +438,9 @@ mod tests {
             updated.channels.channel_state(&channel_id).unwrap().balance,
             4
         );
-        assert_eq!(events.len(), 1);
-        let Event::Tx {
-            tx_hash,
-            op_id,
-            payload,
-        } = events.iter().next().cloned().unwrap()
-        else {
-            panic!("expected Tx event")
-        };
-        assert_eq!(tx_hash, [1; 32].into());
-        assert_eq!(op_id, withdraw_op.op_id());
-        let EventPayload::Withdraw {
-            channel_id,
-            amount,
-            utxos,
-        } = payload
-        else {
-            panic!("expected Withdraw event")
-        };
-        assert_eq!(channel_id, withdraw_op.channel_id);
-        assert_eq!(amount, 6);
-        assert_eq!(
-            utxos,
-            withdraw_op.outputs.utxos(&withdraw_op).collect::<Vec<_>>()
-        );
+        // `SdpNoteUnlocked` event is not emitted immediately because the note will
+        // be unlocked after `SNAPSHOT_FINALIZATION_DELAY` epochs.
+        assert!(events.is_empty());
     }
 
     #[test]

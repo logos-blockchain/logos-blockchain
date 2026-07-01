@@ -26,6 +26,7 @@ lb-services-utils       = { workspace = true }
 lb-time-service         = { workspace = true }
 lb-tracing              = { workspace = true }
 lb-tx-service           = { workspace = true }
+lru                     = { workspace = true }
 overwatch               = { workspace = true }
 rand                    = { workspace = true }
 serde                   = { workspace = true }

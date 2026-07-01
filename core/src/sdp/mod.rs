@@ -11,15 +11,23 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec};
+use lb_utils::bounded_vec::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
+use nom::{
+    IResult,
+    error::{Error, ErrorKind},
+};
 use serde::{Deserialize, Serialize};
 use strum::EnumIter;
 
 use crate::{
     block::BlockNumber,
     codec::{self, DeserializeOp as _, SerializeOp as _},
-    mantle::{NoteId, ops::channel::Ed25519PublicKey},
+    mantle::{
+        NoteId,
+        nom::{NomCodec, NomDecode, NomEncode},
+        ops::channel::Ed25519PublicKey,
+    },
     utils::{display_hex_bytes_newtype, serde_bytes_newtype},
 };
 
@@ -257,6 +265,26 @@ impl Display for Locator {
     }
 }
 
+impl NomEncode for Locator {
+    fn encode(&self) -> Vec<u8> {
+        let bounded_bytes = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::new_unchecked(
+            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
+        );
+        bounded_bytes.encode()
+    }
+}
+
+impl NomDecode for Locator {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = UpperBoundedVec::<u8, MAX_LOCATOR_BYTE_SIZE>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, EnumIter)]
 pub enum ServiceType {
     #[serde(rename = "BN")]
@@ -290,6 +318,25 @@ impl AsRef<u8> for ServiceType {
     }
 }
 
+impl NomEncode for ServiceType {
+    fn encode(&self) -> Vec<u8> {
+        <Self as AsRef<u8>>::as_ref(self).encode()
+    }
+}
+
+impl NomDecode for ServiceType {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = u8::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|()| nom::Err::Error(Error::new(bytes, ErrorKind::MapRes)))?,
+        ))
+    }
+}
+
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags.
+
 #[cfg(test)]
 mod service_type_tests {
     use strum::IntoEnumIterator as _;
@@ -309,7 +356,7 @@ mod service_type_tests {
 
 pub type Nonce = u64;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct ProviderId(pub Ed25519PublicKey);
 
 #[derive(Debug)]
@@ -343,7 +390,7 @@ impl Ord for ProviderId {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, PartialOrd, Ord, NomCodec)]
 pub struct DeclarationId(pub [u8; 32]);
 serde_bytes_newtype!(DeclarationId, 32);
 display_hex_bytes_newtype!(DeclarationId);
@@ -447,7 +494,7 @@ impl TryFrom<Declarations> for Bytes {
 pub const MAX_DECLARATION_LOCATOR_COUNT: usize = 8;
 pub type Locators = NonEmptyBoundedVec<Locator, MAX_DECLARATION_LOCATOR_COUNT>;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct DeclarationMessage {
     pub service_type: ServiceType,
     pub locators: Locators,
@@ -480,14 +527,15 @@ impl DeclarationMessage {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct WithdrawMessage {
     pub declaration_id: DeclarationId,
-    pub locked_note_id: NoteId,
     pub nonce: Nonce,
+    pub locked_note_id: NoteId,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+// ActiveMessage = DeclarationId Nonce Metadata — plain field-order concat.
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct ActiveMessage {
     pub declaration_id: DeclarationId,
     pub nonce: Nonce,
@@ -498,6 +546,36 @@ pub struct ActiveMessage {
 pub enum ActivityMetadata {
     Blend(Box<blend::ActivityProof>),
 }
+
+const ACTIVE_METADATA_BLEND_TYPE: u8 = 1;
+
+impl NomEncode for ActivityMetadata {
+    fn encode(&self) -> Vec<u8> {
+        match self {
+            Self::Blend(blend_activity_proof) => {
+                let mut bytes = vec![ACTIVE_METADATA_BLEND_TYPE];
+                bytes.extend(blend_activity_proof.encode());
+                bytes
+            }
+        }
+    }
+}
+
+impl NomDecode for ActivityMetadata {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, metadata_type) = u8::decode(bytes)?;
+        match metadata_type {
+            ACTIVE_METADATA_BLEND_TYPE => {
+                let (bytes, blend_activity_proof) = blend::ActivityProof::decode(remaining_bytes)?;
+                Ok((bytes, Self::Blend(Box::new(blend_activity_proof))))
+            }
+            _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
+        }
+    }
+}
+
+// TODO: Remove once the `NomCodec` macro supports logic for custom tags and
+// enums.
 
 #[cfg(test)]
 mod tests {

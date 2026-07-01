@@ -1,7 +1,7 @@
 use lb_groth16::{AdditiveGroup as _, Fr, Groth16Input, Groth16InputDeser};
 use serde::Deserialize;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ZkSignVerifierInputs {
     pub public_keys: [Groth16Input; 32],
     pub msg: Groth16Input,

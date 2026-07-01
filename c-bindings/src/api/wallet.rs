@@ -38,8 +38,7 @@ use crate::{
             wallet_notes::{WalletNote, WalletNotes},
         },
     },
-    errors::OperationStatus,
-    logging,
+    errors::{OperationStatus, OperationStatusCode},
     result::{FfiStatusResult, StatusResult},
     return_error_if_null_pointer, unwrap_or_return_error,
 };
@@ -72,10 +71,9 @@ pub(crate) fn get_known_addresses_sync(
             node.get_overwatch_handle(),
         )
         .await;
-        api.get_known_addresses().await.map_err(|e| {
-            logging::error!("get_known_addresses_sync", "{e:?}");
-            OperationStatus::NotFound
-        })
+        api.get_known_addresses()
+            .await
+            .map_err(|e| OperationStatus::error(OperationStatusCode::NotFound, format!("{e:?}")))
     })
 }
 
@@ -103,9 +101,10 @@ pub type FfiKnownAddressesResult = FfiStatusResult<KnownAddresses>;
 /// # Errors
 ///
 /// This function returns an error in the following cases:
-/// - [`OperationStatus::NullPointer`] if the `node` pointer is null.
-/// - [`OperationStatus::NotFound`] if the wallet addresses cannot be retrieved
-///   from the wallet service.
+/// - [`OperationStatusCode::NullPointer`](OperationStatusCode::NullPointer) if
+///   the `node` pointer is null.
+/// - [`OperationStatusCode::NotFound`](OperationStatusCode::NotFound) if the
+///   wallet addresses cannot be retrieved from the wallet service.
 ///
 /// # Safety
 ///
@@ -138,7 +137,7 @@ pub type FfiKnownAddressesResult = FfiStatusResult<KnownAddresses>;
 /// LogosBlockchainNode* node = create_node();
 /// KnownAddressesResult result = get_known_addresses(node);
 ///
-/// if (result.status == OperationStatus_Ok) {
+/// if (result.error.is_ok()) {
 ///     KnownAddresses addresses = result.value;
 ///     for (size_t i = 0; i < addresses.len; i++) {
 ///         uint8_t* address = addresses.addresses[i];
@@ -151,7 +150,7 @@ pub type FfiKnownAddressesResult = FfiStatusResult<KnownAddresses>;
 pub unsafe extern "C" fn get_known_addresses(
     node: *const LogosBlockchainNode,
 ) -> FfiKnownAddressesResult {
-    return_error_if_null_pointer!("get_known_addresses", node);
+    return_error_if_null_pointer!(node);
 
     let node = unsafe { &*node };
     let addresses = unwrap_or_return_error!(get_known_addresses_sync(node));
@@ -212,7 +211,7 @@ pub unsafe extern "C" fn get_known_addresses(
 /// LogosBlockchainNode* node = create_node();
 /// KnownAddressesResult result = get_known_addresses(node);
 ///
-/// if (result.status == OperationStatus_Ok) {
+/// if (result.error.is_ok()) {
 ///     KnownAddresses addresses = result.value;
 ///
 ///     // Use the addresses...
@@ -227,7 +226,7 @@ pub unsafe extern "C" fn get_known_addresses(
 /// ```
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> OperationStatus {
-    return_error_if_null_pointer!("free_known_addresses", addresses.addresses);
+    return_error_if_null_pointer!(addresses.addresses);
     let address_pointers = unsafe {
         Box::from_raw(ptr::slice_from_raw_parts_mut(
             addresses.addresses,
@@ -235,10 +234,10 @@ pub unsafe extern "C" fn free_known_addresses(addresses: KnownAddresses) -> Oper
         ))
     };
     for address_pointer in address_pointers {
-        return_error_if_null_pointer!("free_known_addresses", address_pointer);
+        return_error_if_null_pointer!(address_pointer);
         unsafe { drop(Box::from_raw(address_pointer.cast::<[u8; 32]>())) };
     }
-    OperationStatus::Ok
+    OperationStatus::OK
 }
 
 /// Gets the claimable vouchers tracked by the wallet.
@@ -267,11 +266,10 @@ pub(crate) fn get_claimable_vouchers_sync(
             .wait_for(ServiceStatus::Ready, Some(Duration::from_millis(100)))
             .await
         {
-            logging::error!(
-                "get_claimable_vouchers_sync",
-                "Wallet service is not ready: {status:?}"
-            );
-            return Err(OperationStatus::ServiceError);
+            return Err(OperationStatus::error(
+                OperationStatusCode::ServiceError,
+                format!("Wallet service is not ready: {status:?}"),
+            ));
         }
 
         let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(
@@ -279,8 +277,7 @@ pub(crate) fn get_claimable_vouchers_sync(
         )
         .await;
         api.get_claimable_vouchers(tip).await.map_err(|error| {
-            logging::error!("get_claimable_vouchers_sync", "{error:?}");
-            OperationStatus::DynError
+            OperationStatus::error(OperationStatusCode::DynError, format!("{error:?}"))
         })
     })
 }
@@ -307,7 +304,7 @@ pub unsafe extern "C" fn get_claimable_vouchers(
     node: *const LogosBlockchainNode,
     optional_tip: *const HeaderId,
 ) -> FfiClaimableVouchersResult {
-    return_error_if_null_pointer!("get_claimable_vouchers", node);
+    return_error_if_null_pointer!(node);
     let node = unsafe { &*node };
     let tip = if optional_tip.is_null() {
         None
@@ -352,7 +349,7 @@ pub unsafe extern "C" fn get_claimable_vouchers(
 /// [`get_claimable_vouchers`] and must call this exactly once per result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_claimable_vouchers(vouchers: ClaimableVouchers) -> OperationStatus {
-    return_error_if_null_pointer!("free_claimable_vouchers", vouchers.vouchers);
+    return_error_if_null_pointer!(vouchers.vouchers);
     let vouchers = unsafe {
         Box::from_raw(ptr::slice_from_raw_parts_mut(
             vouchers.vouchers,
@@ -361,7 +358,7 @@ pub unsafe extern "C" fn free_claimable_vouchers(vouchers: ClaimableVouchers) ->
     };
 
     drop(vouchers);
-    OperationStatus::Ok
+    OperationStatus::OK
 }
 
 /// Get the balance of a wallet address
@@ -394,7 +391,12 @@ pub(crate) fn get_balance_sync(
                 .await
                 .map(|tip_response| tip_response.response.map(|balance| balance.balance))
         })
-        .map_err(|_| OperationStatus::DynError)
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to get balance: {error}"),
+            )
+        })
 }
 
 pub type FfiBalanceResult = FfiStatusResult<Value>;
@@ -424,8 +426,8 @@ pub unsafe extern "C" fn get_balance(
     wallet_address: *const u8,
     optional_tip: *const HeaderId,
 ) -> FfiBalanceResult {
-    return_error_if_null_pointer!("get_balance", node);
-    return_error_if_null_pointer!("get_balance", wallet_address);
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(wallet_address);
     let node = unsafe { &*node };
     let tip = if optional_tip.is_null() {
         unwrap_or_return_error!(get_cryptarchia_info_sync(node))
@@ -439,14 +441,19 @@ pub unsafe extern "C" fn get_balance(
         fr_from_bytes(wallet_address_bytes)
             .map(ZkPublicKey::new)
             .map_err(|error| {
-                logging::error!("get_balance_sync", "{error:?}");
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Invalid wallet address: {error:?}"),
+                )
             })
     );
 
     match get_balance_sync(node, tip, wallet_address) {
         Ok(Some(balance)) => FfiBalanceResult::ok(balance),
-        Ok(None) => FfiBalanceResult::err(OperationStatus::NotFound),
+        Ok(None) => FfiBalanceResult::err(OperationStatus::error(
+            OperationStatusCode::NotFound,
+            "Unknown wallet address.",
+        )),
         Err(status) => FfiBalanceResult::err(status),
     }
 }
@@ -490,7 +497,12 @@ pub(crate) fn get_wallet_notes_sync(
                         .map(|balance| (resolved_tip, balance.notes.into_iter().collect()))
                 })
         })
-        .map_err(|_| OperationStatus::DynError)
+        .map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to get balance: {error}"),
+            )
+        })
 }
 
 pub type FfiWalletNotesResult = FfiStatusResult<WalletNotes>;
@@ -522,8 +534,8 @@ pub unsafe extern "C" fn get_wallet_notes(
     wallet_address: *const u8,
     optional_tip: *const HeaderId,
 ) -> FfiWalletNotesResult {
-    return_error_if_null_pointer!("get_wallet_notes", node);
-    return_error_if_null_pointer!("get_wallet_notes", wallet_address);
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(wallet_address);
     let node = unsafe { &*node };
     let tip = if optional_tip.is_null() {
         unwrap_or_return_error!(get_cryptarchia_info_sync(node))
@@ -537,8 +549,10 @@ pub unsafe extern "C" fn get_wallet_notes(
         fr_from_bytes(wallet_address_bytes)
             .map(ZkPublicKey::new)
             .map_err(|error| {
-                logging::error!("get_wallet_notes", "{error:?}");
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Invalid wallet address: {error:?}"),
+                )
             })
     );
 
@@ -559,7 +573,10 @@ pub unsafe extern "C" fn get_wallet_notes(
                 len,
             })
         }
-        Ok(None) => FfiWalletNotesResult::err(OperationStatus::NotFound),
+        Ok(None) => FfiWalletNotesResult::err(OperationStatus::error(
+            OperationStatusCode::NotFound,
+            "Unknown wallet address.",
+        )),
         Err(status) => FfiWalletNotesResult::err(status),
     }
 }
@@ -574,11 +591,11 @@ pub unsafe extern "C" fn get_wallet_notes(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_wallet_notes(notes: WalletNotes) -> OperationStatus {
     if notes.notes.is_null() {
-        return OperationStatus::Ok;
+        return OperationStatus::OK;
     }
     let notes = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(notes.notes, notes.len)) };
     drop(notes);
-    OperationStatus::Ok
+    OperationStatus::OK
 }
 
 #[repr(C)]
@@ -596,23 +613,24 @@ impl TransferFundsArguments {
     ///
     /// # Returns
     ///
-    /// A `Result` indicating success or containing an error message and status.
+    /// A `Result` indicating success or containing an [`OperationStatus`]
+    /// error describing the first invalid argument found.
     ///
     /// # Safety
     ///
     /// This function is unsafe because it dereferences raw pointers. The caller
     /// must ensure that all pointers are valid.
-    pub unsafe fn validate(&self) -> Result<(), (String, OperationStatus)> {
+    pub unsafe fn validate(&self) -> Result<(), OperationStatus> {
         if self.change_public_key.is_null() {
-            return Err((
-                "TransferFunds contains a null `change_public_key` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "TransferFunds contains a null `change_public_key` pointer.",
             ));
         }
         if self.funding_public_keys.is_null() {
-            return Err((
-                "TransferFunds contains a null `funding_public_keys` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "TransferFunds contains a null `funding_public_keys` pointer.",
             ));
         }
 
@@ -620,16 +638,17 @@ impl TransferFundsArguments {
             let funding_public_key_pointer = unsafe { self.funding_public_keys.add(i) };
             let funding_public_key = unsafe { *funding_public_key_pointer };
             if funding_public_key.is_null() {
-                let error_message =
-                    format!("TransferFunds contains a null pointer at `funding_public_keys[{i}]`.");
-                return Err((error_message, OperationStatus::NullPointer));
+                return Err(OperationStatus::error(
+                    OperationStatusCode::NullPointer,
+                    format!("TransferFunds contains a null pointer at `funding_public_keys[{i}]`."),
+                ));
             }
         }
 
         if self.recipient_public_key.is_null() {
-            return Err((
-                "TransferFunds contains a null `recipient_public_key` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "TransferFunds contains a null `recipient_public_key` pointer.",
             ));
         }
         Ok(())
@@ -681,18 +700,19 @@ pub(crate) fn transfer_funds_sync(
                 amount,
             )
             .await
-            .inspect_err(|error| {
-                logging::error!("transfer_funds_sync", "Failed to transfer funds: {error}");
-            })
             .map(|tip_response| tip_response.response)
-            .map_err(|_| OperationStatus::DynError)?;
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to transfer funds: {error}"),
+                )
+            })?;
 
         if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
-            logging::error!(
-                "transfer_funds_sync",
-                "Failed to add transaction to mempool: {error}"
-            );
-            return Err(OperationStatus::DynError);
+            return Err(OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to add transaction to mempool: {error}"),
+            ));
         }
         Ok(signed_tx)
     })
@@ -723,24 +743,16 @@ pub unsafe extern "C" fn transfer_funds(
     node: *const LogosBlockchainNode,
     arguments: *const TransferFundsArguments,
 ) -> FfiTransferFundsResult {
-    return_error_if_null_pointer!("transfer_funds", node);
-    return_error_if_null_pointer!("transfer_funds", arguments);
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(arguments);
     let arguments = unsafe { &*arguments };
-    if let Err((error_message, status)) = unsafe { arguments.validate() } {
-        logging::error!("transfer_funds", "{error_message} Exiting.");
-        return FfiTransferFundsResult::err(status);
-    }
+    unwrap_or_return_error!(unsafe { arguments.validate() });
 
     let node = unsafe { &*node };
     let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node), |_| {
-            logging::error!(
-                "transfer_funds",
-                "Failed to get cryptarchia info. Aborting."
-            );
-        })
-        .cryptarchia_info
-        .tip
+        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+            .cryptarchia_info
+            .tip
     } else {
         lb_core::header::HeaderId::from(unsafe { *arguments.optional_tip })
     };
@@ -776,11 +788,10 @@ pub unsafe extern "C" fn transfer_funds(
     ));
     let transaction_hash = transaction.hash().as_signing_bytes();
     let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        logging::error!(
-            "transfer_funds",
-            "Failed to convert transaction hash to array. Exiting."
-        );
-        return FfiTransferFundsResult::err(OperationStatus::RuntimeError);
+        return FfiTransferFundsResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            "Failed to convert transaction hash to array.",
+        ));
     };
     FfiTransferFundsResult::ok(transaction_hash_array)
 }
@@ -797,8 +808,10 @@ pub unsafe extern "C" fn transfer_funds(
 unsafe fn parse_public_key(pointer: *const u8) -> StatusResult<ZkPublicKey> {
     let bytes = unsafe { std::slice::from_raw_parts(pointer, 32) };
     fr_from_bytes(bytes).map(ZkPublicKey::new).map_err(|error| {
-        logging::error!("parse_public_key", "Invalid public key: {error:?}");
-        OperationStatus::DynError
+        OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Invalid public key: {error:?}"),
+        )
     })
 }
 
@@ -841,53 +854,52 @@ impl ChannelDepositWithNotesArguments {
     ///
     /// This function dereferences raw pointers. The caller must ensure the
     /// pointer-array lengths are accurate.
-    pub unsafe fn validate(&self) -> Result<(), (String, OperationStatus)> {
+    pub unsafe fn validate(&self) -> Result<(), OperationStatus> {
         if self.channel_id.is_null() {
-            return Err((
-                "ChannelDeposit contains a null `channel_id` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "ChannelDeposit contains a null `channel_id` pointer.",
             ));
         }
         if self.input_note_ids.is_null() {
-            return Err((
-                "ChannelDeposit contains a null `input_note_ids` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "ChannelDeposit contains a null `input_note_ids` pointer.",
             ));
         }
         if self.input_note_ids_len == 0 {
-            return Err((
-                "ChannelDeposit requires at least one input note.".to_owned(),
-                OperationStatus::RuntimeError,
+            return Err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                "ChannelDeposit requires at least one input note.",
             ));
         }
         if self.metadata.is_null() && self.metadata_len != 0 {
-            return Err((
-                "ChannelDeposit contains a null `metadata` pointer with non-zero length."
-                    .to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "ChannelDeposit contains a null `metadata` pointer with non-zero length.",
             ));
         }
         if self.change_public_key.is_null() {
-            return Err((
-                "ChannelDeposit contains a null `change_public_key` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "ChannelDeposit contains a null `change_public_key` pointer.",
             ));
         }
         if self.funding_public_keys.is_null() {
-            return Err((
-                "ChannelDeposit contains a null `funding_public_keys` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "ChannelDeposit contains a null `funding_public_keys` pointer.",
             ));
         }
         for i in 0..self.funding_public_keys_len {
             let element_pointer = unsafe { self.funding_public_keys.add(i) };
             let funding_public_key_pointer = unsafe { *element_pointer };
             if funding_public_key_pointer.is_null() {
-                return Err((
+                return Err(OperationStatus::error(
+                    OperationStatusCode::NullPointer,
                     format!(
                         "ChannelDeposit contains a null pointer at `funding_public_keys[{i}]`."
                     ),
-                    OperationStatus::NullPointer,
                 ));
             }
         }
@@ -933,20 +945,18 @@ pub(crate) fn channel_deposit_with_notes_sync(
         // Mirrors the node's `channel_deposit` handler: build -> fund -> check
         // fee -> sign -> submit.
         let tx_context = api.get_tx_context(Some(tip)).await.map_err(|error| {
-            logging::error!(
-                "channel_deposit_with_notes_sync",
-                "Failed to get tx context: {error}"
-            );
-            OperationStatus::DynError
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to get tx context: {error}"),
+            )
         })?;
         let tx_builder = MantleTxBuilder::new(tx_context)
             .push_op(Op::ChannelDeposit(deposit))
             .map_err(|error| {
-                logging::error!(
-                    "channel_deposit_with_notes_sync",
-                    "Failed to push deposit op: {error}"
-                );
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to push deposit op: {error}"),
+                )
             })?;
         let TipResponse {
             tip: funded_tip,
@@ -960,48 +970,43 @@ pub(crate) fn channel_deposit_with_notes_sync(
             )
             .await
             .map_err(|error| {
-                logging::error!(
-                    "channel_deposit_with_notes_sync",
-                    "Failed to fund tx: {error}"
-                );
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to fund tx: {error}"),
+                )
             })?;
 
         let tx_fee = funded_tx_builder
             .gas_cost::<MainnetGasConstants>()
             .map_err(|error| {
-                logging::error!(
-                    "channel_deposit_with_notes_sync",
-                    "Failed to compute gas cost: {error}"
-                );
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to compute gas cost: {error}"),
+                )
             })?;
         if tx_fee > max_tx_fee {
-            logging::error!(
-                "channel_deposit_with_notes_sync",
-                "tx_fee({tx_fee}) exceeds max_tx_fee({max_tx_fee})"
-            );
-            return Err(OperationStatus::DynError);
+            return Err(OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("tx_fee({tx_fee}) exceeds max_tx_fee({max_tx_fee})"),
+            ));
         }
 
         let signed_tx = api
             .sign_tx(Some(funded_tip), funded_tx_builder)
             .await
             .map_err(|error| {
-                logging::error!(
-                    "channel_deposit_with_notes_sync",
-                    "Failed to sign tx: {error}"
-                );
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to sign tx: {error}"),
+                )
             })?
             .response;
 
         if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
-            logging::error!(
-                "channel_deposit_with_notes_sync",
-                "Failed to add transaction to mempool: {error}"
-            );
-            return Err(OperationStatus::DynError);
+            return Err(OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to add transaction to mempool: {error}"),
+            ));
         }
         Ok(signed_tx)
     })
@@ -1033,24 +1038,16 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
     node: *const LogosBlockchainNode,
     arguments: *const ChannelDepositWithNotesArguments,
 ) -> FfiChannelDepositResult {
-    return_error_if_null_pointer!("channel_deposit_with_notes", node);
-    return_error_if_null_pointer!("channel_deposit_with_notes", arguments);
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(arguments);
     let arguments = unsafe { &*arguments };
-    if let Err((error_message, status)) = unsafe { arguments.validate() } {
-        logging::error!("channel_deposit_with_notes", "{error_message} Exiting.");
-        return FfiChannelDepositResult::err(status);
-    }
+    unwrap_or_return_error!(unsafe { arguments.validate() });
 
     let node = unsafe { &*node };
     let tip = if arguments.optional_tip.is_null() {
-        unwrap_or_return_error!(get_cryptarchia_info_sync(node), |_| {
-            logging::error!(
-                "channel_deposit_with_notes",
-                "Failed to get cryptarchia info. Aborting."
-            );
-        })
-        .cryptarchia_info
-        .tip
+        unwrap_or_return_error!(get_cryptarchia_info_sync(node))
+            .cryptarchia_info
+            .tip
     } else {
         CoreHeaderId::from(unsafe { *arguments.optional_tip })
     };
@@ -1058,8 +1055,10 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
     let channel_id = {
         let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
         let Ok(array): Result<[u8; 32], _> = bytes.try_into() else {
-            logging::error!("channel_deposit_with_notes", "Invalid channel_id length.");
-            return FfiChannelDepositResult::err(OperationStatus::RuntimeError);
+            return FfiChannelDepositResult::err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                "Invalid channel_id length.",
+            ));
         };
         ChannelId::from(array)
     };
@@ -1072,18 +1071,19 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
         let note_id =
             unwrap_or_return_error!(fr_from_bytes(note_id_bytes).map(CoreNoteId).map_err(
                 |error| {
-                    logging::error!("channel_deposit_with_notes", "Invalid note ID: {error:?}");
-                    OperationStatus::DynError
+                    OperationStatus::error(
+                        OperationStatusCode::DynError,
+                        format!("Invalid note ID: {error:?}"),
+                    )
                 }
             ));
         note_ids.push(note_id);
     }
     let inputs = unwrap_or_return_error!(Inputs::try_new(note_ids).map_err(|error| {
-        logging::error!(
-            "channel_deposit_with_notes",
-            "Invalid deposit inputs: {error:?}"
-        );
-        OperationStatus::DynError
+        OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Invalid deposit inputs: {error:?}"),
+        )
     }));
 
     let metadata_bytes = if arguments.metadata_len == 0 {
@@ -1092,8 +1092,10 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
         unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
     };
     let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
-        logging::error!("channel_deposit_with_notes", "Invalid metadata: {error:?}");
-        OperationStatus::DynError
+        OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Invalid metadata: {error:?}"),
+        )
     }));
 
     let deposit = DepositOp {
@@ -1128,11 +1130,10 @@ pub unsafe extern "C" fn channel_deposit_with_notes(
     ));
     let transaction_hash = transaction.hash().as_signing_bytes();
     let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        logging::error!(
-            "channel_deposit_with_notes",
-            "Failed to convert transaction hash to array. Exiting."
-        );
-        return FfiChannelDepositResult::err(OperationStatus::RuntimeError);
+        return FfiChannelDepositResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            "Failed to convert transaction hash to array.",
+        ));
     };
     FfiChannelDepositResult::ok(transaction_hash_array)
 }
@@ -1188,30 +1189,29 @@ impl ChannelDepositArguments {
     /// # Safety
     ///
     /// This function dereferences raw pointers.
-    pub unsafe fn validate(&self) -> Result<(), (String, OperationStatus)> {
+    pub unsafe fn validate(&self) -> Result<(), OperationStatus> {
         if self.channel_id.is_null() {
-            return Err((
-                "ChannelDeposit contains a null `channel_id` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "ChannelDeposit contains a null `channel_id` pointer.",
             ));
         }
         if self.funding_public_key.is_null() {
-            return Err((
-                "ChannelDeposit contains a null `funding_public_key` pointer.".to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "ChannelDeposit contains a null `funding_public_key` pointer.",
             ));
         }
         if self.metadata.is_null() && self.metadata_len != 0 {
-            return Err((
-                "ChannelDeposit contains a null `metadata` pointer with non-zero length."
-                    .to_owned(),
-                OperationStatus::NullPointer,
+            return Err(OperationStatus::error(
+                OperationStatusCode::NullPointer,
+                "ChannelDeposit contains a null `metadata` pointer with non-zero length.",
             ));
         }
         if self.amount == 0 {
-            return Err((
-                "ChannelDeposit `amount` must be greater than zero.".to_owned(),
-                OperationStatus::RuntimeError,
+            return Err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                "ChannelDeposit `amount` must be greater than zero.",
             ));
         }
         Ok(())
@@ -1258,25 +1258,25 @@ pub(crate) fn channel_deposit_sync(
             .get_balance(Some(tip), funding_public_key)
             .await
             .map_err(|error| {
-                logging::error!("channel_deposit_sync", "Failed to get balance: {error}");
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to get balance: {error}"),
+                )
             })?;
         let notes: Vec<(CoreNoteId, Value)> = balance
             .response
             .map(|balance| balance.notes.into_iter().collect())
             .ok_or_else(|| {
-                logging::error!("channel_deposit_sync", "Unknown funding address.");
-                OperationStatus::NotFound
+                OperationStatus::error(OperationStatusCode::NotFound, "Unknown funding address.")
             })?;
 
         // 2. Select notes covering the deposit amount.
         let (selected_ids, selected_total) =
             select_notes_covering(notes, amount).ok_or_else(|| {
-                logging::error!(
-                    "channel_deposit_sync",
-                    "Insufficient funds to cover deposit amount."
-                );
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    "Insufficient funds to cover deposit amount.",
+                )
             })?;
         let change = selected_total - amount;
 
@@ -1288,15 +1288,16 @@ pub(crate) fn channel_deposit_sync(
         }
         let transfer = TransferOp {
             inputs: Inputs::try_new(selected_ids).map_err(|error| {
-                logging::error!("channel_deposit_sync", "Invalid transfer inputs: {error:?}");
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Invalid transfer inputs: {error:?}"),
+                )
             })?,
             outputs: Outputs::try_new(outputs).map_err(|error| {
-                logging::error!(
-                    "channel_deposit_sync",
-                    "Invalid transfer outputs: {error:?}"
-                );
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Invalid transfer outputs: {error:?}"),
+                )
             })?,
         };
 
@@ -1305,11 +1306,10 @@ pub(crate) fn channel_deposit_sync(
             .outputs
             .utxo_by_index(0, &transfer)
             .ok_or_else(|| {
-                logging::error!(
-                    "channel_deposit_sync",
-                    "Transfer did not produce a deposit note."
-                );
-                OperationStatus::RuntimeError
+                OperationStatus::error(
+                    OperationStatusCode::RuntimeError,
+                    "Transfer did not produce a deposit note.",
+                )
             })?
             .id();
         let deposit = DepositOp {
@@ -1335,28 +1335,28 @@ pub(crate) fn channel_deposit_sync(
             .sign_tx_with_zk(tx_hash, vec![funding_public_key])
             .await
             .map_err(|error| {
-                logging::error!("channel_deposit_sync", "Failed to sign deposit tx: {error}");
-                OperationStatus::DynError
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to sign deposit tx: {error}"),
+                )
             })?;
         let signed_tx = SignedMantleTx::new(
             tx,
             vec![OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)],
         )
         .map_err(|error| {
-            logging::error!(
-                "channel_deposit_sync",
-                "Failed to assemble signed tx: {error:?}"
-            );
-            OperationStatus::DynError
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to assemble signed tx: {error:?}"),
+            )
         })?;
 
         // 6. Submit to the mempool.
         if let Err(error) = mempool::add_tx(handle, signed_tx.clone(), Transaction::hash).await {
-            logging::error!(
-                "channel_deposit_sync",
-                "Failed to add transaction to mempool: {error}"
-            );
-            return Err(OperationStatus::DynError);
+            return Err(OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to add transaction to mempool: {error}"),
+            ));
         }
         Ok(signed_tx)
     })
@@ -1386,13 +1386,10 @@ pub unsafe extern "C" fn channel_deposit(
     node: *const LogosBlockchainNode,
     arguments: *const ChannelDepositArguments,
 ) -> FfiChannelDepositResult {
-    return_error_if_null_pointer!("channel_deposit", node);
-    return_error_if_null_pointer!("channel_deposit", arguments);
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(arguments);
     let arguments = unsafe { &*arguments };
-    if let Err((error_message, status)) = unsafe { arguments.validate() } {
-        logging::error!("channel_deposit", "{error_message} Exiting.");
-        return FfiChannelDepositResult::err(status);
-    }
+    unwrap_or_return_error!(unsafe { arguments.validate() });
 
     let node = unsafe { &*node };
     let tip = if arguments.optional_tip.is_null() {
@@ -1406,8 +1403,10 @@ pub unsafe extern "C" fn channel_deposit(
     let channel_id = {
         let bytes = unsafe { std::slice::from_raw_parts(arguments.channel_id, 32) };
         let Ok(array): Result<[u8; 32], _> = bytes.try_into() else {
-            logging::error!("channel_deposit", "Invalid channel_id length.");
-            return FfiChannelDepositResult::err(OperationStatus::RuntimeError);
+            return FfiChannelDepositResult::err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                "Invalid channel_id length.",
+            ));
         };
         ChannelId::from(array)
     };
@@ -1421,8 +1420,10 @@ pub unsafe extern "C" fn channel_deposit(
         unsafe { std::slice::from_raw_parts(arguments.metadata, arguments.metadata_len) }.to_vec()
     };
     let metadata = unwrap_or_return_error!(Metadata::try_from(metadata_bytes).map_err(|error| {
-        logging::error!("channel_deposit", "Invalid metadata: {error:?}");
-        OperationStatus::DynError
+        OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Invalid metadata: {error:?}"),
+        )
     }));
 
     let transaction = unwrap_or_return_error!(channel_deposit_sync(
@@ -1435,11 +1436,10 @@ pub unsafe extern "C" fn channel_deposit(
     ));
     let transaction_hash = transaction.hash().as_signing_bytes();
     let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
-        logging::error!(
-            "channel_deposit",
-            "Failed to convert transaction hash to array. Exiting."
-        );
-        return FfiChannelDepositResult::err(OperationStatus::RuntimeError);
+        return FfiChannelDepositResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            "Failed to convert transaction hash to array.",
+        ));
     };
     FfiChannelDepositResult::ok(transaction_hash_array)
 }

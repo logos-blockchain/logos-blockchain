@@ -4158,6 +4158,7 @@ dependencies = [
  "logos-blockchain-wallet-service",
  "multiaddr",
  "overwatch",
+ "serde",
  "serde_json",
  "serde_yaml",
  "tempfile",
@@ -4250,6 +4251,7 @@ dependencies = [
  "logos-blockchain-tracing",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
+ "lru",
  "overwatch",
  "rand 0.8.6",
  "serde",
@@ -4436,10 +4438,10 @@ dependencies = [
  "bytes",
  "const-hex",
  "divan",
- "futures",
  "hasher",
  "hex",
  "logos-blockchain-blend-proofs",
+ "logos-blockchain-core-macros",
  "logos-blockchain-cryptarchia-engine",
  "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-keys",
@@ -4462,6 +4464,16 @@ dependencies = [
  "time",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "logos-blockchain-core-macros"
+version = "0.0.0"
+dependencies = [
+ "hex",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
 ]
 
 [[package]]
@@ -4577,6 +4589,7 @@ dependencies = [
  "generic-array 1.4.3",
  "hex",
  "num-bigint",
+ "rand 0.8.6",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -5001,6 +5014,7 @@ name = "logos-blockchain-tests"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bincode",
  "cucumber",
  "derivative",
  "divan",
@@ -5020,6 +5034,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
@@ -5140,9 +5155,12 @@ dependencies = [
 name = "logos-blockchain-tui-zone"
 version = "0.0.0"
 dependencies = [
+ "bincode",
+ "chrono",
  "clap",
  "hex",
  "logos-blockchain-core",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "rand 0.8.6",

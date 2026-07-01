@@ -1,27 +1,23 @@
 use crate::{errors::OperationStatus, result::FfiResult};
 
-/// Checks if a pointer is null, logs an error, and returns from the calling
-/// function.
+/// Checks if a pointer is null and returns from the calling function with a
+/// null-pointer error status.
 ///
 /// Works with any return type that implements [`FfiReturn`], including
 /// [`FfiResult`], [`OperationStatus`], and `()`.
 ///
 /// # Arguments
 ///
-/// - `$scope`: A string literal describing where the error occurred, used in
-///   the log message.
 /// - `$pointer`: The pointer expression to check.
 #[macro_export]
 macro_rules! return_error_if_null_pointer {
-    ($scope:literal, $pointer:expr) => {
+    ($pointer:expr) => {
         if $pointer.is_null() {
-            $crate::logging::error!(
-                $scope,
-                "Received a null `{}` pointer.",
-                stringify!($pointer)
-            );
             return <_ as $crate::macros::FfiReturn>::from_operation_status(
-                $crate::errors::OperationStatus::NullPointer,
+                $crate::errors::OperationStatus::error(
+                    $crate::errors::OperationStatusCode::NullPointer,
+                    format!("Received a null `{}` pointer.", stringify!($pointer)),
+                ),
             );
         }
     };

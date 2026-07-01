@@ -6,8 +6,8 @@ use lb_node::cli::keys::{
 };
 
 use crate::{
-    OperationStatus, api::config::cstr_to_path, logging, result::FfiStatusResult,
-    return_error_if_null_pointer,
+    OperationStatus, api::config::cstr_to_path, errors::OperationStatusCode,
+    result::FfiStatusResult, return_error_if_null_pointer,
 };
 
 /// Type of key to generate or add to a keystore.
@@ -77,8 +77,8 @@ pub unsafe extern "C" fn generate_key(
     key_type: KeyType,
     key_title: *const c_char,
 ) -> FfiGenerateKeyResult {
-    return_error_if_null_pointer!("generate_key", user_config_path);
-    return_error_if_null_pointer!("generate_key", keystore_path);
+    return_error_if_null_pointer!(user_config_path);
+    return_error_if_null_pointer!(keystore_path);
 
     let args = GenerateKeyArgs::new(
         unsafe { cstr_to_path(user_config_path) },
@@ -91,17 +91,19 @@ pub unsafe extern "C" fn generate_key(
     let key_id = match lb_node::cli::keys::generate_key(args) {
         Ok(key_id) => key_id,
         Err(error) => {
-            logging::error!("generate_key", "Error generating key: {error:?}");
-            return FfiGenerateKeyResult::err(OperationStatus::ConfigurationError);
+            return FfiGenerateKeyResult::err(OperationStatus::error(
+                OperationStatusCode::ConfigurationError,
+                format!("Error generating key: {error:?}"),
+            ));
         }
     };
 
     match CString::new(key_id) {
         Ok(key_id) => FfiGenerateKeyResult::ok(key_id.into_raw()),
-        Err(error) => {
-            logging::error!("generate_key", "Failed to create CString: {error}");
-            FfiGenerateKeyResult::err(OperationStatus::RuntimeError)
-        }
+        Err(error) => FfiGenerateKeyResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create CString: {error}"),
+        )),
     }
 }
 
@@ -134,17 +136,19 @@ pub unsafe extern "C" fn add_key(
     key_hex: *const c_char,
     key_title: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!("add_key", user_config_path);
-    return_error_if_null_pointer!("add_key", keystore_path);
-    return_error_if_null_pointer!("add_key", key_hex);
+    return_error_if_null_pointer!(user_config_path);
+    return_error_if_null_pointer!(keystore_path);
+    return_error_if_null_pointer!(key_hex);
 
     let key_hex = unsafe { CStr::from_ptr(key_hex) }.to_string_lossy();
 
     let key = match parse_key_hex(key_type, &key_hex) {
         Ok(key) => key,
         Err(error) => {
-            logging::error!("add_key", "Invalid key: {error}");
-            return OperationStatus::ValidationError;
+            return OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                format!("Invalid key: {error}"),
+            );
         }
     };
 
@@ -157,11 +161,11 @@ pub unsafe extern "C" fn add_key(
     );
 
     match run_add_key(args) {
-        Ok(()) => OperationStatus::Ok,
-        Err(error) => {
-            logging::error!("add_key", "Error adding key: {error:?}");
-            OperationStatus::ConfigurationError
-        }
+        Ok(()) => OperationStatus::OK,
+        Err(error) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error adding key: {error:?}"),
+        ),
     }
 }
 
@@ -207,9 +211,9 @@ pub unsafe extern "C" fn remove_key(
     keystore_path: *const c_char,
     key_title: *const c_char,
 ) -> OperationStatus {
-    return_error_if_null_pointer!("remove_key", user_config_path);
-    return_error_if_null_pointer!("remove_key", keystore_path);
-    return_error_if_null_pointer!("remove_key", key_title);
+    return_error_if_null_pointer!(user_config_path);
+    return_error_if_null_pointer!(keystore_path);
+    return_error_if_null_pointer!(key_title);
 
     let key_title = unsafe { CStr::from_ptr(key_title) }
         .to_string_lossy()
@@ -223,10 +227,10 @@ pub unsafe extern "C" fn remove_key(
     );
 
     match run_remove_key(args) {
-        Ok(()) => OperationStatus::Ok,
-        Err(error) => {
-            logging::error!("remove_key", "Error removing key: {error:?}");
-            OperationStatus::ConfigurationError
-        }
+        Ok(()) => OperationStatus::OK,
+        Err(error) => OperationStatus::error(
+            OperationStatusCode::ConfigurationError,
+            format!("Error removing key: {error:?}"),
+        ),
     }
 }

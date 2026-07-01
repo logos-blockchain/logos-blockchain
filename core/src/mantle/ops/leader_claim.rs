@@ -1,5 +1,6 @@
 use std::sync::LazyLock;
 
+use lb_core_macros::NomCodec;
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
@@ -8,11 +9,11 @@ use thiserror::Error;
 
 use crate::{
     crypto::ZkHasher,
-    events::{Event, EventPayload, Events},
+    events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
-        encoding::encode_leader_claim,
         ledger::{Operation, Utxos},
+        nom::NomEncode as _,
         ops::OpId,
     },
     proofs::leader_claim_proof::{
@@ -28,19 +29,19 @@ static VOUCHER_NF: LazyLock<Fr> = LazyLock::new(|| {
     fr_from_bytes(b"VOUCHER_NF").expect("BigUint should load from constant string")
 });
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize, NomCodec)]
 pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,
@@ -63,7 +64,7 @@ impl LeaderClaimOp {
 
 impl OpId for LeaderClaimOp {
     fn op_bytes(&self) -> Vec<u8> {
-        encode_leader_claim(self)
+        self.encode()
     }
 }
 
@@ -204,7 +205,7 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         // Add the nullifier to the nullifier set
         ctx.nullifiers = ctx.nullifiers.insert(self.voucher_nullifier);
 
@@ -218,15 +219,14 @@ impl Operation<LeaderClaimValidationContext<'_>> for LeaderClaimOp {
 
         Ok((
             ctx,
-            Event::from_tx(
+            vec![TxEvent::new(
                 tx_hash,
                 self.op_id(),
-                EventPayload::LeaderRewardClaimed {
+                TxEventPayload::LeaderRewardClaimed {
                     voucher_nullifier: self.voucher_nullifier,
                     utxo,
                 },
-            )
-            .into(),
+            )],
         ))
     }
 }
@@ -303,11 +303,11 @@ mod tests {
         );
 
         let mut events = events.iter();
-        let Some(Event::Tx {
+        let Some(TxEvent {
             tx_hash: event_tx_hash,
             op_id,
             payload:
-                EventPayload::LeaderRewardClaimed {
+                TxEventPayload::LeaderRewardClaimed {
                     voucher_nullifier,
                     utxo,
                 },

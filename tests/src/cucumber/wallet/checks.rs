@@ -12,6 +12,7 @@ use crate::{
         fee_reserve::SCENARIO_FEE_ACCOUNT_NAME,
         wallet::{
             TARGET,
+            best_node::get_best_node_info,
             sync::{current_wallet_output_balance, current_wallet_state_for_key},
             wallet_output_state_label,
         },
@@ -258,8 +259,11 @@ pub async fn wait_for_wallet_output_state(
     let time_out = Duration::from_secs(time_out_seconds);
     let mut poll_count = 0usize;
     let wallet_state_label = wallet_output_state_label(wallet_state_type);
+    let mut last_msg = String::new();
 
     loop {
+        // Ensure we have a converged majority before proceeding
+        let _best_node_info = get_best_node_info(world, &wallet_name, Some(&mut last_msg)).await?;
         let balance =
             current_wallet_output_balance(world, step, &wallet, wallet_state_type).await?;
 

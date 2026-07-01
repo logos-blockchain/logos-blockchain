@@ -253,10 +253,12 @@ impl MantleTxBuilder {
     // TODO: Change this to a `Result` if genesis tx already contains max number of
     // ops.
     pub fn build(mut self) -> Result<MantleTx, TxBuilderError> {
-        self.mantle_tx
-            .0
-            .try_push(Op::Transfer(self.pending_transfer))
-            .map_err(|err| TxBuilderError::from((err, TooManyTag::Ops)))?;
+        if !self.pending_transfer.is_empty() {
+            self.mantle_tx
+                .0
+                .try_push(Op::Transfer(self.pending_transfer))
+                .map_err(|err| TxBuilderError::from((err, TooManyTag::Ops)))?;
+        }
         Ok(self.mantle_tx)
     }
 }

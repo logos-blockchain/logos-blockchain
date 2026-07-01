@@ -5,7 +5,7 @@ use crate::{
     state::{InMemoryZoneState, ZoneState as _},
 };
 
-/// Print current state as three sections: Finalized, Adopted, Published.
+/// Print current state as two sections: Pending, Finalized.
 pub fn render_state(state: &InMemoryZoneState) {
     eprintln!();
     if let Some(view) = state.channel_view() {

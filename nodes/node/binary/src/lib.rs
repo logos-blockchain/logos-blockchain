@@ -16,7 +16,7 @@ pub use lb_blend_service::core::{
 pub use lb_core::{
     codec,
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction, TxHash, select::FillSize as FillSizeWithTx},
+    mantle::{SignedMantleTx, Transaction, TxHash},
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{
@@ -56,8 +56,6 @@ pub use crate::{
     cli::Command,
     config::{ApiArgs, LogArgs, NetworkArgs, UserConfig},
 };
-
-pub const MB16: usize = 1024 * 1024 * 16;
 
 pub(crate) type TracingService = Tracing<RuntimeServiceId>;
 

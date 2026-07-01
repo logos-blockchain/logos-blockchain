@@ -38,6 +38,7 @@ use crate::cucumber::{
         display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
+    wallet::sync::current_wallet_states_for_wallets,
     world::{
         ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
         PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap, WalletType,
@@ -308,7 +309,7 @@ pub(crate) fn ensure_fee_sponsorship_and_fork_groups_are_not_mixed(
 }
 
 pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
-    world: &CucumberWorld,
+    world: &mut CucumberWorld,
     step: &str,
 ) -> StepResult {
     let public_cryptarchia_endpoint_peers = world
@@ -347,6 +348,9 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
                 "All nodes synced to the chain in {:.2?}",
                 start.elapsed()
             );
+
+            catch_up_known_wallet_tracking_after_chain_sync(world, step).await?;
+
             return Ok(());
         }
 
@@ -363,6 +367,27 @@ pub(crate) async fn wait_for_all_nodes_to_be_synced_to_chain(
 
         sleep(CHAIN_SYNC_POLL_INTERVAL).await;
     }
+}
+
+async fn catch_up_known_wallet_tracking_after_chain_sync(
+    world: &mut CucumberWorld,
+    step: &str,
+) -> StepResult {
+    let wallets = world.wallet_info.values().cloned().collect::<Vec<_>>();
+    if wallets.is_empty() {
+        return Ok(());
+    }
+
+    let started_at = Instant::now();
+    current_wallet_states_for_wallets(world, step, &wallets).await?;
+
+    info!(
+        target: TARGET,
+        "Wallet state refreshed after chain sync in {:.2?}",
+        started_at.elapsed()
+    );
+
+    Ok(())
 }
 
 pub(crate) fn parse_url(raw: &str) -> Result<String, String> {
@@ -386,13 +411,13 @@ async fn fetch_public_peer_consensus_snapshots(
     for peer in peers {
         match fetch_public_peer_consensus(client, peer).await {
             Ok(info) => snapshots.push(PublicPeerConsensusSnapshot {
-                peer_url: peer.url.clone(),
+                peer_url: peer.base_url.clone(),
                 stats: SyncTargetStats::from_cryptarchia_info(&info),
             }),
             Err(e) => warn!(
                 target: TARGET,
                 "Failed to fetch public cryptarchia info from '{}': {e}",
-                peer.url
+                peer.base_url
             ),
         }
     }
@@ -400,23 +425,25 @@ async fn fetch_public_peer_consensus_snapshots(
     snapshots
 }
 
-async fn fetch_public_peer_consensus(
+/// Fetch the current consensus info from a public cryptarchia endpoint peer.
+/// Returns an error if the request fails or the response is invalid.
+pub async fn fetch_public_peer_consensus(
     client: &Client,
     peer: &PublicCryptarchiaEndpointPeer,
 ) -> Result<CryptarchiaInfo, StepError> {
     let request_url = Url::parse(&format!(
         "{peer_url}/{path}",
-        peer_url = peer.url.as_str(),
+        peer_url = peer.base_url.as_str(),
         path = CRYPTARCHIA_INFO.trim_start_matches('/')
     ))
     .map_err(|e| StepError::InvalidArgument {
         message: format!(
             "Invalid public cryptarchia info URL for '{}': {e}",
-            peer.url.as_str()
+            peer.base_url.as_str()
         ),
     })?;
 
-    client
+    Ok(client
         .get(request_url)
         .basic_auth(&peer.username, Some(&peer.password))
         .send()
@@ -424,8 +451,8 @@ async fn fetch_public_peer_consensus(
         .error_for_status()?
         .json::<ChainServiceInfo>()
         .await
-        .map(|info| info.cryptarchia_info)
-        .map_err(Into::into)
+        .map_err(StepError::from)?
+        .cryptarchia_info)
 }
 
 fn select_majority_public_sync_target(

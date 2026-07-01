@@ -19,7 +19,8 @@ pub use tx::{service::TxMempoolService, settings::TxMempoolSettings};
 /// Response for `GetTransactionsByHashes` request
 #[derive(Debug, Clone)]
 pub struct TransactionsByHashesResponse<Item, Key> {
-    /// Transactions that were found in the mempool
+    /// Transactions that were found in the mempool, ordered like the requested
+    /// hashes.
     found: Vec<Item>,
     /// Hashes of transactions that were not found in the mempool
     not_found: BTreeSet<Key>,

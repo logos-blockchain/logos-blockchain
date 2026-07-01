@@ -10,6 +10,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use lb_tui_zone::cli::NodeKeyArgs;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
@@ -130,7 +131,7 @@ pub enum Command {
     /// Remove a key with title from a keystore.
     RemoveKey(Box<RemoveKeyArgs>),
     /// Publish text inscriptions as zone blocks
-    Inscribe(lb_tui_zone::InscribeArgs),
+    Inscribe(NodeKeyArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
     Participate(ParticipateArgs),
     /// Print the libp2p `PeerId` derived from the node key in a user config
@@ -168,6 +169,10 @@ pub struct InitArgs {
 
     #[clap(flatten)]
     pub state: StateArgs,
+
+    /// Name (or path, relative to the state folder) of the storage DB folder.
+    #[clap(long = "storage-path")]
+    pub storage_path: Option<PathBuf>,
 }
 
 /// Set of arguments for use in c-bindings crate.
@@ -195,6 +200,8 @@ pub struct EmbeddedInitArgs {
     pub external_address: Option<Multiaddr>,
 
     pub state_path: Option<PathBuf>,
+    pub storage_path: Option<PathBuf>,
+    pub logs_path: Option<PathBuf>,
 
     /// Enable Initial Block Download (IBD) using peers
     /// passed via `--initial-peers`/`-p`.
@@ -231,6 +238,8 @@ impl From<EmbeddedInitArgs> for InitArgs {
         init_args.cryptarchia.ibd = args.ibd;
         init_args.api.addr = Some(args.http_addr);
         init_args.state.path.clone_from(&args.state_path);
+        init_args.storage_path.clone_from(&args.storage_path);
+        init_args.log.directory.clone_from(&args.logs_path);
 
         init_args
     }
@@ -248,6 +257,8 @@ impl Default for EmbeddedInitArgs {
             ),
             external_address: None,
             state_path: None,
+            storage_path: None,
+            logs_path: None,
             ibd: false,
             log_filter: None,
             kms_file: None,
@@ -354,6 +365,10 @@ pub struct MigrateArgs {
 
     #[clap(flatten)]
     state: StateArgs,
+
+    /// Name (or path, relative to the state folder) of the storage DB folder.
+    #[clap(long = "storage-path")]
+    storage_path: Option<PathBuf>,
 }
 
 impl MigrateArgs {
@@ -371,6 +386,7 @@ impl MigrateArgs {
             sdp: SdpArgs::default(),
             api: ApiArgs::default(),
             state: StateArgs::default(),
+            storage_path: None,
         }
     }
 }
@@ -387,6 +403,7 @@ impl From<MigrateArgs> for InitArgs {
             sdp: migrate.sdp,
             api: migrate.api,
             state: migrate.state,
+            storage_path: migrate.storage_path,
         }
     }
 }

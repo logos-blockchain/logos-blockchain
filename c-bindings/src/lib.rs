@@ -11,6 +11,6 @@ mod macros;
 mod node;
 mod result;
 
-pub use errors::OperationStatus;
+pub use errors::{OperationStatus, OperationStatusCode};
 pub use node::LogosBlockchainNode;
 pub use result::{FfiResult, FfiStatusResult, StatusResult};

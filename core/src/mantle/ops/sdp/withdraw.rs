@@ -5,7 +5,7 @@ use tracing::debug;
 
 use super::{SDPWithdrawOp, SdpError};
 use crate::{
-    events::Events,
+    events::TxEvent,
     mantle::{
         TxHash,
         ledger::{Declarations, Operation},
@@ -98,7 +98,7 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
     fn execute(
         &self,
         mut ctx: Self::ExecutionContext<'_>,
-    ) -> Result<(Self::ExecutionContext<'_>, Events), Self::Error> {
+    ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
         let declaration = ctx
             .declarations
             .get_mut(&self.declaration_id)
@@ -121,6 +121,6 @@ impl Operation<SDPWithdrawValidationContext<'_>> for SDPWithdrawOp {
             "updated declaration with withdraw message"
         );
 
-        Ok((ctx, Events::new()))
+        Ok((ctx, Vec::new()))
     }
 }
