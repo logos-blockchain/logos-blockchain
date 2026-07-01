@@ -1,17 +1,46 @@
-use lb_groth16::{Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::ZkPublicKey;
+use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
+use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
 use nom::{
     IResult, Parser as _,
     bytes::complete::take,
     combinator::{map, map_res},
     error::{Error, ErrorKind},
-    number::complete::le_u64,
+    number::complete::{le_u16, le_u64},
 };
 use time::OffsetDateTime;
+
+// ==============================================================================
+// Cryptographic Primitive Decoders
+// ==============================================================================
+
+pub fn decode_zk_signature(input: &[u8]) -> IResult<&[u8], ZkSignature> {
+    // ZkSignature = Groth16
+    map(decode_groth16, ZkSignature::new).parse(input)
+}
+
+pub const GROTH16_BYTES: usize = 128;
+pub fn decode_groth16(input: &[u8]) -> IResult<&[u8], CompressedGroth16Proof> {
+    // Groth16 = 128BYTE
+    map(
+        decode_array::<GROTH16_BYTES>,
+        |proof: [u8; GROTH16_BYTES]| CompressedGroth16Proof::from_bytes(&proof),
+    )
+    .parse(input)
+}
 
 pub fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
     // ZkPublicKey = FieldElement
     map(decode_field_element, ZkPublicKey::new).parse(input)
+}
+
+pub const ED25519_SIG_BYTES: usize = 64;
+pub fn decode_ed25519_signature(input: &[u8]) -> IResult<&[u8], Ed25519Signature> {
+    // Ed25519Signature = 64BYTE
+    map(
+        decode_array::<ED25519_SIG_BYTES>,
+        |bytes: [u8; ED25519_SIG_BYTES]| Ed25519Signature::from_bytes(&bytes),
+    )
+    .parse(input)
 }
 
 pub fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
@@ -25,6 +54,20 @@ pub fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
 // ==============================================================================
 // Primitive Decoders
 // ==============================================================================
+
+pub fn decode_array<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N]> {
+    map(take(N), |bytes: &[u8]| {
+        let mut arr = [0u8; N];
+        arr.copy_from_slice(bytes);
+        arr
+    })
+    .parse(input)
+}
+
+pub fn decode_uint16(input: &[u8]) -> IResult<&[u8], u16> {
+    // UINT16 = 2BYTE
+    le_u16(input)
+}
 
 pub fn decode_utf8_string(input: &[u8], len: usize) -> IResult<&[u8], String> {
     map_res(take(len), |bytes: &[u8]| {
@@ -59,6 +102,10 @@ pub fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTime> {
 use lb_groth16::fr_to_bytes;
 
 /// Encode primitives
+pub fn encode_uint16(value: u16) -> Vec<u8> {
+    value.to_le_bytes().to_vec()
+}
+
 pub fn encode_uint64(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
@@ -81,6 +128,20 @@ pub fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
 
 pub fn encode_field_element(fr: &Fr) -> Vec<u8> {
     fr_to_bytes(fr).to_vec()
+}
+
+// Encode cryptographic primitives
+pub fn encode_ed25519_signature(sig: &Ed25519Signature) -> Vec<u8> {
+    sig.to_bytes().to_vec()
+}
+
+pub fn encode_zk_signature(sig: &ZkSignature) -> Vec<u8> {
+    // `ZkSignature` wraps `ZkSignProof` which is `CompressedGroth16Proof`
+    encode_groth16_proof(sig.as_proof())
+}
+
+pub fn encode_groth16_proof(proof: &CompressedGroth16Proof) -> Vec<u8> {
+    proof.to_bytes().to_vec()
 }
 
 #[cfg(test)]

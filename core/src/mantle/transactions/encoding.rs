@@ -2,21 +2,22 @@
 // Top-Level Transaction Decoders
 // ==============================================================================
 
-use lb_groth16::CompressedGroth16Proof;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use nom::{
     IResult, Parser as _,
-    bytes::complete::take,
     combinator::map,
     error::{Error, ErrorKind},
     multi::length_count,
-    number::complete::le_u16,
     sequence::pair,
 };
 
 use crate::{
     mantle::{
         MantleTx, Op, OpProof, SignedMantleTx,
+        codec::{
+            ED25519_SIG_BYTES, GROTH16_BYTES, decode_ed25519_signature, decode_groth16,
+            decode_uint16, decode_zk_signature, encode_ed25519_signature, encode_groth16_proof,
+            encode_uint16, encode_zk_signature,
+        },
         nom::{NomDecode as _, NomEncode as _},
         ops::channel::ChannelKeyIndex,
         transactions::{MantleTxGasContext, Ops},
@@ -100,37 +101,6 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
     }
 }
 
-// ==============================================================================
-// Cryptographic Primitive Decoders
-// ==============================================================================
-
-fn decode_zk_signature(input: &[u8]) -> IResult<&[u8], ZkSignature> {
-    // ZkSignature = Groth16
-    map(decode_groth16, ZkSignature::new).parse(input)
-}
-
-const GROTH16_BYTES: usize = 128;
-fn decode_groth16(input: &[u8]) -> IResult<&[u8], CompressedGroth16Proof> {
-    // Groth16 = 128BYTE
-    map(
-        decode_array::<GROTH16_BYTES>,
-        |proof: [u8; GROTH16_BYTES]| CompressedGroth16Proof::from_bytes(&proof),
-    )
-    .parse(input)
-}
-
-// decode_zk_public_key
-
-const ED25519_SIG_BYTES: usize = 64;
-fn decode_ed25519_signature(input: &[u8]) -> IResult<&[u8], Ed25519Signature> {
-    // Ed25519Signature = 64BYTE
-    map(
-        decode_array::<ED25519_SIG_BYTES>,
-        |bytes: [u8; ED25519_SIG_BYTES]| Ed25519Signature::from_bytes(&bytes),
-    )
-    .parse(input)
-}
-
 const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex) -> usize {
     // Encoding: u16 signature count + N * (Ed25519 sig + u16 key index)
     2 + (threshold as usize) * (ED25519_SIG_BYTES + 2)
@@ -155,51 +125,15 @@ fn decode_channel_multi_sig_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSi
         .map_err(|_| nom::Err::Failure(Error::new(input, ErrorKind::Verify)))
 }
 
-// decode_field_element
-
-// ==============================================================================
-// Primitive Decoders
-// ==============================================================================
-fn decode_array<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N]> {
-    map(take(N), |bytes: &[u8]| {
-        let mut arr = [0u8; N];
-        arr.copy_from_slice(bytes);
-        arr
-    })
-    .parse(input)
-}
-
-fn decode_uint16(input: &[u8]) -> IResult<&[u8], u16> {
-    // UINT16 = 2BYTE
-    le_u16(input)
-}
-
 // ==============================================================================
 // Binary Encoders
 // ==============================================================================
 
-/// Encode primitives
-fn encode_uint16(value: u16) -> Vec<u8> {
-    value.to_le_bytes().to_vec()
-}
-
-/// Encode cryptographic primitives
-fn encode_ed25519_signature(sig: &Ed25519Signature) -> Vec<u8> {
-    sig.to_bytes().to_vec()
-}
-
-fn encode_zk_signature(sig: &ZkSignature) -> Vec<u8> {
-    // `ZkSignature` wraps `ZkSignProof` which is `CompressedGroth16Proof`
-    encode_groth16_proof(sig.as_proof())
-}
+// Encode cryptographic primitives
 
 fn encode_poc(poc: &Groth16LeaderClaimProof) -> Vec<u8> {
     // `Groth16LeaderClaimProof` wraps `PocProof` which is `CompressedGroth16Proof`
     encode_groth16_proof(poc.proof())
-}
-
-fn encode_groth16_proof(proof: &CompressedGroth16Proof) -> Vec<u8> {
-    proof.to_bytes().to_vec()
 }
 
 fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
@@ -327,8 +261,8 @@ mod tests {
 
     use ark_ff::AdditiveGroup as _;
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-    use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
+    use lb_groth16::{CompressedGroth16Proof, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
     use lb_utils::bounded_vec::BoundedError;
     use multiaddr::Multiaddr;
     use num_bigint::BigUint;
