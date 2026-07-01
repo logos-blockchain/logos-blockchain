@@ -74,7 +74,7 @@ use crate::{
         wallet::{
             best_node::get_best_node_info,
             checks::wait_for_observed_transaction_hashes,
-            snapshot::save_wallet_snapshot_if_present,
+            snapshot::{save_wallet_snapshot, save_wallet_snapshot_for_nodes},
             submissions::SignedUserWalletSubmission,
             sync,
             sync::{WalletSendReadiness, current_available_utxos_for_user_wallets},
@@ -436,12 +436,12 @@ async fn execute_non_stop_manual_command(
 ) -> Result<(), StepError> {
     match command {
         ManualCommand::CreateSnapshotAllNodes { snapshot_name } => {
-            execute_create_snapshot_all_nodes(world, snapshot_name)
+            execute_create_snapshot_all_nodes(world, snapshot_name).await
         }
         ManualCommand::CreateSnapshotNode {
             snapshot_name,
             node_name,
-        } => execute_create_snapshot_node(world, snapshot_name, node_name),
+        } => execute_create_snapshot_node(world, snapshot_name, node_name).await,
         ManualCommand::CoinSplit {
             wallet,
             outputs,
@@ -773,7 +773,7 @@ fn clear_all_wallet_encumbrances(world: &mut CucumberWorld, step: &str) -> StepR
     Ok(())
 }
 
-fn execute_create_snapshot_all_nodes(
+async fn execute_create_snapshot_all_nodes(
     world: &CucumberWorld,
     snapshot_name: &str,
 ) -> Result<(), StepError> {
@@ -784,10 +784,10 @@ fn execute_create_snapshot_all_nodes(
     }
 
     create_snapshots_all_nodes(world, snapshot_name)?;
-    save_wallet_snapshot_if_present(snapshot_name, world)
+    save_wallet_snapshot(snapshot_name, world).await
 }
 
-fn execute_create_snapshot_node(
+async fn execute_create_snapshot_node(
     world: &CucumberWorld,
     snapshot_name: &str,
     node_name: &str,
@@ -800,7 +800,7 @@ fn execute_create_snapshot_node(
 
     if let Some(info) = world.nodes_info.get(node_name) {
         save_named_node_state_snapshot(snapshot_name, node_name, &info.runtime_dir)?;
-        save_wallet_snapshot_if_present(snapshot_name, world)?;
+        save_wallet_snapshot_for_nodes(snapshot_name, world, [node_name]).await?;
         info!(
             target: TARGET,
             "Saved snapshot `{snapshot_name}` for node {}",

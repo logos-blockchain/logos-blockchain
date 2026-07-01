@@ -51,7 +51,7 @@ use crate::{
             resolve_literal_or_env,
         },
         wallet::{
-            snapshot::save_wallet_snapshot_if_present,
+            snapshot::{save_wallet_snapshot, save_wallet_snapshot_for_nodes},
             sync::{WalletSendReadiness, wait_wallet_send_ready},
         },
         world::{
@@ -525,14 +525,10 @@ fn step_set_node_snapshot_on_startup(
 #[given(expr = "I create a snapshot {string} of all nodes")]
 #[when(expr = "I create a snapshot {string} of all nodes")]
 #[expect(
-    clippy::needless_pass_by_value,
-    reason = "Required by cucumber expression"
-)]
-#[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require the world as the first `&mut` argument"
 )]
-fn step_create_snapshot_all_nodes_now(
+async fn step_create_snapshot_all_nodes_now(
     world: &mut CucumberWorld,
     snapshot_name: String,
 ) -> StepResult {
@@ -543,7 +539,7 @@ fn step_create_snapshot_all_nodes_now(
     }
 
     create_snapshots_all_nodes(world, &snapshot_name)?;
-    save_wallet_snapshot_if_present(&snapshot_name, world)?;
+    save_wallet_snapshot(&snapshot_name, world).await?;
 
     Ok(())
 }
@@ -552,14 +548,10 @@ fn step_create_snapshot_all_nodes_now(
 #[when(expr = "I create a snapshot {string} of node {string}")]
 #[then(expr = "I create a snapshot {string} of node {string}")]
 #[expect(
-    clippy::needless_pass_by_value,
-    reason = "Required by cucumber expression"
-)]
-#[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require the world as the first `&mut` argument"
 )]
-fn step_create_snapshot_node_now(
+async fn step_create_snapshot_node_now(
     world: &mut CucumberWorld,
     snapshot_name: String,
     node_name: String,
@@ -572,7 +564,7 @@ fn step_create_snapshot_node_now(
 
     if let Some(info) = world.nodes_info.get(&node_name) {
         save_named_node_state_snapshot(&snapshot_name, &node_name, &info.runtime_dir)?;
-        save_wallet_snapshot_if_present(&snapshot_name, world)?;
+        save_wallet_snapshot_for_nodes(&snapshot_name, world, [node_name.as_str()]).await?;
         info!(
             target: TARGET,
             "Saved snapshot `{snapshot_name}` for node {}",
@@ -1013,7 +1005,7 @@ async fn step_query_cryptarchia_info_all_nodes(world: &mut CucumberWorld, step: 
 }
 
 #[then(expr = "I stop all nodes")]
-fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
+async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     let runtime_dir_by_node_name: Vec<(String, String)> = world
         .nodes_info
         .iter()
@@ -1028,7 +1020,7 @@ fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     }
 
     if let Some(snapshot_name) = world.snapshot_save_config.extensions.as_ref() {
-        save_wallet_snapshot_if_present(snapshot_name, world)?;
+        save_wallet_snapshot(snapshot_name, world).await?;
     }
 
     for (node_name, _) in &runtime_dir_by_node_name {

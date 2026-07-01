@@ -39,8 +39,8 @@ use tracing::warn;
 use crate::{
     BIN_PATH_RELEASE,
     common::wallet::{
-        TrackedWalletKeysBySource, TrackedWallets, WalletBlockFeedTracker, WalletDiagnostics,
-        WalletFeedTrackingBatch,
+        TrackedWalletKeys, TrackedWalletKeysBySource, TrackedWallets, WalletBlockFeedTracker,
+        WalletDiagnostics, WalletFeedTrackingBatch,
     },
     cucumber::{
         TARGET,
@@ -1449,6 +1449,40 @@ impl CucumberWorld {
         }
 
         Ok(tracking_batches)
+    }
+
+    pub(crate) fn wallet_tracking_keys_for_source(
+        &self,
+        source_node_name: &str,
+    ) -> Result<Vec<TrackedWalletKeys>, StepError> {
+        let wallets_by_source = self.wallets_by_source_with_unique_public_keys()?;
+        let Some(wallets) = wallets_by_source.get(source_node_name) else {
+            return Ok(Vec::new());
+        };
+
+        let group_key = self
+            .node_to_group
+            .get(source_node_name)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut wallet_keys = TrackedWalletKeysBySource::new();
+        for (wallet_name, public_key) in wallets {
+            wallet_keys.add_wallet(&group_key, wallet_name, *public_key);
+        }
+
+        if let Some(fee_wallet_account) = self.fee_state.wallet_account.clone() {
+            wallet_keys.add_wallet(
+                &group_key,
+                SCENARIO_FEE_ACCOUNT_NAME,
+                fee_wallet_account.public_key(),
+            );
+        }
+
+        Ok(wallet_keys
+            .batches()
+            .flat_map(|batch| batch.wallet_keys().to_vec())
+            .collect())
     }
 
     fn wallets_by_source_with_unique_public_keys(

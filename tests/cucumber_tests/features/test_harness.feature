@@ -54,5 +54,6 @@ Feature: Test harness
     And I start node "NODE_1"
     When node "NODE_1" is at height 2 in 5 seconds
     When node "NODE_1" is at height 3 in 300 seconds
+    When I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"
     Then wallet "WALLET_1A" has 4 or more outputs in 60 seconds
     And I stop all nodes

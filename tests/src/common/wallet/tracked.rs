@@ -5,7 +5,10 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     TrackedWallet, TrackedWalletState, WalletId, WalletReservedInputs, WalletStateView,
-    chain::{state::TrackedWalletKeys, state_cache::WalletChainStateCache},
+    chain::{
+        state::{TrackedWalletKeys, WalletUtxos},
+        state_cache::WalletChainStateCache,
+    },
 };
 
 /// Collection of wallets tracked from a chain view.
@@ -16,7 +19,7 @@ use super::{
 #[derive(Debug, Default)]
 pub struct TrackedWallets {
     wallets: HashMap<WalletId, TrackedWallet>,
-    chain_state_cache: WalletChainStateCache<WalletId>,
+    chain_state_cache: WalletChainStateCache,
     submitted_tx_hashes: HashMap<WalletId, Vec<TxHash>>,
 }
 
@@ -143,6 +146,24 @@ impl TrackedWallets {
             .collect();
         self.submitted_tx_hashes = state.submitted_tx_hashes;
         self.chain_state_cache = WalletChainStateCache::default();
+    }
+
+    /// Export wallet state observed from `node_name` at `header_id`.
+    #[must_use]
+    pub fn export_state_for_node_at_header(
+        &self,
+        node_name: &str,
+        header_id: &str,
+    ) -> Option<(String, u64, TrackedWalletsState)> {
+        self.chain_state_cache
+            .wallet_utxos_for_node_at_header(node_name, header_id)
+            .map(|(header_id, height, wallet_utxos)| {
+                (
+                    header_id,
+                    height,
+                    TrackedWalletsState::from_wallet_utxos(wallet_utxos),
+                )
+            })
     }
 
     pub(crate) fn ensure_wallets_from_tracked_keys(
@@ -327,6 +348,34 @@ pub struct TrackedWalletsState {
 }
 
 impl TrackedWalletsState {
+    #[must_use]
+    pub fn from_wallet_utxos(wallet_utxos: WalletUtxos) -> Self {
+        Self {
+            wallets: wallet_utxos
+                .into_iter()
+                .map(|(wallet_id, utxos)| {
+                    let mut wallet = TrackedWallet::new();
+                    wallet.replace_on_chain_utxos(utxos);
+                    (wallet_id, wallet.to_state())
+                })
+                .collect(),
+            submitted_tx_hashes: HashMap::new(),
+        }
+    }
+
+    #[must_use]
+    pub fn to_wallet_utxos(&self) -> WalletUtxos {
+        self.wallets
+            .iter()
+            .map(|(wallet_id, wallet)| {
+                (
+                    wallet_id.clone(),
+                    TrackedWallet::from_state(wallet.clone()).on_chain_utxos(),
+                )
+            })
+            .collect()
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.wallets.is_empty() && self.submitted_tx_hashes.is_empty()

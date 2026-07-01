@@ -1,26 +1,16 @@
-use std::{collections::HashMap, hash::Hash};
+use std::collections::HashMap;
 
 use lb_core::mantle::Utxo;
 
-#[derive(Debug)]
-pub struct WalletChainStateCache<WalletId> {
-    utxo_snapshots: WalletUtxoSnapshots<WalletId>,
+use crate::common::wallet::{WalletId, WalletUtxos};
+
+#[derive(Debug, Default)]
+pub struct WalletChainStateCache {
+    utxo_snapshots: WalletUtxoSnapshots,
     header_heights: HashMap<String, HashMap<String, u64>>,
 }
 
-impl<WalletId> Default for WalletChainStateCache<WalletId> {
-    fn default() -> Self {
-        Self {
-            utxo_snapshots: WalletUtxoSnapshots::default(),
-            header_heights: HashMap::new(),
-        }
-    }
-}
-
-impl<WalletId> WalletChainStateCache<WalletId>
-where
-    WalletId: Clone + Eq + Hash,
-{
+impl WalletChainStateCache {
     pub fn record_wallets_utxos(
         &mut self,
         header_id: String,
@@ -38,8 +28,22 @@ where
     }
 
     #[must_use]
-    pub const fn utxo_snapshots(&self) -> &WalletUtxoSnapshots<WalletId> {
+    pub const fn utxo_snapshots(&self) -> &WalletUtxoSnapshots {
         &self.utxo_snapshots
+    }
+
+    #[must_use]
+    pub fn wallet_utxos_for_node_at_header(
+        &self,
+        node_name: &str,
+        header_id: &str,
+    ) -> Option<(String, u64, WalletUtxos)> {
+        let heights = self.header_heights.get(node_name)?;
+        header_id_lookup_keys(header_id).find_map(|header_id| {
+            let height = heights.get(&header_id)?;
+            let snapshot = self.utxo_snapshots.by_header.get(&header_id)?;
+            Some((header_id.clone(), *height, snapshot.to_owned_wallet_utxos()))
+        })
     }
 
     #[must_use]
@@ -58,16 +62,18 @@ where
     }
 }
 
-#[derive(Debug)]
-pub struct WalletUtxoSnapshot<WalletId> {
-    header_id: String,
-    utxos_by_wallet: HashMap<WalletId, Vec<Utxo>>,
+fn header_id_lookup_keys(header_id: &str) -> impl Iterator<Item = String> + '_ {
+    let without_prefix = header_id.strip_prefix("0x").unwrap_or(header_id);
+    [without_prefix.to_owned(), format!("0x{without_prefix}")].into_iter()
 }
 
-impl<WalletId> WalletUtxoSnapshot<WalletId>
-where
-    WalletId: Eq + Hash,
-{
+#[derive(Debug)]
+pub struct WalletUtxoSnapshot {
+    header_id: String,
+    utxos_by_wallet: WalletUtxos,
+}
+
+impl WalletUtxoSnapshot {
     #[must_use]
     pub fn new(header_id: String) -> Self {
         Self {
@@ -86,25 +92,19 @@ where
             .iter()
             .map(|(wallet_id, utxos)| (wallet_id, utxos.as_slice()))
     }
-}
 
-#[derive(Debug)]
-pub struct WalletUtxoSnapshots<WalletId> {
-    by_header: HashMap<String, WalletUtxoSnapshot<WalletId>>,
-}
-
-impl<WalletId> Default for WalletUtxoSnapshots<WalletId> {
-    fn default() -> Self {
-        Self {
-            by_header: HashMap::new(),
-        }
+    #[must_use]
+    pub fn to_owned_wallet_utxos(&self) -> WalletUtxos {
+        self.utxos_by_wallet.clone()
     }
 }
 
-impl<WalletId> WalletUtxoSnapshots<WalletId>
-where
-    WalletId: Clone + Eq + Hash,
-{
+#[derive(Debug, Default)]
+pub struct WalletUtxoSnapshots {
+    by_header: HashMap<String, WalletUtxoSnapshot>,
+}
+
+impl WalletUtxoSnapshots {
     pub fn insert_many_wallet_utxos(
         &mut self,
         header_id: String,
@@ -123,7 +123,7 @@ where
         self.by_header.len()
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&String, &WalletUtxoSnapshot<WalletId>)> {
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &WalletUtxoSnapshot)> {
         self.by_header.iter()
     }
 }

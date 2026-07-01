@@ -698,9 +698,10 @@ pub async fn start_node(
         };
         stop_result?;
         if let Some(snapshot_name) = world.snapshot_restore_config.extensions.take() {
-            restore_wallet_snapshot_if_present(&snapshot_name, world).inspect_err(|e| {
-                warn!(target: TARGET, "Step `{step}` error: {e}");
-            })?;
+            restore_wallet_snapshot_if_present(&snapshot_name, &node_snapshot.node, world)
+                .inspect_err(|e| {
+                    warn!(target: TARGET, "Step `{step}` error: {e}");
+                })?;
         }
         restore_node_state_from_snapshot(&node_snapshot, &node_runtime_dir).inspect_err(|e| {
             warn!(target: TARGET, "Step `{step}` error: {e}");
