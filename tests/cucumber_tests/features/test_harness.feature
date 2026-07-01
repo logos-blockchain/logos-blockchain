@@ -12,23 +12,16 @@ Feature: Test harness
 
   @snapshot_restore_smoke
   Scenario: Local snapshot restore after shutdown
-    Given the genesis block has the following wallet resources:
-      | account_index | token_count | token_amount |
-      | 1             | 3           | 1000000      |
-    And I have a cluster with capacity of 1 nodes
+    Given I have a cluster with capacity of 1 nodes
     And all peers must be mode online after startup in 30 seconds
-    And I start nodes with wallet resources:
-      | node_name | account_index | wallet_name | connected_to |
-      | NODE_1    | 1             | WALLET_1A   |              |
-    When node "NODE_1" is at height 2 in 300 seconds
+    And I start node "NODE_1"
+    When node "NODE_1" is at height 3 in 300 seconds
     And I create a snapshot "LOCAL_SNAPSHOT_SMOKE" of node "NODE_1"
     Then I stop all nodes
     Given I will initialize started nodes from snapshot "LOCAL_SNAPSHOT_SMOKE" source node "NODE_1"
     And I have a cluster with capacity of 1 nodes
     And all peers must be mode online after startup in 30 seconds
-    And I start nodes with wallet resources:
-      | node_name | account_index | wallet_name | connected_to |
-      | NODE_1    | 1             | WALLET_1A   |              |
+    And I start node "NODE_1"
     When node "NODE_1" is at height 2 in 5 seconds
     When node "NODE_1" is at height 3 in 300 seconds
     Then I stop all nodes
