@@ -331,6 +331,7 @@ Feature: Transactions
     When wallet "WALLET_1A" has 250 or more outputs in 180 seconds
     And I send 1 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 1 or more outputs in 180 seconds
+    When wallet "WALLET_1A" has 1 or more outputs and 1000 or more LGO in 10 seconds
     # Coin join all outputs back to one output
     # Maximum number of inputs per transaction is 255 (as per encoding limits)
     And I send 1 transactions of 249000 LGO each from wallet "WALLET_1A" to wallet "WALLET_1A"

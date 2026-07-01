@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    time::Duration,
+};
 
 use cucumber::{gherkin::Step, given, then, when};
 use lb_common_http_client::CommonHttpClient;
@@ -10,6 +14,7 @@ use tokio::time::{Instant, sleep};
 use tracing::{info, warn};
 
 use crate::{
+    common::wallet::WalletUtxos,
     cucumber::{
         error::{StepError, StepResult},
         steps::{
@@ -37,13 +42,15 @@ use crate::{
                 },
             },
             manual_transactions::utils::{
-                create_and_submit_transaction_hashes, wait_for_transactions_inclusion,
+                create_and_submit_transaction_hashes_with_utxo_cache,
+                wait_for_transactions_inclusion,
             },
         },
         utils::{
             blend_core_locator_from_node_yaml, blend_core_zk_pk_from_node_yaml,
             resolve_literal_or_env,
         },
+        wallet::sync::{WalletSendReadiness, wait_wallet_send_ready},
         world::{
             CucumberWorld, GenesisTokens, ManualClusterKind, ManualClusterSpec, NodeSnapshot,
             PublicCryptarchiaEndpointPeer,
@@ -720,7 +727,7 @@ fn step_set_ibd_peers(world: &mut CucumberWorld, step: &Step) -> StepResult {
         });
     }
 
-    let mut peers = std::collections::HashSet::with_capacity(table.rows.len().saturating_sub(1));
+    let mut peers = HashSet::with_capacity(table.rows.len().saturating_sub(1));
     for row in table.rows.iter().skip(1) {
         let peer = row[0]
             .trim()
@@ -1043,13 +1050,27 @@ async fn step_send_multiple_transactions_to_blend_core_zk_key(
         .client
         .clone();
 
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        &step.value,
+        &sender_wallet_name,
+        180,
+        number_of_transactions as u64 * output_value,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
     for _ in 0..number_of_transactions {
-        let tx_hashes = create_and_submit_transaction_hashes(
+        let tx_hashes = create_and_submit_transaction_hashes_with_utxo_cache(
             world,
             &step.value,
             &sender_wallet_name,
             &[(receiver_blend_zk_pk, output_value)],
-            None,
+            Some(&best_node_info),
+            Some(&mut available_utxos),
         )
         .await
         .inspect_err(|error| {

@@ -5014,6 +5014,7 @@ name = "logos-blockchain-tests"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "bincode",
  "cucumber",
  "derivative",
  "divan",
@@ -5033,6 +5034,7 @@ dependencies = [
  "logos-blockchain-libp2p",
  "logos-blockchain-mmr",
  "logos-blockchain-node",
+ "logos-blockchain-tui-zone",
  "logos-blockchain-tx-service",
  "logos-blockchain-utils",
  "logos-blockchain-utxotree",
@@ -5153,9 +5155,12 @@ dependencies = [
 name = "logos-blockchain-tui-zone"
 version = "0.0.0"
 dependencies = [
+ "bincode",
+ "chrono",
  "clap",
  "hex",
  "logos-blockchain-core",
+ "logos-blockchain-groth16",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "rand 0.8.6",

@@ -3,21 +3,21 @@ services:
   cfgsync:
     container_name: cfgsync
     build:
-      context: .
+      context: ..
       dockerfile: deployment/Dockerfile
     image: logos-blockchain:latest
     volumes:
-      - ./deployment:/etc/logos-blockchain
+      - .:/etc/logos-blockchain
     environment:
       - ENTROPY_FILE=/etc/logos-blockchain/deployment/cfgsync/tests/test_entropy
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync_server.sh
 
   logos-blockchain-node:
     build:
-      context: .
+      context: ..
       dockerfile: deployment/Dockerfile
     volumes:
-      - ./deployment:/etc/logos-blockchain
+      - .:/etc/logos-blockchain
     deploy:
       replicas: ${DOCKER_COMPOSE_LIBP2P_REPLICAS:-1}
     depends_on:

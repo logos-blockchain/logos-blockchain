@@ -7,8 +7,8 @@ services:
     image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
-      - ./nodes/node/binary/src/config/deployment/settings.yaml:/deployment.yaml
-      - ./deployment:/etc/logos-blockchain
+      - ../nodes/node/binary/src/config/deployment/settings.yaml:/deployment.yaml
+      - .:/etc/logos-blockchain
     ports:
       - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/cleanup_node_data.sh
@@ -25,9 +25,9 @@ services:
       - ENV_TITLE_STRING=${ENV_TITLE_STRING}
     volumes:
       - node-data:/node-data
-      - ./deployment/nginx/setup.conf:/etc/nginx/nginx.conf
-      - ./deployment/nginx/static/setup:/usr/share/nginx/html_template
-      - ./deployment/scripts/setup_nginx.sh:/etc/setup_nginx.sh
+      - ./nginx/setup.conf:/etc/nginx/nginx.conf
+      - ./nginx/static/setup:/usr/share/nginx/html_template
+      - ./scripts/setup_nginx.sh:/etc/setup_nginx.sh
     entrypoint: /etc/setup_nginx.sh
 
 volumes:

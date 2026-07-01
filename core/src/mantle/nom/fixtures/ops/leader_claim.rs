@@ -1,0 +1,23 @@
+use lb_core_macros::nom_wire_fixtures;
+use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+
+use crate::mantle::ops::leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier};
+
+nom_wire_fixtures!(
+    RewardsRoot,
+    Fr::ZERO.into() => "0000000000000000000000000000000000000000000000000000000000000000"
+);
+
+nom_wire_fixtures!(
+    VoucherNullifier,
+    Fr::ZERO.into() => "0000000000000000000000000000000000000000000000000000000000000000"
+);
+
+nom_wire_fixtures!(
+    LeaderClaimOp,
+    LeaderClaimOp {
+        rewards_root: Fr::ZERO.into(),
+        voucher_nullifier: Fr::ONE.into(),
+        pk: Fr::ZERO.into()
+    } => "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+);
