@@ -1,6 +1,8 @@
 pub mod rewards;
+#[cfg(test)]
+pub(crate) mod test_utils;
 
-use std::{collections::HashMap, marker::PhantomData};
+use std::collections::HashMap;
 
 use lb_blend_message::crypto::proofs::RealProofsVerifier;
 use lb_core::{
@@ -83,23 +85,18 @@ impl Service {
         }
     }
 
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "TODO: enable this after making the `rewards` module stable"
-    )]
-    pub const fn update_rewards(
+    pub fn update_rewards(
         &mut self,
-        _provider_id: ProviderId,
-        _metadata: &ActivityMetadata,
-        _rewards_params: &ServiceRewardsParameters,
+        provider_id: ProviderId,
+        metadata: &ActivityMetadata,
+        rewards_params: &ServiceRewardsParameters,
     ) -> Result<(), Error> {
         match self {
-            Self::BlendNetwork(_state) => {
-                // TODO: enable this after making the `rewards` module stable
-                // state.rewards =
-                //     state
-                //         .rewards
-                //         .update_active(provider_id, metadata, &rewards_params.blend)?;
+            Self::BlendNetwork(state) => {
+                state.rewards =
+                    state
+                        .rewards
+                        .update_active(provider_id, metadata, &rewards_params.blend)?;
                 Ok(())
             }
         }
@@ -166,10 +163,8 @@ pub enum Error {
 struct ServiceState<R: Rewards> {
     /// Declarations accumulated until the current block.
     declarations: Declarations,
-    // TODO: enable this after making the `rewards` module stable
     // Rewards calculation and tracking for this service
-    // pub rewards: R,
-    _phantom: PhantomData<R>,
+    pub rewards: R,
 }
 
 impl<R: Rewards> ServiceState<R> {
@@ -179,9 +174,9 @@ impl<R: Rewards> ServiceState<R> {
         epoch_state: &EpochState,
         locked_notes: &mut LockedNotes,
         service_params: &ServiceParameters,
-        _rewards_params: &R::Params,
+        rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>, Vec<HeaderEvent>) {
-        let reward_utxos = Vec::new();
+        let mut reward_utxos = Vec::new();
         let mut events = Vec::new();
 
         if last_epoch_state.epoch() < epoch_state.epoch() {
@@ -193,16 +188,13 @@ impl<R: Rewards> ServiceState<R> {
             // Garbage collect declarations
             self.gc_declarations(epoch_state.epoch(), service_params);
 
-            // Update rewards with current epoch state and distribute rewards
-            // TODO: enable this after making the `rewards` module stable
-            // if last_epoch_state.epoch() < epoch_state.epoch() {
-            //     (self.rewards, reward_utxos) = self.rewards.update_epoch(
-            //         last_epoch_state,
-            //         epoch_state,
-            //         service_params,
-            //         rewards_params,
-            //     );
-            // }
+            // Update and distribute rewards
+            (self.rewards, reward_utxos) = self.rewards.update_epoch(
+                last_epoch_state,
+                epoch_state,
+                service_params,
+                rewards_params,
+            );
         }
 
         (self, reward_utxos, events)
@@ -279,13 +271,8 @@ impl<R: Rewards> ServiceState<R> {
         withdrawn || inactive
     }
 
-    #[expect(
-        clippy::unused_self,
-        reason = "TODO: enable this after making the `rewards` module stable"
-    )]
-    const fn add_income(&self, _income: Value) {
-        // TODO: enable this after making the `rewards` module stable
-        // self.rewards = self.rewards.add_income(income);
+    fn add_income(&mut self, income: Value) {
+        self.rewards = self.rewards.add_income(income);
     }
 
     fn contains(&self, declaration_id: &DeclarationId) -> bool {
@@ -350,31 +337,26 @@ impl SdpLedger {
     #[must_use]
     pub fn with_blend_service(
         mut self,
-        _rewards_settings: &blend::RewardsParameters,
+        rewards_settings: &blend::RewardsParameters,
         epoch_state: &EpochState,
     ) -> Self {
         assert_eq!(
             epoch_state.epoch, self.epoch,
             "TODO: refactor to remove this assertion"
         );
-        let service = Service::BlendNetwork(Self::new_service_state(
-            // TODO: enable this after making the `rewards` module stable
-            // blend::Rewards::new(
-            //     rewards_settings,
-            //     epoch_state,
-            // )
-        ));
+        let service = Service::BlendNetwork(Self::new_service_state(blend::Rewards::new(
+            rewards_settings,
+            epoch_state,
+        )));
         self.services = self.services.insert(ServiceType::BlendNetwork, service);
         self
     }
 
     #[must_use]
-    fn new_service_state<R: Rewards>(// TODO: enabled this after making the `rewards` module stable
-        //rewards: R
-    ) -> ServiceState<R> {
+    fn new_service_state<R: Rewards>(rewards: R) -> ServiceState<R> {
         ServiceState {
             declarations: rpds::RedBlackTreeMapSync::new_sync(),
-            _phantom: PhantomData,
+            rewards,
         }
     }
 
@@ -677,9 +659,7 @@ pub struct HeaderEffect {
 mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
-    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_core::{
-        crypto::ZkHash,
         mantle::ledger::Utxos,
         sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
     };
@@ -689,7 +669,9 @@ mod tests {
     use num_bigint::BigUint;
 
     use super::*;
-    use crate::cryptarchia::tests::utxo_with_sk;
+    use crate::{
+        cryptarchia::tests::utxo_with_sk, mantle::sdp::test_utils::generate_activity_proof,
+    };
 
     fn setup(service_params: ServiceParameters) -> Config {
         let mut params = HashMap::new();
@@ -776,14 +758,18 @@ mod tests {
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
+    const NONCE: Fr = Fr::ZERO;
+    const LOTTERY_0: Fr = Fr::ZERO;
+    const LOTTERY_1: Fr = Fr::ZERO;
+
     fn dummy_epoch_state(epoch: Epoch) -> EpochState {
         EpochState {
             epoch,
-            nonce: ZkHash::ZERO,
+            nonce: NONCE,
             utxos: UtxoTree::default(),
             total_stake: 100,
-            lottery_0: Fr::ZERO,
-            lottery_1: Fr::ZERO,
+            lottery_0: LOTTERY_0,
+            lottery_1: LOTTERY_1,
             active_declarations: Arc::new(lb_core::sdp::Declarations::default()),
         }
     }
@@ -795,11 +781,22 @@ mod tests {
         )
     }
 
-    fn next_epoch_state(epoch: Epoch, last_epoch_state: EpochState) -> EpochState {
+    /// Build the epoch state for `epoch`, snapshotting `active_declarations`
+    /// from `ledger` the same way production does. Using a constant nonce and
+    /// lottery values keeps the `LeaderInputs` used by
+    /// [`generate_activity_proof`] aligned with what the rewards module
+    /// computes on epoch transition.
+    fn next_epoch_state(epoch: Epoch, ledger: &SdpLedger, config: &Config) -> EpochState {
         EpochState {
             epoch,
-            nonce: ZkHash::from(epoch.into_inner()),
-            ..last_epoch_state
+            nonce: NONCE,
+            utxos: UtxoTree::default(),
+            total_stake: 100,
+            lottery_0: LOTTERY_0,
+            lottery_1: LOTTERY_1,
+            active_declarations: Arc::new(
+                ledger.active_declarations(epoch, &config.service_params),
+            ),
         }
     }
 
@@ -821,8 +818,8 @@ mod tests {
 
         // Advance to epoch 1 and declare. The new declaration's `active`
         // initializes to created + 2 = 3.
-        let mut last_epoch_state = epoch0.clone();
-        let new_epoch_state = next_epoch_state(1.into(), epoch0);
+        let mut last_epoch_state = epoch0;
+        let new_epoch_state = next_epoch_state(1.into(), &ledger, &config);
         (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
@@ -853,7 +850,7 @@ mod tests {
         // (active=3, inactivity=2 -> 3+2 < 6).
         let mut ledger = ledger;
         for epoch in 2..=6 {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
+            let new_epoch_state = next_epoch_state(epoch.into(), &ledger, &config);
             (ledger, _) = ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
@@ -939,8 +936,8 @@ mod tests {
 
         // Advance to epoch 1 and declare. The declaration's `active`
         // initializes to created + 2 = 3.
-        let last_epoch_state = epoch0.clone();
-        let new_epoch_state = next_epoch_state(1.into(), epoch0);
+        let last_epoch_state = epoch0;
+        let new_epoch_state = next_epoch_state(1.into(), &ledger, &config);
         (ledger, _) = ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
@@ -1026,12 +1023,8 @@ mod tests {
         let mut ledger = dummy_sdp_ledger(0.into(), &config);
 
         // Move forward to the epoch 1
-        let mut last_epoch_state = epoch0.clone();
-        let new_epoch_state = next_epoch_state(1.into(), epoch0);
-        (ledger, _) = ledger
-            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-            .unwrap();
-        last_epoch_state = new_epoch_state;
+        let epoch1 = next_epoch_state(1.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch0, &epoch1).unwrap();
 
         // Add a declaration at epoch 1
         let (_utxo_sk, utxo) = utxo_with_sk();
@@ -1060,13 +1053,12 @@ mod tests {
         // Move forward to the epoch 4 where the provider can submit an activity
         // message.
         // (The provider is expected to provide the service from epoch 3)
-        for epoch in 2..=4 {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (ledger, _) = ledger
-                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-                .unwrap();
-            last_epoch_state = new_epoch_state;
-        }
+        let epoch2 = next_epoch_state(2.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch1, &epoch2).unwrap();
+        let epoch3 = next_epoch_state(3.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch2, &epoch3).unwrap();
+        let epoch4 = next_epoch_state(4.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch3, &epoch4).unwrap();
         // Check that the declaration is still present.
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
@@ -1075,12 +1067,12 @@ mod tests {
         let active_op = SDPActiveOp {
             declaration_id,
             nonce: 1,
-            metadata: ActivityMetadata::Blend(Box::new(lb_core::sdp::blend::ActivityProof {
-                epoch: 3.into(), // proving activity from epoch 3
-                signing_key: signing_key.public_key(),
-                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]).into(),
-                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([1; _]).into(),
-            })),
+            metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
+                &zk_key,
+                &epoch3, // proving activity from epoch 3
+                &epoch4,
+                &config.service_rewards_params.blend,
+            ))),
         };
         let mut ledger = apply_active_with_dummies(ledger, &active_op, zk_key, &config).unwrap();
         let declaration = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
@@ -1091,13 +1083,12 @@ mod tests {
 
         // Move forward to the epoch 7. The declaration should be still present
         // because the activity message was accepted at epoch 4.
-        for epoch in 5..=7 {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
-            (ledger, _) = ledger
-                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-                .unwrap();
-            last_epoch_state = new_epoch_state;
-        }
+        let epoch5 = next_epoch_state(5.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch4, &epoch5).unwrap();
+        let epoch6 = next_epoch_state(6.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch5, &epoch6).unwrap();
+        let epoch7 = next_epoch_state(7.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch6, &epoch7).unwrap();
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(declarations.contains_key(&declaration_id));
 
@@ -1105,9 +1096,7 @@ mod tests {
         // applying another header within the same epoch 7 must be a no-op
         // (GC and unlock are gated to epoch transitions only).
         let ledger_before = ledger.clone();
-        (ledger, _) = ledger
-            .try_apply_header(&config, &last_epoch_state, &last_epoch_state)
-            .unwrap();
+        (ledger, _) = ledger.try_apply_header(&config, &epoch7, &epoch7).unwrap();
         assert_eq!(
             ledger, ledger_before,
             "within-epoch try_apply_header must not change ledger state"
@@ -1115,12 +1104,98 @@ mod tests {
 
         // Move forward to epoch 8 where declaration should be removed
         // because no activity message has been submitted since epoch 4
-        let new_epoch_state = next_epoch_state(8.into(), last_epoch_state.clone());
-        (ledger, _) = ledger
-            .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
-            .unwrap();
+        let epoch8 = next_epoch_state(8.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch7, &epoch8).unwrap();
         let declarations = ledger.get_declarations(ServiceType::BlendNetwork).unwrap();
         assert!(!declarations.contains_key(&declaration_id));
+    }
+
+    #[test]
+    fn rewards_distributed_to_active_provider() {
+        let config = setup(ServiceParameters {
+            inactivity_period: 2.try_into().unwrap(),
+            retention_period: 100.into(),
+            epoch: 0.into(),
+        });
+
+        // Init ledger with no declaration.
+        let epoch0 = dummy_epoch_state(0.into());
+        let mut ledger = dummy_sdp_ledger(0.into(), &config);
+
+        // Move forward to epoch 1 and declare.
+        let epoch1 = next_epoch_state(1.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch0, &epoch1).unwrap();
+
+        let (_utxo_sk, utxo) = utxo_with_sk();
+        let note_id = utxo.id();
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let declare_op = &SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: note_id,
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id = declare_op.id();
+        let mut ledger = apply_declare_with_dummies(
+            &utxo_tree(vec![utxo]),
+            ledger,
+            declare_op,
+            &zk_key,
+            &config,
+        )
+        .unwrap();
+
+        // Advance to epoch 3.
+        let epoch2 = next_epoch_state(2.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch1, &epoch2).unwrap();
+        let epoch3 = next_epoch_state(3.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch2, &epoch3).unwrap();
+
+        // Simulate block-reward income accrued during epoch 3.
+        let income: Value = 1000;
+        ledger.add_blend_income(income);
+
+        // Advance to epoch 4: The declaration becomes active.
+        let epoch4 = next_epoch_state(4.into(), &ledger, &config);
+        (ledger, _) = ledger.try_apply_header(&config, &epoch3, &epoch4).unwrap();
+
+        // Submit an activity proof at epoch 4
+        let active_op = SDPActiveOp {
+            declaration_id,
+            nonce: 1,
+            metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
+                &zk_key,
+                &epoch3,
+                &epoch4,
+                &config.service_rewards_params.blend,
+            ))),
+        };
+        let ledger =
+            apply_active_with_dummies(ledger, &active_op, zk_key.clone(), &config).unwrap();
+
+        // Advance to epoch 5: SDP rewards are distributed
+        let epoch5 = next_epoch_state(5.into(), &ledger, &config);
+        let (_, effect) = ledger.try_apply_header(&config, &epoch4, &epoch5).unwrap();
+
+        // The single provider is both the only submitter and the premium
+        // provider (min hamming distance), so they collect the full `income`.
+        let provider_zk_id = zk_key.to_public_key();
+        let received: Vec<&Utxo> = effect
+            .reward_utxos
+            .iter()
+            .filter(|u| u.note.pk == provider_zk_id)
+            .collect();
+        assert_eq!(
+            received.len(),
+            1,
+            "the active provider must receive exactly one reward UTXO",
+        );
+        assert_eq!(
+            received[0].note.value, income,
+            "single-provider reward must equal the full accrued income",
+        );
     }
 
     /// Regression test: the per-epoch membership build must not panic on an
@@ -1237,7 +1312,7 @@ mod tests {
         let mut sdp_ledger = sdp_ledger;
         let mut last_epoch_state = epoch0;
         for epoch in 1..=withdrawn_epoch.into_inner() {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
+            let new_epoch_state = next_epoch_state(epoch.into(), &sdp_ledger, &config);
             let events;
             (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
@@ -1281,7 +1356,7 @@ mod tests {
             .strict_add(retention_period)
             .strict_add(Epoch::new(1));
         for epoch in (withdrawn_epoch.into_inner() + 1)..target_epoch.into_inner() {
-            let new_epoch_state = next_epoch_state(epoch.into(), last_epoch_state.clone());
+            let new_epoch_state = next_epoch_state(epoch.into(), &sdp_ledger, &config);
             (sdp_ledger, _) = sdp_ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
@@ -1294,7 +1369,7 @@ mod tests {
 
         // Move forward one more epoch. Now, `snapshot_finalization + retention_period`
         // has passed. Check that the declaration has been removed.
-        let new_epoch_state = next_epoch_state(target_epoch, last_epoch_state.clone());
+        let new_epoch_state = next_epoch_state(target_epoch, &sdp_ledger, &config);
         (sdp_ledger, _) = sdp_ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();

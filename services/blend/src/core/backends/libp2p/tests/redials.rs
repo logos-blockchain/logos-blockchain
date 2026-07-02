@@ -229,10 +229,14 @@ async fn core_remembers_failed_peers_across_retries() {
     );
 }
 
-/// Verifies that when all peers have been tried and failed, the failed peers
-/// memory is cleared and peers are retried from scratch.
+/// Verifies that when all peers have been tried and failed in a cycle, the node
+/// does not immediately re-dial the whole membership (which would spin at
+/// event-loop speed against peers that keep rejecting us). Instead it schedules
+/// a single delayed retry from scratch; when the cooldown elapses,
+/// `check_and_dial_new_peers` re-dials the membership with a cleared
+/// failed-peers set.
 #[test(tokio::test)]
-async fn core_clears_failed_peers_memory_when_all_exhausted() {
+async fn core_schedules_delayed_retry_when_all_peers_exhausted() {
     // Create 3 membership nodes: 1 local + 2 remote unreachable.
     let (mut identities, nodes) = new_nodes_with_empty_address(3);
     let TestSwarm {
@@ -273,17 +277,16 @@ async fn core_clears_failed_peers_memory_when_all_exhausted() {
         })
         .await;
 
-    // Both peers have been tried. The memory should be cleared and a new dial
-    // should be attempted with an empty failed_peers set.
+    // Both peers have been tried this cycle. Instead of an immediate re-dial, a
+    // single delayed retry-from-scratch should be scheduled, with no dial in
+    // flight in the meantime.
     assert!(
-        !dialing_swarm.ongoing_dials().is_empty(),
-        "A new dial should be attempted after clearing failed peers memory"
+        dialing_swarm.ongoing_dials().is_empty(),
+        "No immediate re-dial should happen; the retry from scratch is delayed"
     );
-    let retried_peer = *dialing_swarm.ongoing_dials().keys().next().unwrap();
-    assert_eq!(
-        dialing_swarm.failed_peers_for(&retried_peer),
-        Some(&HashSet::new()),
-        "Failed peers memory should be cleared after all peers have been tried"
+    assert!(
+        dialing_swarm.has_pending_full_membership_retry(),
+        "A delayed retry-from-scratch should be scheduled after all peers have been tried"
     );
 }
 
@@ -414,6 +417,7 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
         .num_healthy_peers();
     let ongoing = dialing_swarm.ongoing_dials().len();
     let pending = dialing_swarm.pending_retries_count();
+    let full_retry = dialing_swarm.has_pending_full_membership_retry();
 
     // Sanity: the reachable peer connected, so we are genuinely one short of the
     // minimum (not simply failing to connect to anyone).
@@ -423,13 +427,15 @@ async fn core_does_not_give_up_below_minimum_peering_degree() {
     );
 
     // Regression guard: a node below the minimum peering degree must not give up
-    // — it must still be dialing (an ongoing dial or a pending retry). Before the
-    // fix it ended with no ongoing dials and no pending retries, stranded at degree
-    // 1 < 2 until the next epoch.
+    // — it must still be trying to reach the minimum, whether via an ongoing
+    // dial, a pending per-peer retry, or a scheduled retry-from-scratch. Before
+    // the fix it ended with none of these, stranded at degree 1 < 2 until the
+    // next epoch.
     assert!(
-        healthy >= min_peering_degree || ongoing > 0 || pending > 0,
+        healthy >= min_peering_degree || ongoing > 0 || pending > 0 || full_retry,
         "node gave up below the minimum peering degree: healthy={healthy} < {min_peering_degree}, \
-         ongoing_dials={ongoing}, pending_retries={pending} — it will stay stranded until the next epoch"
+         ongoing_dials={ongoing}, pending_retries={pending}, full_membership_retry={full_retry} — \
+         it will stay stranded until the next epoch"
     );
 }
 
