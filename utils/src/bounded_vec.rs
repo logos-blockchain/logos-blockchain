@@ -92,7 +92,7 @@ impl<T, const MIN: usize, const MAX: usize> BoundedVec<T, MIN, MAX> {
     }
 
     pub fn try_pop(&mut self) -> Result<Option<T>, BoundedError> {
-        if self.is_empty() {
+        if self.is_empty() || self.len() - 1 < MIN {
             return Ok(None);
         }
 
@@ -524,34 +524,24 @@ mod tests {
     }
 
     #[test]
-    fn try_pop_removes_last_item_when_above_min() {
+    fn try_pop_returns_none_at_or_below_lower_bound_and_is_idempotent() {
         let mut bv = TestBoundedVectorMin2::try_from(vec![1, 2, 3]).unwrap();
 
         assert_eq!(bv.try_pop(), Ok(Some(3)));
-        assert_eq!(bv.as_slice(), &[1, 2]);
-        assert_eq!(bv.len(), 2);
-    }
-
-    #[test]
-    fn try_pop_rejects_removal_below_min_and_does_not_mutate() {
-        let mut bv = TestBoundedVectorMin2::try_from(vec![1, 2]).unwrap();
-
-        assert_eq!(
-            bv.try_pop(),
-            Err(BoundedError::TooFewItems { count: 1, min: 2 })
-        );
-
-        assert_eq!(bv.as_slice(), &[1, 2]);
-        assert_eq!(bv.len(), 2);
-    }
-
-    #[test]
-    fn try_pop_returns_none_when_empty_and_min_is_zero() {
-        type EmptyAllowed = BoundedVec<u8, 0, 4>;
-
-        let mut bv = EmptyAllowed::empty();
-
         assert_eq!(bv.try_pop(), Ok(None));
+        assert_eq!(bv.try_pop(), Ok(None));
+
+        assert_eq!(bv.as_slice(), &[1, 2]);
+        assert_eq!(bv.len(), 2);
+
+        let mut bv = TestBoundedVectorMin0::try_from(vec![1, 2, 3]).unwrap();
+
+        assert_eq!(bv.try_pop(), Ok(Some(3)));
+        assert_eq!(bv.try_pop(), Ok(Some(2)));
+        assert_eq!(bv.try_pop(), Ok(Some(1)));
+        assert_eq!(bv.try_pop(), Ok(None));
+        assert_eq!(bv.try_pop(), Ok(None));
+
         assert!(bv.is_empty());
     }
 
