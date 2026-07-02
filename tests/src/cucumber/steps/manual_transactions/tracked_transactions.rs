@@ -11,10 +11,14 @@ use tokio::time::{sleep, timeout};
 use tracing::{info, warn};
 
 use crate::{
-    common::chain::scan_chain_until,
+    common::{chain::scan_chain_until, wallet::WalletUtxos},
     cucumber::{
         error::StepError,
-        steps::{TARGET, manual_transactions::utils::create_and_submit_transaction_hashes},
+        steps::{
+            TARGET,
+            manual_transactions::utils::create_and_submit_transaction_hashes_with_utxo_cache,
+        },
+        wallet::sync::{WalletSendReadiness, wait_wallet_send_ready},
         world::{CucumberWorld, WalletType},
     },
 };
@@ -75,12 +79,26 @@ pub async fn submit_funded_transfer_transaction(
         }
     }
 
-    let tx_hashes = create_and_submit_transaction_hashes(
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        step,
+        &sender_wallet_name,
+        180,
+        amount,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
+    let tx_hashes = create_and_submit_transaction_hashes_with_utxo_cache(
         world,
         step,
         &sender_wallet_name,
         &[(receiver_wallet.public_key()?, amount)],
-        None,
+        Some(&best_node_info),
+        Some(&mut available_utxos),
     )
     .await
     .inspect_err(|e| {

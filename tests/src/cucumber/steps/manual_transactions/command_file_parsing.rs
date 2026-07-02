@@ -45,7 +45,7 @@ pub enum ManualCommand {
     },
     ClearEncumbrancesAllWallets,
     Send {
-        transactions: usize,
+        num_transactions: usize,
         value: u64,
         from: String,
         to: String,
@@ -53,7 +53,7 @@ pub enum ManualCommand {
     ContinuousRoundRobinUserWallets {
         coin_split_outputs: usize,
         coin_split_value: u64,
-        transactions: usize,
+        num_transactions: usize,
         value: u64,
         cycles: usize,
     },
@@ -68,7 +68,7 @@ pub enum ManualCommand {
     },
     ContinuousNextWalletUserWallets {
         cycles: usize,
-        transactions_per_wallet: usize,
+        num_transactions: usize,
         value: u64,
     },
     FaucetFundsAllUserWallets {
@@ -234,7 +234,7 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
         }),
         "CLEAR_ENCUMBRANCES_ALL_WALLETS" => Ok(ManualCommand::ClearEncumbrancesAllWallets),
         "SEND" => Ok(ManualCommand::Send {
-            transactions: parse_usize_field(&parts, "transactions")?,
+            num_transactions: parse_usize_field(&parts, "num_transactions")?,
             value: parse_u64_field(&parts, "value")?,
             from: parse_quoted_field(&parts, "from")?,
             to: parse_quoted_field(&parts, "to")?,
@@ -243,7 +243,7 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
             Ok(ManualCommand::ContinuousRoundRobinUserWallets {
                 coin_split_outputs: parse_usize_field(&parts, "coin_split_outputs")?,
                 coin_split_value: parse_u64_field(&parts, "coin_split_value")?,
-                transactions: parse_usize_field(&parts, "transactions")?,
+                num_transactions: parse_usize_field(&parts, "num_transactions")?,
                 value: parse_u64_field(&parts, "value")?,
                 cycles: parse_usize_field(&parts, "cycles")?,
             })
@@ -262,7 +262,7 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
         "CONTINUOUS_NEXT_WALLET_USER_WALLETS" => {
             Ok(ManualCommand::ContinuousNextWalletUserWallets {
                 cycles: parse_usize_field(&parts, "cycles")?,
-                transactions_per_wallet: parse_usize_field(&parts, "transactions_per_wallet")?,
+                num_transactions: parse_usize_field(&parts, "num_transactions")?,
                 value: parse_u64_field(&parts, "value")?,
             })
         }
@@ -529,22 +529,23 @@ mod tests {
     }
 
     fn assert_send_command() {
-        let command = parse_ok("SEND, transactions 5, value 100, from 'WALLET_1A', to 'WALLET_2A'");
+        let command =
+            parse_ok("SEND, num_transactions 5, value 100, from 'WALLET_1A', to 'WALLET_2A'");
 
         assert!(matches!(
             command,
             ManualCommand::Send {
-                transactions,
+                num_transactions,
                 value,
                 from,
                 to,
-            } if transactions == 5 && value == 100 && from == "WALLET_1A" && to == "WALLET_2A"
+            } if num_transactions == 5 && value == 100 && from == "WALLET_1A" && to == "WALLET_2A"
         ));
     }
 
     fn assert_continuous_round_robin_user_wallets_command() {
         let command = parse_ok(
-            "CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, transactions 4, value 50, cycles 3",
+            "CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 4, value 50, cycles 3",
         );
 
         assert!(matches!(
@@ -552,12 +553,12 @@ mod tests {
             ManualCommand::ContinuousRoundRobinUserWallets {
                 coin_split_outputs,
                 coin_split_value,
-                transactions,
+                num_transactions,
                 value,
                 cycles,
             } if coin_split_outputs == 10
                 && coin_split_value == 100
-                && transactions == 4
+                && num_transactions == 4
                 && value == 50
                 && cycles == 3
         ));
@@ -611,16 +612,16 @@ mod tests {
 
     fn assert_continuous_next_wallet_user_wallets_command() {
         let command = parse_ok(
-            "CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles 3, transactions_per_wallet 30, value 100",
+            "CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles 3, num_transactions 30, value 100",
         );
 
         assert!(matches!(
             command,
             ManualCommand::ContinuousNextWalletUserWallets {
                 cycles,
-                transactions_per_wallet,
+                num_transactions,
                 value,
-            } if cycles == 3 && transactions_per_wallet == 30 && value == 100
+            } if cycles == 3 && num_transactions == 30 && value == 100
         ));
     }
 
@@ -686,7 +687,7 @@ mod tests {
             },
             ManualCommand::ClearEncumbrancesAllWallets,
             ManualCommand::Send {
-                transactions: 0,
+                num_transactions: 0,
                 value: 0,
                 from: String::new(),
                 to: String::new(),
@@ -694,7 +695,7 @@ mod tests {
             ManualCommand::ContinuousRoundRobinUserWallets {
                 coin_split_outputs: 0,
                 coin_split_value: 0,
-                transactions: 0,
+                num_transactions: 0,
                 value: 0,
                 cycles: 0,
             },
@@ -709,7 +710,7 @@ mod tests {
             },
             ManualCommand::ContinuousNextWalletUserWallets {
                 cycles: 0,
-                transactions_per_wallet: 0,
+                num_transactions: 0,
                 value: 0,
             },
             ManualCommand::FaucetFundsAllUserWallets { rounds: 0 },

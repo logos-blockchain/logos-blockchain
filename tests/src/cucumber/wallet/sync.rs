@@ -1,13 +1,14 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
+    hash::BuildHasher,
     time::{Duration, Instant},
 };
 
-use lb_core::mantle::Utxo;
+use lb_core::mantle::{NoteId, Utxo};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::{BlockFeed, NodeHttpClient};
-use tokio::time::timeout;
-use tracing::{debug, warn};
+use tokio::time::{sleep, timeout};
+use tracing::{debug, info, warn};
 
 use crate::{
     common::wallet::{
@@ -18,19 +19,18 @@ use crate::{
     cucumber::{
         error::StepError,
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
-        wallet::{TARGET, WalletStateView, feed::record_observed_transaction_hashes},
+        wallet::{
+            TARGET, WalletStateView,
+            best_node::{BestNodeInfo, get_best_node_info},
+            feed::record_observed_transaction_hashes,
+        },
         world::{CucumberWorld, WalletInfo},
     },
 };
 
-const CURRENT_WALLET_STATE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(10);
+const CURRENT_WALLET_STATE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(30);
 const WALLET_BLOCK_FEED_SOURCE_WAIT_TIMEOUT: Duration = Duration::from_secs(15);
 const WALLET_BACKFILL_FALLBACK_SELECTION_TIMEOUT: Duration = Duration::from_secs(2);
-
-pub struct FreshWalletAvailableState {
-    pub observation: WalletStateView,
-    pub available_utxos: Vec<Utxo>,
-}
 
 struct WalletFeedSourceRequirement {
     node_name: String,
@@ -120,15 +120,9 @@ pub async fn current_wallet_states_for_wallets(
 pub async fn current_wallet_available_state(
     world: &mut CucumberWorld,
     wallet_name: &str,
-) -> Result<FreshWalletAvailableState, StepError> {
+) -> Result<WalletStateView, StepError> {
     let wallet = world.resolve_wallet(wallet_name)?;
-    let observation = current_wallet_state_for_wallet(world, &wallet).await?;
-    let available_utxos = observation.clone().into_available_utxos();
-
-    Ok(FreshWalletAvailableState {
-        observation,
-        available_utxos,
-    })
+    current_wallet_state_for_wallet(world, &wallet).await
 }
 
 async fn current_available_utxos_for_named_wallets(
@@ -160,7 +154,7 @@ async fn current_available_utxos_for_wallet_keys_with_requirements(
         .collect())
 }
 
-async fn current_wallet_state(
+pub async fn current_wallet_state(
     world: &mut CucumberWorld,
     step: &str,
     wallet_name: &str,
@@ -755,5 +749,166 @@ fn apply_scenario_fee_observations(
                 .fee_state
                 .state_observation_for(wallet_id, wallet_on_chain_utxos),
         );
+    }
+}
+
+#[expect(clippy::too_many_arguments, reason = "Need all args")]
+pub async fn wait_wallet_send_ready<S: BuildHasher + Sync>(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    timeout_seconds: u64,
+    required_available: u64,
+    readiness: WalletSendReadiness,
+    available_utxos: &mut WalletUtxos,
+    used_input_note_ids: &HashSet<NoteId, S>,
+) -> Result<BestNodeInfo, StepError> {
+    let start = tokio::time::Instant::now();
+
+    let mut last_available_value = 0u64;
+    let mut last_available_outputs = 0usize;
+    let mut last_eligible_value = 0u64;
+    let mut last_eligible_outputs = 0usize;
+
+    let (min_required_outputs, min_value_per_transaction) = readiness.get_minimums();
+    let mut last_msg = String::new();
+
+    while start.elapsed() < Duration::from_secs(timeout_seconds) {
+        // Ensure we have a converged majority before proceeding
+        let best_node_info = get_best_node_info(world, wallet_name, Some(&mut last_msg)).await?;
+        let fresh_wallet_state = current_wallet_state(world, step, wallet_name).await?;
+        let available = fresh_wallet_state.balance(WalletOutputState::Available);
+
+        let raw_available_utxos = fresh_wallet_state.into_available_utxos();
+        let filtered_count = raw_available_utxos
+            .iter()
+            .filter(|utxo| used_input_note_ids.contains(&utxo.id()))
+            .count();
+        if filtered_count > 0 {
+            warn!(
+                target: TARGET,
+                "Wallet '{wallet_name}' readiness filtered {filtered_count} previously used UTXO(s) \
+                from {} available candidate(s)", available.output_count
+            );
+        }
+        let mut fresh_available_utxos = raw_available_utxos
+            .into_iter()
+            .filter(|utxo| !used_input_note_ids.contains(&utxo.id()))
+            .collect::<Vec<_>>();
+
+        // Prefer smaller UTXOs first. The transaction builder selects sufficient
+        // inputs, so this helps consume smaller/dustier outputs before large
+        // change-like outputs.
+        fresh_available_utxos.sort_by_key(|utxo| utxo.note.value);
+
+        last_available_outputs = fresh_available_utxos.len();
+        last_available_value = fresh_available_utxos
+            .iter()
+            .map(|utxo| utxo.note.value)
+            .sum();
+
+        let mut eligible_outputs = 0usize;
+        let mut eligible_value = 0u64;
+
+        for utxo in fresh_available_utxos
+            .iter()
+            .filter(|utxo| utxo.note.value >= min_value_per_transaction)
+        {
+            eligible_outputs += 1;
+            eligible_value += utxo.note.value;
+        }
+
+        let is_ready =
+            eligible_outputs >= min_required_outputs && eligible_value >= required_available;
+
+        if is_ready {
+            available_utxos.insert(wallet_name.to_owned().into(), fresh_available_utxos);
+
+            update_fee_wallet_cache(world, step, wallet_name, available_utxos).await?;
+            log_available_utxos(available_utxos, wallet_name);
+
+            return Ok(best_node_info);
+        }
+
+        last_eligible_value = eligible_value;
+        last_eligible_outputs = eligible_outputs;
+
+        sleep(Duration::from_millis(300)).await;
+    }
+
+    Err(StepError::StepFail {
+        message: format!(
+            "Timed out waiting for wallet '{wallet_name}' send readiness: \
+            required {min_required_outputs} eligible UTXO(s) with value >= \
+            {min_value_per_transaction} and eligible value >= {required_available}; \
+            last observed: available={last_available_outputs}/{last_available_value}, \
+            eligible={last_eligible_outputs}/{last_eligible_value}"
+        ),
+    })
+}
+
+async fn update_fee_wallet_cache(
+    world: &mut CucumberWorld,
+    step: &str,
+    wallet_name: &str,
+    available_utxos: &mut WalletUtxos,
+) -> Result<(), StepError> {
+    if world.fee_state.wallet_account.is_some() {
+        let wallet = world.resolve_wallet(wallet_name)?;
+        let group_key = world
+            .node_to_group
+            .get(&wallet.node_name)
+            .cloned()
+            .unwrap_or_default();
+        let fee_wallet_name = ScenarioFeeState::wallet_name_for_group(&group_key);
+        let fresh_available_utxos = current_available_utxos_for_user_wallets(world, step).await?;
+        let fee_wallet_utxos = fresh_available_utxos.get(fee_wallet_name.as_str()).cloned().ok_or_else(|| {
+            StepError::LogicalError {
+                message: format!(
+                    "Scenario fee account state for wallet '{wallet_name}' is invalid: \
+                            scenario fee account state `{fee_wallet_name}` not found in grouped scan"
+                ),
+            }
+        })?;
+        available_utxos.insert(fee_wallet_name.clone().into(), fee_wallet_utxos);
+        log_available_utxos(available_utxos, &fee_wallet_name);
+    }
+    Ok(())
+}
+
+fn log_available_utxos(available_utxos: &WalletUtxos, wallet_name: &str) {
+    if let Some(wallet_available) = available_utxos.get(wallet_name) {
+        info!(
+            target: TARGET,
+            "Wallet `{wallet_name}` has {} available UTXOs with total value of {} LGO",
+            wallet_available.len(), wallet_available.iter()
+                .map(|utxo| utxo.note.value)
+                .sum::<u64>()
+        );
+    }
+}
+
+/// Indicates the readiness of a wallet to send transactions, either by having a
+/// sufficient batch of eligible UTXOs or by having a total value available.
+#[derive(Clone, Copy, Debug)]
+pub enum WalletSendReadiness {
+    EligibleUtxoBatch {
+        min_required_outputs: usize,
+        min_value_per_transaction: u64,
+    },
+    TotalValueOnly,
+}
+
+impl WalletSendReadiness {
+    /// Helper function to destructure minimum readiness requirements
+    #[must_use]
+    pub const fn get_minimums(&self) -> (usize, u64) {
+        match self {
+            Self::EligibleUtxoBatch {
+                min_required_outputs,
+                min_value_per_transaction,
+            } => (*min_required_outputs, *min_value_per_transaction),
+            Self::TotalValueOnly => (1, 1),
+        }
     }
 }

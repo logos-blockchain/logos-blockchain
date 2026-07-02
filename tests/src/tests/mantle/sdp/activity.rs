@@ -84,9 +84,18 @@ async fn sdp_blend_activity() {
     // Each declaration's `active` epoch must have advanced past its initial
     // value, proving activity messages were submitted and accepted.
     let declarations_after = wait_for_declarations(&node0.client, Duration::from_secs(30)).await;
-    for (provider_id, declaration) in declarations {
-        let old_active = declaration.active;
-        let new_active = declarations_after.get(&provider_id).unwrap().active;
+
+    // Check if at least one declaration is still present because blocks may have
+    // been produced by only one nodes by coincidence
+    assert!(
+        !declarations_after.is_empty(),
+        "At least one blend declaration should survive past the inactivity window. Activity proofs may not have been submitted/accepted"
+    );
+
+    // Check that the survived declarations have the refreshed `active` epoch.
+    for (provider_id, declaration) in declarations_after {
+        let old_active = declarations.get(&provider_id).unwrap().active;
+        let new_active = declaration.active;
         assert!(
             new_active > old_active,
             "Declaration must have the refreshed `active` epoch number larger than the initial one ({old_active:?}), but got {new_active:?}"

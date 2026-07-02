@@ -1,4 +1,7 @@
-chain_id: "devnet-0.1.3-rc6"
-genesis_time: "2026-05-08T22:54:09Z"
+# === TEMPLATE: shared default, do not edit per release ===
 entropy_sources:
   - "0000000000000000000000000000000000000000000000000000000000000001"
+
+# === PER-RELEASE: edit on every release ===
+chain_id: "X.Y.Z-rc.N"
+genesis_time: "YYYY-MM-DDTHH:MM:SSZ"

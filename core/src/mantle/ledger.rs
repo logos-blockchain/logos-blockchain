@@ -161,6 +161,15 @@ impl AsMut<BoundedOutputs> for Outputs {
     }
 }
 
+impl<I> From<I> for Outputs
+where
+    I: Into<BoundedOutputs>,
+{
+    fn from(value: I) -> Self {
+        Self(value.into())
+    }
+}
+
 impl<'output> IntoIterator for &'output Outputs {
     type Item = <&'output BoundedOutputs as IntoIterator>::Item;
     type IntoIter = <&'output BoundedOutputs as IntoIterator>::IntoIter;

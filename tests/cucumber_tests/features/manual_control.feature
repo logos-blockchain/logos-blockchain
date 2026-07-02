@@ -14,13 +14,13 @@ Feature: Manual control of transactions
   #   BALANCE_ALL_FUNDING_WALLETS
   #   CLEAR_ENCUMBRANCES, wallet '<wallet_name>'
   #   CLEAR_ENCUMBRANCES_ALL_WALLETS
-  #   SEND, transactions <count>, value <amount>, from '<wallet_name>', to '<wallet_name>'
+  #   SEND, num_transactions <count>, value <amount>, from '<wallet_name>', to '<wallet_name>'
   #   VERIFY_MAX, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
   #   VERIFY_MIN, wallet '<wallet_name>', wallet_state_type 'on-chain'/'encumbered'/'available', outputs <count>, value 14000, time_out <duration_seconds>
-  #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, transactions <count>, value <amount>, cycles <count>
+  #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs <count>, coin_split_value <amount>, num_transactions <count>, value <amount>, cycles <count>
   #   COIN_SPLIT_ALL_USER_WALLETS, splits_per_wallet <count>, outputs <count>, value <amount>
   #   VERIFY_MIN_AVAILABLE_OUTPUTS_ALL_USER_WALLETS, min_outputs <count>, timeout_seconds <duration_seconds>
-  #   CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, transactions_per_wallet <count>, value <amount>
+  #   CONTINUOUS_NEXT_WALLET_USER_WALLETS, cycles <count>, num_transactions <count>, value <amount>
   #   FAUCET_ALL_USER_WALLETS, rounds <count>
   #   FAUCET_ALL_FUNDING_WALLETS, rounds <count>
   #   CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name '<snapshot_name>'
@@ -36,9 +36,9 @@ Feature: Manual control of transactions
   #   COIN_SPLIT, wallet 'WALLET_2A', outputs 10, value 100
   #   VERIFY_MAX, wallet 'WALLET_1A', wallet_state_type 'encumbered', outputs 0, time_out 60
   #   VERIFY_MAX, wallet 'WALLET_2A', wallet_state_type 'encumbered', outputs 0, time_out 60
-  #   SEND, transactions 5, value 100, from 'WALLET_1A', to 'WALLET_2A'
+  #   SEND, num_transactions 5, value 100, from 'WALLET_1A', to 'WALLET_2A'
   #   BALANCE, wallet 'WALLET_1A'
-  #   SEND, transactions 5, value 100, from 'WALLET_2A', to 'WALLET_1A'
+  #   SEND, num_transactions 5, value 100, from 'WALLET_2A', to 'WALLET_1A'
   #   EXPORT_FUNDS, wallet 'WALLET_1A', value 1000, output '/tmp/tui-zone/funds-wallet-1a.json', include_secret true
   #   VERIFY_MAX, wallet 'WALLET_1A', wallet_state_type 'encumbered', outputs 0, time_out 60
   #   VERIFY_MAX, wallet 'WALLET_2A', wallet_state_type 'encumbered', outputs 0, time_out 60
@@ -48,7 +48,7 @@ Feature: Manual control of transactions
   #   CREATE_BLOCKCHAIN_SNAPSHOT_NODE, snapshot_name 'SNAP_TEST_01', node_name 'NODE_1'
   #   RESTART_NODE, node_name 'NODE_1'
   #   CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name 'SNAP_TEST_02'
-  #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, transactions 10, value 100, cycles 3
+  #   CONTINUOUS_ROUND_ROBIN_USER_WALLETS, coin_split_outputs 10, coin_split_value 100, num_transactions 10, value 100, cycles 3
   #   STOP
 
   @manual_control_transactions
@@ -172,7 +172,7 @@ Feature: Manual control of transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 10200 in 30000 seconds
-    When node "NODE_2" is at height 1022 in 30000 seconds
+    When node "NODE_2" is at height 10200 in 30000 seconds
     When I restart node "NODE_1"
     When I restart node "NODE_2"
     When node "NODE_1" is at height 10300 in 30000 seconds

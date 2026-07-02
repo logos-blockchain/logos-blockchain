@@ -51,3 +51,6 @@ services/tx-service/[0-9]*
 
 # testnet cfgsync generated local deployment file
 testnet/cfgsync/deployment-settings.yaml
+
+# Claude folder. We don't enforce any team-wide rules yet.
+.claude/**

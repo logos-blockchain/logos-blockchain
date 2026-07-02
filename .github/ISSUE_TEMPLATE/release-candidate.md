@@ -35,10 +35,6 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Manually trigger the [ceremony workflow][ceremony-workflow] from the `HEAD` of the release branch specifying the `devnet` image tag and the right version number `X.Y.Z-rc.N`
 - [ ] Post the link to the workflow run to this issue for easier review
 - [ ] Wait for the workflow run to complete. The workflow will push a new commit on the release branch overwriting the binary's embedded deployment settings (`nodes/node/binary/src/config/deployment/settings.yaml`) with the devnet settings.
-- [ ] Checkout and hard reset the `devnet` branch to point to the latest commit of the current release branch
-- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
-- [ ] Commit and push to `devnet` branch to trigger the cleanup
-- [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Devnet web UI][devnet-web-ui] and make sure it's in setup mode.
 
 ## Release candidate preparation
 
@@ -65,10 +61,20 @@ Most of the template content is the same or very similar to what is in `release.
 
 ## Devnet deployment
 
+### Existing state cleanup (optional, only whenever a new genesis has been created in the genesis step)
+
+- [ ] Checkout and hard reset the `devnet` branch to point to the latest commit of the current release branch
+- [ ] Symlink the environment file to the repo root with `ln -sf deployment/.env.devnet .env.devnet`
+- [ ] Create a new symlink `compose.static.yml` -> `compose.setup.yml` with `ln -sf compose.setup.yml compose.static.yml`
+- [ ] Commit and push to `devnet` branch to trigger the cleanup
+- [ ] Wait around 1 minute for the previous deployment to be cleaned. Visit the [Devnet web UI][devnet-web-ui] and make sure it's in setup mode.
+
+### Released version deployment
+
 - [ ] Verify the Logos Blockchain tools Docker image was properly built and pushed to the [GitHub container registry][logos-tools-image-container-registry]
 - [ ] Wait for the new Docker image to be built after the release is published. It must have the `X.Y.Z-rc.N` tag.
-- [ ] Checkout `devnet` branch again and change the `compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml compose.static.yml`
-- [ ] Update `.env.devnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z-rc.N` set to version being released
+- [ ] Checkout `devnet` branch again and change the `deployment/compose.static.yml` symlink to now point to `compose.run.yml` with `ln -s -f compose.run.yml deployment/compose.static.yml`
+- [ ] Update `deployment/.env.devnet` file to contain `NODE_IMAGE_LABEL=X.Y.Z-rc.N` set to version being released
 - [ ] Commit and push the changes to trigger environment re-deployment
 - [ ] Wait around 1 minute for deployment to be updated. Environment is now live.
 - [ ] If needed, at any time you can download fleet nodes' configs and logs from [https://devnet.blockchain.logos.co/internal/node-data/](https://devnet.blockchain.logos.co/internal/node-data/)

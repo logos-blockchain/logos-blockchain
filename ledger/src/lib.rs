@@ -758,7 +758,7 @@ mod tests {
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
             leader_claim_proof::Groth16LeaderClaimProof,
         },
-        sdp::{ActivityMetadata, DeclarationId, Nonce, blend::ActivityProof},
+        sdp::{ActivityMetadata, DeclarationId, Nonce},
     };
     use lb_cryptarchia_engine::Epoch;
     use lb_groth16::{CompressedGroth16Proof, Field as _};
@@ -771,7 +771,7 @@ mod tests {
             apply_and_add_utxo, apply_and_add_utxo_and_declaration, declaration_in_snapshot,
             ledger, update_ledger, utxo_with_sk,
         },
-        mantle::leader::LeaderState,
+        mantle::{leader::LeaderState, sdp::test_utils::generate_activity_proof},
     };
 
     fn create_test_keys() -> (Ed25519Key, Ed25519PublicKey) {
@@ -909,31 +909,35 @@ mod tests {
         ledger: &mut Ledger<HeaderId>,
         parent: HeaderId,
         slot: impl Into<Slot>,
+        target_epoch_state: &EpochState,
         utxo_proof: Utxo,
         utxo_add: Utxo,
         declaration_id: DeclarationId,
         zk_key: ZkKey,
         nonce: Nonce,
     ) -> HeaderId {
-        use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-
         let id = apply_and_add_utxo(ledger, parent, slot, utxo_proof, utxo_add);
+        let current_epoch_state = ledger
+            .states
+            .get(&id)
+            .unwrap()
+            .cryptarchia_ledger
+            .epoch_state
+            .clone();
 
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let config = ledger.config().clone();
         let active_op = SDPActiveOp {
             declaration_id,
             nonce,
-            metadata: ActivityMetadata::Blend(Box::new(ActivityProof {
-                // TODO: Create real proofs once the blend rewards module is enabled
-                epoch: 0.into(),
-                signing_key: signing_key.public_key(),
-                proof_of_quota: VerifiedProofOfQuota::from_bytes_unchecked([0; _]).into(),
-                proof_of_selection: VerifiedProofOfSelection::from_bytes_unchecked([1; _]).into(),
-            })),
+            metadata: ActivityMetadata::Blend(Box::new(generate_activity_proof(
+                &zk_key,
+                target_epoch_state,
+                &current_epoch_state,
+                &config.sdp_config.service_rewards_params.blend,
+            ))),
         };
         let tx_hash = TxHash::from([1u8; 32]);
         let zk_sig = ZkKey::multi_sign(&[zk_key], &tx_hash.to_fr()).unwrap();
-        let config = ledger.config().clone();
         let block_ledger = ledger.states.get_mut(&id).unwrap();
         block_ledger.mantle_ledger = block_ledger
             .mantle_ledger
@@ -1596,9 +1600,11 @@ mod tests {
         let (mut ledger, genesis) = ledger(&[leader_utxo, sdp_utxo], config);
 
         // Declare at the first slot of epoch 3 — `active = 3 + 2 = 5`.
+        let h_1 = update_ledger(&mut ledger, genesis, epoch_length, leader_utxo).unwrap();
+        let h_2 = update_ledger(&mut ledger, h_1, 2 * epoch_length, leader_utxo).unwrap();
         let (h_3, declare, zk_key) = apply_and_add_utxo_and_declaration(
             &mut ledger,
-            genesis,
+            h_2,
             3 * epoch_length,
             leader_utxo,
             new_utxo_1,
@@ -1608,10 +1614,14 @@ mod tests {
 
         // Advance to the first slot of epoch 6 and submit an Active message.
         // This sets the live SDP's `active` to 6.
+        let h_4 = update_ledger(&mut ledger, h_3, 4 * epoch_length, leader_utxo).unwrap();
+        let h_5 = update_ledger(&mut ledger, h_4, 5 * epoch_length, leader_utxo).unwrap();
+        let epoch5 = ledger.states[&h_5].cryptarchia_ledger.epoch_state.clone();
         let h_6 = apply_and_add_utxo_and_activity(
             &mut ledger,
-            h_3,
+            h_5,
             6 * epoch_length,
+            &epoch5,
             leader_utxo,
             new_utxo_2,
             declare.id(),
