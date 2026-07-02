@@ -140,6 +140,64 @@ impl TryFrom<Vec<IndexedSignature>> for ChannelMultiSigProof {
     }
 }
 
+pub mod encoding {
+    use nom::{
+        IResult, Parser as _,
+        combinator::map,
+        error::{Error, ErrorKind},
+        multi::length_count,
+        sequence::pair,
+    };
+
+    use crate::{
+        mantle::{
+            codec::{
+                ED25519_SIG_BYTES, decode_ed25519_signature, decode_uint16,
+                encode_ed25519_signature, encode_uint16,
+            },
+            ops::channel::ChannelKeyIndex,
+        },
+        proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    };
+
+    #[must_use]
+    pub const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex) -> usize {
+        // Encoding: u16 signature count + N * (Ed25519 sig + u16 key index)
+        2 + (threshold as usize) * (ED25519_SIG_BYTES + 2)
+    }
+
+    pub fn decode_channel_multi_sig_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSigProof> {
+        // ChannelMultiSigProof = SignatureCount *WithdrawSignature
+        // WithdrawSignature = Ed25519Signature Index
+        let (input, signatures) = length_count(
+            map(decode_uint16, |n: ChannelKeyIndex| n as usize),
+            pair(decode_ed25519_signature, decode_uint16),
+        )
+        .parse(input)?;
+
+        let signatures: Vec<IndexedSignature> = signatures
+            .into_iter()
+            .map(|(signature, index)| IndexedSignature::from((index, signature)))
+            .collect();
+
+        ChannelMultiSigProof::new(signatures)
+            .map(|proof| (input, proof))
+            .map_err(|_| nom::Err::Failure(Error::new(input, ErrorKind::Verify)))
+    }
+
+    #[must_use]
+    pub fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend(encode_uint16(proof.signatures().len() as ChannelKeyIndex));
+        bytes.extend(proof.signatures().iter().flat_map(|signature| {
+            encode_ed25519_signature(&signature.signature)
+                .into_iter()
+                .chain(encode_uint16(signature.channel_key_index))
+        }));
+        bytes
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

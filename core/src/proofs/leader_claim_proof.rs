@@ -130,6 +130,18 @@ impl From<LeaderClaimPrivate> for lb_poc::PoCWitnessInputsData {
     }
 }
 
+pub mod encoding {
+    use crate::{
+        mantle::codec::encode_groth16_proof, proofs::leader_claim_proof::Groth16LeaderClaimProof,
+    };
+
+    #[must_use]
+    pub fn encode_poc(poc: &Groth16LeaderClaimProof) -> Vec<u8> {
+        // `Groth16LeaderClaimProof` wraps `PocProof`, which is `CompressedGroth16Proof`
+        encode_groth16_proof(poc.proof())
+    }
+}
+
 mod proof_serde {
     use serde::{Deserializer, Serializer};
 

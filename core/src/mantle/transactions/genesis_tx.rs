@@ -16,10 +16,10 @@ use crate::{
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+            encoding::proof_matches,
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
-        transactions::encoding::proof_matches,
     },
 };
 
