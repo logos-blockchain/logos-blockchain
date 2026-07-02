@@ -100,19 +100,18 @@ impl From<ChannelMultiSigProof> for ChannelMultiSigProofRepr {
 
 impl ChannelMultiSigProof {
     pub fn try_new(signatures: IndexedSignatures) -> Result<Self, Error> {
-        Self::validate_well_formedness(&signatures)?;
+        let signatures = Self::validate_well_formedness(signatures)?;
         Ok(Self { signatures })
     }
 
     /// Validates that the proof is structurally well-formed: signature indices
     /// must be strictly increasing (so they are ordered and unique, per the
-    /// `CHANNEL_CONFIG` / `CHANNEL_WITHDRAW` spec), and the count must not
-    /// exceed `ChannelKeyIndex::MAX`.
+    /// `CHANNEL_CONFIG` / `CHANNEL_WITHDRAW` spec).
     ///
     /// This validates structural correctness only. Cryptographic validity
     /// (signature verification, threshold requirements, index-to-key
     /// correspondence) must be checked separately.
-    fn validate_well_formedness(signatures: &[IndexedSignature]) -> Result<(), Error> {
+    fn validate_well_formedness(signatures: IndexedSignatures) -> Result<IndexedSignatures, Error> {
         if signatures
             .windows(2)
             .any(|w| w[0].channel_key_index >= w[1].channel_key_index)
@@ -121,7 +120,7 @@ impl ChannelMultiSigProof {
                 signatures.iter().map(|s| s.channel_key_index).collect(),
             ));
         }
-        Ok(())
+        Ok(signatures)
     }
 
     #[must_use]
