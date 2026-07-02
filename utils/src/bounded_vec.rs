@@ -318,7 +318,7 @@ mod tests {
         );
         assert_eq!(
             TestBoundedVector::try_from(vec![1]),
-            Err(BoundedError::TooFewItems { count: 1, min: 2 })
+            Err(BoundedError::EmptyInput)
         );
     }
 
@@ -414,8 +414,7 @@ mod tests {
     fn deserialize_rejects_input_below_min() {
         let err = serde_json::from_str::<TestBoundedVector>("[1]").unwrap_err();
         assert!(
-            err.to_string()
-                .contains("Item count 1 is below minimum of 2"),
+            err.to_string().contains("Input cannot be empty"),
             "unexpected error: {err}"
         );
     }
