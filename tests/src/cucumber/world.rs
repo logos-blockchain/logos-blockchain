@@ -30,8 +30,9 @@ use lb_testing_framework::{
 };
 use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
 use reqwest::Url;
-use testing_framework_core::scenario::{
-    NodeControlCapability, PeerSelection, Scenario, StartedNode,
+use testing_framework_core::{
+    scenario::{NodeControlCapability, PeerSelection, Scenario, StartedNode},
+    topology::DeploymentSeed,
 };
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -56,6 +57,7 @@ use crate::{
         utils::{make_builder, shared_host_bin_path},
         wallet::{
             feed::{CucumberWalletBlockFeed, CucumberWalletBlockFeedError},
+            snapshot::WalletSnapshot,
             sync::track_wallet_feed_batches_with_backfill,
         },
     },
@@ -937,6 +939,9 @@ pub struct CucumberWorld {
     /// Manual: Whether to have dynamically started nodes join the external
     /// network
     pub join_external_network: Option<bool>,
+    /// Manual: Stable deployment seed reused when the same scenario rebuilds a
+    /// manual cluster, for example after restoring from a node snapshot.
+    pub manual_cluster_deployment_seed: Option<DeploymentSeed>,
     /// Manual: Runtime state for node-control extensions added outside the
     /// legacy generic step files.
     pub manual_node_config_overrides: ManualNodeConfigOverrides,
@@ -981,6 +986,8 @@ pub struct SnapshotSaveConfig {
     /// If set, test-framework extension state is saved into this snapshot when
     /// nodes stop.
     pub extensions: Option<String>,
+    /// Wallet extension payload prepared before node shutdown.
+    pub prepared_wallet_snapshot: Option<WalletSnapshot>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1076,6 +1083,10 @@ impl Debug for CucumberWorld {
             .field("node_to_group", &self.node_to_group.len())
             .field("blend_core_nodes", &self.blend_core_nodes)
             .field("manual_cluster_spec", &self.manual_cluster_spec)
+            .field(
+                "manual_cluster_deployment_seed",
+                &self.manual_cluster_deployment_seed.is_some(),
+            )
             .field(
                 "manual_node_config_overrides",
                 &self.manual_node_config_overrides,
@@ -1234,6 +1245,14 @@ impl NodeInfo {
 }
 
 impl CucumberWorld {
+    /// Return the stable deployment seed for this manual-cluster scenario,
+    /// generating it on first use.
+    pub fn manual_cluster_deployment_seed(&mut self) -> DeploymentSeed {
+        self.manual_cluster_deployment_seed
+            .get_or_insert_with(|| DeploymentSeed::new(rand::random()))
+            .clone()
+    }
+
     /// Set a scenario-wide cryptarchia security parameter override for
     /// manual-cluster nodes.
     pub const fn set_cryptarchia_security_param(&mut self, security_param: NonZero<u32>) {

@@ -38,12 +38,22 @@ impl WalletChainStateCache {
         node_name: &str,
         header_id: &str,
     ) -> Option<(String, u64, WalletUtxos)> {
-        let heights = self.header_heights.get(node_name)?;
         header_id_lookup_keys(header_id).find_map(|header_id| {
-            let height = heights.get(&header_id)?;
+            let height = self.header_height(node_name, &header_id)?;
             let snapshot = self.utxo_snapshots.by_header.get(&header_id)?;
             Some((header_id.clone(), *height, snapshot.to_owned_wallet_utxos()))
         })
+    }
+
+    fn header_height(&self, node_name: &str, header_id: &str) -> Option<&u64> {
+        self.header_heights
+            .get(node_name)
+            .and_then(|heights| heights.get(header_id))
+            .or_else(|| {
+                self.header_heights
+                    .values()
+                    .find_map(|heights| heights.get(header_id))
+            })
     }
 
     #[must_use]
@@ -125,5 +135,26 @@ impl WalletUtxoSnapshots {
 
     pub fn iter(&self) -> impl Iterator<Item = (&String, &WalletUtxoSnapshot)> {
         self.by_header.iter()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::common::wallet::chain::state_cache::WalletChainStateCache;
+
+    #[test]
+    fn exports_wallet_state_using_header_height_from_another_node() {
+        let mut cache = WalletChainStateCache::default();
+        cache.record_wallets_utxos("header-1".to_owned(), []);
+        cache.record_header_height("NODE_2", "header-1", 5);
+
+        let Some((header_id, height, _wallet_utxos)) =
+            cache.wallet_utxos_for_node_at_header("NODE_1", "header-1")
+        else {
+            panic!("expected cached wallet state for header");
+        };
+
+        assert_eq!(header_id, "header-1");
+        assert_eq!(height, 5);
     }
 }

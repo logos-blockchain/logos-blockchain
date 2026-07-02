@@ -3,7 +3,7 @@ use std::{
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use hex::FromHex as _;
@@ -11,21 +11,23 @@ use lb_core::header::HeaderId;
 use lb_testing_framework::configs::wallet::WalletAccount;
 use serde::{Deserialize, Serialize};
 use testing_framework_core::scenario::{DynError, SnapshotArtifact, SnapshotStore};
-use tokio::time::{Instant, sleep};
+use tokio::time::sleep;
+use tracing::{debug, info};
 
 use crate::{
-    common::wallet::TrackedWalletsState,
+    common::wallet::{TrackedWalletsState, WalletUtxos},
     cucumber::{
         defaults::snapshots_root_dir,
         error::{StepError, StepResult},
+        wallet::TARGET,
         world::{CucumberWorld, WalletInfoMap},
     },
 };
 
 /// Snapshot extension id used for Cucumber wallet state.
 pub const WALLET_SNAPSHOT_EXTENSION_ID: &str = "wallet";
-const WALLET_SNAPSHOT_STATE_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-const WALLET_SNAPSHOT_STATE_WAIT_INTERVAL: Duration = Duration::from_millis(100);
+const WALLET_SNAPSHOT_FEED_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+const WALLET_SNAPSHOT_FEED_WAIT_INTERVAL: Duration = Duration::from_millis(250);
 
 /// Serializable Cucumber wallet state.
 ///
@@ -53,7 +55,51 @@ struct ChainServiceRecoveryState {
 }
 
 impl WalletSnapshot {
-    async fn from_world_for_nodes(
+    async fn from_active_world_for_nodes(
+        world: &CucumberWorld,
+        node_names: impl IntoIterator<Item = impl AsRef<str>>,
+    ) -> Result<Self, StepError> {
+        let wallet_info = world.wallet_info.clone();
+        let wallet_accounts = world.wallet_accounts.clone();
+        if wallet_info.is_empty() && wallet_accounts.is_empty() {
+            return Ok(Self {
+                wallet_info,
+                wallet_accounts,
+                states_by_node: HashMap::new(),
+            });
+        }
+
+        let mut states_by_node = HashMap::new();
+        for node_name in node_names {
+            let node_name = node_name.as_ref();
+            let node = world
+                .nodes_info
+                .get(node_name)
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!("wallet snapshot source node `{node_name}` is not running"),
+                })?;
+
+            let tip = node
+                .started_node
+                .client
+                .consensus_info()
+                .await?
+                .cryptarchia_info
+                .tip;
+
+            let node_snapshot = wait_for_wallet_feed_state_at_tip(world, node_name, &tip).await?;
+
+            states_by_node.insert(node_name.to_owned(), node_snapshot);
+        }
+
+        Ok(Self {
+            wallet_info,
+            wallet_accounts,
+            states_by_node,
+        })
+    }
+
+    async fn from_saved_node_tips(
         world: &CucumberWorld,
         snapshot_name: &str,
         node_names: impl IntoIterator<Item = impl AsRef<str>>,
@@ -72,18 +118,17 @@ impl WalletSnapshot {
         for node_name in node_names {
             let node_name = node_name.as_ref();
             let saved_tip = saved_node_tip(snapshot_name, node_name)?;
-            let (tip, height, tracked_wallets) =
-                wait_for_wallet_state_at_saved_tip(world, snapshot_name, node_name, &saved_tip)
-                    .await?;
+            let saved_tip = parse_header_id(&saved_tip)?;
+            let node_snapshot = wait_for_wallet_feed_state_at_tip(world, node_name, &saved_tip)
+                .await
+                .map_err(|error| StepError::LogicalError {
+                    message: format!(
+                        "cannot save wallet snapshot `{snapshot_name}` for node `{node_name}`: \
+                         {error}"
+                    ),
+                })?;
 
-            states_by_node.insert(
-                node_name.to_owned(),
-                WalletNodeSnapshot {
-                    tip,
-                    height,
-                    tracked_wallets,
-                },
-            );
+            states_by_node.insert(node_name.to_owned(), node_snapshot);
         }
 
         Ok(Self {
@@ -99,23 +144,53 @@ impl WalletSnapshot {
             && self.states_by_node.is_empty()
     }
 
-    fn apply_for_node(self, node_name: &str, world: &mut CucumberWorld) -> StepResult {
+    fn validate_saved_node_tips(&self, snapshot_name: &str) -> StepResult {
+        for (node_name, node_snapshot) in &self.states_by_node {
+            let saved_tip = saved_node_tip(snapshot_name, node_name)?;
+            let saved_tip = normalize_header_id(&saved_tip);
+            let wallet_tip = normalize_header_id(&node_snapshot.tip);
+
+            if saved_tip != wallet_tip {
+                return Err(StepError::LogicalError {
+                    message: format!(
+                        "cannot save wallet snapshot `{snapshot_name}`: node `{node_name}` saved \
+                         tip `{saved_tip}` does not match prepared wallet tip `{wallet_tip}`"
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn apply_metadata(&self, world: &mut CucumberWorld) {
+        world.wallet_info.clone_from(&self.wallet_info);
+        world.wallet_accounts.clone_from(&self.wallet_accounts);
+    }
+
+    fn apply_for_node(&self, node_name: &str, world: &CucumberWorld) -> StepResult {
         let Some(node_snapshot) = self.states_by_node.get(node_name) else {
             return Err(StepError::LogicalError {
                 message: format!("wallet snapshot does not contain state for node `{node_name}`"),
             });
         };
 
-        world.wallet_info = self.wallet_info;
-        world.wallet_accounts = self.wallet_accounts;
-
-        let wallet_utxos = node_snapshot.tracked_wallets.to_wallet_utxos();
+        let wallet_keys = world.wallet_tracking_keys_for_source(node_name)?;
+        let source_wallet_ids = wallet_keys
+            .iter()
+            .map(|keys| keys.wallet_id().clone())
+            .collect::<HashSet<_>>();
+        let source_wallet_utxos = node_snapshot
+            .tracked_wallets
+            .to_wallet_utxos()
+            .into_iter()
+            .filter(|(wallet_id, _)| source_wallet_ids.contains(wallet_id))
+            .collect::<WalletUtxos>();
 
         world.with_wallets_mut(|wallets| {
-            wallets.replace_from_state(node_snapshot.tracked_wallets.clone());
+            wallets.replace_current_wallets_utxos(source_wallet_utxos.clone());
         })?;
 
-        let wallet_keys = world.wallet_tracking_keys_for_source(node_name)?;
         if !wallet_keys.is_empty() {
             let tip = parse_header_id(&node_snapshot.tip)?;
             world
@@ -123,7 +198,7 @@ impl WalletSnapshot {
                     tracker.replace_source_state(
                         node_name.to_owned(),
                         &wallet_keys,
-                        wallet_utxos,
+                        source_wallet_utxos,
                         tip,
                         node_snapshot.height,
                     )
@@ -157,25 +232,56 @@ impl WalletSnapshot {
     }
 }
 
-/// Save Cucumber wallet state as a wallet extension artifact in
-/// `snapshot_name`.
-pub async fn save_wallet_snapshot(snapshot_name: &str, world: &CucumberWorld) -> StepResult {
-    let node_names = world
-        .nodes_info
-        .keys()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
+/// Prepare Cucumber wallet state from the active node tips before node
+/// shutdown.
+pub async fn prepare_wallet_snapshot_from_active_node_tips(
+    world: &mut CucumberWorld,
+) -> StepResult {
+    world.ensure_wallet_block_feed().await?;
+    let node_names = world.nodes_info.keys().cloned().collect::<Vec<_>>();
+    let snapshot = WalletSnapshot::from_active_world_for_nodes(world, node_names).await?;
+    world.snapshot_save_config.prepared_wallet_snapshot = Some(snapshot);
 
-    save_wallet_snapshot_for_nodes(snapshot_name, world, node_names).await
+    Ok(())
 }
 
-/// Save Cucumber wallet state for the saved node snapshot entries.
-pub async fn save_wallet_snapshot_for_nodes(
+/// Save Cucumber wallet state after the feed observes the saved node snapshot
+/// tips from active nodes.
+pub async fn save_wallet_snapshot_from_saved_node_tips(
     snapshot_name: &str,
-    world: &CucumberWorld,
+    world: &mut CucumberWorld,
+) -> StepResult {
+    world.ensure_wallet_block_feed().await?;
+    let node_names = world.nodes_info.keys().cloned().collect::<Vec<_>>();
+
+    save_wallet_snapshot_for_saved_nodes(snapshot_name, world, node_names).await
+}
+
+/// Save the wallet snapshot prepared before node shutdown.
+pub fn save_prepared_wallet_snapshot(snapshot_name: &str, world: &mut CucumberWorld) -> StepResult {
+    let Some(snapshot) = world.snapshot_save_config.prepared_wallet_snapshot.take() else {
+        return Err(StepError::LogicalError {
+            message: format!("wallet snapshot `{snapshot_name}` was not prepared before shutdown"),
+        });
+    };
+
+    snapshot.validate_saved_node_tips(snapshot_name)?;
+    save_wallet_snapshot_value(snapshot_name, snapshot)
+}
+
+/// Save Cucumber wallet state after the feed observes the saved node snapshot
+/// tips from active nodes.
+pub async fn save_wallet_snapshot_for_saved_nodes(
+    snapshot_name: &str,
+    world: &mut CucumberWorld,
     node_names: impl IntoIterator<Item = impl AsRef<str>>,
 ) -> StepResult {
-    let snapshot = WalletSnapshot::from_world_for_nodes(world, snapshot_name, node_names).await?;
+    world.ensure_wallet_block_feed().await?;
+    let snapshot = WalletSnapshot::from_saved_node_tips(world, snapshot_name, node_names).await?;
+    save_wallet_snapshot_value(snapshot_name, snapshot)
+}
+
+fn save_wallet_snapshot_value(snapshot_name: &str, snapshot: WalletSnapshot) -> StepResult {
     if snapshot.is_empty() {
         return Ok(());
     }
@@ -188,6 +294,26 @@ pub async fn save_wallet_snapshot_for_nodes(
         .map_err(|e| snapshot_error(&e))
 }
 
+/// Prepare wallet state restoration from `snapshot_name`.
+///
+/// Missing wallet state is allowed here because generic snapshot restore is
+/// extension-aware but not extension-specific. A malformed wallet artifact
+/// still fails the step.
+pub fn prepare_wallet_snapshot_restore_if_present(
+    snapshot_name: &str,
+    world: &mut CucumberWorld,
+) -> StepResult {
+    let Some(snapshot) = read_wallet_snapshot_if_present(snapshot_name)? else {
+        return Ok(());
+    };
+
+    clear_wallet_snapshot_state(world)?;
+    snapshot.apply_metadata(world);
+    world.observed_transaction_hashes = Arc::new(Mutex::new(HashSet::new()));
+
+    Ok(())
+}
+
 /// Restore any wallet state stored in `snapshot_name`.
 ///
 /// Missing wallet state is allowed here because generic snapshot restore is
@@ -198,19 +324,9 @@ pub fn restore_wallet_snapshot_if_present(
     node_name: &str,
     world: &mut CucumberWorld,
 ) -> StepResult {
-    let artifact = SnapshotStore::new(snapshots_root_dir())
-        .read_manifest(snapshot_name)
-        .map_err(|e| snapshot_error(&e))?
-        .extensions
-        .get(WALLET_SNAPSHOT_EXTENSION_ID)
-        .cloned();
-
-    let Some(artifact) = artifact else {
+    let Some(snapshot) = read_wallet_snapshot_if_present(snapshot_name)? else {
         return Ok(());
     };
-
-    let snapshot = WalletSnapshot::from_artifact(&artifact).map_err(|e| snapshot_error(&e))?;
-    clear_wallet_snapshot_state(world)?;
 
     snapshot.apply_for_node(node_name, world)?;
     world.observed_transaction_hashes = Arc::new(Mutex::new(HashSet::new()));
@@ -218,9 +334,72 @@ pub fn restore_wallet_snapshot_if_present(
     Ok(())
 }
 
+fn read_wallet_snapshot_if_present(
+    snapshot_name: &str,
+) -> Result<Option<WalletSnapshot>, StepError> {
+    let artifact = SnapshotStore::new(snapshots_root_dir())
+        .read_manifest(snapshot_name)
+        .map_err(|e| snapshot_error(&e))?
+        .extensions
+        .get(WALLET_SNAPSHOT_EXTENSION_ID)
+        .cloned();
+
+    artifact
+        .map(|artifact| WalletSnapshot::from_artifact(&artifact).map_err(|e| snapshot_error(&e)))
+        .transpose()
+}
+
+async fn wait_for_wallet_feed_state_at_tip(
+    world: &CucumberWorld,
+    node_name: &str,
+    tip: &HeaderId,
+) -> Result<WalletNodeSnapshot, StepError> {
+    let started_at = Instant::now();
+    let tip = tip.to_string();
+
+    info!(
+        target: TARGET,
+        "Waiting for wallet feed state at snapshot tip `{tip}` for node `{node_name}`"
+    );
+
+    loop {
+        if let Some((tip, height, tracked_wallets)) = world
+            .with_wallets(|wallets| wallets.export_state_for_node_at_header(node_name, &tip))?
+        {
+            info!(
+                target: TARGET,
+                "Wallet feed state reached snapshot tip `{tip}` for node `{node_name}` at height {height}"
+            );
+
+            return Ok(WalletNodeSnapshot {
+                tip,
+                height,
+                tracked_wallets,
+            });
+        }
+
+        if started_at.elapsed() >= WALLET_SNAPSHOT_FEED_WAIT_TIMEOUT {
+            return Err(StepError::Timeout {
+                message: format!(
+                    "wallet feed did not observe snapshot tip `{tip}` for node `{node_name}` \
+                     within {} seconds",
+                    WALLET_SNAPSHOT_FEED_WAIT_TIMEOUT.as_secs()
+                ),
+            });
+        }
+
+        debug!(
+            target: TARGET,
+            "Still waiting for wallet feed state at snapshot tip `{tip}` for node `{node_name}`"
+        );
+        sleep(WALLET_SNAPSHOT_FEED_WAIT_INTERVAL).await;
+    }
+}
+
 fn clear_wallet_snapshot_state(world: &mut CucumberWorld) -> StepResult {
     world.wallet_info.clear();
     world.wallet_accounts.clear();
+    world.fee_state.clear_reservations();
     world.with_wallets_mut(|wallets| {
         wallets.replace_from_state(TrackedWalletsState::default());
     })?;
@@ -260,33 +439,8 @@ fn saved_node_recovery_path(snapshot_name: &str, node_name: &str) -> PathBuf {
         .join("chain_service.json")
 }
 
-async fn wait_for_wallet_state_at_saved_tip(
-    world: &CucumberWorld,
-    snapshot_name: &str,
-    node_name: &str,
-    saved_tip: &str,
-) -> Result<(String, u64, TrackedWalletsState), StepError> {
-    let started_at = Instant::now();
-
-    loop {
-        if let Some(state) = world
-            .with_wallets(|wallets| wallets.export_state_for_node_at_header(node_name, saved_tip))?
-        {
-            return Ok(state);
-        }
-
-        if started_at.elapsed() >= WALLET_SNAPSHOT_STATE_WAIT_TIMEOUT {
-            return Err(StepError::LogicalError {
-                message: format!(
-                    "cannot save wallet snapshot `{snapshot_name}`: wallet state for node \
-                    `{node_name}` saved tip `{saved_tip}` is not available after {} seconds",
-                    WALLET_SNAPSHOT_STATE_WAIT_TIMEOUT.as_secs()
-                ),
-            });
-        }
-
-        sleep(WALLET_SNAPSHOT_STATE_WAIT_INTERVAL).await;
-    }
+fn normalize_header_id(value: &str) -> String {
+    value.strip_prefix("0x").unwrap_or(value).to_owned()
 }
 
 fn parse_header_id(value: &str) -> Result<HeaderId, StepError> {

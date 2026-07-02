@@ -58,12 +58,10 @@ use crate::{
         error::{StepError, StepResult},
         steps::{
             TARGET, manual_nodes,
-            manual_nodes::{
-                snapshots::save_named_node_state_snapshot,
-                utils::{
-                    create_snapshots_all_nodes, restart_node,
-                    wait_for_all_nodes_to_be_synced_to_chain,
-                },
+            manual_nodes::utils::{
+                create_snapshot_all_nodes_with_wallet_state,
+                create_snapshot_node_with_wallet_state, restart_node,
+                wait_for_all_nodes_to_be_synced_to_chain,
             },
             manual_transactions::{
                 command_file_parsing::{ManualCommand, take_next_command},
@@ -74,7 +72,6 @@ use crate::{
         wallet::{
             best_node::get_best_node_info,
             checks::wait_for_observed_transaction_hashes,
-            snapshot::{save_wallet_snapshot, save_wallet_snapshot_for_nodes},
             submissions::SignedUserWalletSubmission,
             sync,
             sync::{WalletSendReadiness, current_available_utxos_for_user_wallets},
@@ -436,12 +433,12 @@ async fn execute_non_stop_manual_command(
 ) -> Result<(), StepError> {
     match command {
         ManualCommand::CreateSnapshotAllNodes { snapshot_name } => {
-            execute_create_snapshot_all_nodes(world, snapshot_name).await
+            create_snapshot_all_nodes_with_wallet_state(world, snapshot_name).await
         }
         ManualCommand::CreateSnapshotNode {
             snapshot_name,
             node_name,
-        } => execute_create_snapshot_node(world, snapshot_name, node_name).await,
+        } => create_snapshot_node_with_wallet_state(world, snapshot_name, node_name).await,
         ManualCommand::CoinSplit {
             wallet,
             outputs,
@@ -771,47 +768,6 @@ fn clear_all_wallet_encumbrances(world: &mut CucumberWorld, step: &str) -> StepR
     }
     info!(target: TARGET, "Cleared encumbrances for all wallets");
     Ok(())
-}
-
-async fn execute_create_snapshot_all_nodes(
-    world: &CucumberWorld,
-    snapshot_name: &str,
-) -> Result<(), StepError> {
-    if world.nodes_info.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: "cannot create snapshot: no running nodes".to_owned(),
-        });
-    }
-
-    create_snapshots_all_nodes(world, snapshot_name)?;
-    save_wallet_snapshot(snapshot_name, world).await
-}
-
-async fn execute_create_snapshot_node(
-    world: &CucumberWorld,
-    snapshot_name: &str,
-    node_name: &str,
-) -> Result<(), StepError> {
-    if world.nodes_info.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: "cannot create snapshot: no running nodes".to_owned(),
-        });
-    }
-
-    if let Some(info) = world.nodes_info.get(node_name) {
-        save_named_node_state_snapshot(snapshot_name, node_name, &info.runtime_dir)?;
-        save_wallet_snapshot_for_nodes(snapshot_name, world, [node_name]).await?;
-        info!(
-            target: TARGET,
-            "Saved snapshot `{snapshot_name}` for node {}",
-            info.runtime_dir.display()
-        );
-        Ok(())
-    } else {
-        Err(StepError::InvalidArgument {
-            message: format!("Node {node_name} does not exist"),
-        })
-    }
 }
 
 async fn handle_verify_command(

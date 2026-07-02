@@ -33,7 +33,7 @@ use crate::{
         wallet::{
             TARGET,
             best_node::{BestNodeInfo, get_best_node_info, sanitize_best_node_info_with_feed},
-            sync::current_available_utxos_for_user_wallets,
+            sync::{current_available_utxos_for_user_wallets, filter_utxos_to_node_wallet_balance},
         },
         world::{CucumberWorld, WalletInfo, WalletType},
     },
@@ -564,6 +564,7 @@ async fn reserve_user_wallet_transaction_submission(
         synced_available_utxos = current_available_utxos_for_user_wallets(world, step).await?;
         &synced_available_utxos
     };
+
     let sender_available_utxos =
         available_utxos
             .get(sender_wallet_name)
@@ -571,6 +572,16 @@ async fn reserve_user_wallet_transaction_submission(
             .ok_or(StepError::LogicalError {
                 message: format!("Wallet '{sender_wallet_name}' not found in updated balances"),
             })?;
+
+    let sender_available_utxos = filter_utxos_to_node_wallet_balance(
+        world,
+        &wallet.node_name,
+        sender_wallet_name,
+        wallet_account.public_key(),
+        sender_available_utxos,
+    )
+    .await?;
+
     let scenario_fee_funds =
         scenario_fee_account_state(world, sender_wallet_name, available_utxos)?;
 
@@ -579,6 +590,7 @@ async fn reserve_user_wallet_transaction_submission(
         sender_available_utxos,
         scenario_fee_funds,
     );
+
     let submission = prepare_wallet_transaction_work_item(transaction_intent, funding_resources)
         .map_err(wallet_transaction_error)
         .inspect_err(|e| {

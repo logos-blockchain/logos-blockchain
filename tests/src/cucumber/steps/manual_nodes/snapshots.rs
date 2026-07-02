@@ -1,4 +1,7 @@
-use std::path::{Component, Path};
+use std::{
+    fs,
+    path::{Component, Path},
+};
 
 use lb_testing_framework::NodeStateSnapshotStore;
 
@@ -10,6 +13,22 @@ use crate::cucumber::{
 
 fn snapshot_store() -> NodeStateSnapshotStore {
     NodeStateSnapshotStore::new(snapshots_root_dir())
+}
+
+pub(super) fn reset_named_snapshot(snapshot_name: &str) -> StepResult {
+    validate_snapshot_path_component(snapshot_name, "Snapshot name")?;
+
+    let snapshot_dir = snapshots_root_dir().join(snapshot_name);
+    if snapshot_dir.exists() {
+        fs::remove_dir_all(&snapshot_dir).map_err(|source| StepError::LogicalError {
+            message: format!(
+                "failed to reset snapshot directory '{}': {source}",
+                snapshot_dir.display()
+            ),
+        })?;
+    }
+
+    Ok(())
 }
 
 pub(super) fn validate_snapshot_path_component(

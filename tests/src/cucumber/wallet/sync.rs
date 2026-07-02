@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{NoteId, Utxo};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_testing_framework::{BlockFeed, NodeHttpClient};
@@ -348,6 +349,68 @@ async fn backfill_wallet_feed_batch(
             Ok(())
         })?
         .map_err(wallet_feed_error)
+}
+
+pub(crate) async fn filter_utxos_to_node_wallet_balance(
+    world: &CucumberWorld,
+    source_node_name: &str,
+    wallet_id: &str,
+    public_key: ZkPublicKey,
+    utxos: Vec<Utxo>,
+) -> Result<Vec<Utxo>, StepError> {
+    if utxos.is_empty() {
+        return Ok(utxos);
+    }
+
+    let node = world
+        .nodes_info
+        .get(source_node_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!("Wallet balance source node `{source_node_name}` not found"),
+        })?;
+    let tip = node
+        .started_node
+        .client
+        .consensus_info()
+        .await?
+        .cryptarchia_info
+        .tip;
+    let http_client = CommonHttpClient::new(None);
+    let balance = match http_client
+        .get_wallet_balance(
+            node.started_node.client.base_url().clone(),
+            public_key,
+            Some(tip),
+        )
+        .await
+    {
+        Ok(balance) => balance,
+        Err(source) if is_wallet_balance_not_found(&source) => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Wallet balance query failed for `{wallet_id}` on source \
+                     `{source_node_name}` at tip `{tip}`: {source}",
+                ),
+            });
+        }
+    };
+
+    let note_ids = balance.notes.keys().copied().collect::<HashSet<NoteId>>();
+
+    Ok(utxos
+        .into_iter()
+        .filter(|utxo| note_ids.contains(&utxo.id()))
+        .collect())
+}
+
+fn is_wallet_balance_not_found(error: &lb_common_http_client::Error) -> bool {
+    matches!(
+        error,
+        lb_common_http_client::Error::Server(message)
+            if message.contains("404 Not Found")
+                && message.contains("requested address could not be found in the wallet")
+    )
 }
 
 async fn backfill_fallback_client(
