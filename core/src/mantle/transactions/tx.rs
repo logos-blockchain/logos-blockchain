@@ -22,7 +22,7 @@ use crate::{
         },
         transactions::{
             Ops,
-            encoding::{
+            codec::{
                 decode_mantle_tx, decode_signed_mantle_tx, encode_mantle_tx,
                 encode_signed_mantle_tx, predict_signed_mantle_tx_size,
             },

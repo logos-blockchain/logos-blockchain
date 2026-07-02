@@ -222,7 +222,7 @@ mod tests {
             Op, OpProof,
             codec::crypto::GROTH16_BYTES,
             ops::{
-                encoding::{decode_op_proof, encode_op_proof},
+                codec::{decode_op_proof, encode_op_proof},
                 leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
             },
         },

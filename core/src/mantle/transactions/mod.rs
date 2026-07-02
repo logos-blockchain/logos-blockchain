@@ -1,5 +1,5 @@
 pub mod builder;
-pub mod encoding;
+pub mod codec;
 pub mod genesis_tx;
 pub mod tx;
 

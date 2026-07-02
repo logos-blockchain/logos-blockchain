@@ -12,7 +12,7 @@ use crate::{
     mantle::{
         Note, TxHash, Utxo, Value,
         ledger::{Operation, Utxos},
-        ops::{OpId, encoding::encode_leader_claim},
+        ops::{OpId, codec::encode_leader_claim},
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,

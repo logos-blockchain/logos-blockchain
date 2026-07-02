@@ -7,7 +7,7 @@ use crate::{
     mantle::{
         TxHash,
         ledger::{self, Inputs, Operation, Outputs, Utxos},
-        ops::{OpId, encoding::encode_transfer_op},
+        ops::{OpId, codec::encode_transfer_op},
     },
     sdp::locked_notes::LockedNotes,
 };

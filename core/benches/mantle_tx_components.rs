@@ -25,9 +25,7 @@ use logos_blockchain_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::encoding::{
-            decode_signed_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx,
-        },
+        transactions::codec::{decode_signed_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
     },
 };
 

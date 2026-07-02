@@ -5,7 +5,7 @@ pub mod transfer;
 
 pub(crate) mod internal;
 
-pub(crate) mod encoding;
+pub(crate) mod codec;
 mod serde_;
 
 use std::sync::LazyLock;
@@ -34,7 +34,7 @@ use crate::{
     mantle::{
         nom::{NomDecode, NomEncode},
         ops::{
-            encoding::{
+            codec::{
                 decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op,
             },
             internal::{OpDe, OpSer},

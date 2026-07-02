@@ -19,7 +19,7 @@ use crate::{
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            encoding::proof_matches,
+            codec::proof_matches,
             sdp::SDPDeclareOp,
             transfer::TransferOp,
         },
