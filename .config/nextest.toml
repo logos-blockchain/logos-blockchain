@@ -1,0 +1,15 @@
+[profile.default]
+
+# Per-package slow-test and termination policy.
+# Tests are marked SLOW after `period`.
+# They are killed after `period * terminate-after`.
+
+# For unit tests, kill after 30s * 4 = 2m
+[[profile.default.overrides]]
+filter       = "not package(logos-blockchain-tests)"
+slow-timeout = { period = "30s", terminate-after = 4 }
+
+# For e2e integration tests, kill after 2m * 5 = 10m
+[[profile.default.overrides]]
+filter       = "package(logos-blockchain-tests)"
+slow-timeout = { period = "2m", terminate-after = 5 }
