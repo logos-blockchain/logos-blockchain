@@ -222,7 +222,8 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
                 decode_hex_bincode::<Ed25519Signature>(&sig.signature)
                     .map(|signature| IndexedSignature::new(sig.signer_key_index, signature))
             })
-            .collect::<RunResult<Vec<_>>>()?,
+            .collect::<RunResult<Vec<_>>>()?
+            .try_into()?,
     )?;
     if proof.signatures().len() != intent.required_threshold as usize {
         return Err(format!(

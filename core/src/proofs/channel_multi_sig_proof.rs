@@ -54,7 +54,8 @@ pub enum Error {
     TooManySignatures { actual: usize, maximum: usize },
 }
 
-pub type IndexedSignatures = UpperBoundedVec<IndexedSignature, { u16::MAX as usize }>;
+pub const MAX_SIGNATURES: usize = u16::MAX as usize;
+pub type IndexedSignatures = UpperBoundedVec<IndexedSignature, MAX_SIGNATURES>;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, NomCodec)]
 // Serde goes through `ChannelMultiSigProofRepr` via `try_from`/`into`: `Deserialize`

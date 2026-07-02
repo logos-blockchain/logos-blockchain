@@ -125,7 +125,9 @@ pub(super) fn create_channel_config_tx(
                 key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
     let proof = ChannelMultiSigProof::try_new(signatures).unwrap();
 
     SignedMantleTx {
