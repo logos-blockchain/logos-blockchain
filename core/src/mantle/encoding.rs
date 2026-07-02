@@ -1,14 +1,12 @@
-use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, CompressedGroth16Proof, Fr, fr_from_bytes};
+use lb_key_management_system_keys::keys::{ED25519_SIGNATURE_SIZE, Ed25519Signature, ZkSignature};
 use lb_utils::bounded_vec::UpperBoundedVec;
 use nom::{
     IResult, Parser as _,
     bytes::complete::take,
     combinator::{map, map_res},
     error::{Error, ErrorKind},
-    multi::length_count,
-    number::complete::{le_u16, le_u64},
-    sequence::pair,
+    number::complete::le_u64,
 };
 use time::OffsetDateTime;
 
@@ -18,9 +16,7 @@ use crate::{
         nom::{NomDecode as _, NomEncode as _},
         ops::{Op, OpProof},
     },
-    proofs::{
-        channel_multi_sig_proof::IndexedSignatures, leader_claim_proof::Groth16LeaderClaimProof,
-    },
+    proofs::leader_claim_proof::Groth16LeaderClaimProof,
 };
 
 // ==============================================================================
@@ -85,12 +81,12 @@ fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], Vec<O
 fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
     match op {
         // Ed25519SigProof = Ed25519Signature
-        Op::ChannelInscribe(_) => map(decode_ed25519_signature, OpProof::Ed25519Sig).parse(input),
+        Op::ChannelInscribe(_) => map(Ed25519Signature::decode, OpProof::Ed25519Sig).parse(input),
 
         // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
         Op::SDPDeclare(_) => {
-            let (input, zk_sig) = decode_zk_signature(input)?;
-            let (input, ed25519_sig) = decode_ed25519_signature(input)?;
+            let (input, zk_sig) = ZkSignature::decode(input)?;
+            let (input, ed25519_sig) = Ed25519Signature::decode(input)?;
             Ok((
                 input,
                 OpProof::ZkAndEd25519Sigs {
@@ -102,21 +98,16 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
 
         // ZkSigProof = ZkSignature
         Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_) => {
-            map(decode_zk_signature, OpProof::ZkSig).parse(input)
+            map(ZkSignature::decode, OpProof::ZkSig).parse(input)
         }
 
         // ProofOfClaimProof = Groth16
-        Op::LeaderClaim(_) => map(decode_groth16, |proof| {
-            OpProof::PoC(Groth16LeaderClaimProof::new(proof))
-        })
-        .parse(input),
+        Op::LeaderClaim(_) => map(Groth16LeaderClaimProof::decode, OpProof::PoC).parse(input),
 
         // ChannelMultiSigProof — also used by ChannelConfig (threshold sigs)
-        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => map(
-            decode_channel_multi_sig_proof,
-            OpProof::ChannelMultiSigProof,
-        )
-        .parse(input),
+        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => {
+            map(ChannelMultiSigProof::decode, OpProof::ChannelMultiSigProof).parse(input)
+        }
     }
 }
 
@@ -124,55 +115,9 @@ fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
 // Cryptographic Primitive Decoders
 // ==============================================================================
 
-fn decode_zk_signature(input: &[u8]) -> IResult<&[u8], ZkSignature> {
-    // ZkSignature = Groth16
-    map(decode_groth16, ZkSignature::new).parse(input)
-}
-
-const GROTH16_BYTES: usize = 128;
-fn decode_groth16(input: &[u8]) -> IResult<&[u8], CompressedGroth16Proof> {
-    // Groth16 = 128BYTE
-    map(
-        decode_array::<GROTH16_BYTES>,
-        |proof: [u8; GROTH16_BYTES]| CompressedGroth16Proof::from_bytes(&proof),
-    )
-    .parse(input)
-}
-
-const ED25519_SIG_BYTES: usize = 64;
-fn decode_ed25519_signature(input: &[u8]) -> IResult<&[u8], Ed25519Signature> {
-    // Ed25519Signature = 64BYTE
-    map(
-        decode_array::<ED25519_SIG_BYTES>,
-        |bytes: [u8; ED25519_SIG_BYTES]| Ed25519Signature::from_bytes(&bytes),
-    )
-    .parse(input)
-}
-
 const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex) -> usize {
     // Encoding: u16 signature count + N * (Ed25519 sig + u16 key index)
-    2 + (threshold as usize) * (ED25519_SIG_BYTES + 2)
-}
-
-fn decode_channel_multi_sig_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSigProof> {
-    // ChannelMultiSigProof = SignatureCount *WithdrawSignature
-    // WithdrawSignature = Ed25519Signature Index
-    let (input, signatures) = length_count(
-        map(decode_uint16, |n: ChannelKeyIndex| n as usize),
-        pair(decode_ed25519_signature, decode_uint16),
-    )
-    .parse(input)?;
-
-    let signatures: IndexedSignatures = signatures
-        .into_iter()
-        .map(|(signature, index)| IndexedSignature::from((index, signature)))
-        .collect::<Vec<_>>()
-        .try_into()
-        .map_err(|_| nom::Err::Failure(Error::new(input, ErrorKind::TooLarge)))?;
-
-    ChannelMultiSigProof::try_new(signatures)
-        .map(|proof| (input, proof))
-        .map_err(|_| nom::Err::Failure(Error::new(input, ErrorKind::Verify)))
+    2 + (threshold as usize) * (ED25519_SIGNATURE_SIZE + 2)
 }
 
 pub(crate) fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
@@ -186,14 +131,6 @@ pub(crate) fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
 // ==============================================================================
 // Primitive Decoders
 // ==============================================================================
-fn decode_array<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N]> {
-    map(take(N), |bytes: &[u8]| {
-        let mut arr = [0u8; N];
-        arr.copy_from_slice(bytes);
-        arr
-    })
-    .parse(input)
-}
 
 pub(crate) fn decode_utf8_string(input: &[u8], len: usize) -> IResult<&[u8], String> {
     map_res(take(len), |bytes: &[u8]| {
@@ -202,11 +139,6 @@ pub(crate) fn decode_utf8_string(input: &[u8], len: usize) -> IResult<&[u8], Str
             .map_err(|_| Error::new(bytes, ErrorKind::Fail))
     })
     .parse(input)
-}
-
-fn decode_uint16(input: &[u8]) -> IResult<&[u8], u16> {
-    // UINT16 = 2BYTE
-    le_u16(input)
 }
 
 pub(crate) fn decode_uint64(input: &[u8]) -> IResult<&[u8], u64> {
@@ -234,7 +166,7 @@ use lb_groth16::fr_to_bytes;
 
 use crate::{
     mantle::{Utxo, ops::channel::ChannelKeyIndex, tx::MantleTxGasContext},
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
 
 /// Encode primitives
@@ -363,7 +295,7 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
         .iter()
         .map(|op| match op {
             // Ed25519SigProof = Ed25519Signature
-            Op::ChannelInscribe(_) => ED25519_SIG_BYTES,
+            Op::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
 
             // ChannelMultiSigProof — for an existing channel, threshold sigs;
             // for a new channel (just-in-time created here), no sigs required.
@@ -377,11 +309,11 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
             }
 
             // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
-            Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
+            Op::SDPDeclare(_) => COMPRESSED_PROOF_SIZE + ED25519_SIGNATURE_SIZE,
 
             // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
             Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) => {
-                GROTH16_BYTES
+                COMPRESSED_PROOF_SIZE
             }
 
             // ChannelMultiSigProof
@@ -428,6 +360,7 @@ mod tests {
             },
             tx::GasPrices,
         },
+        proofs::channel_multi_sig_proof::IndexedSignature,
         sdp::{
             ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId,
             ServiceType, blend::ActivityProof,
@@ -1180,7 +1113,7 @@ mod tests {
         let op = Op::LeaderClaim(leader_claim_op);
 
         let encoded = encode_op_proof(&OpProof::PoC(poc_proof), &op);
-        assert_eq!(encoded.len(), GROTH16_BYTES);
+        assert_eq!(encoded.len(), COMPRESSED_PROOF_SIZE);
 
         let (remaining, decoded) = decode_op_proof(&encoded, &op).unwrap();
         assert!(remaining.is_empty());

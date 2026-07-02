@@ -10,18 +10,18 @@ use crate::mantle::ops::channel::ChannelKeyIndex;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, NomCodec)]
 pub struct IndexedSignature {
+    pub signature: Ed25519Signature,
     pub channel_key_index: ChannelKeyIndex, /* Using ChannelKeyIndex ensures indices are
                                              * bounded, and MAX provides an upper limit for the
                                              * number of unique signatures (one per index) */
-    pub signature: Ed25519Signature,
 }
 
 impl IndexedSignature {
     #[must_use]
     pub const fn new(channel_key_index: ChannelKeyIndex, signature: Ed25519Signature) -> Self {
         Self {
-            channel_key_index,
             signature,
+            channel_key_index,
         }
     }
 }
