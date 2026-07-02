@@ -1,4 +1,4 @@
-use lb_groth16::{COMPRESSED_PROOF_SIZE, CompressedGroth16Proof, Fr, fr_from_bytes};
+use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, fr_from_bytes};
 use lb_key_management_system_keys::keys::{ED25519_SIGNATURE_SIZE, Ed25519Signature, ZkSignature};
 use lb_utils::bounded_vec::UpperBoundedVec;
 use nom::{
@@ -170,10 +170,6 @@ use crate::{
 };
 
 /// Encode primitives
-fn encode_uint16(value: u16) -> Vec<u8> {
-    value.to_le_bytes().to_vec()
-}
-
 pub(crate) fn encode_uint64(value: u64) -> Vec<u8> {
     value.to_le_bytes().to_vec()
 }
@@ -192,36 +188,6 @@ pub(crate) fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
 
 pub(crate) fn encode_field_element(fr: &Fr) -> Vec<u8> {
     fr_to_bytes(fr).to_vec()
-}
-
-/// Encode cryptographic primitives
-fn encode_ed25519_signature(sig: &Ed25519Signature) -> Vec<u8> {
-    sig.to_bytes().to_vec()
-}
-
-fn encode_zk_signature(sig: &ZkSignature) -> Vec<u8> {
-    // ZkSignature wraps ZkSignProof which is CompressedGroth16Proof
-    encode_groth16_proof(sig.as_proof())
-}
-
-fn encode_poc(poc: &Groth16LeaderClaimProof) -> Vec<u8> {
-    // Groth16LeaderClaimProof wraps PocProof which is CompressedGroth16Proof
-    encode_groth16_proof(poc.proof())
-}
-
-fn encode_groth16_proof(proof: &CompressedGroth16Proof) -> Vec<u8> {
-    proof.to_bytes().to_vec()
-}
-
-fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_uint16(proof.signatures().len() as ChannelKeyIndex));
-    bytes.extend(proof.signatures().iter().flat_map(|signature| {
-        encode_ed25519_signature(&signature.signature)
-            .into_iter()
-            .chain(encode_uint16(signature.channel_key_index))
-    }));
-    bytes
 }
 
 // Check if proofs correspond to ops
@@ -247,18 +213,18 @@ pub const fn proof_matches(proof: &OpProof, op: &Op) -> bool {
 fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
     if proof_matches(proof, op) {
         match proof {
-            OpProof::Ed25519Sig(sig) => encode_ed25519_signature(sig),
-            OpProof::ChannelMultiSigProof(proof) => encode_channel_multi_sig_proof(proof),
+            OpProof::Ed25519Sig(sig) => sig.encode(),
+            OpProof::ChannelMultiSigProof(proof) => proof.encode(),
             OpProof::ZkAndEd25519Sigs {
                 zk_sig,
                 ed25519_sig,
             } => {
-                let mut bytes = encode_zk_signature(zk_sig);
-                bytes.extend(encode_ed25519_signature(ed25519_sig));
+                let mut bytes = zk_sig.encode();
+                bytes.extend(ed25519_sig.encode());
                 bytes
             }
-            OpProof::ZkSig(sig) => encode_zk_signature(sig),
-            OpProof::PoC(poc) => encode_poc(poc),
+            OpProof::ZkSig(sig) => sig.encode(),
+            OpProof::PoC(poc) => poc.encode(),
         }
     } else {
         panic!("Mismatch between proof type and operation type");
@@ -337,6 +303,7 @@ mod tests {
     use std::{collections::HashMap, panic};
 
     use ark_ff::AdditiveGroup as _;
+    use lb_groth16::CompressedGroth16Proof;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
     use lb_utils::bounded_vec::BoundedError;
     use multiaddr::Multiaddr;
