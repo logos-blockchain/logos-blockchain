@@ -1,12 +1,14 @@
 use std::cmp::Ordering;
 
+use lb_core_macros::NomCodec;
 use lb_key_management_system_keys::keys::Ed25519Signature;
+use lb_utils::bounded_vec::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::mantle::ops::channel::ChannelKeyIndex;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, NomCodec)]
 pub struct IndexedSignature {
     pub channel_key_index: ChannelKeyIndex, /* Using ChannelKeyIndex ensures indices are
                                              * bounded, and MAX provides an upper limit for the
@@ -52,7 +54,7 @@ pub enum Error {
     TooManySignatures { actual: usize, maximum: usize },
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, NomCodec)]
 // Serde goes through `ChannelMultiSigProofRepr` via `try_from`/`into`: `Deserialize`
 // routes through `new`, so the well-formedness invariant (strictly-increasing
 // indices) is upheld on every serde path too — a non-monotonic proof is
@@ -65,7 +67,7 @@ pub enum Error {
 pub struct ChannelMultiSigProof {
     // Invariant: signature indices are strictly increasing (hence ordered and
     // unique), as required by the spec.
-    signatures: Vec<IndexedSignature>,
+    signatures: UpperBoundedVec<IndexedSignature, { u16::MAX as usize }>,
 }
 
 /// Serde wire representation of [`ChannelMultiSigProof`] — a struct with a
