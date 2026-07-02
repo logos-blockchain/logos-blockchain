@@ -1,19 +1,22 @@
 use lb_core_macros::nom_wire_fixtures;
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
 
-use crate::mantle::{
-    channel::{SlotTimeframe, SlotTimeout},
-    ledger::{Inputs, Outputs},
-    ops::{
-        Op,
-        channel::{
-            ChannelId, MsgId,
-            config::ChannelConfigOp,
-            deposit::{DepositOp, Metadata},
-            inscribe::InscriptionOp,
-            withdraw::ChannelWithdrawOp,
+use crate::{
+    mantle::{
+        channel::{SlotTimeframe, SlotTimeout},
+        ledger::{Inputs, Outputs},
+        ops::{
+            Op,
+            channel::{
+                ChannelId, MsgId,
+                config::ChannelConfigOp,
+                deposit::{DepositOp, Metadata},
+                inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
+            },
         },
     },
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 
 nom_wire_fixtures!(ChannelId, ChannelId::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
@@ -68,5 +71,12 @@ nom_wire_fixtures!(
     ) => "1100000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 );
 
-// TODO: Resume from here
-nom_wire_fixtures!(IndexedSignature,  })
+nom_wire_fixtures!(
+    IndexedSignature,
+    Self {
+        channel_key_index: 1,
+        signature: Ed25519Signature::from_bytes(&[0u8; _])
+    } => "010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+);
+
+nom_wire_fixtures!(ChannelMultiSigProof, unimplemented!() => "00");

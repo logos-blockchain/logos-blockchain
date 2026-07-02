@@ -214,7 +214,7 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
             signature: sig.signature,
         });
     }
-    let proof = ChannelMultiSigProof::new(
+    let proof = ChannelMultiSigProof::try_new(
         signature_entries
             .iter()
             .map(|sig| {

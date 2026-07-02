@@ -700,7 +700,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{Note, ledger::Outputs, ops::channel::inscribe::InscriptionOp},
-        proofs::channel_multi_sig_proof::IndexedSignature,
+        proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
@@ -771,7 +771,7 @@ mod tests {
             withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();
-        let signatures = signing_keys
+        let signatures: IndexedSignatures = signing_keys
             .iter()
             .enumerate()
             .map(|(index, key)| {
@@ -780,8 +780,10 @@ mod tests {
                     key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
                 )
             })
-            .collect();
-        let proof = ChannelMultiSigProof::new(signatures).unwrap();
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let proof = ChannelMultiSigProof::try_new(signatures).unwrap();
         SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(proof)]).unwrap()
     }
 

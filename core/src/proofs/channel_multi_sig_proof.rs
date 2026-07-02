@@ -54,6 +54,8 @@ pub enum Error {
     TooManySignatures { actual: usize, maximum: usize },
 }
 
+pub type IndexedSignatures = UpperBoundedVec<IndexedSignature, { u16::MAX as usize }>;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, NomCodec)]
 // Serde goes through `ChannelMultiSigProofRepr` via `try_from`/`into`: `Deserialize`
 // routes through `new`, so the well-formedness invariant (strictly-increasing
@@ -67,7 +69,7 @@ pub enum Error {
 pub struct ChannelMultiSigProof {
     // Invariant: signature indices are strictly increasing (hence ordered and
     // unique), as required by the spec.
-    signatures: UpperBoundedVec<IndexedSignature, { u16::MAX as usize }>,
+    signatures: IndexedSignatures,
 }
 
 /// Serde wire representation of [`ChannelMultiSigProof`] — a struct with a
@@ -76,14 +78,14 @@ pub struct ChannelMultiSigProof {
 /// preserving the `{ "signatures": [..] }` JSON shape.
 #[derive(Serialize, Deserialize)]
 struct ChannelMultiSigProofRepr {
-    signatures: Vec<IndexedSignature>,
+    signatures: IndexedSignatures,
 }
 
 impl TryFrom<ChannelMultiSigProofRepr> for ChannelMultiSigProof {
     type Error = Error;
 
     fn try_from(repr: ChannelMultiSigProofRepr) -> Result<Self, Self::Error> {
-        Self::new(repr.signatures)
+        Self::try_new(repr.signatures)
     }
 }
 
@@ -96,7 +98,7 @@ impl From<ChannelMultiSigProof> for ChannelMultiSigProofRepr {
 }
 
 impl ChannelMultiSigProof {
-    pub fn new(signatures: Vec<IndexedSignature>) -> Result<Self, Error> {
+    pub fn try_new(signatures: IndexedSignatures) -> Result<Self, Error> {
         Self::validate_well_formedness(&signatures)?;
         Ok(Self { signatures })
     }
@@ -118,27 +120,12 @@ impl ChannelMultiSigProof {
                 signatures.iter().map(|s| s.channel_key_index).collect(),
             ));
         }
-        let max_signatures_allowed = usize::from(ChannelKeyIndex::MAX) + 1;
-        if signatures.len() > max_signatures_allowed {
-            return Err(Error::TooManySignatures {
-                actual: signatures.len(),
-                maximum: max_signatures_allowed,
-            });
-        }
         Ok(())
     }
 
     #[must_use]
-    pub const fn signatures(&self) -> &Vec<IndexedSignature> {
-        &self.signatures
-    }
-}
-
-impl TryFrom<Vec<IndexedSignature>> for ChannelMultiSigProof {
-    type Error = Error;
-
-    fn try_from(value: Vec<IndexedSignature>) -> Result<Self, Self::Error> {
-        Self::new(value)
+    pub fn signatures(&self) -> &[IndexedSignature] {
+        self.signatures.as_slice()
     }
 }
 
@@ -153,12 +140,12 @@ mod tests {
     #[test]
     fn rejects_repeated_index() {
         // Same index twice (distinct sigs): not strictly increasing, so rejected.
-        let signatures = vec![
+        let signatures = [
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(0, sig(2)),
         ];
         assert!(matches!(
-            ChannelMultiSigProof::new(signatures),
+            ChannelMultiSigProof::try_new(signatures.into()),
             Err(Error::IndicesNotStrictlyIncreasing(_))
         ));
     }
@@ -167,23 +154,23 @@ mod tests {
     fn rejects_unsorted_indices() {
         // Unique but not strictly increasing (descending): rejected (we no longer
         // silently sort — the spec asserts monotonic order).
-        let signatures = vec![
+        let signatures = [
             IndexedSignature::new(1, sig(1)),
             IndexedSignature::new(0, sig(2)),
         ];
         assert!(matches!(
-            ChannelMultiSigProof::new(signatures),
+            ChannelMultiSigProof::try_new(signatures.into()),
             Err(Error::IndicesNotStrictlyIncreasing(_))
         ));
     }
 
     #[test]
     fn accepts_strictly_increasing_indices() {
-        let signatures = vec![
+        let signatures = [
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(1, sig(2)),
         ];
-        let proof = ChannelMultiSigProof::new(signatures)
+        let proof = ChannelMultiSigProof::try_new(signatures.into())
             .expect("strictly-increasing indices are well-formed");
         assert_eq!(proof.signatures().len(), 2);
     }
@@ -197,7 +184,7 @@ mod tests {
     fn deserialize_rejects_non_monotonic_indices() {
         // Two distinct signatures sharing index 0 — not strictly increasing, so
         // `new` (and now `Deserialize`) must reject it.
-        let raw = vec![
+        let raw = [
             IndexedSignature::new(0, sig(1)),
             IndexedSignature::new(0, sig(2)),
         ];
@@ -212,10 +199,13 @@ mod tests {
 
         // A well-formed proof still round-trips, and keeps the `{ "signatures": [..] }`
         // JSON shape.
-        let ok = ChannelMultiSigProof::new(vec![
-            IndexedSignature::new(0, sig(1)),
-            IndexedSignature::new(1, sig(2)),
-        ])
+        let ok = ChannelMultiSigProof::try_new(
+            [
+                IndexedSignature::new(0, sig(1)),
+                IndexedSignature::new(1, sig(2)),
+            ]
+            .into(),
+        )
         .expect("distinct indices are well-formed");
         let serialized = serde_json::to_string(&ok).expect("serialize proof");
         assert!(

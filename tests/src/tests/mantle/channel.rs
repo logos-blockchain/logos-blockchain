@@ -403,7 +403,7 @@ fn signed_channel_withdraw(
 ) -> SignedMantleTx {
     let mantle_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
     let tx_hash = mantle_tx.hash();
-    let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
+    let withdraw_proof = ChannelMultiSigProof::try_new(vec![IndexedSignature::new(
         0,
         signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
     )])
