@@ -1335,10 +1335,17 @@ where
         .add_unsent_processed_message(processed_message.clone())
         .is_err()
     {
-        tracing::warn!(
-            target: LOG_TARGET,
-            "There should not be another copy of the same locally-generated processed message: {processed_message:?}."
-        );
+        // With a data replication factor greater than `0`, it's expected to have
+        // multiple identical copies of the same data message, so in that case it's not
+        // a warning and should not be logged.
+        // Hence, we only log a warning in the unexpected case of an encapsulated
+        // message seen twice, which should never happen.
+        if matches!(processed_message, ProcessedMessage::Encapsulated(_)) {
+            tracing::warn!(
+                target: LOG_TARGET,
+                "There should not be another copy of the same locally-generated processed message: {processed_message:?}."
+            );
+        }
     }
     state_updater.commit_changes()
 }
@@ -1875,8 +1882,16 @@ where
         .into_iter()
         .inspect(|processed_message_to_release| {
             if let Some(state_updater) = state_updater.as_mut()
-                && state_updater.remove_sent_processed_message(processed_message_to_release).is_err() {
-                tracing::warn!(target: LOG_TARGET, "Previously processed message should be present in the recovery state but was not found.");
+                && state_updater.remove_sent_processed_message(processed_message_to_release).is_err() && matches!(processed_message_to_release, ProcessedMessage::Encapsulated(_)) {
+                    // With a data replication factor greater than `0`, it's expected to have
+                    // multiple identical copies of the same data message, so in that case it's not
+                    // a warning and should not be logged.
+                    // Hence, we only log a warning in the unexpected case of an encapsulated
+                    // message seen twice, which should never happen.
+                    tracing::warn!(
+                            target: LOG_TARGET,
+                            "Previously processed message should be present in the recovery state but was not found."
+                        );
             }
         })
         .map(

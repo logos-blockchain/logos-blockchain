@@ -294,6 +294,10 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             .count()
     }
 
+    pub fn num_negotiated_peers(&self) -> usize {
+        self.negotiated_peers.len()
+    }
+
     pub const fn minimum_healthy_peering_degree(&self) -> usize {
         *self.peering_degree.start()
     }
