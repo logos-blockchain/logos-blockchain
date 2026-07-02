@@ -169,7 +169,7 @@ fn get_deployment_config(
 pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
     let node = unsafe { Box::from_raw(node) };
-    node.stop()
+    node.shutdown()
 }
 
 #[cfg(test)]

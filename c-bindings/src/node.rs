@@ -60,13 +60,13 @@ impl LogosBlockchainNode {
         (overwatch, runtime)
     }
 
-    pub(crate) fn stop(self) -> OperationStatus {
+    pub(crate) fn shutdown(self) -> OperationStatus {
         let runtime_handle = self.get_runtime_handle();
         let overwatch_handle = self.get_overwatch_handle();
-        if let Err(error) = runtime_handle.block_on(overwatch_handle.stop_all_services()) {
+        if let Err(error) = runtime_handle.block_on(overwatch_handle.shutdown()) {
             return OperationStatus::error(
-                OperationStatusCode::StopError,
-                format!("Could not stop services: {error}"),
+                OperationStatusCode::ShutdownError,
+                format!("Failed to shut down node: {error}"),
             );
         }
         OperationStatus::OK
