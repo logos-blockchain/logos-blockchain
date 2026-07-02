@@ -1246,8 +1246,8 @@ mod tests {
         let result = Inscription::try_from(oversized_inscription);
         assert_eq!(
             result,
-            Err(BoundedError::TooLong {
-                actual: inscribe::MAX_BYTES + 1,
+            Err(BoundedError::TooManyItems {
+                count: inscribe::MAX_BYTES + 1,
                 max: inscribe::MAX_BYTES
             })
         );
@@ -1298,8 +1298,8 @@ mod tests {
         let result = Ops::try_from(ops);
         assert_eq!(
             result,
-            Err(BoundedError::TooLong {
-                actual: u8::MAX as usize + 1,
+            Err(BoundedError::TooManyItems {
+                count: u8::MAX as usize + 1,
                 max: u8::MAX as usize
             })
         );

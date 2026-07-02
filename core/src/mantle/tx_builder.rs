@@ -19,34 +19,29 @@ use crate::{
 
 #[derive(Debug, Error)]
 pub enum TxBuilderError {
-    #[error("Too many operations in transaction: attempted {actual}, max {max}")]
-    TooManyOps { actual: usize, max: usize },
-    #[error("Too many ledger inputs in transfer: attempted {actual}, max {max}")]
-    TooManyInputs { actual: usize, max: usize },
-    #[error("Too many ledger outputs in transfer: attempted {actual}, max {max}")]
-    TooManyOutputs { actual: usize, max: usize },
+    #[error("Invalid operation bounds in transaction: {source}")]
+    InvalidOpsBounds { source: BoundedError },
+    #[error("Invalid ledger input bounds in transfer: {source}")]
+    InvalidInputsBounds { source: BoundedError },
+    #[error("Invalid ledger output bounds in transfer: {source}")]
+    InvalidOutputsBounds { source: BoundedError },
     #[error("Gas computation overflow: {0}")]
     GasOverflow(#[from] GasOverflow),
 }
 
 #[derive(Debug, Clone, Copy)]
-enum TooManyTag {
+enum BoundedTag {
     Ops,
     Inputs,
     Outputs,
 }
 
-impl From<(BoundedError, TooManyTag)> for TxBuilderError {
-    fn from((err, tag): (BoundedError, TooManyTag)) -> Self {
-        let (actual, max) = match err {
-            BoundedError::TooLong { actual, max } => (actual, max),
-            BoundedError::EmptyInput => (0, 0),
-        };
-
+impl From<(BoundedError, BoundedTag)> for TxBuilderError {
+    fn from((err, tag): (BoundedError, BoundedTag)) -> Self {
         match tag {
-            TooManyTag::Ops => Self::TooManyOps { actual, max },
-            TooManyTag::Inputs => Self::TooManyInputs { actual, max },
-            TooManyTag::Outputs => Self::TooManyOutputs { actual, max },
+            BoundedTag::Ops => Self::InvalidOpsBounds { source: err },
+            BoundedTag::Inputs => Self::InvalidInputsBounds { source: err },
+            BoundedTag::Outputs => Self::InvalidOutputsBounds { source: err },
         }
     }
 }
@@ -90,7 +85,7 @@ impl MantleTxBuilder {
             self.mantle_tx
                 .0
                 .try_push(op)
-                .map_err(|err| TxBuilderError::from((err, TooManyTag::Ops)))?;
+                .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
         Ok(self)
     }
@@ -120,10 +115,10 @@ impl MantleTxBuilder {
                 .inputs
                 .as_mut()
                 .try_push(utxo.id())
-                .map_err(|err| TxBuilderError::from((err, TooManyTag::Inputs)))?;
+                .map_err(|err| TxBuilderError::from((err, BoundedTag::Inputs)))?;
             self.ledger_inputs
                 .try_push(utxo)
-                .map_err(|err| TxBuilderError::from((err, TooManyTag::Inputs)))?;
+                .map_err(|err| TxBuilderError::from((err, BoundedTag::Inputs)))?;
         }
         Ok(self)
     }
@@ -139,9 +134,8 @@ impl MantleTxBuilder {
         for note in notes {
             self.pending_transfer
                 .outputs
-                .as_mut()
                 .try_push(note)
-                .map_err(|err| TxBuilderError::from((err, TooManyTag::Outputs)))?;
+                .map_err(|err| TxBuilderError::from((err, BoundedTag::Outputs)))?;
         }
         Ok(self)
     }
@@ -257,7 +251,7 @@ impl MantleTxBuilder {
             self.mantle_tx
                 .0
                 .try_push(Op::Transfer(self.pending_transfer))
-                .map_err(|err| TxBuilderError::from((err, TooManyTag::Ops)))?;
+                .map_err(|err| TxBuilderError::from((err, BoundedTag::Ops)))?;
         }
         Ok(self.mantle_tx)
     }

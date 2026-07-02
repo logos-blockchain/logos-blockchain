@@ -31,8 +31,12 @@ pub enum Error {
     InvalidGenesisTx(#[from] genesis_tx::Error),
     #[error("add_notes called with empty iterator")]
     EmptyNotes,
+    #[error("too few notes for genesis transfer outputs: attempted {actual}, min {min}")]
+    TooFewNotes { actual: usize, min: usize },
     #[error("too many notes for genesis transfer outputs: attempted {actual}, max {max}")]
     TooManyNotes { actual: usize, max: usize },
+    #[error("Index {index} is out of bounds for length {len}")]
+    IndexOutOfBounds { index: usize, len: usize },
 }
 
 /// Convenience [`Result`](core::result::Result) alias for genesis block
@@ -41,9 +45,17 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 const fn map_notes_bounded_error(error: &BoundedError) -> Error {
     match error {
-        BoundedError::TooLong { actual, max } => Error::TooManyNotes {
+        BoundedError::TooManyItems { count: actual, max } => Error::TooManyNotes {
             actual: *actual,
             max: *max,
+        },
+        BoundedError::TooFewItems { count: actual, min } => Error::TooFewNotes {
+            actual: *actual,
+            min: *min,
+        },
+        BoundedError::IndexOutOfBounds { index, len } => Error::IndexOutOfBounds {
+            index: *index,
+            len: *len,
         },
         BoundedError::EmptyInput => Error::EmptyNotes,
     }

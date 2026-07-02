@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::LazyLock};
+use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
@@ -147,6 +147,14 @@ impl Outputs {
     pub fn iter(&self) -> impl Iterator<Item = &Note> {
         <&Self as IntoIterator>::into_iter(self)
     }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, Note> {
+        self.0.iter_mut()
+    }
+
+    pub fn try_push(&mut self, note: Note) -> Result<(), BoundedError> {
+        self.0.try_push(note)
+    }
 }
 
 impl AsRef<BoundedOutputs> for Outputs {
@@ -155,9 +163,12 @@ impl AsRef<BoundedOutputs> for Outputs {
     }
 }
 
-impl AsMut<BoundedOutputs> for Outputs {
-    fn as_mut(&mut self) -> &mut BoundedOutputs {
-        &mut self.0
+impl<'a> IntoIterator for &'a mut Outputs {
+    type Item = &'a mut Note;
+    type IntoIter = IterMut<'a, Note>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
     }
 }
 
