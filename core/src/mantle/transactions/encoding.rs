@@ -6,7 +6,7 @@ use nom::{
 use crate::{
     mantle::{
         MantleTx, Op, SignedMantleTx,
-        codec::{ED25519_SIG_BYTES, GROTH16_BYTES},
+        codec::crypto::{ED25519_SIG_BYTES, GROTH16_BYTES},
         nom::{NomDecode as _, NomEncode as _},
         ops::encoding::{decode_ops_proofs, encode_ops_proofs},
         transactions::{MantleTxGasContext, Ops},

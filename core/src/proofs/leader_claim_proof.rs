@@ -132,7 +132,8 @@ impl From<LeaderClaimPrivate> for lb_poc::PoCWitnessInputsData {
 
 pub mod encoding {
     use crate::{
-        mantle::codec::encode_groth16_proof, proofs::leader_claim_proof::Groth16LeaderClaimProof,
+        mantle::codec::crypto::encode_groth16_proof,
+        proofs::leader_claim_proof::Groth16LeaderClaimProof,
     };
 
     #[must_use]

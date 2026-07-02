@@ -9,8 +9,11 @@ use crate::{
     mantle::{
         MantleTx, OpProof, Transaction, TransactionHasher,
         codec::{
-            decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
-            encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
+            crypto::{decode_field_element, encode_field_element},
+            primitives::{
+                decode_uint64, decode_unix_timestamp, decode_utf8_string, encode_string,
+                encode_uint64, encode_unix_timestamp,
+            },
         },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ops::{

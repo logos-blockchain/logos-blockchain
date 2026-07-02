@@ -152,8 +152,8 @@ pub mod encoding {
     use crate::{
         mantle::{
             codec::{
-                ED25519_SIG_BYTES, decode_ed25519_signature, decode_uint16,
-                encode_ed25519_signature, encode_uint16,
+                crypto::{ED25519_SIG_BYTES, decode_ed25519_signature, encode_ed25519_signature},
+                primitives::{decode_uint16, encode_uint16},
             },
             ops::channel::ChannelKeyIndex,
         },

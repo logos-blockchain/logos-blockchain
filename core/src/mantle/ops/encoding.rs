@@ -1,16 +1,15 @@
-// ==============================================================================
-// Leader Operation Decoders
-// ==============================================================================
-
 use nom::{IResult, Parser as _, combinator::map};
 
 use crate::{
     mantle::{
         Note, Op, OpProof,
         codec::{
-            decode_ed25519_signature, decode_field_element, decode_groth16, decode_zk_public_key,
-            decode_zk_signature, encode_byte, encode_ed25519_signature, encode_field_element,
-            encode_uint64, encode_zk_signature,
+            crypto::{
+                decode_ed25519_signature, decode_field_element, decode_groth16,
+                decode_zk_public_key, decode_zk_signature, encode_ed25519_signature,
+                encode_field_element, encode_zk_signature,
+            },
+            primitives::{encode_byte, encode_uint64},
         },
         ledger::{BoundedInputs, BoundedOutputs, Inputs, Outputs},
         nom::NomDecode as _,
@@ -221,7 +220,7 @@ mod tests {
     use crate::{
         mantle::{
             Op, OpProof,
-            codec::GROTH16_BYTES,
+            codec::crypto::GROTH16_BYTES,
             ops::{
                 encoding::{decode_op_proof, encode_op_proof},
                 leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
