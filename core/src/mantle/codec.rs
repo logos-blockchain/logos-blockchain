@@ -64,10 +64,6 @@ pub mod primitives {
             value.to_le_bytes().to_vec()
         }
 
-        pub fn encode_byte(value: u8) -> Vec<u8> {
-            vec![value]
-        }
-
         pub fn encode_string(s: &String) -> Vec<u8> {
             s.as_bytes().to_vec()
         }
@@ -144,7 +140,7 @@ pub mod crypto {
 
     mod decoding {
         use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
-        use lb_key_management_system_keys::keys::{Ed25519Signature, ZkPublicKey, ZkSignature};
+        use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
         use nom::{
             IResult, Parser as _,
             bytes::complete::take,
@@ -166,11 +162,6 @@ pub mod crypto {
                 |proof: [u8; GROTH16_BYTES]| CompressedGroth16Proof::from_bytes(&proof),
             )
             .parse(input)
-        }
-
-        pub fn decode_zk_public_key(input: &[u8]) -> IResult<&[u8], ZkPublicKey> {
-            // ZkPublicKey = FieldElement
-            map(decode_field_element, ZkPublicKey::new).parse(input)
         }
 
         pub fn decode_ed25519_signature(input: &[u8]) -> IResult<&[u8], Ed25519Signature> {

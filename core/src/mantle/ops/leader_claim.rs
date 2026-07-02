@@ -1,8 +1,10 @@
 use std::sync::LazyLock;
 
+use lb_core_macros::NomCodec;
 use lb_groth16::{fr_from_bytes, fr_to_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::{Digest, Fr, ZkHash};
+use nom::IResult;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -11,8 +13,10 @@ use crate::{
     events::{TxEvent, TxEventPayload},
     mantle::{
         Note, TxHash, Utxo, Value,
+        codec::crypto::{decode_field_element, encode_field_element},
         ledger::{Operation, Utxos},
-        ops::{OpId, codec::encode_leader_claim},
+        nom::{NomDecode, NomEncode},
+        ops::OpId,
     },
     proofs::leader_claim_proof::{
         Groth16LeaderClaimProof, LeaderClaimProof as _, LeaderClaimPublic,
@@ -28,18 +32,42 @@ static VOUCHER_NF: LazyLock<Fr> = LazyLock::new(|| {
 });
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
-pub struct RewardsRoot(#[serde(with = "serde_fr")] ZkHash);
+pub struct RewardsRoot(#[serde(with = "serde_fr")] pub(crate) ZkHash);
+
+impl NomDecode for RewardsRoot {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        decode_field_element(bytes).map(|(input, value)| (input, Self(value)))
+    }
+}
+
+impl NomEncode for RewardsRoot {
+    fn encode(&self) -> Vec<u8> {
+        encode_field_element(&self.0)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct VoucherSecret(#[serde(with = "serde_fr")] pub Fr);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash, Serialize, Deserialize)]
-pub struct VoucherNullifier(#[serde(with = "serde_fr")] ZkHash);
+pub struct VoucherNullifier(#[serde(with = "serde_fr")] pub(crate) ZkHash);
+
+impl NomDecode for VoucherNullifier {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        decode_field_element(bytes).map(|(input, value)| (input, Self(value)))
+    }
+}
+
+impl NomEncode for VoucherNullifier {
+    fn encode(&self) -> Vec<u8> {
+        encode_field_element(&self.0)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Default, Serialize, Deserialize)]
 pub struct VoucherCm(#[serde(with = "serde_fr")] ZkHash);
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, NomCodec)]
 pub struct LeaderClaimOp {
     pub rewards_root: RewardsRoot,
     pub voucher_nullifier: VoucherNullifier,
@@ -62,7 +90,7 @@ impl LeaderClaimOp {
 
 impl OpId for LeaderClaimOp {
     fn op_bytes(&self) -> Vec<u8> {
-        encode_leader_claim(self)
+        self.encode()
     }
 }
 

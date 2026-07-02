@@ -1,12 +1,10 @@
 pub mod channel;
+pub(crate) mod codec;
+pub(crate) mod internal;
 pub mod leader_claim;
 pub mod sdp;
-pub mod transfer;
-
-pub(crate) mod internal;
-
-pub(crate) mod codec;
 mod serde_;
+pub mod transfer;
 
 use std::sync::LazyLock;
 
@@ -16,8 +14,7 @@ use channel::{
 };
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use nom::{
-    IResult, Parser as _,
-    combinator::map,
+    IResult,
     error::{Error, ErrorKind},
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -34,9 +31,6 @@ use crate::{
     mantle::{
         nom::{NomDecode, NomEncode},
         ops::{
-            codec::{
-                decode_leader_claim, decode_transfer, encode_leader_claim, encode_transfer_op,
-            },
             internal::{OpDe, OpSer},
             transfer::TransferOp,
         },
@@ -154,12 +148,11 @@ impl NomEncode for Op {
             Self::SDPActive(op) => {
                 bytes.extend(op.encode());
             }
-            // TODO: Use `.encode()` once implemented for all other ops
             Self::LeaderClaim(op) => {
-                bytes.extend(encode_leader_claim(op));
+                bytes.extend(op.encode());
             }
             Self::Transfer(op) => {
-                bytes.extend(encode_transfer_op(op));
+                bytes.extend(op.encode());
             }
         }
         bytes
@@ -191,9 +184,10 @@ impl NomDecode for Op {
             SDP_ACTIVE => {
                 SDPActiveOp::decode(bytes).map(|(bytes, op)| (bytes, Self::SDPActive(op)))
             }
-            // TODO: Use `.decode()` once implemented for all other ops
-            LEADER_CLAIM => map(decode_leader_claim, Self::LeaderClaim).parse(bytes),
-            TRANSFER => map(decode_transfer, Self::Transfer).parse(bytes),
+            LEADER_CLAIM => {
+                LeaderClaimOp::decode(bytes).map(|(bytes, op)| (bytes, Self::LeaderClaim(op)))
+            }
+            TRANSFER => TransferOp::decode(bytes).map(|(bytes, op)| (bytes, Self::Transfer(op))),
             _ => Err(nom::Err::Error(Error::new(bytes, ErrorKind::Fail))),
         }
     }

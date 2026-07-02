@@ -116,7 +116,6 @@ mod tests {
                     inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
-                codec::{decode_inputs, decode_outputs, encode_inputs, encode_outputs},
                 leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
                 transfer::TransferOp,
@@ -1127,14 +1126,14 @@ mod tests {
         let inputs = BoundedInputs::from(inputs);
 
         // Encode should succeed
-        let encoded = encode_inputs(&inputs);
+        let encoded = inputs.encode();
         assert!(
             !encoded.is_empty(),
             "Encoding max input count should produce some output"
         );
 
         // Decode should succeed and produce the same number of inputs
-        let result = decode_inputs(&encoded);
+        let result = Inputs::decode(&encoded);
         assert!(result.is_ok(), "Should decode max input count");
         let (_, decoded_inputs) = result.unwrap();
         assert_eq!(
@@ -1151,14 +1150,14 @@ mod tests {
         let outputs = BoundedOutputs::from(outputs);
 
         // Encode should succeed
-        let encoded = encode_outputs(&outputs);
+        let encoded = outputs.encode();
         assert!(
             !encoded.is_empty(),
             "Encoding max output count should produce some output"
         );
 
         // Decode should succeed and produce the same number of outputs
-        let result = decode_outputs(&encoded);
+        let result = Outputs::decode(&encoded);
         assert!(result.is_ok(), "Should decode max output count");
         let (_, decoded_outputs) = result.unwrap();
         assert_eq!(
@@ -1179,7 +1178,7 @@ mod tests {
             valid_input.extend_from_slice(&[0x01; 32]);
         }
 
-        let result = decode_inputs(&valid_input);
+        let result = Inputs::decode(&valid_input);
         assert!(result.is_ok(), "Should accept max input count");
         let (_, inputs) = result.unwrap();
         assert_eq!(inputs.len(), u8::MAX as usize);
@@ -1193,7 +1192,7 @@ mod tests {
             valid_output.extend_from_slice(&[0x02; 32]); // public key
         }
 
-        let result = decode_outputs(&valid_output);
+        let result = Outputs::decode(&valid_output);
         assert!(result.is_ok(), "Should accept max output count");
         let (_, outputs) = result.unwrap();
         assert_eq!(outputs.len(), u8::MAX as usize);
