@@ -8,12 +8,15 @@ mod tests {
 
     use lb_core::mantle::{
         MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo, Value,
-        encoding::{Ops, encode_mantle_tx, encode_signed_mantle_tx},
         ledger::{Inputs, Outputs},
         ops::channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
+        },
+        transactions::{
+            Ops,
+            codec::{encode_mantle_tx, encode_signed_mantle_tx},
         },
     };
     use lb_groth16::{Fr, fr_to_bytes};

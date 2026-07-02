@@ -1,4 +1,4 @@
-use lb_core::mantle::{MantleTx, OpProof, SignedMantleTx, TxHash, encoding::Ops};
+use lb_core::mantle::{MantleTx, OpProof, SignedMantleTx, TxHash, transactions::Ops};
 use serde::Serialize;
 
 #[derive(Serialize)]

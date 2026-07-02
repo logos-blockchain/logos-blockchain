@@ -10,7 +10,7 @@ use lb_core::{
             Op, OpId as _,
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
-        tx::TxHash,
+        transactions::TxHash,
     },
 };
 use tracing::{debug, error, warn};
@@ -599,7 +599,6 @@ mod tests {
     use lb_core::mantle::{
         MantleTx, Note,
         channel::{SlotTimeframe, SlotTimeout},
-        encoding::Ops,
         ledger::{Inputs, Outputs},
         ops::{
             OpId as _, OpProof,
@@ -610,6 +609,7 @@ mod tests {
                 withdraw::ChannelWithdrawOp,
             },
         },
+        transactions::Ops,
     };
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;

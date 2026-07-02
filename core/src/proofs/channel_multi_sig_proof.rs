@@ -151,6 +151,18 @@ impl ChannelMultiSigProof {
     }
 }
 
+pub mod codec {
+    use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
+
+    use crate::mantle::ops::channel::ChannelKeyIndex;
+
+    #[must_use]
+    pub const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex) -> usize {
+        // Encoding: u16 signature count + N * (Ed25519 sig + u16 key index)
+        2 + (threshold as usize) * (ED25519_SIGNATURE_SIZE + 2)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

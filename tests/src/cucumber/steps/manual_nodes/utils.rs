@@ -105,7 +105,7 @@ impl SyncTargetStats {
 
 #[must_use]
 pub(crate) fn genesis_block_utxos(
-    genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
+    genesis_tx: &lb_core::mantle::transactions::GenesisTx,
 ) -> Vec<Utxo> {
     let transfer_op = genesis_tx.genesis_transfer().clone();
     let transfer_id = transfer_op.op_id();

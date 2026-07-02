@@ -250,9 +250,9 @@ mod tests {
         crypto::ZkHasher,
         mantle::{
             MantleTx, TransactionHasher,
-            encoding::Ops,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
+            transactions::Ops,
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };

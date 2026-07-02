@@ -1,6 +1,6 @@
 use lb_core::mantle::{
     ops::channel::{ChannelId, ChannelKeyIndex},
-    tx::{OperationVerificationHelper, VerificationError},
+    transactions::{OperationVerificationHelper, VerificationError},
 };
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 

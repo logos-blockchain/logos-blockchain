@@ -5,7 +5,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx, Transaction as _,
         ops::channel::{MsgId, inscribe::Inscription},
-        tx::TxHash,
+        transactions::TxHash,
     },
 };
 use rpds::HashTrieSetSync;
