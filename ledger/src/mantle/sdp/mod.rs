@@ -38,16 +38,12 @@ enum Service {
 }
 
 impl Service {
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "service_params will be used once the `rewards` module becomes stable"
-    )]
     fn try_apply_header(
         self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         locked_notes: &mut LockedNotes,
-        config: &ServiceParameters,
+        config: ServiceParameters,
         rewards_params: &ServiceRewardsParameters,
     ) -> (Self, Vec<Utxo>, Vec<HeaderEvent>) {
         match self {
@@ -171,16 +167,12 @@ struct ServiceState<R: Rewards> {
 }
 
 impl<R: Rewards> ServiceState<R> {
-    #[expect(
-        clippy::trivially_copy_pass_by_ref,
-        reason = "service_params will be used after making the `rewards` module stable"
-    )]
     fn try_apply_header(
         mut self,
         last_epoch_state: &EpochState,
         epoch_state: &EpochState,
         locked_notes: &mut LockedNotes,
-        service_params: &ServiceParameters,
+        service_params: ServiceParameters,
         rewards_params: &R::Params,
     ) -> (Self, Vec<Utxo>, Vec<HeaderEvent>) {
         let mut reward_utxos = Vec::new();
@@ -195,7 +187,7 @@ impl<R: Rewards> ServiceState<R> {
             (self.rewards, reward_utxos) = self.rewards.update_epoch(
                 last_epoch_state,
                 epoch_state,
-                service_params,
+                &service_params,
                 rewards_params,
             );
         }
@@ -360,7 +352,7 @@ impl SdpLedger {
                     last_epoch_state,
                     epoch_state,
                     &mut locked_notes,
-                    service_params,
+                    *service_params,
                     &config.service_rewards_params,
                 );
                 all_reward_utxos.extend(reward_utxos);
