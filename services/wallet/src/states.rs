@@ -192,14 +192,13 @@ impl<'u> ServiceState<'u> {
         self.lib
     }
 
-    pub fn get_and_inc_next_new_voucher_index(&mut self) -> VoucherIndex {
-        let index = self.next_new_voucher_index;
-        self.next_new_voucher_index += 1;
-        self.update_state();
-        index
+    pub const fn next_new_voucher_index(&self) -> VoucherIndex {
+        self.next_new_voucher_index
     }
 
-    pub fn add_known_voucher(&mut self, cm: VoucherCm, nf: VoucherNullifier, id: VoucherId) {
+    pub fn add_next_known_voucher(&mut self, cm: VoucherCm, nf: VoucherNullifier, key_id: KeyId) {
+        let id = (key_id, self.next_new_voucher_index);
+        self.next_new_voucher_index += 1;
         self.wallet.add_known_voucher(cm, nf, id);
         self.update_state();
     }

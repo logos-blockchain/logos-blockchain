@@ -188,17 +188,121 @@ where
                     );
                 }
             }
-            KMSMessage::Execute { key_id, operator } => {
-                // TODO: Bubble up errors: https://github.com/logos-blockchain/logos-blockchain/issues/2079
+            KMSMessage::Execute {
+                key_id,
+                operator,
+                reply_channel,
+            } => {
                 metrics::kms_execute_requests();
-                drop(backend.execute(&key_id, operator).await.inspect_err(|e| {
+                let result = backend.execute(&key_id, operator).await;
+                if let Err(e) = &result {
                     metrics::kms_execute_failures();
                     error!(
                         target: LOG_TARGET,
                         "Failed to execute operator with key ID {key_id:?}. Error: {e:?}"
                     );
-                }));
+                }
+
+                if reply_channel.send(result).is_err() {
+                    debug!(
+                        target: LOG_TARGET,
+                        "Could not reply to the execute request channel"
+                    );
+                }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, marker::PhantomData};
+
+    use lb_key_management_system_keys::keys::{
+        Ed25519Key, KeyOperators, errors::KeyError, secured_key::SecureKeyOperator,
+    };
+    use rand::rngs::OsRng;
+    use tokio::sync::oneshot;
+
+    use crate::{
+        KMSMessage, KMSService,
+        backend::{
+            KMSBackend as _,
+            preload::{PreloadBackendError, PreloadKMSBackend, PreloadKMSBackendSettings},
+        },
+    };
+
+    #[derive(Debug)]
+    struct NoopOperator<Key, Error> {
+        _key: PhantomData<Key>,
+        _error: PhantomData<Error>,
+    }
+
+    #[async_trait::async_trait]
+    impl<Key, Error> SecureKeyOperator for NoopOperator<Key, Error>
+    where
+        Key: Send + Sync + 'static,
+        Error: Send + Sync + 'static,
+    {
+        type Key = Key;
+        type Error = Error;
+
+        async fn execute(self: Box<Self>, _key: &Self::Key) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_replies_with_backend_error() {
+        let missing_key_id = "missing".to_owned();
+        let mut backend = PreloadKMSBackend::new(PreloadKMSBackendSettings {
+            keys: HashMap::new(),
+        });
+        let (reply_channel, rx) = oneshot::channel();
+
+        KMSService::<PreloadKMSBackend, ()>::handle_kms_message(
+            KMSMessage::Execute {
+                key_id: missing_key_id.clone(),
+                operator: KeyOperators::Ed25519(Box::new(NoopOperator::<Ed25519Key, KeyError> {
+                    _key: PhantomData,
+                    _error: PhantomData,
+                })),
+                reply_channel,
+            },
+            &mut backend,
+        )
+        .await;
+
+        assert!(matches!(
+            rx.await.expect("execute response should be sent"),
+            Err(PreloadBackendError::NotRegisteredKeyId(key_id)) if key_id == missing_key_id
+        ));
+    }
+
+    #[tokio::test]
+    async fn execute_replies_with_success() {
+        let key_id = "leader".to_owned();
+        let mut backend = PreloadKMSBackend::new(PreloadKMSBackendSettings {
+            keys: HashMap::from_iter([(
+                key_id.clone(),
+                lb_key_management_system_keys::keys::Key::Ed25519(Ed25519Key::generate(&mut OsRng)),
+            )]),
+        });
+        let (reply_channel, rx) = oneshot::channel();
+
+        KMSService::<PreloadKMSBackend, ()>::handle_kms_message(
+            KMSMessage::Execute {
+                key_id,
+                operator: KeyOperators::Ed25519(Box::new(NoopOperator::<Ed25519Key, KeyError> {
+                    _key: PhantomData,
+                    _error: PhantomData,
+                })),
+                reply_channel,
+            },
+            &mut backend,
+        )
+        .await;
+
+        assert!(rx.await.expect("execute response should be sent").is_ok());
     }
 }

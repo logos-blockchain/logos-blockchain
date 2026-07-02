@@ -8,7 +8,9 @@ use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     header::HeaderId,
     mantle::Utxo,
-    proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate, LeaderPublic},
+    proofs::leader_proof::{
+        Error as LeaderProofError, Groth16LeaderProof, LeaderPrivate, LeaderPublic,
+    },
 };
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_key_management_system_service::{
@@ -19,21 +21,25 @@ use lb_ledger::{EpochState, UtxoTree};
 use lb_time_service::{EpochSlotTickStream, SlotTick, TimeServiceMessage};
 use lb_wallet_service::{
     UtxoWithKeyId,
-    api::{WalletApi, WalletServiceData},
+    api::{WalletApi, WalletApiError, WalletServiceData},
 };
 use overwatch::services::{AsServiceId, relay::OutboundRelay};
 use rand::rngs::OsRng;
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinError,
+};
 
 use crate::{
     LOG_TARGET, WinningPolEpochSlots, WinningPolSlotStream, WinningSlotFuture,
     kms::{KmsAdapter, PreloadKmsService},
+    metrics,
 };
 
 /// Return a leadership proof and signing key if the current slot is a winning
 /// one for any of the eligible UTXOs, for use in a block proposal.
 ///
-/// If the slot is not a winning one, it returns `None`.
+/// If the slot is not a winning one, it returns `Ok(None)`.
 #[expect(
     clippy::cognitive_complexity,
     reason = "TODO: address this in a dedicated refactor"
@@ -45,16 +51,29 @@ pub async fn build_proof_for<Wallet, RuntimeServiceId>(
     slot: Slot,
     wallet: &WalletApi<Wallet, RuntimeServiceId>,
     kms: &(impl KmsAdapter<RuntimeServiceId, KeyId = KeyId> + Sync),
-) -> Option<(Groth16LeaderProof, Ed25519Key)>
+) -> Result<Option<(Groth16LeaderProof, Ed25519Key)>, BuildProofError>
 where
     Wallet: WalletServiceData,
     RuntimeServiceId: Debug + Display + Sync + AsServiceId<Wallet>,
 {
     for UtxoWithKeyId { utxo, key_id } in utxos {
         let public_inputs = public_inputs_for_slot(epoch_state, slot, latest_tree);
-        let winning = kms
+        let winning = match kms
             .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
-            .await;
+            .await
+        {
+            Ok(winning) => winning,
+            Err(e) => {
+                metrics::consensus_proposals_create_failed("leadership_check");
+                tracing::error!(
+                    target: LOG_TARGET,
+                    "Failed to check winning utxo {:?} for {slot:?}: {e:?}",
+                    utxo.id(),
+                );
+                continue;
+            }
+        };
+
         if winning {
             tracing::debug!(
                 "leader for slot {:?}, {:?}/{:?}",
@@ -63,15 +82,7 @@ where
                 epoch_state.total_stake()
             );
 
-            let voucher_cm = match wallet.generate_new_voucher().await {
-                Ok(voucher_cm) => voucher_cm,
-                Err(e) => {
-                    tracing::error!("Failed to generate voucher: {e:?}");
-                    continue;
-                }
-            };
-
-            let private_inputs_result = kms
+            let (private_inputs, leader_signing_key) = match kms
                 .build_private_inputs_for_winning_utxo_and_slot(
                     key_id.clone(),
                     utxo,
@@ -79,12 +90,27 @@ where
                     public_inputs,
                     latest_tree,
                 )
-                .await;
-            let (private_inputs, leader_signing_key) = match private_inputs_result {
+                .await
+            {
                 Ok(result) => result,
                 Err(e) => {
+                    metrics::consensus_proposals_create_failed("private_inputs");
                     tracing::error!(
+                        target: LOG_TARGET,
                         "Failed to build private inputs for winning utxo {:?} for {slot:?}: {e:?}",
+                        utxo.id(),
+                    );
+                    continue;
+                }
+            };
+
+            let voucher_cm = match wallet.generate_new_voucher().await {
+                Ok(voucher_cm) => voucher_cm,
+                Err(e) => {
+                    metrics::consensus_proposals_create_failed("voucher_generation");
+                    tracing::error!(
+                        target: LOG_TARGET,
+                        "Failed to generate voucher for winning utxo {:?} for {slot:?}: {e:?}",
                         utxo.id(),
                     );
                     continue;
@@ -96,12 +122,22 @@ where
             })
             .await;
             match res {
-                Ok(Ok(proof)) => return Some((proof, leader_signing_key)),
+                Ok(Ok(proof)) => return Ok(Some((proof, leader_signing_key))),
                 Ok(Err(e)) => {
-                    tracing::error!("Failed to build proof: {:?}", e);
+                    metrics::consensus_proposals_create_failed("proof_generation");
+                    tracing::error!(
+                        target: LOG_TARGET,
+                        "Failed to build proof for winning utxo {:?} for {slot:?}: {e:?}",
+                        utxo.id(),
+                    );
                 }
                 Err(e) => {
-                    tracing::error!("Failed to wait thread to build proof: {:?}", e);
+                    metrics::consensus_proposals_create_failed("proof_task");
+                    tracing::error!(
+                        target: LOG_TARGET,
+                        "Failed to wait for proof task for winning utxo {:?} for {slot:?}: {e:?}",
+                        utxo.id(),
+                    );
                 }
             }
         } else {
@@ -114,7 +150,7 @@ where
         }
     }
 
-    None
+    Ok(None)
 }
 
 pub fn operator_for_private_inputs_arguments_for_winning_utxo_and_slot(
@@ -176,6 +212,22 @@ pub enum PrivateInputsError {
     AgedNoteNotFound,
     #[error("Latest note not found from merkle tree")]
     LatestNoteNotFound,
+    #[error("KMS API error: {0}")]
+    KmsApi(#[from] overwatch::DynError),
+    #[error("KMS API did not respond")]
+    KmsResponse,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum BuildProofError {
+    #[error("Wallet API error: {0}")]
+    Wallet(#[from] WalletApiError),
+    #[error("Private input generation failed: {0}")]
+    PrivateInputs(#[from] PrivateInputsError),
+    #[error("Proof generation failed: {0}")]
+    Proof(#[from] LeaderProofError),
+    #[error("Proof generation task failed: {0}")]
+    ProofTask(#[from] JoinError),
 }
 
 /// The per-epoch chain state needed to check winning slots, shared by the
@@ -389,10 +441,21 @@ fn epoch_winning_slots_stream<RuntimeServiceId>(
         let is_slot_winning_task: WinningSlotFuture = Box::pin(async move {
             let public_inputs = public_inputs_for_slot(&epoch_state, slot.into(), &epoch_state.utxos);
             for (utxo, key_id) in eligible_aged.iter() {
-                if !kms
+                let winning = match kms
                     .check_winning_with_key(key_id.clone(), utxo, &public_inputs)
                     .await
                 {
+                    Ok(winning) => winning,
+                    Err(e) => {
+                        tracing::error!(
+                            target: LOG_TARGET,
+                            "Failed to check winning utxo {:?} at slot {slot}: {e:?}",
+                            utxo.id(),
+                        );
+                        continue;
+                    }
+                };
+                if !winning {
                     continue;
                 }
                 tracing::trace!(target: LOG_TARGET, "Found winning utxo with ID {:?} for slot {slot}", utxo.id());
@@ -535,6 +598,7 @@ mod pol_tests {
                 kms,
             )
             .await
+            .expect("proof build should not fail")
             {
                 return Some((proof, slot));
             }
@@ -697,9 +761,14 @@ mod pol_tests {
             _: Self::KeyId,
             utxo: &Utxo,
             leader_public: &LeaderPublic,
-        ) -> bool {
+        ) -> Result<bool, overwatch::DynError> {
             let sk = ZkKey::new(Fr::from(0u64));
-            check_winning(*utxo, *leader_public, &sk.to_public_key(), Fr::from(0u64))
+            Ok(check_winning(
+                *utxo,
+                *leader_public,
+                &sk.to_public_key(),
+                Fr::from(0u64),
+            ))
         }
 
         async fn build_private_inputs_for_winning_utxo_and_slot(
@@ -754,7 +823,7 @@ mod pol_tests {
             tokio::spawn(async move {
                 while let Some(msg) = msg_receiver.recv().await {
                     if let WalletMsg::GenerateNewVoucherSecret { resp_tx } = msg {
-                        let _ = resp_tx.send(dummy_voucher_cm());
+                        drop(resp_tx.send(Ok(dummy_voucher_cm())));
                     }
                 }
             });

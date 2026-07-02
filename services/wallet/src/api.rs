@@ -272,7 +272,7 @@ where
         self.relay
             .send(WalletMsg::GenerateNewVoucherSecret { resp_tx })
             .await?;
-        Ok(rx.await?)
+        Ok(rx.await??)
     }
 
     pub async fn get_claimable_vouchers(

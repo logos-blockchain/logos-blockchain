@@ -440,8 +440,24 @@ where
                         };
 
                         let latest_tree = tip_state.latest_utxos();
+                        let proof = match build_proof_for(
+                            &eligible_aged,
+                            latest_tree,
+                            &epoch_state,
+                            slot,
+                            &wallet_api,
+                            &kms_api,
+                        )
+                        .await
+                        {
+                            Ok(proof) => proof,
+                            Err(e) => {
+                                error!(target: LOG_TARGET, "Failed to build leadership proof for slot {slot:?}: {e}");
+                                continue;
+                            }
+                        };
 
-                       if let Some((proof, signing_key)) = build_proof_for(&eligible_aged, latest_tree, &epoch_state, slot, &wallet_api, &kms_api).await {
+                        if let Some((proof, signing_key)) = proof {
                             // TODO: spawn as a separate task?
                             match Self::propose_block(
                                 tip,
@@ -458,7 +474,7 @@ where
                                     Self::apply_and_publish_block_proposal(block, &chain_network_api, &blend_adapter).await;
                                 }
                                 Err(e) => {
-                                    metrics::consensus_proposals_create_failed();
+                                    metrics::consensus_proposals_create_failed("propose_block");
                                     error!(target: LOG_TARGET, "{e}");
                                 }
                             }

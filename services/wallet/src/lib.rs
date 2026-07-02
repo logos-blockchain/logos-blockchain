@@ -172,7 +172,7 @@ pub enum WalletMsg {
         resp_tx: Sender<Result<TipResponse<Vec<UtxoWithKeyId>>, WalletServiceError>>,
     },
     GenerateNewVoucherSecret {
-        resp_tx: Sender<VoucherCm>,
+        resp_tx: Sender<Result<VoucherCm, WalletServiceError>>,
     },
     GetClaimableVouchers {
         tip: Option<HeaderId>,
@@ -808,7 +808,8 @@ where
                 leader_claim_op.voucher_nullifier,
             ))?;
         let voucher_secret =
-            Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index).await;
+            Self::derive_voucher_from_kms(kms, voucher_master_key_id.clone(), *voucher_index)
+                .await?;
 
         let voucher_cm = VoucherCm::from_secret(voucher_secret);
         let path = wallet
@@ -1044,16 +1045,22 @@ where
         state: &mut ServiceState<'_>,
         master_key_id: KeyId,
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
-        resp_tx: Sender<VoucherCm>,
+        resp_tx: Sender<Result<VoucherCm, WalletServiceError>>,
     ) {
-        let index = state.get_and_inc_next_new_voucher_index();
-        let secret = Self::derive_voucher_from_kms(kms, master_key_id.clone(), index).await;
+        let index = state.next_new_voucher_index();
+        let secret = match Self::derive_voucher_from_kms(kms, master_key_id.clone(), index).await {
+            Ok(secret) => secret,
+            Err(err) => {
+                Self::send_err(resp_tx, err);
+                return;
+            }
+        };
         let cm = VoucherCm::from_secret(secret);
         let nf = VoucherNullifier::from_secret(secret);
 
-        state.add_known_voucher(cm, nf, (master_key_id, index));
+        state.add_next_known_voucher(cm, nf, master_key_id);
 
-        if let Err(e) = resp_tx.send(cm) {
+        if let Err(e) = resp_tx.send(Ok(cm)) {
             debug!(target: LOG_TARGET, "Failed to send voucher secret: {e:?}");
         }
     }
@@ -1064,22 +1071,24 @@ where
         kms: &KmsServiceApi<Kms, RuntimeServiceId>,
         key_id: KeyId,
         index: u64,
-    ) -> VoucherSecret {
+    ) -> Result<VoucherSecret, WalletServiceError> {
         let (output_tx, output_rx) = oneshot::channel();
-        let () = kms
-            .execute(
-                key_id,
-                KeyOperators::Zk(Box::new(UnsafeVoucherOperator::new(
-                    index.into(),
-                    output_tx,
-                ))),
-            )
+        kms.execute(
+            key_id,
+            KeyOperators::Zk(Box::new(UnsafeVoucherOperator::new(
+                index.into(),
+                output_tx,
+            ))),
+        )
+        .await
+        .map_err(|error| WalletServiceError::KmsApi(Box::new(error)))?;
+
+        Ok(output_rx
             .await
-            .expect("KMS API should be invoked");
-        output_rx
-            .await
-            .expect("KMS API should respond with voucher_cm")
-            .into()
+            .map_err(|_| {
+                WalletServiceError::KmsApi("KMS API did not respond with voucher_cm".into())
+            })?
+            .into())
     }
 
     async fn build_leader_claim_tx(
