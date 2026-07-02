@@ -90,41 +90,6 @@ impl<T, const MIN: usize, const MAX: usize> BoundedVec<T, MIN, MAX> {
         self.0.push(item);
         Ok(())
     }
-
-    pub fn try_pop(&mut self) -> Result<Option<T>, BoundedError> {
-        if self.is_empty() {
-            return Ok(None);
-        }
-
-        let new_len = self.len() - 1;
-        if new_len < MIN {
-            return Err(BoundedError::TooFewItems {
-                count: new_len,
-                min: MIN,
-            });
-        }
-
-        Ok(self.0.pop())
-    }
-
-    pub fn try_remove(&mut self, index: usize) -> Result<T, BoundedError> {
-        if index >= self.len() {
-            return Err(BoundedError::IndexOutOfBounds {
-                index,
-                len: self.len(),
-            });
-        }
-
-        let new_len = self.len() - 1;
-        if new_len < MIN {
-            return Err(BoundedError::TooFewItems {
-                count: new_len,
-                min: MIN,
-            });
-        }
-
-        Ok(self.0.remove(index))
-    }
 }
 
 impl<T, const MIN: usize, const MAX: usize> Default for BoundedVec<T, MIN, MAX> {
@@ -143,13 +108,8 @@ impl<T, const MIN: usize, const MAX: usize> TryFrom<Vec<T>> for BoundedVec<T, MI
     type Error = BoundedError;
 
     fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
-        if value.len() < MIN && value.is_empty() {
+        if value.len() < MIN {
             return Err(BoundedError::EmptyInput);
-        } else if value.len() < MIN {
-            return Err(BoundedError::TooFewItems {
-                count: value.len(),
-                min: MIN,
-            });
         }
         if value.len() > MAX {
             return Err(BoundedError::TooManyItems {
@@ -174,8 +134,7 @@ where
 
 impl<T, const MIN: usize, const MAX: usize> From<T> for BoundedVec<T, MIN, MAX> {
     fn from(value: T) -> Self {
-        const { assert!(MIN <= 1, "Single element is below BoundedVec MIN") }
-        const { assert!(MAX >= 1, "Single element exceeds BoundedVec MAX") }
+        const { assert!(MAX >= 1, "Max size cannot be zero.") }
         Self([value].into())
     }
 }
@@ -477,72 +436,5 @@ mod tests {
             err.to_string().contains("exceeds static maximum"),
             "unexpected error: {err}"
         );
-    }
-
-    #[test]
-    fn try_pop_removes_last_item_when_above_min() {
-        let mut bv = TestBoundedVector::try_from(vec![1, 2, 3]).unwrap();
-
-        assert_eq!(bv.try_pop(), Ok(Some(3)));
-        assert_eq!(bv.as_slice(), &[1, 2]);
-        assert_eq!(bv.len(), 2);
-    }
-
-    #[test]
-    fn try_pop_rejects_removal_below_min_and_does_not_mutate() {
-        let mut bv = TestBoundedVector::try_from(vec![1, 2]).unwrap();
-
-        assert_eq!(
-            bv.try_pop(),
-            Err(BoundedError::TooFewItems { count: 1, min: 2 })
-        );
-
-        assert_eq!(bv.as_slice(), &[1, 2]);
-        assert_eq!(bv.len(), 2);
-    }
-
-    #[test]
-    fn try_pop_returns_none_when_empty_and_min_is_zero() {
-        type EmptyAllowed = BoundedVec<u8, 0, 4>;
-
-        let mut bv = EmptyAllowed::empty();
-
-        assert_eq!(bv.try_pop(), Ok(None));
-        assert!(bv.is_empty());
-    }
-
-    #[test]
-    fn try_remove_removes_item_at_index_when_above_min() {
-        let mut bv = TestBoundedVector::try_from(vec![1, 2, 3, 4]).unwrap();
-
-        assert_eq!(bv.try_remove(1), Ok(2));
-        assert_eq!(bv.as_slice(), &[1, 3, 4]);
-        assert_eq!(bv.len(), 3);
-    }
-
-    #[test]
-    fn try_remove_rejects_removal_below_min_and_does_not_mutate() {
-        let mut bv = TestBoundedVector::try_from(vec![1, 2]).unwrap();
-
-        assert_eq!(
-            bv.try_remove(0),
-            Err(BoundedError::TooFewItems { count: 1, min: 2 })
-        );
-
-        assert_eq!(bv.as_slice(), &[1, 2]);
-        assert_eq!(bv.len(), 2);
-    }
-
-    #[test]
-    fn try_remove_rejects_out_of_bounds_and_does_not_mutate() {
-        let mut bv = TestBoundedVector::try_from(vec![1, 2, 3]).unwrap();
-
-        assert_eq!(
-            bv.try_remove(3),
-            Err(BoundedError::IndexOutOfBounds { index: 3, len: 3 })
-        );
-
-        assert_eq!(bv.as_slice(), &[1, 2, 3]);
-        assert_eq!(bv.len(), 3);
     }
 }
