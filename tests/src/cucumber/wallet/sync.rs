@@ -38,6 +38,11 @@ struct WalletFeedSourceRequirement {
     min_height: u64,
 }
 
+/// Return currently available UTXOs for all user wallets.
+///
+/// The result comes from TF wallet tracking, not directly from the node wallet
+/// API. Before reading it, this waits for wallet-feed sources to reach the
+/// minimum heights required by the wallets' connected nodes.
 pub async fn current_available_utxos_for_user_wallets(
     world: &mut CucumberWorld,
     step: &str,
@@ -55,6 +60,10 @@ pub async fn current_available_utxos_for_user_wallets(
     .await
 }
 
+/// Return currently available UTXOs for funding wallets.
+///
+/// Funding wallets use the same tracked-wallet state as user wallets, but are
+/// selected from the funding-wallet namespace.
 pub async fn current_available_utxos_for_funding_wallets(
     world: &mut CucumberWorld,
     step: &str,
@@ -62,6 +71,7 @@ pub async fn current_available_utxos_for_funding_wallets(
     current_available_utxos_for_named_wallets(world, step, world.all_funding_wallets()).await
 }
 
+/// Return currently available UTXOs for both user and funding wallets.
 pub async fn current_available_utxos_for_all_wallets(
     world: &mut CucumberWorld,
     step: &str,
@@ -75,6 +85,7 @@ pub async fn current_available_utxos_for_all_wallets(
     Ok(all_wallet_utxos)
 }
 
+/// Return currently available UTXOs for one named wallet.
 pub async fn current_available_utxos_for_wallet(
     world: &mut CucumberWorld,
     step: &str,
@@ -85,6 +96,7 @@ pub async fn current_available_utxos_for_wallet(
         .into_available_utxos())
 }
 
+/// Return one balance view for a resolved wallet.
 pub async fn current_wallet_output_balance(
     world: &mut CucumberWorld,
     _step: &str,
@@ -96,6 +108,7 @@ pub async fn current_wallet_output_balance(
         .map(|observation| observation.balance(wallet_state_type))
 }
 
+/// Return one balance view for a wallet name.
 pub async fn current_wallet_balance(
     world: &mut CucumberWorld,
     step: &str,
@@ -107,6 +120,10 @@ pub async fn current_wallet_balance(
         .balance(wallet_state_type))
 }
 
+/// Return wallet-state views for the provided wallets.
+///
+/// This waits only for the feed sources needed by these wallets, then reads the
+/// tracked state for their keys.
 pub async fn current_wallet_states_for_wallets(
     world: &mut CucumberWorld,
     step: &str,
@@ -118,6 +135,7 @@ pub async fn current_wallet_states_for_wallets(
     current_wallet_state_views(world, &wallet_keys, feed_requirements).await
 }
 
+/// Return the current tracked state for one wallet, including reserved outputs.
 pub async fn current_wallet_available_state(
     world: &mut CucumberWorld,
     wallet_name: &str,
@@ -259,6 +277,12 @@ fn current_wallet_state_views_from_state(
     Ok(observations)
 }
 
+/// Add missing wallet keys to the block feed and backfill their state if the
+/// feed had already passed relevant blocks.
+///
+/// Normal feed polling handles already-tracked wallets. Backfill is only for
+/// keys introduced after a feed source has progressed, for example when wallets
+/// are restored or created after node startup.
 pub(crate) async fn track_wallet_feed_batches_with_backfill(
     world: &CucumberWorld,
     tracking_batches: &[WalletFeedTrackingBatch],
@@ -281,6 +305,7 @@ pub(crate) async fn track_wallet_feed_batches_with_backfill(
     backfill_wallet_feed_batches(world, tracking.backfill_batches(), genesis_utxos).await
 }
 
+/// Rebuild tracked wallet state for feed batches that missed earlier blocks.
 async fn backfill_wallet_feed_batches(
     world: &CucumberWorld,
     tracking_batches: &[WalletFeedTrackingBatch],
@@ -293,6 +318,7 @@ async fn backfill_wallet_feed_batches(
     Ok(())
 }
 
+/// Backfill one wallet-feed source by scanning chain data from that source.
 async fn backfill_wallet_feed_batch(
     world: &CucumberWorld,
     tracking_batch: &WalletFeedTrackingBatch,
@@ -351,6 +377,12 @@ async fn backfill_wallet_feed_batch(
         .map_err(wallet_feed_error)
 }
 
+/// Keep only UTXOs visible to the wallet's own node at that node's current tip.
+///
+/// TF may have observed a UTXO through another node/feed source before the
+/// wallet's connected node exposes it through its wallet API. Submission uses
+/// the wallet's connected node, so this prevents signing with inputs that the
+/// target node cannot spend yet. It does not mutate tracked wallet state.
 pub(crate) async fn filter_utxos_to_node_wallet_balance(
     world: &CucumberWorld,
     source_node_name: &str,
@@ -815,6 +847,11 @@ fn apply_scenario_fee_observations(
     }
 }
 
+/// Wait until a wallet can safely produce a transaction with the requested
+/// value/output shape.
+///
+/// The check combines majority-tip selection, tracked-wallet state, already
+/// reserved inputs, and optional per-transaction UTXO size requirements.
 #[expect(clippy::too_many_arguments, reason = "Need all args")]
 pub async fn wait_wallet_send_ready<S: BuildHasher + Sync>(
     world: &mut CucumberWorld,

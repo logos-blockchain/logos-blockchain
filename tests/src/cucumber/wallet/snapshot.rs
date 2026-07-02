@@ -55,6 +55,11 @@ struct ChainServiceRecoveryState {
 }
 
 impl WalletSnapshot {
+    /// Build a wallet snapshot from live nodes.
+    ///
+    /// Each node entry is captured at that node's current consensus tip. The
+    /// wallet feed must already have observed the same tip, otherwise the
+    /// snapshot would pair node state with stale wallet state.
     async fn from_active_world_for_nodes(
         world: &CucumberWorld,
         node_names: impl IntoIterator<Item = impl AsRef<str>>,
@@ -99,6 +104,11 @@ impl WalletSnapshot {
         })
     }
 
+    /// Build a wallet snapshot for node state already saved on disk.
+    ///
+    /// This is used after node snapshots are copied. The recovery file in each
+    /// saved node snapshot is treated as the source of truth for the node tip,
+    /// and wallet state is taken only once the feed has that exact tip.
     async fn from_saved_node_tips(
         world: &CucumberWorld,
         snapshot_name: &str,
@@ -234,6 +244,11 @@ impl WalletSnapshot {
 
 /// Prepare Cucumber wallet state from the active node tips before node
 /// shutdown.
+///
+/// Use this for snapshot-on-stop flows. It captures wallet state while nodes
+/// are still queryable, then `save_prepared_wallet_snapshot` validates that the
+/// saved node snapshot still points at the same tips before writing the wallet
+/// artifact.
 pub async fn prepare_wallet_snapshot_from_active_node_tips(
     world: &mut CucumberWorld,
 ) -> StepResult {
@@ -247,6 +262,10 @@ pub async fn prepare_wallet_snapshot_from_active_node_tips(
 
 /// Save Cucumber wallet state after the feed observes the saved node snapshot
 /// tips from active nodes.
+///
+/// Use this when node state was saved while nodes are still running. The saved
+/// node recovery tips are read from disk, then wallet state is selected from
+/// the feed at those exact tips.
 pub async fn save_wallet_snapshot_from_saved_node_tips(
     snapshot_name: &str,
     world: &mut CucumberWorld,
@@ -258,6 +277,10 @@ pub async fn save_wallet_snapshot_from_saved_node_tips(
 }
 
 /// Save the wallet snapshot prepared before node shutdown.
+///
+/// This is the final half of snapshot-on-stop. It fails if no wallet snapshot
+/// was prepared, or if the node recovery tips saved on disk no longer match the
+/// prepared wallet state.
 pub fn save_prepared_wallet_snapshot(snapshot_name: &str, world: &mut CucumberWorld) -> StepResult {
     let Some(snapshot) = world.snapshot_save_config.prepared_wallet_snapshot.take() else {
         return Err(StepError::LogicalError {
@@ -271,6 +294,9 @@ pub fn save_prepared_wallet_snapshot(snapshot_name: &str, world: &mut CucumberWo
 
 /// Save Cucumber wallet state after the feed observes the saved node snapshot
 /// tips from active nodes.
+///
+/// This is the node-selected variant used by manual-control snapshot commands.
+/// It writes no wallet artifact when the scenario has no wallet resources.
 pub async fn save_wallet_snapshot_for_saved_nodes(
     snapshot_name: &str,
     world: &mut CucumberWorld,
@@ -299,6 +325,11 @@ fn save_wallet_snapshot_value(snapshot_name: &str, snapshot: WalletSnapshot) -> 
 /// Missing wallet state is allowed here because generic snapshot restore is
 /// extension-aware but not extension-specific. A malformed wallet artifact
 /// still fails the step.
+///
+/// This restores wallet metadata before nodes are started: named wallets,
+/// account keys, and empty runtime tracking structures. Node-specific UTXO
+/// state is applied later by `restore_wallet_snapshot_if_present`, once a node
+/// is actually being started from the snapshot.
 pub fn prepare_wallet_snapshot_restore_if_present(
     snapshot_name: &str,
     world: &mut CucumberWorld,
@@ -319,6 +350,10 @@ pub fn prepare_wallet_snapshot_restore_if_present(
 /// Missing wallet state is allowed here because generic snapshot restore is
 /// extension-aware but not extension-specific. A malformed wallet artifact
 /// still fails the step.
+///
+/// `node_name` is the source-node entry inside the snapshot, not necessarily
+/// the runtime node being started. This supports the common restore shape where
+/// several fresh nodes all start from one saved node snapshot.
 pub fn restore_wallet_snapshot_if_present(
     snapshot_name: &str,
     node_name: &str,

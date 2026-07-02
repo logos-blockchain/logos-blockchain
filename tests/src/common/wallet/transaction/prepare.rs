@@ -16,6 +16,11 @@ use super::{
 };
 use crate::common::wallet::{WalletFundingResources, WalletFundingSource, WalletReservedInputs};
 
+/// Intermediate transaction state after funding/input reservation but before
+/// proof generation.
+///
+/// Keeping this separate lets tests reserve inputs cheaply, then finalize
+/// expensive proof/signing work concurrently.
 pub struct PreparedWalletTransactionWorkItem {
     funded_builder: MantleTxBuilder,
     tx_hash: TxHash,
@@ -31,6 +36,7 @@ impl PreparedWalletTransactionWorkItem {
     }
 }
 
+/// Prepare and immediately finalize a wallet transaction.
 pub fn prepare_wallet_transaction(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
@@ -38,6 +44,10 @@ pub fn prepare_wallet_transaction(
     finalize_prepared_wallet_transaction(prepare_wallet_transaction_work_item(intent, resources)?)
 }
 
+/// Fund a transaction and compute the inputs that must be reserved.
+///
+/// The returned work item has enough information to prevent duplicate input
+/// selection before transfer proofs are built.
 pub fn prepare_wallet_transaction_work_item(
     intent: WalletTransactionIntent,
     resources: WalletFundingResources,
@@ -66,6 +76,7 @@ pub fn prepare_wallet_transaction_work_item(
     })
 }
 
+/// Build transfer proofs and return a fully prepared transaction.
 pub fn finalize_prepared_wallet_transaction(
     work_item: PreparedWalletTransactionWorkItem,
 ) -> Result<PreparedWalletTransaction, WalletTransactionError> {
