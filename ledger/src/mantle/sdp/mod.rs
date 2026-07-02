@@ -1344,7 +1344,10 @@ mod tests {
                 note_id: unlocked_note,
                 service_type,
                 declaration_id: id,
-            } = &event;
+            } = &event
+            else {
+                return None;
+            };
             (*unlocked_note == note_id && *service_type == service_a && *id == declaration_id)
                 .then_some(event)
         });
