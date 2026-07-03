@@ -1,6 +1,6 @@
 //! Applies wallet funding decisions to Mantle transaction builders.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashSet};
 
 use lb_core::mantle::{
     Note, Op, Utxo,
@@ -30,6 +30,7 @@ pub fn fund_builder_from_wallet_source(
         source.public_key(),
         [source.public_key()],
         context,
+        &HashSet::new(),
     )
 }
 

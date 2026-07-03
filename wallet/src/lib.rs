@@ -113,6 +113,21 @@ impl WalletBlock {
             txs: transform_txs(block.transactions(), tx_events).collect(),
         }
     }
+
+    /// Note IDs this block spends or locks.
+    #[must_use]
+    pub fn spent_note_ids(&self) -> HashSet<NoteId> {
+        self.txs
+            .iter()
+            .flat_map(|tx| tx.ops.iter())
+            .flat_map(|op| match op {
+                WalletOp::Transfer(transfer) => transfer.inputs.iter().copied().collect::<Vec<_>>(),
+                WalletOp::ChannelDeposit(inputs) => inputs.clone(),
+                WalletOp::Lock(note_id) => vec![*note_id],
+                WalletOp::LeaderClaim(_) | WalletOp::ChannelWithdraw(_) => Vec::new(),
+            })
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,13 +203,16 @@ impl WalletState {
         change_pk: ZkPublicKey,
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &MantleTxContext,
+        excluded_notes: &HashSet<NoteId>,
     ) -> Result<MantleTxBuilder, WalletError> {
         // Get all UTXOs owned by the provided PKs, excluding the following notes:
         // - Notes that are being consumed/locked by the tx
         // - Notes that are already locked in Ledger
+        // - Notes excluded by the caller (e.g. reserved for in-flight txs)
         let consumed_or_locked = tx_builder
             .consumed_or_locked_notes()
             .chain(self.locked_notes.iter().copied())
+            .chain(excluded_notes.iter().copied())
             .collect::<HashSet<_>>();
         let mut utxos = self
             .utxos_owned_by_pks(pks)
@@ -692,9 +710,15 @@ where
         change_pk: ZkPublicKey,
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &MantleTxContext,
+        excluded_notes: &HashSet<NoteId>,
     ) -> Result<MantleTxBuilder, WalletError> {
-        self.wallet_state_at(tip)?
-            .fund_tx::<G>(tx_builder, change_pk, funding_pks, context)
+        self.wallet_state_at(tip)?.fund_tx::<G>(
+            tx_builder,
+            change_pk,
+            funding_pks,
+            context,
+            excluded_notes,
+        )
     }
 
     pub fn wallet_state_at(&self, tip: HeaderId) -> Result<WalletState, WalletError> {
@@ -1224,7 +1248,7 @@ mod tests {
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context)
+            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new())
             .unwrap();
 
         assert_eq!(
@@ -1288,7 +1312,7 @@ mod tests {
         assert_eq!(0, tx_builder.funding_delta::<Gas>(&context).unwrap());
 
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context)
+            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new())
             .unwrap();
 
         // No input was pulled in (an added input would push the net balance to
@@ -1343,7 +1367,8 @@ mod tests {
         tx_builder = tx_builder.push_op(inscription).unwrap();
 
         // Fund the transaction
-        let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context);
+        let fund_attempt =
+            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1371,7 +1396,8 @@ mod tests {
         let tx_builder = MantleTxBuilder::new();
 
         // Fund the transaction
-        let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context);
+        let fund_attempt =
+            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1402,7 +1428,8 @@ mod tests {
         let tx_builder = MantleTxBuilder::new();
 
         // Fund the transaction
-        let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context);
+        let fund_attempt =
+            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1434,7 +1461,8 @@ mod tests {
         let tx_builder = MantleTxBuilder::new();
 
         // Attempt to fund the transaction with Alice's notes.
-        let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context);
+        let fund_attempt =
+            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1443,7 +1471,7 @@ mod tests {
 
         // Fund the transaction with Bob's notes.
         wallet_state
-            .fund_tx::<Gas>(&tx_builder, bob, [bob], &context)
+            .fund_tx::<Gas>(&tx_builder, bob, [bob], &context, &HashSet::new())
             .unwrap(); // succesfully funded;
     }
 
@@ -1483,7 +1511,7 @@ mod tests {
         );
 
         let funded_tx_wo_change = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context)
+            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new())
             .unwrap()
             .build()
             .unwrap(); // successfully funded the tx
@@ -1523,7 +1551,8 @@ mod tests {
                 ),
             );
 
-            let fund_attempt = wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context);
+            let fund_attempt =
+                wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
 
             assert_eq!(
                 fund_attempt.unwrap_err(),
@@ -1541,7 +1570,7 @@ mod tests {
         );
 
         let funded_tx_wo_change = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context)
+            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new())
             .unwrap()
             .build()
             .unwrap(); // successfully funded the tx

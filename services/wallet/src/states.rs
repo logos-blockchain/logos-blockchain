@@ -1,9 +1,17 @@
-use std::collections::HashMap;
+use std::{
+    borrow::Borrow,
+    collections::{HashMap, HashSet},
+};
 
 use lb_core::{
     header::HeaderId,
-    mantle::ops::leader_claim::{VoucherCm, VoucherNullifier},
+    mantle::{
+        GasConstants, NoteId,
+        ops::leader_claim::{VoucherCm, VoucherNullifier},
+        transactions::{MantleTxBuilder, MantleTxContext},
+    },
 };
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_ledger::LedgerState;
 use lb_log_targets::wallet;
 use lb_wallet::{Voucher, Vouchers, WalletBlock, WalletError, WalletState};
@@ -108,6 +116,90 @@ impl PendingClaims {
     }
 }
 
+/// Notes handed out as funding for transactions that have been built but not
+/// yet observed on chain. Ephemeral: rebuilt empty on restart; entries are
+/// dropped once the note is observed spent in a block, or expire after enough
+/// LIB progress (mirroring [`PendingClaims`]).
+///
+/// Unlike claim reservations, which must hold until the claim is finalised,
+/// funded notes are released as soon as they are observed spent in a tip
+/// block; eviction only covers transactions that never land. Releasing too
+/// early merely reintroduces a conflicting tx, the same failure mode as
+/// having no reservation at all.
+#[derive(Debug, Default)]
+struct PendingNotes {
+    notes: HashMap<NoteId, u64>,
+}
+
+impl PendingNotes {
+    fn reserve(&mut self, note_ids: impl IntoIterator<Item = NoteId>) {
+        for note_id in note_ids {
+            debug!(
+                target: wallet::SERVICE,
+                ?note_id,
+                "Reserved pending note"
+            );
+            self.notes.insert(note_id, 0);
+        }
+    }
+
+    fn release(&mut self, note_ids: impl IntoIterator<Item = NoteId>) {
+        for note_id in note_ids {
+            if self.notes.remove(&note_id).is_some() {
+                debug!(
+                    target: wallet::SERVICE,
+                    ?note_id,
+                    "Released pending note reservation"
+                );
+            }
+        }
+    }
+
+    fn note_ids(&self) -> HashSet<NoteId> {
+        self.notes.keys().copied().collect()
+    }
+
+    fn remove_spent(&mut self, spent: &HashSet<NoteId>) {
+        self.notes.retain(|note_id, _| !spent.contains(note_id));
+    }
+
+    /// Evict reservations whose LIB-progress age reached the configured limit.
+    ///
+    /// Each LIB update adds `new_immutable_blocks_count` to every reservation's
+    /// counter. A reservation expires once that counter reaches
+    /// `max_immutable_blocks_since_reservation`.
+    fn evict_expired(
+        &mut self,
+        new_immutable_blocks_count: u64,
+        max_immutable_blocks_since_reservation: u64,
+    ) {
+        if new_immutable_blocks_count == 0 {
+            return;
+        }
+
+        self.notes
+            .retain(|note_id, immutable_blocks_since_reservation| {
+                *immutable_blocks_since_reservation =
+                    immutable_blocks_since_reservation.saturating_add(new_immutable_blocks_count);
+
+                let expired =
+                    *immutable_blocks_since_reservation >= max_immutable_blocks_since_reservation;
+
+                if expired {
+                    debug!(
+                        target: wallet::SERVICE,
+                        ?note_id,
+                        immutable_blocks_since_reservation,
+                        max_immutable_blocks_since_reservation,
+                        "Removing pending note reservation after LIB progress"
+                    );
+                }
+
+                !expired
+            });
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecoveryState {
     next_new_voucher_index: VoucherIndex,
@@ -142,6 +234,8 @@ pub struct ServiceState<'u> {
     lib: HeaderId,
     updater: &'u StateUpdater<Option<RecoveryState>>,
     pending_claims: PendingClaims,
+    pending_notes: PendingNotes,
+    pending_note_expiry_blocks: u64,
     security_param: u64,
 }
 
@@ -184,6 +278,8 @@ impl<'u> ServiceState<'u> {
             lib: wallet_lib,
             updater,
             pending_claims,
+            pending_notes: PendingNotes::default(),
+            pending_note_expiry_blocks: settings.pending_note_expiry_blocks,
             security_param,
         }
     }
@@ -205,6 +301,7 @@ impl<'u> ServiceState<'u> {
 
     pub fn apply_block(&mut self, block: &WalletBlock) -> Result<(), WalletError> {
         self.wallet.apply_block(block)?;
+        self.pending_notes.remove_spent(&block.spent_note_ids());
         self.update_state();
         Ok(())
     }
@@ -221,6 +318,8 @@ impl<'u> ServiceState<'u> {
         self.wallet.prune_vouchers(pruned_nullifiers);
         self.pending_claims
             .evict_expired(new_immutable_blocks_count, self.security_param);
+        self.pending_notes
+            .evict_expired(new_immutable_blocks_count, self.pending_note_expiry_blocks);
         self.update_state();
     }
 
@@ -261,6 +360,34 @@ impl<'u> ServiceState<'u> {
         self.pending_claims.release(nullifier);
     }
 
+    /// Fund `tx_builder` from the wallet's UTXOs at `tip`, excluding notes
+    /// already reserved for in-flight transactions.
+    pub fn fund_tx<G: GasConstants>(
+        &self,
+        tip: HeaderId,
+        tx_builder: &MantleTxBuilder,
+        change_pk: ZkPublicKey,
+        funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
+        context: &MantleTxContext,
+    ) -> Result<MantleTxBuilder, WalletError> {
+        self.wallet.fund_tx::<G>(
+            tip,
+            tx_builder,
+            change_pk,
+            funding_pks,
+            context,
+            &self.pending_notes.note_ids(),
+        )
+    }
+
+    pub fn reserve_pending_notes(&mut self, note_ids: impl IntoIterator<Item = NoteId>) {
+        self.pending_notes.reserve(note_ids);
+    }
+
+    pub fn release_pending_notes(&mut self, note_ids: impl IntoIterator<Item = NoteId>) {
+        self.pending_notes.release(note_ids);
+    }
+
     fn update_state(&self) {
         let lib_wallet_state = self
             .wallet()
@@ -278,6 +405,8 @@ impl<'u> ServiceState<'u> {
 
 #[cfg(test)]
 mod tests {
+    use lb_groth16::{AdditiveGroup as _, Field as _, Fr};
+
     use super::*;
 
     const EXPIRY_BLOCKS: u64 = 4;
@@ -304,5 +433,54 @@ mod tests {
 
         pending_claims.evict_expired(1, EXPIRY_BLOCKS);
         assert!(!pending_claims.is_reserved(&nullifier));
+    }
+
+    #[test]
+    fn pending_note_does_not_expire_without_lib_progress() {
+        let note_id = NoteId::from(Fr::ONE);
+        let mut pending_notes = PendingNotes::default();
+
+        pending_notes.reserve([note_id]);
+        pending_notes.evict_expired(0, EXPIRY_BLOCKS);
+
+        assert!(pending_notes.note_ids().contains(&note_id));
+    }
+
+    #[test]
+    fn pending_note_expires_after_enough_lib_progress() {
+        let note_id = NoteId::from(Fr::ONE);
+        let mut pending_notes = PendingNotes::default();
+
+        pending_notes.reserve([note_id]);
+        pending_notes.evict_expired(EXPIRY_BLOCKS - 1, EXPIRY_BLOCKS);
+        assert!(pending_notes.note_ids().contains(&note_id));
+
+        pending_notes.evict_expired(1, EXPIRY_BLOCKS);
+        assert!(!pending_notes.note_ids().contains(&note_id));
+    }
+
+    #[test]
+    fn pending_note_removed_when_observed_spent() {
+        let spent = NoteId::from(Fr::ZERO);
+        let kept = NoteId::from(Fr::ONE);
+        let mut pending_notes = PendingNotes::default();
+
+        pending_notes.reserve([spent, kept]);
+        pending_notes.remove_spent(&HashSet::from([spent]));
+
+        let note_ids = pending_notes.note_ids();
+        assert!(!note_ids.contains(&spent));
+        assert!(note_ids.contains(&kept));
+    }
+
+    #[test]
+    fn released_pending_note_becomes_available() {
+        let note_id = NoteId::from(Fr::ONE);
+        let mut pending_notes = PendingNotes::default();
+
+        pending_notes.reserve([note_id]);
+        pending_notes.release([note_id]);
+
+        assert!(pending_notes.note_ids().is_empty());
     }
 }

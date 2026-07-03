@@ -121,7 +121,6 @@ async fn claim_leader_rewards(node: &NodeHttpClient, duration: Duration) -> TxHa
 }
 
 #[tokio::test]
-#[ignore = "Blocked on zero-fee transaction funding fix in https://github.com/logos-blockchain/logos-blockchain/pull/2970"]
 async fn concurrent_leader_claims() {
     let (_base, nodes, leader_funding_pk) = setup_test_nodes("concurrent_leader_claims").await;
     let node = &nodes[0];
