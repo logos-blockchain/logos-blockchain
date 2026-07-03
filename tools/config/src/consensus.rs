@@ -41,7 +41,9 @@ const KEY_MATERIAL_LEN: usize = 16;
 
 const REGULAR_NOTE_VALUE: u64 = 100_000;
 const BLEND_NOTE_VALUE: u64 = 1;
-const SDP_NOTE_VALUE: u64 = 100;
+/// Funds SDP declare/activity transaction fees at non-zero gas prices; an
+/// activity transaction costs roughly 400-1000 at genesis prices.
+const SDP_NOTE_VALUE: u64 = 10_000;
 
 #[derive(Clone)]
 pub struct ProviderInfo {
