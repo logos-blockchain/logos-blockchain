@@ -3,10 +3,17 @@ use std::cmp::Ordering;
 use lb_core_macros::NomCodec;
 use lb_key_management_system_keys::keys::Ed25519Signature;
 use lb_utils::bounded_vec::UpperBoundedVec;
+use nom::{
+    Err,
+    error::{Error as NomError, ErrorKind},
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::mantle::ops::channel::ChannelKeyIndex;
+use crate::mantle::{
+    nom::{NomDecode, NomEncode},
+    ops::channel::ChannelKeyIndex,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, NomCodec)]
 pub struct IndexedSignature {
@@ -57,7 +64,7 @@ pub enum Error {
 pub const MAX_SIGNATURES: usize = u16::MAX as usize;
 pub type IndexedSignatures = UpperBoundedVec<IndexedSignature, MAX_SIGNATURES>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, NomCodec)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 // Serde goes through `ChannelMultiSigProofRepr` via `try_from`/`into`: `Deserialize`
 // routes through `new`, so the well-formedness invariant (strictly-increasing
 // indices) is upheld on every serde path too — a non-monotonic proof is
@@ -71,6 +78,21 @@ pub struct ChannelMultiSigProof {
     // Invariant: signature indices are strictly increasing (hence ordered and
     // unique), as required by the spec.
     signatures: IndexedSignatures,
+}
+
+impl NomEncode for ChannelMultiSigProof {
+    fn encode(&self) -> Vec<u8> {
+        self.signatures.encode()
+    }
+}
+
+impl NomDecode for ChannelMultiSigProof {
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (remaining_bytes, inner) = IndexedSignatures::decode(bytes)?;
+        let proof = Self::try_new(inner)
+            .map_err(|_| Err::Error(NomError::new(bytes, ErrorKind::MapRes)))?;
+        Ok((remaining_bytes, proof))
+    }
 }
 
 /// Serde wire representation of [`ChannelMultiSigProof`] — a struct with a
@@ -215,5 +237,41 @@ mod tests {
         let round_tripped: ChannelMultiSigProof =
             serde_json::from_str(&serialized).expect("well-formed proof round-trips");
         assert_eq!(round_tripped, ok);
+    }
+
+    /// The nom decoder must uphold the same well-formedness invariant as `new`:
+    /// a wire-encoded vector with a repeated index is not strictly increasing,
+    /// so `decode` must fail (the `try_new` inside `decode` maps to a nom error).
+    #[test]
+    fn decode_rejects_repeated_index() {
+        // Encode a raw vector (bypassing `ChannelMultiSigProof`) with the same
+        // index twice, then decode it back through the proof's nom path.
+        let raw: IndexedSignatures = [
+            IndexedSignature::new(0, sig(1)),
+            IndexedSignature::new(0, sig(2)),
+        ]
+        .into();
+        let bytes = raw.encode();
+        assert!(
+            ChannelMultiSigProof::decode(&bytes).is_err(),
+            "decoding a proof with a repeated index must fail"
+        );
+    }
+
+    /// Companion to the above: a wire-encoded vector whose indices are unique
+    /// but out of order (descending) is also not strictly increasing, so the
+    /// nom decoder must reject it.
+    #[test]
+    fn decode_rejects_out_of_order_indices() {
+        let raw: IndexedSignatures = [
+            IndexedSignature::new(1, sig(1)),
+            IndexedSignature::new(0, sig(2)),
+        ]
+        .into();
+        let bytes = raw.encode();
+        assert!(
+            ChannelMultiSigProof::decode(&bytes).is_err(),
+            "decoding a proof with out-of-order indices must fail"
+        );
     }
 }
