@@ -394,6 +394,15 @@ pub(crate) async fn filter_utxos_to_node_wallet_balance(
         return Ok(utxos);
     }
 
+    if !world.node_provisioned_wallet_pks.contains(&public_key) {
+        debug!(
+            target: TARGET,
+            "Skipping node wallet balance filter for `{wallet_id}`: its key is not provisioned \
+             to node wallets, so `{source_node_name}` cannot corroborate its UTXOs"
+        );
+        return Ok(utxos);
+    }
+
     let node = world
         .nodes_info
         .get(source_node_name)

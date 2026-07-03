@@ -875,6 +875,13 @@ pub struct CucumberWorld {
     /// Manual: Mapping of wallet account indices to their corresponding wallet
     /// account in the cluster.
     pub wallet_accounts: HashMap<usize, WalletAccount>,
+    /// Manual: Public keys of wallet accounts whose secret keys are
+    /// provisioned into node KMS configs at cluster build time.
+    ///
+    /// Node wallet services only index notes for keys they hold, so node-side
+    /// wallet queries can be answered only for these keys. Accounts without
+    /// genesis tokens are never provisioned and are absent here.
+    pub node_provisioned_wallet_pks: HashSet<ZkPublicKey>,
     /// Manual: Scenario-level fee sponsor configuration and accounting.
     pub fee_state: ScenarioFeeState,
     /// Manual: Scenario-local wallet read model.
@@ -1061,6 +1068,10 @@ impl Debug for CucumberWorld {
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
             )
             .field("wallet_accounts", &self.wallet_accounts.len())
+            .field(
+                "node_provisioned_wallet_pks",
+                &self.node_provisioned_wallet_pks.len(),
+            )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("wallets", &"SharedTrackedWallets")
             .field("wallet_block_feed", &self.wallet_block_feed.is_some())

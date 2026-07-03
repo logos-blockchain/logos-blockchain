@@ -79,6 +79,13 @@ pub fn build_manual_cluster_deployment(
         None => None,
     };
 
+    world.node_provisioned_wallet_pks = config
+        .wallet_config
+        .accounts
+        .iter()
+        .map(WalletAccount::public_key)
+        .collect();
+
     let deployment = DeploymentBuilder::new(config)
         .with_deployment_seed(world.manual_cluster_deployment_seed())
         .build()
@@ -121,6 +128,7 @@ fn build_devnet_manual_cluster_deployment(
     // wallet tracking.
     world.genesis_block_utxos.clear();
     world.wallet_accounts.clear();
+    world.node_provisioned_wallet_pks.clear();
 
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
