@@ -1,7 +1,3 @@
-use std::hash::Hash;
-
-use thiserror::Error;
-
 pub mod channel;
 pub(crate) mod codec;
 pub mod gas;
@@ -11,10 +7,13 @@ pub mod nom;
 pub mod ops;
 pub mod transactions;
 
+use std::hash::Hash;
+
 pub use gas::{GasCalculator, GasConstants};
 pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
+use thiserror::Error;
 pub use transactions::CryptarchiaParameter;
 
 pub use crate::mantle::transactions::{MantleTx, SignedMantleTx, TxHash, VerificationError};
