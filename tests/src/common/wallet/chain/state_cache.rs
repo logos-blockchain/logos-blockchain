@@ -42,6 +42,12 @@ impl WalletChainStateCache {
     #[must_use]
     /// Return UTXOs for a node at a specific header, accepting header ids with
     /// or without a `0x` prefix.
+    ///
+    /// The height must have been recorded for `node_name` itself. Heights are
+    /// recorded when a node's own source tracker applies the header, and only
+    /// then does the header snapshot contain that node's wallets, so
+    /// falling back to another node's height here would expose a snapshot
+    /// that is still missing this node's wallet UTXOs.
     pub fn wallet_utxos_for_node_at_header(
         &self,
         node_name: &str,
@@ -55,14 +61,7 @@ impl WalletChainStateCache {
     }
 
     fn header_height(&self, node_name: &str, header_id: &str) -> Option<&u64> {
-        self.header_heights
-            .get(node_name)
-            .and_then(|heights| heights.get(header_id))
-            .or_else(|| {
-                self.header_heights
-                    .values()
-                    .find_map(|heights| heights.get(header_id))
-            })
+        self.header_heights.get(node_name)?.get(header_id)
     }
 
     #[must_use]
@@ -158,10 +157,10 @@ mod tests {
     use crate::common::wallet::chain::state_cache::WalletChainStateCache;
 
     #[test]
-    fn exports_wallet_state_using_header_height_from_another_node() {
+    fn exports_wallet_state_once_node_recorded_header_height() {
         let mut cache = WalletChainStateCache::default();
         cache.record_wallets_utxos("header-1".to_owned(), []);
-        cache.record_header_height("NODE_2", "header-1", 5);
+        cache.record_header_height("NODE_1", "header-1", 5);
 
         let Some((header_id, height, _wallet_utxos)) =
             cache.wallet_utxos_for_node_at_header("NODE_1", "header-1")
@@ -171,5 +170,18 @@ mod tests {
 
         assert_eq!(header_id, "header-1");
         assert_eq!(height, 5);
+    }
+
+    #[test]
+    fn does_not_export_wallet_state_using_header_height_from_another_node() {
+        let mut cache = WalletChainStateCache::default();
+        cache.record_wallets_utxos("header-1".to_owned(), []);
+        cache.record_header_height("NODE_2", "header-1", 5);
+
+        assert!(
+            cache
+                .wallet_utxos_for_node_at_header("NODE_1", "header-1")
+                .is_none()
+        );
     }
 }
