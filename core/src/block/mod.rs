@@ -56,17 +56,11 @@ pub struct References {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(bound(serialize = "Tx: Clone + Serialize"))]
 pub struct Block<Tx> {
     header: Header,
     signature: Ed25519Signature,
-    transactions: Vec<Tx>,
-}
-
-#[derive(Deserialize)]
-struct RawBlock<Tx> {
-    header: Header,
-    signature: Ed25519Signature,
-    transactions: Vec<Tx>,
+    transactions: BlockTransactions<Tx>,
 }
 
 impl<'de, Tx> Deserialize<'de> for Block<Tx>
@@ -77,15 +71,16 @@ where
     where
         D: serde::Deserializer<'de>,
     {
-        let raw = RawBlock::<Tx>::deserialize(deserializer)?;
-        let block = Self {
-            header: raw.header,
-            signature: raw.signature,
-            transactions: raw.transactions,
-        };
+        #[derive(Deserialize)]
+        struct RawBlock<Tx> {
+            header: Header,
+            signature: Ed25519Signature,
+            transactions: BlockTransactions<Tx>,
+        }
 
-        block
-            .try_into_bounded_block()
+        let raw = RawBlock::<Tx>::deserialize(deserializer)?;
+
+        Self::reconstruct(raw.header, raw.transactions, raw.signature)
             .map_err(serde::de::Error::custom)
     }
 }
@@ -112,12 +107,11 @@ impl Proposal {
     }
 }
 
-/// Validated transaction payload for non-genesis blocks.
+/// Validated transaction payload for blocks.
 ///
-/// `Block<Tx>` stores transactions as a plain `Vec<Tx>` because `GenesisBlock =
-/// Block<GenesisTx>` has different runtime constraints.
-/// Normal block constructors accept this wrapper to enforce count limits before
-/// the transactions are stored internally.
+/// The block stores transactions as this bounded vector directly, so the
+/// transaction-count limit is enforced at construction and deserialization
+/// boundaries.
 pub type BlockTransactions<Tx> = BoundedVec<Tx, 0, MAX_BLOCK_TRANSACTIONS>;
 
 impl<Tx> Block<Tx> {
@@ -131,6 +125,10 @@ impl<Tx> Block<Tx> {
     where
         Tx: Transaction<Hash = TxHash> + StorageSize,
     {
+        if slot == Slot::genesis() {
+            return Err(Error::Validation("expected non-genesis slot".to_owned()));
+        }
+
         let expected_public_key = proof_of_leadership.leader_key();
         let actual_public_key = signing_key.public_key();
         if expected_public_key != &actual_public_key {
@@ -146,7 +144,7 @@ impl<Tx> Block<Tx> {
         let block = Self {
             header,
             signature,
-            transactions: transactions.into_inner(),
+            transactions,
         };
         block.validate_total_transactions_size()?;
 
@@ -164,27 +162,32 @@ impl<Tx> Block<Tx> {
         let block = Self {
             header,
             signature,
-            transactions: transactions.into_inner(),
+            transactions,
         };
-        block.verify_internal()?;
+        let block = block.into_verified()?;
 
         Ok(block)
     }
 
-    fn verify_internal(&self) -> Result<(), Error>
+    fn into_verified(self) -> Result<Self, Error>
     where
         Tx: Transaction<Hash = TxHash> + StorageSize,
     {
-        // 1. Size is ok
+        // 1. Non-genesis blocks only
+        if self.header.slot() == Slot::genesis() {
+            return Err(Error::Validation("expected non-genesis slot".to_owned()));
+        }
+
+        // 2. Size is ok
         self.validate_total_transactions_size()?;
 
-        // 2. Block root matches transactions merkle hash
+        // 3. Block root matches transactions merkle hash
         let calculated_content_id = Self::calculate_content_id(&self.transactions);
         if self.header.block_root() != &calculated_content_id {
             return Err(Error::BlockRootMismatch);
         }
 
-        // 3. Signature is valid over the header bytes
+        // 4. Signature is valid over the header bytes
         let leader_public_key = self.header.leader_proof().leader_key();
         let header_bytes = self.header.to_bytes()?;
 
@@ -192,7 +195,7 @@ impl<Tx> Block<Tx> {
             .verify(&header_bytes, &self.signature)
             .map_err(|_| Error::Signature)?;
 
-        Ok(())
+        Ok(self)
     }
 
     fn validate_total_transactions_size(&self) -> Result<usize, Error>
@@ -220,33 +223,6 @@ impl<Tx> Block<Tx> {
         Ok(total)
     }
 
-    /// Convert a raw/deserialized block into a validated non-genesis block.
-    ///
-    /// This enforces transaction count, storage-size, block-root, and signature
-    /// validation before returning the block.
-    fn try_into_bounded_block(self) -> Result<Self, Error>
-    where
-        Tx: Transaction<Hash = TxHash> + StorageSize,
-    {
-        let Self {
-            header,
-            signature,
-            transactions,
-        } = self;
-
-        if header.slot() == Slot::from(0) {
-            // Genesis block: skip non-genesis bounded + signature validation.
-            return Ok(Self {
-                header,
-                signature,
-                transactions,
-            });
-        }
-
-        let txs = BlockTransactions::try_from(transactions)?;
-        Self::reconstruct(header, txs, signature)
-    }
-
     fn calculate_content_id(transactions: &[Tx]) -> ContentId
     where
         Tx: Transaction<Hash = TxHash>,
@@ -262,17 +238,17 @@ impl<Tx> Block<Tx> {
 
     #[must_use]
     pub fn transactions(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
-        self.transactions.iter()
+        self.transactions.as_slice().iter()
     }
 
     #[must_use]
-    pub const fn transactions_vec(&self) -> &Vec<Tx> {
-        &self.transactions
+    pub fn transactions_vec(&self) -> &Vec<Tx> {
+        self.transactions.as_ref()
     }
 
     #[must_use]
     pub fn into_transactions(self) -> Vec<Tx> {
-        self.transactions
+        self.transactions.into_inner()
     }
 
     #[must_use]
@@ -305,9 +281,11 @@ impl<Tx: Clone + Eq + Serialize + DeserializeOwned + Transaction<Hash = TxHash> 
 
     fn try_from(bytes: Bytes) -> Result<Self, Self::Error> {
         let block = Self::from_bytes(&bytes)?;
-        block
-            .try_into_bounded_block()
-            .map_err(|e| crate::codec::Error::Deserialize(Box::new(e)))
+
+        let block = block
+            .into_verified()
+            .map_err(|e| crate::codec::Error::Deserialize(Box::new(e)))?;
+        Ok(block)
     }
 }
 
@@ -558,5 +536,60 @@ mod tests {
     fn global_block_limits_are_reflective_in_block_transaction_bounds() {
         assert_eq!(BlockTransactions::<MantleTx>::MIN, 0);
         assert_eq!(BlockTransactions::<MantleTx>::MAX, MAX_BLOCK_TRANSACTIONS);
+    }
+
+    #[test]
+    fn test_create_rejects_genesis_slot() {
+        let parent_block = [0u8; 32].into();
+        let proof = create_proof();
+
+        // Build a syntactically valid non-genesis block first.
+        let txs = BlockTransactions::<MantleTx>::empty();
+        let key = Ed25519Key::from_bytes(&[0; 32]);
+        let block_result =
+            Block::create(parent_block, Slot::from(0u64), proof, txs, &key).unwrap_err();
+
+        assert!(
+            matches!(block_result, Error::Validation(msg) if msg == "expected non-genesis slot")
+        );
+    }
+
+    #[test]
+    fn test_reconstruct_rejects_genesis_slot() {
+        let parent_block = [0u8; 32].into();
+        let proof = create_proof();
+        let key = Ed25519Key::from_bytes(&[0; 32]);
+
+        // Create a valid NON-genesis block first so we can reuse a valid signature
+        // shape.
+        let valid = Block::create(
+            parent_block,
+            Slot::from(1u64),
+            proof.clone(),
+            BlockTransactions::<MantleTx>::empty(),
+            &key,
+        )
+        .expect("valid non-genesis block");
+
+        // Rebuild header at genesis slot and sign it so signature itself is still
+        // consistent.
+        let genesis_header = Header::new(
+            parent_block,
+            *valid.header().block_root(),
+            Slot::genesis(),
+            proof,
+        );
+        let genesis_signature = genesis_header
+            .sign(&key)
+            .expect("header signing should succeed");
+
+        let err = Block::reconstruct(
+            genesis_header,
+            BlockTransactions::<MantleTx>::empty(),
+            genesis_signature,
+        )
+        .expect_err("genesis slot must be rejected by reconstruct path");
+
+        assert!(matches!(err, Error::Validation(msg) if msg == "expected non-genesis slot"));
     }
 }

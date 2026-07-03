@@ -364,7 +364,7 @@ impl Cryptarchia {
         current_slot: Slot,
     ) -> Result<(PrunedBlocks<HeaderId>, ReorgedBlocks<HeaderId>, Events), Error>
     where
-        Tx: AuthenticatedMantleTx<Context = GasPrices>,
+        Tx: AuthenticatedMantleTx<Context = GasPrices> + Clone,
     {
         let header = block.header();
         let id = header.id();

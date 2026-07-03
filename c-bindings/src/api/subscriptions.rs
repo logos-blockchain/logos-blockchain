@@ -22,6 +22,7 @@ use crate::{
 
 #[derive(Serialize)]
 #[serde(rename = "SignedMantleTx")]
+#[derive(Clone)]
 pub struct TxWithId {
     id: TxHash,
     #[serde(flatten)]

@@ -100,7 +100,7 @@ impl WalletBlock {
     #[must_use]
     pub fn from_block<Tx>(block: &Block<Tx>, epoch: Epoch, events: &Events) -> Self
     where
-        Tx: AuthenticatedMantleTx,
+        Tx: AuthenticatedMantleTx + Clone,
     {
         // TODO: devise a better way to mirror ledger's execution always correctly: https://github.com/logos-blockchain/logos-blockchain/issues/2627
         let (header_events, tx_events) = group_events(events);

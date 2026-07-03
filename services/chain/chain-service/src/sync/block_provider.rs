@@ -642,7 +642,7 @@ mod tests {
 
         let ids = env.create_storage_only_blocks(3).await;
         let stale_block = env
-            .build_block_with_parent(ids[0], Slot::from(2))
+            .build_block_with_parent(ids[0], Slot::from(3))
             .expect("stale block should be valid");
 
         let stale_block_id = stale_block.header().id();
@@ -830,7 +830,8 @@ mod tests {
             let mut prev_header = HeaderId::from([0u8; 32]);
 
             for i in 0..count {
-                let slot = Slot::from(slot_offset + i as u64);
+                // Genesis slot is not allowed for normal blocks
+                let slot = Slot::from(slot_offset + (i + 1) as u64);
                 let block = self
                     .build_block_with_parent(prev_header, slot)
                     .expect("Failed to build block with parent");
