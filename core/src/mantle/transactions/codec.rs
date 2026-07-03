@@ -84,8 +84,8 @@ pub fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext
                 calculate_channel_multi_sig_proof_byte_size(channel_withdraw_threshold)
             }
 
-            // None
-            Op::ChannelDeposit(_) => 0,
+            // ZkSigProof = ZkSignature = Groth16
+            Op::ChannelDeposit(_) => COMPRESSED_PROOF_SIZE,
         })
         .sum::<usize>();
 
