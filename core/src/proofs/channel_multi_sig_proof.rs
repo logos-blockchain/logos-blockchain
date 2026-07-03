@@ -241,7 +241,8 @@ mod tests {
 
     /// The nom decoder must uphold the same well-formedness invariant as `new`:
     /// a wire-encoded vector with a repeated index is not strictly increasing,
-    /// so `decode` must fail (the `try_new` inside `decode` maps to a nom error).
+    /// so `decode` must fail (the `try_new` inside `decode` maps to a nom
+    /// error).
     #[test]
     fn decode_rejects_repeated_index() {
         // Encode a raw vector (bypassing `ChannelMultiSigProof`) with the same
