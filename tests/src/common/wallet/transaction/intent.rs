@@ -13,22 +13,31 @@ use super::error::WalletTransactionError;
 
 pub struct WalletTransactionIntent {
     tx_builder: MantleTxBuilder,
+    context: MantleTxContext,
     sender_output_total: u64,
 }
 
 impl WalletTransactionIntent {
     #[must_use]
-    const fn new(tx_builder: MantleTxBuilder, sender_output_total: u64) -> Self {
+    const fn new(
+        tx_builder: MantleTxBuilder,
+        context: MantleTxContext,
+        sender_output_total: u64,
+    ) -> Self {
         Self {
             tx_builder,
+            context,
             sender_output_total,
         }
     }
 
-    pub fn from_builder(tx_builder: MantleTxBuilder) -> Result<Self, WalletTransactionError> {
+    pub fn from_builder(
+        tx_builder: MantleTxBuilder,
+        context: MantleTxContext,
+    ) -> Result<Self, WalletTransactionError> {
         let sender_output_total = transfer_output_total(&tx_builder)?;
 
-        Ok(Self::new(tx_builder, sender_output_total))
+        Ok(Self::new(tx_builder, context, sender_output_total))
     }
 
     pub fn transfer(
@@ -43,17 +52,17 @@ impl WalletTransactionIntent {
             ),
             ..MantleTxContext::default()
         };
-        let mut tx_builder = MantleTxBuilder::new(empty_context);
+        let mut tx_builder = MantleTxBuilder::new();
 
         for (receiver_pk, value) in receivers {
             tx_builder = tx_builder.add_ledger_output(Note::new(*value, *receiver_pk))?;
         }
 
-        Self::from_builder(tx_builder)
+        Self::from_builder(tx_builder, empty_context)
     }
 
-    pub(super) fn into_parts(self) -> (MantleTxBuilder, u64) {
-        (self.tx_builder, self.sender_output_total)
+    pub(super) fn into_parts(self) -> (MantleTxBuilder, MantleTxContext, u64) {
+        (self.tx_builder, self.context, self.sender_output_total)
     }
 }
 

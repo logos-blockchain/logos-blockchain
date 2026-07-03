@@ -1,5 +1,8 @@
 use lb_core::{
-    mantle::{Op, SignedMantleTx, gas::MainnetGasConstants, tx_builder::MantleTxBuilder},
+    mantle::{
+        Op, SignedMantleTx, gas::MainnetGasConstants, tx::MantleTxContext,
+        tx_builder::MantleTxBuilder,
+    },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_sdp_service::wallet::{
@@ -33,6 +36,7 @@ where
     async fn declare_tx(
         &self,
         mut tx_builder: MantleTxBuilder,
+        context: MantleTxContext,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
@@ -45,7 +49,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
+        let tx_fee = funded.gas_cost::<MainnetGasConstants>(&context)?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -66,6 +70,7 @@ where
     async fn withdraw_tx(
         &self,
         mut tx_builder: MantleTxBuilder,
+        context: MantleTxContext,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
@@ -78,7 +83,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
+        let tx_fee = funded.gas_cost::<MainnetGasConstants>(&context)?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -99,6 +104,7 @@ where
     async fn active_tx(
         &self,
         mut tx_builder: MantleTxBuilder,
+        context: MantleTxContext,
         active: ActiveMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
@@ -111,7 +117,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>()?;
+        let tx_fee = funded.gas_cost::<MainnetGasConstants>(&context)?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     AuthenticatedMantleTx as _, NoteId, Op, OpProof, SignedMantleTx, TxHash,
-    gas::MainnetGasConstants, tx_builder::MantleTxBuilder,
+    gas::MainnetGasConstants, tx::MantleTxContext, tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::ZkKey;
 
@@ -16,12 +16,13 @@ pub(super) type WalletTransferSigners = HashMap<NoteId, ZkKey>;
 
 pub(super) fn sign_prepared_wallet_transaction(
     funded_builder: MantleTxBuilder,
+    context: &MantleTxContext,
     tx_hash: TxHash,
     transfer_proofs: Vec<OpProof>,
     reserved_inputs: WalletReservedInputs,
     leading_op_proofs: Vec<OpProof>,
 ) -> Result<SignedWalletTransaction, WalletTransactionError> {
-    let gas_prices = funded_builder.get_gas_prices();
+    let gas_prices = context.gas_context.get_gas_prices();
     let mantle_tx = funded_builder.build()?;
     let mut op_proofs = leading_op_proofs;
     op_proofs.extend(transfer_proofs);

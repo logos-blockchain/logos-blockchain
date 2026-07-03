@@ -950,7 +950,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
                 format!("Failed to get tx context: {error}"),
             )
         })?;
-        let tx_builder = MantleTxBuilder::new(tx_context)
+        let tx_builder = MantleTxBuilder::new()
             .push_op(Op::ChannelDeposit(deposit))
             .map_err(|error| {
                 OperationStatus::error(
@@ -977,7 +977,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
             })?;
 
         let tx_fee = funded_tx_builder
-            .gas_cost::<MainnetGasConstants>()
+            .gas_cost::<MainnetGasConstants>(&tx_context)
             .map_err(|error| {
                 OperationStatus::error(
                     OperationStatusCode::DynError,

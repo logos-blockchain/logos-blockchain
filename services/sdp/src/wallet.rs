@@ -2,6 +2,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx,
         gas::{GasCost, GasOverflow},
+        tx::MantleTxContext,
         tx_builder::{MantleTxBuilder, TxBuilderError},
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
@@ -43,6 +44,7 @@ pub trait SdpWalletAdapter {
     async fn declare_tx(
         &self,
         tx_builder: MantleTxBuilder,
+        context: MantleTxContext,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError>;
@@ -50,6 +52,7 @@ pub trait SdpWalletAdapter {
     async fn active_tx(
         &self,
         tx_builder: MantleTxBuilder,
+        context: MantleTxContext,
         active_message: ActiveMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError>;
@@ -57,6 +60,7 @@ pub trait SdpWalletAdapter {
     async fn withdraw_tx(
         &self,
         tx_builder: MantleTxBuilder,
+        context: MantleTxContext,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError>;

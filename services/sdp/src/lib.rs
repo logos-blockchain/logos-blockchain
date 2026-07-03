@@ -396,11 +396,11 @@ where
             tracing::error!("Failed to get gas context for declaration");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(tx_context);
+        let tx_builder = MantleTxBuilder::new();
         let declaration_id = declaration.id();
 
         let signed_tx = match wallet_adapter
-            .declare_tx(tx_builder, *declaration, &self.wallet_config)
+            .declare_tx(tx_builder, tx_context, *declaration, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
@@ -468,10 +468,10 @@ where
             tracing::error!("Failed to get gas context for activity");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(tx_context);
+        let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .active_tx(tx_builder, active_message, &self.wallet_config)
+            .active_tx(tx_builder, tx_context, active_message, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
@@ -526,10 +526,15 @@ where
             tracing::error!("Failed to get gas context for withdrawal");
             return;
         };
-        let tx_builder = MantleTxBuilder::new(tx_context);
+        let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .withdraw_tx(tx_builder, withdraw_message, &self.wallet_config)
+            .withdraw_tx(
+                tx_builder,
+                tx_context,
+                withdraw_message,
+                &self.wallet_config,
+            )
             .await
         {
             Ok(tx) => tx,

@@ -479,11 +479,11 @@ async fn fund_sdp_transaction(
         gas_context: empty_context,
         leader_reward_amount: 0,
     };
-    let tx_builder = MantleTxBuilder::new(tx_context)
+    let tx_builder = MantleTxBuilder::new()
         .push_op(extra_op)
         .expect("mixed-op helper should fit op bounds");
 
-    let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder)
+    let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder, &tx_context)
         .expect("funding mixed-op transaction should succeed");
 
     // With zero gas prices the funding step adds no input, so the built tx carries

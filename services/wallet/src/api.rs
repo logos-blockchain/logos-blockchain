@@ -192,9 +192,8 @@ where
         recipient_pk: ZkPublicKey,
         amount: Value,
     ) -> Result<TipResponse<SignedMantleTx>, WalletApiError> {
-        let context = self.get_tx_context(tip).await?;
         let mantle_tx_builder =
-            MantleTxBuilder::new(context).add_ledger_output(Note::new(amount, recipient_pk))?;
+            MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
         let funded_tx_builder = self
             .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks)
             .await?;

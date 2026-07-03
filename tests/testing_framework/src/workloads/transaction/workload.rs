@@ -12,7 +12,7 @@ use lb_core::mantle::{
     GasCalculator as _, GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
     gas::MainnetGasConstants,
     ops::OpId as _,
-    tx::{GasPrices, MantleTxContext, MantleTxGasContext},
+    tx::{GasPrices, MantleTxGasContext},
     tx_builder::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
@@ -279,12 +279,8 @@ fn build_wallet_transaction(
     gas_context: &MantleTxGasContext,
 ) -> Result<SignedMantleTx, DynError> {
     let receiver = input.account.public_key();
-    let tx_context = MantleTxContext {
-        gas_context: gas_context.clone(),
-        leader_reward_amount: 0,
-    };
 
-    let provisional_tx = MantleTxBuilder::new(tx_context.clone())
+    let provisional_tx = MantleTxBuilder::new()
         .add_ledger_input(input.utxo)
         .map_err(|err| format!("failed to add provisional input: {err}"))?
         .add_ledger_output(Note::new(input.utxo.note.value, receiver))
@@ -302,7 +298,7 @@ fn build_wallet_transaction(
         )
     })?;
 
-    let tx = MantleTxBuilder::new(tx_context)
+    let tx = MantleTxBuilder::new()
         .add_ledger_input(input.utxo)
         .map_err(|err| format!("failed to add input: {err}"))?
         .add_ledger_output(Note::new(output_value, receiver))

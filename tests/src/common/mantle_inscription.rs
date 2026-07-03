@@ -21,7 +21,7 @@ pub fn build_inscription_tx_builder(
     signing_key: &Ed25519Key,
     channel_id: ChannelId,
     parent: Option<MsgId>,
-) -> MantleTxBuilder {
+) -> (MantleTxBuilder, MantleTxContext) {
     let tx_context = MantleTxContext {
         gas_context: MantleTxGasContext::new(
             HashMap::new(),
@@ -34,14 +34,16 @@ pub fn build_inscription_tx_builder(
         leader_reward_amount: 0,
     };
 
-    MantleTxBuilder::new(tx_context)
+    let tx_builder = MantleTxBuilder::new()
         .push_op(Op::ChannelInscribe(InscriptionOp {
             channel_id,
             inscription,
             parent: parent.unwrap_or_else(MsgId::root),
             signer: signing_key.public_key(),
         }))
-        .expect("inscription test builder should fit op bounds")
+        .expect("inscription test builder should fit op bounds");
+
+    (tx_builder, tx_context)
 }
 
 #[must_use]

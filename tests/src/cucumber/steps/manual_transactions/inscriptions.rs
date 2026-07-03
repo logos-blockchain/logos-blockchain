@@ -90,17 +90,15 @@ async fn submit_inscription_transaction(
     let payload_size = payload.len();
     let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
 
-    let tx_builder = build_inscription_tx_builder(
+    let (tx_builder, tx_context) = build_inscription_tx_builder(
         payload,
         &signing_key,
         channel_id_for_payload_size(payload_size),
         None,
     );
-    let transaction_intent =
-        WalletTransactionIntent::from_builder(tx_builder).map_err(|error| {
-            StepError::LogicalError {
-                message: error.to_string(),
-            }
+    let transaction_intent = WalletTransactionIntent::from_builder(tx_builder, tx_context)
+        .map_err(|error| StepError::LogicalError {
+            message: error.to_string(),
         })?;
 
     let prepared = prepare_user_wallet_transaction_submission(
