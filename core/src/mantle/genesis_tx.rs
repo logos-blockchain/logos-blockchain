@@ -1,5 +1,10 @@
+use lb_core_macros::NomCodec;
 use lb_groth16::Fr;
-use nom::IResult;
+use lb_utils::bounded_vec::BoundedVec;
+use nom::{
+    IResult,
+    error::{Error as NomError, ErrorKind},
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -8,12 +13,9 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         MantleTx, Transaction, TransactionHasher, TxHash,
-        encoding::{
-            decode_field_element, decode_uint64, decode_unix_timestamp, decode_utf8_string,
-            encode_field_element, encode_string, encode_uint64, encode_unix_timestamp,
-            proof_matches,
-        },
+        encoding::proof_matches,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
+        nom::{NomDecode, NomEncode},
         ops::{
             Op,
             channel::{ChannelId, MsgId, inscribe::InscriptionOp},
@@ -158,7 +160,11 @@ fn valid_cryptarchia_inscription(
         ))));
     }
 
-    CryptarchiaParameter::decode(inscription.inscription.as_ref())
+    Ok(
+        CryptarchiaParameter::decode(inscription.inscription.as_ref())
+            .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))?
+            .1,
+    )
 }
 
 impl Transaction for GenesisTx {
@@ -266,55 +272,169 @@ impl<'de> Deserialize<'de> for GenesisTx {
     }
 }
 
-/// Cryptarchia parameters encoded as an inscription in the genesis block.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CryptarchiaParameter {
-    pub chain_id: String,
-    pub genesis_time: OffsetDateTime,
-    pub epoch_nonce: Fr,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+struct BoundedString<const MIN_SIZE: usize, const MAX_SIZE: usize>(String);
+
+impl<const MIN_SIZE: usize, const MAX_SIZE: usize> AsRef<str>
+    for BoundedString<MIN_SIZE, MAX_SIZE>
+{
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
 }
 
-impl CryptarchiaParameter {
-    /// Encode the inscription into the deterministic ad-hoc binary format.
-    ///
-    /// Ad-hoc encoding format:
-    /// [u64-chain-id-bytes-len][utf8-encoded-chain-id][u64-genesis-time-as-unix-timestamp-in-seconds][256bit-epoch-nonce]
-    ///
-    /// All integers are little-endian. The epoch nonce is 32 raw bytes.
+impl<const MIN_SIZE: usize, const MAX_SIZE: usize> TryFrom<String>
+    for BoundedString<MIN_SIZE, MAX_SIZE>
+{
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        if value.len() < MIN_SIZE {
+            return Err(format!("String must be at least {MIN_SIZE} bytes: {value}"));
+        }
+        if value.len() > MAX_SIZE {
+            return Err(format!("String must not exceed {MAX_SIZE} bytes: {value}"));
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl<const MIN_SIZE: usize, const MAX_SIZE: usize> TryFrom<Vec<u8>>
+    for BoundedString<MIN_SIZE, MAX_SIZE>
+{
+    type Error = String;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let string = String::from_utf8(value).map_err(|e| format!("Invalid UTF-8 string: {e}"))?;
+        Self::try_from(string)
+    }
+}
+
+impl<const MIN_SIZE: usize, const MAX_SIZE: usize, const MIN: usize, const MAX: usize>
+    TryFrom<BoundedVec<u8, MIN, MAX>> for BoundedString<MIN_SIZE, MAX_SIZE>
+{
+    type Error = String;
+
+    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
+        const {
+            assert!(
+                MIN >= MIN_SIZE,
+                "Min size cannot be less than the minimum allowed byte size for a chain ID."
+            );
+        }
+        const {
+            assert!(
+                MAX <= MAX_SIZE,
+                "Max size cannot be more than the maximum allowed byte size for a chain ID."
+            );
+        }
+        Self::try_from(value.into_inner())
+    }
+}
+
+pub const MAX_CHAIN_ID_SIZE: usize = u64::MAX as usize;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "String")]
+pub struct ChainId(BoundedString<1, MAX_CHAIN_ID_SIZE>);
+
+impl ChainId {
     #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        let chain_id = encode_string(&self.chain_id);
-        let chain_id_len = u64::try_from(chain_id.len()).expect("chain_id length fits in u64");
-
-        let mut buf = Vec::new();
-        buf.extend(encode_uint64(chain_id_len));
-        buf.extend(chain_id);
-        buf.extend(encode_unix_timestamp(&self.genesis_time));
-        buf.extend(encode_field_element(&self.epoch_nonce));
-        buf
+    pub const fn new_unchecked(addr: String) -> Self {
+        Self(BoundedString(addr))
     }
 
-    /// Decode the inscription from the ad-hoc binary format.
-    pub fn decode(data: &[u8]) -> Result<Self, Error> {
-        Ok(Self::decode_by_nom(data)
-            .map_err(|e| Error::InvalidCryptarchiaParameter(format!("Decoding error: {e}")))?
-            .1)
+    #[must_use]
+    pub fn into_inner(self) -> String {
+        self.0.0
     }
 
-    fn decode_by_nom(data: &[u8]) -> IResult<&[u8], Self> {
-        let (data, chain_id_len) = decode_uint64(data)?;
-        let (data, chain_id) = decode_utf8_string(data, chain_id_len as usize)?;
-        let (data, genesis_time) = decode_unix_timestamp(data)?;
-        let (data, epoch_nonce) = decode_field_element(data)?;
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.0.len()
+    }
+
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.0.is_empty()
+    }
+}
+
+impl AsRef<str> for ChainId {
+    fn as_ref(&self) -> &str {
+        self.0.as_ref()
+    }
+}
+
+impl AsRef<[u8]> for ChainId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref().as_ref()
+    }
+}
+
+impl TryFrom<String> for ChainId {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        let bounded_chain_id = BoundedString::<1, MAX_CHAIN_ID_SIZE>::try_from(value)
+            .map_err(|e| format!("Invalid chain ID: {e}"))?;
+
+        Ok(Self(bounded_chain_id))
+    }
+}
+
+impl TryFrom<Vec<u8>> for ChainId {
+    type Error = String;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        let string = String::from_utf8(value).map_err(|e| format!("Invalid UTF-8 string: {e}"))?;
+        Self::try_from(string)
+    }
+}
+
+impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for ChainId {
+    type Error = String;
+
+    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
+        const {
+            assert!(MIN >= 1, "Min size cannot be less than 1.");
+            // No need to assert `MAX <= MAX_CHAIN_ID_SIZE` because
+            // `MAX_CHAIN_ID_SIZE` == `u64::MAX` so comparison is
+            // always true, and the compiles throws an error because
+            // of that.
+        }
+        Self::try_from(value.into_inner())
+    }
+}
+
+impl NomEncode for ChainId {
+    fn encode(&self) -> Vec<u8> {
+        let bounded_bytes = BoundedVec::<u8, 1, MAX_CHAIN_ID_SIZE>::new_unchecked(
+            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
+        );
+        bounded_bytes.encode()
+    }
+}
+
+impl NomDecode for ChainId {
+    fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
+        let (remaining_bytes, value) = BoundedVec::<u8, 1, MAX_CHAIN_ID_SIZE>::decode(bytes)?;
         Ok((
-            data,
-            Self {
-                chain_id,
-                genesis_time,
-                epoch_nonce,
-            },
+            remaining_bytes,
+            Self::try_from(value)
+                .map_err(|_| nom::Err::Error(NomError::new(bytes, ErrorKind::MapRes)))?,
         ))
     }
+}
+
+/// Cryptarchia parameters encoded as an inscription in the genesis block.
+#[derive(Debug, Clone, PartialEq, Eq, NomCodec)]
+pub struct CryptarchiaParameter {
+    pub chain_id: ChainId,
+    pub genesis_time: OffsetDateTime,
+    pub epoch_nonce: Fr,
 }
 
 #[cfg(test)]
@@ -349,7 +469,7 @@ mod tests {
 
     fn cryptarchia_param() -> CryptarchiaParameter {
         CryptarchiaParameter {
-            chain_id: "test".to_owned(),
+            chain_id: "test".to_owned().try_into().unwrap(),
             genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
             epoch_nonce: Fr::ZERO,
         }
@@ -625,7 +745,7 @@ mod tests {
     fn test_cryptarchia_parameter_roundtrip() {
         let param = cryptarchia_param();
         let encoded = param.encode();
-        let decoded = CryptarchiaParameter::decode(&encoded).unwrap();
+        let (_, decoded) = CryptarchiaParameter::decode(&encoded).unwrap();
         assert_eq!(param, decoded);
     }
 
@@ -633,24 +753,33 @@ mod tests {
     fn test_cryptarchia_parameter_decode_errors() {
         // Too short
         assert!(matches!(
-            CryptarchiaParameter::decode(&[0; 1]),
-            Err(Error::InvalidCryptarchiaParameter(_))
+            CryptarchiaParameter::decode(&[0; 1]).unwrap_err(),
+            nom::Err::Error(NomError {
+                code: ErrorKind::Eof,
+                ..
+            })
         ));
 
         // Wrong length (chain_id_len says 100 but only a few bytes follow)
         let mut bad = vec![0; 48];
         bad[0] = 100; // chain_id_len = 100
         assert!(matches!(
-            CryptarchiaParameter::decode(&bad),
-            Err(Error::InvalidCryptarchiaParameter(_))
+            CryptarchiaParameter::decode(&bad).unwrap_err(),
+            nom::Err::Error(NomError {
+                code: ErrorKind::Eof,
+                ..
+            })
         ));
 
         // Invalid UTF-8 chain_id
         let mut encoded = cryptarchia_param().encode();
         encoded[8] = 0xFF; // corrupt the UTF-8 byte
         assert!(matches!(
-            CryptarchiaParameter::decode(&encoded),
-            Err(Error::InvalidCryptarchiaParameter(_))
+            CryptarchiaParameter::decode(&encoded).unwrap_err(),
+            nom::Err::Error(NomError {
+                code: ErrorKind::MapRes,
+                ..
+            })
         ));
     }
 

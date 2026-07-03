@@ -13,6 +13,7 @@ pub mod core;
 pub mod kms;
 pub mod numbers;
 pub mod proof_of_quota;
+pub mod time;
 
 mod fixtures;
 

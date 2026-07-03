@@ -1193,6 +1193,7 @@ mod tests {
         header::HeaderId,
         mantle::{
             CryptarchiaParameter, GenesisTx as _, NoteId,
+            nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -1205,7 +1206,7 @@ mod tests {
             channel_id: ChannelId::from([0; 32]),
             inscription: Inscription::new_unchecked(
                 CryptarchiaParameter {
-                    chain_id: "test-chain".into(),
+                    chain_id: "test-chain".to_owned().try_into().unwrap(),
                     genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
                     epoch_nonce: Fr::ZERO,
                 }
@@ -1221,7 +1222,7 @@ mod tests {
             channel_id: ChannelId::from([1; 32]), // non-zero — invalid
             inscription: Inscription::new_unchecked(
                 CryptarchiaParameter {
-                    chain_id: "test-chain".into(),
+                    chain_id: "test-chain".to_owned().try_into().unwrap(),
                     genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
                     epoch_nonce: Fr::ZERO,
                 }

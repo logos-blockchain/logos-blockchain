@@ -1,14 +1,11 @@
-use lb_groth16::{COMPRESSED_PROOF_SIZE, Fr, fr_from_bytes};
+use lb_groth16::COMPRESSED_PROOF_SIZE;
 use lb_key_management_system_keys::keys::{ED25519_SIGNATURE_SIZE, Ed25519Signature, ZkSignature};
 use lb_utils::bounded_vec::UpperBoundedVec;
 use nom::{
     IResult, Parser as _,
-    bytes::complete::take,
-    combinator::{map, map_res},
+    combinator::map,
     error::{Error, ErrorKind},
-    number::complete::le_u64,
 };
-use time::OffsetDateTime;
 
 use crate::{
     mantle::{
@@ -120,75 +117,14 @@ const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex)
     2 + (threshold as usize) * (ED25519_SIGNATURE_SIZE + 2)
 }
 
-pub(crate) fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
-    // FieldElement = 32BYTE
-    map_res(take(32usize), |bytes: &[u8]| {
-        fr_from_bytes(bytes).map_err(|_| "Invalid field element")
-    })
-    .parse(input)
-}
-
-// ==============================================================================
-// Primitive Decoders
-// ==============================================================================
-
-pub(crate) fn decode_utf8_string(input: &[u8], len: usize) -> IResult<&[u8], String> {
-    map_res(take(len), |bytes: &[u8]| {
-        std::str::from_utf8(bytes)
-            .map(ToOwned::to_owned)
-            .map_err(|_| Error::new(bytes, ErrorKind::Fail))
-    })
-    .parse(input)
-}
-
-pub(crate) fn decode_uint64(input: &[u8]) -> IResult<&[u8], u64> {
-    // UINT64 = 8BYTE
-    le_u64(input)
-}
-
-pub(crate) fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTime> {
-    // Timestamp = UINT64
-    map_res(decode_uint64, |ts| {
-        OffsetDateTime::from_unix_timestamp(
-            ts.try_into()
-                .map_err(|_| Error::new(input, ErrorKind::Fail))?,
-        )
-        .map_err(|_| Error::new(input, ErrorKind::Fail))
-    })
-    .parse(input)
-}
-
 // ==============================================================================
 // Binary Encoders
 // ==============================================================================
-
-use lb_groth16::fr_to_bytes;
 
 use crate::{
     mantle::{Utxo, ops::channel::ChannelKeyIndex, tx::MantleTxGasContext},
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
-
-/// Encode primitives
-pub(crate) fn encode_uint64(value: u64) -> Vec<u8> {
-    value.to_le_bytes().to_vec()
-}
-
-pub(crate) fn encode_string(s: &String) -> Vec<u8> {
-    s.as_bytes().to_vec()
-}
-
-pub(crate) fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
-    encode_uint64(
-        ts.unix_timestamp()
-            .try_into()
-            .expect("timestamp fits in u64"),
-    )
-}
-
-pub(crate) fn encode_field_element(fr: &Fr) -> Vec<u8> {
-    fr_to_bytes(fr).to_vec()
-}
 
 // Check if proofs correspond to ops
 #[must_use]
@@ -303,11 +239,12 @@ mod tests {
     use std::{collections::HashMap, panic};
 
     use ark_ff::AdditiveGroup as _;
-    use lb_groth16::CompressedGroth16Proof;
+    use lb_groth16::{CompressedGroth16Proof, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
     use lb_utils::bounded_vec::BoundedError;
     use multiaddr::Multiaddr;
     use num_bigint::BigUint;
+    use time::OffsetDateTime;
 
     use super::*;
     use crate::{
@@ -363,8 +300,8 @@ mod tests {
     #[test]
     fn test_encode_decode_primitives() {
         // Test UINT64
-        let data = encode_uint64(42u64);
-        let (remaining, value) = decode_uint64(&data).unwrap();
+        let data = 42u64.encode();
+        let (remaining, value) = u64::decode(&data).unwrap();
         assert_eq!(value, 42u64);
         assert!(remaining.is_empty());
 
@@ -386,17 +323,10 @@ mod tests {
         assert_eq!(value, [0x42u8; 32]);
         assert!(remaining.is_empty());
 
-        // Test UTF-8 String
-        let str = "hello, world!".to_owned();
-        let data = encode_string(&str);
-        let (remaining, value) = decode_utf8_string(&data, data.len()).unwrap();
-        assert_eq!(value, str);
-        assert!(remaining.is_empty());
-
         // Test Unix Timestamp
         let ts = OffsetDateTime::now_utc();
-        let data = encode_unix_timestamp(&ts);
-        let (remaining, value) = decode_unix_timestamp(&data).unwrap();
+        let data = ts.encode();
+        let (remaining, value) = OffsetDateTime::decode(&data).unwrap();
         assert_eq!(value, ts.truncate_to_second());
         assert!(remaining.is_empty());
     }
