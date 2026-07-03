@@ -1,3 +1,5 @@
+use core::fmt::{self, Display, Formatter};
+
 use lb_core_macros::NomCodec;
 use lb_groth16::Fr;
 use lb_utils::bounded_vec::BoundedVec;
@@ -284,6 +286,12 @@ impl<const MIN_SIZE: usize, const MAX_SIZE: usize> AsRef<str>
     }
 }
 
+impl<const MIN_SIZE: usize, const MAX_SIZE: usize> Display for BoundedString<MIN_SIZE, MAX_SIZE> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 impl<const MIN_SIZE: usize, const MAX_SIZE: usize> TryFrom<String>
     for BoundedString<MIN_SIZE, MAX_SIZE>
 {
@@ -359,6 +367,12 @@ impl ChainId {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.0.0.is_empty()
+    }
+}
+
+impl Display for ChainId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
     }
 }
 

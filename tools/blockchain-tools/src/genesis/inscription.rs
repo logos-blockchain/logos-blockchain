@@ -3,6 +3,8 @@ use lb_core::{
     crypto::ZkDigest,
     mantle::{
         CryptarchiaParameter,
+        genesis_tx::ChainId,
+        nom::NomEncode as _,
         ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
     },
 };
@@ -14,7 +16,7 @@ use time::OffsetDateTime;
 #[serde_as]
 #[derive(serde::Deserialize, Debug)]
 pub struct InscribeParams {
-    pub chain_id: String,
+    pub chain_id: ChainId,
     #[serde(with = "time::serde::iso8601")]
     pub genesis_time: OffsetDateTime,
     #[serde_as(as = "Vec<Hex>")]
@@ -22,7 +24,7 @@ pub struct InscribeParams {
 }
 
 pub fn inscribe<D: ZkDigest>(
-    chain_id: String,
+    chain_id: ChainId,
     genesis_time: OffsetDateTime,
     entropy_sources: impl IntoIterator<Item = FrBytes>,
 ) -> InscriptionOp {

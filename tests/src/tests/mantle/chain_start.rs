@@ -5,6 +5,7 @@ use lb_core::{
     block::genesis::GenesisBlockBuilder,
     mantle::{
         GenesisTx as _,
+        nom::NomEncode as _,
         ops::channel::inscribe::{Inscription, InscriptionOp},
     },
 };
