@@ -12,6 +12,7 @@ ARG NODE_VERSION=0.2.0
 FROM debian:trixie-slim AS builder
 
 ARG CORE_VERSION
+ARG NODE_VERSION
 
 WORKDIR /logos-blockchain
 COPY . .
