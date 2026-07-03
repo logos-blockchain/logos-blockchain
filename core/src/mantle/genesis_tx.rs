@@ -323,8 +323,6 @@ impl<const MIN_SIZE: usize, const MAX_SIZE: usize, const MIN: usize, const MAX: 
                 MIN >= MIN_SIZE,
                 "Min size cannot be less than the minimum allowed byte size for a chain ID."
             );
-        }
-        const {
             assert!(
                 MAX <= MAX_SIZE,
                 "Max size cannot be more than the maximum allowed byte size for a chain ID."
@@ -335,10 +333,12 @@ impl<const MIN_SIZE: usize, const MAX_SIZE: usize, const MIN: usize, const MAX: 
 }
 
 pub const MAX_CHAIN_ID_SIZE: usize = u64::MAX as usize;
+type ChainIdBoundedVec = BoundedVec<u8, 1, MAX_CHAIN_ID_SIZE>;
+type ChainIdBoundedString = BoundedString<1, MAX_CHAIN_ID_SIZE>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-pub struct ChainId(BoundedString<1, MAX_CHAIN_ID_SIZE>);
+#[serde(transparent)]
+pub struct ChainId(ChainIdBoundedString);
 
 impl ChainId {
     #[must_use]
@@ -378,8 +378,8 @@ impl TryFrom<String> for ChainId {
     type Error = String;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        let bounded_chain_id = BoundedString::<1, MAX_CHAIN_ID_SIZE>::try_from(value)
-            .map_err(|e| format!("Invalid chain ID: {e}"))?;
+        let bounded_chain_id =
+            ChainIdBoundedString::try_from(value).map_err(|e| format!("Invalid chain ID: {e}"))?;
 
         Ok(Self(bounded_chain_id))
     }
@@ -411,16 +411,15 @@ impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for C
 
 impl NomEncode for ChainId {
     fn encode(&self) -> Vec<u8> {
-        let bounded_bytes = BoundedVec::<u8, 1, MAX_CHAIN_ID_SIZE>::new_unchecked(
-            <Self as AsRef<[u8]>>::as_ref(self).to_owned(),
-        );
+        let bounded_bytes =
+            ChainIdBoundedVec::new_unchecked(<Self as AsRef<[u8]>>::as_ref(self).to_owned());
         bounded_bytes.encode()
     }
 }
 
 impl NomDecode for ChainId {
     fn decode(bytes: &[u8]) -> IResult<&[u8], Self> {
-        let (remaining_bytes, value) = BoundedVec::<u8, 1, MAX_CHAIN_ID_SIZE>::decode(bytes)?;
+        let (remaining_bytes, value) = ChainIdBoundedVec::decode(bytes)?;
         Ok((
             remaining_bytes,
             Self::try_from(value)
