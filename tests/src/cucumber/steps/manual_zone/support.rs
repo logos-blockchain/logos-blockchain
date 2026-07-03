@@ -6,7 +6,7 @@
 //! on.
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
@@ -19,7 +19,7 @@ use lb_core::{
         ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
-                ChannelId,
+                ChannelId, MsgId,
                 deposit::{DepositOp, Metadata},
                 inscribe::Inscription,
                 withdraw::ChannelWithdrawOp,
@@ -49,10 +49,24 @@ use tokio::{
 use tracing::warn;
 
 use super::runner::{
-    self, ChannelUpdate, Event, FinalizedOp, InscriptionId, InscriptionInfo, OrphanedTx, PendingTx,
-    PublishResult, SequencerChannelView, SequencerCheckpoint, SequencerClient, SequencerConfig,
-    TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
+    self, ChannelUpdate, Event, FinalizedOp, FinalizedTx, InscriptionId, InscriptionInfo,
+    OrphanedTx, PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
+    SequencerClient, SequencerConfig, TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
 };
+
+/// Inscriptions in the just-finalized txs — the permanent, settled part of the
+/// channel. Once a payload finalizes it's on chain for good, so a policy pins
+/// these and never re-homes a finalized payload when it later drops off a
+/// non-canonical branch.
+fn finalized_inscriptions(finalized: &[FinalizedTx]) -> impl Iterator<Item = &InscriptionInfo> {
+    finalized
+        .iter()
+        .flat_map(|tx| tx.ops.iter())
+        .filter_map(|op| match op {
+            FinalizedOp::Inscription(info) => Some(info),
+            FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
+        })
+}
 use crate::common::{
     chain::wait_for_transactions_inclusion, mantle_inscription::make_inscription,
     wallet::build_wallet_funded_transfer,
@@ -197,16 +211,25 @@ pub fn start_sequencer_event_loop(
     republish_orphans: bool,
 ) -> PolicyRuntime {
     if republish_orphans {
-        to_policy_runtime(runner::spawn(sequencer, OrphanRepublishPolicy))
+        to_policy_runtime(runner::spawn(sequencer, OrphanRepublishPolicy::default()))
     } else {
         to_policy_runtime(runner::spawn(sequencer, runner::PassivePolicy))
     }
 }
 
-/// Drives a competing-sequencer policy that re-publishes invalidated payloads
-/// until they are either pending again or adopted on chain.
-pub fn start_republish_policy(sequencer: ZoneSequencer<ZoneNodeHttpClient>) -> PolicyRuntime {
-    to_policy_runtime(runner::spawn(sequencer, OrphanRepublishPolicy))
+/// Drives a competing-sequencer policy that publishes `planned` once ready and
+/// re-publishes its own orphans (tracked by intent lineage) until they land —
+/// correct even when payloads repeat.
+pub fn start_republish_lineage_policy(
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    planned: Vec<Inscription>,
+) -> PolicyRuntime {
+    let policy = RepublishLineagePolicy {
+        planned,
+        published_initial: false,
+        lineage: LineageTracker::default(),
+    };
+    to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
 /// Drives a policy that republishes orphaned balance updates only when the
@@ -238,23 +261,43 @@ pub fn start_sorted_conflict_policy(
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
-/// Inline policy: republish any orphaned inscriptions. Plain inscriptions
-/// only — bundles are not auto-republished (callers that issue bundles
-/// re-prepare with fresh withdraw nonces themselves).
-struct OrphanRepublishPolicy;
+/// Inline policy: republish orphaned inscriptions that aren't already back on
+/// the canonical chain. Plain inscriptions only — bundles are not
+/// auto-republished (callers that issue bundles re-prepare with fresh withdraw
+/// nonces themselves). Assumes unique payloads, so the payload identifies the
+/// message; for repeating payloads see [`RepublishLineagePolicy`].
+#[derive(Default)]
+struct OrphanRepublishPolicy {
+    finalized: HashSet<Inscription>,
+}
 
 impl<Node> runner::Policy<Node> for OrphanRepublishPolicy
 where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlocksProcessed { channel_update, .. } = event else {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
             return;
         };
+        // Add finalized payloads to state first.
+        self.finalized
+            .extend(finalized_inscriptions(finalized).map(|i| i.payload.clone()));
+        // Skip orphans whose payload is already on chain (adopted) or finalized
+        // — republishing them would duplicate.
+        let adopted: HashSet<&Inscription> =
+            channel_update.adopted.iter().map(|i| &i.payload).collect();
         for entry in &channel_update.orphaned {
             let OrphanedTx::Inscription(info) = entry else {
                 continue;
             };
+            if adopted.contains(&info.payload) || self.finalized.contains(&info.payload) {
+                continue;
+            }
             if let Err(error) = sequencer.handle().publish(info.payload.clone()) {
                 warn!(%error, "Failed to re-publish orphaned zone payload");
             }
@@ -262,8 +305,156 @@ where
     }
 }
 
+/// Tracks our published inscriptions by intent lineage, so republishing works
+/// even when payloads repeat (identical bytes published as distinct messages).
+///
+/// Each original publish is its own intent, rooted at its `this_msg`; every
+/// republish we issue for an orphaned member is recorded under the same root.
+/// An intent is "live" while any of its `this_msg`s is on the channel
+/// (`adopted`) or in flight as a publish/republish we issued. Identical
+/// payloads form distinct intents (distinct `this_msg`s), so each lands once,
+/// and other sequencers' inscriptions are never in our map, so we never
+/// republish theirs.
+#[derive(Default)]
+struct LineageTracker {
+    /// Every `this_msg` we've published (originals + republishes) → intent
+    /// root.
+    intent_root: HashMap<MsgId, MsgId>,
+    /// Per intent root, the `this_msg`s currently live.
+    live: HashMap<MsgId, HashSet<MsgId>>,
+    /// Intent roots that have finalized — permanently landed, so the intent is
+    /// considered live forever and never re-homed again.
+    finalized_roots: HashSet<MsgId>,
+}
+
+impl LineageTracker {
+    /// Record an original publish as its own intent, in flight.
+    fn record_publish(&mut self, this_msg: MsgId) {
+        self.intent_root.insert(this_msg, this_msg);
+        self.live.entry(this_msg).or_default().insert(this_msg);
+    }
+
+    /// Record a republish of `orphan` as a new live member of its intent.
+    fn record_republish(&mut self, orphan: MsgId, republished: MsgId) {
+        let root = self.intent_root.get(&orphan).copied().unwrap_or(orphan);
+        self.intent_root.insert(republished, root);
+        self.live.entry(root).or_default().insert(republished);
+    }
+
+    /// Fold a delta into per-intent liveness — only our `msg_id`s are relevant.
+    /// Adopted members become live; orphaned members stop being live.
+    fn observe(&mut self, channel_update: &ChannelUpdate) {
+        for info in &channel_update.adopted {
+            if let Some(&root) = self.intent_root.get(&info.this_msg) {
+                self.live.entry(root).or_default().insert(info.this_msg);
+            }
+        }
+        for entry in &channel_update.orphaned {
+            if let OrphanedTx::Inscription(info) = entry
+                && let Some(&root) = self.intent_root.get(&info.this_msg)
+                && let Some(members) = self.live.get_mut(&root)
+            {
+                members.remove(&info.this_msg);
+            }
+        }
+    }
+
+    /// Pin the intents of any finalized `this_msg`s of ours as permanently
+    /// live — once a member finalizes the payload is on chain for good.
+    fn observe_finalized(&mut self, finalized: impl Iterator<Item = MsgId>) {
+        for this_msg in finalized {
+            if let Some(&root) = self.intent_root.get(&this_msg) {
+                self.finalized_roots.insert(root);
+            }
+        }
+    }
+
+    /// True if `this_msg` is one of ours.
+    fn is_ours(&self, this_msg: &MsgId) -> bool {
+        self.intent_root.contains_key(this_msg)
+    }
+
+    /// True if the intent of `this_msg` has finalized, or still has a live
+    /// member.
+    fn intent_live(&self, this_msg: &MsgId) -> bool {
+        let root = self.intent_root.get(this_msg).copied().unwrap_or(*this_msg);
+        self.finalized_roots.contains(&root)
+            || self
+                .live
+                .get(&root)
+                .is_some_and(|members| !members.is_empty())
+    }
+}
+
+/// Inline republish policy for channels whose payloads can repeat. Publishes
+/// its own `planned` payloads once the sequencer is ready, then republishes any
+/// of *our* orphans whose intent has no live member, tracking msg-id lineage
+/// (the payload can't identify the message when it repeats). Owning the
+/// publishes is what gives the policy its outbox: every `this_msg` it sends is
+/// recorded.
+struct RepublishLineagePolicy {
+    planned: Vec<Inscription>,
+    published_initial: bool,
+    lineage: LineageTracker,
+}
+
+impl<Node> runner::Policy<Node> for RepublishLineagePolicy
+where
+    Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+{
+    async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
+        match event {
+            Event::Ready if !self.published_initial => {
+                self.published_initial = true;
+                for payload in self.planned.clone() {
+                    match sequencer.handle().publish(payload) {
+                        Ok((result, _checkpoint)) => {
+                            self.lineage
+                                .record_publish(result.tx.inscription().this_msg);
+                        }
+                        Err(error) => warn!(%error, "Failed to publish planned zone payload"),
+                    }
+                }
+            }
+            Event::BlocksProcessed {
+                channel_update,
+                finalized,
+                ..
+            } => {
+                self.lineage
+                    .observe_finalized(finalized_inscriptions(finalized).map(|i| i.this_msg));
+                self.lineage.observe(channel_update);
+                for entry in &channel_update.orphaned {
+                    let OrphanedTx::Inscription(info) = entry else {
+                        continue;
+                    };
+                    if !self.lineage.is_ours(&info.this_msg)
+                        || self.lineage.intent_live(&info.this_msg)
+                    {
+                        continue;
+                    }
+                    match sequencer.handle().publish(info.payload.clone()) {
+                        Ok((result, _checkpoint)) => {
+                            self.lineage
+                                .record_republish(info.this_msg, result.tx.inscription().this_msg);
+                        }
+                        Err(error) => warn!(%error, "Failed to re-publish orphaned zone payload"),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Inline policy: republish orphans only when the local balance view still
 /// allows it; publish planned payloads as soon as it's our turn to write.
+///
+/// The balance view is rebuilt from the full delta — every orphaned op is
+/// removed and every adopted op applied — so affordability reflects all
+/// inscriptions on the channel. Removing an orphan we never applied (never-
+/// landed pending) is a no-op, and an already-adopted op is skipped because its
+/// id is already in the applied set after `record_adopted_payloads`.
 struct BalanceAwarePolicy {
     balances: BalanceAwareState,
     planned: VecDeque<Inscription>,
@@ -275,7 +466,13 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        if let Event::BlocksProcessed { channel_update, .. } = event {
+        if let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        {
+            self.balances.record_finalized_payloads(finalized);
             let ChannelUpdate { orphaned, adopted } = channel_update;
             let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
                 .iter()
@@ -318,6 +515,10 @@ where
 
 /// Inline policy: republish orphans only when they preserve sorted-payload
 /// order; otherwise mark them as discarded.
+///
+/// The full delta lets us rebuild the on-chain payload set each update (drop
+/// orphaned, add adopted), so the order floor we gate republishing on falls
+/// back correctly when the highest payload is orphaned.
 struct SortedConflictPolicy {
     state: SortedConflictState,
 }
@@ -327,28 +528,55 @@ where
     Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
 {
     async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
-        let Event::BlocksProcessed { channel_update, .. } = event else {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
             return;
         };
+        // Pin finalized payloads first.
+        self.state.record_finalized(finalized);
         let ChannelUpdate { orphaned, adopted } = channel_update;
+        let orphaned_inscriptions: Vec<&InscriptionInfo> = orphaned
+            .iter()
+            .filter_map(|o| match o {
+                OrphanedTx::Inscription(i) => Some(i),
+                OrphanedTx::AtomicWithdraw(_) => None,
+            })
+            .collect();
+
+        // Rebuild on-chain state from this delta before deciding anything.
+        self.state.revert_orphaned(&orphaned_inscriptions);
         self.state.record_adoptions(adopted).await;
-        for entry in orphaned {
-            let OrphanedTx::Inscription(inscription) = entry else {
-                continue;
-            };
-            if self.state.already_discarded(&inscription.payload).await {
+
+        let readopted: HashSet<&Inscription> = adopted.iter().map(|i| &i.payload).collect();
+
+        // Consider this round's fresh orphans together with everything parked,
+        // in sorted order (a `BTreeSet` iterates ascending). A payload parked
+        // under a higher floor on another branch then slots in ahead of a higher
+        // fresh orphan instead of being locked out, and the chain stays sorted.
+        // Finalized payloads are excluded — they're already permanently landed.
+        let mut candidates: BTreeSet<Inscription> = orphaned_inscriptions
+            .iter()
+            .map(|i| i.payload.clone())
+            .filter(|payload| !readopted.contains(payload) && !self.state.is_finalized(payload))
+            .collect();
+        candidates.extend(self.state.discarded_snapshot().await);
+
+        for payload in candidates {
+            if self.state.is_finalized(&payload) {
                 continue;
             }
-            if self.state.preserves_order(inscription) {
-                if let Err(error) = sequencer.handle().publish(inscription.payload.clone()) {
+            if self.state.preserves_order(&payload) {
+                if let Err(error) = sequencer.handle().publish(payload.clone()) {
                     warn!(%error, "Failed to re-publish sorted zone payload");
                     continue;
                 }
-                self.state
-                    .record_published_payload(inscription.payload.clone())
-                    .await;
+                self.state.record_published_payload(payload).await;
             } else {
-                self.state.discard(inscription.payload.clone()).await;
+                self.state.discard(payload).await;
             }
         }
     }
@@ -357,6 +585,7 @@ where
 struct BalanceAwareState {
     initial_balances: ZoneAccountBalances,
     applied: HashMap<String, HashMap<String, i64>>,
+    finalized: HashSet<String>,
 }
 
 impl BalanceAwareState {
@@ -364,6 +593,17 @@ impl BalanceAwareState {
         Self {
             initial_balances,
             applied: HashMap::new(),
+            finalized: HashSet::new(),
+        }
+    }
+
+    /// Pin finalized payloads.
+    fn record_finalized_payloads(&mut self, finalized: &[FinalizedTx]) {
+        for inscription in finalized_inscriptions(finalized) {
+            if let Some((uuid, _, _)) = parse_balance_payload(&inscription.payload) {
+                self.finalized.insert(uuid);
+            }
+            self.record_applied_payload(&inscription.payload);
         }
     }
 
@@ -380,6 +620,11 @@ impl BalanceAwareState {
             let Some((uuid, account, _)) = parse_balance_payload(&inscription.payload) else {
                 continue;
             };
+
+            // A finalized delta is permanent — never drop it on an orphan.
+            if self.finalized.contains(&uuid) {
+                continue;
+            }
 
             if let Some(account_updates) = self.applied.get_mut(&account) {
                 account_updates.remove(&uuid);
@@ -398,7 +643,7 @@ impl BalanceAwareState {
             return false;
         };
 
-        if self.account_updates(&account).contains_key(&uuid) {
+        if self.finalized.contains(&uuid) || self.account_updates(&account).contains_key(&uuid) {
             return false;
         }
 
@@ -422,52 +667,65 @@ impl BalanceAwareState {
 static EMPTY_BALANCE_UPDATES: LazyLock<HashMap<String, i64>> = LazyLock::new(HashMap::new);
 
 struct SortedConflictState {
-    max_seen_on_chain: Option<Inscription>,
+    on_chain: BTreeSet<Inscription>,
     discarded: DiscardedPayloads,
+    finalized: HashSet<Inscription>,
 }
 
 impl SortedConflictState {
-    const fn new(discarded: DiscardedPayloads) -> Self {
+    fn new(discarded: DiscardedPayloads) -> Self {
         Self {
-            max_seen_on_chain: None,
+            on_chain: BTreeSet::new(),
             discarded,
+            finalized: HashSet::new(),
+        }
+    }
+
+    /// Pin finalized payloads into the on-chain set permanently.
+    fn record_finalized(&mut self, finalized: &[FinalizedTx]) {
+        for inscription in finalized_inscriptions(finalized) {
+            self.finalized.insert(inscription.payload.clone());
+            self.on_chain.insert(inscription.payload.clone());
+        }
+    }
+
+    fn is_finalized(&self, payload: &Inscription) -> bool {
+        self.finalized.contains(payload)
+    }
+
+    /// Drop orphaned payloads from the on-chain set — the order floor falls
+    /// back to the max of whatever remains. Finalized payloads stay put.
+    fn revert_orphaned(&mut self, orphaned: &[&InscriptionInfo]) {
+        for inscription in orphaned {
+            if self.finalized.contains(&inscription.payload) {
+                continue;
+            }
+            self.on_chain.remove(&inscription.payload);
         }
     }
 
     async fn record_adoptions(&mut self, adopted: &[InscriptionInfo]) {
-        for payload in adopted {
-            self.discarded.lock().await.remove(&payload.payload);
-            self.record_seen_payload(payload.payload.clone());
+        for inscription in adopted {
+            self.discarded.lock().await.remove(&inscription.payload);
+            self.on_chain.insert(inscription.payload.clone());
         }
     }
 
     async fn record_published_payload(&mut self, payload: Inscription) {
         self.discarded.lock().await.remove(&payload);
-        self.record_seen_payload(payload);
+        self.on_chain.insert(payload);
     }
 
-    fn record_seen_payload(&mut self, payload: Inscription) {
-        if self
-            .max_seen_on_chain
-            .as_ref()
-            .is_none_or(|seen| payload > *seen)
-        {
-            self.max_seen_on_chain = Some(payload);
-        }
-    }
-
-    async fn already_discarded(&self, payload: &Inscription) -> bool {
-        self.discarded.lock().await.contains(payload)
-    }
-
-    fn preserves_order(&self, inscription: &InscriptionInfo) -> bool {
-        self.max_seen_on_chain
-            .as_deref()
-            .is_none_or(|seen| inscription.payload.as_slice() >= seen)
+    fn preserves_order(&self, payload: &Inscription) -> bool {
+        self.on_chain.last().is_none_or(|max| payload >= max)
     }
 
     async fn discard(&self, payload: Inscription) {
         self.discarded.lock().await.insert(payload);
+    }
+
+    async fn discarded_snapshot(&self) -> Vec<Inscription> {
+        self.discarded.lock().await.iter().cloned().collect()
     }
 }
 

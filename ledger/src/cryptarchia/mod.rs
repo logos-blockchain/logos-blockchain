@@ -913,7 +913,6 @@ pub mod tests {
             ServiceType::BlendNetwork,
             ServiceParameters {
                 inactivity_period: 2.try_into().unwrap(),
-                retention_period: 1.into(),
                 epoch: 0.into(),
             },
         );
@@ -1316,8 +1315,8 @@ pub mod tests {
     }
 
     /// A declaration that lapses past `inactivity_period` but has not yet
-    /// been garbage-collected must be filtered out of the `EpochState`
-    /// snapshot built at a later epoch.
+    /// been withdrawn must be filtered out of the `EpochState` snapshot
+    /// built at a later epoch.
     #[test]
     fn epoch_state_snapshot_excludes_inactive_declaration() {
         let leader_utxo = utxo();
@@ -1339,10 +1338,10 @@ pub mod tests {
             sdp_utxo_key,
         );
 
-        // Advance to epoch 4 (one-by-one).
+        // Advance to epoch 5 (one-by-one).
         // With inactivity_period=2, the declaration goes inactive at epoch 5.
-        // With retention_period=1, GC fires at epoch 6.
-        // So, at epoch 5, the declaration is inactive yet still present in the ledger.
+        // It shouldn't be in the snapshot, but should still exist in the live SDP
+        // ledger because the user has not yet witdrawn it.
         let mut ledger = ledger0.clone();
         let mut head = head0;
         for epoch in 1..=5u64 {
@@ -1358,7 +1357,7 @@ pub mod tests {
                 .sdp
                 .get_declaration(&declare.id())
                 .is_some(),
-            "declaration must still be in the live SDP ledger before GC removes it"
+            "declaration must still be in the live SDP ledger because it is not yet withdrawn"
         );
         assert!(
             declaration_in_snapshot(&ledger, &head, &declare.id()).is_none(),

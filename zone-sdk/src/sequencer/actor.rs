@@ -3,6 +3,8 @@
     reason = "`ZoneSequencer`'s public API lives in zone_sequencer.rs; internal handlers live here."
 )]
 
+use std::collections::HashSet;
+
 use lb_common_http_client::{ProcessedBlockEvent, Slot};
 use lb_core::mantle::channel::ChannelState;
 use tracing::{debug, error, warn};
@@ -13,8 +15,8 @@ use super::{
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
     types::{
-        ChannelUpdate, Error, Event, FinalizedTx, SequencerChannelView, SequencerCheckpoint,
-        TurnNotification, TxSource, TxStatus,
+        ChannelUpdate, Error, Event, FinalizedTx, InscriptionInfo, OrphanedTx,
+        SequencerChannelView, SequencerCheckpoint, TurnNotification, TxSource, TxStatus,
     },
     zone_sequencer::{ZoneSequencer, build_checkpoint},
 };
@@ -97,7 +99,7 @@ where
         // so callers may rely on them.
         self.connected = true;
         let became_ready = self.maybe_signal_ready();
-        let (channel_update, finalized) = self.apply_block_result(result);
+        let (channel_update, finalized, mined) = self.apply_block_result(result);
 
         // Failed posts (still `!posted`) get retried by the turn-change
         // handler and the `resubmit_interval` self-heal tick. Don't queue
@@ -109,7 +111,7 @@ where
         // arrives.
         self.publish_channel_view();
 
-        self.queue_block_status_events(&channel_update, &finalized);
+        self.queue_block_status_events(&channel_update, &finalized, &mined);
 
         let block_event = self
             .publish_checkpoint()
@@ -461,7 +463,7 @@ where
     fn apply_block_result(
         &mut self,
         result: BlockEventResult,
-    ) -> (ChannelUpdate, Vec<FinalizedTx>) {
+    ) -> (ChannelUpdate, Vec<FinalizedTx>, Vec<InscriptionInfo>) {
         let channel_update = match result.channel_update {
             Some(update) => {
                 Self::log_channel_update(&update);
@@ -482,13 +484,18 @@ where
                 adopted: Vec::new(),
             },
         };
-        (channel_update, result.finalized_items)
+        (
+            channel_update,
+            result.finalized_items,
+            result.mined_inscriptions,
+        )
     }
 
     fn queue_block_status_events(
         &mut self,
         channel_update: &ChannelUpdate,
         finalized: &[FinalizedTx],
+        mined: &[InscriptionInfo],
     ) {
         for tx in &channel_update.orphaned {
             let tx_hash = tx.tx_hash();
@@ -498,7 +505,11 @@ where
                 .map_or(TxSource::Other, |state| state.tx_source(&tx_hash));
             self.queue_tx_status(tx_hash, TxStatus::Orphaned(source));
         }
-        for info in &channel_update.adopted {
+        // `OnChain` is a per-tx lifecycle signal — it fires when an inscription
+        // lands in a block, independent of whether it moved the channel lineage.
+        // Our own publishes are already in the lineage, so they never appear in
+        // `adopted`; drive `OnChain` from what was actually mined this block.
+        for info in mined {
             let source = self
                 .state
                 .as_ref()
@@ -539,23 +550,35 @@ where
         }
     }
 
-    /// Build the [`ChannelUpdate`]. `orphaned` contains only our own pending
-    /// whose original signed tx is permanently invalid — items the SDK has
-    /// given up on (parent slot claimed by a competing inscription, or
-    /// parent transitively off canonical). Block-delta orphans whose
-    /// original tx is still valid (the SDK keeps retrying them) are not
-    /// surfaced. `adopted` is the raw block-delta — consumers dedupe by
-    /// `this_msg` against the outbox they built from their own publish-call
-    /// return values.
+    /// Build the [`ChannelUpdate`] returned to the consumer.
+    ///
+    /// `orphaned` combines two sources, deduped by `tx_hash`:
+    /// - inscriptions that left the channel chain between the old and new
+    ///   canonical tip, and
+    /// - our own pending that can no longer land on the new tip
+    ///   ([`TxState::shed_off_branch_pending`]), including pending that never
+    ///   mined and so appears in no on-chain delta.
+    ///
+    /// A tx in both keeps the shed variant: it carries the `AtomicWithdraw`
+    /// bundle metadata the on-chain delta lacks.
+    ///
+    /// `adopted` is the inscriptions added to the channel chain.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
-        let orphaned = match (self.state.as_mut(), self.current_tip) {
+        let shed = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
             _ => Vec::new(),
         };
-        let typed_orphaned = orphaned.into_iter().map(orphan_from_shed).collect();
+        let mut orphaned: Vec<OrphanedTx> = shed.into_iter().map(orphan_from_shed).collect();
+
+        let mut seen: HashSet<_> = orphaned.iter().map(OrphanedTx::tx_hash).collect();
+        for info in u.orphaned {
+            if seen.insert(info.tx_hash) {
+                orphaned.push(OrphanedTx::Inscription(info));
+            }
+        }
 
         ChannelUpdate {
-            orphaned: typed_orphaned,
+            orphaned,
             adopted: u.adopted,
         }
     }

@@ -14,7 +14,10 @@ use lb_core::{
 use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
-        wallet::transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+        wallet::{
+            balance::WalletBalanceResponseBody,
+            transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
+        },
     },
     paths::{
         BLEND_NETWORK_INFO, DIAL_PEER, MANTLE_METRICS, MANTLE_SDP_DECLARATIONS, MEMPOOL_VIEW,
@@ -22,6 +25,7 @@ use lb_http_api_common::{
     },
     queries::BlocksStreamQuery,
 };
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_network_service::backends::libp2p::Libp2pInfo;
 use lb_tx_service::MempoolMetrics;
@@ -79,6 +83,19 @@ impl NodeHttpClient {
         self.with_timeout(
             "Get block by ID request",
             self.http_client.get_block_by_id(self.base_url.clone(), *id),
+        )
+        .await
+    }
+
+    pub async fn wallet_balance(
+        &self,
+        zk_pk: ZkPublicKey,
+        tip: Option<HeaderId>,
+    ) -> Result<WalletBalanceResponseBody, Error> {
+        self.with_timeout(
+            "Wallet balance request",
+            self.http_client
+                .get_wallet_balance(self.base_url.clone(), zk_pk, tip),
         )
         .await
     }

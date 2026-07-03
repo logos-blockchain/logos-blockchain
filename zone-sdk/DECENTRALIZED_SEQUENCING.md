@@ -265,7 +265,7 @@ if let Event::BlocksProcessed { channel_update, .. } = event {
 }
 ```
 
-The integration tests provide a reference policy that runs this re-publish loop automatically — see `OrphanRepublishPolicy` in `tests/src/cucumber/steps/manual_zone/support.rs`. Wiring such a policy into the drive loop is the recommended pattern for any sequencer running in a competing-write environment.
+The integration tests provide reference policies that run this re-publish loop automatically, in `tests/src/cucumber/steps/manual_zone/support.rs`: `OrphanRepublishPolicy` (simple republish), `RepublishLineagePolicy` (for repeating payloads, tracks msg-id lineage so each intent lands once), `SortedConflictPolicy` (republish only when it preserves the channel's sorted order, otherwise discard), and `BalanceAwarePolicy` (republish only when the account balance still allows it). Wiring one into the drive loop is the recommended pattern for any sequencer running in a competing-write environment.
 
 If the orphan policy is too aggressive — e.g., the orphan was caused by genuine application-level conflict, not a race — the consumer can choose to drop the payload, deduplicate against a higher-level transaction stream, or apply any other custom rule. The SDK only surfaces the event; the resolution policy is yours.
 

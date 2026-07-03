@@ -183,7 +183,8 @@ mod tests {
                     MAX_BYTES + 1,
                 )
                 .as_str()
-            )
+            ),
+            "{err:?}",
         );
     }
 

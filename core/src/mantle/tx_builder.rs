@@ -134,7 +134,6 @@ impl MantleTxBuilder {
         for note in notes {
             self.pending_transfer
                 .outputs
-                .as_mut()
                 .try_push(note)
                 .map_err(|err| TxBuilderError::from((err, BoundedTag::Outputs)))?;
         }

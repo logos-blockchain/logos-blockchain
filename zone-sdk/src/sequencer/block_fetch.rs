@@ -34,6 +34,10 @@ pub(super) struct BlockEventResult {
     /// inscription+withdraw bundle).
     pub(super) finalized_items: Vec<FinalizedTx>,
     pub(super) channel_update: Option<ChannelUpdateInfo>,
+    /// Inscriptions that appeared in this block. Surfaced so a consumer learns
+    /// its tx reached the chain (`OnChain` status) even when the tx didn't move
+    /// the canonical channel chain.
+    pub(super) mined_inscriptions: Vec<InscriptionInfo>,
 }
 
 /// Process a block event. Returns finalized tx hashes and optional channel
@@ -68,6 +72,7 @@ where
         return Ok(BlockEventResult {
             finalized_items: Vec::new(),
             channel_update: None,
+            mined_inscriptions: Vec::new(),
         });
     };
 
@@ -107,6 +112,12 @@ where
         .collect();
 
     let inscriptions = extract_channel_tip_ops(&event.block.transactions, channel_id);
+    let mined_inscriptions = inscriptions.clone();
+
+    // Capture the channel lineage at the old tip BEFORE inserting this block, so
+    // the "before" side of the diff isn't contaminated by the block we're about
+    // to add to `block_inscriptions` (which the lineage walk bridges through).
+    let old_lineage = old_tip.map(|old| s.channel_lineage(old));
 
     // Process the actual event block
     s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
@@ -124,9 +135,9 @@ where
     // On first event (old_tip is None), check for existing inscriptions on
     // the channel — this handles clean start on an existing channel.
     // On subsequent events, detect channel update if tip changed.
-    let channel_update = match old_tip {
-        Some(old) if old != tip => s.detect_channel_update(old, tip),
-        None => {
+    let channel_update = match (old_tip, old_lineage) {
+        (Some(old), Some(old_lineage)) if old != tip => s.detect_channel_update(old_lineage, tip),
+        (None, _) => {
             // First event — no old canonical exists yet, so nothing can be
             // orphaned. Report any inscriptions on the initial tip as adopted.
             let channel_tip = s.channel_tip_at(tip);
@@ -147,6 +158,7 @@ where
     Ok(BlockEventResult {
         finalized_items,
         channel_update,
+        mined_inscriptions,
     })
 }
 

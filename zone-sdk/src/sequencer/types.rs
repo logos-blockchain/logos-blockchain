@@ -259,28 +259,33 @@ pub enum TxSource {
     Other,
 }
 
-/// Channel state delta from one [`Event::BlocksProcessed`].
+/// How the channel changed across one [`Event::BlocksProcessed`].
 ///
-/// Both vecs are empty when there is nothing for the consumer to adopt or
-/// orphan in this block. `safe → pending` transitions whose original signed
-/// tx is still valid (parent unchanged on the new branch) are not surfaced
-/// — the SDK keeps retrying them internally.
+/// The channel is an ordered chain of inscriptions. It can momentarily fork —
+/// competing inscriptions chain off the same parent — and this reports how the
+/// canonical chain moved since the last event:
+///
+/// - `adopted`: inscriptions now on the channel that weren't before — apply
+///   them.
+/// - `orphaned`: inscriptions that were on the channel (or that you published
+///   and were still waiting to land) and no longer are — revert them and treat
+///   them as republish candidates.
+///
+/// Both empty means nothing changed.
 ///
 /// Consumer pattern:
-/// 1. On publish-return: optimistically apply your own inscription to local
-///    state and record its `this_msg`.
-/// 2. On [`Event::BlocksProcessed`]: apply `adopted` (filtered against your
-///    local outbox of `this_msg`s if you don't want to double-apply your own
-///    publishes) to local state, revert `orphaned` (yours that can no longer
-///    land). Both being empty is a no-op.
-/// 3. For each entry in `orphaned`, decide whether to republish (with a fresh
-///    parent — SDK handles parent selection).
+/// 1. On each event, mirror the channel: revert every `orphaned` entry and
+///    apply every `adopted` entry.
+/// 2. Process the orphans so no useful work is lost — e.g. if your inscriptions
+///    carry Zone transactions, return them to your mempool. Reprocessing is
+///    idempotent: anything still valid is already pending and no-ops, so only
+///    genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
-    /// Our pending whose original signed tx is permanently invalid because
-    /// a competing inscription claimed the parent slot (or because the
-    /// parent is now off the canonical chain transitively). These need a
-    /// user decision — re-creation requires your signing key.
+    /// Inscriptions removed from the channel: ones that were on chain, plus our
+    /// own pending that can no longer finalize because a conflicting
+    /// inscription took their place in the chain (a parent double-spend).
+    /// Revert from state and treat as republish candidates.
     ///
     /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
     /// via [`super::SequencerHandle::publish`]. For
@@ -290,9 +295,9 @@ pub struct ChannelUpdate {
     /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
     /// `withdraw_nonce` internally on each publish.
     pub orphaned: Vec<OrphanedTx>,
-    /// Inscriptions newly on the canonical branch (block-delta). Includes
-    /// entries this instance submitted — consumers dedup by `this_msg`
-    /// against the values returned from their publish calls.
+    /// Inscriptions added to the channel. Includes entries this instance
+    /// submitted — consumers dedup by `this_msg` against the values returned
+    /// from their publish calls.
     pub adopted: Vec<InscriptionInfo>,
 }
 

@@ -10,9 +10,15 @@ use std::{
 };
 
 use lb_chain_service::Epoch;
-use lb_core::sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType};
+use lb_core::{
+    mantle::Value,
+    sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType},
+};
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
-use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
+use lb_testing_framework::{
+    DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+};
 use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::Slot;
 use logos_blockchain_tests::{
@@ -21,7 +27,7 @@ use logos_blockchain_tests::{
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
-use testing_framework_core::scenario::DynError;
+use testing_framework_core::scenario::{DynError, StartedNode};
 use tokio::time::sleep;
 
 const NODE_COUNT: usize = 2;
@@ -29,11 +35,11 @@ const NODE_COUNT: usize = 2;
 /// End-to-end test for blend SDP activity proofs:
 ///
 /// 1. Spawn two validators with blend declarations in the genesis transaction.
-/// 2. Wait long enough that declarations would be removed if no activity
-///    message was submitted during `inactivity_period + retention_period`
-///    epochs.
-/// 3. Verify that both declarations are still present, proving that the nodes
-///    automatically submitted valid activity messages that the ledger accepted.
+/// 2. Wait past `inactivity_period` so that any activity messages produced by
+///    the nodes have to refresh the `active` field on the declarations.
+/// 3. Verify that each declaration's `active` epoch has advanced past its
+///    initial value, proving that the nodes automatically submitted valid
+///    activity messages that the ledger accepted.
 #[tokio::test]
 async fn sdp_blend_activity() {
     let slots_per_epoch = Arc::new(AtomicU64::new(0));
@@ -67,23 +73,26 @@ async fn sdp_blend_activity() {
         declarations.len()
     );
 
-    // Wait past the point where declarations would be removed if no activity
-    // proofs were submitted.
+    // Snapshot each provider's wallet initial balance.
+    let provider_zk_ids: Vec<ZkPublicKey> = declarations.values().map(|d| d.zk_id).collect();
+    let initial_balances = collect_provider_balances(&nodes, &provider_zk_ids).await;
+
+    // Wait past `inactivity_period` so any activity messages produced by the
+    // nodes have to refresh the `active` field on the declarations.
     let initial_active_epoch = declarations.values().next().unwrap().active;
-    let survival_epochs = initial_active_epoch
+    let target_epoch = initial_active_epoch
         .strict_add(INACTIVITY_PERIOD)
-        .strict_add(RETENTION_PERIOD)
         .strict_add(Epoch::new(2)); // +1 margin
-    let survival_slots = Slot::new(u64::from(u32::from(survival_epochs)) * slots_per_epoch);
+    let target_slot = Slot::new(u64::from(u32::from(target_epoch)) * slots_per_epoch);
     wait_for_nodes_tip_slot(
         &[&node0.client, &node1.client],
-        survival_slots,
+        target_slot,
         Duration::from_secs(500),
     )
     .await;
 
-    // Declarations must still be present — this proves that activity messages were
-    // submitted/accepted, keeping the declarations alive.
+    // Each declaration's `active` epoch must have advanced past its initial
+    // value, proving activity messages were submitted and accepted.
     let declarations_after = wait_for_declarations(&node0.client, Duration::from_secs(30)).await;
 
     // Check if at least one declaration is still present because blocks may have
@@ -102,10 +111,21 @@ async fn sdp_blend_activity() {
             "Declaration must have the refreshed `active` epoch number larger than the initial one ({old_active:?}), but got {new_active:?}"
         );
     }
+
+    // At least one provider's wallet balance must have grown.
+    let final_balances = collect_provider_balances(&nodes, &provider_zk_ids).await;
+    let anyone_paid = provider_zk_ids.iter().any(|zk_id| {
+        let before = initial_balances.get(zk_id).copied().unwrap_or(0);
+        let after = final_balances.get(zk_id).copied().unwrap_or(0);
+        after > before
+    });
+    assert!(
+        anyone_paid,
+        "expected at least one provider's wallet balance to grow; no reward UTXOs were credited",
+    );
 }
 
 const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
-const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
 
 fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig {
     config.deployment.time.slot_duration = Duration::from_secs(1);
@@ -127,8 +147,8 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
         Ordering::Relaxed,
     );
 
-    // Set small inactivity/retention periods so that declarations are removed
-    // quickly if no activity proofs are submitted.
+    // Set a small inactivity period so the inactivity window is short enough
+    // for the test to observe `active` being refreshed quickly.
     let blend_params = config
         .deployment
         .cryptarchia
@@ -137,7 +157,6 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
         .get_mut(&ServiceType::BlendNetwork)
         .expect("blend network params should exist");
     blend_params.inactivity_period = INACTIVITY_PERIOD.try_into().unwrap();
-    blend_params.retention_period = RETENTION_PERIOD;
 
     // Shorten Blend delay to speed up the test
     config
@@ -153,6 +172,23 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
     config.deployment.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
 
     config
+}
+
+/// For each `zk_id`, ask every node for the wallet balance.
+async fn collect_provider_balances(
+    nodes: &[StartedNode<LbcEnv>],
+    zk_ids: &[ZkPublicKey],
+) -> HashMap<ZkPublicKey, Value> {
+    let mut balances = HashMap::new();
+    for &zk_id in zk_ids {
+        for node in nodes {
+            if let Ok(response) = node.client.wallet_balance(zk_id, None).await {
+                balances.insert(zk_id, response.balance);
+                break;
+            }
+        }
+    }
+    balances
 }
 
 async fn wait_for_declarations(
