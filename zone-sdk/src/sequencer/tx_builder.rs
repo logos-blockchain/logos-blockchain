@@ -29,7 +29,7 @@ pub(super) fn build_atomic_withdraw_ops_proofs(
     own_sig: Ed25519Signature,
 ) -> Result<Vec<OpProof>, Error> {
     let withdraw_proof =
-        ChannelMultiSigProof::new(vec![IndexedSignature::new(own_key_index, own_sig)])
+        ChannelMultiSigProof::try_new([IndexedSignature::new(own_key_index, own_sig)].into())
             .map_err(|e| Error::Network(format!("multi-sig proof assembly failed: {e:?}")))?;
     let mut ops_proofs = Vec::with_capacity(tx.ops().len());
     for op in tx.ops() {
@@ -125,8 +125,10 @@ pub(super) fn create_channel_config_tx(
                 key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
         })
-        .collect();
-    let proof = ChannelMultiSigProof::new(signatures).unwrap();
+        .collect::<Vec<_>>()
+        .try_into()
+        .unwrap();
+    let proof = ChannelMultiSigProof::try_new(signatures).unwrap();
 
     SignedMantleTx {
         ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],

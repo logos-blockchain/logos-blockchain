@@ -1055,10 +1055,13 @@ mod tests {
 
         let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
         let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
-            0,
-            signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
-        )])
+        let config_proof = ChannelMultiSigProof::try_new(
+            [IndexedSignature::new(
+                0,
+                signing_key.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
+            )]
+            .into(),
+        )
         .unwrap();
 
         let tx = create_signed_tx(
@@ -1221,10 +1224,13 @@ mod tests {
         };
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
         let withdraw_tx_hash = withdraw_tx.hash();
-        let withdraw_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
-            0,
-            signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
-        )])
+        let withdraw_proof = ChannelMultiSigProof::try_new(
+            [IndexedSignature::new(
+                0,
+                signing_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
+            )]
+            .into(),
+        )
         .unwrap();
 
         let signed_tx = create_multi_signed_tx(
@@ -1311,10 +1317,13 @@ mod tests {
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
         let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
         let withdraw_tx_hash = withdraw_tx.hash();
-        let invalid_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
-            0,
-            wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
-        )])
+        let invalid_proof = ChannelMultiSigProof::try_new(
+            [IndexedSignature::new(
+                0,
+                wrong_key.sign_payload(withdraw_tx_hash.as_signing_bytes().as_ref()),
+            )]
+            .into(),
+        )
         .unwrap();
 
         let signed_tx = create_multi_signed_tx(
@@ -1528,10 +1537,13 @@ mod tests {
         ];
         let config_tx = MantleTx(Ops::new_unchecked(ops.clone()));
         let config_tx_hash = config_tx.hash();
-        let config_proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
-            0,
-            sk1.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
-        )])
+        let config_proof = ChannelMultiSigProof::try_new(
+            [IndexedSignature::new(
+                0,
+                sk1.sign_payload(config_tx_hash.as_signing_bytes().as_ref()),
+            )]
+            .into(),
+        )
         .unwrap();
 
         let tx = create_multi_signed_tx(

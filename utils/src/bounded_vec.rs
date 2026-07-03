@@ -281,6 +281,8 @@ pub type UpperBoundedVec<T, const MAX: usize> = BoundedVec<T, 0, MAX>;
 pub type LowerBoundedVec<T, const MIN: usize> = BoundedVec<T, MIN, { usize::MAX }>;
 // `[1, MAX]` elements.
 pub type NonEmptyBoundedVec<T, const MAX: usize> = BoundedVec<T, 1, MAX>;
+// `[0, usize::MAX]` elements.
+pub type MaxBoundedVec<T> = UpperBoundedVec<T, { usize::MAX }>;
 
 #[cfg(test)]
 mod tests {

@@ -1,7 +1,7 @@
 mod curve;
 mod from_json_error;
 mod proof;
-pub use proof::{CompressSize, CompressedProof};
+pub use proof::{COMPRESSED_PROOF_SIZE, CompressSize, CompressedProof};
 mod protocol;
 mod public_input;
 

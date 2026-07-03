@@ -1588,7 +1588,7 @@ pub async fn submit_zone_withdraw(
             })?;
 
     let withdraw_proof =
-        match ChannelMultiSigProof::new(vec![IndexedSignature::new(0, withdraw_sig)]) {
+        match ChannelMultiSigProof::try_new([IndexedSignature::new(0, withdraw_sig)].into()) {
             Ok(proof) => proof,
             Err(error) => {
                 return Err(ZoneTestError::SubmitWithdraw {
