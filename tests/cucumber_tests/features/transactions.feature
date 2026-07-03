@@ -27,7 +27,7 @@ Feature: Transactions
       | account_index | token_count | token_amount |
       | 1             | 2           | 1000         |
       | 2             | 0           | 0            |
-    And we have a sponsored genesis fee account with 2 tokens of 997 value each
+    And we have a sponsored genesis fee account with 2 tokens of 20000 value each
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
@@ -50,7 +50,7 @@ Feature: Transactions
       | account_index | token_count | token_amount |
       | 1             | 2           | 1000         |
       | 2             | 0           | 0            |
-    And we have a sponsored genesis fee account with 2 tokens of 997 value each
+    And we have a sponsored genesis fee account with 2 tokens of 20000 value each
     And I have a cluster with capacity of 2 nodes
     And we use IBD peers
     And all peers must be mode online after startup in 30 seconds
@@ -70,7 +70,7 @@ Feature: Transactions
   Scenario: Many nodes with wallets startup
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1000         |
+      | 1             | 2           | 2000         |
       | 2             | 0           | 0            |
       | 3             | 0           | 0            |
       | 4             | 0           | 0            |
@@ -132,7 +132,7 @@ Feature: Transactions
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When node "NODE_1" is at height 2 in 300 seconds
-    When I perform continuous transactions on user wallets with 5 coin split outputs of 1000 LGO, 5 transactions of 900 LGO each for 3 cycles and timeout of 300 seconds
+    When I perform continuous transactions on user wallets with 5 coin split outputs of 2500 LGO, 5 transactions of 900 LGO each for 3 cycles and timeout of 300 seconds
     Then I stop all nodes
 
   @local_transactions
@@ -170,15 +170,15 @@ Feature: Transactions
   Scenario: Continuous transactions next wallet with coin split
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 12000        |
-      | 2             | 2           | 12000        |
+      | 1             | 2           | 50000        |
+      | 2             | 2           | 50000        |
     And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
       | NODE_2    | 2             | WALLET_2A   | NODE_1       |
     When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
-    And I perform 2 coin split transactions for each user wallet with 10 outputs of 1000 LGO each
+    And I perform 2 coin split transactions for each user wallet with 10 outputs of 4000 LGO each
     And I verify each wallet has minimum 20 outputs "available" in 300 seconds
     And I perform 3 stress continuous cycles with 20 transactions of 1000 LGO to the next user wallet
     Then I stop all nodes
@@ -220,7 +220,7 @@ Feature: Transactions
   Scenario: Coin split with many transfers to other
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 4           | 26000        |
+      | 1             | 4           | 30000        |
       | 2             | 0           | 0            |
     And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
@@ -238,7 +238,7 @@ Feature: Transactions
     And I send 50 transactions of 1000 LGO each from wallet "WALLET_1A" to wallet "WALLET_2A"
     When wallet "WALLET_2A" has 50 or more outputs in 240 seconds
     # All outputs accounted for
-    When wallet "WALLET_1A" has 56000 or less LGO in 180 seconds
+    When wallet "WALLET_1A" has 70000 or less LGO in 180 seconds
     When wallet "WALLET_1A" has 0 or less encumbered outputs in 60 seconds
     Then I stop all nodes
 
@@ -246,10 +246,10 @@ Feature: Transactions
   Scenario: Two fork chains join later and preserve persisted state wallet balances
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
-      | 1             | 2           | 1400         |
-      | 2             | 2           | 1400         |
-      | 4             | 2           | 1400         |
-      | 5             | 2           | 1400         |
+      | 1             | 2           | 2500         |
+      | 2             | 2           | 2500         |
+      | 4             | 2           | 2500         |
+      | 5             | 2           | 2500         |
       | 7             | 0           | 0            |
       | 8             | 0           | 0            |
     And I have a cluster with capacity of 5 nodes
@@ -305,10 +305,10 @@ Feature: Transactions
     And wallet "WALLET_2A" has 3 or more outputs in 10 seconds
     And wallet "WALLET_4A" has 3 or more outputs in 10 seconds
     And wallet "WALLET_5A" has 3 or more outputs in 10 seconds
-    When wallet "WALLET_1A" has 2100 or less LGO in 10 seconds
-    And wallet "WALLET_2A" has 2100 or less LGO in 10 seconds
-    And wallet "WALLET_4A" has 2100 or less LGO in 10 seconds
-    And wallet "WALLET_5A" has 2100 or less LGO in 10 seconds
+    When wallet "WALLET_1A" has 4300 or less LGO in 10 seconds
+    And wallet "WALLET_2A" has 4300 or less LGO in 10 seconds
+    And wallet "WALLET_4A" has 4300 or less LGO in 10 seconds
+    And wallet "WALLET_5A" has 4300 or less LGO in 10 seconds
     Then I stop all nodes
 
   @transactions_ci
@@ -317,7 +317,7 @@ Feature: Transactions
       | account_index | token_count | token_amount |
       | 1             | 10          | 25000        |
       | 2             | 0           | 0            |
-    And we have a sponsored genesis fee account with 200 tokens of 100 value each
+    And we have a sponsored genesis fee account with 4 tokens of 20000 value each
     And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |
@@ -346,7 +346,7 @@ Feature: Transactions
       | account_index | token_count | token_amount |
       | 1             | 3           | 100000       |
       | 2             | 0           | 0            |
-    And we have a sponsored genesis fee account with 5 tokens of 100 value each
+    And we have a sponsored genesis fee account with 2 tokens of 20000 value each
     And I have a cluster with capacity of 2 nodes
     And I start nodes with wallet resources:
       | node_name | account_index | wallet_name | connected_to |

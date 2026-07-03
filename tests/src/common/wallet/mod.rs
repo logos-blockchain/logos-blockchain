@@ -30,7 +30,7 @@ pub(crate) use funding::{
 };
 pub use funding_from_chain::{
     DirectWalletSourceError, WalletFundingSourceFromChainError, current_wallet_funding_source,
-    wallet_funding_source_from_chain, wallet_utxos_from_chain,
+    funded_signed_tx, wallet_funding_source_from_chain, wallet_utxos_from_chain,
 };
 pub use ids::{WalletChainSourceId, WalletId, wallet_id_for_chain_source};
 pub use tracked::{
@@ -42,7 +42,7 @@ pub use tracked_wallet::{TrackedWalletState, WalletBalance, WalletOutputState, W
 pub use transaction::{
     PreparedWalletTransaction, SignedWalletTransaction, WalletTransactionError,
     WalletTransactionIntent, fund_builder_from_wallet_source, prepare_wallet_transaction,
-    wallet_state_from_utxos,
+    transfer_proofs_for_funded_wallet_tx, wallet_state_from_utxos,
 };
 pub(crate) use transaction::{
     PreparedWalletTransactionWorkItem, finalize_prepared_wallet_transaction,

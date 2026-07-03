@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     OpProof, TxHash,
-    gas::GasPrice,
     ops::{
         Op,
         channel::{
@@ -11,7 +10,8 @@ use lb_core::mantle::{
         },
     },
     transactions::{
-        GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext,
+        GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder,
+        MantleTxContext, MantleTxGasContext,
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
@@ -27,7 +27,7 @@ pub fn build_inscription_tx_builder(
             HashMap::new(),
             HashMap::new(),
             GasPrices {
-                execution_base_gas_price: GasPrice::new(0),
+                execution_base_gas_price: GENESIS_EXECUTION_GAS_PRICE,
                 storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
             },
         ),

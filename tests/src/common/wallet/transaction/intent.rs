@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     Note, Op,
-    transactions::{GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext},
+    transactions::{
+        GENESIS_EXECUTION_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxContext,
+        MantleTxGasContext,
+    },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -47,7 +50,7 @@ impl WalletTransactionIntent {
             gas_context: MantleTxGasContext::new(
                 HashMap::new(),
                 HashMap::new(),
-                GasPrices::new(0, storage_gas_price),
+                GasPrices::new(GENESIS_EXECUTION_GAS_PRICE.into_inner(), storage_gas_price),
             ),
             ..MantleTxContext::default()
         };

@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use lb_core::mantle::{GenesisTx as _, Utxo};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::Multiaddr;
 use lb_node::{UserConfig, config::RunConfig};
@@ -345,6 +346,19 @@ pub fn api_url(node: &NodeHttpClient, path: &str) -> Url {
     node.base_url()
         .join(path)
         .expect("manual-cluster client base URL should join API path")
+}
+
+/// UTXOs created by the genesis transfer of the deployment's genesis block.
+#[must_use]
+pub fn genesis_wallet_utxos(config: &TopologyConfig) -> Vec<Utxo> {
+    let genesis_tx = config
+        .genesis_block
+        .as_ref()
+        .expect("manual-cluster deployment should include genesis tx")
+        .genesis_tx();
+    let genesis_transfer = genesis_tx.genesis_transfer();
+
+    genesis_transfer.outputs.utxos(genesis_transfer).collect()
 }
 
 #[must_use]

@@ -1,7 +1,12 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use lb_common_http_client::{ApiBlock, Error as HttpClientError};
-use lb_core::mantle::{TxHash, Utxo};
+use lb_core::mantle::{
+    Op, OpProof, SignedMantleTx, Transaction as _, TxHash, Utxo,
+    gas::MainnetGasConstants,
+    ops::channel::{ChannelId, ChannelKeyIndex},
+    transactions::{GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext},
+};
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
 use thiserror::Error;
 
@@ -9,7 +14,9 @@ use super::{
     NodeHttpWalletChainSource, WalletChainSource, WalletId, WalletUtxos,
     chain::state::{TrackedWalletKeys, TrackedWalletKeysError, WalletChainState},
 };
-use crate::common::wallet::WalletFundingSource;
+use crate::common::wallet::{
+    WalletFundingSource, fund_builder_from_wallet_source, transfer_proofs_for_funded_wallet_tx,
+};
 
 #[derive(Debug, Error)]
 pub enum DirectWalletSourceError {
@@ -27,6 +34,64 @@ pub enum WalletFundingSourceFromChainError<FetchError> {
     TrackedKeys(#[from] TrackedWalletKeysError),
     #[error(transparent)]
     FetchBlock(FetchError),
+}
+
+/// Build, fund, and sign a single-op transaction.
+///
+/// The op fee is paid from the funding wallet (synced from chain), whose
+/// trailing transfer op gets its own proof. The op proof is built via
+/// `op_proof` from the funded transaction hash. `withdraw_thresholds` is
+/// needed by the gas-size predictor for `ChannelWithdraw` ops. Returns the
+/// signed transaction and its fee at genesis gas prices.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "The thresholds map is forwarded to MantleTxGasContext, which requires the default hasher."
+)]
+pub async fn funded_signed_tx(
+    node: &NodeHttpClient,
+    genesis_utxos: &[Utxo],
+    funding_account: &WalletAccount,
+    withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+    op: Op,
+    op_proof: impl FnOnce(TxHash) -> OpProof,
+) -> (SignedMantleTx, u64) {
+    let funding_source =
+        current_wallet_funding_source(node, genesis_utxos, funding_account.clone())
+            .await
+            .expect("funding wallet source should sync from chain");
+
+    let tx_context = MantleTxContext {
+        gas_context: MantleTxGasContext::new(
+            withdraw_thresholds,
+            HashMap::new(),
+            GasPrices::default(),
+        ),
+        leader_reward_amount: 0,
+    };
+    let tx_builder = MantleTxBuilder::new()
+        .push_op(op)
+        .expect("op should fit op bounds");
+
+    let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder, &tx_context)
+        .expect("funding transaction should succeed");
+    let fee = funded_builder
+        .gas_cost::<MainnetGasConstants>(&tx_context)
+        .expect("funded tx gas cost should calculate")
+        .into_inner();
+
+    let mantle_tx = funded_builder.build().expect("funded builder should build");
+    let tx_hash = mantle_tx.hash();
+
+    let mut proofs = vec![op_proof(tx_hash)];
+    proofs.extend(
+        transfer_proofs_for_funded_wallet_tx(&mantle_tx, &funding_account.secret_key)
+            .expect("transfer proofs should build"),
+    );
+
+    let signed_tx =
+        SignedMantleTx::new(mantle_tx, proofs).expect("funded transaction should be valid");
+
+    (signed_tx, fee)
 }
 
 pub async fn current_wallet_funding_source(
