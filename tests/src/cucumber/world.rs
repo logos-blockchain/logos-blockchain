@@ -30,8 +30,9 @@ use lb_testing_framework::{
 };
 use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
 use reqwest::Url;
-use testing_framework_core::scenario::{
-    NodeControlCapability, PeerSelection, Scenario, StartedNode,
+use testing_framework_core::{
+    scenario::{NodeControlCapability, PeerSelection, Scenario, StartedNode},
+    topology::DeploymentSeed,
 };
 use tokio::task::JoinHandle;
 use tracing::warn;
@@ -39,8 +40,8 @@ use tracing::warn;
 use crate::{
     BIN_PATH_RELEASE,
     common::wallet::{
-        TrackedWalletKeysBySource, TrackedWallets, WalletBlockFeedTracker, WalletDiagnostics,
-        WalletFeedTrackingBatch,
+        TrackedWalletKeys, TrackedWalletKeysBySource, TrackedWallets, WalletBlockFeedTracker,
+        WalletDiagnostics, WalletFeedTrackingBatch,
     },
     cucumber::{
         TARGET,
@@ -56,6 +57,7 @@ use crate::{
         utils::{make_builder, shared_host_bin_path},
         wallet::{
             feed::{CucumberWalletBlockFeed, CucumberWalletBlockFeedError},
+            snapshot::WalletSnapshot,
             sync::track_wallet_feed_batches_with_backfill,
         },
     },
@@ -873,6 +875,13 @@ pub struct CucumberWorld {
     /// Manual: Mapping of wallet account indices to their corresponding wallet
     /// account in the cluster.
     pub wallet_accounts: HashMap<usize, WalletAccount>,
+    /// Manual: Public keys of wallet accounts whose secret keys are
+    /// provisioned into node KMS configs at cluster build time.
+    ///
+    /// Node wallet services only index notes for keys they hold, so node-side
+    /// wallet queries can be answered only for these keys. Accounts without
+    /// genesis tokens are never provisioned and are absent here.
+    pub node_provisioned_wallet_pks: HashSet<ZkPublicKey>,
     /// Manual: Scenario-level fee sponsor configuration and accounting.
     pub fee_state: ScenarioFeeState,
     /// Manual: Scenario-local wallet read model.
@@ -926,16 +935,20 @@ pub struct CucumberWorld {
     /// Manual: If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
-    /// Manual: If set, all running nodes are copied into a named snapshot when
-    /// the scenario stops them.
-    pub blockchain_snapshot_name_on_stop: Option<String>,
+    /// Manual: Snapshot work to perform when the scenario stops nodes.
+    pub snapshot_save_config: SnapshotSaveConfig,
+    /// Manual: Snapshot work to perform before starting nodes from a snapshot.
+    pub snapshot_restore_config: SnapshotRestoreConfig,
     /// Manual: If set, dynamically started nodes should initialize their chain
     /// state from this named snapshot. This is a scenario-wide startup seeding
     /// setting.
-    pub blockchain_snapshot_on_startup: Option<NodeSnapshot>,
+    pub node_snapshot_on_startup: Option<NodeSnapshot>,
     /// Manual: Whether to have dynamically started nodes join the external
     /// network
     pub join_external_network: Option<bool>,
+    /// Manual: Stable deployment seed reused when the same scenario rebuilds a
+    /// manual cluster, for example after restoring from a node snapshot.
+    pub manual_cluster_deployment_seed: Option<DeploymentSeed>,
     /// Manual: Runtime state for node-control extensions added outside the
     /// legacy generic step files.
     pub manual_node_config_overrides: ManualNodeConfigOverrides,
@@ -970,6 +983,25 @@ pub struct NodeSnapshot {
     /// The node name that this snapshot corresponds to. This is used to
     /// determine which node's data directory will be used.
     pub node: String,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SnapshotSaveConfig {
+    /// If set, all running node state is copied into this snapshot when nodes
+    /// stop.
+    pub node_state: Option<String>,
+    /// If set, test-framework extension state is saved into this snapshot when
+    /// nodes stop.
+    pub extensions: Option<String>,
+    /// Wallet extension payload prepared before node shutdown.
+    pub prepared_wallet_snapshot: Option<WalletSnapshot>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct SnapshotRestoreConfig {
+    /// If set, test-framework extension state is restored from this snapshot
+    /// before nodes start.
+    pub extensions: Option<String>,
 }
 
 impl Debug for CucumberWorld {
@@ -1036,6 +1068,10 @@ impl Debug for CucumberWorld {
                 &format!("{}", self.faucet_task_handles.as_ref().map_or(0, Vec::len)),
             )
             .field("wallet_accounts", &self.wallet_accounts.len())
+            .field(
+                "node_provisioned_wallet_pks",
+                &self.node_provisioned_wallet_pks.len(),
+            )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("wallets", &"SharedTrackedWallets")
             .field("wallet_block_feed", &self.wallet_block_feed.is_some())
@@ -1058,6 +1094,10 @@ impl Debug for CucumberWorld {
             .field("node_to_group", &self.node_to_group.len())
             .field("blend_core_nodes", &self.blend_core_nodes)
             .field("manual_cluster_spec", &self.manual_cluster_spec)
+            .field(
+                "manual_cluster_deployment_seed",
+                &self.manual_cluster_deployment_seed.is_some(),
+            )
             .field(
                 "manual_node_config_overrides",
                 &self.manual_node_config_overrides,
@@ -1091,15 +1131,11 @@ impl Debug for CucumberWorld {
                     self.deployment_config_override_path.as_ref(),
                 ),
             )
+            .field("snapshot_save_config", &self.snapshot_save_config)
+            .field("snapshot_restore_config", &self.snapshot_restore_config)
             .field(
-                "blockchain_snapshot_name_on_stop",
-                &self.blockchain_snapshot_name_on_stop,
-            )
-            .field(
-                "blockchain_snapshot_name_on_startup",
-                &blockchain_snapshot_on_startup_display(
-                    self.blockchain_snapshot_on_startup.as_ref(),
-                ),
+                "node_snapshot_on_startup",
+                &node_snapshot_on_startup_display(self.node_snapshot_on_startup.as_ref()),
             )
             .finish()
     }
@@ -1120,7 +1156,7 @@ pub struct GenesisTokens {
 }
 
 /// The wallet type can either be ussr defined or funding.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub enum WalletType {
     /// User defined wallets with are not tied to a specific node
     User { wallet_account: WalletAccount },
@@ -1130,7 +1166,7 @@ pub enum WalletType {
 
 /// Information about a wallet resource created in the world, which can be used
 /// to track and reference wallets across steps.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct WalletInfo {
     /// Logical name of the wallet resource, used for referencing in steps.
     pub wallet_name: String,
@@ -1220,6 +1256,14 @@ impl NodeInfo {
 }
 
 impl CucumberWorld {
+    /// Return the stable deployment seed for this manual-cluster scenario,
+    /// generating it on first use.
+    pub fn manual_cluster_deployment_seed(&mut self) -> DeploymentSeed {
+        self.manual_cluster_deployment_seed
+            .get_or_insert_with(|| DeploymentSeed::new(rand::random()))
+            .clone()
+    }
+
     /// Set a scenario-wide cryptarchia security parameter override for
     /// manual-cluster nodes.
     pub const fn set_cryptarchia_security_param(&mut self, security_param: NonZero<u32>) {
@@ -1435,6 +1479,40 @@ impl CucumberWorld {
         }
 
         Ok(tracking_batches)
+    }
+
+    pub(crate) fn wallet_tracking_keys_for_source(
+        &self,
+        source_node_name: &str,
+    ) -> Result<Vec<TrackedWalletKeys>, StepError> {
+        let wallets_by_source = self.wallets_by_source_with_unique_public_keys()?;
+        let Some(wallets) = wallets_by_source.get(source_node_name) else {
+            return Ok(Vec::new());
+        };
+
+        let group_key = self
+            .node_to_group
+            .get(source_node_name)
+            .cloned()
+            .unwrap_or_default();
+
+        let mut wallet_keys = TrackedWalletKeysBySource::new();
+        for (wallet_name, public_key) in wallets {
+            wallet_keys.add_wallet(&group_key, wallet_name, *public_key);
+        }
+
+        if let Some(fee_wallet_account) = self.fee_state.wallet_account.clone() {
+            wallet_keys.add_wallet(
+                &group_key,
+                SCENARIO_FEE_ACCOUNT_NAME,
+                fee_wallet_account.public_key(),
+            );
+        }
+
+        Ok(wallet_keys
+            .batches()
+            .flat_map(|batch| batch.wallet_keys().to_vec())
+            .collect())
     }
 
     fn wallets_by_source_with_unique_public_keys(
@@ -2273,7 +2351,7 @@ fn ibd_peers_override_display(ibd_peers_override: Option<&HashSet<PeerId>>) -> S
     )
 }
 
-fn blockchain_snapshot_on_startup_display(node_snapshot: Option<&NodeSnapshot>) -> String {
+fn node_snapshot_on_startup_display(node_snapshot: Option<&NodeSnapshot>) -> String {
     node_snapshot.as_ref().map_or_else(
         || "None".to_owned(),
         |snapshot| format!("Some(NodeSnapshot({}-{}))", snapshot.name, snapshot.node),

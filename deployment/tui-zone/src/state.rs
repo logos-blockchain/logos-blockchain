@@ -1,6 +1,6 @@
-use std::{error::Error, fs};
+use std::{collections::HashSet, error::Error, fs};
 
-use lb_core::mantle::ops::channel::{ChannelId, MsgId};
+use lb_core::mantle::ops::channel::ChannelId;
 use lb_zone_sdk::sequencer::{InscriptionInfo, SequencerChannelView, SequencerCheckpoint};
 use serde::{Deserialize, Serialize};
 use tracing::{error, warn};
@@ -22,33 +22,23 @@ struct CheckpointFile {
 /// Trait for the TUI's view of zone state.
 ///
 /// The TUI feeds SDK events into this trait; the trait owns persistence.
-/// `InMemoryZoneState` is the demo implementation. A real sequencer would
-/// implement it over a DB so `published`/`adopted`/`finalized` survive
-/// restarts (the SDK's own checkpoint covers tx-level resume separately).
+/// `InMemoryZoneState` is the demo implementation.
 ///
-/// Three lists, each ordered by arrival:
-/// - `published`: our submissions, in submit order, until they finalize or get
-///   orphaned.
-/// - `adopted`: others' inscriptions on canonical, deduped by `msg_id` (reorgs
-///   can re-adopt the same one), in first-sighting order.
-/// - `finalized`: all inscriptions below LIB, in canonical order — the SDK
-///   delivers `finalized` on `BlocksProcessed`.
+/// Tracks two lists:
+/// - `pending`: messages we published that haven't finalized yet.
+/// - `finalized`: inscriptions below LIB, delivered on `BlocksProcessed`.
 ///
-/// Replay-idempotent: `on_adopted` and `on_finalized` dedup by `msg_id`, so
-/// resuming from a persisted state and re-receiving backfill is harmless.
+/// The SDK manages the outbox (resubmit and shed across reorgs); this state
+/// renders published and finalized messages and does not consume the channel
+/// delta.
 pub trait ZoneState: Send {
-    /// Record adopted inscriptions from the canonical chain.
-    fn on_adopted(&mut self, adopted: &[InscriptionInfo]);
-    /// Remove our orphaned entry from `published`. Caller is expected to
-    /// auto-republish via `sequencer.handle().publish`.
-    fn on_orphaned(&mut self, msg_id: &MsgId);
-    /// Move finalized inscriptions into the finalized list.
+    /// Record a message we just published as pending.
+    fn on_published(&mut self, info: &InscriptionInfo);
+    /// Move finalized inscriptions from `pending` into `finalized`.
     fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]);
 
     /// Locally published inscriptions that are not finalized yet.
-    fn published(&self) -> &[Msg];
-    /// Adopted inscriptions from other writers that are not finalized yet.
-    fn adopted(&self) -> &[Msg];
+    fn pending(&self) -> &[Msg];
     /// Finalized inscriptions below LIB.
     fn finalized(&self) -> &[Msg];
 
@@ -61,54 +51,38 @@ pub trait ZoneState: Send {
 /// In-memory implementation of [`ZoneState`].
 #[derive(Default)]
 pub struct InMemoryZoneState {
-    published: Vec<Msg>,
-    adopted: Vec<Msg>,
+    pending: Vec<Msg>,
     finalized: Vec<Msg>,
+    finalized_payloads: HashSet<Vec<u8>>,
     checkpoint: Option<SequencerCheckpoint>,
     channel_id: Option<ChannelId>,
     channel_view: Option<SequencerChannelView>,
 }
 
 impl ZoneState for InMemoryZoneState {
-    fn on_adopted(&mut self, adopted: &[InscriptionInfo]) {
-        for info in adopted {
-            if !self.adopted.iter().any(|m| m.msg_id == info.this_msg) {
-                self.adopted
-                    .push(Msg::from_payload(info.this_msg, &info.payload));
-            }
-        }
-    }
-
-    fn on_orphaned(&mut self, msg_id: &MsgId) {
-        if let Some(i) = self.published.iter().position(|m| &m.msg_id == msg_id) {
-            self.published.remove(i);
+    fn on_published(&mut self, info: &InscriptionInfo) {
+        if !self.pending.iter().any(|m| m.msg_id == info.this_msg) {
+            self.pending
+                .push(Msg::from_payload(info.this_msg, &info.payload));
         }
     }
 
     fn on_finalized(&mut self, inscriptions: &[InscriptionInfo]) {
         for info in inscriptions {
-            if let Some(i) = self
-                .published
-                .iter()
-                .position(|m| m.msg_id == info.this_msg)
-            {
-                self.published.remove(i);
-            } else if let Some(i) = self.adopted.iter().position(|m| m.msg_id == info.this_msg) {
-                self.adopted.remove(i);
+            if let Some(i) = self.pending.iter().position(|m| m.msg_id == info.this_msg) {
+                self.pending.remove(i);
             }
             if !self.finalized.iter().any(|m| m.msg_id == info.this_msg) {
                 self.finalized
                     .push(Msg::from_payload(info.this_msg, &info.payload));
             }
+            self.finalized_payloads
+                .insert(info.payload.as_slice().to_vec());
         }
     }
 
-    fn published(&self) -> &[Msg] {
-        &self.published
-    }
-
-    fn adopted(&self) -> &[Msg] {
-        &self.adopted
+    fn pending(&self) -> &[Msg] {
+        &self.pending
     }
 
     fn finalized(&self) -> &[Msg] {
@@ -206,9 +180,9 @@ impl InMemoryZoneState {
         channel_exists: bool,
     ) -> Result<Self, Box<dyn Error + Send + Sync>> {
         Ok(Self {
-            published: Vec::new(),
-            adopted: Vec::new(),
+            pending: Vec::new(),
             finalized: Vec::new(),
+            finalized_payloads: HashSet::new(),
             checkpoint: load_or_discard_persisted_checkpoint_for_channel(
                 &channel_id,
                 channel_exists,
@@ -229,10 +203,10 @@ impl InMemoryZoneState {
         self.channel_view.as_ref()
     }
 
-    /// Record a tx we just published locally. Called at the publish-call
-    /// site so the local outbox stays in sync with what the SDK accepted.
-    pub fn on_published(&mut self, info: &InscriptionInfo) {
-        self.published
-            .push(Msg::from_payload(info.this_msg, &info.payload));
+    /// True if this exact payload has finalized — used to skip re-publishing an
+    /// orphan whose payload is already permanently on chain.
+    #[must_use]
+    pub fn is_finalized(&self, payload: &[u8]) -> bool {
+        self.finalized_payloads.contains(payload)
     }
 }

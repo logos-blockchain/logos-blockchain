@@ -10,9 +10,15 @@ use std::{
 };
 
 use lb_chain_service::Epoch;
-use lb_core::sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType};
+use lb_core::{
+    mantle::Value,
+    sdp::{Declaration, NumberOfEpochs, ProviderId, ServiceType},
+};
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::{RunConfig, cryptarchia::deployment::EpochConfig};
-use lb_testing_framework::{DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig};
+use lb_testing_framework::{
+    DeploymentBuilder, LbcEnv, NodeHttpClient, TopologyConfig as TfTopologyConfig,
+};
 use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::Slot;
 use logos_blockchain_tests::{
@@ -21,7 +27,7 @@ use logos_blockchain_tests::{
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
-use testing_framework_core::scenario::DynError;
+use testing_framework_core::scenario::{DynError, StartedNode};
 use tokio::time::sleep;
 
 const NODE_COUNT: usize = 2;
@@ -67,6 +73,10 @@ async fn sdp_blend_activity() {
         declarations.len()
     );
 
+    // Snapshot each provider's wallet initial balance.
+    let provider_zk_ids: Vec<ZkPublicKey> = declarations.values().map(|d| d.zk_id).collect();
+    let initial_balances = collect_provider_balances(&nodes, &provider_zk_ids).await;
+
     // Wait past `inactivity_period` so any activity messages produced by the
     // nodes have to refresh the `active` field on the declarations.
     let initial_active_epoch = declarations.values().next().unwrap().active;
@@ -101,6 +111,18 @@ async fn sdp_blend_activity() {
             "Declaration must have the refreshed `active` epoch number larger than the initial one ({old_active:?}), but got {new_active:?}"
         );
     }
+
+    // At least one provider's wallet balance must have grown.
+    let final_balances = collect_provider_balances(&nodes, &provider_zk_ids).await;
+    let anyone_paid = provider_zk_ids.iter().any(|zk_id| {
+        let before = initial_balances.get(zk_id).copied().unwrap_or(0);
+        let after = final_balances.get(zk_id).copied().unwrap_or(0);
+        after > before
+    });
+    assert!(
+        anyone_paid,
+        "expected at least one provider's wallet balance to grow; no reward UTXOs were credited",
+    );
 }
 
 const INACTIVITY_PERIOD: NumberOfEpochs = NumberOfEpochs::new(2);
@@ -150,6 +172,23 @@ fn test_config(mut config: RunConfig, slots_per_epoch: &AtomicU64) -> RunConfig 
     config.deployment.blend.common.num_blend_layers = (NODE_COUNT as u64).try_into().unwrap();
 
     config
+}
+
+/// For each `zk_id`, ask every node for the wallet balance.
+async fn collect_provider_balances(
+    nodes: &[StartedNode<LbcEnv>],
+    zk_ids: &[ZkPublicKey],
+) -> HashMap<ZkPublicKey, Value> {
+    let mut balances = HashMap::new();
+    for &zk_id in zk_ids {
+        for node in nodes {
+            if let Ok(response) = node.client.wallet_balance(zk_id, None).await {
+                balances.insert(zk_id, response.balance);
+                break;
+            }
+        }
+    }
+    balances
 }
 
 async fn wait_for_declarations(

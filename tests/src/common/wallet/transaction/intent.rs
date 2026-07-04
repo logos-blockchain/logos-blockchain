@@ -4,8 +4,7 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     Note, Op,
-    tx::{GasPrices, MantleTxContext, MantleTxGasContext},
-    tx_builder::MantleTxBuilder,
+    transactions::{GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext},
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 

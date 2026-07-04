@@ -1,49 +1,26 @@
-use lb_groth16::{CompressedGroth16Proof, Fr, fr_from_bytes};
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_utils::bounded_vec::UpperBoundedVec;
+use lb_groth16::COMPRESSED_PROOF_SIZE;
+use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
 use nom::{
-    IResult, Parser as _,
-    bytes::complete::take,
-    combinator::{map, map_res},
+    IResult,
     error::{Error, ErrorKind},
-    multi::length_count,
-    number::complete::{le_u16, le_u64},
-    sequence::pair,
 };
-use time::OffsetDateTime;
 
 use crate::{
     mantle::{
-        MantleTx, Note, NoteId, SignedMantleTx,
+        MantleTx, Op, SignedMantleTx,
         nom::{NomDecode as _, NomEncode as _},
-        ops::{Op, OpProof},
+        ops::codec::{decode_ops_proofs, encode_ops_proofs},
+        transactions::{MantleTxGasContext, Ops},
     },
-    proofs::leader_claim_proof::Groth16LeaderClaimProof,
+    proofs::channel_multi_sig_proof::codec::calculate_channel_multi_sig_proof_byte_size,
 };
 
-// ==============================================================================
-// Memory Safety Limits
-// ==============================================================================
-// These limits are not designed to mimic system limits, but rather to prevent
-// unbounded memory usage from malicious inputs. They prevent memory
-// over-allocation attacks where untrusted input specifies allocation sizes.
-// Values are chosen to not limit normal operations while preventing excessive
-// memory usage (e.g., 68GB allocation). As an example, if the network currently
-// limits maximum transaction size to 1MiB, for memory safety limits we can
-// allow 4MiB.
+pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
+    // MantleTx = Ops ExecutionGasPrice StorageGasPrice
+    let (input, ops) = Ops::decode(input)?;
 
-pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
-pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
-const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
-const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
-pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
-pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
-
-pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
-
-// ==============================================================================
-// Top-Level Transaction Decoders
-// ==============================================================================
+    Ok((input, MantleTx(ops)))
+}
 
 pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
     // SignedMantleTx = MantleTx OpsProofs
@@ -56,288 +33,6 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
     Ok((input, signed_tx))
 }
 
-pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
-    // MantleTx = Ops ExecutionGasPrice StorageGasPrice
-    let (input, ops) = Ops::decode(input)?;
-
-    Ok((input, MantleTx(ops)))
-}
-
-// ==============================================================================
-// Proof Decoders
-// ==============================================================================
-
-fn decode_ops_proofs<'a>(input: &'a [u8], ops: &[Op]) -> IResult<&'a [u8], Vec<OpProof>> {
-    let mut remaining = input;
-    let mut proofs = Vec::with_capacity(ops.len());
-
-    for op in ops {
-        let (new_remaining, proof) = decode_op_proof(remaining, op)?;
-        proofs.push(proof);
-        remaining = new_remaining;
-    }
-
-    Ok((remaining, proofs))
-}
-
-fn decode_op_proof<'a>(input: &'a [u8], op: &Op) -> IResult<&'a [u8], OpProof> {
-    match op {
-        // Ed25519SigProof = Ed25519Signature
-        Op::ChannelInscribe(_) => map(decode_ed25519_signature, OpProof::Ed25519Sig).parse(input),
-
-        // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
-        Op::SDPDeclare(_) => {
-            let (input, zk_sig) = decode_zk_signature(input)?;
-            let (input, ed25519_sig) = decode_ed25519_signature(input)?;
-            Ok((
-                input,
-                OpProof::ZkAndEd25519Sigs {
-                    zk_sig,
-                    ed25519_sig,
-                },
-            ))
-        }
-
-        // ZkSigProof = ZkSignature
-        Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_) => {
-            map(decode_zk_signature, OpProof::ZkSig).parse(input)
-        }
-
-        // ProofOfClaimProof = Groth16
-        Op::LeaderClaim(_) => map(decode_groth16, |proof| {
-            OpProof::PoC(Groth16LeaderClaimProof::new(proof))
-        })
-        .parse(input),
-
-        // ChannelMultiSigProof — also used by ChannelConfig (threshold sigs)
-        Op::ChannelWithdraw(_) | Op::ChannelConfig(_) => map(
-            decode_channel_multi_sig_proof,
-            OpProof::ChannelMultiSigProof,
-        )
-        .parse(input),
-    }
-}
-
-// ==============================================================================
-// Cryptographic Primitive Decoders
-// ==============================================================================
-
-fn decode_zk_signature(input: &[u8]) -> IResult<&[u8], ZkSignature> {
-    // ZkSignature = Groth16
-    map(decode_groth16, ZkSignature::new).parse(input)
-}
-
-const GROTH16_BYTES: usize = 128;
-fn decode_groth16(input: &[u8]) -> IResult<&[u8], CompressedGroth16Proof> {
-    // Groth16 = 128BYTE
-    map(
-        decode_array::<GROTH16_BYTES>,
-        |proof: [u8; GROTH16_BYTES]| CompressedGroth16Proof::from_bytes(&proof),
-    )
-    .parse(input)
-}
-
-const ED25519_SIG_BYTES: usize = 64;
-fn decode_ed25519_signature(input: &[u8]) -> IResult<&[u8], Ed25519Signature> {
-    // Ed25519Signature = 64BYTE
-    map(
-        decode_array::<ED25519_SIG_BYTES>,
-        |bytes: [u8; ED25519_SIG_BYTES]| Ed25519Signature::from_bytes(&bytes),
-    )
-    .parse(input)
-}
-
-const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex) -> usize {
-    // Encoding: u16 signature count + N * (Ed25519 sig + u16 key index)
-    2 + (threshold as usize) * (ED25519_SIG_BYTES + 2)
-}
-
-fn decode_channel_multi_sig_proof(input: &[u8]) -> IResult<&[u8], ChannelMultiSigProof> {
-    // ChannelMultiSigProof = SignatureCount *WithdrawSignature
-    // WithdrawSignature = Ed25519Signature Index
-    let (input, signatures) = length_count(
-        map(decode_uint16, |n: ChannelKeyIndex| n as usize),
-        pair(decode_ed25519_signature, decode_uint16),
-    )
-    .parse(input)?;
-
-    let signatures: Vec<IndexedSignature> = signatures
-        .into_iter()
-        .map(|(signature, index)| IndexedSignature::from((index, signature)))
-        .collect();
-
-    ChannelMultiSigProof::new(signatures)
-        .map(|proof| (input, proof))
-        .map_err(|_| nom::Err::Failure(Error::new(input, ErrorKind::Verify)))
-}
-
-pub(crate) fn decode_field_element(input: &[u8]) -> IResult<&[u8], Fr> {
-    // FieldElement = 32BYTE
-    map_res(take(32usize), |bytes: &[u8]| {
-        fr_from_bytes(bytes).map_err(|_| "Invalid field element")
-    })
-    .parse(input)
-}
-
-// ==============================================================================
-// Primitive Decoders
-// ==============================================================================
-fn decode_array<const N: usize>(input: &[u8]) -> IResult<&[u8], [u8; N]> {
-    map(take(N), |bytes: &[u8]| {
-        let mut arr = [0u8; N];
-        arr.copy_from_slice(bytes);
-        arr
-    })
-    .parse(input)
-}
-
-pub(crate) fn decode_utf8_string(input: &[u8], len: usize) -> IResult<&[u8], String> {
-    map_res(take(len), |bytes: &[u8]| {
-        std::str::from_utf8(bytes)
-            .map(ToOwned::to_owned)
-            .map_err(|_| Error::new(bytes, ErrorKind::Fail))
-    })
-    .parse(input)
-}
-
-fn decode_uint16(input: &[u8]) -> IResult<&[u8], u16> {
-    // UINT16 = 2BYTE
-    le_u16(input)
-}
-
-pub(crate) fn decode_uint64(input: &[u8]) -> IResult<&[u8], u64> {
-    // UINT64 = 8BYTE
-    le_u64(input)
-}
-
-pub(crate) fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTime> {
-    // Timestamp = UINT64
-    map_res(decode_uint64, |ts| {
-        OffsetDateTime::from_unix_timestamp(
-            ts.try_into()
-                .map_err(|_| Error::new(input, ErrorKind::Fail))?,
-        )
-        .map_err(|_| Error::new(input, ErrorKind::Fail))
-    })
-    .parse(input)
-}
-
-// ==============================================================================
-// Binary Encoders
-// ==============================================================================
-
-use lb_groth16::fr_to_bytes;
-
-use crate::{
-    mantle::{Utxo, ops::channel::ChannelKeyIndex, tx::MantleTxGasContext},
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
-};
-
-/// Encode primitives
-fn encode_uint16(value: u16) -> Vec<u8> {
-    value.to_le_bytes().to_vec()
-}
-
-pub(crate) fn encode_uint64(value: u64) -> Vec<u8> {
-    value.to_le_bytes().to_vec()
-}
-
-pub(crate) fn encode_string(s: &String) -> Vec<u8> {
-    s.as_bytes().to_vec()
-}
-
-pub(crate) fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
-    encode_uint64(
-        ts.unix_timestamp()
-            .try_into()
-            .expect("timestamp fits in u64"),
-    )
-}
-
-pub(crate) fn encode_field_element(fr: &Fr) -> Vec<u8> {
-    fr_to_bytes(fr).to_vec()
-}
-
-/// Encode cryptographic primitives
-fn encode_ed25519_signature(sig: &Ed25519Signature) -> Vec<u8> {
-    sig.to_bytes().to_vec()
-}
-
-fn encode_zk_signature(sig: &ZkSignature) -> Vec<u8> {
-    // ZkSignature wraps ZkSignProof which is CompressedGroth16Proof
-    encode_groth16_proof(sig.as_proof())
-}
-
-fn encode_poc(poc: &Groth16LeaderClaimProof) -> Vec<u8> {
-    // Groth16LeaderClaimProof wraps PocProof which is CompressedGroth16Proof
-    encode_groth16_proof(poc.proof())
-}
-
-fn encode_groth16_proof(proof: &CompressedGroth16Proof) -> Vec<u8> {
-    proof.to_bytes().to_vec()
-}
-
-fn encode_channel_multi_sig_proof(proof: &ChannelMultiSigProof) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend(encode_uint16(proof.signatures().len() as ChannelKeyIndex));
-    bytes.extend(proof.signatures().iter().flat_map(|signature| {
-        encode_ed25519_signature(&signature.signature)
-            .into_iter()
-            .chain(encode_uint16(signature.channel_key_index))
-    }));
-    bytes
-}
-
-// Check if proofs correspond to ops
-#[must_use]
-pub const fn proof_matches(proof: &OpProof, op: &Op) -> bool {
-    matches!(
-        (proof, op),
-        (OpProof::Ed25519Sig(_), Op::ChannelInscribe(_))
-            | (
-                OpProof::ChannelMultiSigProof(_),
-                Op::ChannelWithdraw(_) | Op::ChannelConfig(_)
-            )
-            | (OpProof::ZkAndEd25519Sigs { .. }, Op::SDPDeclare(_))
-            | (
-                OpProof::ZkSig(_),
-                Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
-            )
-            | (OpProof::PoC(_), Op::LeaderClaim(_))
-    )
-}
-
-/// Encode proofs
-fn encode_op_proof(proof: &OpProof, op: &Op) -> Vec<u8> {
-    if proof_matches(proof, op) {
-        match proof {
-            OpProof::Ed25519Sig(sig) => encode_ed25519_signature(sig),
-            OpProof::ChannelMultiSigProof(proof) => encode_channel_multi_sig_proof(proof),
-            OpProof::ZkAndEd25519Sigs {
-                zk_sig,
-                ed25519_sig,
-            } => {
-                let mut bytes = encode_zk_signature(zk_sig);
-                bytes.extend(encode_ed25519_signature(ed25519_sig));
-                bytes
-            }
-            OpProof::ZkSig(sig) => encode_zk_signature(sig),
-            OpProof::PoC(poc) => encode_poc(poc),
-        }
-    } else {
-        panic!("Mismatch between proof type and operation type");
-    }
-}
-
-fn encode_ops_proofs(proofs: &[OpProof], ops: &[Op]) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    for (proof, op) in proofs.iter().zip(ops.iter()) {
-        bytes.extend(encode_op_proof(proof, op));
-    }
-    bytes
-}
-
-/// Encode top-level transactions
 #[must_use]
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
     tx.ops().encode()
@@ -351,7 +46,8 @@ pub fn encode_signed_mantle_tx(tx: &SignedMantleTx) -> Vec<u8> {
     bytes
 }
 
-pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext) -> usize {
+#[must_use]
+pub fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext) -> usize {
     let mantle_tx_size = encode_mantle_tx(tx).len();
 
     let ops_proofs_size = tx
@@ -359,11 +55,11 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
         .iter()
         .map(|op| match op {
             // Ed25519SigProof = Ed25519Signature
-            Op::ChannelInscribe(_) => ED25519_SIG_BYTES,
+            Op::ChannelInscribe(_) => ED25519_SIGNATURE_SIZE,
 
             // ChannelMultiSigProof — for an existing channel, threshold sigs;
             // for a new channel (just-in-time created here), no sigs required.
-            // TODO: under-predicts if there is a non-empty proof for a new
+            // TODO: underpredicts if there is a non-empty proof for a new
             // channel. Tighten before enabling non-zero storage gas prices.
             Op::ChannelConfig(operation) => {
                 let threshold = context
@@ -373,11 +69,11 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
             }
 
             // ZkAndEd25519SigsProof = ZkSignature Ed25519Signature
-            Op::SDPDeclare(_) => GROTH16_BYTES + ED25519_SIG_BYTES,
+            Op::SDPDeclare(_) => COMPRESSED_PROOF_SIZE + ED25519_SIGNATURE_SIZE,
 
             // ZkSigProof = ZkSignature = ProofOfClaimProof = Groth16
             Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::LeaderClaim(_) | Op::Transfer(_) => {
-                GROTH16_BYTES
+                COMPRESSED_PROOF_SIZE
             }
 
             // ChannelMultiSigProof
@@ -398,10 +94,12 @@ pub(crate) fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGas
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, panic};
+    use std::collections::HashMap;
 
     use ark_ff::AdditiveGroup as _;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
+    use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
+    use lb_groth16::{CompressedGroth16Proof, Fr};
+    use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
     use lb_utils::bounded_vec::BoundedError;
     use multiaddr::Multiaddr;
     use num_bigint::BigUint;
@@ -409,20 +107,25 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{
-            Transaction as _,
-            ledger::{Inputs, Outputs},
+            Note, NoteId, OpProof, Transaction as _, Utxo,
+            ledger::{BoundedInputs, BoundedOutputs, Inputs, Outputs},
             ops::{
                 channel::{
                     ChannelId, MsgId,
                     config::{ChannelConfigOp, Keys},
-                    inscribe::{self, Inscription, InscriptionOp},
+                    inscribe,
+                    inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
                 transfer::TransferOp,
             },
-            tx::GasPrices,
+            transactions::GasPrices,
+        },
+        proofs::{
+            channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+            leader_claim_proof::Groth16LeaderClaimProof,
         },
         sdp::{
             ActivityMetadata, DeclarationId, Locator, MAX_LOCATOR_BYTE_SIZE, ProviderId,
@@ -454,47 +157,6 @@ mod tests {
                 }
             );
         }
-    }
-
-    #[test]
-    fn test_encode_decode_primitives() {
-        // Test UINT64
-        let data = encode_uint64(42u64);
-        let (remaining, value) = decode_uint64(&data).unwrap();
-        assert_eq!(value, 42u64);
-        assert!(remaining.is_empty());
-
-        // Test UINT32
-        let data = 123u32.encode();
-        let (remaining, value) = u32::decode(&data).unwrap();
-        assert_eq!(value, 123u32);
-        assert!(remaining.is_empty());
-
-        // Test Byte
-        let data = 0xABu8.encode();
-        let (remaining, value) = u8::decode(&data).unwrap();
-        assert_eq!(value, 0xAB);
-        assert!(remaining.is_empty());
-
-        // Test Hash32
-        let data = [0x42u8; 32].encode();
-        let (remaining, value) = <[u8; 32]>::decode(&data).unwrap();
-        assert_eq!(value, [0x42u8; 32]);
-        assert!(remaining.is_empty());
-
-        // Test UTF-8 String
-        let str = "hello, world!".to_owned();
-        let data = encode_string(&str);
-        let (remaining, value) = decode_utf8_string(&data, data.len()).unwrap();
-        assert_eq!(value, str);
-        assert!(remaining.is_empty());
-
-        // Test Unix Timestamp
-        let ts = OffsetDateTime::now_utc();
-        let data = encode_unix_timestamp(&ts);
-        let (remaining, value) = decode_unix_timestamp(&data).unwrap();
-        assert_eq!(value, ts.truncate_to_second());
-        assert!(remaining.is_empty());
     }
 
     #[test]
@@ -596,7 +258,7 @@ mod tests {
 
         // ChannelConfig creates the channel just-in-time, so no signatures are
         // required for validation — empty proof is well-formed.
-        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+        let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
 
         // Encode and decode roundtrip test (no hardcoded test vector since signatures
         // are deterministic)
@@ -698,8 +360,6 @@ mod tests {
 
     #[test]
     fn test_encode_decode_roundtrip_with_transfer() {
-        use num_bigint::BigUint;
-
         // Create a MantleTx with ledger inputs and outputs
         let pk = ZkPublicKey::from(BigUint::from(42u64));
         let note = Note::new(1000, pk);
@@ -808,9 +468,9 @@ mod tests {
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
-        // Create a signed tx and encode it to get actual size. New channel
-        // → empty proof (no signatures required for just-in-time create).
-        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+        // Create a signed tx and encode it to get the actual size.
+        // New channel → empty proof (no signatures required for just-in-time create).
+        let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
         let signed_tx =
             SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(config_proof)])
                 .unwrap();
@@ -822,8 +482,6 @@ mod tests {
 
     #[test]
     fn test_predict_signed_mantle_tx_size_with_sdp_declare() {
-        use num_bigint::BigUint;
-
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let zk_sk = ZkKey::zero();
         let locator1: Multiaddr = "/ip4/127.0.0.1/tcp/8080".parse().unwrap();
@@ -909,8 +567,6 @@ mod tests {
 
     #[test]
     fn test_predict_signed_mantle_tx_size_with_sdp_active() {
-        use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-
         let signing_key = Ed25519Key::from_bytes(&[1u8; 32]);
         let blend_proof = ActivityProof {
             epoch: 42.into(),
@@ -950,8 +606,6 @@ mod tests {
 
     #[test]
     fn test_predict_signed_mantle_tx_size_with_multiple_ops() {
-        use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
-
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
 
         let inscribe_op = InscriptionOp {
@@ -996,9 +650,9 @@ mod tests {
 
         let txhash = mantle_tx.hash();
         let op_sig = signing_key.sign_payload(&txhash.as_signing_bytes());
-        // Create a signed tx and encode it to get actual size. ChannelConfig
-        // creates the channel here, so its proof has no signatures.
-        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+        // Create a signed tx and encode it to get the actual size.
+        // ChannelConfig creates the channel here, so its proof has no signatures.
+        let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![
@@ -1016,8 +670,6 @@ mod tests {
 
     #[test]
     fn test_predict_signed_mantle_tx_size_with_ledger_inputs_outputs() {
-        use num_bigint::BigUint;
-
         let pk1 = ZkPublicKey::from(BigUint::from(100u64));
         let pk2 = ZkPublicKey::from(BigUint::from(200u64));
 
@@ -1054,8 +706,6 @@ mod tests {
 
     #[test]
     fn test_predict_signed_mantle_tx_size_complex_scenario() {
-        use num_bigint::BigUint;
-
         let signing_key1 = Ed25519Key::from_bytes(&[1; 32]);
         let signing_key2 = Ed25519Key::from_bytes(&[2; 32]);
 
@@ -1107,11 +757,11 @@ mod tests {
             MantleTxGasContext::new(HashMap::new(), HashMap::new(), GasPrices::new(0, 0));
         let predicted_size = predict_signed_mantle_tx_size(&mantle_tx, &gas_context);
 
-        // Create a signed tx and encode it to get actual size. ChannelConfig
-        // creates the channel here, so its proof has no signatures.
+        // Create a signed tx and encode it to get the actual size.
+        // ChannelConfig creates the channel here, so its proof has no signatures.
         let txhash = mantle_tx.hash();
         let op_ed25519_sig = signing_key1.sign_payload(&txhash.as_signing_bytes());
-        let config_proof = ChannelMultiSigProof::new(vec![]).unwrap();
+        let config_proof = ChannelMultiSigProof::try_new([].into()).unwrap();
         let signed_tx = SignedMantleTx::new(
             mantle_tx,
             vec![
@@ -1133,8 +783,6 @@ mod tests {
 
     #[test]
     fn test_predict_signed_mantle_tx_size_with_leader_claim() {
-        use crate::proofs::leader_claim_proof::Groth16LeaderClaimProof;
-
         let leader_claim_op = LeaderClaimOp {
             rewards_root: RewardsRoot::default(),
             voucher_nullifier: VoucherNullifier::default(),
@@ -1158,34 +806,6 @@ mod tests {
 
         let encoded = encode_signed_mantle_tx(&signed_tx);
         assert_eq!(predicted_size, encoded.len());
-    }
-
-    #[test]
-    fn test_encode_decode_leader_claim_op_proof() {
-        use crate::proofs::leader_claim_proof::Groth16LeaderClaimProof;
-
-        let proof_bytes: [u8; 128] = core::array::from_fn(|i| i as u8);
-        let poc_proof =
-            Groth16LeaderClaimProof::new(CompressedGroth16Proof::from_bytes(&proof_bytes));
-
-        let leader_claim_op = LeaderClaimOp {
-            rewards_root: RewardsRoot::default(),
-            voucher_nullifier: VoucherNullifier::default(),
-            pk: ZkPublicKey::from(BigUint::from(0u64)),
-        };
-        let op = Op::LeaderClaim(leader_claim_op);
-
-        let encoded = encode_op_proof(&OpProof::PoC(poc_proof), &op);
-        assert_eq!(encoded.len(), GROTH16_BYTES);
-
-        let (remaining, decoded) = decode_op_proof(&encoded, &op).unwrap();
-        assert!(remaining.is_empty());
-        assert_eq!(
-            decoded,
-            OpProof::PoC(Groth16LeaderClaimProof::new(
-                CompressedGroth16Proof::from_bytes(&proof_bytes),
-            ))
-        );
     }
 
     #[test]
@@ -1220,10 +840,13 @@ mod tests {
             },
         )]));
         let tx_hash = mantle_tx.hash();
-        let proof = ChannelMultiSigProof::new(vec![IndexedSignature::new(
-            0,
-            signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
-        )])
+        let proof = ChannelMultiSigProof::try_new(
+            [IndexedSignature::new(
+                0,
+                signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
+            )]
+            .into(),
+        )
         .unwrap();
         let signed_tx =
             SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(proof)]).unwrap();
@@ -1353,38 +976,11 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_memory_safety_no_allocation_on_oversized_length() {
-        // This test verifies that we reject oversized lengths WITHOUT
-        // attempting to allocate the memory first
-
-        // Test with an astronomically large inscription_len
-        // (e.g., 4GB which would cause the original bug)
-        let huge_len = u32::MAX; // 4GB - 1
-
-        let mut malicious_input = Vec::new();
-        malicious_input.extend_from_slice(&[0x42; 32]); // ChannelId
-        malicious_input.extend_from_slice(&huge_len.to_le_bytes());
-
-        // This should fail immediately without trying to allocate 4GB
-        let result = InscriptionOp::decode(&malicious_input);
-        assert!(result.is_err(), "Should reject huge inscription length");
-
-        // Similar test for metadata
-        let mut malicious_input2 = Vec::new();
-        malicious_input2.extend_from_slice(&[0x42; 32]); // DeclarationId
-        malicious_input2.extend_from_slice(&42u64.to_le_bytes()); // Nonce
-        malicious_input2.extend_from_slice(&huge_len.to_le_bytes());
-
-        let result2 = SDPActiveOp::decode(&malicious_input2);
-        assert!(result2.is_err(), "Should reject huge metadata length");
-    }
-
-    #[test]
     fn test_decode_reject_zero_key_count() {
         let encoded_config_op = ChannelConfigOp {
             channel: ChannelId::from([0x22; 32]),
-            // Using `new_unchecked` to bypass the constructor check since we're testing decode
-            // directly.
+            // Using `new_unchecked` to bypass the constructor check since we're testing
+            // `decode` directly.
             keys: Keys::new_unchecked([].into()),
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),

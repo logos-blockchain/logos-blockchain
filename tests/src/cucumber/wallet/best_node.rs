@@ -90,6 +90,11 @@ pub async fn sanitize_best_node_info<'a>(
     sanitize_best_node_info_with_feed(world, wallet_name, best_node_info, None).await
 }
 
+/// Resolve a query node for `wallet_name`, reusing `best_node_info` when it is
+/// still on the observed chain.
+///
+/// If the cached selection is stale or missing, this waits for a fresh majority
+/// tip in the wallet's fork group and returns the selected node client.
 pub async fn sanitize_best_node_info_with_feed<'a>(
     world: &'a CucumberWorld,
     wallet_name: &str,
@@ -114,6 +119,10 @@ pub async fn sanitize_best_node_info_with_feed<'a>(
     resolve_selected_best_node(world, &wallet_node_name, &refreshed).await
 }
 
+/// Resolve a query node for a wallet-feed source group.
+///
+/// This is the group-oriented form used when the caller already knows the
+/// source id instead of a wallet name.
 pub async fn sanitize_best_node_info_for_group<'a>(
     world: &'a CucumberWorld,
     source_id: &WalletChainSourceId,
@@ -122,6 +131,11 @@ pub async fn sanitize_best_node_info_for_group<'a>(
     sanitize_best_node_info_for_group_with_feed(world, source_id, best_node_info, None).await
 }
 
+/// Resolve a query node for a source group, optionally validating against a
+/// block feed.
+///
+/// The feed check keeps a cached best node only if its tip is still part of the
+/// observed chain.
 pub async fn sanitize_best_node_info_for_group_with_feed<'a>(
     world: &'a CucumberWorld,
     source_id: &WalletChainSourceId,
@@ -276,6 +290,10 @@ pub async fn determine_best_node(
 }
 
 /// Get best-node info for the wallet's fork group.
+/// Wait for and return the best-node selection for `wallet_name`.
+///
+/// The selected node is chosen from the wallet's fork group. The optional log
+/// string suppresses repeated verbose messages while polling.
 pub async fn get_best_node_info(
     world: &CucumberWorld,
     wallet_name: &str,

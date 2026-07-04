@@ -12,8 +12,7 @@ use lb_core::mantle::{
     GasCalculator as _, GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
     gas::MainnetGasConstants,
     ops::OpId as _,
-    tx::{GasPrices, MantleTxGasContext},
-    tx_builder::MantleTxBuilder,
+    transactions::{GasPrices, MantleTxBuilder, MantleTxGasContext},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use rand::{seq::SliceRandom as _, thread_rng};
@@ -317,7 +316,7 @@ fn build_wallet_transaction(
 }
 
 fn wallet_utxo_map(
-    genesis_tx: &lb_core::mantle::genesis_tx::GenesisTx,
+    genesis_tx: &lb_core::mantle::transactions::GenesisTx,
 ) -> HashMap<ZkPublicKey, Utxo> {
     let transfer_op = genesis_tx.genesis_transfer().clone();
     let op_id = transfer_op.op_id();

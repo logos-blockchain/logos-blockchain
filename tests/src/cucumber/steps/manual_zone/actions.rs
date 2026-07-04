@@ -28,7 +28,7 @@ use super::{
         ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included, keygen,
         publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
         sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
-        start_republish_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
+        start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
         submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
@@ -66,7 +66,9 @@ pub(super) enum DriveMode {
     Passive {
         republish_orphans: bool,
     },
-    Republish,
+    RepublishLineage {
+        planned: Vec<Inscription>,
+    },
     Sorted {
         discarded: DiscardedPayloads,
     },
@@ -869,7 +871,9 @@ fn start_sequencer_runtime(
             start_sequencer_event_loop(sequencer, republish_orphans),
             None,
         ),
-        DriveMode::Republish => from_policy_runtime(start_republish_policy(sequencer), None),
+        DriveMode::RepublishLineage { planned } => {
+            from_policy_runtime(start_republish_lineage_policy(sequencer, planned), None)
+        }
         DriveMode::Sorted { discarded } => from_policy_runtime(
             start_sorted_conflict_policy(sequencer, &discarded),
             Some(discarded),

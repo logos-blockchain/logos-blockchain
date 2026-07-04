@@ -160,6 +160,7 @@ pub enum Error {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct ServiceState<R: Rewards> {
+    service_type: ServiceType,
     /// Declarations accumulated until the current block.
     declarations: Declarations,
     // Rewards calculation and tracking for this service
@@ -189,6 +190,14 @@ impl<R: Rewards> ServiceState<R> {
                 epoch_state,
                 &service_params,
                 rewards_params,
+            );
+            events.extend(
+                reward_utxos
+                    .iter()
+                    .map(|utxo| HeaderEvent::SdpRewardDistributed {
+                        service_type: self.service_type,
+                        utxo: *utxo,
+                    }),
             );
         }
 
@@ -314,17 +323,18 @@ impl SdpLedger {
             epoch_state.epoch, self.epoch,
             "TODO: refactor to remove this assertion"
         );
-        let service = Service::BlendNetwork(Self::new_service_state(blend::Rewards::new(
-            rewards_settings,
-            epoch_state,
-        )));
+        let service = Service::BlendNetwork(Self::new_service_state(
+            ServiceType::BlendNetwork,
+            blend::Rewards::new(rewards_settings, epoch_state),
+        ));
         self.services = self.services.insert(ServiceType::BlendNetwork, service);
         self
     }
 
     #[must_use]
-    fn new_service_state<R: Rewards>(rewards: R) -> ServiceState<R> {
+    fn new_service_state<R: Rewards>(service_type: ServiceType, rewards: R) -> ServiceState<R> {
         ServiceState {
+            service_type,
             declarations: rpds::RedBlackTreeMapSync::new_sync(),
             rewards,
         }
@@ -1162,6 +1172,24 @@ mod tests {
             received[0].note.value, income,
             "single-provider reward must equal the full accrued income",
         );
+
+        // `SdpRewardDistributed` events must mirror the reward UTXOs one-to-one
+        // so wallets can credit provider keys off the header events alone.
+        let reward_events: Vec<(ServiceType, Utxo)> = effect
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                HeaderEvent::SdpRewardDistributed { service_type, utxo } => {
+                    Some((*service_type, *utxo))
+                }
+                HeaderEvent::SdpNoteUnlocked { .. } => None,
+            })
+            .collect();
+        assert_eq!(reward_events.len(), effect.reward_utxos.len());
+        for (service_type, utxo) in &reward_events {
+            assert_eq!(*service_type, ServiceType::BlendNetwork);
+            assert!(effect.reward_utxos.contains(utxo));
+        }
     }
 
     /// Regression test: the per-epoch membership build must not panic on an
@@ -1283,7 +1311,10 @@ mod tests {
                     note_id: unlocked_note,
                     service_type,
                     declaration_id: id,
-                } = &event;
+                } = &event
+                else {
+                    return None;
+                };
                 (*unlocked_note == note_id && *service_type == service_a && *id == declaration_id)
                     .then_some(event)
             });
@@ -1313,7 +1344,10 @@ mod tests {
                 note_id: unlocked_note,
                 service_type,
                 declaration_id: id,
-            } = &event;
+            } = &event
+            else {
+                return None;
+            };
             (*unlocked_note == note_id && *service_type == service_a && *id == declaration_id)
                 .then_some(event)
         });

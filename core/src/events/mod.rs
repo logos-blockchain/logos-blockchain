@@ -120,6 +120,11 @@ pub enum HeaderEvent {
         service_type: ServiceType,
         declaration_id: DeclarationId,
     },
+    /// A reward UTXO was minted to a provider.
+    SdpRewardDistributed {
+        service_type: ServiceType,
+        utxo: Utxo,
+    },
 }
 
 impl TryFrom<Bytes> for Events {

@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx, Transaction as _,
-        encoding::{encode_mantle_tx, encode_signed_mantle_tx},
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
         },
+        transactions::codec::{encode_mantle_tx, encode_signed_mantle_tx},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -214,7 +214,7 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
             signature: sig.signature,
         });
     }
-    let proof = ChannelMultiSigProof::new(
+    let proof = ChannelMultiSigProof::try_new(
         signature_entries
             .iter()
             .map(|sig| {
@@ -222,7 +222,8 @@ pub(crate) fn run_config_combine(args: ConfigCombineArgs) -> RunResult<()> {
                 decode_hex_bincode::<Ed25519Signature>(&sig.signature)
                     .map(|signature| IndexedSignature::new(sig.signer_key_index, signature))
             })
-            .collect::<RunResult<Vec<_>>>()?,
+            .collect::<RunResult<Vec<_>>>()?
+            .try_into()?,
     )?;
     if proof.signatures().len() != intent.required_threshold as usize {
         return Err(format!(

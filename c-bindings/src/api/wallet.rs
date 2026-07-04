@@ -15,7 +15,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        tx_builder::MantleTxBuilder,
+        transactions::MantleTxBuilder,
     },
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};

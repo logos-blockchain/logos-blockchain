@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use lb_core::mantle::ops::channel::inscribe::Inscription;
 use lb_zone_sdk::{
@@ -117,10 +117,9 @@ fn handle_event(
             channel_update,
             finalized,
         } => {
+            // Pin finalized payloads before the re-publish dedup below.
+            apply_finalized(&finalized, state);
             apply_channel_update(channel_update, state, sequencer);
-            if !finalized.is_empty() {
-                apply_finalized(&finalized, state);
-            }
             state.save_checkpoint(checkpoint);
         }
         Event::MempoolPending(..) | Event::TurnNotification { .. } => {}
@@ -138,6 +137,9 @@ fn apply_finalized(items: &[FinalizedTx], state: &mut InMemoryZoneState) {
             FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) => None,
         })
         .collect();
+    if inscriptions.is_empty() {
+        return;
+    }
     state.on_finalized(&inscriptions);
     ui::render_state(state);
     ui::prompt();
@@ -149,37 +151,47 @@ fn apply_channel_update(
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
 ) {
     let ChannelUpdate { orphaned, adopted } = update;
-    if orphaned.is_empty() && adopted.is_empty() {
+    if orphaned.is_empty() {
         return;
     }
-    state.on_adopted(&adopted);
+    // Dedup by payload (carries a unique tx_uuid): an orphan already back on
+    // the channel reappears in `adopted`, so don't republish it.
+    let adopted_payloads: HashSet<&[u8]> = adopted.iter().map(|i| i.payload.as_slice()).collect();
     for entry in &orphaned {
-        handle_orphan(state, sequencer, entry);
+        handle_orphan(state, sequencer, entry, &adopted_payloads);
     }
-    ui::render_state(state);
-    ui::prompt();
 }
 
 fn handle_orphan(
     state: &mut InMemoryZoneState,
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
     entry: &OrphanedTx,
+    adopted_payloads: &HashSet<&[u8]>,
 ) {
-    match entry {
-        OrphanedTx::Inscription(info) => {
-            state.on_orphaned(&info.this_msg);
-            debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
-            match sequencer.handle().publish(info.payload.clone()) {
-                Ok((result, checkpoint)) => {
-                    state.on_published(result.tx.inscription());
-                    state.save_checkpoint(checkpoint);
-                }
-                Err(e) => error!("failed to auto-republish: {e}"),
-            }
-        }
-        OrphanedTx::AtomicWithdraw(_) => {
-            error!("unexpected atomic-withdraw orphan - TUI does not publish bundles");
-        }
+    let OrphanedTx::Inscription(info) = entry else {
+        debug!("ignoring atomic-withdraw orphan; TUI does not publish bundles");
+        return;
+    };
+    if adopted_payloads.contains(info.payload.as_slice()) {
+        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "orphan already on channel; not republishing");
+        return;
+    }
+    if state.is_finalized(info.payload.as_slice()) {
+        debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "orphan already finalized; not republishing");
+        return;
+    }
+    republish_orphan(state, sequencer, info);
+}
+
+fn republish_orphan(
+    state: &mut InMemoryZoneState,
+    sequencer: &mut ZoneSequencer<NodeHttpClient>,
+    info: &InscriptionInfo,
+) {
+    debug!(msg_id = %hex::encode(info.this_msg.as_ref()), "Auto-republishing orphan");
+    match sequencer.handle().publish(info.payload.clone()) {
+        Ok((_, checkpoint)) => state.save_checkpoint(checkpoint),
+        Err(e) => error!("failed to auto-republish: {e}"),
     }
 }
 

@@ -5,7 +5,7 @@ use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded_vec::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -14,13 +14,25 @@ use thiserror::Error;
 use crate::{
     crypto::{Hash, ZkHasher},
     events::TxEvent,
-    mantle::{
-        encoding::{BoundedInputs, BoundedOutputs},
-        nom::NomCodec,
-        ops::OpId,
-    },
+    mantle::{nom::NomCodec, ops::OpId},
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
+
+// ==============================================================================
+// Memory Safety Limits
+// ==============================================================================
+// These limits are not designed to mimic system limits, but rather to prevent
+// unbounded memory usage from malicious inputs. They prevent memory
+// over-allocation attacks where untrusted input specifies allocation sizes.
+// Values are chosen to not limit normal operations while preventing excessive
+// memory usage (e.g., 68GB allocation). As an example, if the network currently
+// limits maximum transaction size to 1MiB, for memory safety limits we can
+// allow 4MiB.
+const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
+const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
+pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
+pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
+pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
 pub trait Operation<ValidationContext> {
     type ExecutionContext<'a>

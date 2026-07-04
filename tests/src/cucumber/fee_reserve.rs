@@ -58,6 +58,10 @@ impl ScenarioFeeState {
         self.reservations.clear_wallet(wallet_name);
     }
 
+    pub fn clear_reservations(&mut self) {
+        self.reservations.clear();
+    }
+
     #[must_use]
     pub fn wallet_name_for_group(group_key: &str) -> String {
         wallet_id_for_chain_source(
@@ -149,6 +153,10 @@ impl ScenarioFeeReservations {
 
     fn clear_wallet(&mut self, wallet_name: &str) {
         self.reserved_by_wallet.remove(wallet_name);
+    }
+
+    fn clear(&mut self) {
+        self.reserved_by_wallet.clear();
     }
 
     fn wallet_count(&self) -> usize {

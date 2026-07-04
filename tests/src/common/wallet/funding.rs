@@ -9,6 +9,10 @@ use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use lb_testing_framework::configs::wallet::WalletAccount;
 use lb_wallet::WalletError;
 
+/// Funding inputs available for one wallet transaction.
+///
+/// `sender` owns the transfer inputs. `fee_sponsor`, when present, contributes
+/// only fee inputs so tests can model sponsored-fee scenarios explicitly.
 pub struct WalletFundingResources {
     sender: WalletFundingSource,
     fee_sponsor: Option<WalletFundingSource>,
@@ -72,11 +76,15 @@ impl WalletFundingResources {
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+/// Fee-payment policy derived from the available funding resources.
 pub enum WalletFundingPolicy {
+    /// Sender pays both transfer value and fees.
     SenderPays,
+    /// Sender pays transfer value and another wallet pays fees.
     FeeSponsored,
 }
 
+/// Wallet account plus the UTXOs that may fund a transaction.
 pub struct WalletFundingSource {
     account: WalletAccount,
     funding_utxos: WalletFundingUtxos,
@@ -113,6 +121,7 @@ impl WalletFundingSource {
     }
 }
 
+/// UTXO set for one funding source, including the change public key.
 pub struct WalletFundingUtxos {
     change_pk: ZkPublicKey,
     available_utxos: Vec<Utxo>,
@@ -143,12 +152,14 @@ impl WalletFundingUtxos {
     }
 }
 
+/// Inputs selected to cover a target value.
 pub struct WalletSelectedInputs {
     inputs: Vec<Utxo>,
     total: u64,
 }
 
 impl WalletSelectedInputs {
+    /// Select largest UTXOs first until `target` is covered.
     pub fn largest_first_covering(mut utxos: Vec<Utxo>, target: u64) -> Result<Self, WalletError> {
         if target == 0 {
             return Ok(Self {
@@ -185,6 +196,7 @@ impl WalletSelectedInputs {
     }
 }
 
+/// Transfer operation together with the concrete input UTXOs selected for it.
 pub struct WalletFundedTransfer {
     transfer: TransferOp,
     selected_inputs: Vec<Utxo>,
@@ -202,6 +214,9 @@ impl WalletFundedTransfer {
     }
 }
 
+/// Build a transfer operation and change output from available UTXOs.
+///
+/// Inputs are selected largest-first, and change is returned to `change_pk`.
 pub fn build_wallet_funded_transfer(
     available_utxos: Vec<Utxo>,
     outputs: Vec<Note>,
@@ -231,11 +246,16 @@ pub fn build_wallet_funded_transfer(
     })
 }
 
+/// Result of trying to fund a transaction while iterating candidate inputs.
 pub enum WalletFundingOutcome<T> {
+    /// More inputs are needed before the transaction can be funded.
     NeedsMoreInputs,
+    /// The transaction is funded and carries the caller's result value.
     Funded(T),
 }
 
+/// Ordered input plan used when building transactions that may need multiple
+/// funding attempts.
 pub struct WalletFundingPlan {
     ordered_utxos: Vec<Utxo>,
     base_inputs: Vec<Utxo>,

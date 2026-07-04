@@ -9,11 +9,9 @@ use crate::{
     header::Header,
     mantle::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
-        encoding::{BoundedOutputs, Ops},
-        genesis_tx::{self, GenesisTx},
-        ledger::{Inputs, Outputs},
+        ledger::{BoundedOutputs, Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
-        tx::VerificationError,
+        transactions::{GenesisTx, Ops, VerificationError, genesis_tx},
     },
 };
 

@@ -5,15 +5,13 @@ use lb_utils::bounded_vec::BoundedError;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use super::{GasCalculator as _, GasConstants, MantleTx, Note, Op, Utxo};
 use crate::{
     mantle::{
-        NoteId,
-        encoding::BoundedUtxos,
+        GasCalculator as _, GasConstants, Note, NoteId, Op, Utxo,
         gas::{GasCost, GasOverflow},
-        ledger::{Inputs, Outputs},
+        ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
-        tx::MantleTxContext,
+        transactions::{MantleTx, MantleTxContext},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
 };
@@ -290,7 +288,7 @@ mod tests {
                 leader_claim::LeaderClaimOp,
                 sdp::{SDPDeclareOp, SDPWithdrawOp},
             },
-            tx::{GasPrices, MantleTxGasContext},
+            transactions::{GasPrices, MantleTxGasContext},
         },
         sdp::{DeclarationId, Locator, ProviderId, ServiceType},
     };
