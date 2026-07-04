@@ -1,9 +1,5 @@
 use lb_core::{
-    mantle::{
-        Op, SignedMantleTx,
-        gas::MainnetGasConstants,
-        transactions::{MantleTxBuilder, MantleTxContext},
-    },
+    mantle::{Op, SignedMantleTx, gas::GasCost, transactions::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_sdp_service::wallet::{
@@ -17,6 +13,15 @@ where
     Service: WalletServiceData,
 {
     api: WalletApi<Service, RuntimeServiceId>,
+}
+
+/// The paid fee is the tx's net balance (inputs minus outputs); it can exceed
+/// the gas cost once priority tips are introduced.
+fn tx_fee(funded: &MantleTxBuilder) -> Result<GasCost, SdpWalletError> {
+    let net_balance = funded.net_balance();
+    u64::try_from(net_balance)
+        .map(GasCost::new)
+        .map_err(|_| SdpWalletError::NegativeNetBalance(net_balance))
 }
 
 #[async_trait::async_trait]
@@ -37,7 +42,6 @@ where
     async fn declare_tx(
         &self,
         mut tx_builder: MantleTxBuilder,
-        context: MantleTxContext,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
@@ -50,7 +54,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>(&context)?;
+        let tx_fee = tx_fee(&funded)?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -71,7 +75,6 @@ where
     async fn withdraw_tx(
         &self,
         mut tx_builder: MantleTxBuilder,
-        context: MantleTxContext,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
@@ -84,7 +87,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>(&context)?;
+        let tx_fee = tx_fee(&funded)?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,
@@ -105,7 +108,6 @@ where
     async fn active_tx(
         &self,
         mut tx_builder: MantleTxBuilder,
-        context: MantleTxContext,
         active: ActiveMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError> {
@@ -118,7 +120,7 @@ where
             .map_err(|e| SdpWalletError::WalletApi(e.into()))?
             .response;
 
-        let tx_fee = funded.gas_cost::<MainnetGasConstants>(&context)?;
+        let tx_fee = tx_fee(&funded)?;
         if tx_fee > config.max_tx_fee {
             return Err(SdpWalletError::TxFeeExceedsMaxFee {
                 tx_fee,

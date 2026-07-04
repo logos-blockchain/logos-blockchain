@@ -20,10 +20,7 @@ use lb_chain_service::{
 use lb_core::{
     block::BlockNumber,
     header::HeaderId,
-    mantle::{
-        NoteId, SignedMantleTx,
-        transactions::{MantleTxBuilder, MantleTxContext},
-    },
+    mantle::{NoteId, SignedMantleTx, transactions::MantleTxBuilder},
     sdp::{
         ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,
         ServiceType, WithdrawMessage,
@@ -241,7 +238,6 @@ where
                         &wallet_adapter,
                         &mempool_adapter,
                         reply_channel,
-                        &chain_api,
                     )
                     .await;
                 }
@@ -393,17 +389,12 @@ where
         wallet_adapter: &WalletAdapter,
         mempool_adapter: &MempoolAdapter,
         reply_channel: oneshot::Sender<Result<DeclarationId, DynError>>,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
     ) {
-        let Ok(tx_context) = self.get_tx_context(None, chain_api).await else {
-            tracing::error!("Failed to get gas context for declaration");
-            return;
-        };
         let tx_builder = MantleTxBuilder::new();
         let declaration_id = declaration.id();
 
         let signed_tx = match wallet_adapter
-            .declare_tx(tx_builder, tx_context, *declaration, &self.wallet_config)
+            .declare_tx(tx_builder, *declaration, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
@@ -467,14 +458,10 @@ where
             metadata,
         };
 
-        let Ok(tx_context) = self.get_tx_context(None, chain_api).await else {
-            tracing::error!("Failed to get gas context for activity");
-            return;
-        };
         let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .active_tx(tx_builder, tx_context, active_message, &self.wallet_config)
+            .active_tx(tx_builder, active_message, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
@@ -525,19 +512,10 @@ where
             nonce,
         };
 
-        let Ok(tx_context) = self.get_tx_context(None, chain_api).await else {
-            tracing::error!("Failed to get gas context for withdrawal");
-            return;
-        };
         let tx_builder = MantleTxBuilder::new();
 
         let signed_tx = match wallet_adapter
-            .withdraw_tx(
-                tx_builder,
-                tx_context,
-                withdraw_message,
-                &self.wallet_config,
-            )
+            .withdraw_tx(tx_builder, withdraw_message, &self.wallet_config)
             .await
         {
             Ok(tx) => tx,
@@ -596,32 +574,5 @@ where
             .update(Some(SdpState::from(self.declaration_id)));
 
         Ok(())
-    }
-
-    async fn block_id_or_tip(
-        &self,
-        block_id: Option<HeaderId>,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
-    ) -> Result<HeaderId, DynError> {
-        if let Some(block_id) = block_id {
-            Ok(block_id)
-        } else {
-            let ChainServiceInfo {
-                cryptarchia_info, ..
-            } = chain_api.info().await?;
-            Ok(cryptarchia_info.tip)
-        }
-    }
-
-    async fn get_tx_context(
-        &self,
-        block_id: Option<HeaderId>,
-        chain_api: &CryptarchiaServiceApi<ChainService, RuntimeServiceId>,
-    ) -> Result<MantleTxContext, DynError> {
-        let block_id = self.block_id_or_tip(block_id, chain_api).await?;
-        let Some(ledger_state) = chain_api.get_ledger_state(block_id).await? else {
-            return Err(format!("Ledger state not found for block {block_id:?}").into());
-        };
-        Ok(ledger_state.tx_context())
     }
 }

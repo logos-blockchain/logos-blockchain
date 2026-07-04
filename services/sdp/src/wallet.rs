@@ -2,7 +2,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx,
         gas::{GasCost, GasOverflow},
-        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError},
+        transactions::{MantleTxBuilder, TxBuilderError},
     },
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
@@ -18,6 +18,8 @@ pub enum SdpWalletError {
     WalletApi(DynError),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
+    #[error("Funded transaction has negative net balance: {0}")]
+    NegativeNetBalance(i128),
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
     #[error(transparent)]
@@ -43,7 +45,6 @@ pub trait SdpWalletAdapter {
     async fn declare_tx(
         &self,
         tx_builder: MantleTxBuilder,
-        context: MantleTxContext,
         declaration: DeclarationMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError>;
@@ -51,7 +52,6 @@ pub trait SdpWalletAdapter {
     async fn active_tx(
         &self,
         tx_builder: MantleTxBuilder,
-        context: MantleTxContext,
         active_message: ActiveMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError>;
@@ -59,7 +59,6 @@ pub trait SdpWalletAdapter {
     async fn withdraw_tx(
         &self,
         tx_builder: MantleTxBuilder,
-        context: MantleTxContext,
         withdraw: WithdrawMessage,
         config: &SdpWalletConfig,
     ) -> Result<SignedMantleTx, SdpWalletError>;

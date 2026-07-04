@@ -26,7 +26,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction, TxHash, gas::MainnetGasConstants, ops::channel::ChannelId,
+        Op, SignedMantleTx, Transaction, TxHash, gas::GasCost, ops::channel::ChannelId,
         transactions::MantleTxBuilder,
     },
 };
@@ -975,7 +975,6 @@ where
             handle.relay::<WalletService>().await?,
         );
 
-        let tx_context = wallet.get_tx_context(None).await?;
         let tx_builder = MantleTxBuilder::new()
             .push_op(Op::ChannelDeposit(req.deposit))
             .map_err(|e| overwatch::DynError::from(e.to_string()))?;
@@ -991,7 +990,12 @@ where
             )
             .await?;
 
-        let tx_fee = funded_tx_builder.gas_cost::<MainnetGasConstants>(&tx_context)?;
+        // The paid fee is the tx's net balance (inputs minus outputs); it can
+        // exceed the gas cost once priority tips are introduced.
+        let net_balance = funded_tx_builder.net_balance();
+        let tx_fee = u64::try_from(net_balance).map(GasCost::new).map_err(|_| {
+            overwatch::DynError::from(format!("funded tx has negative net balance: {net_balance}"))
+        })?;
         if tx_fee > req.max_tx_fee {
             return Err(overwatch::DynError::from(format!(
                 "tx_fee({tx_fee}) exceeds max_tx_fee({})",

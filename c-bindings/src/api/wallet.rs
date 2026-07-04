@@ -6,7 +6,7 @@ use lb_core::{
     header::HeaderId as CoreHeaderId,
     mantle::{
         MantleTx, Note, NoteId as CoreNoteId, Op, OpProof, SignedMantleTx, Transaction,
-        gas::{GasCost, MainnetGasConstants},
+        gas::GasCost,
         ledger::{Inputs, Outputs},
         ops::{
             channel::{
@@ -944,12 +944,6 @@ pub(crate) fn channel_deposit_with_notes_sync(
 
         // Mirrors the node's `channel_deposit` handler: build -> fund -> check
         // fee -> sign -> submit.
-        let tx_context = api.get_tx_context(Some(tip)).await.map_err(|error| {
-            OperationStatus::error(
-                OperationStatusCode::DynError,
-                format!("Failed to get tx context: {error}"),
-            )
-        })?;
         let tx_builder = MantleTxBuilder::new()
             .push_op(Op::ChannelDeposit(deposit))
             .map_err(|error| {
@@ -976,14 +970,15 @@ pub(crate) fn channel_deposit_with_notes_sync(
                 )
             })?;
 
-        let tx_fee = funded_tx_builder
-            .gas_cost::<MainnetGasConstants>(&tx_context)
-            .map_err(|error| {
-                OperationStatus::error(
-                    OperationStatusCode::DynError,
-                    format!("Failed to compute gas cost: {error}"),
-                )
-            })?;
+        // The paid fee is the tx's net balance (inputs minus outputs); it can
+        // exceed the gas cost once priority tips are introduced.
+        let net_balance = funded_tx_builder.net_balance();
+        let tx_fee = u64::try_from(net_balance).map(GasCost::new).map_err(|_| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("funded tx has negative net balance: {net_balance}"),
+            )
+        })?;
         if tx_fee > max_tx_fee {
             return Err(OperationStatus::error(
                 OperationStatusCode::DynError,
