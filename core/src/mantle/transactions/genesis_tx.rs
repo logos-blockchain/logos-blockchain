@@ -282,7 +282,7 @@ impl CryptarchiaParameter {
     /// Encode the inscription into the deterministic ad-hoc binary format.
     ///
     /// Ad-hoc encoding format:
-    /// [u64-chain-id-bytes-len][utf8-encoded-chain-id][u64-genesis-time-as-unix-timestamp-in-seconds][256bit-epoch-nonce]
+    /// [u64-chain-id-bytes-len][utf8-encoded-chain-id][u32-genesis-time-as-unix-timestamp-in-seconds][256bit-epoch-nonce]
     ///
     /// All integers are little-endian. The epoch nonce is 32 raw bytes.
     #[must_use]

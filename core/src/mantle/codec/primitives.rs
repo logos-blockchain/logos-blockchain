@@ -7,7 +7,7 @@ mod decoding {
         bytes::complete::take,
         combinator::map_res,
         error::{Error, ErrorKind},
-        number::complete::le_u64,
+        number::complete::{le_u32, le_u64},
     };
     use time::OffsetDateTime;
 
@@ -26,13 +26,10 @@ mod decoding {
     }
 
     pub fn decode_unix_timestamp(input: &[u8]) -> IResult<&[u8], OffsetDateTime> {
-        // Timestamp = UINT64
-        map_res(decode_uint64, |ts| {
-            OffsetDateTime::from_unix_timestamp(
-                ts.try_into()
-                    .map_err(|_| Error::new(input, ErrorKind::Fail))?,
-            )
-            .map_err(|_| Error::new(input, ErrorKind::Fail))
+        // Timestamp = UINT32 seconds since the Unix epoch
+        map_res(le_u32, |ts| {
+            OffsetDateTime::from_unix_timestamp(i64::from(ts))
+                .map_err(|_| Error::new(input, ErrorKind::Fail))
         })
         .parse(input)
     }
@@ -50,11 +47,10 @@ mod encoding {
     }
 
     pub fn encode_unix_timestamp(ts: &OffsetDateTime) -> Vec<u8> {
-        encode_uint64(
-            ts.unix_timestamp()
-                .try_into()
-                .expect("timestamp fits in u64"),
-        )
+        u32::try_from(ts.unix_timestamp())
+            .expect("timestamp fits in u32")
+            .to_le_bytes()
+            .to_vec()
     }
 }
 
@@ -103,9 +99,10 @@ mod tests {
         assert_eq!(value, str);
         assert!(remaining.is_empty());
 
-        // Test Unix Timestamp
+        // Test Unix Timestamp (spec: u32 LE, 4 bytes)
         let ts = OffsetDateTime::now_utc();
         let data = encode_unix_timestamp(&ts);
+        assert_eq!(data.len(), 4);
         let (remaining, value) = decode_unix_timestamp(&data).unwrap();
         assert_eq!(value, ts.truncate_to_second());
         assert!(remaining.is_empty());
