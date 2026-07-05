@@ -38,12 +38,9 @@ use crate::cucumber::{
         display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
-    wallet::{
-        snapshot::{
-            restore_wallet_snapshot_if_present, save_wallet_snapshot_for_saved_nodes,
-            save_wallet_snapshot_from_saved_node_tips,
-        },
-        sync::current_wallet_states_for_wallets,
+    wallet::snapshot::{
+        restore_wallet_snapshot_if_present, save_wallet_snapshot_for_saved_nodes,
+        save_wallet_snapshot_from_saved_node_tips,
     },
     world::{
         ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
@@ -379,17 +376,18 @@ async fn catch_up_known_wallet_tracking_after_chain_sync(
     world: &mut CucumberWorld,
     step: &str,
 ) -> StepResult {
-    let wallets = world.wallet_info.values().cloned().collect::<Vec<_>>();
-    if wallets.is_empty() {
+    if world.wallet_info.is_empty() {
         return Ok(());
     }
 
     let started_at = Instant::now();
-    current_wallet_states_for_wallets(world, step, &wallets).await?;
+    world
+        .wait_for_wallet_scanner_catch_up(Duration::from_secs(30))
+        .await?;
 
     info!(
         target: TARGET,
-        "Wallet state refreshed after chain sync in {:.2?}",
+        "Wallet scanner caught up after chain sync for step `{step}` in {:.2?}",
         started_at.elapsed()
     );
 
@@ -636,7 +634,6 @@ pub async fn start_node(
             message: "No local cluster available".into(),
         });
     }
-    world.ensure_wallet_block_feed().await?;
     let startup_settings = get_startup_settings(world, initial_peers).inspect_err(|e| {
         warn!(target: TARGET, "Step `{step}` error: {e}");
     })?;
@@ -770,10 +767,17 @@ pub async fn start_node(
     if let Some(node_snapshot) = restored_node_snapshot
         && let Some(snapshot_name) = world.snapshot_restore_config.extensions.clone()
     {
-        restore_wallet_snapshot_if_present(&snapshot_name, &node_snapshot.node, world)
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{step}` error: {e}");
-            })?;
+        restore_wallet_snapshot_if_present(
+            &snapshot_name,
+            &node_snapshot.node,
+            node_name,
+            &client,
+            world,
+        )
+        .await
+        .inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
     }
 
     // All nodes are required to be network ready responsive, and bootstrap nodes
@@ -794,10 +798,6 @@ pub async fn start_node(
             warn!(target: TARGET, "Step `{step}` error: {e}");
         })?;
     }
-
-    world
-        .register_wallet_block_feed_source(node_name, client.clone())
-        .await?;
 
     if world.node_snapshot_on_startup.is_some() {
         match client.consensus_info().await {

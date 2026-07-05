@@ -533,7 +533,7 @@ async fn execute_non_stop_manual_command(
     }
 }
 
-async fn log_wallet_balances(
+pub async fn log_wallet_balances(
     world: &mut CucumberWorld,
     step: &str,
     wallets: Vec<WalletInfo>,

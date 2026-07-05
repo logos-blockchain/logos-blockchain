@@ -197,6 +197,8 @@ async fn step_start_nodes_with_wallet_resources(
         .await?;
     }
 
+    world.ensure_wallet_scanner_started().await?;
+
     Ok(())
 }
 
@@ -986,6 +988,7 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
         prepare_wallet_snapshot_from_active_node_tips(world).await?;
     }
 
+    world.reset_wallet_scanner_after_current_iteration().await;
     world.zone.clear();
     stop_active_manual_cluster(world)?;
 
@@ -1001,7 +1004,6 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
         info!(target: TARGET, "Stopping node '{node_name}'");
     }
     world.nodes_info.clear();
-    world.reset_wallet_block_feed();
 
     Ok(())
 }

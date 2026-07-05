@@ -6,10 +6,10 @@ use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
 use thiserror::Error;
 
 use super::{
-    NodeHttpWalletChainSource, WalletChainSource, WalletId, WalletUtxos,
+    NodeHttpWalletChainSource, WalletChainSource, WalletId,
     chain::state::{TrackedWalletKeys, TrackedWalletKeysError, WalletChainState},
 };
-use crate::common::wallet::WalletFundingSource;
+use crate::common::wallet::{WalletFundingSource, chain::state::WalletUtxos};
 
 #[derive(Debug, Error)]
 pub enum DirectWalletSourceError {

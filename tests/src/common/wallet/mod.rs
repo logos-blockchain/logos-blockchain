@@ -1,4 +1,5 @@
 mod ids;
+pub(crate) mod scanner;
 mod tracked;
 mod tracked_wallet;
 mod transaction;
@@ -8,16 +9,10 @@ mod funding;
 mod funding_from_chain;
 
 pub use chain::{
-    feed::{
-        WalletBlockFeedTracker, WalletBlockFeedTrackerError, WalletFeedTrackingBatch,
-        WalletFeedTrackingResult, WalletObservedBlock,
-    },
     source::{NodeHttpWalletChainSource, WalletChainSource},
-    state::{TrackedWalletKeys, TrackedWalletKeysError, WalletObservedOutput, WalletObservedSpend},
-    sync::{
-        WalletSyncResult, WalletSyncResults, WalletSyncTrackedKeysBySource,
-        WalletSyncTrackedKeysError, WalletSyncTrackedKeysForSource, WalletSyncedBlock,
-        WalletSyncedOutput, WalletSyncedSpend, WalletUtxos,
+    state::{
+        TrackedWalletKeys, TrackedWalletKeysError, WalletObservedOutput, WalletObservedSpend,
+        WalletUtxos,
     },
     tracked_keys::{TrackedWalletKeysBySource, TrackedWalletKeysForSource},
 };
