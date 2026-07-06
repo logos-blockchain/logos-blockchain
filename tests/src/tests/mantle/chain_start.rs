@@ -4,7 +4,7 @@ use lb_chain_service::{ChainServiceMode, State};
 use lb_core::{
     block::genesis::GenesisBlockBuilder,
     mantle::{
-        GenesisTx as _,
+        GenesisTime, GenesisTx as _,
         nom::NomEncode as _,
         ops::channel::inscribe::{Inscription, InscriptionOp},
     },
@@ -37,7 +37,12 @@ async fn delayed_chain_start() {
         ),
         NODE_COUNT,
         ManualNodeLayout::SelectNodeSeed(0),
-        move |config| Ok(test_config(config, genesis_time)),
+        move |config| {
+            Ok(test_config(
+                config,
+                genesis_time.try_into().expect("should fit in GenesisTime"),
+            ))
+        },
         Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
     )
     .await;
@@ -90,7 +95,7 @@ where
     }
 }
 
-fn test_config(mut config: RunConfig, genesis_time: OffsetDateTime) -> RunConfig {
+fn test_config(mut config: RunConfig, genesis_time: GenesisTime) -> RunConfig {
     let genesis_tx = config.deployment.cryptarchia.genesis_block.genesis_tx();
 
     let mut cryptarchia_parameter = genesis_tx.cryptarchia_parameter();
