@@ -1,7 +1,10 @@
 use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
 
 use backon::{ExponentialBuilder, Retryable as _};
-use futures::{StreamExt as _, future::join_all};
+use futures::{
+    StreamExt as _,
+    future::{join_all, try_join_all},
+};
 use lb_chain_service::{
     CryptarchiaInfo,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -226,13 +229,16 @@ where
             .await
             .inspect_err(|_| error!("no configured peer returned a tip this round"))?;
 
-        let mut unsynced = HashSet::new();
-        for tip in tips {
-            if !self.block_processor.has_processed_block(tip).await? {
-                unsynced.insert(tip);
-            }
-        }
-        Ok(unsynced)
+        Ok(try_join_all(tips.into_iter().map(async |tip| {
+            self.block_processor
+                .has_processed_block(tip)
+                .await
+                .map(|processed| (!processed).then_some(tip))
+        }))
+        .await?
+        .into_iter()
+        .flatten()
+        .collect())
     }
 }
 
