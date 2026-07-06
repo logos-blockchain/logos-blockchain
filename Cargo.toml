@@ -127,6 +127,7 @@ lb-cryptarchia-engine              = { default-features = false, package = "logo
 lb-cryptarchia-sync                = { default-features = false, package = "logos-blockchain-cryptarchia-sync", path = "./consensus/cryptarchia-sync" }
 lb-demo-archiver                   = { default-features = false, package = "logos-blockchain-demo-archiver", path = "./deployment/l2-sequencer-archival-demo/archiver" }
 lb-demo-sequencer                  = { default-features = false, package = "logos-blockchain-demo-sequencer", path = "./deployment/l2-sequencer-archival-demo/sequencer" }
+lb-faucet                          = { default-features = false, package = "logos-blockchain-faucet", path = "./deployment/faucet" }
 lb-groth16                         = { default-features = false, package = "logos-blockchain-groth16", path = "./zk/groth16" }
 lb-http-api-common                 = { default-features = false, package = "logos-blockchain-http-api-common", path = "./nodes/api-common" }
 lb-key-management-system-keys      = { default-features = false, package = "logos-blockchain-key-management-system-keys", path = "./kms/keys" }

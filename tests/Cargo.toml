@@ -22,6 +22,7 @@ lb-utxotree = { workspace = true }
 
 [dependencies]
 async-trait                      = { workspace = true }
+axum                             = { features = ["http1", "json", "tokio"], workspace = true }
 bincode                          = { workspace = true }
 cucumber                         = { features = ["macros", "output-junit"], workspace = true }
 derivative                       = { workspace = true }
@@ -34,6 +35,7 @@ lb-chain-service                 = { workspace = true }
 lb-common-http-client            = { workspace = true }
 lb-config                        = { workspace = true }
 lb-core                          = { workspace = true }
+lb-faucet                        = { workspace = true }
 lb-groth16                       = { workspace = true }
 lb-http-api-common               = { workspace = true }
 lb-key-management-system-service = { workspace = true }
@@ -94,6 +96,10 @@ path = "src/tests/mantle/chain_start.rs"
 [[test]]
 name = "test_mantle_channel"
 path = "src/tests/mantle/channel.rs"
+
+[[test]]
+name = "test_mantle_faucet"
+path = "src/tests/mantle/faucet.rs"
 
 [[test]]
 name              = "test_mantle_sdp_ops"
