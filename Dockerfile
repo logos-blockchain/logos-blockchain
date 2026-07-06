@@ -20,7 +20,6 @@ COPY . .
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
-    bash \
     && rm -rf /var/lib/apt/lists/*
 
 RUN scripts/setup-logos-core.sh "$CORE_VERSION" "$(uname -m)-linux"
