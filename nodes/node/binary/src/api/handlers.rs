@@ -35,6 +35,7 @@ use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
         channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+        mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
             claimable_vouchers::{
@@ -1345,6 +1346,59 @@ where
         Ok(Some(events)) => (StatusCode::OK, Json(events)).into_response(),
         Ok(None) => (StatusCode::NOT_FOUND, "Block not found").into_response(),
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct GasPricesQuery {
+    tip: Option<HeaderId>,
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_GAS_PRICES,
+    responses(
+        (status = 200, description = "Get the gas prices from the ledger state at the tip"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn get_gas_prices<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+    Query(query): Query<GasPricesQuery>,
+) -> Response
+where
+    RuntimeServiceId:
+        AsServiceId<Cryptarchia<RuntimeServiceId>> + Debug + Sync + Display + Send + 'static,
+{
+    let relay = match get_relay_or_500(&handle).await {
+        Ok(relay) => relay,
+        Err(error_response) => return error_response,
+    };
+    let chain_api =
+        CryptarchiaServiceApi::<Cryptarchia<RuntimeServiceId>, RuntimeServiceId>::new(relay);
+
+    let block_id = match query.tip {
+        Some(tip) => tip,
+        None => match consensus::cryptarchia_info::<RuntimeServiceId>(&handle).await {
+            Ok(info) => info.cryptarchia_info.tip,
+            Err(error) => {
+                return (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response();
+            }
+        },
+    };
+
+    match chain_api.get_ledger_state(block_id).await {
+        Ok(Some(ledger_state)) => {
+            let gas_prices = ledger_state.get_gas_prices();
+            Json(GasPricesResponseBody {
+                tip: block_id,
+                execution_base_gas_price: gas_prices.execution_base_gas_price,
+                storage_gas_price: gas_prices.storage_gas_price,
+            })
+            .into_response()
+        }
+        Ok(None) => (StatusCode::NOT_FOUND, "Ledger state not found for block").into_response(),
+        Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
     }
 }
 
