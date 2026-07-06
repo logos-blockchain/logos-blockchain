@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        CryptarchiaParameter, MantleTx, Note, NoteId, OpProof, Utxo,
+        CryptarchiaParameter, GenesisTime, MantleTx, Note, NoteId, OpProof, Utxo,
         nom::NomEncode as _,
         ops::{
             Op, OpId as _,
@@ -85,10 +85,14 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
-static GENESIS_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
+static GENESIS_TIME: OnceLock<GenesisTime> = OnceLock::new();
 
-fn get_or_init_genesis_time() -> OffsetDateTime {
-    *GENESIS_TIME.get_or_init(OffsetDateTime::now_utc)
+fn get_or_init_genesis_time() -> GenesisTime {
+    *GENESIS_TIME.get_or_init(|| {
+        OffsetDateTime::now_utc()
+            .try_into()
+            .expect("should fit in GenesisTime")
+    })
 }
 
 pub struct BaseConsensusMaterial {
