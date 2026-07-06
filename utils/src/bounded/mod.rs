@@ -13,6 +13,7 @@
 //! can still reuse the bound-checking logic via [`Bounded::check_len`] and
 //! [`Bounded::new_unchecked`].
 
+pub mod multiaddr;
 pub mod string;
 pub mod vec;
 
@@ -44,18 +45,6 @@ pub enum BoundedError {
 /// [`Bounded::check_len`] + [`Bounded::new_unchecked`].
 pub trait BoundedLen {
     fn bounded_len(&self) -> usize;
-}
-
-impl<T> BoundedLen for Vec<T> {
-    fn bounded_len(&self) -> usize {
-        self.len()
-    }
-}
-
-impl BoundedLen for String {
-    fn bounded_len(&self) -> usize {
-        self.len()
-    }
 }
 
 /// A newtype over `T` whose [measured length](BoundedLen) is statically

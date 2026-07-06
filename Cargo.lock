@@ -5216,6 +5216,7 @@ dependencies = [
  "futures",
  "humantime",
  "logos-blockchain-log-targets",
+ "multiaddr",
  "nistrs",
  "overwatch",
  "rand 0.8.6",

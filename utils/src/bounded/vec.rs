@@ -4,7 +4,13 @@ use core::{
 };
 use std::{ops::DerefMut, str::FromStr, vec::IntoIter};
 
-use crate::bounded::{Bounded, BoundedError};
+use crate::bounded::{Bounded, BoundedError, BoundedLen};
+
+impl<T> BoundedLen for Vec<T> {
+    fn bounded_len(&self) -> usize {
+        self.len()
+    }
+}
 
 /// `Vec<T>` whose length is statically enforced to be in the range `[MIN,
 /// MAX]`.

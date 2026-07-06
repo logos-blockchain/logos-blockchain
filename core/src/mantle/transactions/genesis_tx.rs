@@ -275,7 +275,7 @@ impl<'de> Deserialize<'de> for GenesisTx {
     }
 }
 
-pub const MAX_CHAIN_ID_SIZE: usize = u64::MAX as usize;
+pub const MAX_CHAIN_ID_SIZE: usize = u8::MAX as usize;
 type ChainIdBoundedVec = BoundedVec<u8, 1, MAX_CHAIN_ID_SIZE>;
 /// A chain ID is a UTF-8 string whose byte length is bounded to
 /// `[1, MAX_CHAIN_ID_SIZE]`. The length invariant is owned by [`Bounded`];

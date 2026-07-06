@@ -20,6 +20,7 @@ const-hex      = { features = ["alloc"], workspace = true }
 futures        = { optional = true, workspace = true }
 humantime      = { optional = true, workspace = true }
 lb-log-targets = { workspace = true }
+multiaddr      = { workspace = true }
 overwatch      = { workspace = true }
 rand           = { features = ["getrandom"], workspace = true }
 serde          = { features = ["alloc", "derive"], workspace = true }

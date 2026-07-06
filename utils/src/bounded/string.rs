@@ -1,4 +1,10 @@
-use crate::bounded::{Bounded, BoundedError};
+use crate::bounded::{Bounded, BoundedError, BoundedLen};
+
+impl BoundedLen for String {
+    fn bounded_len(&self) -> usize {
+        self.len()
+    }
+}
 
 /// A `String` whose byte length is statically enforced to be in the range
 /// `[MIN, MAX]`.
@@ -8,7 +14,7 @@ use crate::bounded::{Bounded, BoundedError};
 /// string-flavoured conversions live here.
 pub type BoundedString<const MIN: usize, const MAX: usize> = Bounded<String, MIN, MAX>;
 
-impl<const MIN: usize, const MAX: usize> Bounded<String, MIN, MAX> {
+impl<const MIN: usize, const MAX: usize> BoundedString<MIN, MAX> {
     /// Length in bytes (not `char`s), matching `str`/`String` semantics.
     #[must_use]
     pub const fn len(&self) -> usize {
@@ -26,7 +32,7 @@ impl<const MIN: usize, const MAX: usize> Bounded<String, MIN, MAX> {
     }
 }
 
-impl<const MIN: usize, const MAX: usize> TryFrom<String> for Bounded<String, MIN, MAX> {
+impl<const MIN: usize, const MAX: usize> TryFrom<String> for BoundedString<MIN, MAX> {
     type Error = BoundedError;
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
@@ -34,7 +40,7 @@ impl<const MIN: usize, const MAX: usize> TryFrom<String> for Bounded<String, MIN
     }
 }
 
-impl<const MIN: usize, const MAX: usize> TryFrom<&str> for Bounded<String, MIN, MAX> {
+impl<const MIN: usize, const MAX: usize> TryFrom<&str> for BoundedString<MIN, MAX> {
     type Error = BoundedError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {

@@ -107,7 +107,7 @@ pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 /// `Multiaddr` is foreign to `lb_utils`, so it cannot implement `BoundedLen`;
 /// the byte length is measured here and validated through the shared
 /// [`Bounded::check_len`] gate.
-type BoundedMultiaddr = Bounded<Multiaddr, 0, MAX_LOCATOR_BYTE_SIZE>;
+type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LOCATOR_BYTE_SIZE>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "Multiaddr")]
@@ -116,7 +116,7 @@ pub struct Locator(BoundedMultiaddr);
 impl Locator {
     #[must_use]
     pub const fn new_unchecked(addr: Multiaddr) -> Self {
-        Self(Bounded::new_unchecked(addr))
+        Self(BoundedMultiaddr::new_unchecked(addr))
     }
 
     #[must_use]
@@ -175,7 +175,7 @@ impl TryFrom<Multiaddr> for Locator {
             }
         }
 
-        Ok(Self(Bounded::new_unchecked(value)))
+        Ok(Self(BoundedMultiaddr::new_unchecked(value)))
     }
 }
 
