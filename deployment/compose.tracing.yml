@@ -40,7 +40,6 @@ services:
       - "24318:4318"
     volumes:
       - ./tracing/loki.yaml:/etc/loki/local-config.yaml
-      - loki-data:/loki
     command: -config.file=/etc/loki/local-config.yaml
 
   prometheus:
@@ -48,7 +47,6 @@ services:
     image: docker.io/prom/prometheus:v3.0.1
     volumes:
       - ./tracing/prometheus.yaml:/etc/prometheus/prometheus.yml:z
-      - prometheus-data:/prometheus
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.retention.time=7d
@@ -59,5 +57,3 @@ services:
 
 volumes:
   grafana-data:
-  prometheus-data:
-  loki-data:
