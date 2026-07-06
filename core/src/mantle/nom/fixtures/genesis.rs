@@ -11,7 +11,8 @@ nom_wire_fixtures!(
 
 nom_wire_fixtures!(
     GenesisTime,
-    GenesisTime::new(1000) => "e8030000"
+    GenesisTime::new(1000) => "e8030000",
+    GenesisTime::new(u32::MAX) => "ffffffff"
 );
 
 nom_wire_fixtures!(

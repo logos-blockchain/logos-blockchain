@@ -792,6 +792,24 @@ mod tests {
     }
 
     #[test]
+    fn test_genesis_time_boundaries() {
+        // The u32::MAX unix timestamp is the largest value `GenesisTime` accepts.
+        let max = OffsetDateTime::from_unix_timestamp(i64::from(u32::MAX)).unwrap();
+        assert_eq!(
+            GenesisTime::try_from(max).unwrap(),
+            GenesisTime::new(u32::MAX)
+        );
+
+        // One second past u32::MAX must be rejected.
+        let overflow = OffsetDateTime::from_unix_timestamp(i64::from(u32::MAX) + 1).unwrap();
+        assert!(GenesisTime::try_from(overflow).is_err());
+
+        // Pre-epoch (negative) must be rejected.
+        let pre_epoch = OffsetDateTime::from_unix_timestamp(-1).unwrap();
+        assert!(GenesisTime::try_from(pre_epoch).is_err());
+    }
+
+    #[test]
     fn test_cryptarchia_parameter_decode_errors() {
         // Too short
         assert!(matches!(
