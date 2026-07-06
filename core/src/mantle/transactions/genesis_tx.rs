@@ -443,8 +443,8 @@ impl NomDecode for ChainId {
     }
 }
 
-/// Time at which the chain should start. Bounded by u32 since a far-future
-/// value isn't needed.
+/// Time at which the chain should start. u32 suffices: we only need the
+/// positive half of the i64 Unix timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, NomCodec)]
 pub struct GenesisTime(u32);
 
