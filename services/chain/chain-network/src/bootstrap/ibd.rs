@@ -247,6 +247,9 @@ where
 ///
 /// Returns `Ok` with the first non-empty batch, or [`AllPeersFailed`] once
 /// every retry attempt produced nothing.
+///
+/// Retry lives at this batch level (not per-fetch), so a slow peer's backoff
+/// doesn't block IBD from moving on to fetch next tips from the fast peers.
 async fn fetch_tips_with_retry<NetAdapter, RuntimeServiceId>(
     network: &NetAdapter,
     config: &IbdConfig<NetAdapter::PeerId>,
