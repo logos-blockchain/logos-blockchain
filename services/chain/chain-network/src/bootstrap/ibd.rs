@@ -250,6 +250,8 @@ where
     NetAdapter::PeerId: Copy + Clone + Eq + Hash + Debug + Send + Sync,
     RuntimeServiceId: Sync,
 {
+    // A closure is needed for `backon::Retryable.retry()` that spawns a fresh
+    // future per attempt.
     (|| fetch_tips(network, config.peers.iter().copied()))
         .retry(
             ExponentialBuilder::default()
