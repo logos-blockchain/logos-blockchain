@@ -225,7 +225,7 @@ impl MantleTxBuilder {
         &self,
         context: &MantleTxContext,
     ) -> Result<GasCost, TxBuilderError> {
-        let build = self.clone().build()?;
+        let build = self.draft_tx()?;
         Ok(build.total_gas_cost::<G>(&context.gas_context)?)
     }
 
@@ -269,9 +269,23 @@ impl MantleTxBuilder {
         &self.channel_multi_sig_proofs
     }
 
-    // TODO: Change this to a `Result` if genesis tx already contains max number of
-    // ops.
-    pub fn build(mut self) -> Result<MantleTx, TxBuilderError> {
+    /// Build the transaction, rejecting a negative net balance — such a
+    /// transaction spends more than it provides and the ledger would refuse
+    /// it anyway.
+    pub fn build(self) -> Result<MantleTx, TxBuilderError> {
+        let _ = self.tx_fee()?;
+        self.assemble()
+    }
+
+    /// Assemble the current — possibly unbalanced — transaction for
+    /// inspection or gas estimation. Unlike [`Self::build`], performs no
+    /// balance check.
+    pub fn draft_tx(&self) -> Result<MantleTx, TxBuilderError> {
+        self.clone().assemble()
+    }
+
+    /// Append the pending transfer and produce the final [`MantleTx`].
+    fn assemble(mut self) -> Result<MantleTx, TxBuilderError> {
         if !self.pending_transfer.is_empty() {
             self.mantle_tx
                 .0
@@ -422,6 +436,23 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn build_rejects_negative_net_balance() {
+        // Outputs without inputs — spends more than it provides.
+        let builder = MantleTxBuilder::new()
+            .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
+            .unwrap();
+
+        assert!(matches!(
+            builder.clone().build(),
+            Err(TxBuilderError::NegativeNetBalance { net_balance: -40 })
+        ));
+
+        // The draft view of the same builder is still available for
+        // inspection and gas estimation.
+        assert!(builder.draft_tx().is_ok());
     }
 
     #[test]
