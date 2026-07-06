@@ -7,13 +7,20 @@ use nom::{
 
 use crate::{
     mantle::{
-        MantleTx, Op, OpProof, SignedMantleTx,
+        MantleTx, Op, SignedMantleTx,
         nom::{NomDecode as _, NomEncode as _},
         ops::codec::{decode_ops_proofs, encode_ops_proofs},
         transactions::{MantleTxGasContext, Ops},
     },
     proofs::channel_multi_sig_proof::codec::calculate_channel_multi_sig_proof_byte_size,
 };
+
+pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
+    // MantleTx = Ops ExecutionGasPrice StorageGasPrice
+    let (input, ops) = Ops::decode(input)?;
+
+    Ok((input, MantleTx(ops)))
+}
 
 pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
     // SignedMantleTx = MantleTx OpsProofs
@@ -26,37 +33,6 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
     Ok((input, signed_tx))
 }
 
-pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
-    // MantleTx = Ops ExecutionGasPrice StorageGasPrice
-    let (input, ops) = Ops::decode(input)?;
-
-    Ok((input, MantleTx(ops)))
-}
-
-// ==============================================================================
-// Binary Encoders
-// ==============================================================================
-
-// Check if proofs correspond to ops
-#[must_use]
-pub const fn proof_matches(proof: &OpProof, op: &Op) -> bool {
-    matches!(
-        (proof, op),
-        (OpProof::Ed25519Sig(_), Op::ChannelInscribe(_))
-            | (
-                OpProof::ChannelMultiSigProof(_),
-                Op::ChannelWithdraw(_) | Op::ChannelConfig(_)
-            )
-            | (OpProof::ZkAndEd25519Sigs { .. }, Op::SDPDeclare(_))
-            | (
-                OpProof::ZkSig(_),
-                Op::SDPWithdraw(_) | Op::SDPActive(_) | Op::Transfer(_) | Op::ChannelDeposit(_),
-            )
-            | (OpProof::PoC(_), Op::LeaderClaim(_))
-    )
-}
-
-/// Encode top-level transactions
 #[must_use]
 pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
     tx.ops().encode()
@@ -127,12 +103,11 @@ mod tests {
     use lb_utils::bounded_vec::BoundedError;
     use multiaddr::Multiaddr;
     use num_bigint::BigUint;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId, Transaction as _, Utxo,
+            Note, NoteId, OpProof, Transaction as _, Utxo,
             ledger::{BoundedInputs, BoundedOutputs, Inputs, Outputs},
             ops::{
                 channel::{
@@ -182,40 +157,6 @@ mod tests {
                 }
             );
         }
-    }
-
-    #[test]
-    fn test_encode_decode_primitives() {
-        // Test UINT64
-        let data = 42u64.encode();
-        let (remaining, value) = u64::decode(&data).unwrap();
-        assert_eq!(value, 42u64);
-        assert!(remaining.is_empty());
-
-        // Test UINT32
-        let data = 123u32.encode();
-        let (remaining, value) = u32::decode(&data).unwrap();
-        assert_eq!(value, 123u32);
-        assert!(remaining.is_empty());
-
-        // Test Byte
-        let data = 0xABu8.encode();
-        let (remaining, value) = u8::decode(&data).unwrap();
-        assert_eq!(value, 0xAB);
-        assert!(remaining.is_empty());
-
-        // Test Hash32
-        let data = [0x42u8; 32].encode();
-        let (remaining, value) = <[u8; 32]>::decode(&data).unwrap();
-        assert_eq!(value, [0x42u8; 32]);
-        assert!(remaining.is_empty());
-
-        // Test Unix Timestamp
-        let ts = OffsetDateTime::now_utc();
-        let data = ts.encode();
-        let (remaining, value) = OffsetDateTime::decode(&data).unwrap();
-        assert_eq!(value, ts.truncate_to_second());
-        assert!(remaining.is_empty());
     }
 
     #[test]
