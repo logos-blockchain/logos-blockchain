@@ -658,10 +658,11 @@ where
         let mut chain_start_timer: Option<Pin<Box<tokio::time::Sleep>>> = None;
 
         if let StartingState::Genesis { genesis_block } = starting_state {
-            let genesis_time = genesis_block
+            let genesis_time: OffsetDateTime = genesis_block
                 .genesis_tx()
                 .cryptarchia_parameter()
-                .genesis_time;
+                .genesis_time
+                .into();
             let now = OffsetDateTime::now_utc();
 
             if genesis_time > now {

@@ -13,7 +13,7 @@ pub use ledger::{Note, NoteId, Utxo, Value};
 pub use ops::{Op, OpProof};
 use ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp};
 use thiserror::Error;
-pub use transactions::CryptarchiaParameter;
+pub use transactions::{CryptarchiaParameter, GenesisTime};
 
 pub use crate::mantle::transactions::{MantleTx, SignedMantleTx, TxHash, VerificationError};
 use crate::mantle::{

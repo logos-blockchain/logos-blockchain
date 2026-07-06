@@ -2,7 +2,7 @@ use lb_config::consensus::{EMPTY_CHANNEL_ID, EMPTY_ED25519_PUBLIC_KEY};
 use lb_core::{
     crypto::ZkDigest,
     mantle::{
-        CryptarchiaParameter,
+        CryptarchiaParameter, GenesisTime,
         nom::NomEncode as _,
         ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
         transactions::genesis_tx::ChainId,
@@ -41,6 +41,8 @@ pub fn inscribe<D: ZkDigest>(
     }
 
     let genesis_nonce_fr = hasher.finalize();
+
+    let genesis_time = GenesisTime::try_from(genesis_time).expect("Invalid genesis time");
 
     let params = CryptarchiaParameter {
         chain_id,
