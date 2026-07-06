@@ -1,8 +1,8 @@
 use lb_core::mantle::{
     MantleTx, SignedMantleTx,
     channel::{SlotTimeframe, SlotTimeout},
-    encoding::Ops,
     ops::channel::{MsgId, config::Keys, inscribe::Inscription},
+    transactions::Ops,
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 

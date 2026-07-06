@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use lb_core::mantle::{
     AuthenticatedMantleTx as _, NoteId, Op, OpProof, SignedMantleTx, TxHash,
-    gas::MainnetGasConstants, tx_builder::MantleTxBuilder,
+    gas::MainnetGasConstants, transactions::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::ZkKey;
 

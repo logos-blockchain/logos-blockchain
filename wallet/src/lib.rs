@@ -21,7 +21,7 @@ use lb_core::{
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
-        tx_builder::MantleTxBuilder,
+        transactions::builder::MantleTxBuilder,
     },
     proofs::leader_proof::LeaderProof as _,
 };
@@ -756,7 +756,7 @@ mod tests {
             gas::MainnetGasConstants as Gas,
             ledger::{Inputs, Outputs},
             ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
-            tx::{GasPrices, MantleTxContext, MantleTxGasContext},
+            transactions::{GasPrices, MantleTxContext, MantleTxGasContext},
         },
         sdp::{MinStake, ServiceParameters, ServiceType},
     };

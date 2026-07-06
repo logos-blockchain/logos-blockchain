@@ -3,9 +3,9 @@ use lb_core::{
     crypto::ZkDigest,
     mantle::{
         CryptarchiaParameter,
-        genesis_tx::ChainId,
         nom::NomEncode as _,
         ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+        transactions::genesis_tx::ChainId,
     },
 };
 use lb_groth16::{FrBytes, fr_from_bytes};

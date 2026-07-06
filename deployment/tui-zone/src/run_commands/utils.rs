@@ -8,7 +8,6 @@ use chrono::{DateTime, Utc};
 use lb_core::mantle::{
     MantleTx, Note, SignedMantleTx, TxHash, Utxo, Value,
     channel::ChannelState,
-    encoding::{decode_mantle_tx, decode_signed_mantle_tx},
     ledger::{Inputs, Outputs},
     ops::{
         channel::{
@@ -17,6 +16,7 @@ use lb_core::mantle::{
         },
         transfer::TransferOp,
     },
+    transactions::codec::{decode_mantle_tx, decode_signed_mantle_tx},
 };
 use lb_key_management_system_service::keys::{
     ED25519_SECRET_KEY_SIZE, Ed25519Key, Ed25519PublicKey, ZkPublicKey,

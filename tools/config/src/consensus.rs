@@ -5,8 +5,6 @@ use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
         CryptarchiaParameter, MantleTx, Note, NoteId, OpProof, Utxo,
-        encoding::Ops,
-        genesis_tx::GenesisTx,
         nom::NomEncode as _,
         ops::{
             Op, OpId as _,
@@ -16,6 +14,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
+        transactions::{GenesisTx, Ops},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };

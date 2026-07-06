@@ -37,6 +37,10 @@ pub enum CucumberWalletBlockFeedError {
     SourceLockPoisoned,
 }
 
+/// Runtime wallet feed used by Cucumber scenarios.
+///
+/// It observes blocks from dynamically registered node sources, updates tracked
+/// wallet state, and records transaction hashes seen in chain blocks.
 pub struct CucumberWalletBlockFeed {
     provider: DynamicWalletBlockFeedSources,
     feed: BlockFeed,
@@ -45,6 +49,10 @@ pub struct CucumberWalletBlockFeed {
 }
 
 impl CucumberWalletBlockFeed {
+    /// Start the wallet block feed and its collectors.
+    ///
+    /// Sources are registered later as nodes start, so the feed can survive
+    /// manual-cluster restarts and snapshot restore flows.
     pub async fn start(
         wallets: SharedTrackedWallets,
         tracker: SharedWalletBlockFeedTracker,
@@ -80,10 +88,12 @@ impl CucumberWalletBlockFeed {
     }
 
     #[must_use]
+    /// Return a handle to the underlying block feed.
     pub fn feed(&self) -> BlockFeed {
         self.feed.clone()
     }
 
+    /// Add or replace a node source observed by the wallet feed.
     pub fn register_source(
         &self,
         node_name: &str,

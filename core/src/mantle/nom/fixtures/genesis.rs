@@ -3,7 +3,7 @@ use lb_core_macros::nom_wire_fixtures;
 use lb_groth16::Fr;
 use time::OffsetDateTime;
 
-use crate::mantle::genesis_tx::{ChainId, CryptarchiaParameter};
+use crate::mantle::transactions::genesis_tx::{ChainId, CryptarchiaParameter};
 
 nom_wire_fixtures!(
     ChainId,

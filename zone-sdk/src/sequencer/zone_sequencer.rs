@@ -13,14 +13,13 @@ use lb_core::{
     mantle::{
         MantleTx, Op, SignedMantleTx, Transaction as _,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        encoding::Ops,
         ops::channel::{
             ChannelId, MsgId,
             config::Keys,
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
-        tx::TxHash,
+        transactions::{Ops, TxHash},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};

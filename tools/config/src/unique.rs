@@ -10,7 +10,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use lb_core::mantle::genesis_tx::ChainId;
+use lb_core::mantle::transactions::genesis_tx::ChainId;
 use lb_utils::net::{get_available_tcp_port, get_available_udp_port};
 
 const PORT_BLOCK_SIZE: u16 = 256;
