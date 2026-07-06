@@ -17,7 +17,7 @@ impl BoundedLen for Multiaddr {
 pub type BoundedMultiaddr<const MIN: usize, const MAX: usize> = Bounded<Multiaddr, MIN, MAX>;
 
 impl<const MIN: usize, const MAX: usize> BoundedMultiaddr<MIN, MAX> {
-    /// Length in bytes (not `char`s), matching `str`/`String` semantics.
+    /// Length in bytes (not `char`s), matching `Multiaddr` semantics.
     #[must_use]
     pub fn len(&self) -> usize {
         self.as_inner().len()

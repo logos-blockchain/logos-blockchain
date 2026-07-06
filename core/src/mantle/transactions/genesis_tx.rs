@@ -352,10 +352,10 @@ impl<const MIN: usize, const MAX: usize> TryFrom<BoundedVec<u8, MIN, MAX>> for C
     fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
         const {
             assert!(MIN >= 1, "Min size cannot be less than 1.");
-            // No need to assert `MAX <= MAX_CHAIN_ID_SIZE` because
-            // `MAX_CHAIN_ID_SIZE` == `u64::MAX` so comparison is
-            // always true, and the compiles throws an error because
-            // of that.
+            assert!(
+                MAX <= MAX_CHAIN_ID_SIZE,
+                "Max size cannot be greater than MAX_CHAIN_ID_SIZE."
+            );
         }
         Self::try_from(value.into_inner())
     }
@@ -748,9 +748,19 @@ mod tests {
 
     #[test]
     fn test_cryptarchia_parameter_decode_errors() {
-        // Too short
+        // A single byte is a complete 1-byte chain_id length prefix of 0, which
+        // is below the chain_id minimum length of 1.
         assert!(matches!(
             CryptarchiaParameter::decode(&[0; 1]).unwrap_err(),
+            nom::Err::Error(NomError {
+                code: ErrorKind::LengthValue,
+                ..
+            })
+        ));
+
+        // Genuinely too short: not even the length prefix can be read.
+        assert!(matches!(
+            CryptarchiaParameter::decode(&[]).unwrap_err(),
             nom::Err::Error(NomError {
                 code: ErrorKind::Eof,
                 ..
@@ -768,9 +778,10 @@ mod tests {
             })
         ));
 
-        // Invalid UTF-8 chain_id
+        // Invalid UTF-8 chain_id. The chain_id bytes begin right after its
+        // single-byte length prefix, so index 1 is the first UTF-8 byte.
         let mut encoded = cryptarchia_param().encode();
-        encoded[8] = 0xFF; // corrupt the UTF-8 byte
+        encoded[1] = 0xFF; // corrupt the first chain_id UTF-8 byte
         assert!(matches!(
             CryptarchiaParameter::decode(&encoded).unwrap_err(),
             nom::Err::Error(NomError {

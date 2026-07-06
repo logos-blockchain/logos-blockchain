@@ -105,6 +105,7 @@ mod tests {
     #[test]
     fn len_measures_bytes_not_chars() {
         // "é" is two UTF-8 bytes, so "éé" is 4 bytes — within [3, 5].
+        #[expect(clippy::non_ascii_literal, reason = "Test case.")]
         let s = Bounded3To5::try_from("éé").unwrap();
         assert_eq!(s.len(), 4);
     }

@@ -11,7 +11,7 @@ use blake2::{Blake2b, Digest as _};
 use bytes::Bytes;
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded::{Bounded, BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
+use lb_utils::bounded::{BoundedVec, NonEmptyBoundedVec, UpperBoundedVec};
 use multiaddr::{Multiaddr, Protocol};
 use nom::{
     IResult,

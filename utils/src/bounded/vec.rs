@@ -97,7 +97,7 @@ impl<T, const MIN: usize, const MAX: usize> Bounded<Vec<T>, MIN, MAX> {
         Ok(self.0.remove(index))
     }
 
-    pub fn iter_mut(&mut self) -> core::slice::IterMut<'_, T> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, T> {
         self.0.iter_mut()
     }
 }
@@ -179,8 +179,8 @@ where
     }
 }
 
-impl<T, const MIN: usize, const MAX: usize> From<Bounded<Vec<T>, MIN, MAX>> for Vec<T> {
-    fn from(value: Bounded<Vec<T>, MIN, MAX>) -> Self {
+impl<T, const MIN: usize, const MAX: usize> From<Bounded<Self, MIN, MAX>> for Vec<T> {
+    fn from(value: Bounded<Self, MIN, MAX>) -> Self {
         value.into_inner()
     }
 }
