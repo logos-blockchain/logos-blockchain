@@ -214,6 +214,10 @@ impl MantleTxBuilder {
     /// The fee this transaction actually pays: its net balance (inputs minus
     /// outputs). This can exceed the raw gas cost once priority tips are
     /// introduced. Only meaningful once the builder is funded/balanced.
+    ///
+    /// Only accounts for builder-managed value (ledger inputs and the pending
+    /// transfer). `Transfer` ops pushed directly carry note ids whose values
+    /// are unknown to the builder and are not priced.
     pub fn tx_fee(&self) -> Result<GasCost, TxBuilderError> {
         let net_balance = self.net_balance();
         u64::try_from(net_balance)
@@ -269,11 +273,21 @@ impl MantleTxBuilder {
         &self.channel_multi_sig_proofs
     }
 
-    /// Build the transaction, rejecting a negative net balance — such a
-    /// transaction spends more than it provides and the ledger would refuse
-    /// it anyway.
+    /// Build the transaction, rejecting any transaction the builder can
+    /// prove is underfunded (negative net balance).
+    ///
+    /// `Transfer` ops pushed directly carry note ids whose values are
+    /// unknown to the builder, so such transactions cannot be priced
+    /// client-side — they are built as-is and left to ledger validation.
     pub fn build(self) -> Result<MantleTx, TxBuilderError> {
-        let _ = self.tx_fee()?;
+        let has_pushed_transfers = self
+            .mantle_tx
+            .ops()
+            .iter()
+            .any(|op| matches!(op, Op::Transfer(_)));
+        if !has_pushed_transfers {
+            let _ = self.tx_fee()?;
+        }
         self.assemble()
     }
 
@@ -453,6 +467,22 @@ mod tests {
         // The draft view of the same builder is still available for
         // inspection and gas estimation.
         assert!(builder.draft_tx().is_ok());
+    }
+
+    #[test]
+    fn build_skips_balance_check_with_pushed_transfer_ops() {
+        // A >32-input funding path pushes full transfer chunks as raw ops;
+        // their input values are unknown to the builder, so the balance
+        // check must not reject the (possibly balanced) transaction.
+        let chunk = TransferOp::new(Inputs::new([NoteId(Fr::ZERO)]), Outputs::empty());
+        let builder = MantleTxBuilder::new()
+            .push_op(Op::Transfer(chunk))
+            .unwrap()
+            .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
+            .unwrap();
+
+        assert!(builder.net_balance() < 0, "visible balance is negative");
+        assert!(builder.build().is_ok());
     }
 
     #[test]
