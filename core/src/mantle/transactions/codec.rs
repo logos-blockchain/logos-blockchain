@@ -100,7 +100,7 @@ mod tests {
     use lb_blend_proofs::{quota::VerifiedProofOfQuota, selection::VerifiedProofOfSelection};
     use lb_groth16::{CompressedGroth16Proof, Fr};
     use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature, ZkKey, ZkPublicKey};
-    use lb_utils::bounded_vec::BoundedError;
+    use lb_utils::bounded::BoundedError;
     use multiaddr::Multiaddr;
     use num_bigint::BigUint;
 

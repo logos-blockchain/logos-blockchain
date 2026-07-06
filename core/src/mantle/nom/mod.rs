@@ -4,7 +4,7 @@ use std::borrow::Cow;
 // Both macros are the blessed way to declare a codec: each emits the mandatory
 // `WireExamples` fixtures (see below) alongside the impls.
 pub use lb_core_macros::{NomCodec, nom_wire_fixtures};
-use lb_utils::bounded_vec::LowerBoundedVec;
+use lb_utils::bounded::LowerBoundedVec;
 use nom::IResult;
 
 pub mod array;

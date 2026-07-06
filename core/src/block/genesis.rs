@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded::BoundedError;
 
 use crate::{
     block::Block,

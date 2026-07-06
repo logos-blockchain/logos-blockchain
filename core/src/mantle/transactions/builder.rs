@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use lb_key_management_system_keys::keys::ZkPublicKey;
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded::BoundedError;
 use thiserror::Error;
 
 use crate::{

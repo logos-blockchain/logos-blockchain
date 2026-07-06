@@ -6,7 +6,7 @@ use lb_core::{
         transactions::builder::TxBuilderError,
     },
 };
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded::BoundedError;
 use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq, Eq)]

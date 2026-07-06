@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded_vec::UpperBoundedVec;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};
@@ -148,7 +148,7 @@ impl Operation<InscriptionValidationContext<'_>> for InscriptionOp {
 
 #[cfg(test)]
 mod tests {
-    use lb_utils::bounded_vec::BoundedError;
+    use lb_utils::bounded::BoundedError;
 
     use super::*;
     use crate::mantle::nom::NomDecode as _;

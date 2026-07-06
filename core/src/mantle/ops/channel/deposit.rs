@@ -1,5 +1,5 @@
 use lb_key_management_system_keys::keys::{ZkPublicKey, ZkSignature};
-use lb_utils::bounded_vec::UpperBoundedVec;
+use lb_utils::bounded::UpperBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use crate::{

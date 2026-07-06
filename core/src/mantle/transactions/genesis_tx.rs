@@ -2,7 +2,7 @@ use core::fmt::{self, Display, Formatter};
 
 use lb_core_macros::NomCodec;
 use lb_groth16::Fr;
-use lb_utils::bounded_vec::BoundedVec;
+use lb_utils::bounded::{BoundedString, BoundedVec};
 use nom::{
     IResult,
     error::{Error as NomError, ErrorKind},
@@ -275,74 +275,11 @@ impl<'de> Deserialize<'de> for GenesisTx {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(try_from = "String")]
-struct BoundedString<const MIN_SIZE: usize, const MAX_SIZE: usize>(String);
-
-impl<const MIN_SIZE: usize, const MAX_SIZE: usize> AsRef<str>
-    for BoundedString<MIN_SIZE, MAX_SIZE>
-{
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-impl<const MIN_SIZE: usize, const MAX_SIZE: usize> Display for BoundedString<MIN_SIZE, MAX_SIZE> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-impl<const MIN_SIZE: usize, const MAX_SIZE: usize> TryFrom<String>
-    for BoundedString<MIN_SIZE, MAX_SIZE>
-{
-    type Error = String;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        if value.len() < MIN_SIZE {
-            return Err(format!("String must be at least {MIN_SIZE} bytes: {value}"));
-        }
-        if value.len() > MAX_SIZE {
-            return Err(format!("String must not exceed {MAX_SIZE} bytes: {value}"));
-        }
-
-        Ok(Self(value))
-    }
-}
-
-impl<const MIN_SIZE: usize, const MAX_SIZE: usize> TryFrom<Vec<u8>>
-    for BoundedString<MIN_SIZE, MAX_SIZE>
-{
-    type Error = String;
-
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        let string = String::from_utf8(value).map_err(|e| format!("Invalid UTF-8 string: {e}"))?;
-        Self::try_from(string)
-    }
-}
-
-impl<const MIN_SIZE: usize, const MAX_SIZE: usize, const MIN: usize, const MAX: usize>
-    TryFrom<BoundedVec<u8, MIN, MAX>> for BoundedString<MIN_SIZE, MAX_SIZE>
-{
-    type Error = String;
-
-    fn try_from(value: BoundedVec<u8, MIN, MAX>) -> Result<Self, Self::Error> {
-        const {
-            assert!(
-                MIN >= MIN_SIZE,
-                "Min size cannot be less than the minimum allowed byte size for a chain ID."
-            );
-            assert!(
-                MAX <= MAX_SIZE,
-                "Max size cannot be more than the maximum allowed byte size for a chain ID."
-            );
-        }
-        Self::try_from(value.into_inner())
-    }
-}
-
 pub const MAX_CHAIN_ID_SIZE: usize = u64::MAX as usize;
 type ChainIdBoundedVec = BoundedVec<u8, 1, MAX_CHAIN_ID_SIZE>;
+/// A chain ID is a UTF-8 string whose byte length is bounded to
+/// `[1, MAX_CHAIN_ID_SIZE]`. The length invariant is owned by [`Bounded`];
+/// the UTF-8 and domain rules live on [`ChainId`] below.
 type ChainIdBoundedString = BoundedString<1, MAX_CHAIN_ID_SIZE>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -352,22 +289,22 @@ pub struct ChainId(ChainIdBoundedString);
 impl ChainId {
     #[must_use]
     pub const fn new_unchecked(addr: String) -> Self {
-        Self(BoundedString(addr))
+        Self(BoundedString::new_unchecked(addr))
     }
 
     #[must_use]
     pub fn into_inner(self) -> String {
-        self.0.0
+        self.0.into_inner()
     }
 
     #[must_use]
     pub const fn len(&self) -> usize {
-        self.0.0.len()
+        self.0.as_inner().len()
     }
 
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.0.0.is_empty()
+        self.0.as_inner().is_empty()
     }
 }
 
@@ -379,13 +316,13 @@ impl Display for ChainId {
 
 impl AsRef<str> for ChainId {
     fn as_ref(&self) -> &str {
-        self.0.as_ref()
+        self.0.as_inner().as_str()
     }
 }
 
 impl AsRef<[u8]> for ChainId {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_ref().as_ref()
+        self.0.as_inner().as_bytes()
     }
 }
 
