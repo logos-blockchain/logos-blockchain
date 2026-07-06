@@ -263,7 +263,7 @@ impl<'de> Deserialize<'de> for GenesisTx {
         }
 
         let helper = Helper::deserialize(deserializer)?;
-        let tx = SignedMantleTx::new_unverified(helper.mantle_tx, helper.ops_proofs);
+        let tx = SignedMantleTx::new_trusted(helper.mantle_tx, helper.ops_proofs);
         Self::from_tx(tx).map_err(serde::de::Error::custom)
     }
 }

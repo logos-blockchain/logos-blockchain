@@ -320,7 +320,7 @@ mod tests {
         .expect("tracked wallet keys should be valid");
         chain_state.seed_genesis_utxos(&[deposited]);
 
-        let tx = SignedMantleTx::new_unverified(
+        let tx = SignedMantleTx::new_trusted(
             MantleTx(
                 [Op::ChannelDeposit(DepositOp {
                     channel_id: ChannelId::from([0; 32]),

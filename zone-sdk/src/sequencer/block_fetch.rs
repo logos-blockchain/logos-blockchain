@@ -1145,7 +1145,7 @@ mod tests {
             })]
             .into(),
         );
-        SignedMantleTx::new_unverified(
+        SignedMantleTx::new_trusted(
             mantle_tx,
             [OpProof::Ed25519Sig(Ed25519Signature::zero())].into(),
         )

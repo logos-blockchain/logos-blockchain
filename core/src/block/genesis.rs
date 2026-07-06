@@ -1244,7 +1244,7 @@ impl GenesisBlockBuilder<WithAll> {
                 })
                 .expect("genesis transaction proofs are bounded");
         }
-        let signed_tx = SignedMantleTx::new_unverified(MantleTx(capped_ops), ops_proofs);
+        let signed_tx = SignedMantleTx::new_trusted(MantleTx(capped_ops), ops_proofs);
         Ok(GenesisBlock::genesis(GenesisTx::from_tx(signed_tx)?))
     }
 }
@@ -1360,7 +1360,7 @@ mod tests {
         }))
         .expect("genesis transaction proofs are bounded");
 
-        SignedMantleTx::new_unverified(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
+        SignedMantleTx::new_trusted(MantleTx(Ops::new_unchecked(ops)), ops_proofs)
     }
 
     fn make_genesis_tx(extra_ops: Vec<Op>) -> GenesisTx {

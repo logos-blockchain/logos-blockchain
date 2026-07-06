@@ -4,6 +4,7 @@ use std::{
 };
 
 use ark_ff::PrimeField as _;
+use blake2::digest::Mac;
 use bytes::Bytes;
 use lb_core_macros::NomCodec;
 use lb_groth16::Fr;
@@ -29,6 +30,7 @@ use crate::{
                 decode_signed_mantle_tx, encode_signed_mantle_tx, predict_signed_mantle_tx_size,
             },
             genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+            states::{Preverified, Unverified, VerificationState, Verified},
         },
     },
     proofs::{
@@ -328,8 +330,8 @@ impl Transaction for MantleTx {
     }
 }
 
-impl From<SignedMantleTx> for MantleTx {
-    fn from(signed_tx: SignedMantleTx) -> Self {
+impl<State: VerificationState> From<SignedMantleTx<State>> for MantleTx {
+    fn from(signed_tx: SignedMantleTx<State>) -> Self {
         signed_tx.mantle_tx
     }
 }
@@ -341,10 +343,11 @@ pub type OpsProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;
 // TODO: Split entity into a system that allows for verification in different
 // stages.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SignedMantleTx {
+pub struct SignedMantleTx<State: VerificationState> {
     pub mantle_tx: MantleTx,
     // TODO: make this more efficient
     pub ops_proofs: OpsProofs,
+    state: State,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
@@ -409,141 +412,222 @@ pub trait OperationVerificationHelper {
     ) -> Result<Ed25519PublicKey, VerificationError>;
 }
 
-impl SignedMantleTx {
-    /// Create a new `SignedMantleTx` and verify that all required proofs are
-    /// present and valid.
-    ///
-    /// This enforces at construction time that:
-    /// - `ChannelInscribe` operations have a valid Ed25519 signature from the
-    ///   declared signer
-    pub fn new(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Result<Self, VerificationError> {
-        let tx = Self {
+impl<State: VerificationState> SignedMantleTx<State> {
+    fn with_state<T: VerificationState>(self, state: T) -> SignedMantleTx<T> {
+        let Self {
             mantle_tx,
             ops_proofs,
-        };
-        tx.verify_ops_proofs()?;
-        Ok(tx)
-    }
-
-    /// Create a `SignedMantleTx` without verifying proofs.
-    /// This should only be used for `GenesisTx` or in tests.
-    #[doc(hidden)]
-    #[must_use]
-    pub const fn new_unverified(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
-        Self {
+            ..
+        } = self;
+        SignedMantleTx::<T> {
             mantle_tx,
             ops_proofs,
+            state,
         }
-    }
-
-    // TODO: might drop proofs after verification
-    fn verify_ops_proofs(&self) -> Result<(), VerificationError> {
-        // Check that we have the same number of proofs as ops
-        if self.mantle_tx.ops().len() != self.ops_proofs.len() {
-            return Err(VerificationError::ProofCountMismatch {
-                ops_count: self.mantle_tx.ops().len(),
-                proofs_count: self.ops_proofs.len(),
-            });
-        }
-
-        let tx_hash = self.hash();
-        let tx_hash_bytes = tx_hash.as_signing_bytes();
-
-        for (idx, (op, proof)) in self
-            .mantle_tx
-            .ops()
-            .iter()
-            .zip(self.ops_proofs.iter())
-            .enumerate()
-        {
-            match (op, proof) {
-                (Op::ChannelInscribe(inscribe_op), OpProof::Ed25519Sig(sig)) => {
-                    // Inscription operations require an Ed25519 signature
-                    inscribe_op
-                        .signer
-                        .verify(tx_hash_bytes.as_ref(), sig)
-                        .map_err(|_| VerificationError::InvalidSignature { op_index: idx })?;
-                }
-                v @ (Op::ChannelInscribe(_), OpProof::ZkSig(_)) => {
-                    return Err(VerificationError::IncorrectProofType {
-                        op_type: v.0.as_str(),
-                        op_index: idx,
-                    });
-                }
-                (Op::LeaderClaim(leader_claim_op), OpProof::PoC(poc)) => {
-                    let ok = poc.verify(&LeaderClaimPublic {
-                        voucher_nullifier: leader_claim_op.voucher_nullifier.into(),
-                        voucher_root: leader_claim_op.rewards_root.into(),
-                        mantle_tx_hash: tx_hash.to_fr(),
-                    });
-                    if !ok {
-                        return Err(VerificationError::InvalidProofOfClaim { op_index: idx });
-                    }
-                }
-                // Other operations are checked by the ledger or don't require verification here
-                _ => {
-                    // TODO: If the op and proof don't match, we are silently
-                    // delaying the error
-                    //  until tx execution.
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn verify_ops_proofs_with_helper(
-        &self,
-        operation_verification_helper: &impl OperationVerificationHelper,
-    ) -> Result<(), VerificationError> {
-        let tx_hash = self.hash();
-        let tx_hash_bytes = tx_hash.as_signing_bytes();
-
-        for (idx, (op, proof)) in self
-            .mantle_tx
-            .ops()
-            .iter()
-            .zip(self.ops_proofs.iter())
-            .enumerate()
-        {
-            match (op, proof) {
-                (
-                    Op::ChannelWithdraw(channel_withdraw_op),
-                    OpProof::ChannelMultiSigProof(proof),
-                ) => {
-                    verify_channel_multi_sig(
-                        &channel_withdraw_op.channel_id,
-                        proof,
-                        &tx_hash_bytes,
-                        operation_verification_helper,
-                        idx,
-                    )?;
-                }
-                (
-                    Op::ChannelTransfer(channel_transfer_op),
-                    OpProof::ChannelMultiSigProof(proof),
-                ) => {
-                    verify_channel_multi_sig(
-                        &channel_transfer_op.channel_id,
-                        proof,
-                        &tx_hash_bytes,
-                        operation_verification_helper,
-                        idx,
-                    )?;
-                }
-                // Other operations don't require verification here
-                _ => {
-                    // TODO: If the op and proof don't match, we are silently
-                    //  delaying the error until tx execution.
-                }
-            }
-        }
-
-        Ok(())
     }
 
     fn gas_storage_size(&self) -> u64 {
         encode_signed_mantle_tx(self).len() as u64
+    }
+}
+
+enum OpVerificationResult {
+    Verified,
+    StatefulRequired,
+}
+
+impl SignedMantleTx<Unverified> {
+    pub fn new(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
+        Self {
+            mantle_tx,
+            ops_proofs,
+            state: Unverified,
+        }
+    }
+
+    fn ensure_one_proof_per_op(&self) -> Result<(), VerificationError> {
+        if self.mantle_tx.ops().len() == self.ops_proofs.len() {
+            return Ok(());
+        }
+
+        Err(VerificationError::ProofCountMismatch {
+            ops_count: self.mantle_tx.ops().len(),
+            proofs_count: self.ops_proofs.len(),
+        })
+    }
+
+    // TODO: Might drop proofs after verification. This TODO is carried over from
+    // the original code.
+    fn verify_stateless_op(
+        op_index: usize,
+        op: &Op,
+        proof: &OpProof,
+        tx_hash: &TxHash,
+        tx_hash_bytes: &Bytes,
+    ) -> Result<OpVerificationResult, VerificationError> {
+        match (op, proof) {
+            (Op::ChannelInscribe(inscribe_op), OpProof::Ed25519Sig(sig)) => {
+                // Inscription operations require an Ed25519 signature
+                inscribe_op
+                    .signer
+                    .verify(tx_hash_bytes.as_ref(), sig)
+                    .map(|_| OpVerificationResult::Verified)
+                    .map_err(|_| VerificationError::InvalidSignature { op_index })
+            }
+            (op @ Op::ChannelInscribe(_), _) => Err(VerificationError::IncorrectProofType {
+                op_type: op.as_str(),
+                op_index,
+            }),
+            // -----
+            (Op::LeaderClaim(leader_claim_op), OpProof::PoC(poc)) => {
+                let is_verified = poc.verify(&LeaderClaimPublic {
+                    voucher_nullifier: leader_claim_op.voucher_nullifier.into(),
+                    voucher_root: leader_claim_op.rewards_root.into(),
+                    mantle_tx_hash: tx_hash.to_fr(),
+                });
+
+                if is_verified {
+                    Ok(OpVerificationResult::Verified)
+                } else {
+                    Err(VerificationError::InvalidProofOfClaim { op_index })
+                }
+            }
+            (op @ Op::LeaderClaim(_), _) => Err(VerificationError::IncorrectProofType {
+                op_type: op.as_str(),
+                op_index,
+            }),
+            // -----
+            // TODO: Fill in with the remaining operations
+            // We probably benefit on a "match valid and verify/classify", else InCorrectProofType
+            _ => Ok(OpVerificationResult::StatefulRequired),
+        }
+    }
+
+    fn verify_stateless_ops(&self) -> Result<Vec<usize>, VerificationError> {
+        let mut pending = vec![];
+
+        let tx_hash = self.hash();
+        let tx_hash_bytes = tx_hash.as_signing_bytes();
+        for (op_index, (op, proof)) in self
+            .mantle_tx
+            .ops()
+            .iter()
+            .zip(self.ops_proofs.iter())
+            .enumerate()
+        {
+            let op_verification_result =
+                Self::verify_stateless_op(op_index, op, proof, &tx_hash, &tx_hash_bytes)?;
+            match op_verification_result {
+                OpVerificationResult::Verified => {}
+                OpVerificationResult::StatefulRequired => {
+                    pending.push(op_index);
+                }
+            }
+        }
+
+        Ok(pending)
+    }
+
+    fn into_preverified(self, pending: Vec<usize>) -> SignedMantleTx<Preverified> {
+        let preverified_state = Preverified { pending };
+        self.with_state(preverified_state)
+    }
+
+    pub fn preverify(self) -> Result<SignedMantleTx<Preverified>, VerificationError> {
+        self.ensure_one_proof_per_op()?;
+        let pending = self.verify_stateless_ops()?;
+        Ok(self.into_preverified(pending))
+    }
+}
+
+impl SignedMantleTx<Preverified> {
+    fn pending_ops_with_proofs(&self) -> impl Iterator<Item = (usize, &Op, &OpProof)> {
+        self.state.pending.iter().map(|&op_index| {
+            let op = &self.mantle_tx.ops()[op_index];
+            let proof = &self.ops_proofs[op_index];
+            (op_index, op, proof)
+        })
+    }
+
+    fn verify_stateful_op(
+        op_index: usize,
+        op: &Op,
+        proof: &OpProof,
+        tx_hash_bytes: &Bytes,
+        helper: &impl OperationVerificationHelper,
+    ) -> Result<(), VerificationError> {
+        #[expect(
+            clippy::single_match_else,
+            reason = "Clearer and follows the pattern of verify_ops_proofs."
+        )]
+        match (op, proof) {
+            (Op::ChannelWithdraw(channel_withdraw_op), OpProof::ChannelMultiSigProof(proof)) => {
+                verify_channel_multi_sig(
+                    &channel_withdraw_op.channel_id,
+                    proof,
+                    &tx_hash_bytes,
+                    helper,
+                    op_index,
+                )
+            }
+            (
+                Op::ChannelTransfer(channel_transfer_op),
+                OpProof::ChannelMultiSigProof(proof),
+            ) => {
+                verify_channel_multi_sig(
+                    &channel_transfer_op.channel_id,
+                    proof,
+                    &tx_hash_bytes,
+                    helper,
+                    op_index,
+                )
+            }
+            // TODO: Explicitly handle all operations that should have been statelessly verified
+            // (instead of _).   This includes matching each op with its proof type.
+            _ => {
+                unreachable!("All stateless verification should have been done in preverify.");
+            }
+        }
+    }
+
+    fn verify_stateful_ops(
+        &self,
+        helper: &impl OperationVerificationHelper,
+    ) -> Result<(), VerificationError> {
+        let tx_hash = self.hash();
+        let tx_hash_bytes = tx_hash.as_signing_bytes();
+
+        for (op_index, op, proof) in self.pending_ops_with_proofs() {
+            Self::verify_stateful_op(op_index, op, proof, &tx_hash_bytes, helper)?;
+        }
+
+        Ok(())
+    }
+
+    fn into_verified(self) -> SignedMantleTx<Verified> {
+        self.with_state(Verified)
+    }
+
+    pub fn verify(
+        self,
+        helper: &impl OperationVerificationHelper,
+    ) -> Result<SignedMantleTx<Verified>, VerificationError> {
+        self.verify_stateful_ops(helper)?;
+        Ok(self.into_verified())
+    }
+}
+
+impl SignedMantleTx<Verified> {
+    /// Create a [`SignedMantleTx`] without verifying proofs.
+    /// This should only be used for [`GenesisTx`] or in tests.
+    #[doc(hidden)]
+    #[must_use]
+    pub const fn new_trusted(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
+        Self {
+            mantle_tx,
+            ops_proofs,
+            state: Verified,
+        }
     }
 }
 
