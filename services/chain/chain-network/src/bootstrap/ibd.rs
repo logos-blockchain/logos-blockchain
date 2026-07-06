@@ -157,7 +157,11 @@ where
     ) -> Result<(), Error> {
         let mut downloader = OrphanBlocksDownloader::new(
             self.network.clone(),
-            config.peers.len().try_into().unwrap(),
+            config
+                .peers
+                .len()
+                .try_into()
+                .expect("IBD peer set shouldn't be empty in this function"),
             orphan_config.max_rejected_cache_size,
         );
 
