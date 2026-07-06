@@ -111,9 +111,6 @@ pub enum WalletServiceError {
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
 
-    #[error("Funded transaction has negative net balance: {0}")]
-    NegativeNetBalance(i128),
-
     #[error("PoC generation failed: {0:?}")]
     PoCGenerationFailed(#[from] lb_core::proofs::leader_claim_proof::Error),
 
@@ -1216,11 +1213,7 @@ where
             "leader claim tx builder state after funding"
         );
 
-        // The paid fee is the tx's net balance (inputs minus outputs); it can
-        // exceed the gas cost once priority tips are introduced.
-        let tx_fee = u64::try_from(net_balance)
-            .map(GasCost::new)
-            .map_err(|_| WalletServiceError::NegativeNetBalance(net_balance))?;
+        let tx_fee = funded_tx_builder.tx_fee()?;
         if tx_fee > request.max_tx_fee {
             return Err(WalletServiceError::TxFeeExceedsMaxFee {
                 max_fee: request.max_tx_fee,

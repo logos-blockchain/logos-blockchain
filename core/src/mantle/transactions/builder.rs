@@ -26,6 +26,8 @@ pub enum TxBuilderError {
     InvalidOutputsBounds { source: BoundedError },
     #[error("Gas computation overflow: {0}")]
     GasOverflow(#[from] GasOverflow),
+    #[error("Funded transaction has negative net balance: {net_balance}")]
+    NegativeNetBalance { net_balance: i128 },
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -207,6 +209,16 @@ impl MantleTxBuilder {
             .sum();
 
         in_sum - out_sum
+    }
+
+    /// The fee this transaction actually pays: its net balance (inputs minus
+    /// outputs). This can exceed the raw gas cost once priority tips are
+    /// introduced. Only meaningful once the builder is funded/balanced.
+    pub fn tx_fee(&self) -> Result<GasCost, TxBuilderError> {
+        let net_balance = self.net_balance();
+        u64::try_from(net_balance)
+            .map(GasCost::new)
+            .map_err(|_| TxBuilderError::NegativeNetBalance { net_balance })
     }
 
     pub fn gas_cost<G: GasConstants>(

@@ -18,8 +18,6 @@ pub enum SdpWalletError {
     WalletApi(DynError),
     #[error("Transaction fee exceeded the configured max fee. tx_fee={tx_fee} > max_fee={max_fee}")]
     TxFeeExceedsMaxFee { max_fee: GasCost, tx_fee: GasCost },
-    #[error("Funded transaction has negative net balance: {0}")]
-    NegativeNetBalance(i128),
     #[error(transparent)]
     GasOverflow(#[from] GasOverflow),
     #[error(transparent)]

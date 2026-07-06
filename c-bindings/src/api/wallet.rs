@@ -970,13 +970,10 @@ pub(crate) fn channel_deposit_with_notes_sync(
                 )
             })?;
 
-        // The paid fee is the tx's net balance (inputs minus outputs); it can
-        // exceed the gas cost once priority tips are introduced.
-        let net_balance = funded_tx_builder.net_balance();
-        let tx_fee = u64::try_from(net_balance).map(GasCost::new).map_err(|_| {
+        let tx_fee = funded_tx_builder.tx_fee().map_err(|error| {
             OperationStatus::error(
                 OperationStatusCode::DynError,
-                format!("funded tx has negative net balance: {net_balance}"),
+                format!("Failed to compute tx fee: {error}"),
             )
         })?;
         if tx_fee > max_tx_fee {
