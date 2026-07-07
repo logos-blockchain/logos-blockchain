@@ -164,7 +164,7 @@ fn build_cryptarchia_config(
         CryptarchiaConfig::with_required_values(CryptarchiaConfigRequiredValues {
             funding_pk: cryptarchia_funding_key.to_public_key(),
         });
-    if cryptarchia_args.ibd
+    if !cryptarchia_args.skip_ibd
         && let Some(initial_peers) = initial_peers
     {
         cryptarchia_config.network.bootstrap.ibd.peers = initial_peers
