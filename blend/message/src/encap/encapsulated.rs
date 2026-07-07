@@ -1,11 +1,11 @@
-use std::{num::NonZeroU64, sync::LazyLock};
+use std::num::NonZeroU64;
 
 use derivative::Derivative;
 use itertools::Itertools as _;
 use lb_blend_crypto::{ZkHash, cipher::Cipher};
 use lb_blend_proofs::{
     quota::{self, PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
-    selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
+    selection::{self, PROOF_OF_SELECTION_SIZE, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_key_management_system_keys::keys::{
@@ -26,7 +26,8 @@ use crate::{
     },
     input::EncapsulationInput,
     message::{
-        BlendingHeader, Payload, PublicHeader, payload::PaddedPayloadBody,
+        BlendingHeader, Payload, PublicHeader,
+        payload::{MAX_PAYLOAD_BODY_SIZE, PaddedPayloadBody},
         public_header::VerifiedPublicHeader,
     },
 };
@@ -70,9 +71,10 @@ impl EncapsulatedMessage {
     /// all have a constant size, so the total is strictly linear in the number
     /// of layers and fully determined by `num_layers`.
     #[must_use]
-    pub fn expected_serialized_len(num_layers: NonZeroU64) -> u64 {
-        let SizeModel { base, per_layer } = *SIZE_MODEL;
-        base + num_layers.get() * per_layer
+    pub const fn expected_serialized_len(num_layers: NonZeroU64) -> u64 {
+        let private_header_size = SEQUENCE_LENGTH_PREFIX_SIZE
+            + num_layers.get() as usize * ENCAPSULATED_BLENDING_HEADER_SIZE;
+        (PUBLIC_HEADER_SIZE + private_header_size + ENCAPSULATED_PAYLOAD_SIZE) as u64
     }
 
     /// Deserialize a message received from an untrusted remote peer, enforcing
@@ -290,7 +292,7 @@ impl EncapsulatedPart {
         if self.private_header.layer_count() as u64 != num_layers.get() {
             return Err(Error::UnexpectedEncapsulationLayerCount);
         }
-        if !self.private_header.has_fixed_size_layers() || self.payload.byte_len() != *PAYLOAD_LEN {
+        if !self.private_header.has_fixed_size_layers() || self.payload.byte_len() != PAYLOAD_SIZE {
             return Err(Error::MalformedEncapsulatedMessage);
         }
         Ok(())
@@ -553,7 +555,7 @@ impl EncapsulatedPrivateHeader {
     fn has_fixed_size_layers(&self) -> bool {
         self.0
             .iter()
-            .all(|header| header.byte_len() == *BLENDING_HEADER_LEN)
+            .all(|header| header.byte_len() == BLENDING_HEADER_SIZE)
     }
 }
 
@@ -645,68 +647,46 @@ impl EncapsulatedPayload {
     }
 }
 
-/// The wire size of a message is `base + num_layers * per_layer` bytes. We
-/// recover these two coefficients once, by measuring two canonically-built
-/// messages, so that no assumption about the underlying codec's framing is
-/// hard-coded here.
-struct SizeModel {
-    base: u64,
-    per_layer: u64,
-}
+// Serialized sizes of the message components. The wire format is fixed-size
+// (see the Blend Payload Formatting spec): every field is either a primitive, a
+// fixed-size crypto object, or the payload padded to [`MAX_PAYLOAD_BODY_SIZE`],
+// so all of these are compile-time constants. The framing constants below follow
+// from the codec configuration (bincode, fixed-int, little-endian); the
+// `serialized_size_constants_match_wire_format` test pins them to the real
+// encoding.
 
-static SIZE_MODEL: LazyLock<SizeModel> = LazyLock::new(|| {
-    let size_of = |num_layers| {
-        canonical_message(num_layers)
-            .bytes_size()
-            .expect("A canonical message is always serializable.")
-    };
-    let one_layer = size_of(1);
-    let two_layers = size_of(2);
-    let per_layer = two_layers - one_layer;
-    SizeModel {
-        base: one_layer - per_layer,
-        per_layer,
-    }
-});
+/// bincode encodes a sequence's length as a `u64`.
+const SEQUENCE_LENGTH_PREFIX_SIZE: usize = size_of::<u64>();
 
-/// The fixed serialized size of a single encapsulated blending header (layer).
-static BLENDING_HEADER_LEN: LazyLock<usize> = LazyLock::new(|| {
-    EncapsulatedBlendingHeader::initialize(&BlendingHeader::pseudo_random(&[0])).byte_len()
-});
+/// bincode encodes an enum discriminant as a `u32`.
+const ENUM_DISCRIMINANT_SIZE: usize = size_of::<u32>();
 
-/// The fixed serialized size of an encapsulated payload.
-static PAYLOAD_LEN: LazyLock<usize> =
-    LazyLock::new(|| EncapsulatedPayload::initialize(&canonical_payload()).byte_len());
+/// Serialized size of a [`BlendingHeader`]: every field is fixed-size.
+const BLENDING_HEADER_SIZE: usize = ED25519_PUBLIC_KEY_SIZE
+    + PROOF_OF_QUOTA_SIZE
+    + ED25519_SIGNATURE_SIZE
+    + PROOF_OF_SELECTION_SIZE
+    + size_of::<bool>(); // `is_last`
 
-fn canonical_payload() -> Payload {
-    Payload::new(
-        PayloadType::Cover,
-        PaddedPayloadBody::try_from([0u8; 0].as_slice())
-            .expect("An empty payload body is always valid."),
-    )
-}
+/// Serialized size of one layer on the wire: an [`EncapsulatedBlendingHeader`]
+/// is a `Vec<u8>` wrapping the fixed-size blending header bytes.
+const ENCAPSULATED_BLENDING_HEADER_SIZE: usize =
+    SEQUENCE_LENGTH_PREFIX_SIZE + BLENDING_HEADER_SIZE;
 
-/// Builds a structurally-valid (but cryptographically meaningless) message with
-/// `num_layers` layers, used solely to measure the fixed wire size.
-fn canonical_message(num_layers: usize) -> EncapsulatedMessage {
-    let public_header = PublicHeader::new(
-        UnsecuredEd25519Key::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).public_key(),
-        &VerifiedProofOfQuota::from_bytes_unchecked([0; PROOF_OF_QUOTA_SIZE]).into_inner(),
-        Ed25519Signature::from_bytes(&[0; ED25519_SIGNATURE_SIZE]),
-    );
-    let private_header = EncapsulatedPrivateHeader(
-        (0..num_layers)
-            .map(|layer| {
-                EncapsulatedBlendingHeader::initialize(&BlendingHeader::pseudo_random(&[layer as u8]))
-            })
-            .collect::<Vec<_>>()
-            .into_boxed_slice(),
-    );
-    EncapsulatedMessage::from_components(
-        public_header,
-        EncapsulatedPart {
-            private_header,
-            payload: EncapsulatedPayload::initialize(&canonical_payload()),
-        },
-    )
-}
+/// Serialized size of a [`Payload`]: the body is always padded to
+/// [`MAX_PAYLOAD_BODY_SIZE`], so the whole payload has a constant size.
+///
+/// `PaddedPayloadBody::padded` is serialized via `serde_with::Bytes`, i.e. as a
+/// byte string, which bincode length-prefixes (unlike a bare fixed-size array).
+const PAYLOAD_SIZE: usize = ENUM_DISCRIMINANT_SIZE // `PayloadHeader::payload_type`
+    + size_of::<u16>() // `PayloadHeader::body_len`
+    + SEQUENCE_LENGTH_PREFIX_SIZE + MAX_PAYLOAD_BODY_SIZE // `PaddedPayloadBody::padded`
+    + size_of::<u16>(); // `PaddedPayloadBody::actual_len`
+
+/// Serialized size of the payload on the wire: an [`EncapsulatedPayload`] is a
+/// `Vec<u8>` wrapping the fixed-size serialized payload.
+const ENCAPSULATED_PAYLOAD_SIZE: usize = SEQUENCE_LENGTH_PREFIX_SIZE + PAYLOAD_SIZE;
+
+/// Serialized size of a [`PublicHeader`]: a version byte plus fixed-size fields.
+const PUBLIC_HEADER_SIZE: usize =
+    size_of::<u8>() + ED25519_PUBLIC_KEY_SIZE + PROOF_OF_QUOTA_SIZE + ED25519_SIGNATURE_SIZE;

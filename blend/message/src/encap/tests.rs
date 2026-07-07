@@ -387,6 +387,35 @@ fn decapsulate_empty_private_headers_returns_error() {
     assert!(matches!(result, Err(Error::EmptyEncapsulationInputs)));
 }
 
+#[test]
+fn serialized_size_constants_match_wire_format() {
+    // The O(1) size gate in `deserialize_from_remote` relies on
+    // `expected_serialized_len` being exact. Build real, genuinely-encapsulated
+    // messages of varying layer counts and confirm the constant-derived length
+    // matches the actual serialized length — this pins every codec framing
+    // assumption baked into the size constants to the real wire encoding.
+    for num_layers in 1..=4u64 {
+        let (inputs, _) = generate_inputs(num_layers as usize);
+        let message = EncapsulatedMessage::from(
+            EncapsulatedMessageWithVerifiedPublicHeader::try_new(
+                &inputs,
+                PayloadType::Data,
+                b"payload".as_slice().try_into().unwrap(),
+            )
+            .unwrap(),
+        );
+
+        let actual_len = message.to_bytes().unwrap().len() as u64;
+        let expected_len =
+            EncapsulatedMessage::expected_serialized_len(num_layers.try_into().unwrap());
+
+        assert_eq!(
+            expected_len, actual_len,
+            "expected_serialized_len mismatch for {num_layers} layer(s)"
+        );
+    }
+}
+
 fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey>) {
     let recipient_signing_keys =
         core::iter::repeat_with(UnsecuredEd25519Key::generate_with_blake_rng)
