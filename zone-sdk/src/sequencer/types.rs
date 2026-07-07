@@ -11,7 +11,7 @@ use lb_core::{
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
-        tx::TxHash,
+        transactions::TxHash,
     },
 };
 

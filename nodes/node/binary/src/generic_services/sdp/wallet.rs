@@ -1,5 +1,5 @@
 use lb_core::{
-    mantle::{Op, SignedMantleTx, gas::MainnetGasConstants, tx_builder::MantleTxBuilder},
+    mantle::{Op, SignedMantleTx, gas::MainnetGasConstants, transactions::MantleTxBuilder},
     sdp::{ActiveMessage, DeclarationMessage, WithdrawMessage},
 };
 use lb_sdp_service::wallet::{

@@ -110,13 +110,16 @@ impl ServiceConfig {
         let chain_network_settings = lb_chain_network_service::ChainNetworkSettings {
             bootstrap: lb_chain_network_service::BootstrapConfig {
                 ibd: lb_chain_network_service::IbdConfig {
-                    delay_before_new_download: self
+                    peers: self.user.network.bootstrap.ibd.peers,
+                    tips_fetch_max_attempts: self
                         .user
                         .network
                         .bootstrap
                         .ibd
-                        .delay_before_new_download,
-                    peers: self.user.network.bootstrap.ibd.peers,
+                        .tips_fetch_max_attempts,
+                    tips_fetch_min_delay: self.user.network.bootstrap.ibd.tips_fetch_min_delay,
+                    tips_fetch_max_delay: self.user.network.bootstrap.ibd.tips_fetch_max_delay,
+                    round_delay: self.user.network.bootstrap.ibd.round_delay,
                 },
             },
             network: LibP2pAdapterSettings {

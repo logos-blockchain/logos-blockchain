@@ -1,5 +1,5 @@
 use lb_cryptarchia_engine::Slot;
-use lb_utils::bounded_vec::NonEmptyBoundedVec;
+use lb_utils::bounded::NonEmptyBoundedVec;
 use serde::{Deserialize, Serialize};
 
 use super::{ChannelId, Ed25519PublicKey, MsgId};

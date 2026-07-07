@@ -14,10 +14,8 @@ use lb_common_http_client::Error;
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
-        genesis_tx::GENESIS_STORAGE_GAS_PRICE,
         ops::Op,
-        tx::{GasPrices, MantleTxGasContext},
-        tx_builder::MantleTxBuilder,
+        transactions::{GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxGasContext},
     },
     sdp::{Declaration, DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
 };
@@ -475,7 +473,7 @@ async fn fund_sdp_transaction(
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         },
     );
-    let tx_context = lb_core::mantle::tx::MantleTxContext {
+    let tx_context = lb_core::mantle::transactions::MantleTxContext {
         gas_context: empty_context,
         leader_reward_amount: 0,
     };

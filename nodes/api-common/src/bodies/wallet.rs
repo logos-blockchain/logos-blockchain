@@ -114,7 +114,7 @@ pub mod transfer_funds {
 
     #[derive(Serialize, Deserialize)]
     pub struct WalletTransferFundsResponseBody {
-        pub hash: lb_core::mantle::tx::TxHash,
+        pub hash: lb_core::mantle::transactions::TxHash,
     }
 
     impl From<SignedMantleTx> for WalletTransferFundsResponseBody {

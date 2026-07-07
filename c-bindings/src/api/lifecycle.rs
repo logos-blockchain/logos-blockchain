@@ -148,12 +148,12 @@ fn get_deployment_config(
     }
 }
 
-/// Stops and frees the resources associated with the given Logos blockchain
-/// node.
+/// Shuts down and frees the resources associated with the given Logos
+/// blockchain node.
 ///
 /// # Arguments
 ///
-/// - `node`: A pointer to the [`LogosBlockchainNode`] instance to be stopped.
+/// - `node`: A pointer to the [`LogosBlockchainNode`] instance to be shut down.
 ///
 /// # Returns
 ///
@@ -166,10 +166,10 @@ fn get_deployment_config(
 /// - The [`LogosBlockchainNode`] instance was created by this library
 /// - The pointer will not be used after this function returns
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn stop_node(node: *mut LogosBlockchainNode) -> OperationStatus {
+pub unsafe extern "C" fn shutdown_node(node: *mut LogosBlockchainNode) -> OperationStatus {
     return_error_if_null_pointer!(node);
     let node = unsafe { Box::from_raw(node) };
-    node.stop()
+    node.shutdown()
 }
 
 #[cfg(test)]
@@ -180,7 +180,7 @@ mod test {
     use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
     use tempfile::TempDir;
 
-    use crate::api::lifecycle::{start_lb_node, stop_node};
+    use crate::api::lifecycle::{shutdown_node, start_lb_node};
 
     static REPOSITORY_ROOT: LazyLock<PathBuf> = LazyLock::new(|| {
         let crate_dir = env!("CARGO_MANIFEST_DIR");
@@ -269,8 +269,11 @@ mod test {
         );
         let node = start_status.value;
 
-        let stop_status = unsafe { stop_node(node) };
+        let shutdown_status = unsafe { shutdown_node(node) };
 
-        assert!(stop_status.is_ok(), "Failed to stop node: {stop_status:?}");
+        assert!(
+            shutdown_status.is_ok(),
+            "Failed to shut down node: {shutdown_status:?}"
+        );
     }
 }

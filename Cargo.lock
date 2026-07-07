@@ -121,9 +121,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "approx"
@@ -887,7 +887,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "cfgsync-adapter"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=dev_snapshot_2026_06_03_4733e56a#4733e56af27e2e8c94b3779151bcaa647ac85432"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=cbd367a5461ae8adfe4986cbb8d499888c56eba4#cbd367a5461ae8adfe4986cbb8d499888c56eba4"
 dependencies = [
  "cfgsync-artifacts",
  "cfgsync-core",
@@ -898,7 +898,7 @@ dependencies = [
 [[package]]
 name = "cfgsync-artifacts"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=dev_snapshot_2026_06_03_4733e56a#4733e56af27e2e8c94b3779151bcaa647ac85432"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=cbd367a5461ae8adfe4986cbb8d499888c56eba4#cbd367a5461ae8adfe4986cbb8d499888c56eba4"
 dependencies = [
  "serde",
  "thiserror 2.0.18",
@@ -907,7 +907,7 @@ dependencies = [
 [[package]]
 name = "cfgsync-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=dev_snapshot_2026_06_03_4733e56a#4733e56af27e2e8c94b3779151bcaa647ac85432"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=cbd367a5461ae8adfe4986cbb8d499888c56eba4#cbd367a5461ae8adfe4986cbb8d499888c56eba4"
 dependencies = [
  "anyhow",
  "axum",
@@ -4238,6 +4238,7 @@ name = "logos-blockchain-chain-network-service"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "backon",
  "futures",
  "logos-blockchain-chain-service",
  "logos-blockchain-chain-service-common",
@@ -5215,6 +5216,7 @@ dependencies = [
  "futures",
  "humantime",
  "logos-blockchain-log-targets",
+ "multiaddr",
  "nistrs",
  "overwatch",
  "rand 0.8.6",
@@ -8276,7 +8278,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-core"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=dev_snapshot_2026_06_03_4733e56a#4733e56af27e2e8c94b3779151bcaa647ac85432"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=cbd367a5461ae8adfe4986cbb8d499888c56eba4#cbd367a5461ae8adfe4986cbb8d499888c56eba4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8289,6 +8291,7 @@ dependencies = [
  "rand 0.8.6",
  "reqwest",
  "serde",
+ "serde_json",
  "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
@@ -8298,7 +8301,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-compose"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=dev_snapshot_2026_06_03_4733e56a#4733e56af27e2e8c94b3779151bcaa647ac85432"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=cbd367a5461ae8adfe4986cbb8d499888c56eba4#cbd367a5461ae8adfe4986cbb8d499888c56eba4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8319,7 +8322,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-k8s"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=dev_snapshot_2026_06_03_4733e56a#4733e56af27e2e8c94b3779151bcaa647ac85432"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=cbd367a5461ae8adfe4986cbb8d499888c56eba4#cbd367a5461ae8adfe4986cbb8d499888c56eba4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -8344,7 +8347,7 @@ dependencies = [
 [[package]]
 name = "testing-framework-runner-local"
 version = "0.1.0"
-source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?tag=dev_snapshot_2026_06_03_4733e56a#4733e56af27e2e8c94b3779151bcaa647ac85432"
+source = "git+https://github.com/logos-blockchain/logos-blockchain-testing.git?rev=cbd367a5461ae8adfe4986cbb8d499888c56eba4#cbd367a5461ae8adfe4986cbb8d499888c56eba4"
 dependencies = [
  "async-trait",
  "fs_extra",

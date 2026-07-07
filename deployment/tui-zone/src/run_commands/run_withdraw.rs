@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use lb_core::{
     mantle::{
         Note, Op, OpProof, SignedMantleTx, Transaction as _,
-        encoding::{encode_mantle_tx, encode_signed_mantle_tx},
         ledger::Outputs,
         ops::channel::{
             ChannelId, ChannelKeyIndex, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
+        transactions::codec::{encode_mantle_tx, encode_signed_mantle_tx},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };

@@ -117,6 +117,11 @@ enum WalletBalanceBoundsError {
     MissingBound,
 }
 
+/// Assert that TF's tracked wallet fees match the on-chain spend from the
+/// sponsored fee account.
+///
+/// This catches accounting drift between locally reserved/submitted wallet fees
+/// and the fee account balance observed from chain state.
 pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     world: &mut CucumberWorld,
     step_value: &str,
@@ -177,6 +182,11 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     Ok(())
 }
 
+/// Wait until the wallet block feed has observed all expected transaction
+/// hashes in blocks.
+///
+/// This checks inclusion through TF's observed-chain feed, not just successful
+/// transaction submission to a node.
 pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
     world: &mut CucumberWorld,
     step: &str,
@@ -225,6 +235,10 @@ pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
     clippy::too_many_arguments,
     reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
 )]
+/// Wait until a wallet balance matches the requested output-count/value bounds.
+///
+/// The balance is read from tracked wallet state at the selected best node, so
+/// the assertion follows the same fork-group logic used by transaction steps.
 pub async fn wait_for_wallet_output_state(
     world: &mut CucumberWorld,
     step: &str,

@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use lb_core::mantle::{NoteId, Utxo};
+use serde::{Deserialize, Serialize};
 
 use super::WalletId;
 
@@ -175,6 +176,32 @@ impl TrackedWallet {
             tracked_spent_fees: self.pending_state.tracked_spent_fees(),
         }
     }
+
+    /// Export this tracked wallet's durable read-model state.
+    #[must_use]
+    pub fn to_state(&self) -> TrackedWalletState {
+        TrackedWalletState {
+            on_chain_utxos: self.on_chain_utxos(),
+            reserved_utxos: self.pending_state.reserved_utxos().to_vec(),
+            tracked_spent_fees: self.pending_state.tracked_spent_fees(),
+        }
+    }
+
+    /// Recreate a tracked wallet from exported read-model state.
+    #[must_use]
+    pub fn from_state(state: TrackedWalletState) -> Self {
+        Self {
+            utxos_by_note: state
+                .on_chain_utxos
+                .into_iter()
+                .map(|utxo| (utxo.id(), utxo))
+                .collect(),
+            pending_state: PendingWalletState {
+                reserved_utxos: state.reserved_utxos,
+                tracked_spent_fees: state.tracked_spent_fees,
+            },
+        }
+    }
 }
 
 impl Default for TrackedWallet {
@@ -186,6 +213,17 @@ impl Default for TrackedWallet {
 pub struct TrackedWalletPendingSummary {
     pub reserved_utxos: usize,
     pub tracked_spent_fees: u64,
+}
+
+/// Serializable state for one tracked wallet.
+///
+/// Contains the latest observed on-chain UTXOs plus local pending state that is
+/// not directly derivable from a single block observation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TrackedWalletState {
+    on_chain_utxos: Vec<Utxo>,
+    reserved_utxos: Vec<Utxo>,
+    tracked_spent_fees: u64,
 }
 
 /// Local wallet state for transactions that were submitted but are not yet

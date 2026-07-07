@@ -115,7 +115,7 @@ pub enum ZoneTestError {
     #[error("zone sequencer event stream stopped before observing the expected event")]
     SequencerStopped,
     #[error(transparent)]
-    BoundedError(#[from] lb_utils::bounded_vec::BoundedError),
+    BoundedError(#[from] lb_utils::bounded::BoundedError),
     #[error(transparent)]
     OutputsError(#[from] OutputsError),
 }

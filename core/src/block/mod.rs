@@ -6,7 +6,7 @@ use core::fmt::Debug;
 use bytes::Bytes;
 use lb_cryptarchia_engine::Slot;
 use lb_key_management_system_keys::keys::{Ed25519Key, Ed25519Signature};
-use lb_utils::bounded_vec::{BoundedError, BoundedVec};
+use lb_utils::bounded::{BoundedError, BoundedVec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -312,9 +312,9 @@ mod tests {
         crypto::ZkHasher,
         mantle::{
             MantleTx, TransactionHasher,
-            encoding::Ops,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
+            transactions::Ops,
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };

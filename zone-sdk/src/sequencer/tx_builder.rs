@@ -2,7 +2,6 @@ use lb_core::{
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        encoding::Ops,
         ops::{
             Op, OpProof,
             channel::{
@@ -11,7 +10,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        tx::TxHash,
+        transactions::{Ops, TxHash},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };

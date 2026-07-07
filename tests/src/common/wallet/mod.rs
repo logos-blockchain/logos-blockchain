@@ -34,11 +34,11 @@ pub use funding_from_chain::{
 };
 pub use ids::{WalletChainSourceId, WalletId, wallet_id_for_chain_source};
 pub use tracked::{
-    RecordedWalletSubmission, TrackedWallets, WalletDiagnostics, WalletPendingStateDiagnostics,
-    WalletUtxoSnapshotDiagnostics,
+    RecordedWalletSubmission, TrackedWallets, TrackedWalletsState, WalletDiagnostics,
+    WalletPendingStateDiagnostics, WalletUtxoSnapshotDiagnostics,
 };
 pub(crate) use tracked_wallet::TrackedWallet;
-pub use tracked_wallet::{WalletBalance, WalletOutputState, WalletStateView};
+pub use tracked_wallet::{TrackedWalletState, WalletBalance, WalletOutputState, WalletStateView};
 pub use transaction::{
     PreparedWalletTransaction, SignedWalletTransaction, WalletTransactionError,
     WalletTransactionIntent, fund_builder_from_wallet_source, prepare_wallet_transaction,

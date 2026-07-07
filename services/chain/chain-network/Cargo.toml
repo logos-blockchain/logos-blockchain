@@ -14,6 +14,7 @@ workspace = true
 
 [dependencies]
 async-trait             = { workspace = true }
+backon                  = { features = ["tokio-sleep"], workspace = true }
 futures                 = { workspace = true }
 lb-chain-service        = { workspace = true }
 lb-chain-service-common = { workspace = true }

@@ -8,10 +8,10 @@ use crate::cucumber::{
 #[cfg_attr(test, derive(strum_macros::EnumCount))]
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ManualCommand {
-    CreateBlockchainSnapshotAllNodes {
+    CreateSnapshotAllNodes {
         snapshot_name: String,
     },
-    CreateBlockchainSnapshotNode {
+    CreateSnapshotNode {
         snapshot_name: String,
         node_name: String,
     },
@@ -176,12 +176,10 @@ fn parse_manual_command(raw: &str) -> Result<ManualCommand, StepError> {
     let command = binding.as_str();
 
     match command {
-        "CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES" => {
-            Ok(ManualCommand::CreateBlockchainSnapshotAllNodes {
-                snapshot_name: parse_quoted_field(&parts, "snapshot_name")?,
-            })
-        }
-        "CREATE_BLOCKCHAIN_SNAPSHOT_NODE" => Ok(ManualCommand::CreateBlockchainSnapshotNode {
+        "CREATE_SNAPSHOT_ALL_NODES" => Ok(ManualCommand::CreateSnapshotAllNodes {
+            snapshot_name: parse_quoted_field(&parts, "snapshot_name")?,
+        }),
+        "CREATE_SNAPSHOT_NODE" => Ok(ManualCommand::CreateSnapshotNode {
             snapshot_name: parse_quoted_field(&parts, "snapshot_name")?,
             node_name: parse_quoted_field(&parts, "node_name")?,
         }),
@@ -377,25 +375,23 @@ mod tests {
             .unwrap_or_else(|e| panic!("Expected command to parse, got error: {e}. Raw: {raw}"))
     }
 
-    fn assert_create_blockchain_snapshot_all_nodes_command() {
-        let command =
-            parse_ok("CREATE_BLOCKCHAIN_SNAPSHOT_ALL_NODES, snapshot_name 'SNAP_TEST_01'");
+    fn assert_create_snapshot_all_nodes_command() {
+        let command = parse_ok("CREATE_SNAPSHOT_ALL_NODES, snapshot_name 'SNAP_TEST_01'");
 
         assert!(matches!(
             command,
-            ManualCommand::CreateBlockchainSnapshotAllNodes { snapshot_name }
+            ManualCommand::CreateSnapshotAllNodes { snapshot_name }
                 if snapshot_name == "SNAP_TEST_01"
         ));
     }
 
-    fn assert_create_blockchain_snapshot_node_command() {
-        let command = parse_ok(
-            "CREATE_BLOCKCHAIN_SNAPSHOT_NODE, snapshot_name 'SNAP_TEST_01', node_name 'NODE_1'",
-        );
+    fn assert_create_snapshot_node_command() {
+        let command =
+            parse_ok("CREATE_SNAPSHOT_NODE, snapshot_name 'SNAP_TEST_01', node_name 'NODE_1'");
 
         assert!(matches!(
             command,
-            ManualCommand::CreateBlockchainSnapshotNode {
+            ManualCommand::CreateSnapshotNode {
                 snapshot_name,
                 node_name,
             } if snapshot_name == "SNAP_TEST_01" && node_name == "NODE_1"
@@ -650,10 +646,10 @@ mod tests {
 
     fn variant_array() -> [ManualCommand; ManualCommand::COUNT] {
         let command_array = [
-            ManualCommand::CreateBlockchainSnapshotAllNodes {
+            ManualCommand::CreateSnapshotAllNodes {
                 snapshot_name: String::new(),
             },
-            ManualCommand::CreateBlockchainSnapshotNode {
+            ManualCommand::CreateSnapshotNode {
                 snapshot_name: String::new(),
                 node_name: String::new(),
             },
@@ -742,12 +738,12 @@ mod tests {
 
         for variant in variant_array() {
             match variant {
-                ManualCommand::CreateBlockchainSnapshotAllNodes { .. } => {
-                    assert_create_blockchain_snapshot_all_nodes_command();
+                ManualCommand::CreateSnapshotAllNodes { .. } => {
+                    assert_create_snapshot_all_nodes_command();
                     visited += 1;
                 }
-                ManualCommand::CreateBlockchainSnapshotNode { .. } => {
-                    assert_create_blockchain_snapshot_node_command();
+                ManualCommand::CreateSnapshotNode { .. } => {
+                    assert_create_snapshot_node_command();
                     visited += 1;
                 }
                 ManualCommand::CoinSplit { .. } => {

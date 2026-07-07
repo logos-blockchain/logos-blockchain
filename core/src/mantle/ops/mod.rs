@@ -5,6 +5,7 @@ pub mod transfer;
 
 pub(crate) mod internal;
 
+pub(crate) mod codec;
 mod serde_;
 
 use std::sync::LazyLock;

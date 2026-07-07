@@ -596,7 +596,6 @@ mod tests {
         header::{ContentId, HeaderId},
         mantle::{
             MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo,
-            encoding::Ops,
             ledger::{Inputs, Outputs},
             ops::{
                 OpProof,
@@ -608,6 +607,7 @@ mod tests {
                     withdraw::ChannelWithdrawOp,
                 },
             },
+            transactions::Ops,
         },
         proofs::leader_proof::Groth16LeaderProof,
     };

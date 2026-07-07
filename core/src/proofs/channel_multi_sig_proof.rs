@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use lb_core_macros::NomCodec;
 use lb_key_management_system_keys::keys::Ed25519Signature;
-use lb_utils::bounded_vec::UpperBoundedVec;
+use lb_utils::bounded::UpperBoundedVec;
 use nom::{
     Err,
     error::{Error as NomError, ErrorKind},
@@ -148,6 +148,18 @@ impl ChannelMultiSigProof {
     #[must_use]
     pub fn signatures(&self) -> &[IndexedSignature] {
         self.signatures.as_slice()
+    }
+}
+
+pub mod codec {
+    use lb_key_management_system_keys::keys::ED25519_SIGNATURE_SIZE;
+
+    use crate::mantle::ops::channel::ChannelKeyIndex;
+
+    #[must_use]
+    pub const fn calculate_channel_multi_sig_proof_byte_size(threshold: ChannelKeyIndex) -> usize {
+        // Encoding: u16 signature count + N * (Ed25519 sig + u16 key index)
+        2 + (threshold as usize) * (ED25519_SIGNATURE_SIZE + 2)
     }
 }
 

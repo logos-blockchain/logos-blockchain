@@ -30,7 +30,7 @@ use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded::BoundedError;
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -279,7 +279,10 @@ where
             network_adapter.clone(),
         );
 
-        match initial_block_download.run(bootstrap_config.ibd).await {
+        match initial_block_download
+            .run(bootstrap_config.ibd, &sync_config.orphan)
+            .await
+        {
             Ok(_) => {
                 info!("Initial Block Download completed successfully");
                 // Notify chain-service that IBD is complete so it can start the prolonged
