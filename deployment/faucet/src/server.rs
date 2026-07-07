@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 pub struct FaucetServerState {
     queue: mpsc::Sender<ZkPublicKey>,
-    cooldowns: Mutex<HashMap<String, Instant>>,
+    cooldowns: Mutex<HashMap<ZkPublicKey, Instant>>,
     cooldown: Duration,
 }
 
@@ -33,7 +33,7 @@ impl FaucetServerState {
 
     /// Registers a drip attempt for `key`. Returns the remaining cooldown if
     /// the key is still cooling down from a previous request.
-    fn try_start_cooldown(&self, key: &str) -> Result<(), Duration> {
+    fn try_start_cooldown(&self, key: ZkPublicKey) -> Result<(), Duration> {
         let mut cooldowns = self
             .cooldowns
             .lock()
@@ -41,20 +41,20 @@ impl FaucetServerState {
         let now = Instant::now();
         cooldowns.retain(|_, expires_at| *expires_at > now);
 
-        if let Some(expires_at) = cooldowns.get(key) {
+        if let Some(expires_at) = cooldowns.get(&key) {
             return Err(expires_at.duration_since(now));
         }
 
-        cooldowns.insert(key.to_owned(), now + self.cooldown);
+        cooldowns.insert(key, now + self.cooldown);
         drop(cooldowns);
         Ok(())
     }
 
-    fn clear_cooldown(&self, key: &str) {
+    fn clear_cooldown(&self, key: ZkPublicKey) {
         self.cooldowns
             .lock()
             .expect("cooldown mutex should not be poisoned")
-            .remove(key);
+            .remove(&key);
     }
 }
 
@@ -78,8 +78,7 @@ async fn transfer_funds(
         }
     };
 
-    let cooldown_key = key_id.to_lowercase();
-    if let Err(remaining) = state.try_start_cooldown(&cooldown_key) {
+    if let Err(remaining) = state.try_start_cooldown(recipient_pk) {
         let retry_after_secs = remaining.as_secs().max(1);
         return (
             StatusCode::TOO_MANY_REQUESTS,
@@ -102,7 +101,7 @@ async fn transfer_funds(
         )
             .into_response()
     } else {
-        state.clear_cooldown(&cooldown_key);
+        state.clear_cooldown(recipient_pk);
         (
             StatusCode::SERVICE_UNAVAILABLE,
             serde_json::json!({
