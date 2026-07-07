@@ -1286,7 +1286,7 @@ where
 }
 
 #[utoipa::path(
-    post,
+    get,
     path = paths::BLOCKS_DETAIL,
     responses(
         (status = 200, description = "Block found"),
@@ -1439,7 +1439,7 @@ where
 
 #[utoipa::path(
     get,
-    path = paths::BLOCKS_STREAM,
+    path = paths::BLOCKS_RANGE_STREAM,
     params(BlocksStreamQuery),
     responses(
         (status = 200, description = "Stream of processed blocks with chain state in slot order. \
@@ -1527,7 +1527,7 @@ where
 }
 
 #[utoipa::path(
-    post,
+    get,
     path = paths::TRANSACTION,
     responses(
         (status = 200, description = "Transaction found"),

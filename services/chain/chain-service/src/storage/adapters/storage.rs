@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, HashMap},
     marker::PhantomData,
     pin::Pin,
 };
@@ -235,7 +235,7 @@ where
 
     async fn get_transactions(
         &self,
-        tx_hashes: BTreeSet<TxHash>,
+        tx_hashes: Vec<TxHash>,
     ) -> Result<Pin<Box<dyn Stream<Item = Self::Tx> + Send>>, overwatch::DynError> {
         let (sender, receiver) = oneshot::channel();
 
