@@ -31,6 +31,7 @@ use utoipa::OpenApi;
         crate::api::handlers::wallet::get_claimable_vouchers,
         crate::api::handlers::get_gas_prices,
         crate::api::handlers::wallet::post_transactions_transfer_funds,
+        crate::api::handlers::wallet::fund,
         crate::api::tracing::reload_tracing_filter,
     ),
     components(schemas(schema::Status, schema::MempoolMetrics)),

@@ -310,6 +310,33 @@ mod tests {
     };
 
     #[test]
+    fn serde_round_trip() {
+        // The builder crosses the HTTP boundary (e.g. the wallet fund
+        // endpoint), so a serialized builder must deserialize back to the
+        // same transaction.
+        let builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(InscriptionOp {
+                channel_id: [0; 32].into(),
+                inscription: b"hello".into(),
+                parent: [1; 32].into(),
+                signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            }))
+            .unwrap()
+            .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero())))
+            .unwrap()
+            .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
+            .unwrap();
+
+        let json = serde_json::to_string(&builder).expect("builder should serialize");
+        let restored: MantleTxBuilder =
+            serde_json::from_str(&json).expect("builder should deserialize");
+
+        assert_eq!(restored.net_balance(), builder.net_balance());
+        assert_eq!(restored.ledger_inputs(), builder.ledger_inputs());
+        assert_eq!(restored.build().unwrap(), builder.build().unwrap());
+    }
+
+    #[test]
     fn inscription_op() {
         // Build an operation
         let op = InscriptionOp {
