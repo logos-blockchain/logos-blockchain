@@ -13,9 +13,7 @@ mode: Run
 # Tracing
 tracing_settings:
   logger:
-    otlp:
-      endpoint: "http://otel:4317"
-      service_name: "init_node"
+    otlp: null
     stdout: false
     stderr: false
     file:
@@ -24,8 +22,6 @@ tracing_settings:
     gelf: null
   tracing: None
   filter: None
-  metrics: !Otlp
-    endpoint: "http://otel:4317"
-    host_identifier: "init_node"
+  metrics: None
   console: None
   level: "DEBUG"
