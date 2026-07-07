@@ -104,9 +104,10 @@ pub const MAX_LOCATOR_BYTE_SIZE: usize = 329;
 /// A [`Multiaddr`] whose byte length is bounded to `[0,
 /// MAX_LOCATOR_BYTE_SIZE]`.
 ///
-/// `Multiaddr` is foreign to `lb_utils`, so it cannot implement `BoundedLen`;
-/// the byte length is measured here and validated through the shared
-/// [`Bounded::check_len`] gate.
+/// The shared `lb_utils::bounded` wrapper enforces the byte-length invariant
+/// using `Multiaddr::len()`. `Locator::try_from` performs the additional
+/// locator-specific validation below, such as rejecting unspecified, loopback,
+/// multicast, documentation, and link-local addresses.
 type BoundedMultiaddr = lb_utils::bounded::multiaddr::BoundedMultiaddr<0, MAX_LOCATOR_BYTE_SIZE>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
