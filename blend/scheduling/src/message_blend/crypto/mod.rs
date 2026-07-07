@@ -10,7 +10,7 @@ use lb_blend_message::{
         },
     },
 };
-use lb_core::codec::{DeserializeOp as _, SerializeOp};
+use lb_core::codec::SerializeOp;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 pub mod core_and_leader;
@@ -59,6 +59,9 @@ where
         .to_vec()
 }
 
-pub fn deserialize_encapsulated_message(message: &[u8]) -> Result<EncapsulatedMessage, Error> {
-    EncapsulatedMessage::from_bytes(message).map_err(|_| Error::MessageDeserializationFailed)
+pub fn deserialize_encapsulated_message(
+    message: &[u8],
+    num_blend_layers: NonZeroU64,
+) -> Result<EncapsulatedMessage, Error> {
+    EncapsulatedMessage::deserialize_from_remote(message, num_blend_layers)
 }

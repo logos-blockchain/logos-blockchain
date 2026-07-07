@@ -1,13 +1,16 @@
+use std::{num::NonZeroU64, sync::LazyLock};
+
 use derivative::Derivative;
 use itertools::Itertools as _;
 use lb_blend_crypto::{ZkHash, cipher::Cipher};
 use lb_blend_proofs::{
-    quota::{self, VerifiedProofOfQuota},
+    quota::{self, PROOF_OF_QUOTA_SIZE, VerifiedProofOfQuota},
     selection::{self, VerifiedProofOfSelection, inputs::VerifyInputs},
 };
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_key_management_system_keys::keys::{
-    Ed25519PublicKey, Ed25519Signature, SharedKey, UnsecuredEd25519Key,
+    ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature, SharedKey,
+    UnsecuredEd25519Key,
 };
 use serde::{Deserialize, Serialize};
 
@@ -57,6 +60,40 @@ impl EncapsulatedMessage {
     #[must_use]
     pub fn into_components(self) -> (PublicHeader, EncapsulatedPart) {
         (self.public_header, self.encapsulated_part)
+    }
+
+    /// The exact serialized size, in bytes, of any well-formed message with
+    /// `num_layers` encapsulation layers.
+    ///
+    /// The wire format is fixed-size (see the Blend Payload Formatting spec):
+    /// the public header, every encapsulated blending header, and the payload
+    /// all have a constant size, so the total is strictly linear in the number
+    /// of layers and fully determined by `num_layers`.
+    #[must_use]
+    pub fn expected_serialized_len(num_layers: NonZeroU64) -> u64 {
+        let SizeModel { base, per_layer } = *SIZE_MODEL;
+        base + num_layers.get() * per_layer
+    }
+
+    /// Deserialize a message received from an untrusted remote peer, enforcing
+    /// the fixed layout mandated by the Blend Payload Formatting spec.
+    ///
+    /// Before allocating anything we reject any input whose length is not
+    /// exactly that of a well-formed `num_layers`-layer message. Because each
+    /// layer contributes a fixed number of bytes, this O(1) check bounds the
+    /// work an adversary can force on us: a message encoding, say, 20 layers
+    /// when we expect 3 has a different length and is discarded before a single
+    /// layer is parsed. Decoding is then re-checked against the expected layout,
+    /// since the total length alone does not pin down how the bytes are split
+    /// between layers and payload.
+    pub fn deserialize_from_remote(bytes: &[u8], num_layers: NonZeroU64) -> Result<Self, Error> {
+        if bytes.len() as u64 != Self::expected_serialized_len(num_layers) {
+            return Err(Error::UnexpectedMessageSize);
+        }
+
+        let message = Self::from_bytes(bytes).map_err(|_| Error::MessageDeserializationFailed)?;
+        message.encapsulated_part.validate_layout(num_layers)?;
+        Ok(message)
     }
 
     /// Verify the message public header signature.
@@ -245,6 +282,19 @@ impl EncapsulatedPart {
     pub(super) fn sign(&self, key: &UnsecuredEd25519Key) -> Ed25519Signature {
         key.sign_payload(&signing_body(&self.private_header, &self.payload))
     }
+
+    /// Verifies that a decoded part matches the fixed layout of a well-formed
+    /// `num_layers`-layer message: exactly `num_layers` layers, each of the
+    /// fixed per-layer size, and a fixed-size payload.
+    fn validate_layout(&self, num_layers: NonZeroU64) -> Result<(), Error> {
+        if self.private_header.layer_count() as u64 != num_layers.get() {
+            return Err(Error::UnexpectedEncapsulationLayerCount);
+        }
+        if !self.private_header.has_fixed_size_layers() || self.payload.byte_len() != *PAYLOAD_LEN {
+            return Err(Error::MalformedEncapsulatedMessage);
+        }
+        Ok(())
+    }
 }
 
 /// Verify the public header reconstructed when decapsulating all but the very
@@ -301,7 +351,7 @@ fn signing_body(
 // TODO: Consider having `InitializedPrivateHeader`
 // that just finished the initialization step and doesn't have `decapsulate` method.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub(super) struct EncapsulatedPrivateHeader(Vec<EncapsulatedBlendingHeader>);
+pub(super) struct EncapsulatedPrivateHeader(Box<[EncapsulatedBlendingHeader]>);
 
 impl EncapsulatedPrivateHeader {
     #[cfg(test)]
@@ -351,7 +401,8 @@ impl EncapsulatedPrivateHeader {
                         });
                     header
                 })
-                .collect(),
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
         )
     }
 
@@ -492,6 +543,18 @@ impl EncapsulatedPrivateHeader {
             .iter()
             .flat_map(EncapsulatedBlendingHeader::iter_bytes)
     }
+
+    fn layer_count(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns `true` iff every layer has the fixed serialized size mandated by
+    /// the Blend Payload Formatting spec.
+    fn has_fixed_size_layers(&self) -> bool {
+        self.0
+            .iter()
+            .all(|header| header.byte_len() == *BLENDING_HEADER_LEN)
+    }
 }
 
 /// A blending header encapsulated zero or more times.
@@ -530,6 +593,10 @@ impl EncapsulatedBlendingHeader {
 
     fn iter_bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.0.iter().copied()
+    }
+
+    const fn byte_len(&self) -> usize {
+        self.0.len()
     }
 }
 
@@ -572,4 +639,74 @@ impl EncapsulatedPayload {
     fn iter_bytes(&self) -> impl Iterator<Item = u8> + '_ {
         self.0.iter().copied()
     }
+
+    const fn byte_len(&self) -> usize {
+        self.0.len()
+    }
+}
+
+/// The wire size of a message is `base + num_layers * per_layer` bytes. We
+/// recover these two coefficients once, by measuring two canonically-built
+/// messages, so that no assumption about the underlying codec's framing is
+/// hard-coded here.
+struct SizeModel {
+    base: u64,
+    per_layer: u64,
+}
+
+static SIZE_MODEL: LazyLock<SizeModel> = LazyLock::new(|| {
+    let size_of = |num_layers| {
+        canonical_message(num_layers)
+            .bytes_size()
+            .expect("A canonical message is always serializable.")
+    };
+    let one_layer = size_of(1);
+    let two_layers = size_of(2);
+    let per_layer = two_layers - one_layer;
+    SizeModel {
+        base: one_layer - per_layer,
+        per_layer,
+    }
+});
+
+/// The fixed serialized size of a single encapsulated blending header (layer).
+static BLENDING_HEADER_LEN: LazyLock<usize> = LazyLock::new(|| {
+    EncapsulatedBlendingHeader::initialize(&BlendingHeader::pseudo_random(&[0])).byte_len()
+});
+
+/// The fixed serialized size of an encapsulated payload.
+static PAYLOAD_LEN: LazyLock<usize> =
+    LazyLock::new(|| EncapsulatedPayload::initialize(&canonical_payload()).byte_len());
+
+fn canonical_payload() -> Payload {
+    Payload::new(
+        PayloadType::Cover,
+        PaddedPayloadBody::try_from([0u8; 0].as_slice())
+            .expect("An empty payload body is always valid."),
+    )
+}
+
+/// Builds a structurally-valid (but cryptographically meaningless) message with
+/// `num_layers` layers, used solely to measure the fixed wire size.
+fn canonical_message(num_layers: usize) -> EncapsulatedMessage {
+    let public_header = PublicHeader::new(
+        UnsecuredEd25519Key::from_bytes(&[0; ED25519_PUBLIC_KEY_SIZE]).public_key(),
+        &VerifiedProofOfQuota::from_bytes_unchecked([0; PROOF_OF_QUOTA_SIZE]).into_inner(),
+        Ed25519Signature::from_bytes(&[0; ED25519_SIGNATURE_SIZE]),
+    );
+    let private_header = EncapsulatedPrivateHeader(
+        (0..num_layers)
+            .map(|layer| {
+                EncapsulatedBlendingHeader::initialize(&BlendingHeader::pseudo_random(&[layer as u8]))
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
+    );
+    EncapsulatedMessage::from_components(
+        public_header,
+        EncapsulatedPart {
+            private_header,
+            payload: EncapsulatedPayload::initialize(&canonical_payload()),
+        },
+    )
 }

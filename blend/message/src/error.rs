@@ -14,6 +14,12 @@ pub enum Error {
     ProofOfQuotaVerificationFailed(quota::Error),
     #[error("Encapsulated message deserialization failed")]
     MessageDeserializationFailed,
+    #[error("Encapsulated message has an unexpected serialized size")]
+    UnexpectedMessageSize,
+    #[error("Encapsulated message has an unexpected number of encapsulation layers")]
+    UnexpectedEncapsulationLayerCount,
+    #[error("Encapsulated message layout does not match the fixed wire format")]
+    MalformedEncapsulatedMessage,
     #[error("Payload deserialization failed")]
     PayloadDeserializationFailed,
     #[error("Private header deserialization failed")]
