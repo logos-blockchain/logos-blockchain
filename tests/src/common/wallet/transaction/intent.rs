@@ -67,7 +67,8 @@ impl WalletTransactionIntent {
 
 fn transfer_output_total(tx_builder: &MantleTxBuilder) -> Result<u64, WalletTransactionError> {
     tx_builder
-        .draft_tx()?
+        .clone()
+        .build()?
         .ops()
         .iter()
         .filter_map(|op| match op {

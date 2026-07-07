@@ -229,7 +229,7 @@ impl MantleTxBuilder {
         &self,
         context: &MantleTxContext,
     ) -> Result<GasCost, TxBuilderError> {
-        let build = self.draft_tx()?;
+        let build = self.clone().build()?;
         Ok(build.total_gas_cost::<G>(&context.gas_context)?)
     }
 
@@ -273,33 +273,9 @@ impl MantleTxBuilder {
         &self.channel_multi_sig_proofs
     }
 
-    /// Build the transaction, rejecting any transaction the builder can
-    /// prove is underfunded (negative net balance).
-    ///
-    /// `Transfer` ops pushed directly carry note ids whose values are
-    /// unknown to the builder, so such transactions cannot be priced
-    /// client-side — they are built as-is and left to ledger validation.
-    pub fn build(self) -> Result<MantleTx, TxBuilderError> {
-        let has_pushed_transfers = self
-            .mantle_tx
-            .ops()
-            .iter()
-            .any(|op| matches!(op, Op::Transfer(_)));
-        if !has_pushed_transfers {
-            let _ = self.tx_fee()?;
-        }
-        self.assemble()
-    }
-
-    /// Assemble the current — possibly unbalanced — transaction for
-    /// inspection or gas estimation. Unlike [`Self::build`], performs no
-    /// balance check.
-    pub fn draft_tx(&self) -> Result<MantleTx, TxBuilderError> {
-        self.clone().assemble()
-    }
-
-    /// Append the pending transfer and produce the final [`MantleTx`].
-    fn assemble(mut self) -> Result<MantleTx, TxBuilderError> {
+    // TODO: Change this to a `Result` if genesis tx already contains max number of
+    // ops.
+    pub fn build(mut self) -> Result<MantleTx, TxBuilderError> {
         if !self.pending_transfer.is_empty() {
             self.mantle_tx
                 .0
@@ -450,39 +426,6 @@ mod tests {
                 .unwrap(),
             0
         );
-    }
-
-    #[test]
-    fn build_rejects_negative_net_balance() {
-        // Outputs without inputs — spends more than it provides.
-        let builder = MantleTxBuilder::new()
-            .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
-            .unwrap();
-
-        assert!(matches!(
-            builder.clone().build(),
-            Err(TxBuilderError::NegativeNetBalance { net_balance: -40 })
-        ));
-
-        // The draft view of the same builder is still available for
-        // inspection and gas estimation.
-        assert!(builder.draft_tx().is_ok());
-    }
-
-    #[test]
-    fn build_skips_balance_check_with_pushed_transfer_ops() {
-        // A >32-input funding path pushes full transfer chunks as raw ops;
-        // their input values are unknown to the builder, so the balance
-        // check must not reject the (possibly balanced) transaction.
-        let chunk = TransferOp::new(Inputs::new([NoteId(Fr::ZERO)]), Outputs::empty());
-        let builder = MantleTxBuilder::new()
-            .push_op(Op::Transfer(chunk))
-            .unwrap()
-            .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
-            .unwrap();
-
-        assert!(builder.net_balance() < 0, "visible balance is negative");
-        assert!(builder.build().is_ok());
     }
 
     #[test]

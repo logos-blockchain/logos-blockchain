@@ -301,7 +301,7 @@ fn with_transfer_input_chunks(
 }
 
 fn pending_transfer_output_sum(tx_builder: &MantleTxBuilder) -> u128 {
-    match tx_builder.draft_tx() {
+    match tx_builder.clone().build() {
         Ok(tx) => match tx.0.iter().last() {
             Some(Op::Transfer(transfer)) => transfer
                 .outputs
