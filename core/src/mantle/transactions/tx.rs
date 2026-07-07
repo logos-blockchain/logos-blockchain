@@ -14,16 +14,19 @@ use crate::{
     mantle::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         channel::Channels,
-        encoding::{
-            Ops, decode_mantle_tx, decode_signed_mantle_tx, encode_mantle_tx,
-            encode_signed_mantle_tx,
-        },
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
-        genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
             transfer::TransferOp,
+        },
+        transactions::{
+            Ops,
+            codec::{
+                decode_mantle_tx, decode_signed_mantle_tx, encode_mantle_tx,
+                encode_signed_mantle_tx, predict_signed_mantle_tx_size,
+            },
+            genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         },
     },
     proofs::{
@@ -256,7 +259,7 @@ impl GasCalculator for MantleTx {
 impl MantleTx {
     #[must_use]
     pub fn signed_serialized_size(&self, context: &<Self as GasCalculator>::Context) -> u64 {
-        super::encoding::predict_signed_mantle_tx_size(self, context) as u64
+        predict_signed_mantle_tx_size(self, context) as u64
     }
 
     #[must_use]
@@ -700,7 +703,7 @@ mod tests {
     use super::*;
     use crate::{
         mantle::{Note, ledger::Outputs, ops::channel::inscribe::InscriptionOp},
-        proofs::channel_multi_sig_proof::IndexedSignature,
+        proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
@@ -771,7 +774,7 @@ mod tests {
             withdraw_nonce: 0,
         })]);
         let tx_hash = mantle_tx.hash();
-        let signatures = signing_keys
+        let signatures: IndexedSignatures = signing_keys
             .iter()
             .enumerate()
             .map(|(index, key)| {
@@ -780,8 +783,10 @@ mod tests {
                     key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
                 )
             })
-            .collect();
-        let proof = ChannelMultiSigProof::new(signatures).unwrap();
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let proof = ChannelMultiSigProof::try_new(signatures).unwrap();
         SignedMantleTx::new(mantle_tx, vec![OpProof::ChannelMultiSigProof(proof)]).unwrap()
     }
 

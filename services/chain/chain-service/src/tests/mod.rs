@@ -344,7 +344,6 @@ pub fn ledger_config(security_param: NonZero<u32>) -> lb_ledger::Config {
         lb_core::sdp::ServiceType::BlendNetwork,
         ServiceParameters {
             inactivity_period: 2.try_into().unwrap(),
-            retention_period: 1.into(),
             epoch: 0.into(),
         },
     );

@@ -1,7 +1,7 @@
 use std::iter::repeat_n;
 
 use lb_core::{
-    mantle::{GenesisTx as _, Op, genesis_tx::GenesisTx},
+    mantle::{GenesisTx as _, Op, transactions::GenesisTx},
     sdp::DeclarationId,
 };
 

@@ -32,23 +32,33 @@ use crate::{
         fee_reserve::{DEFAULT_STORAGE_GAS_PRICE, ScenarioFeeFundingError},
         wallet::{
             TARGET,
-            best_node::{BestNodeInfo, sanitize_best_node_info_with_feed},
-            sync::current_available_utxos_for_user_wallets,
+            best_node::{BestNodeInfo, get_best_node_info, sanitize_best_node_info_with_feed},
+            sync::{current_available_utxos_for_user_wallets, filter_utxos_to_node_wallet_balance},
         },
         world::{CucumberWorld, WalletInfo, WalletType},
     },
 };
 
+/// Prepared transaction tied to the scenario wallet that owns it.
+///
+/// This is used when a test step needs to construct a transaction now and
+/// submit it later, optionally after adding extra operation proofs.
 pub struct PreparedUserWalletSubmission {
     wallet: WalletInfo,
     submission: PreparedWalletTransaction,
 }
 
+/// Signed transaction plus the wallet metadata needed for submission and
+/// bookkeeping.
 pub(crate) struct SignedUserWalletSubmission {
     wallet: WalletInfo,
     submission: SignedWalletTransaction,
 }
 
+/// Transaction whose inputs are selected but whose proofs are not finalized.
+///
+/// Manual command flows use this to reserve inputs in an in-memory cache before
+/// doing expensive signing work concurrently.
 pub(crate) struct ReservedUserWalletSubmission {
     wallet: WalletInfo,
     submission: PreparedWalletTransactionWorkItem,
@@ -68,6 +78,11 @@ impl SignedUserWalletSubmission {
     pub(crate) const fn signed_tx(&self) -> &SignedMantleTx {
         self.submission.signed_tx()
     }
+
+    #[must_use]
+    pub fn reserved_inputs(&self) -> WalletReservedInputs {
+        self.submission.reserved_inputs()
+    }
 }
 
 impl ReservedUserWalletSubmission {
@@ -77,6 +92,11 @@ impl ReservedUserWalletSubmission {
     }
 }
 
+/// Reserve inputs for a user-wallet transfer and immediately update the
+/// caller's UTXO cache.
+///
+/// Updating the cache prevents a batch of pending transactions from selecting
+/// the same input notes before the wallet feed observes the submissions.
 pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
     world: &mut CucumberWorld,
     step: &str,
@@ -97,6 +117,10 @@ pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
     Ok(reserved)
 }
 
+/// Finalize reserved transactions in blocking worker tasks.
+///
+/// Wallet proof/signing work can be CPU-heavy, so this avoids doing it inline
+/// on the async runtime while preserving the first error for the caller.
 pub(crate) async fn finalize_reserved_user_wallet_submissions_concurrently(
     step: &str,
     reserved_submissions: Vec<ReservedUserWalletSubmission>,
@@ -137,46 +161,120 @@ pub(crate) async fn finalize_reserved_user_wallet_submissions_concurrently(
     Ok(signed_submissions)
 }
 
+/// Get the best n nodes for a random wallet's fork group. All wallets in the
+/// list should be in the same fork group.
+async fn get_best_n_nodes_for_submissions(
+    world: &CucumberWorld,
+    signed_submissions: &[SignedUserWalletSubmission],
+    n: usize,
+) -> Result<Vec<(String, NodeHttpClient)>, StepError> {
+    let mut wallet_names = signed_submissions
+        .iter()
+        .map(|v| v.wallet.wallet_name.clone())
+        .collect::<Vec<_>>();
+    wallet_names.sort();
+    wallet_names.dedup();
+    let best_node_info =
+        get_best_node_info(world, wallet_names.first().expect("wallet exists"), None).await?;
+    let same_tip_node_names = best_node_info
+        .best_nodes
+        .values()
+        .next()
+        .ok_or(StepError::LogicalError {
+            message: "No best node info available for submission".to_owned(),
+        })?
+        .same_tip_nodes
+        .iter()
+        .take(n.max(1))
+        .cloned()
+        .collect::<Vec<_>>();
+    if same_tip_node_names.is_empty() {
+        return Err(StepError::LogicalError {
+            message: "No same tip nodes available for submission".to_owned(),
+        });
+    }
+
+    let mut started_nodes = Vec::with_capacity(n.max(1));
+    for node_name in same_tip_node_names {
+        if let Some(node_info) = world.nodes_info.get(&node_name) {
+            started_nodes.push((node_name, node_info.started_node.client.clone()));
+        } else {
+            return Err(StepError::LogicalError {
+                message: format!("No node info available for {node_name} in world"),
+            });
+        }
+    }
+
+    Ok(started_nodes)
+}
+
+/// Submit signed transactions to several nodes sharing the selected majority
+/// tip.
+///
+/// Fanout makes manual/stress scenarios less sensitive to one slow node while
+/// still avoiding nodes from a different fork group.
 pub(crate) async fn submit_signed_user_wallet_submissions_concurrently(
     world: &mut CucumberWorld,
     signed_submissions: Vec<SignedUserWalletSubmission>,
-    best_node_info: Option<&BestNodeInfo>,
 ) -> Result<Vec<(String, TxHash)>, StepError> {
     if signed_submissions.is_empty() {
         return Ok(Vec::new());
     }
+    world.ensure_wallet_block_feed().await?;
+
+    let same_tip_nodes = get_best_n_nodes_for_submissions(world, &signed_submissions, 3).await?;
 
     let mut join_set = JoinSet::new();
-    world.ensure_wallet_block_feed().await?;
-    let feed = world.wallet_block_feed()?;
-    let selection_wallet_name = signed_submissions[0].wallet.wallet_name.clone();
-    let (_, node_client, _) = sanitize_best_node_info_with_feed(
-        world,
-        &selection_wallet_name,
-        best_node_info,
-        Some(&feed),
-    )
-    .await?;
-    let node_client = node_client.clone();
 
     for signed_submission in signed_submissions {
         let wallet = signed_submission.wallet.clone();
-        let node_client = node_client.clone();
+        let same_tip_nodes = same_tip_nodes.clone();
 
         join_set.spawn(async move {
-            timeout(
-                Duration::from_secs(15),
-                node_client.submit_transaction(signed_submission.signed_tx()),
-            )
-            .await
-            .map_err(|_| StepError::Timeout {
-                message: format!(
-                    "Submit transaction '{}/{}' ",
-                    wallet.wallet_name, wallet.node_name
-                ),
-            })??;
+            let tx_hash = signed_submission.tx_hash();
+            let mut submission_errors = Vec::new();
 
-            Ok::<_, StepError>(signed_submission)
+            // Try to submit to each node in same_tip_nodes.
+            let mut submitted_nodes = Vec::new();
+            for (node_name, node_client) in &same_tip_nodes {
+                match timeout(
+                    Duration::from_secs(15),
+                    node_client.submit_transaction(signed_submission.signed_tx()),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {
+                        submitted_nodes.push(node_name.clone());
+                    }
+                    Ok(Err(err)) => {
+                        submission_errors.push(format!("{node_name}: {err}"));
+                    }
+                    Err(_) => {
+                        submission_errors.push(format!("{node_name}: timeout"));
+                    }
+                }
+            }
+            if !submitted_nodes.is_empty() {
+                if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+                    info!(
+                        target: TARGET,
+                        "Transaction {} submitted successfully to {submitted_nodes:?}",
+                        hex::encode(tx_hash.0)
+                    );
+                }
+                return Ok::<_, StepError>(signed_submission);
+            }
+
+            // All nodes failed; log and return error.
+            let message = format!(
+                "Transaction {tx_hash:?} for '{}' failed on all {} nodes: {}",
+                wallet.wallet_name,
+                same_tip_nodes.len(),
+                submission_errors.join("; ")
+            );
+            warn!(target: TARGET, "{message}");
+
+            Err(StepError::LogicalError { message })
         });
     }
 
@@ -213,19 +311,25 @@ pub(crate) async fn submit_signed_user_wallet_submissions_concurrently(
     Ok(tx_hashes)
 }
 
+/// Build, sign, submit, and record one wallet transaction.
+///
+/// User wallets go through the local signing path. Funding wallets use the node
+/// wallet API because their funds are managed by the node-side wallet service.
 pub async fn create_and_submit_transaction(
     world: &mut CucumberWorld,
     step: &str,
     sender_wallet_name: &str,
     receivers: &[(ZkPublicKey, u64)],
     best_node_info: Option<&BestNodeInfo>,
+    in_memory_available_utxos: Option<&mut WalletUtxos>,
 ) -> Result<String, StepError> {
-    let tx_hashes = create_and_submit_transaction_hashes(
+    let tx_hashes = create_and_submit_transaction_hashes_with_utxo_cache(
         world,
         step,
         sender_wallet_name,
         receivers,
         best_node_info,
+        in_memory_available_utxos,
     )
     .await?;
 
@@ -243,24 +347,11 @@ pub async fn create_and_submit_transaction(
     Ok(tx_hashes_hex)
 }
 
-pub async fn create_and_submit_transaction_hashes(
-    world: &mut CucumberWorld,
-    step: &str,
-    sender_wallet_name: &str,
-    receivers: &[(ZkPublicKey, u64)],
-    best_node_info: Option<&BestNodeInfo>,
-) -> Result<Vec<TxHash>, StepError> {
-    create_and_submit_transaction_hashes_with_utxo_cache(
-        world,
-        step,
-        sender_wallet_name,
-        receivers,
-        best_node_info,
-        None,
-    )
-    .await
-}
-
+/// Build and submit one or more wallet transactions, optionally using a shared
+/// UTXO cache.
+///
+/// The shared cache is used by batch commands so each transaction sees inputs
+/// already reserved by earlier transactions in the same batch.
 pub async fn create_and_submit_transaction_hashes_with_utxo_cache(
     world: &mut CucumberWorld,
     step: &str,
@@ -327,6 +418,7 @@ pub async fn create_and_submit_transaction_hashes_with_utxo_cache(
     Ok(tx_hashes)
 }
 
+/// Wait until all supplied transaction hashes are included in chain blocks.
 pub async fn wait_for_transactions_inclusion(
     client: &NodeHttpClient,
     tx_hashes: &[TxHash],
@@ -345,6 +437,7 @@ pub async fn wait_for_transactions_inclusion(
     })
 }
 
+/// Wait until all transactions recorded for `wallet_name` are included.
 pub async fn wait_for_wallet_submitted_transactions_inclusion(
     world: &CucumberWorld,
     wallet_name: &str,
@@ -365,6 +458,10 @@ pub async fn wait_for_wallet_submitted_transactions_inclusion(
     wait_for_transactions_inclusion(client, &tx_hashes, timeout).await
 }
 
+/// Sign, submit, and record a previously prepared user-wallet transaction.
+///
+/// This path is used when a step needs to add extra operation proofs before the
+/// wallet transaction is finalized.
 pub async fn submit_prepared_user_wallet_transaction(
     world: &mut CucumberWorld,
     step: &str,
@@ -403,6 +500,7 @@ pub async fn submit_prepared_user_wallet_transaction(
     Ok(tx_hash)
 }
 
+/// Finalize proofs and signatures for a prepared user-wallet transaction.
 pub(crate) fn sign_prepared_user_wallet_transaction(
     step: &str,
     prepared: PreparedUserWalletSubmission,
@@ -440,6 +538,7 @@ fn finalize_reserved_user_wallet_submission(
     )
 }
 
+/// Record a signed transaction in TF wallet bookkeeping.
 pub(crate) fn record_signed_user_wallet_submission(
     world: &mut CucumberWorld,
     signed_submission: &SignedUserWalletSubmission,
@@ -452,6 +551,10 @@ pub(crate) fn record_signed_user_wallet_submission(
     )
 }
 
+/// Prepare a user-wallet transaction without submitting it.
+///
+/// This resolves wallet state, chooses inputs, applies fee policy, and returns
+/// a prepared transaction that can be signed/submitted later.
 pub(crate) async fn prepare_user_wallet_transaction_submission(
     world: &mut CucumberWorld,
     step: &str,
@@ -506,6 +609,7 @@ async fn reserve_user_wallet_transaction_submission(
         synced_available_utxos = current_available_utxos_for_user_wallets(world, step).await?;
         &synced_available_utxos
     };
+
     let sender_available_utxos =
         available_utxos
             .get(sender_wallet_name)
@@ -513,6 +617,16 @@ async fn reserve_user_wallet_transaction_submission(
             .ok_or(StepError::LogicalError {
                 message: format!("Wallet '{sender_wallet_name}' not found in updated balances"),
             })?;
+
+    let sender_available_utxos = filter_utxos_to_node_wallet_balance(
+        world,
+        &wallet.node_name,
+        sender_wallet_name,
+        wallet_account.public_key(),
+        sender_available_utxos,
+    )
+    .await?;
+
     let scenario_fee_funds =
         scenario_fee_account_state(world, sender_wallet_name, available_utxos)?;
 
@@ -521,6 +635,7 @@ async fn reserve_user_wallet_transaction_submission(
         sender_available_utxos,
         scenario_fee_funds,
     );
+
     let submission = prepare_wallet_transaction_work_item(transaction_intent, funding_resources)
         .map_err(wallet_transaction_error)
         .inspect_err(|e| {
@@ -645,7 +760,7 @@ fn apply_submitted_inputs_to_utxo_cache(
     apply_reserved_inputs_to_utxo_cache(cache, signed_submission.reserved_inputs());
 }
 
-fn apply_reserved_inputs_to_utxo_cache(
+pub fn apply_reserved_inputs_to_utxo_cache(
     cache: &mut WalletUtxos,
     reserved_inputs: WalletReservedInputs,
 ) {

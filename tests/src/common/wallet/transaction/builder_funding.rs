@@ -7,7 +7,7 @@ use lb_core::mantle::{
     gas::MainnetGasConstants,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
-    tx_builder::MantleTxBuilder,
+    transactions::MantleTxBuilder,
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_mmr::MerkleMountainRange;

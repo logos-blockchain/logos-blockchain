@@ -634,8 +634,12 @@ fn build_cryptarchia_user_config(
         network: NetworkConfig {
             bootstrap: network::BootstrapConfig {
                 ibd: network::IbdConfig {
-                    delay_before_new_download: Duration::from_secs(10),
                     peers: HashSet::new(),
+                    delay_before_new_download: Duration::from_secs(10),
+                    tips_fetch_max_attempts: 3,
+                    tips_fetch_min_delay: Duration::from_millis(250),
+                    tips_fetch_max_delay: Duration::from_secs(1),
+                    round_delay: Duration::from_secs(1),
                 },
             },
             network: network::NetworkConfig {

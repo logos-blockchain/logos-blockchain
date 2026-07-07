@@ -167,7 +167,7 @@ mod tests {
         let oversized = vec![0u8; MAX_BYTES + 1];
         let err = Inscription::try_from(oversized).unwrap_err();
         assert!(
-            matches!(err, BoundedError::TooLong { actual, max } if actual == MAX_BYTES + 1 && max == MAX_BYTES)
+            matches!(err, BoundedError::TooManyItems { count, max } if count == MAX_BYTES + 1 && max == MAX_BYTES)
         );
     }
 
@@ -179,11 +179,12 @@ mod tests {
         assert!(
             format!("{err}").contains(
                 format!(
-                    "Length {} exceeds static maximum of {MAX_BYTES}",
+                    "Item count {} exceeds static maximum of {MAX_BYTES}",
                     MAX_BYTES + 1,
                 )
                 .as_str()
-            )
+            ),
+            "{err:?}",
         );
     }
 

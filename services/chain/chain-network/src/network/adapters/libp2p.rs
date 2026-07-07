@@ -416,7 +416,7 @@ where
                         )
                         .await?;
 
-                    debug!("Requested orphan parents from peer: {peer}");
+                    debug!("received a stream of orphan parents from peer: {peer}");
 
                     Ok(stream)
                 }

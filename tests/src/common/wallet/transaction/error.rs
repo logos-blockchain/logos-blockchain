@@ -1,6 +1,6 @@
 //! Shared error type for wallet transaction preparation.
 
-use lb_core::mantle::{NoteId, VerificationError, gas::GasOverflow, tx_builder::TxBuilderError};
+use lb_core::mantle::{NoteId, VerificationError, gas::GasOverflow, transactions::TxBuilderError};
 use lb_wallet::WalletError;
 use lb_zksign::ZkSignError;
 use thiserror::Error;

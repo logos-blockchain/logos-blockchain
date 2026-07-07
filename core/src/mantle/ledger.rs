@@ -1,11 +1,11 @@
-use std::{collections::HashSet, sync::LazyLock};
+use std::{collections::HashSet, slice::IterMut, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_groth16::{Fr, fr_from_bytes, serde::serde_fr};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_poseidon2::Digest as _;
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded_vec::{BoundedError, UpperBoundedVec};
 use lb_utxotree::UtxoTree;
 use num_bigint::BigUint;
 use serde::{Deserialize, Serialize};
@@ -14,13 +14,25 @@ use thiserror::Error;
 use crate::{
     crypto::{Hash, ZkHasher},
     events::TxEvent,
-    mantle::{
-        encoding::{BoundedInputs, BoundedOutputs},
-        nom::NomCodec,
-        ops::OpId,
-    },
+    mantle::{nom::NomCodec, ops::OpId},
     sdp::{Declaration, DeclarationId, locked_notes::LockedNotes},
 };
+
+// ==============================================================================
+// Memory Safety Limits
+// ==============================================================================
+// These limits are not designed to mimic system limits, but rather to prevent
+// unbounded memory usage from malicious inputs. They prevent memory
+// over-allocation attacks where untrusted input specifies allocation sizes.
+// Values are chosen to not limit normal operations while preventing excessive
+// memory usage (e.g., 68GB allocation). As an example, if the network currently
+// limits maximum transaction size to 1MiB, for memory safety limits we can
+// allow 4MiB.
+const MAX_TRANSACTION_INPUTS: usize = u8::MAX as usize;
+const MAX_TRANSACTION_OUTPUTS: usize = u8::MAX as usize;
+pub type BoundedUtxos = UpperBoundedVec<Utxo, MAX_TRANSACTION_INPUTS>;
+pub type BoundedInputs = UpperBoundedVec<NoteId, MAX_TRANSACTION_INPUTS>;
+pub type BoundedOutputs = UpperBoundedVec<Note, MAX_TRANSACTION_OUTPUTS>;
 
 pub trait Operation<ValidationContext> {
     type ExecutionContext<'a>
@@ -147,6 +159,14 @@ impl Outputs {
     pub fn iter(&self) -> impl Iterator<Item = &Note> {
         <&Self as IntoIterator>::into_iter(self)
     }
+
+    pub fn iter_mut(&mut self) -> IterMut<'_, Note> {
+        self.0.iter_mut()
+    }
+
+    pub fn try_push(&mut self, note: Note) -> Result<(), BoundedError> {
+        self.0.try_push(note)
+    }
 }
 
 impl AsRef<BoundedOutputs> for Outputs {
@@ -155,9 +175,21 @@ impl AsRef<BoundedOutputs> for Outputs {
     }
 }
 
-impl AsMut<BoundedOutputs> for Outputs {
-    fn as_mut(&mut self) -> &mut BoundedOutputs {
-        &mut self.0
+impl<'a> IntoIterator for &'a mut Outputs {
+    type Item = &'a mut Note;
+    type IntoIter = IterMut<'a, Note>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+impl<I> From<I> for Outputs
+where
+    I: Into<BoundedOutputs>,
+{
+    fn from(value: I) -> Self {
+        Self(value.into())
     }
 }
 

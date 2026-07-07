@@ -8,6 +8,7 @@
 
 mod channel;
 mod core;
+mod genesis;
 mod kms;
 mod ledger;
 mod numbers;

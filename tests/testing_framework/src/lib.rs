@@ -31,9 +31,9 @@ pub use framework::{
     BlockFeed, BlockFeedCollector, BlockFeedCollectorRuntime, BlockFeedExtensionFactory,
     BlockFeedObservation, BlockFeedObserver, BlockFeedSnapshot, BlockFeedWaitError, BlockRecord,
     BoxedBlockFeedCollector, CoreBuilderExt, LbcComposeDeployer, LbcEnv, LbcK8sDeployer,
-    LbcK8sManualCluster, LbcLocalDeployer, LbcManualCluster, NodeHeadSnapshot, ObservedBlock,
-    ScenarioBuilder, ScenarioBuilderExt, block_feed_source_provider, block_feed_sources,
-    named_block_feed_sources,
+    LbcK8sManualCluster, LbcLocalDeployer, LbcManualCluster, NodeHeadSnapshot,
+    NodeStateSnapshotStore, ObservedBlock, ScenarioBuilder, ScenarioBuilderExt,
+    block_feed_source_provider, block_feed_sources, named_block_feed_sources,
 };
 // Required by reused node-test config modules importing from crate root.
 pub use node::configs::deployment::{DeploymentBuilder, TopologyConfig};

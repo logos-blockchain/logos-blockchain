@@ -94,7 +94,8 @@ where
         let encoded = fixture.value.encode();
         assert!(
             encoded.as_slice() == expected,
-            "{type_name}: encode(value) drifted from the well-known bytes\n  actual   (hex): {actual}\n  expected (hex): {expected_hex}",
+            "{type_name}: encode(value) drifted from the well-known bytes\n  value: {:?}  actual   (hex): {actual}\n  expected (hex): {expected_hex}",
+            fixture.value,
             actual = hex::encode(&encoded),
             expected_hex = hex::encode(expected),
         );

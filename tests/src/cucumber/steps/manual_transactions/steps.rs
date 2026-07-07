@@ -1,10 +1,11 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use cucumber::{gherkin::Step, given, then, when};
 use tokio::time::timeout;
 use tracing::{info, warn};
 
 use crate::{
+    common::wallet::WalletUtxos,
     cucumber::{
         error::{StepError, StepResult},
         steps::{
@@ -30,7 +31,7 @@ use crate::{
                 },
             },
         },
-        wallet::best_node::get_best_node_info,
+        wallet::sync::{WalletSendReadiness, wait_wallet_send_ready},
         world::{CucumberWorld, WalletInfo},
     },
     non_zero,
@@ -48,16 +49,35 @@ async fn step_do_coin_split(
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
 
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        &step.value,
+        &wallet_name,
+        180,
+        number_of_outputs as u64 * output_value,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
     let self_pk = wallet.public_key().inspect_err(|e| {
         warn!(target: TARGET, "Step `{}` error: {e}", step.value);
     })?;
     let receivers = vec![(self_pk, output_value); number_of_outputs];
-    let tx_hash_hex =
-        create_and_submit_transaction(world, &step.value, &wallet_name, &receivers, None)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-            })?;
+    let tx_hash_hex = create_and_submit_transaction(
+        world,
+        &step.value,
+        &wallet_name,
+        &receivers,
+        Some(&best_node_info),
+        Some(&mut available_utxos),
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
 
     info!(
         target: TARGET,
@@ -356,7 +376,19 @@ async fn step_send_multiple_transactions_to_single_wallet(
 
     let receiver_wallet_pk = receiver_wallet.public_key()?;
 
-    let best_node_info = get_best_node_info(world, &sender_wallet_name).await?;
+    let mut available_utxos = WalletUtxos::new();
+    let best_node_info = wait_wallet_send_ready(
+        world,
+        &step.value,
+        &sender_wallet_name,
+        180,
+        number_of_transactions as u64 * output_value,
+        WalletSendReadiness::TotalValueOnly,
+        &mut available_utxos,
+        &HashSet::new(),
+    )
+    .await?;
+
     for _ in 0..number_of_transactions {
         let tx_hash_hex = create_and_submit_transaction(
             world,
@@ -364,6 +396,7 @@ async fn step_send_multiple_transactions_to_single_wallet(
             &sender_wallet_name,
             &[(receiver_wallet_pk, output_value)],
             Some(&best_node_info),
+            Some(&mut available_utxos),
         )
         .await
         .inspect_err(|e| {
@@ -452,12 +485,18 @@ async fn step_send_single_transaction_multiple_outputs_to_single_wallet(
     })?;
 
     let receivers = vec![(receiver_wallet_pk, output_value); number_of_outputs];
-    let tx_hash_hex =
-        create_and_submit_transaction(world, &step.value, &sender_wallet_name, &receivers, None)
-            .await
-            .inspect_err(|e| {
-                warn!(target: TARGET, "Step `{}` error: {e}", step.value);
-            })?;
+    let tx_hash_hex = create_and_submit_transaction(
+        world,
+        &step.value,
+        &sender_wallet_name,
+        &receivers,
+        None,
+        None,
+    )
+    .await
+    .inspect_err(|e| {
+        warn!(target: TARGET, "Step `{}` error: {e}", step.value);
+    })?;
 
     info!(
         target: TARGET,
@@ -614,7 +653,7 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
     world: &mut CucumberWorld,
     step: &Step,
     cycles: usize,
-    transactions_per_wallet: usize,
+    num_transactions: usize,
     value: u64,
 ) -> StepResult {
     execute_continuous_next_wallet_user_wallet(
@@ -622,7 +661,7 @@ async fn step_perform_stress_continuous_cycles_next_user_wallet(
         &step.value,
         &ManualCommand::ContinuousNextWalletUserWallets {
             cycles,
-            transactions_per_wallet,
+            num_transactions,
             value,
         },
     )

@@ -94,6 +94,7 @@ pub struct PoCVerifierInputJson([Groth16InputDeser; 3]);
 
 /// Public inputs of the POC verifier circuit as returned by the prover.
 /// This inputs are the ones that need to be fed into the verifier.
+#[derive(Clone)]
 pub struct PoCVerifierInput {
     pub voucher_nullifier: Groth16Input,
     voucher_root: Groth16Input,

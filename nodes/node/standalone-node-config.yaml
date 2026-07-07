@@ -130,6 +130,16 @@ cryptarchia:
         delay_before_new_download:
           secs: 10
           nanos: 0
+        tips_fetch_max_attempts: 3
+        tips_fetch_min_delay:
+          secs: 0
+          nanos: 250000000
+        tips_fetch_max_delay:
+          secs: 1
+          nanos: 0
+        round_delay:
+          secs: 1
+          nanos: 0
     sync:
       orphan:
         max_orphan_cache_size: 1000

@@ -1,6 +1,6 @@
 //! Funded wallet transaction before final signing.
 
-use lb_core::mantle::{OpProof, TxHash, tx_builder::MantleTxBuilder};
+use lb_core::mantle::{OpProof, TxHash, transactions::MantleTxBuilder};
 
 use super::{
     error::WalletTransactionError, signed::SignedWalletTransaction,

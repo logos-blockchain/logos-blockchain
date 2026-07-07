@@ -1,7 +1,7 @@
 mod curve;
 mod from_json_error;
 mod proof;
-pub use proof::{CompressSize, CompressedProof};
+pub use proof::{COMPRESSED_PROOF_SIZE, CompressSize, CompressedProof};
 mod protocol;
 mod public_input;
 
@@ -16,7 +16,7 @@ pub use ark_bn254::{Bn254, Fr};
 pub use ark_ff::{AdditiveGroup, Field};
 use ark_ff::{BigInteger as _, PrimeField};
 use num_bigint::BigUint;
-pub use verifier::groth16_verify;
+pub use verifier::{groth16_batch_verify, groth16_verify};
 
 pub const GROTH16_SAFE_BYTES_SIZE: usize = 31;
 

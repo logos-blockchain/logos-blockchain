@@ -20,7 +20,10 @@ use lb_chain_service::{
 use lb_core::{
     block::BlockNumber,
     header::HeaderId,
-    mantle::{NoteId, SignedMantleTx, tx::MantleTxContext, tx_builder::MantleTxBuilder},
+    mantle::{
+        NoteId, SignedMantleTx,
+        transactions::{MantleTxBuilder, MantleTxContext},
+    },
     sdp::{
         ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,
         ServiceType, WithdrawMessage,

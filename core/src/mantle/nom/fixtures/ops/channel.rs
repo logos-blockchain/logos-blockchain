@@ -1,19 +1,22 @@
 use lb_core_macros::nom_wire_fixtures;
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
 
-use crate::mantle::{
-    channel::{SlotTimeframe, SlotTimeout},
-    ledger::{Inputs, Outputs},
-    ops::{
-        Op,
-        channel::{
-            ChannelId, MsgId,
-            config::ChannelConfigOp,
-            deposit::{DepositOp, Metadata},
-            inscribe::InscriptionOp,
-            withdraw::ChannelWithdrawOp,
+use crate::{
+    mantle::{
+        channel::{SlotTimeframe, SlotTimeout},
+        ledger::{Inputs, Outputs},
+        ops::{
+            Op,
+            channel::{
+                ChannelId, MsgId,
+                config::ChannelConfigOp,
+                deposit::{DepositOp, Metadata},
+                inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
+            },
         },
     },
+    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 
 nom_wire_fixtures!(ChannelId, ChannelId::from([0u8; 32]) => "0000000000000000000000000000000000000000000000000000000000000000");
@@ -66,4 +69,17 @@ nom_wire_fixtures!(
             .expect("InscriptionOp has a fixture")
             .value
     ) => "1100000000000000000000000000000000000000000000000000000000000000000700000067656e6573697300000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+);
+
+nom_wire_fixtures!(
+    IndexedSignature,
+    Self {
+        channel_key_index: 1,
+        signature: Ed25519Signature::from_bytes(&[0u8; _])
+    } => "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100"
+);
+
+nom_wire_fixtures!(ChannelMultiSigProof,
+    Self::try_new([].into()).unwrap() => "0000",
+    Self::try_new([IndexedSignature::new(0, Ed25519Signature::from_bytes(&[0u8; _]))].into()).unwrap() => "0100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 );

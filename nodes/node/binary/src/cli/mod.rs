@@ -10,6 +10,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use color_eyre::eyre::Result;
+use lb_tui_zone::cli::NodeKeyArgs;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
 use libp2p::Multiaddr;
 
@@ -130,7 +131,7 @@ pub enum Command {
     /// Remove a key with title from a keystore.
     RemoveKey(Box<RemoveKeyArgs>),
     /// Publish text inscriptions as zone blocks
-    Inscribe(lb_tui_zone::InscribeArgs),
+    Inscribe(NodeKeyArgs),
     /// Generate stakeholder.yaml and provider.yaml from a user config
     Participate(ParticipateArgs),
     /// Print the libp2p `PeerId` derived from the node key in a user config
@@ -147,6 +148,10 @@ pub struct InitArgs {
     /// Defaults to 'keystore.yaml' in the same directory as --output.
     #[clap(long = "keystore", short = 'k')]
     pub keystore: Option<PathBuf>,
+
+    /// Overwrite existing user config and keystore.
+    #[arg(long, default_value_t = false)]
+    pub overwrite: bool,
 
     #[clap(flatten)]
     pub log: LogArgs,
@@ -268,7 +273,7 @@ impl Default for EmbeddedInitArgs {
 #[derive(Parser, Debug)]
 pub struct UpdateArgs {
     /// Output file path for the generated config.
-    #[clap(long = "user-config", short = 'o', default_value = "user_config.yaml")]
+    #[clap(long = "user-config", short = 'u', default_value = "user_config.yaml")]
     pub user_config: PathBuf,
 
     /// Path for the keystore file.
@@ -403,6 +408,7 @@ impl From<MigrateArgs> for InitArgs {
             api: migrate.api,
             state: migrate.state,
             storage_path: migrate.storage_path,
+            overwrite: false,
         }
     }
 }

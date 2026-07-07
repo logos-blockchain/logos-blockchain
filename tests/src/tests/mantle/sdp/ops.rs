@@ -14,15 +14,10 @@ use lb_common_http_client::Error;
 use lb_core::{
     mantle::{
         GenesisTx as _, MantleTx, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
-        genesis_tx::GENESIS_STORAGE_GAS_PRICE,
         ops::Op,
-        tx::{GasPrices, MantleTxGasContext},
-        tx_builder::MantleTxBuilder,
+        transactions::{GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxGasContext},
     },
-    sdp::{
-        Declaration, DeclarationMessage, Locator, NumberOfEpochs, ProviderId, ServiceType,
-        WithdrawMessage,
-    },
+    sdp::{Declaration, DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::{
@@ -48,13 +43,11 @@ use num_bigint::BigUint;
 use testing_framework_core::scenario::{DynError, StartNodeOptions};
 use tokio::time::{sleep, timeout};
 
-const RETENTION_PERIOD: NumberOfEpochs = NumberOfEpochs::new(1);
-
 /// High-level SDP flow covered by this E2E:
 /// - submit a `Declare` transaction backed by an unused genesis note and wait
 ///   for inclusion;
-/// - submit a `Withdraw` transaction, wait for the finalization delay and the
-///   retention period to pass, and check that the declaration disappears.
+/// - submit a `Withdraw` transaction, wait for the finalization delay and check
+///   that the declaration disappears.
 ///
 /// Note: Activity testing requires the blend service to generate real proofs,
 /// which happens automatically for nodes that are declared as blend providers.
@@ -192,20 +185,19 @@ async fn sdp_ops_e2e() {
     let withdraw_epoch = get_declaration(&node0, &provider_id)
         .await
         .expect("API must succeed")
-        .expect("declaration must still exist even after withdrawal because GC shouldn't remove it immediately")
+        .expect("declaration must still exist until the snapshot finalization delay has passed")
         .withdraw_at
         .expect("withdraw_at must be set after withdraw tx is accepted");
 
-    // Wait for the snapshot finalization delay and the retention period to pass.
+    // Wait for the snapshot finalization delay to pass. At the `withdrawn`
+    // epoch the locked note is unlocked and the declaration is removed.
     wait_for_tip_slot(
         &node0,
-        (u64::from((withdraw_epoch.strict_add(RETENTION_PERIOD).strict_add(Epoch::new(1))).into_inner())
-            * slots_per_epoch)
-            .into(),
+        (u64::from(withdraw_epoch.strict_add(Epoch::new(1)).into_inner()) * slots_per_epoch).into(),
         Duration::from_mins(3),
     )
     .await
-    .expect("timed out to wait until the snapshot finalization delay and the retention period pass after withdraw");
+    .expect("timed out to wait until the snapshot finalization delay passes after withdraw");
 
     // Check that the declaration has been removed
     assert!(
@@ -449,7 +441,6 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
         .get_mut(&ServiceType::BlendNetwork)
         .expect("blend network params should exist");
     service_params.inactivity_period = 10.try_into().unwrap();
-    service_params.retention_period = RETENTION_PERIOD;
 
     config.deployment.blend.common.num_blend_layers = 1.try_into().unwrap();
     config.deployment.blend.common.minimum_network_size = MinimumNetworkSize::try_new(2).unwrap();
@@ -482,7 +473,7 @@ async fn fund_sdp_transaction(
             storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
         },
     );
-    let tx_context = lb_core::mantle::tx::MantleTxContext {
+    let tx_context = lb_core::mantle::transactions::MantleTxContext {
         gas_context: empty_context,
         leader_reward_amount: 0,
     };

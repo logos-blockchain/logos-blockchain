@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use lb_chain_service::Epoch;
 use lb_core::{
     block::genesis::GenesisBlock,
-    sdp::{InactivityPeriod, MinStake, NumberOfEpochs, ServiceType},
+    sdp::{InactivityPeriod, MinStake, ServiceType},
 };
 use lb_cryptarchia_engine::{
     Config as ConsensusConfig, average_slots_for_blocks, base_period_length, time::epoch_length,
@@ -88,6 +88,5 @@ pub struct SdpConfig {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ServiceParameters {
     pub inactivity_period: InactivityPeriod,
-    pub retention_period: NumberOfEpochs,
     pub epoch: Epoch,
 }

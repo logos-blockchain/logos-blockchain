@@ -97,9 +97,9 @@ resolver = "2"
 
 [workspace.dependencies]
 # Internal
-cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
-cfgsync-artifacts                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
-cfgsync-core                       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
+cfgsync-adapter                    = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "cbd367a5461ae8adfe4986cbb8d499888c56eba4" }
+cfgsync-artifacts                  = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "cbd367a5461ae8adfe4986cbb8d499888c56eba4" }
+cfgsync-core                       = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "cbd367a5461ae8adfe4986cbb8d499888c56eba4" }
 common-http-client                 = { default-features = false, package = "logos-blockchain-common-http-client", path = "./nodes/node/http-client" }
 hasher                             = { default-features = false, version = "0.1.4" }
 jf-poseidon2                       = { default-features = false, git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa" }
@@ -173,10 +173,10 @@ lbc-poq-sys                      = { default-features = false, git = "https://gi
 lbc-signature-sys                = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-signature-sys", tag = "v0.5.3" }
 lbc-types                        = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-circuits.git", package = "logos-blockchain-circuits-types", tag = "v0.5.3" }
 lbp-error                        = { default-features = false, package = "logos-blockchain-proofs-error", path = "./zk/proofs/error" }
-testing-framework-core           = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
-testing-framework-runner-compose = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
-testing-framework-runner-k8s     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
-testing-framework-runner-local   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", tag = "dev_snapshot_2026_06_03_4733e56a" }
+testing-framework-core           = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "cbd367a5461ae8adfe4986cbb8d499888c56eba4" }
+testing-framework-runner-compose = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "cbd367a5461ae8adfe4986cbb8d499888c56eba4" }
+testing-framework-runner-k8s     = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "cbd367a5461ae8adfe4986cbb8d499888c56eba4" }
+testing-framework-runner-local   = { default-features = false, git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "cbd367a5461ae8adfe4986cbb8d499888c56eba4" }
 
 # External
 anyhow                             = { default-features = false, version = "1" }
