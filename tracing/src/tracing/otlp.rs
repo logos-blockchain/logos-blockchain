@@ -13,14 +13,14 @@ use tonic::metadata::MetadataMap;
 use tracing::Subscriber;
 use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::registry::LookupSpan;
-use url::Url;
+
+use crate::OtlpServiceConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OtlpTracingConfig {
-    pub endpoint: Url,
+    #[serde(flatten)]
+    pub service: OtlpServiceConfig,
     pub sample_ratio: f64,
-    pub service_name: String,
-    pub authorization_header: Option<String>,
 }
 
 pub fn create_otlp_tracing_layer<S>(
@@ -30,14 +30,17 @@ where
     S: Subscriber + for<'span> LookupSpan<'span>,
 {
     let resource = Resource::builder()
-        .with_attributes(vec![KeyValue::new(SERVICE_NAME, config.service_name)])
+        .with_attributes(vec![KeyValue::new(
+            SERVICE_NAME,
+            config.service.service_name,
+        )])
         .build();
 
     let exporter = {
         let mut exporter = opentelemetry_otlp::SpanExporter::builder()
             .with_tonic()
-            .with_endpoint(config.endpoint.to_string());
-        if let Some(auth_header) = config.authorization_header {
+            .with_endpoint(config.service.url.to_string());
+        if let Some(auth_header) = config.service.authorization_header {
             let mut metadata = MetadataMap::new();
             metadata.insert("authorization", auth_header.parse()?);
             exporter = exporter.with_metadata(metadata);

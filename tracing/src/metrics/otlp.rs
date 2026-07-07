@@ -8,15 +8,13 @@ use tonic::metadata::MetadataMap;
 use tracing::Subscriber;
 use tracing_opentelemetry::MetricsLayer;
 use tracing_subscriber::registry::LookupSpan;
-use url::Url;
 
-use crate::metrics::emit::reset_cached_instruments;
+use crate::{OtlpServiceConfig, metrics::emit::reset_cached_instruments};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OtlpMetricsConfig {
-    pub endpoint: Url,
-    pub host_identifier: String,
-    pub authorization_header: Option<String>,
+    #[serde(flatten)]
+    pub service: OtlpServiceConfig,
 }
 
 pub fn create_otlp_metrics_layer<S>(
@@ -31,15 +29,15 @@ where
     let resource = Resource::builder_empty()
         .with_attributes(vec![KeyValue::new(
             opentelemetry_semantic_conventions::resource::SERVICE_NAME,
-            config.host_identifier,
+            config.service.service_name,
         )])
         .build();
 
     let exporter = {
         let mut exporter = opentelemetry_otlp::MetricExporter::builder()
             .with_tonic()
-            .with_endpoint(config.endpoint.to_string());
-        if let Some(auth_header) = config.authorization_header {
+            .with_endpoint(config.service.url.to_string());
+        if let Some(auth_header) = config.service.authorization_header {
             let mut metadata = MetadataMap::new();
             metadata.insert("authorization", auth_header.parse()?);
             exporter = exporter.with_metadata(metadata);

@@ -56,11 +56,16 @@ impl From<Layers> for LoggerLayerSettings {
             gelf: value
                 .gelf
                 .map(|g| lb_tracing::logging::gelf::GelfConfig { addr: g.addr }),
-            otlp: value.otlp.map(|o| lb_tracing::logging::otlp::OtlpConfig {
-                endpoint: o.endpoint,
-                service_name: o.service_name,
-                authorization_header: o.authorization_header,
-            }),
+            otlp: value
+                .otlp
+                .map(|o| lb_tracing::logging::otlp::OtlpLoggingConfig {
+                    service: lb_tracing::OtlpServiceConfig {
+                        url: o.endpoint,
+                        service_name: o.service_name,
+                        authorization_header: o.authorization_header,
+                        protocol: o.protocol,
+                    },
+                }),
             stdout: value.stdout,
             stderr: value.stderr,
         }
@@ -111,4 +116,5 @@ pub struct OtlpConfig {
     pub service_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_header: Option<String>,
+    pub protocol: lb_tracing::OtlpProtocol,
 }

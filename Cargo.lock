@@ -4423,6 +4423,7 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-libp2p",
  "logos-blockchain-node",
+ "logos-blockchain-tracing",
  "logos-blockchain-utils",
  "num-bigint",
  "rand 0.8.6",

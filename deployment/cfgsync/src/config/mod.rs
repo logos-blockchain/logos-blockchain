@@ -271,7 +271,7 @@ fn update_tracing_identifier(
 
     let metrics = match settings.metrics {
         tracing::metrics::Layer::Otlp(mut config) => {
-            config.host_identifier.clone_from(identifier);
+            config.service_name.clone_from(identifier);
             tracing::metrics::Layer::Otlp(config)
         }
         other @ tracing::metrics::Layer::None => other,
