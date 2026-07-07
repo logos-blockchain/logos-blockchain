@@ -2,6 +2,7 @@ use std::fmt::{Debug, Display};
 
 use axum::{Json, extract::State, response::Response};
 use lb_api_service::http::DynError;
+use lb_http_api_common::paths;
 use lb_log_targets::node;
 use lb_tracing::filter::envfilter::EnvFilterConfig;
 use lb_tracing_service::TracingMessage;
@@ -11,6 +12,14 @@ use crate::{TracingService, make_request_and_return_response};
 
 const LOG_TARGET: &str = node::api::TRACING;
 
+#[utoipa::path(
+    put,
+    path = paths::admin::TRACING_FILTER,
+    responses(
+        (status = 200, description = "Tracing filter reloaded"),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
 pub async fn reload_tracing_filter<RuntimeServiceId>(
     State(handle): State<OverwatchHandle<RuntimeServiceId>>,
     Json(filter): Json<EnvFilterConfig>,

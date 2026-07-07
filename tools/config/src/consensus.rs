@@ -4,7 +4,8 @@ use std::sync::OnceLock;
 use lb_core::{
     block::genesis::{GenesisBlock, GenesisBlockBuilder},
     mantle::{
-        CryptarchiaParameter, MantleTx, Note, NoteId, OpProof, Utxo,
+        CryptarchiaParameter, GenesisTime, MantleTx, Note, NoteId, OpProof, Utxo,
+        nom::NomEncode as _,
         ops::{
             Op, OpId as _,
             channel::{
@@ -84,10 +85,14 @@ pub struct ServiceNote {
     pub output_index: usize,
 }
 
-static GENESIS_TIME: OnceLock<OffsetDateTime> = OnceLock::new();
+static GENESIS_TIME: OnceLock<GenesisTime> = OnceLock::new();
 
-fn get_or_init_genesis_time() -> OffsetDateTime {
-    *GENESIS_TIME.get_or_init(OffsetDateTime::now_utc)
+fn get_or_init_genesis_time() -> GenesisTime {
+    *GENESIS_TIME.get_or_init(|| {
+        OffsetDateTime::now_utc()
+            .try_into()
+            .expect("should fit in GenesisTime")
+    })
 }
 
 pub struct BaseConsensusMaterial {
@@ -98,13 +103,13 @@ pub struct BaseConsensusMaterial {
 }
 
 fn inscription_for_current_test(test_context: Option<&str>) -> InscriptionOp {
-    let owner = unique_test_context(test_context);
-    println!("Genesis inscription: {owner}");
+    let chain_id = unique_test_context(test_context);
+    println!("Genesis inscription: {chain_id}");
     InscriptionOp {
         channel_id: ChannelId::from(EMPTY_CHANNEL_ID),
         inscription: Inscription::new_unchecked(
             CryptarchiaParameter {
-                chain_id: owner,
+                chain_id,
                 genesis_time: get_or_init_genesis_time(),
                 epoch_nonce: Fr::ZERO,
             }

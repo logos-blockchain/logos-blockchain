@@ -15,6 +15,7 @@ services:
       - ./tracing/grafana/datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:z
       - ./tracing/grafana/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:z
       - ./tracing/grafana/dashboards:/var/lib/grafana/dashboards/:z
+      - grafana-data:/var/lib/grafana
     ports:
       - 9091:3000
     restart: on-failure
@@ -53,3 +54,6 @@ services:
     ports:
       - "0.0.0.0:9090:9090"
     restart: on-failure
+
+volumes:
+  grafana-data:

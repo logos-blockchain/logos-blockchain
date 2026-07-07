@@ -276,7 +276,10 @@ where
             network_adapter.clone(),
         );
 
-        match initial_block_download.run(bootstrap_config.ibd).await {
+        match initial_block_download
+            .run(bootstrap_config.ibd, &sync_config.orphan)
+            .await
+        {
             Ok(_) => {
                 info!("Initial Block Download completed successfully");
                 // Notify chain-service that IBD is complete so it can start the prolonged

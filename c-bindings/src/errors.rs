@@ -14,7 +14,7 @@ pub enum OperationStatusCode {
     RuntimeError = 0x7,
     DynError = 0x8,
     InitializationError = 0x9,
-    StopError = 0xA,
+    ShutdownError = 0xA,
     ConfigurationError = 0xB,
     ValidationError = 0xC,
 }

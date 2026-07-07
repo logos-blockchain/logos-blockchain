@@ -1,5 +1,4 @@
 use std::{
-    collections::BTreeSet,
     fmt::{Debug, Display},
     marker::PhantomData,
 };
@@ -51,7 +50,7 @@ where
         Tx: DeserializeOwned + Send,
     {
         let (sender, receiver) = tokio::sync::oneshot::channel();
-        let message = StorageMsg::get_transactions_request(BTreeSet::from([id]), sender);
+        let message = StorageMsg::get_transactions_request(vec![id], sender);
         storage_relay
             .send(message)
             .await

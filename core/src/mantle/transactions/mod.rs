@@ -5,9 +5,10 @@ pub mod tx;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};
 pub use genesis_tx::{
-    CryptarchiaParameter, GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTx,
+    CryptarchiaParameter, GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTime,
+    GenesisTx,
 };
-use lb_utils::bounded_vec::UpperBoundedVec;
+use lb_utils::bounded::UpperBoundedVec;
 pub use tx::{
     GasPrices, MantleTx, MantleTxContext, MantleTxGasContext, OperationVerificationHelper,
     SignedMantleTx, TxHash, VerificationError,

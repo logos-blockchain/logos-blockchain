@@ -1,6 +1,10 @@
-use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData};
+use std::{collections::HashSet, fmt::Debug, hash::Hash, marker::PhantomData, time::Duration};
 
-use futures::StreamExt as _;
+use backon::{ExponentialBuilder, Retryable as _};
+use futures::{
+    StreamExt as _,
+    future::{join_all, try_join_all},
+};
 use lb_chain_service::{
     CryptarchiaInfo,
     api::{CryptarchiaServiceApi, CryptarchiaServiceData},
@@ -13,13 +17,11 @@ use lb_core::{
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_tx_service::backend::RecoverableMempool;
 use overwatch::DynError;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    Error as ChainError, IbdConfig,
-    bootstrap::download::{Delay, Download, Downloads, DownloadsOutput},
-    mempool::adapter::MempoolAdapter,
-    network::NetworkAdapter,
+    Error as ChainError, IbdConfig, OrphanConfig, mempool::adapter::MempoolAdapter,
+    network::NetworkAdapter, sync::orphan_handler::OrphanBlocksDownloader,
 };
 
 pub trait IbdBlockProcessor<B> {
@@ -71,6 +73,16 @@ where
     }
 }
 
+/// Initial Block Download.
+///
+/// Each round, IBD fetches the chain tip from every configured peer in
+/// parallel, enqueues every fetched tip that is not yet in the local tree as
+/// an orphan into the [`OrphanBlocksDownloader`], drains the downloader, then
+/// re-fetches. IBD completes once every fetched tip is in the local tree.
+///
+/// The orphan downloader fans out across connected and discovered peers,
+/// so block downloads themselves are not restricted to the configured IBD
+/// peer set.
 pub struct InitialBlockDownload<NetAdapter, BlockProcessor, RuntimeServiceId>
 where
     NetAdapter: NetworkAdapter<RuntimeServiceId>,
@@ -79,7 +91,6 @@ where
 {
     block_processor: BlockProcessor,
     network: NetAdapter,
-    synced_peers: HashSet<NetAdapter::PeerId>,
     _phantom: PhantomData<RuntimeServiceId>,
 }
 
@@ -90,11 +101,10 @@ where
     NetAdapter::PeerId: Clone + Eq + Hash,
     BlockProcessor: IbdBlockProcessor<NetAdapter::Block>,
 {
-    pub fn new(block_processor: BlockProcessor, network: NetAdapter) -> Self {
+    pub const fn new(block_processor: BlockProcessor, network: NetAdapter) -> Self {
         Self {
             block_processor,
             network,
-            synced_peers: HashSet::new(),
             _phantom: PhantomData,
         }
     }
@@ -103,24 +113,21 @@ where
 impl<NetAdapter, BlockProcessor, RuntimeServiceId>
     InitialBlockDownload<NetAdapter, BlockProcessor, RuntimeServiceId>
 where
-    NetAdapter: NetworkAdapter<RuntimeServiceId> + Send + Sync,
-    NetAdapter::PeerId: Copy + Clone + Eq + Hash + Debug + Send + Sync + Unpin,
-    NetAdapter::Block: Debug + Unpin,
-    BlockProcessor: IbdBlockProcessor<NetAdapter::Block> + Sync,
-    RuntimeServiceId: Sync,
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Clone + Send + Sync + 'static,
+    NetAdapter::PeerId: Copy + Clone + Eq + Hash + Debug + Send + Sync + Unpin + 'static,
+    NetAdapter::Block: Clone + Debug + Send + Sync + Unpin + 'static,
+    BlockProcessor: IbdBlockProcessor<NetAdapter::Block> + Send + Sync,
+    RuntimeServiceId: Send + Sync + 'static,
 {
-    /// Runs IBD with the configured peers.
+    /// Runs IBD against the configured peers.
     ///
-    /// It downloads blocks from the peers, and applies them to the
-    /// [`Cryptarchia`].
-    ///
-    /// An updated [`Cryptarchia`] is returned after all downloads
-    /// have completed from all peers except the failed ones.
-    ///
-    /// An error is returned if downloads fail from all peers.
+    /// # Returns
+    /// - [`BlockProcessor`] if IBD caught up to every reachable IBD peer's tip.
+    /// - [`Error::AllPeersFailed`] if no IBD peer returned a tip.
     pub async fn run(
         mut self,
         config: IbdConfig<NetAdapter::PeerId>,
+        orphan_config: &OrphanConfig,
     ) -> Result<BlockProcessor, Error> {
         if config.peers.is_empty() {
             warn!("Skipping IBD as no peers are configured");
@@ -131,284 +138,190 @@ where
             "Starting Initial Block Download with {} peers",
             config.peers.len()
         );
-        let downloads = self.initiate_downloads(config).await?;
-        self.proceed_downloads(downloads).await
+
+        self.download_blocks(config, orphan_config).await?;
+        Ok(self.block_processor)
     }
 
-    /// Initiates [`Downloads`] from the configured peers.
-    async fn initiate_downloads<'a>(
+    /// Start downloading blocks:
+    /// 1. Fetch tips from configured peers
+    /// 2. Enqueue tips into orphan downloader
+    /// 3. Drain orphan downloader, downloading/applying blocks.
+    /// 4. Repeat 1~3 until all tips are present in the local tree
+    ///
+    /// Between each round, sleep for `config.round_delay` to not overload the
+    /// configured peers with tip requests if the block downloads have been
+    /// rejected from all peers immediately. Also, this delay gives the node
+    /// time to discover new peers.
+    async fn download_blocks(
         &mut self,
         config: IbdConfig<NetAdapter::PeerId>,
-    ) -> Result<Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>, Error>
-    where
-        NetAdapter::PeerId: 'a,
-        NetAdapter::Block: 'a,
-    {
-        let mut downloads = Downloads::new(config.delay_before_new_download);
-        for peer in &config.peers {
-            match self.initiate_download(*peer, None).await {
-                Ok(Some(download)) => {
-                    self.start_download(download, &mut downloads);
+        orphan_config: &OrphanConfig,
+    ) -> Result<(), Error> {
+        let mut downloader = OrphanBlocksDownloader::new(
+            self.network.clone(),
+            config
+                .peers
+                .len()
+                .try_into()
+                .expect("IBD peer set shouldn't be empty in this function"),
+            orphan_config.max_rejected_cache_size,
+        );
+
+        loop {
+            let unsynced_tips = self.collect_unsynced_tips(&config).await?;
+            if unsynced_tips.is_empty() {
+                info!("IBD complete: all configured peer tips are present in the local tree");
+                return Ok(());
+            }
+            let info = self.block_processor.info().await?;
+            enqueue_tips(&mut downloader, unsynced_tips, &info);
+
+            self.drain_downloader(&mut downloader).await;
+
+            tokio::time::sleep(config.round_delay).await;
+        }
+    }
+
+    /// Pulls every block from the orphan downloader, applying each to the
+    /// block processor. Returns once the downloader has nothing more to yield.
+    #[expect(clippy::cognitive_complexity, reason = "for readability")]
+    async fn drain_downloader(
+        &mut self,
+        downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+    ) {
+        debug!("draining downloads");
+
+        // Use `timeout` because `downloader.next()` can stall forever if a
+        // download fails and leaves the queue empty.
+        // The timeout lets us re-check `should_poll` and exit cleanly in that case.
+        // Also, the timeout is useful to give the node time for peer discovery
+        // before starting the next IBD round.
+        // TODO: improve `OrphanBlocksDownloader` to simplify this.
+        while downloader.should_poll() {
+            match tokio::time::timeout(Duration::from_secs(1), downloader.next()).await {
+                Ok(Some(block)) => {
+                    if let Err(e) = self.block_processor.process_block(block).await {
+                        warn!("failed to process block: {e:?}");
+                        downloader.cancel_active_download();
+                    }
                 }
                 Ok(None) => {
-                    debug!("No download needed for {peer:?}. Delaying the peer");
-                    downloads.add_delay(Delay::new(*peer, None));
+                    debug!("orphan downloader returned None; re-checking should_poll");
                 }
-                Err(e) => {
-                    warn!("Failed to initiate download for {peer:?}: {e}");
+                Err(_) => {
+                    trace!("drain timed out; re-checking should_poll");
                 }
             }
-        }
-
-        if downloads.is_empty() {
-            Err(Error::AllPeersFailed)
-        } else {
-            Ok(downloads)
         }
     }
 
-    /// Initiates a [`Download`] from a specific peer.
-    ///
-    /// It gets the peer's tip, and requests a block stream to reach the tip.
-    ///
-    /// If the peer's tip already exists in local, or if there is any duplicate
-    /// download for the tip, no download is initiated and [`None`] is returned.
-    ///
-    /// If communication fails, an [`Error`] is returned.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "TODO: address this in a dedicated refactor"
-    )]
-    async fn initiate_download(
-        &mut self,
-        peer: NetAdapter::PeerId,
-        latest_downloaded_block: Option<HeaderId>,
-    ) -> Result<Option<Download<NetAdapter::PeerId, NetAdapter::Block>>, Error> {
-        // Get the most recent peer's tip.
-        let tip_response = self
-            .network
-            .request_tip(peer)
-            .await
-            .map_err(Error::BlockProvider)?;
+    /// Fetches tips from the configured peers and returns those not yet in the
+    /// local tree. Returns [`Error::AllPeersFailed`] if no peer responded
+    /// across every retry attempt.
+    async fn collect_unsynced_tips(
+        &self,
+        config: &IbdConfig<NetAdapter::PeerId>,
+    ) -> Result<HashSet<HeaderId>, Error> {
+        debug!("collecting unsynced tips from {} peers", config.peers.len());
 
-        // Use the peer's tip as the target for the download.
-        let target = match tip_response {
-            GetTipResponse::Tip { tip, .. } => tip,
-            GetTipResponse::Failure(reason) => {
-                return Err(Error::BlockProvider(DynError::from(reason)));
-            }
+        let tips = fetch_tips_with_retry(&self.network, config)
+            .await
+            .inspect_err(|_| error!("no configured peer returned a tip this round"))?;
+
+        Ok(try_join_all(tips.into_iter().map(async |tip| {
+            self.block_processor
+                .has_processed_block(tip)
+                .await
+                .map(|processed| (!processed).then_some(tip))
+        }))
+        .await?
+        .into_iter()
+        .flatten()
+        .collect())
+    }
+}
+
+/// Calls [`fetch_tips`] with exponential backoff to not overload the configured
+/// peers.
+///
+/// Returns `Ok` with the first non-empty batch, or [`AllPeersFailed`] once
+/// every retry attempt produced nothing.
+///
+/// Retry lives at this batch level (not per-fetch), so a slow peer's backoff
+/// doesn't block IBD from moving on to fetch next tips from the fast peers.
+async fn fetch_tips_with_retry<NetAdapter, RuntimeServiceId>(
+    network: &NetAdapter,
+    config: &IbdConfig<NetAdapter::PeerId>,
+) -> Result<HashSet<HeaderId>, AllPeersFailed>
+where
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    NetAdapter::PeerId: Copy + Clone + Eq + Hash + Debug + Send + Sync,
+    RuntimeServiceId: Sync,
+{
+    // A closure is needed for `backon::Retryable.retry()` that spawns a fresh
+    // future per attempt.
+    (|| fetch_tips(network, config.peers.iter().copied()))
+        .retry(
+            ExponentialBuilder::default()
+                .with_min_delay(config.tips_fetch_min_delay)
+                .with_max_delay(config.tips_fetch_max_delay)
+                .with_max_times(config.tips_fetch_max_attempts)
+                .with_jitter(),
+        )
+        .notify(|_, delay| debug!("tip fetch returned no tips; retrying in {delay:?}"))
+        .await
+}
+
+/// Concurrently asks every peer for its current chain tip. Returns `Ok` with
+/// the tips of the peers that responded, or [`AllPeersFailed`] if none did.
+/// Per-peer failures are warn-logged and dropped.
+async fn fetch_tips<NetAdapter, RuntimeServiceId, I>(
+    network: &NetAdapter,
+    peers: I,
+) -> Result<HashSet<HeaderId>, AllPeersFailed>
+where
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Sync,
+    NetAdapter::PeerId: Copy + Debug + Send + Sync,
+    RuntimeServiceId: Sync,
+    I: IntoIterator<Item = NetAdapter::PeerId>,
+{
+    let tips: HashSet<HeaderId> = join_all(peers.into_iter().map(async |peer| {
+        let result: Result<HeaderId, DynError> = match network.request_tip(peer).await {
+            Ok(GetTipResponse::Tip { tip, .. }) => Ok(tip),
+            Ok(GetTipResponse::Failure(reason)) => Err(DynError::from(reason)),
+            Err(e) => Err(e),
         };
-
-        if self.block_processor.has_processed_block(target).await? {
-            debug!(
-                "No download needed for {peer:?} as target block already exists locally: {target:?}"
-            );
-            self.synced_peers.insert(peer);
-            return Ok(None);
-        }
-
-        let initial_cryptarchia_info = self.block_processor.info().await?;
-
-        // Request a block stream.
-        debug!(
-            ?target, local_tip = ?initial_cryptarchia_info.tip, local_tip_height = initial_cryptarchia_info.height,
-            local_lib = ?initial_cryptarchia_info.lib, ?peer,
-            "requesting blocks from peer",
-        );
-        let stream = self
-            .network
-            .request_blocks_from_peer(
-                peer,
-                target,
-                initial_cryptarchia_info.tip,
-                initial_cryptarchia_info.lib,
-                latest_downloaded_block.map_or_else(HashSet::new, |id| HashSet::from([id])),
-            )
-            .await
-            .inspect_err(|_e| {
-                crate::metrics::chainsync_observe_download_blocks_err();
-            })
-            .map_err(Error::BlockProvider)?;
-        debug!(?peer, ?target, "a download initiated");
-
-        Ok(Some(Download::new(peer, target, stream)))
+        result
+            .inspect_err(|e| warn!("failed to fetch tip from {peer:?}: {e}"))
+            .ok()
+    }))
+    .await
+    .into_iter()
+    .flatten()
+    .collect();
+    if tips.is_empty() {
+        Err(AllPeersFailed)
+    } else {
+        Ok(tips)
     }
+}
 
-    /// Proceeds [`Downloads`] by reading/processing blocks.
-    ///
-    /// It returns the updated [`Cryptarchia`] if all downloads have
-    /// completed from all peers except the failed ones.
-    ///
-    /// For peers that complete earlier, delays for the peers are scheduled,
-    /// so that new downloads can be initiated after the delays,
-    /// as long as there are other peers still in progress.
-    ///
-    /// An error is return if downloads fail from all peers.
-    async fn proceed_downloads<'a>(
-        mut self,
-        mut downloads: Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
-    ) -> Result<BlockProcessor, Error>
-    where
-        NetAdapter::PeerId: 'a,
-        NetAdapter::Block: 'a,
-    {
-        // Repeat until there is no download remaining,
-        // even if there are delays in progress.
-        while let Some(output) = downloads.next().await {
-            if let Err(e) = self.handle_downloads_output(output, &mut downloads).await {
-                warn!("A peer was dropped from IBD due to error: {e:?}");
-            }
-        }
-
-        if self.synced_peers.is_empty() {
-            error!("No peers synced successfully during IBD");
-            Err(Error::AllPeersFailed)
+fn enqueue_tips<NetAdapter, RuntimeServiceId>(
+    downloader: &mut OrphanBlocksDownloader<NetAdapter, RuntimeServiceId>,
+    tips: HashSet<HeaderId>,
+    info: &CryptarchiaInfo,
+) where
+    NetAdapter: NetworkAdapter<RuntimeServiceId> + Clone + Send + Sync + 'static,
+    NetAdapter::Block: Clone + Send + Sync + 'static,
+    RuntimeServiceId: Send + Sync + 'static,
+{
+    for tip in tips {
+        if let Err(e) = downloader.enqueue_orphan(tip, None, info.tip, info.lib) {
+            debug!("failed to enqueue tip {tip:?}: {e}");
         } else {
-            Ok(self.block_processor)
+            debug!("enqueued tip {tip:?} for download");
         }
-    }
-
-    /// Handles a [`DownloadsOutput`].
-    ///
-    /// In case of failure, the [`Download`] for the failed peer is dropped
-    /// from the [`Downloads`] and the error is returned.
-    async fn handle_downloads_output<'a>(
-        &mut self,
-        output: DownloadsOutput<NetAdapter::PeerId, NetAdapter::Block>,
-        downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
-    ) -> Result<(), Error>
-    where
-        NetAdapter::PeerId: 'a,
-        NetAdapter::Block: 'a,
-    {
-        match output {
-            DownloadsOutput::DelayCompleted(delay) => {
-                self.handle_delay_completed(delay, downloads).await
-            }
-            DownloadsOutput::BlockReceived { block, download } => {
-                self.handle_block_received(block, download, downloads).await
-            }
-            DownloadsOutput::DownloadCompleted(download) => {
-                self.handle_download_completed(download, downloads).await
-            }
-            DownloadsOutput::Error { error, download } => {
-                crate::metrics::chainsync_observe_download_blocks_err();
-                warn!("Download failed from {:?}: {}", download.peer(), error);
-                Err(Error::BlockProvider(error))
-            }
-        }
-    }
-
-    /// Handles a [`DownloadsOutput::BlockReceived`] by processing the block.
-    async fn handle_block_received<'a>(
-        &mut self,
-        block: NetAdapter::Block,
-        download: Download<NetAdapter::PeerId, NetAdapter::Block>,
-        downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
-    ) -> Result<(), Error>
-    where
-        NetAdapter::PeerId: 'a,
-        NetAdapter::Block: 'a,
-    {
-        debug!("Handling a block received from {:?}", download.peer());
-
-        self.block_processor
-            .process_block(block)
-            .await
-            .inspect_err(|e| {
-                error!(
-                    "Failed to process block from peer {:?}: {e:?}",
-                    download.peer()
-                );
-            })?;
-        self.start_download(download, downloads);
-        Ok(())
-    }
-
-    /// Handles a [`DownloadsOutput::DownloadCompleted`] by trying to
-    /// initiate a new download for the same peer.
-    async fn handle_download_completed<'a>(
-        &mut self,
-        download: Download<NetAdapter::PeerId, NetAdapter::Block>,
-        downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
-    ) -> Result<(), Error>
-    where
-        NetAdapter::PeerId: 'a,
-        NetAdapter::Block: 'a,
-    {
-        debug!(
-            "A download completed for {:?}. Try a new download",
-            download.peer()
-        );
-
-        crate::metrics::chainsync_observe_download_blocks_ok(
-            download.started_at().elapsed(),
-            download.blocks_downloaded(),
-        );
-
-        self.try_initiate_download(*download.peer(), download.last(), downloads)
-            .await
-    }
-
-    /// Handles a [`DownloadsOutput::DelayCompleted`] by trying to
-    /// initiate a new download for the same peer.
-    async fn handle_delay_completed<'a>(
-        &mut self,
-        delay: Delay<NetAdapter::PeerId>,
-        downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
-    ) -> Result<(), Error>
-    where
-        NetAdapter::PeerId: 'a,
-        NetAdapter::Block: 'a,
-    {
-        debug!(
-            "A delay completed for {:?}. Try a new download",
-            delay.peer()
-        );
-        self.try_initiate_download(*delay.peer(), delay.latest_downloaded_block(), downloads)
-            .await
-    }
-
-    /// Tries to initiate a download for a peer.
-    ///
-    /// If there is no download needed at the moment, a delay is scheduled,
-    /// so that a new download can be attempted later.
-    async fn try_initiate_download<'a>(
-        &mut self,
-        peer: NetAdapter::PeerId,
-        latest_downloaded_block: Option<HeaderId>,
-        downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
-    ) -> Result<(), Error>
-    where
-        NetAdapter::PeerId: 'a,
-        NetAdapter::Block: 'a,
-    {
-        match self
-            .initiate_download(peer, latest_downloaded_block)
-            .await
-            .inspect_err(|e| {
-                warn!("Failed to initiate next download for {peer:?}: {e}");
-            })? {
-            Some(download) => {
-                self.start_download(download, downloads);
-            }
-            None => {
-                downloads.add_delay(Delay::new(peer, latest_downloaded_block));
-            }
-        }
-        Ok(())
-    }
-
-    fn start_download<'a>(
-        &mut self,
-        download: Download<NetAdapter::PeerId, NetAdapter::Block>,
-        downloads: &mut Downloads<'a, NetAdapter::PeerId, NetAdapter::Block>,
-    ) where
-        NetAdapter::PeerId: 'a,
-        NetAdapter::Block: 'a,
-    {
-        self.synced_peers.remove(download.peer());
-        downloads.add_download(download);
     }
 }
 
@@ -416,13 +329,15 @@ where
 pub enum Error {
     #[error(transparent)]
     Cryptarchia(#[from] lb_chain_service::api::ApiError),
-    #[error("Block provider error: {0}")]
-    BlockProvider(DynError),
-    #[error("All peers failed")]
-    AllPeersFailed,
+    #[error(transparent)]
+    AllPeersFailed(#[from] AllPeersFailed),
     #[error("Block processing failed: {0}")]
     BlockProcessing(#[from] ChainError),
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("All peers failed")]
+pub struct AllPeersFailed;
 
 #[cfg(test)]
 mod tests {
@@ -430,9 +345,13 @@ mod tests {
         collections::HashMap,
         iter::empty,
         num::{NonZero, NonZeroU64},
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
+    use futures::stream;
     use lb_core::{
         block::Proposal,
         sdp::{MinStake, ServiceParameters, ServiceType},
@@ -457,9 +376,9 @@ mod tests {
     async fn no_peers_configured() {
         let block_processor = InitialBlockDownload::new(
             MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::new()),
+            MockNetworkAdapter::<()>::new(Vec::new()),
         )
-        .run(config(HashSet::new()))
+        .run(config(HashSet::new()), &orphan_config())
         .await
         .unwrap();
 
@@ -471,7 +390,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn single_download() {
+    async fn single_peer() {
         let peer = BlockProvider::new(
             vec![
                 Block::genesis(),
@@ -479,47 +398,16 @@ mod tests {
                 Block::new(2, 1, 2, 2),
             ],
             Ok(Block::new(2, 1, 2, 2)),
-            2,
-            false,
         );
-        let block_processor = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([(NodeId(0), peer.clone())])),
+        let block_processor = run_ibd(
+            HashMap::from([(NodeId(0), peer.clone())]),
+            [NodeId(0)].into(),
         )
-        .run(config([NodeId(0)].into()))
         .await
         .unwrap();
 
         let cryptarchia = block_processor.cryptarchia;
 
-        // All blocks from the peer should be in the local chain.
-        assert!(peer.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
-    }
-
-    #[tokio::test]
-    async fn repeat_downloads() {
-        let peer = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(1, GENESIS_ID, 1, 1),
-                Block::new(2, 1, 2, 2),
-                Block::new(3, 2, 3, 3),
-            ],
-            Ok(Block::new(3, 2, 3, 3)),
-            2,
-            false,
-        );
-        let block_processor = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([(NodeId(0), peer.clone())])),
-        )
-        .run(config([NodeId(0)].into()))
-        .await
-        .unwrap();
-
-        let cryptarchia = block_processor.cryptarchia;
-
-        // All blocks from the peer should be in the local chain.
         assert!(peer.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
     }
 
@@ -532,8 +420,6 @@ mod tests {
                 Block::new(2, 1, 2, 2),
             ],
             Ok(Block::new(2, 1, 2, 2)),
-            2,
-            false,
         );
         let peer1 = BlockProvider::new(
             vec![
@@ -543,331 +429,169 @@ mod tests {
                 Block::new(5, 4, 5, 3),
             ],
             Ok(Block::new(5, 4, 5, 3)),
-            2,
-            false,
         );
-        let block_processor = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([
-                (NodeId(0), peer0.clone()),
-                (NodeId(1), peer1.clone()),
-            ])),
+        let block_processor = run_ibd(
+            HashMap::from([(NodeId(0), peer0.clone()), (NodeId(1), peer1.clone())]),
+            [NodeId(0), NodeId(1)].into(),
         )
-        .run(config([NodeId(0), NodeId(1)].into()))
         .await
         .unwrap();
 
         let cryptarchia = block_processor.cryptarchia;
 
-        // All blocks from both peers should be in the local chain.
         assert!(peer0.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
         assert!(peer1.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
     }
 
-    /// If one peer returns an error while streaming blocks,
-    /// the peer should be ignored, and IBD should continue
-    /// with the remaining peers.
+    /// If all configured peers fail to return a tip, [`Error::AllPeersFailed`]
+    /// is returned.
     #[tokio::test]
-    async fn stream_err_from_one_peer_while_downloading() {
-        let peer0 = BlockProvider::new(
+    async fn all_peers_fail_tip() {
+        let peer0 = BlockProvider::new(vec![Block::genesis()], Err(()));
+        let peer1 = BlockProvider::new(vec![Block::genesis()], Err(()));
+        let result = run_ibd(
+            HashMap::from([(NodeId(0), peer0), (NodeId(1), peer1)]),
+            [NodeId(0), NodeId(1)].into(),
+        )
+        .await;
+
+        assert!(matches!(result, Err(Error::AllPeersFailed(_))));
+    }
+
+    /// If only some peers return a tip, IBD proceeds with the ones that did.
+    #[tokio::test]
+    async fn one_peer_fails_tip() {
+        let peer0 = BlockProvider::new(vec![Block::genesis()], Err(()));
+        let peer1 = BlockProvider::new(
             vec![
                 Block::genesis(),
                 Block::new(1, GENESIS_ID, 1, 1),
                 Block::new(2, 1, 2, 2),
             ],
             Ok(Block::new(2, 1, 2, 2)),
-            2,
-            true, // Return error while streaming blocks
         );
-        let peer1 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(3, GENESIS_ID, 3, 1),
-                Block::new(4, 3, 4, 2),
-                Block::new(5, 4, 5, 3),
-            ],
-            Ok(Block::new(5, 4, 5, 3)),
-            2,
-            false,
-        );
-        let block_processor = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([
-                (NodeId(0), peer0.clone()),
-                (NodeId(1), peer1.clone()),
-            ])),
+        let block_processor = run_ibd(
+            HashMap::from([(NodeId(0), peer0), (NodeId(1), peer1.clone())]),
+            [NodeId(0), NodeId(1)].into(),
         )
-        .run(config([NodeId(0), NodeId(1)].into()))
         .await
         .unwrap();
 
         let cryptarchia = block_processor.cryptarchia;
-
-        // All blocks from peer1 that doesn't return an error
-        // should be added to the local chain.
         assert!(peer1.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
     }
 
-    /// If all peers return an error while streaming blocks,
-    /// [`Error::AllPeersFailed`] should be returned.
+    /// If every peer's tip is already in the local tree, IBD finishes
+    /// immediately without enqueueing anything.
     #[tokio::test]
-    async fn stream_err_from_all_peers_while_downloading() {
-        let peer0 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(1, GENESIS_ID, 1, 1),
-                Block::new(2, 1, 2, 2),
-            ],
-            Ok(Block::new(2, 1, 2, 2)),
-            2,
-            true, // Return error while streaming blocks
+    async fn all_tips_already_local() {
+        let peer = BlockProvider::new(vec![Block::genesis()], Ok(Block::genesis()));
+        let block_processor = run_ibd(HashMap::from([(NodeId(0), peer)]), [NodeId(0)].into())
+            .await
+            .unwrap();
+
+        let cryptarchia = block_processor.cryptarchia;
+        assert_eq!(cryptarchia.tip(), [GENESIS_ID; 32].into());
+    }
+
+    /// A peer that streams a block whose parent is unknown to the consensus
+    /// triggers `process_block` to fail, which must in turn call
+    /// `cancel_active_download` on the orphan downloader. The IBD then keeps
+    /// retrying that same tip (no per-tip retry limit yet), so the test bounds
+    /// the run with a timeout and asserts the failure counter advanced.
+    #[tokio::test]
+    async fn block_apply_error_triggers_cancel() {
+        let invalid_chain = vec![
+            Block::genesis(),
+            Block::new(1, GENESIS_ID, 1, 1),
+            // Parent (id=100) is not in the consensus, so process_block errors.
+            Block::new(2, 100, 2, 2),
+        ];
+        let peer = BlockProvider::new(invalid_chain, Ok(Block::new(2, 100, 2, 2)));
+
+        let processor = MockBlockProcessor::new();
+        let failures = Arc::clone(&processor.process_block_failures);
+        let ibd = InitialBlockDownload::new(
+            processor,
+            MockNetworkAdapter::<()>::new(vec![(NodeId(0), peer)]),
         );
-        let peer1 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(3, GENESIS_ID, 3, 1),
-                Block::new(4, 3, 4, 2),
-                Block::new(5, 4, 5, 3),
-            ],
-            Ok(Block::new(5, 4, 5, 3)),
-            2,
-            true, // Return error while streaming blocks
-        );
-        let result = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([
-                (NodeId(0), peer0.clone()),
-                (NodeId(1), peer1.clone()),
-            ])),
+
+        let _result = tokio::time::timeout(
+            Duration::from_millis(200),
+            ibd.run(config([NodeId(0)].into()), &orphan_config()),
         )
-        .run(config([NodeId(0), NodeId(1)].into()))
         .await;
 
-        assert!(matches!(result, Err(Error::AllPeersFailed)));
-    }
-
-    /// If one peer returns an error while initiating download,
-    /// the peer should be ignored, and IBD should continue
-    /// with the remaining peers.
-    #[tokio::test]
-    async fn stream_err_from_one_peer_while_initiating() {
-        let peer0 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(1, GENESIS_ID, 1, 1),
-                Block::new(2, 1, 2, 2),
-            ],
-            Err(()), // Return error while initiating download
-            2,
-            true,
-        );
-        let peer1 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(3, GENESIS_ID, 3, 1),
-                Block::new(4, 3, 4, 2),
-                Block::new(5, 4, 5, 3),
-            ],
-            Ok(Block::new(5, 4, 5, 3)),
-            2,
-            false,
-        );
-        let block_processor = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([
-                (NodeId(0), peer0.clone()),
-                (NodeId(1), peer1.clone()),
-            ])),
-        )
-        .run(config([NodeId(0), NodeId(1)].into()))
-        .await
-        .unwrap();
-
-        let cryptarchia = block_processor.cryptarchia;
-        // All blocks from peer1 that doesn't return an error
-        // should be added to the local chain.
-        assert!(peer1.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
-    }
-
-    /// If all peers return an error while initiating download,
-    /// [`Error::AllPeersFailed`] should be returned.
-    #[tokio::test]
-    async fn stream_err_from_all_peers_while_initiating() {
-        let peer0 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(1, GENESIS_ID, 1, 1),
-                Block::new(2, 1, 2, 2),
-            ],
-            Err(()), // Return error while initiating download
-            2,
-            true,
-        );
-        let peer1 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(3, GENESIS_ID, 3, 1),
-                Block::new(4, 3, 4, 2),
-                Block::new(5, 4, 5, 3),
-            ],
-            Err(()), // Return error while initiating download
-            2,
-            true,
-        );
-        let result = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([
-                (NodeId(0), peer0.clone()),
-                (NodeId(1), peer1.clone()),
-            ])),
-        )
-        .run(config([NodeId(0), NodeId(1)].into()))
-        .await;
-
-        assert!(matches!(result, Err(Error::AllPeersFailed)));
-    }
-
-    /// If a block received from a peer cannot be processed,
-    /// the peer should be ignored, and IBD should continue
-    /// with the remaining peers.
-    #[tokio::test]
-    async fn block_err_from_one_peer() {
-        let peer0 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(1, GENESIS_ID, 1, 1),
-                // Invalid block (parent doesn't exist)
-                Block::new(2, 100, 2, 2),
-                Block::new(3, 2, 3, 3),
-            ],
-            Ok(Block::new(3, 2, 3, 3)),
-            2,
-            false,
-        );
-        let peer1 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(4, GENESIS_ID, 1, 1),
-                Block::new(5, 4, 2, 2),
-                Block::new(6, 5, 3, 3),
-            ],
-            Ok(Block::new(6, 5, 3, 3)),
-            2,
-            false,
-        );
-        let block_processor = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([
-                (NodeId(0), peer0.clone()),
-                (NodeId(1), peer1.clone()),
-            ])),
-        )
-        .run(config([NodeId(0), NodeId(1)].into()))
-        .await
-        .unwrap();
-
-        let cryptarchia = block_processor.cryptarchia;
-
-        // All blocks from peer1 that provided valid blocks
-        // should be added to the local chain.
-        assert!(peer1.chain.iter().all(|b| cryptarchia.has_block(&b.id)));
-        // The local tip should be the same as peer1's tip.
-        assert_eq!(cryptarchia.tip(), peer1.tip.unwrap().id);
-
-        // Blocks from peer0 remain in the local chain only until
-        // right before the failure.
         assert!(
-            peer0.chain[..2]
-                .iter()
-                .all(|b| cryptarchia.has_block(&b.id))
-        );
-        assert!(
-            peer0.chain[2..]
-                .iter()
-                .all(|b| !cryptarchia.has_block(&b.id))
+            failures.load(Ordering::SeqCst) > 0,
+            "process_block must have failed at least once",
         );
     }
 
-    /// If all peers provided invalid blocks,
-    /// [`Error::AllPeersFailed`] should be returned.
+    /// Multi-round flow: round 1 syncs the peer's first reported tip, round 2
+    /// picks up the peer's advanced tip, round 3 sees the tip in local tree
+    /// and completes IBD.
     #[tokio::test]
-    async fn block_err_from_all_peers() {
-        let peer0 = BlockProvider::new(
+    async fn tip_advances_between_rounds() {
+        let chain = vec![
+            Block::genesis(),
+            Block::new(1, GENESIS_ID, 1, 1),
+            Block::new(2, 1, 2, 2),
+        ];
+        let peer = BlockProvider::with_tips(
+            chain.clone(),
             vec![
-                Block::genesis(),
-                Block::new(1, GENESIS_ID, 1, 1),
-                // Invalid block (parent doesn't exist)
-                Block::new(2, 100, 2, 2),
-                Block::new(3, 2, 3, 3),
+                Ok(Block::new(1, GENESIS_ID, 1, 1)),
+                Ok(Block::new(2, 1, 2, 2)),
             ],
-            Ok(Block::new(3, 2, 3, 3)),
-            2,
-            false,
         );
-        let peer1 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(4, GENESIS_ID, 1, 1),
-                // Invalid block (parent doesn't exist)
-                Block::new(5, 100, 2, 2),
-                Block::new(6, 5, 3, 3),
-            ],
-            Ok(Block::new(6, 5, 3, 3)),
-            2,
-            false,
-        );
-        let result = InitialBlockDownload::new(
-            MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([
-                (NodeId(0), peer0.clone()),
-                (NodeId(1), peer1.clone()),
-            ])),
-        )
-        .run(config([NodeId(0), NodeId(1)].into()))
-        .await;
+        let block_processor = run_ibd(HashMap::from([(NodeId(0), peer)]), [NodeId(0)].into())
+            .await
+            .unwrap();
 
-        // Expect an error
-        assert!(matches!(result, Err(Error::AllPeersFailed)));
+        let cryptarchia = block_processor.cryptarchia;
+        assert!(chain.iter().all(|b| cryptarchia.has_block(&b.id)));
     }
 
+    /// First round succeeds (peer returns a tip we sync), second round the
+    /// peer goes dark. Since the synced tip is already local, the only
+    /// remaining peer fails tip fetch -> `AllPeersFailed`.
     #[tokio::test]
-    async fn block_err_from_all_peers_with_same_tip() {
-        let peer0 = BlockProvider::new(
-            vec![
-                Block::genesis(),
-                Block::new(1, GENESIS_ID, 1, 1),
-                // Invalid block (parent doesn't exist)
-                Block::new(2, 100, 2, 2),
-                Block::new(3, 2, 3, 3),
-            ],
-            Ok(Block::new(3, 2, 3, 3)),
-            2,
-            false,
-        );
-        let peer1 = peer0.clone();
+    async fn all_peers_go_dark_after_first_round() {
+        let chain = vec![Block::genesis(), Block::new(1, GENESIS_ID, 1, 1)];
+        let peer =
+            BlockProvider::with_tips(chain, vec![Ok(Block::new(1, GENESIS_ID, 1, 1)), Err(())]);
+        let result = run_ibd(HashMap::from([(NodeId(0), peer)]), [NodeId(0)].into()).await;
+        assert!(matches!(result, Err(Error::AllPeersFailed(_))));
+    }
 
-        let result = InitialBlockDownload::new(
+    async fn run_ibd(
+        providers: HashMap<NodeId, BlockProvider>,
+        peers: HashSet<NodeId>,
+    ) -> Result<MockBlockProcessor, Error> {
+        let provider_list = providers.into_iter().collect();
+        let ibd = InitialBlockDownload::new(
             MockBlockProcessor::new(),
-            MockNetworkAdapter::<()>::new(HashMap::from([
-                (NodeId(0), peer0.clone()),
-                (NodeId(1), peer1.clone()),
-            ])),
+            MockNetworkAdapter::<()>::new(provider_list),
+        );
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            ibd.run(config(peers), &orphan_config()),
         )
-        .run(config([NodeId(0), NodeId(1)].into()))
-        .await;
-
-        // Expect an error
-        assert!(matches!(result, Err(Error::AllPeersFailed)));
+        .await
+        .expect("IBD test timed out")
     }
 
     struct MockBlockProcessor {
         cryptarchia: lb_chain_service::Cryptarchia,
+        process_block_failures: Arc<AtomicUsize>,
     }
 
     impl MockBlockProcessor {
         fn new() -> Self {
             Self {
                 cryptarchia: new_cryptarchia(),
+                process_block_failures: Arc::new(AtomicUsize::new(0)),
             }
         }
     }
@@ -878,13 +602,11 @@ mod tests {
         }
 
         async fn process_block(&mut self, block: Block) -> Result<(), Error> {
-            // Add the block only to the consensus, not to the ledger state
-            // because the mocked block doesn't have a proof.
-            // It's enough because the tests doesn't check the ledger state.
             self.cryptarchia
                 .consensus
                 .receive_block(block.id, block.parent, block.slot)
                 .map_err(|e| {
+                    self.process_block_failures.fetch_add(1, Ordering::SeqCst);
                     Error::BlockProcessing(ChainError::InvalidBlock(format!(
                         "Consensus error: {e:?}"
                     )))
@@ -903,7 +625,17 @@ mod tests {
     fn config(peers: HashSet<NodeId>) -> IbdConfig<NodeId> {
         IbdConfig {
             peers,
-            delay_before_new_download: std::time::Duration::from_millis(1),
+            tips_fetch_max_attempts: 3,
+            tips_fetch_min_delay: Duration::from_millis(250),
+            tips_fetch_max_delay: Duration::from_secs(1),
+            round_delay: Duration::from_secs(1),
+        }
+    }
+
+    fn orphan_config() -> OrphanConfig {
+        OrphanConfig {
+            max_orphan_cache_size: 10.try_into().unwrap(),
+            max_rejected_cache_size: 0,
         }
     }
 
@@ -937,63 +669,65 @@ mod tests {
         }
     }
 
-    /// A mock block provider that returns the fixed sets of block streams.
+    /// Mock peer that owns a fixed chain and a sequence of tip responses.
+    ///
+    /// `request_tip` consumes the sequence one element per call (saturating at
+    /// the last), letting a test simulate a peer whose tip advances or goes
+    /// dark between IBD rounds.
     #[derive(Clone)]
     struct BlockProvider {
         chain: Vec<Block>,
-        tip: Result<Block, ()>,
-        stream_limit: usize,
-        stream_err: bool,
+        tips: Vec<Result<Block, ()>>,
+        tip_call_count: Arc<AtomicUsize>,
     }
 
     impl BlockProvider {
-        fn new(
-            chain: Vec<Block>,
-            tip: Result<Block, ()>,
-            stream_limit: usize,
-            stream_err: bool,
-        ) -> Self {
+        fn new(chain: Vec<Block>, tip: Result<Block, ()>) -> Self {
+            Self::with_tips(chain, vec![tip])
+        }
+
+        fn with_tips(chain: Vec<Block>, tips: Vec<Result<Block, ()>>) -> Self {
+            assert!(!tips.is_empty(), "tip sequence must be non-empty");
             Self {
                 chain,
-                tip,
-                stream_limit,
-                stream_err,
+                tips,
+                tip_call_count: Arc::new(AtomicUsize::new(0)),
             }
         }
 
-        fn stream(&self, known_blocks: &HashSet<HeaderId>) -> Vec<Result<Block, DynError>> {
-            if self.stream_err {
-                return vec![Err(DynError::from("Stream error"))];
-            }
+        fn next_tip(&self) -> Result<Block, ()> {
+            let idx = self.tip_call_count.fetch_add(1, Ordering::SeqCst);
+            let pos = idx.min(self.tips.len() - 1);
+            self.tips[pos].clone()
+        }
 
-            let start_pos = self
-                .chain
+        fn stream_to_target(
+            &self,
+            target: HeaderId,
+            known_blocks: &HashSet<HeaderId>,
+        ) -> Option<Vec<Block>> {
+            let target_pos = self.chain.iter().position(|b| b.id == target)?;
+            let start_pos = self.chain[..=target_pos]
                 .iter()
                 .rposition(|block| known_blocks.contains(&block.id))
                 .map_or(0, |pos| pos + 1);
-            if start_pos >= self.chain.len() {
-                vec![]
-            } else {
-                self.chain[start_pos..]
-                    .iter()
-                    .take(self.stream_limit)
-                    .cloned()
-                    .map(Ok)
-                    .collect()
-            }
+            Some(self.chain[start_pos..=target_pos].to_vec())
         }
     }
 
-    /// A mock network adapter that returns a static set of blocks.
+    /// Mock adapter that holds an ordered list of [`BlockProvider`]s. The
+    /// order is deterministic so that `request_blocks_from_peers` picks the
+    /// first provider that owns the target block in the same way across runs.
+    #[derive(Clone)]
     struct MockNetworkAdapter<RuntimeServiceId> {
-        providers: HashMap<NodeId, BlockProvider>,
+        providers: Arc<[(NodeId, BlockProvider)]>,
         _phantom: PhantomData<RuntimeServiceId>,
     }
 
     impl<RuntimeServiceId> MockNetworkAdapter<RuntimeServiceId> {
-        pub fn new(providers: HashMap<NodeId, BlockProvider>) -> Self {
+        fn new(providers: Vec<(NodeId, BlockProvider)>) -> Self {
             Self {
-                providers,
+                providers: providers.into(),
                 _phantom: PhantomData,
             }
         }
@@ -1028,52 +762,58 @@ mod tests {
         }
 
         async fn request_tip(&self, peer: Self::PeerId) -> Result<GetTipResponse, DynError> {
-            let provider = self.providers.get(&peer).unwrap();
-            match provider.tip.clone() {
+            let tip = self
+                .providers
+                .iter()
+                .find_map(|(id, p)| (*id == peer).then(|| p.next_tip()))
+                .expect("test setup: peer must exist in providers");
+            match tip {
                 Ok(tip) => Ok(GetTipResponse::Tip {
                     tip: tip.id,
                     slot: tip.slot,
                     height: tip.height,
                 }),
-                Err(()) => Err(DynError::from("Cannot provide tip")),
+                Err(()) => Err(DynError::from("cannot provide tip")),
             }
         }
 
         async fn sample_tips(&self, _max_peers: usize) -> BoxedStream<GetTipResponse> {
-            Box::new(futures::stream::empty())
+            Box::new(stream::empty())
         }
 
         async fn request_blocks_from_peer(
             &self,
-            peer: Self::PeerId,
-            _target_block: HeaderId,
-            local_tip: HeaderId,
-            latest_immutable_block: HeaderId,
-            additional_blocks: HashSet<HeaderId>,
-        ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
-            let provider = self.providers.get(&peer).unwrap();
-
-            let mut known_blocks = additional_blocks;
-            known_blocks.insert(local_tip);
-            known_blocks.insert(latest_immutable_block);
-
-            let stream = provider.stream(&known_blocks);
-            Ok(Box::new(tokio_stream::iter(stream.into_iter().map(
-                |result| match result {
-                    Ok(block) => Ok((block.id, block)),
-                    Err(e) => Err(e),
-                },
-            ))))
-        }
-
-        async fn request_blocks_from_peers(
-            &self,
+            _peer: Self::PeerId,
             _target_block: HeaderId,
             _local_tip: HeaderId,
             _latest_immutable_block: HeaderId,
             _additional_blocks: HashSet<HeaderId>,
         ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
             unimplemented!()
+        }
+
+        async fn request_blocks_from_peers(
+            &self,
+            target_block: HeaderId,
+            local_tip: HeaderId,
+            latest_immutable_block: HeaderId,
+            additional_blocks: HashSet<HeaderId>,
+        ) -> Result<BoxedStream<Result<(HeaderId, Self::Block), DynError>>, DynError> {
+            let mut known_blocks = additional_blocks;
+            known_blocks.insert(local_tip);
+            known_blocks.insert(latest_immutable_block);
+
+            let blocks = self
+                .providers
+                .iter()
+                .find_map(|(_, p)| p.stream_to_target(target_block, &known_blocks))
+                .ok_or_else(|| DynError::from(format!("no peer has target {target_block:?}")))?;
+
+            let items = blocks
+                .into_iter()
+                .map(|b| Ok((b.id, b)))
+                .collect::<Vec<_>>();
+            Ok(Box::new(tokio_stream::iter(items)))
         }
     }
 

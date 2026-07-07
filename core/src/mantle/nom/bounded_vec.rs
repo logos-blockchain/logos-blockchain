@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use lb_utils::bounded_vec::BoundedVec;
+use lb_utils::bounded::BoundedVec;
 use nom::{
     IResult, Parser as _,
     error::{Error, ErrorKind},
@@ -151,7 +151,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use lb_utils::bounded_vec::BoundedVec;
+    use lb_utils::bounded::BoundedVec;
     use nom::error::ErrorKind;
 
     use crate::mantle::nom::{NomDecode as _, NomEncode as _};

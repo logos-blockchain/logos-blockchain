@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
-use lb_utils::bounded_vec::BoundedError;
+use lb_utils::bounded::BoundedError;
 
 use crate::{
     block::Block,
@@ -1184,13 +1184,13 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
     use num_bigint::BigUint;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::{
         header::HeaderId,
         mantle::{
-            CryptarchiaParameter, GenesisTx as _, NoteId,
+            CryptarchiaParameter, GenesisTime, GenesisTx as _, NoteId,
+            nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -1203,8 +1203,8 @@ mod tests {
             channel_id: ChannelId::from([0; 32]),
             inscription: Inscription::new_unchecked(
                 CryptarchiaParameter {
-                    chain_id: "test-chain".into(),
-                    genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+                    chain_id: "test-chain".to_owned().try_into().unwrap(),
+                    genesis_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
                 }
                 .encode(),
@@ -1219,8 +1219,8 @@ mod tests {
             channel_id: ChannelId::from([1; 32]), // non-zero — invalid
             inscription: Inscription::new_unchecked(
                 CryptarchiaParameter {
-                    chain_id: "test-chain".into(),
-                    genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+                    chain_id: "test-chain".to_owned().try_into().unwrap(),
+                    genesis_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
                 }
                 .encode(),

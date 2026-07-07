@@ -14,6 +14,7 @@ use lb_core::{
 use lb_http_api_common::{
     bodies::{
         blend::JoinBlendRequestBody,
+        mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
@@ -71,6 +72,14 @@ impl NodeHttpClient {
         self.with_timeout(
             "Consensus info request",
             self.http_client.consensus_info(self.base_url.clone()),
+        )
+        .await
+    }
+
+    pub async fn gas_prices(&self) -> Result<GasPricesResponseBody, Error> {
+        self.with_timeout(
+            "Gas prices request",
+            self.http_client.gas_prices(self.base_url.clone()),
         )
         .await
     }

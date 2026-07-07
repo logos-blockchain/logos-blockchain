@@ -2,8 +2,10 @@ use lb_config::consensus::{EMPTY_CHANNEL_ID, EMPTY_ED25519_PUBLIC_KEY};
 use lb_core::{
     crypto::ZkDigest,
     mantle::{
-        CryptarchiaParameter,
+        CryptarchiaParameter, GenesisTime,
+        nom::NomEncode as _,
         ops::channel::{ChannelId, MsgId, inscribe::InscriptionOp},
+        transactions::genesis_tx::ChainId,
     },
 };
 use lb_groth16::{FrBytes, fr_from_bytes};
@@ -14,7 +16,7 @@ use time::OffsetDateTime;
 #[serde_as]
 #[derive(serde::Deserialize, Debug)]
 pub struct InscribeParams {
-    pub chain_id: String,
+    pub chain_id: ChainId,
     #[serde(with = "time::serde::iso8601")]
     pub genesis_time: OffsetDateTime,
     #[serde_as(as = "Vec<Hex>")]
@@ -22,7 +24,7 @@ pub struct InscribeParams {
 }
 
 pub fn inscribe<D: ZkDigest>(
-    chain_id: String,
+    chain_id: ChainId,
     genesis_time: OffsetDateTime,
     entropy_sources: impl IntoIterator<Item = FrBytes>,
 ) -> InscriptionOp {
@@ -39,6 +41,8 @@ pub fn inscribe<D: ZkDigest>(
     }
 
     let genesis_nonce_fr = hasher.finalize();
+
+    let genesis_time = GenesisTime::try_from(genesis_time).expect("Invalid genesis time");
 
     let params = CryptarchiaParameter {
         chain_id,
