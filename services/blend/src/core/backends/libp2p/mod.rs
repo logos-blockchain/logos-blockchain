@@ -185,5 +185,6 @@ impl Drop for Libp2pBlendBackend {
             ..
         } = self;
         swarm_task_abort_handle.abort();
+        metrics::peers_negotiated_stop_reporting();
     }
 }

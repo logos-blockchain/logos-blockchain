@@ -78,7 +78,7 @@ pub fn apply_wallet_genesis_overrides(
         .expect("Genesis block should have a genesis tx")
         .genesis_transfer()
         .clone();
-    for output in transfer_op.outputs.as_mut().iter_mut() {
+    for output in &mut transfer_op.outputs {
         if leader_keys.contains(&output.pk) {
             output.value = leader_stake;
         }
@@ -86,7 +86,6 @@ pub fn apply_wallet_genesis_overrides(
     for (secret_key, value) in wallet_accounts {
         transfer_op
             .outputs
-            .as_mut()
             .try_push(Note::new(*value, secret_key.to_public_key()))
             .expect("wallet account outputs must fit transfer output bounds");
     }

@@ -400,7 +400,8 @@ where
                 }
             }
             ConnectionEvent::DialUpgradeError(e) => {
-                tracing::error!(target: LOG_TARGET, "DialUpgradeError for connection {:?}: {:?}", self.connection_details, e);
+                // This error is handled in the swarm, so we just log it at `DEBUG` level here.
+                tracing::debug!(target: LOG_TARGET, "DialUpgradeError for connection {:?}: {:?}", self.connection_details, e);
                 self.close_substreams();
             }
             event => {

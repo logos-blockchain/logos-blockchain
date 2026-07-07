@@ -12,6 +12,7 @@ use crate::{
         fee_reserve::SCENARIO_FEE_ACCOUNT_NAME,
         wallet::{
             TARGET,
+            best_node::get_best_node_info,
             sync::{current_wallet_output_balance, current_wallet_state_for_key},
             wallet_output_state_label,
         },
@@ -116,6 +117,11 @@ enum WalletBalanceBoundsError {
     MissingBound,
 }
 
+/// Assert that TF's tracked wallet fees match the on-chain spend from the
+/// sponsored fee account.
+///
+/// This catches accounting drift between locally reserved/submitted wallet fees
+/// and the fee account balance observed from chain state.
 pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     world: &mut CucumberWorld,
     step_value: &str,
@@ -176,6 +182,11 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     Ok(())
 }
 
+/// Wait until the wallet block feed has observed all expected transaction
+/// hashes in blocks.
+///
+/// This checks inclusion through TF's observed-chain feed, not just successful
+/// transaction submission to a node.
 pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
     world: &mut CucumberWorld,
     step: &str,
@@ -224,6 +235,10 @@ pub async fn wait_for_observed_transaction_hashes<S: BuildHasher + Sync>(
     clippy::too_many_arguments,
     reason = "This function is more readable with explicit arguments rather than packing them into structs or tuples."
 )]
+/// Wait until a wallet balance matches the requested output-count/value bounds.
+///
+/// The balance is read from tracked wallet state at the selected best node, so
+/// the assertion follows the same fork-group logic used by transaction steps.
 pub async fn wait_for_wallet_output_state(
     world: &mut CucumberWorld,
     step: &str,
@@ -258,8 +273,11 @@ pub async fn wait_for_wallet_output_state(
     let time_out = Duration::from_secs(time_out_seconds);
     let mut poll_count = 0usize;
     let wallet_state_label = wallet_output_state_label(wallet_state_type);
+    let mut last_msg = String::new();
 
     loop {
+        // Ensure we have a converged majority before proceeding
+        let _best_node_info = get_best_node_info(world, &wallet_name, Some(&mut last_msg)).await?;
         let balance =
             current_wallet_output_balance(world, step, &wallet, wallet_state_type).await?;
 

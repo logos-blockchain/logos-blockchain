@@ -84,6 +84,7 @@ impl From<MigrateArgs> for InitArgs {
             api: migrate.api,
             state: migrate.state,
             storage_path: None,
+            overwrite: false,
         }
     }
 }

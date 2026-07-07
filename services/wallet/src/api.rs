@@ -4,8 +4,7 @@ use lb_core::{
         Note, SignedMantleTx, TxHash, Value,
         gas::GasCost,
         ops::leader_claim::{RewardsRoot, VoucherCm},
-        tx::MantleTxContext,
-        tx_builder::{MantleTxBuilder, TxBuilderError},
+        transactions::{MantleTxBuilder, MantleTxContext, TxBuilderError},
     },
 };
 use lb_key_management_system_service::keys::{
@@ -294,7 +293,7 @@ mod tests {
 
     use lb_core::mantle::{
         ops::channel::{ChannelId, ChannelKeyIndex},
-        tx::{GasPrices, MantleTxGasContext},
+        transactions::{GasPrices, MantleTxGasContext},
     };
     use overwatch::services::state::{NoOperator, NoState};
     use tokio::sync::mpsc;

@@ -31,7 +31,6 @@ cryptarchia:
     service_params:
       BN:
         inactivity_period: 2
-        retention_period: 1
         epoch: 0
     min_stake:
       threshold: 1
@@ -55,4 +54,3 @@ time:
   slot_duration: '1.000000000'
 mempool:
   pubsub_topic: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/mempool/1.0.0
-

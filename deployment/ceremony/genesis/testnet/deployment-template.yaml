@@ -1,9 +1,9 @@
 blend:
   common:
     num_blend_layers: 1
-    minimum_network_size: 32
+    minimum_network_size: 2
     protocol_name: /logos-blockchain-ENV_PLACEHOLDER-VERSION_PLACEHOLDER/blend/1.0.0
-    data_replication_factor: 0
+    data_replication_factor: 1
   core:
     scheduler:
       cover:
@@ -31,7 +31,6 @@ cryptarchia:
     service_params:
       BN:
         inactivity_period: 2
-        retention_period: 1
         epoch: 0
     min_stake:
       threshold: 1

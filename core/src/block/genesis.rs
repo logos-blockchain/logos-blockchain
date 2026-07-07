@@ -9,11 +9,9 @@ use crate::{
     header::Header,
     mantle::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
-        encoding::{BoundedOutputs, Ops},
-        genesis_tx::{self, GenesisTx},
-        ledger::{Inputs, Outputs},
+        ledger::{BoundedOutputs, Inputs, Outputs},
         ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
-        tx::VerificationError,
+        transactions::{GenesisTx, Ops, VerificationError, genesis_tx},
     },
 };
 
@@ -31,8 +29,12 @@ pub enum Error {
     InvalidGenesisTx(#[from] genesis_tx::Error),
     #[error("add_notes called with empty iterator")]
     EmptyNotes,
+    #[error("too few notes for genesis transfer outputs: attempted {actual}, min {min}")]
+    TooFewNotes { actual: usize, min: usize },
     #[error("too many notes for genesis transfer outputs: attempted {actual}, max {max}")]
     TooManyNotes { actual: usize, max: usize },
+    #[error("Index {index} is out of bounds for length {len}")]
+    IndexOutOfBounds { index: usize, len: usize },
 }
 
 /// Convenience [`Result`](core::result::Result) alias for genesis block
@@ -41,9 +43,17 @@ pub type Result<T> = core::result::Result<T, Error>;
 
 const fn map_notes_bounded_error(error: &BoundedError) -> Error {
     match error {
-        BoundedError::TooLong { actual, max } => Error::TooManyNotes {
+        BoundedError::TooManyItems { count: actual, max } => Error::TooManyNotes {
             actual: *actual,
             max: *max,
+        },
+        BoundedError::TooFewItems { count: actual, min } => Error::TooFewNotes {
+            actual: *actual,
+            min: *min,
+        },
+        BoundedError::IndexOutOfBounds { index, len } => Error::IndexOutOfBounds {
+            index: *index,
+            len: *len,
         },
         BoundedError::EmptyInput => Error::EmptyNotes,
     }
@@ -1174,13 +1184,13 @@ mod tests {
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
     use num_bigint::BigUint;
-    use time::OffsetDateTime;
 
     use super::*;
     use crate::{
         header::HeaderId,
         mantle::{
-            CryptarchiaParameter, GenesisTx as _, NoteId,
+            CryptarchiaParameter, GenesisTime, GenesisTx as _, NoteId,
+            nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         sdp::{Locator, ProviderId, ServiceType},
@@ -1193,8 +1203,8 @@ mod tests {
             channel_id: ChannelId::from([0; 32]),
             inscription: Inscription::new_unchecked(
                 CryptarchiaParameter {
-                    chain_id: "test-chain".into(),
-                    genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+                    chain_id: "test-chain".to_owned().try_into().unwrap(),
+                    genesis_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
                 }
                 .encode(),
@@ -1209,8 +1219,8 @@ mod tests {
             channel_id: ChannelId::from([1; 32]), // non-zero — invalid
             inscription: Inscription::new_unchecked(
                 CryptarchiaParameter {
-                    chain_id: "test-chain".into(),
-                    genesis_time: OffsetDateTime::from_unix_timestamp(1000).unwrap(),
+                    chain_id: "test-chain".to_owned().try_into().unwrap(),
+                    genesis_time: GenesisTime::new(1000),
                     epoch_nonce: Fr::ZERO,
                 }
                 .encode(),

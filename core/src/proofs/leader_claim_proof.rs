@@ -5,7 +5,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::error;
 
-use crate::{mantle::ops::leader_claim::VoucherSecret, proofs::merkle::mmr_path_to_witness};
+use crate::{
+    mantle::{
+        nom::{NomDecode, NomEncode},
+        ops::leader_claim::VoucherSecret,
+    },
+    proofs::merkle::mmr_path_to_witness,
+};
 
 const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 
@@ -13,6 +19,24 @@ const LOG_TARGET: &str = proofs::LEADER_CLAIM;
 pub struct Groth16LeaderClaimProof {
     #[serde(with = "proof_serde")]
     proof: lb_poc::PoCProof,
+}
+
+impl NomEncode for Groth16LeaderClaimProof {
+    fn encode(&self) -> Vec<u8> {
+        self.proof.to_bytes().encode()
+    }
+}
+
+impl NomDecode for Groth16LeaderClaimProof {
+    fn decode(bytes: &[u8]) -> nom::IResult<&[u8], Self> {
+        let (remaining_bytes, inner) = <[u8; _]>::decode(bytes)?;
+        Ok((
+            remaining_bytes,
+            Self {
+                proof: lb_poc::PoCProof::from_bytes(&inner),
+            },
+        ))
+    }
 }
 
 #[derive(Debug, Error)]

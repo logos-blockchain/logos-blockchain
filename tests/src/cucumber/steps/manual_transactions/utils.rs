@@ -1,6 +1,6 @@
 use std::{collections::HashSet, num::NonZero};
 
-use lb_core::mantle::TxHash;
+use lb_core::mantle::{NoteId, TxHash};
 use tracing::warn;
 
 pub use crate::cucumber::wallet::{
@@ -10,9 +10,8 @@ pub use crate::cucumber::wallet::{
     },
     parse_wallet_output_state,
     submissions::{
-        create_and_submit_transaction, create_and_submit_transaction_hashes,
-        create_and_submit_transaction_hashes_with_utxo_cache, wait_for_transactions_inclusion,
-        wait_for_wallet_submitted_transactions_inclusion,
+        create_and_submit_transaction, create_and_submit_transaction_hashes_with_utxo_cache,
+        wait_for_transactions_inclusion, wait_for_wallet_submitted_transactions_inclusion,
     },
     sync::{
         current_available_utxos_for_all_wallets, current_available_utxos_for_funding_wallets,
@@ -23,7 +22,7 @@ pub use crate::cucumber::wallet::{
 pub(crate) use crate::cucumber::wallet::{
     best_node::BestNodeInfo,
     submissions::{
-        SignedUserWalletSubmission, finalize_reserved_user_wallet_submissions_concurrently,
+        finalize_reserved_user_wallet_submissions_concurrently,
         prepare_user_wallet_transaction_submission,
         reserve_user_wallet_transaction_submission_with_utxo_cache,
         submit_prepared_user_wallet_transaction,
@@ -80,5 +79,14 @@ where
 {
     for hash in hashes {
         let _unused = hash_set.insert(*hash);
+    }
+}
+
+pub(crate) fn extend_note_id_set<'a, I>(note_id_set: &mut HashSet<NoteId>, note_ids: I)
+where
+    I: IntoIterator<Item = &'a NoteId>,
+{
+    for note_id in note_ids {
+        let _unused = note_id_set.insert(*note_id);
     }
 }

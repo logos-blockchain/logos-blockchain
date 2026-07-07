@@ -41,11 +41,11 @@ pub fn run(args: InitArgs) -> Result<()> {
             .join("keystore.yaml")
     });
 
-    if user_config_path.exists() {
+    if user_config_path.exists() && !args.overwrite {
         return Err(InitError::UserFileExists.into());
     }
 
-    if keystore_path.exists() {
+    if keystore_path.exists() && !args.overwrite {
         return Err(InitError::KeystoreFileExists.into());
     }
 
