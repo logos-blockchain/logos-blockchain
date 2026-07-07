@@ -125,27 +125,32 @@ impl<Tx> Block<Tx> {
     where
         Tx: Transaction<Hash = TxHash> + StorageSize,
     {
+        // 1. Non-genesis blocks only
         if slot == Slot::genesis() {
             return Err(Error::Validation("expected non-genesis slot".to_owned()));
         }
 
-        let expected_public_key = proof_of_leadership.leader_key();
-        let actual_public_key = signing_key.public_key();
-        if expected_public_key != &actual_public_key {
+        // 2. Expected leader public key
+        let expected_leader_public_key = proof_of_leadership.leader_key();
+        if expected_leader_public_key != &signing_key.public_key() {
             return Err(Error::KeyMismatch);
         }
 
+        // 3. Block root & header
         let block_root = Self::calculate_content_id(transactions.as_slice());
-
         let header = Header::new(parent_block, block_root, slot, proof_of_leadership);
 
+        // 4. Signature over the header
         let signature = header.sign(signing_key)?;
 
+        // 5. New block
         let block = Self {
             header,
             signature,
             transactions,
         };
+
+        // 6. Size is ok
         block.validate_total_transactions_size()?;
 
         Ok(block)
