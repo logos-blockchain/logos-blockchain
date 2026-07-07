@@ -452,7 +452,10 @@ where
                         {
                             Ok(proof) => proof,
                             Err(e) => {
-                                error!(target: LOG_TARGET, "Failed to build leadership proof for slot {slot:?}: {e}");
+                                error!(
+                                    target: LOG_TARGET,
+                                    "Failed to build leadership proof for slot {slot:?}: {e}"
+                                );
                                 continue;
                             }
                         };
