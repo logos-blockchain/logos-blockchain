@@ -17,6 +17,7 @@ use lb_http_api_common::{
     MAX_BLOCKS_STREAM_BLOCKS, MAX_BLOCKS_STREAM_CHUNK_SIZE,
     bodies::{
         blend::JoinBlendRequestBody,
+        mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
             claimable_vouchers::WalletClaimableVouchersResponseBody,
@@ -26,7 +27,7 @@ use lb_http_api_common::{
     paths::{
         BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
         BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS,
-        MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
+        MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
         wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
@@ -297,6 +298,15 @@ impl CommonHttpClient {
             .join(CRYPTARCHIA_INFO.trim_start_matches('/'))
             .map_err(Error::Url)?;
         self.get::<(), ChainServiceInfo>(request_url, None).await
+    }
+
+    /// Get the current gas prices from the ledger state at the tip.
+    pub async fn gas_prices(&self, base_url: Url) -> Result<GasPricesResponseBody, Error> {
+        let request_url = base_url
+            .join(MANTLE_GAS_PRICES.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+        self.get::<(), GasPricesResponseBody>(request_url, None)
+            .await
     }
 
     /// Get time service info derived from deployment settings.
