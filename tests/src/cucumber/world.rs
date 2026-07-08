@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     env,
     fmt::Debug,
     hash::BuildHasher,
@@ -884,9 +884,12 @@ pub struct CucumberWorld {
     pub fee_state: ScenarioFeeState,
     /// Manual: Scenario-local wallet read model.
     ///
-    /// Chain-derived UTXOs are tracked by the wallet block-feed tracker.
-    /// Step code still records local intent, such as reserved inputs and
-    /// submitted transaction hashes, directly in this state.
+    /// This shared state contains wallet balances/UTXOs observed during a test
+    /// scenario. Chain-derived UTXOs are updated exclusively by the
+    /// background wallet scanner; step code must treat this state as
+    /// read-only. Stored behind `Arc<Mutex<_>>` so scanner tasks and step
+    /// code can safely share a single synchronized view for the scenario
+    /// lifetime.
     pub wallets: SharedTrackedWallets,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
@@ -898,6 +901,9 @@ pub struct CucumberWorld {
     pub wallet_scanner_state: SharedWalletScannerState,
     /// Manual: Background wallet scanner runtime.
     pub wallet_scanner_runtime: Option<WalletScannerRuntime>,
+    /// Manual: Topology/config fingerprint used to detect stale scanner runtime
+    /// configs.
+    pub wallet_scanner_fingerprint: Option<WalletScannerTopologyFingerprint>,
     /// Manual: Restored snapshot seeds available to wallet scanner startup,
     /// keyed by runtime node name.
     pub wallet_scanner_seeds: HashMap<String, ScannerSeed>,
@@ -965,6 +971,10 @@ pub struct CucumberWorld {
 impl Drop for CucumberWorld {
     fn drop(&mut self) {
         self.zone.clear();
+
+        if let Some(runtime) = self.wallet_scanner_runtime.take() {
+            runtime.cancel();
+        }
 
         if let Some(handles) = self.faucet_task_handles.take() {
             for handle in handles {
@@ -1092,6 +1102,10 @@ impl Debug for CucumberWorld {
             .field(
                 "wallet_scanner_runtime",
                 &self.wallet_scanner_runtime.is_some(),
+            )
+            .field(
+                "wallet_scanner_fingerprint",
+                &self.wallet_scanner_fingerprint.is_some(),
             )
             .field("wallet_scanner_seeds", &self.wallet_scanner_seeds.len())
             .field("wallet_utxos_by_block", &wallet_utxo_snapshot_count)
@@ -1228,6 +1242,100 @@ pub type ChainInfoMap = HashMap<u64, String>;
 /// information.
 pub type WalletInfoMap = HashMap<String, WalletInfo>;
 
+/// Stable scanner startup inputs used to reject stale scanner runtime reuse.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WalletScannerTopologyFingerprint {
+    nodes: BTreeSet<String>,
+    wallets: BTreeMap<String, (String, String, String)>,
+    node_groups: BTreeMap<String, BTreeSet<String>>,
+    node_to_group: BTreeMap<String, String>,
+    fee_wallet_public_key: Option<String>,
+    scanner_seeds: BTreeMap<String, String>,
+}
+
+impl WalletScannerTopologyFingerprint {
+    fn from_world(world: &CucumberWorld) -> Self {
+        let nodes = world.nodes_info.keys().cloned().collect();
+        let wallets = world
+            .wallet_info
+            .iter()
+            .map(|(wallet_name, wallet)| {
+                (
+                    wallet_name.clone(),
+                    (
+                        wallet.node_name.clone(),
+                        wallet_type_label(&wallet.wallet_type).to_owned(),
+                        wallet.public_key_hex(),
+                    ),
+                )
+            })
+            .collect();
+        let node_groups = world
+            .node_groups
+            .iter()
+            .map(|(group, nodes)| (group.clone(), nodes.clone()))
+            .collect();
+        let node_to_group = world
+            .node_to_group
+            .iter()
+            .map(|(node, group)| (node.clone(), group.clone()))
+            .collect();
+        let fee_wallet_public_key = world
+            .fee_state
+            .wallet_account
+            .as_ref()
+            .map(WalletAccount::public_key_hex);
+        let scanner_seeds = world
+            .wallet_scanner_seeds
+            .iter()
+            .map(|(node, seed)| (node.clone(), scanner_seed_fingerprint(seed)))
+            .collect();
+
+        Self {
+            nodes,
+            wallets,
+            node_groups,
+            node_to_group,
+            fee_wallet_public_key,
+            scanner_seeds,
+        }
+    }
+}
+
+const fn wallet_type_label(wallet_type: &WalletType) -> &'static str {
+    match wallet_type {
+        WalletType::User { .. } => "user",
+        WalletType::Funding { .. } => "funding",
+    }
+}
+
+fn scanner_seed_fingerprint(seed: &ScannerSeed) -> String {
+    match seed {
+        ScannerSeed::Genesis => "genesis".to_owned(),
+        ScannerSeed::Snapshot {
+            tip,
+            height,
+            slot,
+            source_node_names,
+            rescan_blocks,
+            wallet_utxos,
+        } => {
+            let mut wallet_counts = wallet_utxos
+                .iter()
+                .map(|(wallet_id, utxos)| format!("{wallet_id}:{}", utxos.len()))
+                .collect::<Vec<_>>();
+            wallet_counts.sort();
+            let mut source_node_names = source_node_names.clone();
+            source_node_names.sort();
+            format!(
+                "snapshot:{tip}:{height}:{slot}:{rescan_blocks}:{}:{}",
+                source_node_names.join(","),
+                wallet_counts.join(",")
+            )
+        }
+    }
+}
+
 /// Information about a started node in the world
 pub struct NodeInfo {
     /// Node name
@@ -1362,7 +1470,13 @@ impl CucumberWorld {
     }
 
     pub async fn ensure_wallet_scanner_started(&mut self) -> StepResult {
+        let fingerprint = WalletScannerTopologyFingerprint::from_world(self);
         if self.wallet_scanner_runtime.is_some() {
+            if self.wallet_scanner_fingerprint.as_ref() != Some(&fingerprint) {
+                return Err(StepError::LogicalError {
+                    message: "Wallet scanner topology changed after scanner startup; reset the wallet scanner before adding wallet-bearing nodes or wallets".to_owned(),
+                });
+            }
             tokio::task::yield_now().await;
             return Ok(());
         }
@@ -1373,6 +1487,7 @@ impl CucumberWorld {
 
         self.wallet_scanner_state = scanner_state;
         self.wallet_scanner_runtime = Some(runtime);
+        self.wallet_scanner_fingerprint = Some(fingerprint);
         tokio::task::yield_now().await;
         Ok(())
     }
@@ -1387,6 +1502,7 @@ impl CucumberWorld {
             runtime.cancel();
         }
         self.wallet_scanner_state = Arc::new(Mutex::new(WalletScannerState::default()));
+        self.wallet_scanner_fingerprint = None;
     }
 
     pub async fn reset_wallet_scanner_after_current_iteration(&mut self) {
@@ -1394,6 +1510,7 @@ impl CucumberWorld {
             runtime.shutdown_after_current_iteration().await;
         }
         self.wallet_scanner_state = Arc::new(Mutex::new(WalletScannerState::default()));
+        self.wallet_scanner_fingerprint = None;
     }
 
     pub(crate) fn wallet_tracking_keys_for_source(

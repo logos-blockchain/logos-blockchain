@@ -1,13 +1,13 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 
-use lb_core::header::HeaderId;
+use lb_core::{header::HeaderId, mantle::TxHash};
 use lb_testing_framework::NodeHttpClient;
 use tokio::{task::JoinHandle, time::sleep};
 use tracing::{info, warn};
@@ -19,7 +19,10 @@ use super::{
     state::{ScannerStatus, SharedWalletScannerState},
 };
 use crate::{
-    common::wallet::TrackedWallets,
+    common::wallet::{
+        TrackedWallets, WalletId,
+        scanner::{error::ScannerError, state::ForkGroupScannerState},
+    },
     cucumber::{
         error::StepError,
         wallet::best_node::{BestGroupNode, display_group_key},
@@ -145,18 +148,12 @@ pub async fn wait_for_scanner_catch_up(
 
     loop {
         let waiting = {
-            let snapshot = state
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let snapshot = state.lock().unwrap_or_else(PoisonError::into_inner);
             snapshot
                 .groups
                 .values()
                 .filter(|group| group.wallet_count > 0)
-                .any(|group| {
-                    group
-                        .target_height
-                        .is_none_or(|target_height| group.applied_height < target_height)
-                })
+                .any(scanner_group_needs_catch_up)
         };
 
         if !waiting {
@@ -165,9 +162,7 @@ pub async fn wait_for_scanner_catch_up(
 
         if started_at.elapsed() >= timeout {
             let status = {
-                let snapshot = state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let snapshot = state.lock().unwrap_or_else(PoisonError::into_inner);
                 snapshot
                     .groups
                     .values()
@@ -192,6 +187,14 @@ pub async fn wait_for_scanner_catch_up(
 
         sleep(Duration::from_millis(250)).await;
     }
+}
+
+fn scanner_group_needs_catch_up(group: &ForkGroupScannerState) -> bool {
+    group.status == ScannerStatus::Error
+        || group.last_error.is_some()
+        || group
+            .target_height
+            .is_none_or(|target_height| group.applied_height < target_height)
 }
 
 fn initialize_scanner_from_seed(
@@ -487,7 +490,8 @@ async fn scan_group_once(
 
     let from_slot = applied_slot.map_or(0, |slot| slot.saturating_add(1));
 
-    let observed_tx_count_before = accounting.observed_transaction_hashes().len();
+    let observed_tx_hashes_before = accounting.observed_transaction_hashes().clone();
+    let observed_tx_count_before = observed_tx_hashes_before.len();
     let mut applied_block_count = 0usize;
     let mut skipped_unconnected_block_count = 0usize;
     let mut last_publish_height = *applied_height;
@@ -546,7 +550,7 @@ async fn scan_group_once(
                 block.header.id.to_string(),
                 wallet_utxos,
             )
-            .map_err(|error| super::error::ScannerError::Logical(error.to_string()))?;
+            .map_err(|error| ScannerError::Logical(error.to_string()))?;
             last_publish_height = *applied_height;
         }
 
@@ -600,13 +604,7 @@ async fn scan_group_once(
         }
     }
 
-    {
-        let mut observed = config
-            .observed_transaction_hashes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        observed.extend(accounting.observed_transaction_hashes().iter().copied());
-    };
+    publish_new_observed_transaction_hashes(config, accounting, &observed_tx_hashes_before);
 
     update_group_state(&config.scanner_state, &config.group_id, |group| {
         group.applied_height = *applied_height;
@@ -635,6 +633,23 @@ async fn scan_group_once(
     }
 
     Ok(())
+}
+
+fn publish_new_observed_transaction_hashes(
+    config: &ForkGroupScannerConfig,
+    accounting: &ScannerAccounting,
+    observed_tx_hashes_before: &BTreeSet<TxHash>,
+) {
+    let mut observed = config
+        .observed_transaction_hashes
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    observed.extend(
+        accounting
+            .observed_transaction_hashes()
+            .difference(observed_tx_hashes_before)
+            .copied(),
+    );
 }
 
 fn publish_genesis_wallet_state_if_needed(
@@ -813,9 +828,7 @@ fn publish_wallet_state(
     source_node_names: &[String],
     height: u64,
     header_id: String,
-    wallet_utxos: impl IntoIterator<
-        Item = (crate::common::wallet::WalletId, Vec<lb_core::mantle::Utxo>),
-    >,
+    wallet_utxos: impl IntoIterator<Item = (WalletId, Vec<lb_core::mantle::Utxo>)>,
 ) -> Result<(), StepError> {
     let wallet_utxos = wallet_utxos.into_iter().collect::<Vec<_>>();
     let mut wallets = wallets.lock().map_err(|_| StepError::LogicalError {
@@ -833,11 +846,11 @@ fn publish_wallet_state(
 fn update_group_state(
     state: &SharedWalletScannerState,
     group_id: &str,
-    update: impl FnOnce(&mut super::state::ForkGroupScannerState),
+    update: impl FnOnce(&mut ForkGroupScannerState),
 ) {
     if let Some(group) = state
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(PoisonError::into_inner)
         .groups
         .get_mut(group_id)
     {
