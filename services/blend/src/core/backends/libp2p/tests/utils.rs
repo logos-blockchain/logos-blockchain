@@ -198,8 +198,6 @@ impl BlendBehaviourBuilder {
                     with_core: CoreToCoreConfig {
                         peering_degree,
                         minimum_network_size: 1.try_into().unwrap(),
-                        // Matches the number of layers produced by the shared
-                        // test message helper (`generate_valid_inputs` uses 3).
                         num_blend_layers: 3.try_into().unwrap(),
                     },
                     with_edge: CoreToEdgeConfig {

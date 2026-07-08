@@ -145,29 +145,6 @@ impl WireDecode for PublicHeader {
     }
 }
 
-// The verified public-header variants are never decoded from the wire (a peer's
-// bytes always decode into an unverified `PublicHeader`); they only need to
-// encode, and all three variants produce identical bytes. Implementing only
-// `WireEncode` for them means a verified message can be serialized directly,
-// with no conversion/copy through `PublicHeader`.
-impl WireEncode for PublicHeaderWithVerifiedSignature {
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.version.encode_into(out);
-        self.signing_pubkey.encode_into(out);
-        self.proof_of_quota.encode_into(out);
-        self.signature.encode_into(out);
-    }
-}
-
-impl WireEncode for VerifiedPublicHeader {
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        self.version.encode_into(out);
-        self.signing_pubkey.encode_into(out);
-        self.proof_of_quota.as_ref().encode_into(out);
-        self.signature.encode_into(out);
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct PublicHeaderWithVerifiedSignature {
     version: u8,
@@ -238,6 +215,20 @@ impl PublicHeaderWithVerifiedSignature {
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn signature_mut(&mut self) -> &mut Ed25519Signature {
         &mut self.signature
+    }
+}
+
+// The verified public-header variants are never decoded from the wire (a peer's
+// bytes always decode into an unverified `PublicHeader`); they only need to
+// encode, and all three variants produce identical bytes. Implementing only
+// `WireEncode` for them means a verified message can be serialized directly,
+// with no conversion/copy through `PublicHeader`.
+impl WireEncode for PublicHeaderWithVerifiedSignature {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.version.encode_into(out);
+        self.signing_pubkey.encode_into(out);
+        self.proof_of_quota.encode_into(out);
+        self.signature.encode_into(out);
     }
 }
 
@@ -336,6 +327,15 @@ impl VerifiedPublicHeader {
             self.proof_of_quota,
             self.signature,
         )
+    }
+}
+
+impl WireEncode for VerifiedPublicHeader {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.version.encode_into(out);
+        self.signing_pubkey.encode_into(out);
+        self.proof_of_quota.as_ref().encode_into(out);
+        self.signature.encode_into(out);
     }
 }
 

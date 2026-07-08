@@ -155,8 +155,6 @@ impl BehaviourBuilder {
             minimum_network_size: self
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
-            // Matches the number of layers produced by the shared test message
-            // helper (`generate_valid_inputs` uses 3 inputs).
             num_blend_layers: self
                 .num_blend_layers
                 .unwrap_or_else(|| 3.try_into().unwrap()),

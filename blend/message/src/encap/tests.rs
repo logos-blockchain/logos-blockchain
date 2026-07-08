@@ -16,6 +16,7 @@ use crate::{
         ProofsVerifier,
         decapsulated::DecapsulationOutput,
         encapsulated::{EncapsulatedMessage, EncapsulatedPart},
+        expected_serialized_len,
         validated::{
             EncapsulatedMessageWithVerifiedPublicHeader, EncapsulatedMessageWithVerifiedSignature,
             RequiredProofOfSelectionVerificationInputs,
@@ -409,8 +410,7 @@ fn serialized_size_constants_match_wire_format() {
         let message = EncapsulatedMessage::from(sample_message(num_layers as usize));
 
         let actual_len = message.encode().len() as u64;
-        let expected_len =
-            EncapsulatedMessage::expected_serialized_len(num_layers.try_into().unwrap());
+        let expected_len = expected_serialized_len(num_layers.try_into().unwrap()) as u64;
 
         assert_eq!(
             expected_len, actual_len,
@@ -430,7 +430,10 @@ fn encode_decode_round_trip() {
         let (remaining, decoded) =
             EncapsulatedMessage::decode(&encoded, num_layers.try_into().unwrap()).unwrap();
 
-        assert!(remaining.is_empty(), "leftover bytes for {num_layers} layer(s)");
+        assert!(
+            remaining.is_empty(),
+            "leftover bytes for {num_layers} layer(s)"
+        );
         assert_eq!(
             decoded, message,
             "round-trip mismatch for {num_layers} layer(s)"
@@ -454,8 +457,8 @@ fn wire_bytes_identical_across_message_types() {
 
 // Rejecting a message whose layer count differs from the expected one is now
 // the responsibility of the network-side size gate (it compares the received
-// length against `EncapsulatedMessage::expected_serialized_len`), covered by the
-// `blend-network` tests. `decode` itself assumes a correctly-sized input.
+// length against `EncapsulatedMessage::expected_serialized_len`), covered by
+// the `blend-network` tests. `decode` itself assumes a correctly-sized input.
 
 fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey>) {
     let recipient_signing_keys =

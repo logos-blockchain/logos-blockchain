@@ -14,6 +14,26 @@ pub enum PayloadType {
     Data = 0x01,
 }
 
+impl WireEncode for PayloadType {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        (*self as u8).encode_into(out);
+    }
+}
+
+impl WireDecode for PayloadType {
+    type Context = ();
+
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
+        let (remaining, discriminant) = u8::decode(input, ())?;
+        let payload_type = match discriminant {
+            0x00 => Self::Cover,
+            0x01 => Self::Data,
+            _ => return Err(WireDecodeError::InvalidPayloadType),
+        };
+        Ok((remaining, payload_type))
+    }
+}
+
 /// The decapsulated payload body, padded to a fixed size.
 ///
 /// `actual_len` is the length of the real (unpadded) content and is the single
@@ -60,13 +80,6 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
     }
 }
 
-/// The exact number of bytes a [`Payload`] encodes to: a fixed enum
-/// discriminant, the `u16` body length, and the body padded to
-/// [`MAX_PAYLOAD_BODY_SIZE`]. Compile-time constant, so the encapsulated
-/// (ciphered) form can be stored as a `Box<[u8; PAYLOAD_ENCODED_SIZE]>`.
-pub const PAYLOAD_ENCODED_SIZE: usize =
-    size_of::<u8>() + size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE;
-
 impl WireEncode for PaddedPayloadBody {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.actual_len.encode_into(out);
@@ -88,6 +101,12 @@ impl WireDecode for PaddedPayloadBody {
         Ok((remaining, Self { actual_len, padded }))
     }
 }
+
+/// The exact number of bytes a [`Payload`] encodes to: a fixed enum
+/// discriminant, the `u16` body length, and the body padded to
+/// [`MAX_PAYLOAD_BODY_SIZE`]. Compile-time constant, so the encapsulated
+/// (ciphered) form can be stored as a `Box<[u8; PAYLOAD_ENCODED_SIZE]>`.
+pub const PAYLOAD_ENCODED_SIZE: usize = size_of::<u8>() + size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE;
 
 /// A payload that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
@@ -118,26 +137,6 @@ impl Payload {
 
     pub fn try_into_components(self) -> Result<(PayloadType, Vec<u8>), Error> {
         Ok((self.payload_type(), self.body()?.to_vec()))
-    }
-}
-
-impl WireEncode for PayloadType {
-    fn encode_into(&self, out: &mut Vec<u8>) {
-        (*self as u8).encode_into(out);
-    }
-}
-
-impl WireDecode for PayloadType {
-    type Context = ();
-
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (remaining, discriminant) = u8::decode(input, ())?;
-        let payload_type = match discriminant {
-            0x00 => Self::Cover,
-            0x01 => Self::Data,
-            _ => return Err(WireDecodeError::InvalidPayloadType),
-        };
-        Ok((remaining, payload_type))
     }
 }
 

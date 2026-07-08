@@ -1,3 +1,5 @@
+use core::num::NonZeroU64;
+
 use derivative::Derivative;
 use lb_blend_crypto::random_sized_bytes;
 use lb_blend_proofs::{
@@ -9,11 +11,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     Error, MessageIdentifier, PaddedPayloadBody, PayloadType,
+    codec::WireEncode as _,
     crypto::key_ext::Ed25519SecretKeyExt as _,
     encap::{
         ProofsVerifier,
         decapsulated::{DecapsulatedMessage, DecapsulationOutput, PartDecapsulationOutput},
-        encapsulated::{EncapsulatedMessage, EncapsulatedPart, encode_message_components},
+        encapsulated::{EncapsulatedMessage, EncapsulatedPart},
+        expected_serialized_len,
     },
     input::EncapsulationInput,
     message::public_header::{PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
@@ -81,15 +85,23 @@ impl EncapsulatedMessageWithVerifiedSignature {
         self.public_header_with_verified_signature.id()
     }
 
-    /// Serialize to the fixed-size, prefix-free wire format. Produces
-    /// byte-identical output to the equivalent [`EncapsulatedMessage`], so the
-    /// receiver can decode it as one.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        encode_message_components(
-            &self.public_header_with_verified_signature,
-            &self.encapsulated_part,
-        )
+        let expected_encoded_len = expected_serialized_len(self.encapsulation_layers());
+        let mut out = Vec::with_capacity(expected_encoded_len);
+        self.public_header_with_verified_signature
+            .encode_into(&mut out);
+        self.encapsulated_part.encode_into(&mut out);
+        debug_assert!(
+            out.len() == expected_encoded_len,
+            "Message should encode to the expected length but it did not."
+        );
+        out
+    }
+
+    #[must_use]
+    fn encapsulation_layers(&self) -> NonZeroU64 {
+        self.encapsulated_part.encapsulation_layers()
     }
 
     #[cfg(any(feature = "unsafe-test-functions", test))]
@@ -199,14 +211,6 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
         self.validated_public_header.id()
     }
 
-    /// Serialize to the fixed-size, prefix-free wire format. Produces
-    /// byte-identical output to the equivalent [`EncapsulatedMessage`], so the
-    /// receiver can decode it as one.
-    #[must_use]
-    pub fn encode(&self) -> Vec<u8> {
-        encode_message_components(&self.validated_public_header, &self.encapsulated_part)
-    }
-
     /// Decapsulates the message using the provided key.
     ///
     /// If the provided key is eligible, returns the following:
@@ -295,6 +299,24 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn public_header_mut(&mut self) -> &mut VerifiedPublicHeader {
         &mut self.validated_public_header
+    }
+
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let expected_encoded_len = expected_serialized_len(self.encapsulation_layers());
+        let mut out = Vec::with_capacity(expected_encoded_len);
+        self.validated_public_header.encode_into(&mut out);
+        self.encapsulated_part.encode_into(&mut out);
+        debug_assert!(
+            out.len() == expected_encoded_len,
+            "Message should encode to the expected length but it did not."
+        );
+        out
+    }
+
+    #[must_use]
+    fn encapsulation_layers(&self) -> NonZeroU64 {
+        self.encapsulated_part.encapsulation_layers()
     }
 }
 
