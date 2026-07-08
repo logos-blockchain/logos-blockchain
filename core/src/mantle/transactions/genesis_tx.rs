@@ -14,7 +14,7 @@ use super::{SignedMantleTx, TxHash};
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        MantleTx, OpProof, Transaction, TransactionHasher,
+        AuthenticatedMantleTx, MantleTx, OpProof, Transaction, TransactionHasher,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         nom::{NomDecode, NomEncode},
         ops::{
@@ -39,7 +39,7 @@ pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
-    tx: SignedMantleTx,
+    tx: SignedMantleTx<Verified>,
     cryptarchia_parameter: CryptarchiaParameter,
 }
 
@@ -75,8 +75,8 @@ pub enum Error {
 }
 
 impl GenesisTx {
-    pub fn from_tx(signed_mantle_tx: SignedMantleTx) -> Result<Self, Error> {
-        let mantle_tx = &signed_mantle_tx.mantle_tx;
+    pub fn from_tx(signed_mantle_tx: SignedMantleTx<Verified>) -> Result<Self, Error> {
+        let mantle_tx = signed_mantle_tx.mantle_tx();
 
         // Genesis transactions must contain exactly one transfer as the first op,
         // one inscription as the second op, and then may contain other SDP declarations
@@ -107,19 +107,15 @@ impl GenesisTx {
         };
 
         // Validate that every operation is paired with a proof of the correct variant.
-        let ops_count = signed_mantle_tx.mantle_tx.ops().len();
-        let proofs_count = signed_mantle_tx.ops_proofs.len();
+        let ops_count = signed_mantle_tx.mantle_tx().ops().len();
+        let proofs_count = signed_mantle_tx.ops_proofs().len();
         if ops_count != proofs_count {
             return Err(Error::ProofCountMismatch {
                 ops_count,
                 proofs_count,
             });
         }
-        for (proof, op) in signed_mantle_tx
-            .ops_proofs
-            .iter()
-            .zip(signed_mantle_tx.mantle_tx.ops().iter())
-        {
+        for (op, proof) in signed_mantle_tx.ops_with_proof() {
             if !proof_matches(proof, op) {
                 return Err(Error::MismatchedProofType {
                     op: Box::new(op.clone()),
@@ -164,10 +160,12 @@ fn valid_cryptarchia_inscription(
 }
 
 impl Transaction for GenesisTx {
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+    // the closure.
     const HASHER: TransactionHasher<Self> = |tx| TxHash(Hasher::digest(tx.as_signing()).into());
     type Hash = TxHash;
     fn as_signing(&self) -> Vec<u8> {
-        self.tx.mantle_tx.as_signing()
+        self.tx.as_signing()
     }
 }
 
@@ -223,21 +221,17 @@ impl crate::mantle::GenesisTx for GenesisTx {
     }
 
     fn sdp_declarations(&self) -> impl Iterator<Item = (&SDPDeclareOp, &OpProof)> {
-        self.mantle_tx()
-            .ops()
-            .iter()
-            .zip(self.tx.ops_proofs.iter())
-            .filter_map(|(op, proof)| {
-                if let Op::SDPDeclare(sdp_msg) = op {
-                    Some((sdp_msg, proof))
-                } else {
-                    None
-                }
-            })
+        self.tx.ops_with_proof().filter_map(|(op, proof)| {
+            if let Op::SDPDeclare(sdp_msg) = op {
+                Some((sdp_msg, proof))
+            } else {
+                None
+            }
+        })
     }
 
     fn mantle_tx(&self) -> &MantleTx {
-        &self.tx.mantle_tx
+        &self.tx.mantle_tx()
     }
 }
 
@@ -420,7 +414,7 @@ mod tests {
         mantle::{
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::channel::{Ed25519PublicKey, inscribe::Inscription},
-            transactions::Ops,
+            transactions::{Ops, states::Unverified},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
@@ -483,7 +477,7 @@ mod tests {
 
     // Helper function to create a basic signed transaction
     // Genesis transactions don't need verified proofs for Blob/Inscription ops
-    fn create_tx(mut ops: Vec<Op>, ops_proofs: Vec<OpProof>) -> SignedMantleTx {
+    fn create_tx(mut ops: Vec<Op>, ops_proofs: Vec<OpProof>) -> SignedMantleTx<Unverified> {
         let transfer_op = TransferOp::new(Inputs::empty(), Outputs::new([create_test_note(1000)]));
         let mut new_ops = vec![Op::Transfer(transfer_op)];
         new_ops.append(&mut ops);
@@ -495,10 +489,10 @@ mod tests {
         for proof in ops_proofs {
             new_op_proofs.try_push(proof).unwrap();
         }
-        SignedMantleTx {
+        SignedMantleTx::new(
             mantle_tx,
-            ops_proofs: new_op_proofs,
-        }
+            new_op_proofs,
+        )
     }
 
     #[test]

@@ -87,6 +87,8 @@ pub trait GenesisTx: Transaction<Hash = TxHash> {
 }
 
 impl<T: Transaction> Transaction for &T {
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+    // the closure.
     const HASHER: TransactionHasher<Self> = |tx| T::HASHER(tx);
     type Hash = T::Hash;
 

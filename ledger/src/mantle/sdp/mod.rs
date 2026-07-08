@@ -441,28 +441,29 @@ impl SdpLedger {
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
-        channels: &Channels,
+        // channels: &Channels,
         op: &SDPDeclareOp,
-        zk_sig: &ZkSignature,
-        ed25519_sig: &Ed25519Signature,
-        tx_hash: TxHash,
+        // zk_sig: &ZkSignature,
+        // ed25519_sig: &Ed25519Signature,
+        // tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
-        // Validate SDP Declare
-        op.validate(&SDPDeclareValidationContext {
-            utxo_tree,
-            channels,
-            locked_notes: &self.locked_notes,
-            tx_hash: &tx_hash,
-            declare_zk_sig: zk_sig,
-            declare_eddsa_sig: ed25519_sig,
-            declarations: service_state.declarations(),
-            min_stake: &config.min_stake,
-        })?;
+        // // Moved
+        // // Validate SDP Declare
+        // op.validate(&SDPDeclareValidationContext {
+        //     utxo_tree,
+        //     channels,
+        //     locked_notes: &self.locked_notes,
+        //     tx_hash: &tx_hash,
+        //     declare_zk_sig: zk_sig,
+        //     declare_eddsa_sig: ed25519_sig,
+        //     declarations: service_state.declarations(),
+        //     min_stake: &config.min_stake,
+        // })?;
 
         // Execute SDP Declare
         let (result, events) = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
@@ -484,8 +485,8 @@ impl SdpLedger {
     pub fn apply_active_msg(
         mut self,
         op: &SDPActiveOp,
-        zksig: &ZkSignature,
-        tx_hash: TxHash,
+        // zksig: &ZkSignature,
+        // tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
@@ -494,12 +495,12 @@ impl SdpLedger {
         };
 
         //Validate SDP Active
-        op.validate(&SDPActiveValidationContext {
-            declarations: service_state.declarations(),
-            tx_hash: &tx_hash,
-            active_sig: zksig,
-            epoch: self.epoch,
-        })?;
+        // op.validate(&SDPActiveValidationContext {
+        //     declarations: service_state.declarations(),
+        //     tx_hash: &tx_hash,
+        //     active_sig: zksig,
+        //     epoch: self.epoch,
+        // })?;
 
         // Execute SDP Active
         let (result, events) = op.execute(SDPActiveExecutionContext {
@@ -522,8 +523,8 @@ impl SdpLedger {
     pub fn apply_withdrawn_msg(
         mut self,
         op: &SDPWithdrawOp,
-        zksig: &ZkSignature,
-        tx_hash: TxHash,
+        // zksig: &ZkSignature,
+        // tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
@@ -531,14 +532,14 @@ impl SdpLedger {
             return Err(Error::ServiceNotFound(service));
         };
 
-        // Validate SDP Withdraw
-        op.validate(&SDPWithdrawValidationContext {
-            declarations: service_state.declarations(),
-            epoch: self.epoch,
-            locked_notes: &self.locked_notes,
-            tx_hash: &tx_hash,
-            sdp_withdraw_sig: zksig,
-        })?;
+        // // Validate SDP Withdraw
+        // op.validate(&SDPWithdrawValidationContext {
+        //     declarations: service_state.declarations(),
+        //     epoch: self.epoch,
+        //     locked_notes: &self.locked_notes,
+        //     tx_hash: &tx_hash,
+        //     sdp_withdraw_sig: zksig,
+        // })?;
 
         // Execute SDP Withdraw
         let (result, events) = op.execute(SDPWithdrawExecutionContext {
@@ -727,12 +728,11 @@ mod tests {
 
         sdp_ledger
             .try_apply_sdp_declaration(
-                utxos,
-                &Channels::new(),
+                utxos, // &Channels::new(),
                 op,
-                &zk_sig,
-                &ed25519_sig,
-                tx_hash,
+                // &zk_sig,
+                // &ed25519_sig,
+                // tx_hash,
                 config,
             )
             .map(|(sdp_ledger, _)| sdp_ledger)
@@ -747,7 +747,11 @@ mod tests {
         let tx_hash = TxHash([2u8; 32]);
         let zk_sig = ZkKey::multi_sign(&[zk_sk], &tx_hash.to_fr()).unwrap();
         sdp_ledger
-            .apply_active_msg(op, &zk_sig, tx_hash, config)
+            .apply_active_msg(
+                op, // &zk_sig,
+                // tx_hash,
+                config,
+            )
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
@@ -762,7 +766,11 @@ mod tests {
         let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.to_fr()).unwrap();
 
         sdp_ledger
-            .apply_withdrawn_msg(op, &zk_sig, tx_hash, config)
+            .apply_withdrawn_msg(
+                op, // &zk_sig,
+                // tx_hash,
+                config,
+            )
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 

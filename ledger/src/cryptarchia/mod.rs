@@ -461,22 +461,22 @@ impl LedgerState {
 
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
-        locked_notes: &LockedNotes,
-        channels: &Channels,
+        // locked_notes: &LockedNotes,
+        // channels: &Channels,
         transfer_op: &TransferOp,
-        transfer_sig: &ZkSignature,
-        tx_hash: TxHash,
+        // transfer_sig: &ZkSignature,
+        // tx_hash: TxHash,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
-        //validate the transfer
-        transfer_op
-            .validate(&TransferValidationContext {
-                locked_notes,
-                channels,
-                utxos: &self.utxos,
-                tx_hash: &tx_hash,
-                transfer_sig,
-            })
-            .map_err(mantle::Error::Transfer)?;
+        // //validate the transfer
+        // transfer_op
+        //     .validate(&TransferValidationContext {
+        //         locked_notes,
+        //         channels,
+        //         utxos: &self.utxos,
+        //         tx_hash: &tx_hash,
+        //         transfer_sig,
+        //     })
+        //     .map_err(mantle::Error::Transfer)?;
 
         // Compute the balance
         let balance = transfer_op

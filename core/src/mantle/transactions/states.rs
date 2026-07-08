@@ -2,15 +2,11 @@
 pub trait VerificationState {}
 
 /// Unverified state of a Transaction
+#[derive(Debug)]
 pub struct Unverified;
 impl VerificationState for Unverified {}
 
 /// Partially verified state of a Transaction
-pub struct Preverified {
-    pub pending: Vec<usize>,
-}
+#[derive(Debug, PartialEq)]
+pub struct Preverified;
 impl VerificationState for Preverified {}
-
-/// Fully verified state of a Transaction
-pub struct Verified;
-impl VerificationState for Verified {}

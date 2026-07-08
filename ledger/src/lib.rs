@@ -15,7 +15,8 @@ use lb_core::{
     block::BlockNumber,
     events::{Events, HeaderEvent, TxEvent},
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, Utxo, Value, VerificationError,
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, SignedMantleTx, Utxo, Value,
+        VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
         ledger::Operation as _,
         ops::{
@@ -28,7 +29,10 @@ use lb_core::{
             },
             leader_claim::{LeaderClaimExecutionContext, LeaderClaimValidationContext},
         },
-        transactions::{GasPrices, MantleTxContext, MantleTxGasContext},
+        transactions::{
+            GasPrices, MantleTxContext, MantleTxGasContext,
+            states::{Preverified, Verified},
+        },
     },
     proofs::leader_proof,
 };
@@ -147,7 +151,7 @@ where
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
-        txs: impl Iterator<Item = impl AuthenticatedMantleTx<Context = GasPrices>>,
+        txs: impl Iterator<Item = SignedMantleTx<Verified>>,
     ) -> Result<(Id, LedgerState, Events), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -213,7 +217,7 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
-        txs: impl Iterator<Item = impl AuthenticatedMantleTx<Context = GasPrices>>,
+        txs: impl Iterator<Item = SignedMantleTx<Verified>>,
         config: &Config,
     ) -> Result<(Self, Events), LedgerError<Id>>
     where
@@ -361,7 +365,7 @@ impl LedgerState {
     pub fn try_apply_contents<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
-        txs: impl Iterator<Item = impl AuthenticatedMantleTx<Context = GasPrices>>,
+        txs: impl Iterator<Item = SignedMantleTx<Preverified>>,
     ) -> Result<(Self, Vec<TxEvent>), LedgerError<Id>> {
         let mut total_block_execution_gas: Gas = 0.into();
         let mut total_fee_burned: GasCost = 0.into();
@@ -371,7 +375,7 @@ impl LedgerState {
         for tx in txs {
             let balance;
             let events;
-            (self, balance, events) = self.try_apply_tx::<_, Constants>(config, &tx)?;
+            (self, balance, events) = self.try_apply_tx::<_, Constants>(config, tx.clone())?; // Clone here is temporary? Hopefully?
             tx_events.extend(events);
 
             let gas_prices = GasPrices {
@@ -525,6 +529,17 @@ impl LedgerState {
         }
     }
 
+    fn verify_transaction<Id>(
+        &self,
+        transaction: SignedMantleTx<Preverified>,
+    ) -> Result<SignedMantleTx<Verified>, LedgerError<Id>> {
+        let operation_verification_helper =
+            MantleOperationVerificationHelper::new(&self.mantle_ledger);
+        transaction
+            .verify(&operation_verification_helper)
+            .map_err(LedgerError::VerificationError)
+    }
+
     /// Applies a transaction to the ledger state, returning the updated state
     /// and the net balance change.
     ///
@@ -557,16 +572,13 @@ impl LedgerState {
     fn try_apply_tx<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
-        tx: impl AuthenticatedMantleTx,
+        tx: SignedMantleTx<Preverified>,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
-        let operation_verification_helper =
-            MantleOperationVerificationHelper::new(&self.mantle_ledger);
-        tx.verify_ops_proofs_with_helper(&operation_verification_helper)
-            .map_err(LedgerError::VerificationError)?;
+        let tx = self.verify_transaction(tx)?;
 
         let mut balance: Balance = 0;
         let mut tx_events = Vec::new();
-        let tx_hash = tx.hash();
+        let tx_hash = AuthenticatedMantleTx::hash(&self);
         for (op, proof) in tx.ops_with_proof() {
             match (op, proof) {
                 // The signature for channel ops can be verified before reaching this point,
@@ -575,8 +587,8 @@ impl LedgerState {
                 (Op::ChannelInscribe(op), OpProof::Ed25519Sig(sig)) => {
                     let (result, events) = self.mantle_ledger.try_apply_channel_inscription(
                         op,
-                        sig,
-                        tx_hash,
+                        // sig,
+                        // tx_hash,
                         self.cryptarchia_ledger.slot,
                     )?;
                     self.mantle_ledger = result;
@@ -585,8 +597,8 @@ impl LedgerState {
                 (Op::ChannelConfig(op), OpProof::ChannelMultiSigProof(sig)) => {
                     let (result, events) = self.mantle_ledger.try_apply_channel_set_keys(
                         op,
-                        sig,
-                        &tx_hash,
+                        // sig,
+                        // &tx_hash,
                         self.cryptarchia_ledger.slot,
                     )?;
                     self.mantle_ledger = result;
@@ -597,15 +609,15 @@ impl LedgerState {
                     let locked_notes = self.mantle_ledger.locked_notes();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
-                    // Validate the Deposit
-                    op.validate(&DepositValidationContext {
-                        channels,
-                        locked_notes,
-                        utxos,
-                        tx_hash: &tx_hash,
-                        deposit_sig: sig,
-                    })
-                    .map_err(mantle::Error::Channel)?;
+                    // // Validate the Deposit
+                    // op.validate(&DepositValidationContext {
+                    //     channels,
+                    //     locked_notes,
+                    //     utxos,
+                    //     tx_hash: &tx_hash,
+                    //     deposit_sig: sig,
+                    // })
+                    // .map_err(mantle::Error::Channel)?;
 
                     // Execute the Deposit
                     let (result, events) = op
@@ -623,15 +635,16 @@ impl LedgerState {
                     let locked_notes = self.mantle_ledger.locked_notes();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
-                    // Validate the Withdraw
-                    op.validate(&WithdrawValidationContext {
-                        channels,
-                        locked_notes,
-                        utxos,
-                        tx_hash: &tx_hash,
-                        withdraw_sigs: sigs,
-                    })
-                    .map_err(mantle::Error::Channel)?;
+                    // Moved
+                    // // Validate the Withdraw
+                    // op.validate(&WithdrawValidationContext {
+                    //     channels,
+                    //     locked_notes,
+                    //     utxos,
+                    //     tx_hash: &tx_hash,
+                    //     withdraw_sigs: sigs,
+                    // })
+                    // .map_err(mantle::Error::Channel)?;
 
                     // Execute the Withdraw
                     let (result, events) = op
@@ -679,41 +692,45 @@ impl LedgerState {
                 ) => {
                     let (result, events) = self.mantle_ledger.try_apply_sdp_declaration(
                         op,
-                        zk_sig,
-                        ed25519_sig,
+                        // zk_sig,
+                        // ed25519_sig,
                         self.cryptarchia_ledger.latest_utxos(),
-                        tx_hash,
+                        // tx_hash,
                         config,
                     )?;
                     self.mantle_ledger = result;
                     tx_events.extend(events);
                 }
                 (Op::SDPActive(op), OpProof::ZkSig(sig)) => {
-                    let (result, events) = self
-                        .mantle_ledger
-                        .try_apply_sdp_active(op, sig, tx_hash, config)?;
+                    let (result, events) = self.mantle_ledger.try_apply_sdp_active(
+                        op, // sig,
+                        // tx_hash,
+                        config,
+                    )?;
                     self.mantle_ledger = result;
                     tx_events.extend(events);
                 }
                 (Op::SDPWithdraw(op), OpProof::ZkSig(sig)) => {
-                    let (result, events) = self
-                        .mantle_ledger
-                        .try_apply_sdp_withdraw(op, sig, tx_hash, config)?;
+                    let (result, events) = self.mantle_ledger.try_apply_sdp_withdraw(
+                        op, // sig,
+                        // tx_hash,
+                        config,
+                    )?;
                     self.mantle_ledger = result;
                     tx_events.extend(events);
                 }
                 (Op::LeaderClaim(op), OpProof::PoC(poc)) => {
-                    // Validate the LeaderClaim
-                    op.validate(&LeaderClaimValidationContext {
-                        nullifiers: self.mantle_ledger.leaders.nullifiers(),
-                        claimable_vouchers_root: &self
-                            .mantle_ledger
-                            .leaders
-                            .vouchers_snapshot_root(),
-                        proof_of_claim: poc,
-                        tx_hash: &tx_hash,
-                    })
-                    .map_err(mantle::Error::LeaderClaim)?;
+                    // // Validate the LeaderClaim
+                    // op.validate(&LeaderClaimValidationContext {
+                    //     nullifiers: self.mantle_ledger.leaders.nullifiers(),
+                    //     claimable_vouchers_root: &self
+                    //         .mantle_ledger
+                    //         .leaders
+                    //         .vouchers_snapshot_root(),
+                    //     proof_of_claim: poc,
+                    //     tx_hash: &tx_hash,
+                    // })
+                    // .map_err(mantle::Error::LeaderClaim)?;
 
                     // Execute the LeaderClaim
                     let (result, events) = op
@@ -740,11 +757,11 @@ impl LedgerState {
                     let events;
                     (self.cryptarchia_ledger, transfer_balance, events) =
                         self.cryptarchia_ledger.try_apply_transfer::<_, Constants>(
-                            self.mantle_ledger.locked_notes(),
+                            // self.mantle_ledger.locked_notes(),
                             self.mantle_ledger.channels(),
                             op,
-                            sig,
-                            tx_hash,
+                            // sig,
+                            // tx_hash,
                         )?;
                     balance = balance
                         .checked_add(transfer_balance)
@@ -782,7 +799,7 @@ mod tests {
                 sdp::SDPActiveOp,
                 transfer::TransferOp,
             },
-            transactions::{Ops, tx::OpsProofs},
+            transactions::{Ops, states::Unverified, tx::OpsProofs},
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
@@ -810,19 +827,20 @@ mod tests {
 
     type HeaderId = [u8; 32];
 
-    fn create_tx(inputs: Vec<NoteId>, outputs: Vec<Note>, sks: &[ZkKey]) -> SignedMantleTx {
+    fn create_tx(
+        inputs: Vec<NoteId>,
+        outputs: Vec<Note>,
+        sks: &[ZkKey],
+    ) -> SignedMantleTx<Unverified> {
         let transfer_op = TransferOp::new(
             Inputs::try_new(inputs).expect("Invalid inputs size"),
             Outputs::try_new(outputs).expect("Invalid outputs size"),
         );
         let mantle_tx = MantleTx([Op::Transfer(transfer_op)].into());
-        SignedMantleTx {
-            ops_proofs: [OpProof::ZkSig(
-                ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
-            )]
-            .into(),
-            mantle_tx,
-        }
+        let ops_proofs = [OpProof::ZkSig(
+            ZkKey::multi_sign(sks, &mantle_tx.hash().to_fr()).unwrap(),
+        )].into();
+        SignedMantleTx::new(mantle_tx, ops_proofs)
     }
 
     pub fn create_test_ledger() -> (Ledger<HeaderId>, HeaderId, Utxo) {
@@ -884,11 +902,14 @@ mod tests {
         MultiSequencer(ChannelMultiSigProof),
     }
 
-    fn create_signed_tx(op: Op, signing_key: &Key) -> SignedMantleTx {
+    fn create_signed_tx(op: Op, signing_key: &Key) -> SignedMantleTx<Preverified> {
         create_multi_signed_tx(vec![op], vec![signing_key])
     }
 
-    fn create_multi_signed_tx(ops: Vec<Op>, signing_keys: Vec<&Key>) -> SignedMantleTx {
+    fn create_multi_signed_tx(
+        ops: Vec<Op>,
+        signing_keys: Vec<&Key>,
+    ) -> SignedMantleTx<Preverified> {
         let mantle_tx = MantleTx(Ops::new_unchecked(ops.clone()));
 
         let tx_hash = mantle_tx.hash();
@@ -909,6 +930,7 @@ mod tests {
         let ops_proofs = OpsProofs::try_from(ops_proofs).expect("operation proofs are bounded");
 
         SignedMantleTx::new(mantle_tx, ops_proofs)
+            .preverify()
             .expect("Test transaction should have valid signatures")
     }
 
@@ -974,7 +996,11 @@ mod tests {
         block_ledger.mantle_ledger = block_ledger
             .mantle_ledger
             .clone()
-            .try_apply_sdp_active(&active_op, &zk_sig, tx_hash, &config)
+            .try_apply_sdp_active(
+                &active_op, // &zk_sig,
+                // tx_hash,
+                &config,
+            )
             .unwrap()
             .0;
         id
@@ -1004,7 +1030,15 @@ mod tests {
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::default())
                 .unwrap();
         output_note.value = utxo.note.value - fees.into_inner();
-        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk]);
+
+        let helper = MantleOperationVerificationHelper::new(
+            &ledger.state(&genesis_id).unwrap().mantle_ledger,
+        );
+        let tx = create_tx(vec![utxo.id()], vec![output_note], &[sk])
+            .preverify()
+            .unwrap()
+            .verify(&helper)
+            .unwrap();
 
         // Create a dummy proof (using same structure as in cryptarchia tests)
 
@@ -1032,7 +1066,7 @@ mod tests {
         assert!(!new_state.latest_utxos().contains(&utxo.id()));
 
         // Verify output was created
-        if let Op::Transfer(transfer_op) = &tx.mantle_tx.ops()[0] {
+        if let Op::Transfer(transfer_op) = &tx.mantle_tx().ops()[0] {
             let output_utxo = transfer_op.outputs.utxo_by_index(0, transfer_op).unwrap();
             assert!(new_state.latest_utxos().contains(&output_utxo.id()));
         } else {
