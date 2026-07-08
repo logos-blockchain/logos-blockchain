@@ -1,10 +1,17 @@
-use lb_blend_proofs::quota::{self, ProofOfQuota, VerifiedProofOfQuota};
-use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
+use lb_blend_proofs::quota::{self, PROOF_OF_QUOTA_SIZE, ProofOfQuota, VerifiedProofOfQuota};
+use lb_key_management_system_keys::keys::{
+    ED25519_PUBLIC_KEY_SIZE, ED25519_SIGNATURE_SIZE, Ed25519PublicKey, Ed25519Signature,
+};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
 use crate::{Error, MessageIdentifier, codec::WireCodec, encap::ProofsVerifier};
 
 const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
+
+/// The exact number of bytes a [`PublicHeader`] encodes to (a version byte plus
+/// fixed-size fields). Compile-time constant.
+pub const PUBLIC_HEADER_ENCODED_SIZE: usize =
+    size_of::<u8>() + ED25519_PUBLIC_KEY_SIZE + PROOF_OF_QUOTA_SIZE + ED25519_SIGNATURE_SIZE;
 
 // A public header that is revealed to all nodes.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -105,12 +112,8 @@ impl PublicHeader {
 impl WireCodec for PublicHeader {
     type Context = ();
 
-    fn encoded_length(context: Self::Context) -> usize {
-        u8::encoded_length(())
-            .checked_add(Ed25519PublicKey::encoded_length(()))
-            .and_then(|len| len.checked_add(ProofOfQuota::encoded_length(())))
-            .and_then(|len| len.checked_add(Ed25519Signature::encoded_length(())))
-            .unwrap()
+    fn encoded_length((): Self::Context) -> usize {
+        PUBLIC_HEADER_ENCODED_SIZE
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -120,7 +123,7 @@ impl WireCodec for PublicHeader {
         self.signature.encode_into(out);
     }
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
         let (input, version) = u8::decode(input, ())?;
         if version != LATEST_BLEND_MESSAGE_VERSION {
             return Err(());

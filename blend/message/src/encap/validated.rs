@@ -83,6 +83,19 @@ impl EncapsulatedMessageWithVerifiedSignature {
         self.public_header_with_verified_signature.id()
     }
 
+    /// Serialize to the fixed-size, prefix-free wire format. Produces
+    /// byte-identical output to the equivalent [`EncapsulatedMessage`], so the
+    /// receiver can decode it as one.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        // All public-header variants encode to identical bytes; convert to the
+        // unverified form (a cheap copy) so encoding stays single-typed.
+        encode_message_components(
+            &PublicHeader::from(self.public_header_with_verified_signature.clone()),
+            &self.encapsulated_part,
+        )
+    }
+
     #[cfg(any(feature = "unsafe-test-functions", test))]
     pub const fn public_header_mut(&mut self) -> &mut PublicHeaderWithVerifiedSignature {
         &mut self.public_header_with_verified_signature

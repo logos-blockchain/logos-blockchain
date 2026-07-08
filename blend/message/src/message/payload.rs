@@ -63,10 +63,17 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
     }
 }
 
+/// The exact number of bytes a [`Payload`] encodes to: a fixed enum
+/// discriminant, the `u16` body length, and the body padded to
+/// [`MAX_PAYLOAD_BODY_SIZE`]. Compile-time constant, so the encapsulated
+/// (ciphered) form can be stored as a `Box<[u8; PAYLOAD_ENCODED_SIZE]>`.
+pub const PAYLOAD_ENCODED_SIZE: usize =
+    size_of::<u8>() + size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE;
+
 impl WireCodec for PaddedPayloadBody {
     type Context = ();
 
-    fn encoded_length(context: Self::Context) -> usize {
+    fn encoded_length((): Self::Context) -> usize {
         MAX_PAYLOAD_BODY_SIZE
     }
 
@@ -74,7 +81,7 @@ impl WireCodec for PaddedPayloadBody {
         out.extend_from_slice(&self.padded[..]);
     }
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
         if input.len() < MAX_PAYLOAD_BODY_SIZE {
             return Err(());
         }
@@ -149,11 +156,8 @@ impl WireCodec for PayloadType {
 impl WireCodec for Payload {
     type Context = ();
 
-    fn encoded_length(_context: Self::Context) -> usize {
-        PayloadType::encoded_length(())
-            .checked_add(u16::encoded_length(())) // `body_len`
-            .and_then(|len| len.checked_add(PaddedPayloadBody::encoded_length(())))
-            .expect("Payload encoded length overflow")
+    fn encoded_length((): Self::Context) -> usize {
+        PAYLOAD_ENCODED_SIZE
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {

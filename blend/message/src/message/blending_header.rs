@@ -62,16 +62,23 @@ fn concat(a: &[u8], b: &[u8]) -> Vec<u8> {
     a.iter().chain(b.iter()).copied().collect::<Vec<_>>()
 }
 
+/// The exact number of bytes a [`BlendingHeader`] encodes to. Every field is
+/// fixed-size, so this is a compile-time constant — which lets the encapsulated
+/// (ciphered) form be stored as a `[u8; BLENDING_HEADER_ENCODED_SIZE]`.
+pub const BLENDING_HEADER_ENCODED_SIZE: usize = ED25519_PUBLIC_KEY_SIZE
+    .checked_add(PROOF_OF_QUOTA_SIZE)
+    .unwrap()
+    .checked_add(ED25519_SIGNATURE_SIZE)
+    .unwrap()
+    .checked_add(PROOF_OF_SELECTION_SIZE)
+    .unwrap()
+    .checked_add(size_of::<bool>())
+    .unwrap();
 impl WireCodec for BlendingHeader {
     type Context = ();
 
-    fn encoded_length(context: Self::Context) -> usize {
-        Ed25519PublicKey::encoded_length(())
-            .checked_add(ProofOfQuota::encoded_length(()))
-            .and_then(|len| len.checked_add(Ed25519Signature::encoded_length(())))
-            .and_then(|len| len.checked_add(ProofOfSelection::encoded_length(())))
-            .and_then(|len| len.checked_add(bool::encoded_length(())))
-            .expect("BlendingHeader encoded length overflow")
+    fn encoded_length((): Self::Context) -> usize {
+        BLENDING_HEADER_ENCODED_SIZE
     }
 
     fn encode_into(&self, out: &mut Vec<u8>) {
@@ -82,7 +89,7 @@ impl WireCodec for BlendingHeader {
         self.is_last.encode_into(out);
     }
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
         let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
         let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
         let (input, signature) = Ed25519Signature::decode(input, ())?;

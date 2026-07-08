@@ -69,6 +69,13 @@ impl WireCodec for bool {
 impl WireCodec for Ed25519PublicKey {
     type Context = ();
 
+    // Must be explicit: `size_of::<Ed25519PublicKey>()` is NOT the wire size — a
+    // `VerifyingKey` also caches the decompressed point, so it is far larger than
+    // the 32 bytes `encode_into` actually writes.
+    fn encoded_length((): Self::Context) -> usize {
+        ED25519_PUBLIC_KEY_SIZE
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(self.as_bytes());
     }
