@@ -1386,19 +1386,10 @@ mod tests {
             (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
                 .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
                 .unwrap();
-            let unlock_events = events.into_iter().filter_map(|event| {
-                let HeaderEvent::SdpNoteUnlocked {
-                    note_id: unlocked_note,
-                    service_type,
-                    declaration_id: id,
-                } = &event
-                else {
-                    return None;
-                };
-                (*unlocked_note == note_id && *service_type == service_a && *id == declaration_id)
-                    .then_some(event)
-            });
-            assert_eq!(unlock_events.count(), 0);
+            assert_eq!(
+                count_unlock_events(events, note_id, service_a, declaration_id),
+                0
+            );
             last_epoch_state = new_epoch_state;
         }
         assert!(
@@ -1419,19 +1410,10 @@ mod tests {
         (sdp_ledger, HeaderEffect { events, .. }) = sdp_ledger
             .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
             .unwrap();
-        let unlock_events = events.into_iter().filter_map(|event| {
-            let HeaderEvent::SdpNoteUnlocked {
-                note_id: unlocked_note,
-                service_type,
-                declaration_id: id,
-            } = &event
-            else {
-                return None;
-            };
-            (*unlocked_note == note_id && *service_type == service_a && *id == declaration_id)
-                .then_some(event)
-        });
-        assert_eq!(unlock_events.count(), 1);
+        assert_eq!(
+            count_unlock_events(events, note_id, service_a, declaration_id),
+            1
+        );
         assert!(
             sdp_ledger.get_declaration(&declaration_id).is_none(),
             "declaration must be removed at the withdrawn epoch"
@@ -1442,5 +1424,26 @@ mod tests {
                 .is_locked_for_service(&declare_op.locked_note_id, &ServiceType::BlendNetwork),
             "the provider's note must be unlocked at the withdrawn epoch"
         );
+    }
+
+    fn count_unlock_events(
+        events: Vec<HeaderEvent>,
+        note_id: NoteId,
+        service_type: ServiceType,
+        declaration_id: DeclarationId,
+    ) -> usize {
+        events
+            .into_iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    HeaderEvent::SdpNoteUnlocked {
+                        note_id: n,
+                        service_type: s,
+                        declaration_id: d,
+                    } if *n == note_id && *s == service_type && *d == declaration_id
+                )
+            })
+            .count()
     }
 }
