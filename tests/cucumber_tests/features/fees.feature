@@ -28,7 +28,7 @@ Feature: Fees
     Then I stop all nodes
 
   @transactions_ci
-  Scenario: Wallet fund endpoint funds an inscription transaction
+  Scenario: Wallet fund endpoint leaves a feeless transaction unchanged
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
       | 1             | 1           | 1000         |
