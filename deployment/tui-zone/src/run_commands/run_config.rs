@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx, Transaction as _,
+        nom::NomEncode as _,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
         },
-        transactions::codec::{encode_mantle_tx, encode_signed_mantle_tx},
+        transactions::codec::encode_signed_mantle_tx,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -109,7 +110,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         tx_hash: hex::encode(tx_hash.as_ref()),
         msg_id: hex::encode(msg_id.as_ref()),
         required_threshold: channel_state.configuration_threshold,
-        mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+        mantle_tx: hex::encode(tx.encode()),
         new_authorized_keys: authorized_keys
             .iter()
             .map(|key| hex::encode(key.to_bytes()))

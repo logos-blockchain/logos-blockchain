@@ -98,6 +98,7 @@ pub fn build_manual_cluster_deployment(
             crate::cucumber::steps::manual_nodes::utils::genesis_block_utxos(
                 &genesis_block.genesis_tx(),
             );
+        world.genesis_block_id = Some(genesis_block.header().id());
     }
 
     Ok(deployment)
@@ -127,6 +128,7 @@ fn build_devnet_manual_cluster_deployment(
     // settings, so locally generated genesis outputs are not meaningful for
     // wallet tracking.
     world.genesis_block_utxos.clear();
+    world.genesis_block_id = None;
     world.wallet_accounts.clear();
     world.node_provisioned_wallet_pks.clear();
 

@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt as _, stream};
 use indexmap::IndexSet;
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     codec::{DeserializeOp as _, SerializeOp as _},
     header::HeaderId,
     mantle::mock::{MockTransaction, MockTxId},
@@ -436,7 +436,7 @@ fn local_submission_rejects_oversized_tx() {
             .block_on(async { app.handle().relay::<MockMempoolService>().await.unwrap() });
 
         let oversized_tx = MockTransaction::new(MockMessage {
-            payload: "x".repeat(MAX_BLOCK_SIZE + 1),
+            payload: "x".repeat(MAX_BLOCK_TRANSACTIONS_SIZE + 1),
             content_topic: MOCK_TX_CONTENT_TOPIC,
             version: 0,
             timestamp: 0,
@@ -452,8 +452,8 @@ fn local_submission_rejects_oversized_tx() {
             error,
             MempoolError::ItemTooLarge {
                 size,
-                max: MAX_BLOCK_SIZE,
-            } if size > MAX_BLOCK_SIZE
+                max: MAX_BLOCK_TRANSACTIONS_SIZE,
+            } if size > MAX_BLOCK_TRANSACTIONS_SIZE
         ));
 
         assert!(

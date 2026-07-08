@@ -14,7 +14,7 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     mantle::{StorageSize, Transaction},
 };
 use lb_log_targets::mempool;
@@ -519,10 +519,10 @@ where
 
     fn validate_item_for_mempool(item: &Pool::Item) -> Result<(), MempoolError> {
         let size = item.storage_size();
-        if size > MAX_BLOCK_SIZE {
+        if size > MAX_BLOCK_TRANSACTIONS_SIZE {
             return Err(MempoolError::ItemTooLarge {
                 size,
-                max: MAX_BLOCK_SIZE,
+                max: MAX_BLOCK_TRANSACTIONS_SIZE,
             });
         }
 

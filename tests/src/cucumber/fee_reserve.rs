@@ -3,7 +3,7 @@ use std::{
     num::NonZero,
 };
 
-use lb_core::mantle::{NoteId, Utxo};
+use lb_core::mantle::{NoteId, Utxo, transactions::GENESIS_STORAGE_GAS_PRICE};
 use lb_testing_framework::configs::wallet::WalletAccount;
 use thiserror::Error;
 
@@ -14,7 +14,7 @@ use crate::{
     cucumber::{error::StepError, wallet::WalletStateView},
 };
 
-pub const DEFAULT_STORAGE_GAS_PRICE: u64 = 0;
+pub const DEFAULT_STORAGE_GAS_PRICE: u64 = GENESIS_STORAGE_GAS_PRICE.into_inner();
 pub const SCENARIO_FEE_ACCOUNT_NAME: &str = "__SCENARIO_FEE_ACCOUNT__";
 
 const SCENARIO_FEE_ACCOUNT_INDEX: u64 = 1 << 63;

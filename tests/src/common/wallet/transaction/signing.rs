@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 
 use lb_core::mantle::{
-    AuthenticatedMantleTx as _, NoteId, Op, OpProof, SignedMantleTx, TxHash,
+    AuthenticatedMantleTx as _, MantleTx, NoteId, Op, OpProof, SignedMantleTx, Transaction as _,
+    TxHash,
     gas::MainnetGasConstants,
     transactions::{MantleTxBuilder, MantleTxContext},
 };
@@ -39,6 +40,34 @@ pub(super) fn sign_prepared_wallet_transaction(
         reserved_inputs,
         spent_fee,
     ))
+}
+
+/// Build one `ZkSig` proof per transfer op in a funded transaction, signing
+/// every input with the same wallet key. Suitable for transactions whose
+/// funding inputs all come from a single wallet account.
+pub fn transfer_proofs_for_funded_wallet_tx(
+    tx: &MantleTx,
+    signing_key: &ZkKey,
+) -> Result<Vec<OpProof>, WalletTransactionError> {
+    let tx_hash = tx.hash();
+    tx.ops()
+        .iter()
+        .filter_map(|op| match op {
+            Op::Transfer(transfer_op) => Some(transfer_op),
+            _ => None,
+        })
+        .map(|transfer_op| {
+            let signing_keys = transfer_op
+                .inputs
+                .iter()
+                .map(|_| signing_key.clone())
+                .collect::<Vec<_>>();
+            Ok(OpProof::ZkSig(ZkKey::multi_sign(
+                &signing_keys,
+                &tx_hash.to_fr(),
+            )?))
+        })
+        .collect()
 }
 
 pub(super) fn build_transfer_proofs(

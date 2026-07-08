@@ -21,3 +21,4 @@ pub use prepare::{
 };
 pub use prepared::PreparedWalletTransaction;
 pub use signed::SignedWalletTransaction;
+pub use signing::transfer_proofs_for_funded_wallet_tx;

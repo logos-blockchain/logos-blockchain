@@ -12,11 +12,7 @@ use std::{
 use lb_chain_service::Epoch;
 use lb_common_http_client::Error;
 use lb_core::{
-    mantle::{
-        GenesisTx as _, MantleTx, NoteId, OpProof, SignedMantleTx, Transaction as _, Utxo,
-        ops::Op,
-        transactions::{GENESIS_STORAGE_GAS_PRICE, GasPrices, MantleTxBuilder, MantleTxGasContext},
-    },
+    mantle::{NoteId, OpProof, Transaction as _, Utxo, ops::Op},
     sdp::{Declaration, DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
@@ -32,10 +28,11 @@ use logos_blockchain_tests::{
     common::{
         chain::wait_for_transactions_inclusion,
         manual_cluster::{
-            LocalManualClusterHarnessBase, build_local_manual_cluster, read_manual_node_logs,
-            wait_for_height as wait_for_manual_cluster_height, wait_for_tip_slot,
+            LocalManualClusterHarnessBase, build_local_manual_cluster, genesis_wallet_utxos,
+            read_manual_node_logs, wait_for_height as wait_for_manual_cluster_height,
+            wait_for_tip_slot,
         },
-        wallet::{current_wallet_funding_source, fund_builder_from_wallet_source},
+        wallet::funded_signed_tx,
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
@@ -104,32 +101,32 @@ async fn sdp_ops_e2e() {
     };
     let declaration_id = declaration.id();
 
-    let declare_mantle_tx = fund_sdp_transaction(
+    let (declare_tx, _declare_fee) = funded_signed_tx(
         &node0,
         &genesis_utxos,
         &funding_wallet,
+        HashMap::new(),
         Op::SDPDeclare(declaration),
+        |tx_hash| {
+            let ed25519_sig = Ed25519Signature::from_bytes(
+                &provider_signing_key
+                    .sign_payload(tx_hash.as_signing_bytes().as_ref())
+                    .to_bytes(),
+            );
+            let zk_sig = ZkKey::multi_sign(
+                &[spare_note_secret_key.clone(), provider_zk_key.clone()],
+                &tx_hash.to_fr(),
+            )
+            .expect("SDP declare zk proof should build");
+
+            OpProof::ZkAndEd25519Sigs {
+                zk_sig,
+                ed25519_sig,
+            }
+        },
     )
     .await;
-    let declare_hash = declare_mantle_tx.hash();
-    let declare_ed25519_sig = Ed25519Signature::from_bytes(
-        &provider_signing_key
-            .sign_payload(declare_hash.as_signing_bytes().as_ref())
-            .to_bytes(),
-    );
-    let declare_zk_sig = ZkKey::multi_sign(
-        &[spare_note_secret_key.clone(), provider_zk_key.clone()],
-        &declare_hash.to_fr(),
-    )
-    .expect("SDP declare zk proof should build");
-    let declare_tx = SignedMantleTx::new(
-        declare_mantle_tx,
-        vec![OpProof::ZkAndEd25519Sigs {
-            zk_sig: declare_zk_sig,
-            ed25519_sig: declare_ed25519_sig,
-        }],
-    )
-    .expect("funded SDP declare transaction should be valid");
+    let declare_hash = declare_tx.hash();
 
     node0
         .submit_transaction(&declare_tx)
@@ -153,24 +150,24 @@ async fn sdp_ops_e2e() {
         nonce: declaration_created.nonce + 1,
     };
 
-    let withdraw_mantle_tx = fund_sdp_transaction(
+    let (withdraw_tx, _withdraw_fee) = funded_signed_tx(
         &node0,
         &genesis_utxos,
         &funding_wallet,
+        HashMap::new(),
         Op::SDPWithdraw(withdraw_message),
+        |tx_hash| {
+            OpProof::ZkSig(
+                ZkKey::multi_sign(
+                    &[spare_note_secret_key.clone(), provider_zk_key.clone()],
+                    &tx_hash.to_fr(),
+                )
+                .expect("SDP withdraw zk proof should build"),
+            )
+        },
     )
     .await;
-
-    let withdraw_hash = withdraw_mantle_tx.hash();
-    let withdraw_zk_sig = ZkKey::multi_sign(
-        &[spare_note_secret_key.clone(), provider_zk_key.clone()],
-        &withdraw_hash.to_fr(),
-    )
-    .expect("SDP withdraw zk proof should build");
-
-    let withdraw_tx =
-        SignedMantleTx::new(withdraw_mantle_tx, vec![OpProof::ZkSig(withdraw_zk_sig)])
-            .expect("funded SDP withdraw transaction should be valid");
+    let withdraw_hash = withdraw_tx.hash();
 
     node0
         .submit_transaction(&withdraw_tx)
@@ -372,26 +369,7 @@ async fn start_sdp_manual_cluster(
         .await
         .expect("node-0 should produce the first block");
 
-    let genesis_utxos: Vec<_> = cluster_harness
-        .deployment()
-        .config
-        .genesis_block
-        .clone()
-        .expect("manual-cluster deployment should include genesis tx")
-        .genesis_tx()
-        .genesis_transfer()
-        .outputs
-        .utxos(
-            cluster_harness
-                .deployment()
-                .config
-                .genesis_block
-                .as_ref()
-                .expect("manual-cluster deployment should include genesis tx")
-                .genesis_tx()
-                .genesis_transfer(),
-        )
-        .collect();
+    let genesis_utxos = genesis_wallet_utxos(&cluster_harness.deployment().config);
 
     let spare_note_id = genesis_utxos
         .iter()
@@ -453,40 +431,4 @@ fn patch_sdp_manual_cluster_config(mut config: RunConfig) -> RunConfig {
         .maximum_release_delay_in_rounds = 1.try_into().unwrap();
 
     config
-}
-
-async fn fund_sdp_transaction(
-    node: &NodeHttpClient,
-    genesis_utxos: &[Utxo],
-    funding_wallet: &WalletAccount,
-    extra_op: Op,
-) -> MantleTx {
-    let funding_source = current_wallet_funding_source(node, genesis_utxos, funding_wallet.clone())
-        .await
-        .expect("funding wallet source should sync from chain");
-
-    let empty_context = MantleTxGasContext::new(
-        HashMap::new(),
-        HashMap::new(),
-        GasPrices {
-            execution_base_gas_price: 0.into(),
-            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-        },
-    );
-    let tx_context = lb_core::mantle::transactions::MantleTxContext {
-        gas_context: empty_context,
-        leader_reward_amount: 0,
-    };
-    let tx_builder = MantleTxBuilder::new()
-        .push_op(extra_op)
-        .expect("mixed-op helper should fit op bounds");
-
-    let funded_builder = fund_builder_from_wallet_source(&funding_source, &tx_builder, &tx_context)
-        .expect("funding mixed-op transaction should succeed");
-
-    // With zero gas prices the funding step adds no input, so the built tx carries
-    // no trailing transfer op — the SDP op is the only op, and the only proof.
-    funded_builder
-        .build()
-        .expect("funded mixed-op builder should build")
 }

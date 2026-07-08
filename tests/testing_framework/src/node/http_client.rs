@@ -77,10 +77,10 @@ impl NodeHttpClient {
         .await
     }
 
-    pub async fn gas_prices(&self) -> Result<GasPricesResponseBody, Error> {
+    pub async fn gas_prices(&self, tip: Option<HeaderId>) -> Result<GasPricesResponseBody, Error> {
         self.with_timeout(
             "Gas prices request",
-            self.http_client.gas_prices(self.base_url.clone()),
+            self.http_client.gas_prices(self.base_url.clone(), tip),
         )
         .await
     }

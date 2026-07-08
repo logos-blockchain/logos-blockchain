@@ -5,7 +5,7 @@ pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
 pub use lb_core::events::{Event, Events, TxEventPayload};
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     header::{ContentId, HeaderId},
     mantle::{SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
     proofs::leader_proof::Groth16LeaderProof,
@@ -301,11 +301,23 @@ impl CommonHttpClient {
         self.get::<(), ChainServiceInfo>(request_url, None).await
     }
 
-    /// Get the current gas prices from the ledger state at the tip.
-    pub async fn gas_prices(&self, base_url: Url) -> Result<GasPricesResponseBody, Error> {
-        let request_url = base_url
+    /// Get the gas prices from the ledger state at `tip`, or at the current
+    /// tip when `tip` is `None`.
+    pub async fn gas_prices(
+        &self,
+        base_url: Url,
+        tip: Option<HeaderId>,
+    ) -> Result<GasPricesResponseBody, Error> {
+        let mut request_url = base_url
             .join(MANTLE_GAS_PRICES.trim_start_matches('/'))
             .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
         self.get::<(), GasPricesResponseBody>(request_url, None)
             .await
     }
@@ -495,7 +507,7 @@ impl CommonHttpClient {
         response: reqwest::Response,
     ) -> impl Stream<Item = ProcessedBlockEvent> {
         // NDJSON event upper bound; margin above max serialized single event line
-        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_SIZE * 3 / 2;
+        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
         const LOG_LINE_PREVIEW_CHARS: usize = 256;
 
         let byte_stream = response.bytes_stream().map_err(std::io::Error::other);

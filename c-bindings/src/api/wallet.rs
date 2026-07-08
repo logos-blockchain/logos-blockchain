@@ -1,5 +1,8 @@
 use core::ptr;
-use std::time::Duration;
+use std::{
+    ffi::{CStr, CString, c_char},
+    time::Duration,
+};
 
 use lb_api_service::http::mempool;
 use lb_core::{
@@ -19,6 +22,7 @@ use lb_core::{
     },
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
+use lb_http_api_common::bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody};
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use lb_node::{
     RuntimeServiceId,
@@ -1434,4 +1438,246 @@ pub unsafe extern "C" fn channel_deposit(
         ));
     };
     FfiChannelDepositResult::ok(transaction_hash_array)
+}
+
+/// Funds a transaction from the node's wallet.
+///
+/// This is a synchronous wrapper that mirrors the node's `POST /wallet/fund`
+/// HTTP handler: it funds the request's transaction builder from
+/// `funding_public_keys` (change to `change_public_key`), rejects it if the
+/// fee exceeds `max_tx_fee`, and signs only the appended fee transfer. All
+/// other ops are left unsigned for the caller to prove.
+pub(crate) fn wallet_fund_tx_sync(
+    node: &LogosBlockchainNode,
+    request: WalletFundRequestBody,
+) -> StatusResult<WalletFundResponseBody> {
+    let runtime_handle = node.get_runtime_handle();
+    runtime_handle.block_on(async {
+        let handle = node.get_overwatch_handle();
+        let api = WalletApi::<WalletService, RuntimeServiceId>::from_overwatch_handle(handle).await;
+
+        let TipResponse {
+            tip,
+            response: funded_tx_builder,
+        } = api
+            .fund_tx(
+                request.tip,
+                request.tx_builder,
+                request.change_public_key,
+                request.funding_public_keys,
+            )
+            .await
+            .map_err(|error| {
+                OperationStatus::error(
+                    OperationStatusCode::DynError,
+                    format!("Failed to fund tx: {error}"),
+                )
+            })?;
+
+        let tx_fee = funded_tx_builder.tx_fee().map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to compute tx fee: {error}"),
+            )
+        })?;
+        if tx_fee > request.max_tx_fee {
+            return Err(OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!(
+                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
+                    request.max_tx_fee
+                ),
+            ));
+        }
+
+        // Owners of the funding inputs, in input order — the ledger verifies
+        // the transfer proof against this exact list.
+        let funding_note_pks: Vec<ZkPublicKey> = funded_tx_builder
+            .ledger_inputs()
+            .iter()
+            .map(|utxo| utxo.note.pk)
+            .collect();
+
+        let funded_tx = funded_tx_builder.build().map_err(|error| {
+            OperationStatus::error(
+                OperationStatusCode::DynError,
+                format!("Failed to build funded tx: {error}"),
+            )
+        })?;
+        let transfer_proof = if funding_note_pks.is_empty() {
+            None
+        } else {
+            let tx_hash = funded_tx.hash();
+            let signature = api
+                .sign_tx_with_zk(tx_hash, funding_note_pks)
+                .await
+                .map_err(|error| {
+                    OperationStatus::error(
+                        OperationStatusCode::DynError,
+                        format!("Failed to sign fee transfer: {error}"),
+                    )
+                })?;
+            Some(OpProof::ZkSig(signature))
+        };
+
+        Ok(WalletFundResponseBody {
+            tip,
+            funded_tx,
+            transfer_proof,
+        })
+    })
+}
+
+pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
+
+/// Funds a transaction from the node's wallet.
+///
+/// The node adds fee inputs and change from its own wallet, signs only the
+/// appended fee transfer, and returns the funded — still unsigned —
+/// transaction together with the transfer proof. The caller signs its own
+/// ops over the funded transaction hash, assembles the proofs in op order
+/// and submits the result via [`submit_signed_transaction`].
+///
+/// The request and response are JSON strings with the exact same schemas as
+/// the node's `POST /wallet/fund` HTTP request and response bodies.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+/// - `request_json`: A non-null, NUL-terminated JSON encoding of the fund
+///   request.
+///
+/// # Returns
+///
+/// A [`FfiWalletFundResult`] containing the JSON-encoded fund response on
+/// success, or an [`OperationStatus`] error on failure.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that all pointers are valid.
+///
+/// # Memory Management
+///
+/// This function allocates the returned C string. The caller must free it
+/// using the [`free_cstring`](crate::api::free_cstring) function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_fund_tx(
+    node: *const LogosBlockchainNode,
+    request_json: *const c_char,
+) -> FfiWalletFundResult {
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(request_json);
+    let node = unsafe { &*node };
+
+    let request_json = match unsafe { CStr::from_ptr(request_json) }.to_str() {
+        Ok(request_json) => request_json,
+        Err(error) => {
+            return FfiWalletFundResult::err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                format!("Request is not valid UTF-8: {error}"),
+            ));
+        }
+    };
+    let request: WalletFundRequestBody = match serde_json::from_str(request_json) {
+        Ok(request) => request,
+        Err(error) => {
+            return FfiWalletFundResult::err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                format!("Failed to parse fund request: {error}"),
+            ));
+        }
+    };
+
+    let response = unwrap_or_return_error!(wallet_fund_tx_sync(node, request));
+
+    let response_json = match serde_json::to_string(&response) {
+        Ok(response_json) => response_json,
+        Err(error) => {
+            return FfiWalletFundResult::err(OperationStatus::error(
+                OperationStatusCode::RuntimeError,
+                format!("Failed to serialize fund response: {error}"),
+            ));
+        }
+    };
+    match CString::new(response_json) {
+        Ok(response_json) => FfiWalletFundResult::ok(response_json.into_raw()),
+        Err(error) => FfiWalletFundResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            format!("Failed to create response CString: {error}"),
+        )),
+    }
+}
+
+pub type FfiSubmitTransactionResult = FfiStatusResult<Hash>;
+
+/// Submits a signed transaction to the mempool.
+///
+/// Mirrors the node's `POST /mempool/add/tx` HTTP handler. The transaction is
+/// a JSON string with the exact same schema as the HTTP request body — for
+/// example a transaction funded via [`wallet_fund_tx`] and completed with the
+/// caller's op proofs.
+///
+/// # Arguments
+///
+/// - `node`: A non-null pointer to a [`LogosBlockchainNode`] instance.
+/// - `signed_tx_json`: A non-null, NUL-terminated JSON encoding of the signed
+///   transaction.
+///
+/// # Returns
+///
+/// A [`FfiSubmitTransactionResult`] containing the submitted transaction
+/// [`Hash`] on success, or an [`OperationStatus`] error on failure.
+///
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers. The caller
+/// must ensure that all pointers are valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn submit_signed_transaction(
+    node: *const LogosBlockchainNode,
+    signed_tx_json: *const c_char,
+) -> FfiSubmitTransactionResult {
+    return_error_if_null_pointer!(node);
+    return_error_if_null_pointer!(signed_tx_json);
+    let node = unsafe { &*node };
+
+    let signed_tx_json = match unsafe { CStr::from_ptr(signed_tx_json) }.to_str() {
+        Ok(signed_tx_json) => signed_tx_json,
+        Err(error) => {
+            return FfiSubmitTransactionResult::err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                format!("Transaction is not valid UTF-8: {error}"),
+            ));
+        }
+    };
+    let signed_tx: SignedMantleTx = match serde_json::from_str(signed_tx_json) {
+        Ok(signed_tx) => signed_tx,
+        Err(error) => {
+            return FfiSubmitTransactionResult::err(OperationStatus::error(
+                OperationStatusCode::ValidationError,
+                format!("Failed to parse signed transaction: {error}"),
+            ));
+        }
+    };
+
+    let transaction_hash = signed_tx.hash().as_signing_bytes();
+    let runtime_handle = node.get_runtime_handle();
+    let submit_result = runtime_handle.block_on(async {
+        mempool::add_tx(node.get_overwatch_handle(), signed_tx, Transaction::hash).await
+    });
+    if let Err(error) = submit_result {
+        return FfiSubmitTransactionResult::err(OperationStatus::error(
+            OperationStatusCode::DynError,
+            format!("Failed to add transaction to mempool: {error}"),
+        ));
+    }
+
+    let Ok(transaction_hash_array) = transaction_hash.iter().as_slice().try_into() else {
+        return FfiSubmitTransactionResult::err(OperationStatus::error(
+            OperationStatusCode::RuntimeError,
+            "Failed to convert transaction hash to array.",
+        ));
+    };
+    FfiSubmitTransactionResult::ok(transaction_hash_array)
 }

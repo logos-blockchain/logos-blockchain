@@ -13,6 +13,7 @@ use cucumber::World;
 use derivative::Derivative;
 use lb_core::{
     codec::DeserializeOp as _,
+    header::HeaderId,
     mantle::{
         SignedMantleTx, TxHash, Utxo, Value,
         ops::channel::{
@@ -853,6 +854,9 @@ pub struct CucumberWorld {
     /// Manual: List of genesis block UTXOs allocated in the genesis
     /// configuration.
     pub genesis_block_utxos: Vec<Utxo>,
+    /// Manual: Header id of the locally generated genesis block, when the
+    /// cluster deployment carries one.
+    pub genesis_block_id: Option<HeaderId>,
     /// Manual: Optional local cluster instance for scenarios that use the local
     /// deployer.
     #[derivative(Default(value = "None"))]
@@ -1052,6 +1056,7 @@ impl Debug for CucumberWorld {
                 "genesis_block_utxos",
                 &format!("{:?}", self.genesis_block_utxos),
             )
+            .field("genesis_block_id", &self.genesis_block_id)
             .field("local_cluster", {
                 if self.local_cluster.is_some() {
                     &"Has LbcManualCluster"
@@ -1947,6 +1952,11 @@ impl CucumberWorld {
         format!("{:?}", FullDebugInfo(self))
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Flat field-by-field dump of the whole world state; splitting it would not \
+                  improve readability"
+    )]
     pub fn full_debug_info(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let wallet_diagnostics = self
             .wallet_diagnostics_for_debug()
@@ -1976,6 +1986,7 @@ impl CucumberWorld {
                 "genesis_block_utxos",
                 &format!("{:?}", self.genesis_block_utxos),
             )
+            .field("genesis_block_id", &self.genesis_block_id)
             .field("local_cluster", {
                 if self.local_cluster.is_some() {
                     &"Has LbcManualCluster"

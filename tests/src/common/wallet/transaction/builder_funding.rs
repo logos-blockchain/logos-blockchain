@@ -1,6 +1,6 @@
 //! Applies wallet funding decisions to Mantle transaction builders.
 
-use std::cmp::Ordering;
+use std::{cmp::Ordering, collections::HashSet};
 
 use lb_core::mantle::{
     Note, Op, Utxo,
@@ -30,6 +30,7 @@ pub fn fund_builder_from_wallet_source(
         source.public_key(),
         [source.public_key()],
         context,
+        &HashSet::new(),
     )
 }
 
@@ -334,25 +335,39 @@ fn funding_delta_for_chunked_builder(
 
 #[cfg(test)]
 mod tests {
-    use lb_core::mantle::ops::channel::inscribe::Inscription;
+    use std::collections::HashMap;
+
+    use lb_core::mantle::{
+        ops::channel::{
+            ChannelId, MsgId,
+            inscribe::{Inscription, InscriptionOp},
+        },
+        transactions::{GasPrices, MantleTxGasContext},
+    };
     use lb_key_management_system_service::keys::Ed25519Key;
     use lb_testing_framework::configs::wallet::WalletAccount;
 
     use super::*;
-    use crate::common::mantle_inscription::{
-        build_inscription_tx_builder, channel_id_for_payload_size,
-    };
 
     #[test]
     fn zero_cost_wallet_transaction_still_uses_funding_input() {
-        let payload_size = 1024;
         let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
-        let (tx_builder, context) = build_inscription_tx_builder(
-            Inscription::new_unchecked(vec![0xab; payload_size]),
-            &signing_key,
-            channel_id_for_payload_size(payload_size),
-            None,
-        );
+        let context = MantleTxContext {
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
+            leader_reward_amount: 0,
+        };
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(InscriptionOp {
+                channel_id: ChannelId::from([0xAA; 32]),
+                inscription: Inscription::new_unchecked(vec![0xab; 1024]),
+                parent: MsgId::root(),
+                signer: signing_key.public_key(),
+            }))
+            .expect("inscription test builder should fit op bounds");
         assert_eq!(
             tx_builder
                 .funding_delta::<MainnetGasConstants>(&context)

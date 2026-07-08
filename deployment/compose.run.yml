@@ -139,6 +139,14 @@ services:
       - "${NODE3_API_PORT}:18083/tcp"
     entrypoint: /etc/logos-blockchain/scripts/run_node.sh
 
+  filebrowser:
+    container_name: filebrowser
+    image: filebrowser/filebrowser:v2-s6
+    volumes:
+      - node-data:/srv
+    command: ["--noauth", "-b", "/filebrowser"]
+    restart: on-failure
+
   nginx:
     container_name: nginx
     image: docker.io/library/nginx:stable-trixie-perl

@@ -10,7 +10,7 @@ Feature: Fees
       | node_name | account_index | wallet_name | connected_to |
       | NODE_1    | 1             | WALLET_1A   |              |
     When node "NODE_1" is at height 1 in 180 seconds
-    Then gas prices on node "NODE_1" equal the genesis gas prices
+    Then gas prices on node "NODE_1" at the genesis block equal the genesis gas prices
     Then I stop all nodes
 
   @transactions_ci

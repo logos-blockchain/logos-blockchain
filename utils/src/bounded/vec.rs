@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn from_single_value_builds_a_one_element_vec() {
-        // `From<T>` requires `MIN >= 1`; `MAX` here comfortably allows one.
+        // `From<T>` requires `MIN <= 1`; `MAX` here comfortably allows one.
         let bv: BoundedVec<u8, 1, 4> = 42.into();
         assert_eq!(bv.as_slice(), &[42]);
     }

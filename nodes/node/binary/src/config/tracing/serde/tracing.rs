@@ -1,4 +1,4 @@
-use lb_tracing::tracing::otlp::OtlpTracingConfig;
+use lb_tracing::{OtlpProtocol, OtlpServiceConfig, tracing::otlp::OtlpTracingConfig};
 use lb_tracing_service::TracingLayerSettings;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -14,10 +14,13 @@ impl From<Layer> for TracingLayerSettings {
     fn from(value: Layer) -> Self {
         match value {
             Layer::Otlp(config) => Self::Otlp(OtlpTracingConfig {
-                endpoint: config.endpoint,
+                service: OtlpServiceConfig {
+                    url: config.endpoint,
+                    service_name: config.service_name,
+                    authorization_header: config.authorization_header,
+                    protocol: config.protocol,
+                },
                 sample_ratio: config.sample_ratio,
-                service_name: config.service_name,
-                authorization_header: config.authorization_header,
             }),
             Layer::None => Self::None,
         }
@@ -32,6 +35,7 @@ pub struct OtlpConfig {
     pub service_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_header: Option<String>,
+    pub protocol: OtlpProtocol,
 }
 
 const fn default_sample_ratio() -> f64 {

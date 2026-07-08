@@ -287,7 +287,8 @@ fn standalone_deployment_config_deserializes() {
     let parsed: Result<DeploymentSettings, serde_yaml::Error> = serde_yaml::from_slice(&bytes);
     assert!(
         parsed.is_ok(),
-        "standalone deployment config should deserialize"
+        "standalone deployment config should deserialize ({:?})",
+        parsed.err(),
     );
 
     let parsed = deserialize_value_at_path::<DeploymentSettings>(&yaml_path, OnUnknownKeys::Fail);
