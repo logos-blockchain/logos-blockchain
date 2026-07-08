@@ -696,13 +696,13 @@ mod tests {
         sdp_ledger: SdpLedger,
         op: &SDPDeclareOp,
         zk_sk: &ZkKey,
+        signing_key: &Ed25519Key,
         config: &Config,
     ) -> Result<SdpLedger, Error> {
         let (note_sk, _) = utxo_with_sk();
         let tx_hash = TxHash([0u8; 32]);
         let zk_sig = ZkKey::multi_sign(&[note_sk, zk_sk.clone()], &tx_hash.to_fr()).unwrap();
 
-        let signing_key = create_signing_key();
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
         sdp_ledger
@@ -829,6 +829,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -886,6 +887,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -943,6 +945,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -1020,6 +1023,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -1119,6 +1123,7 @@ mod tests {
             ledger,
             declare_op,
             &zk_key,
+            &signing_key,
             &config,
         )
         .unwrap();
@@ -1192,58 +1197,127 @@ mod tests {
         }
     }
 
-    /// Regression test: the per-epoch membership build must not panic on an
-    /// SDP snapshot that contains two declarations with the same `zk_id`.
-    ///
-    /// `DeclarationId = Hash(service || provider_id || zk_id || locators)`
-    /// does not bind `zk_id` uniqueness (the SDP spec explicitly permits
-    /// duplicates), so two declarations with the *same* `zk_id` but
-    /// *different* locators (hence different `DeclarationId`s) can both be on
-    /// chain. `membership_info_from_epoch_state` (and, once rewards are
-    /// re-enabled, `providers_and_zk_root` inside `try_apply_header`) feed
-    /// their `zk_id`s into `sort_nodes_and_build_merkle_tree(..).expect(..)`,
-    /// which used to return `Err(DuplicateKey)` on the collision and so
-    /// panicked every Blend node at the epoch boundary. The builder now
-    /// reduces duplicate keys to a single leaf, so the build succeeds.
+    /// Two Blend declarations sharing the same `provider_id` (different
+    /// `zk_id` and locators) must be rejected by the Blend-specific
+    /// declaration validation.
     #[test]
-    fn membership_merkle_build_tolerates_duplicate_zk_ids() {
-        use lb_blend_crypto::merkle::sort_nodes_and_build_merkle_tree;
+    fn rejects_duplicate_provider_id_in_blend_declarations() {
+        use lb_core::mantle::ops::sdp::{SdpError, service::blend};
+
+        let config = setup(ServiceParameters {
+            inactivity_period: 20.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
 
         let signing_key = create_signing_key();
-        let zk_key = create_zk_key(1);
         let (_sk_a, utxo_a) = utxo_with_sk();
         let (_sk_b, utxo_b) = utxo_with_sk();
 
-        // Two declarations sharing the SAME zk_id, differing only in locators
-        // (and locked note) -> distinct DeclarationIds, identical zk_id.
         let declare_a = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locked_note_id: utxo_a.id(),
-            zk_id: zk_key.to_public_key(),
+            zk_id: create_zk_key(1).to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
         };
         let declare_b = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locked_note_id: utxo_b.id(),
-            zk_id: zk_key.to_public_key(),
+            zk_id: create_zk_key(2).to_public_key(),
             provider_id: ProviderId(signing_key.public_key()),
             locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
         };
-        assert_ne!(declare_a.id(), declare_b.id());
-        assert_eq!(declare_a.zk_id, declare_b.zk_id);
 
-        // Exactly what `membership_info_from_epoch_state` does with the
-        // snapshot: build the core-membership Merkle tree keyed by each
-        // declaration's zk_id. Production `.expect()`s this result.
-        let mut zk_ids = vec![declare_a.zk_id.into_inner(), declare_b.zk_id.into_inner()];
-        let result = sort_nodes_and_build_merkle_tree(&mut zk_ids, |zk_id| *zk_id);
+        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_a,
+            &create_zk_key(1),
+            &signing_key,
+            &config,
+        )
+        .unwrap();
 
+        let result = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_b,
+            &create_zk_key(2),
+            &signing_key,
+            &config,
+        );
         assert!(
-            result.is_ok(),
-            "membership Merkle build must not error (and thus `.expect()`-panic) \
-             on duplicate zk_ids: {:?}",
-            result.err()
+            matches!(
+                result,
+                Err(Error::SdpOp(SdpError::BlendDeclaration(ref err)))
+                    if matches!(*err, blend::Error::DuplicateProviderId(_))
+            ),
+            "expected DuplicateProviderId, got {result:?}"
+        );
+    }
+
+    /// Two Blend declarations sharing the same `zk_id` (different
+    /// `provider_id` and locators) must be rejected by the Blend-specific
+    /// declaration validation.
+    #[test]
+    fn rejects_duplicate_zk_id_in_blend_declarations() {
+        use lb_core::mantle::ops::sdp::{SdpError, service::blend};
+
+        let config = setup(ServiceParameters {
+            inactivity_period: 20.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
+
+        let signing_key_a = Ed25519Key::from_bytes(&[1; 32]);
+        let signing_key_b = Ed25519Key::from_bytes(&[2; 32]);
+        let zk_key = create_zk_key(1);
+        let (_sk_a, utxo_a) = utxo_with_sk();
+        let (_sk_b, utxo_b) = utxo_with_sk();
+
+        let declare_a = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_a.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key_a.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declare_b = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_b.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key_b.public_key()),
+            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
+        };
+
+        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_a,
+            &zk_key,
+            &signing_key_a,
+            &config,
+        )
+        .unwrap();
+
+        let result = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_b,
+            &zk_key,
+            &signing_key_b,
+            &config,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(Error::SdpOp(SdpError::BlendDeclaration(ref err)))
+                    if matches!(*err, blend::Error::DuplicateZkId(_))
+            ),
+            "expected DuplicateZkId, got {result:?}"
         );
     }
 
@@ -1274,9 +1348,15 @@ mod tests {
         let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
 
         let utxo_tree = utxo_tree(vec![utxo]);
-        let sdp_ledger =
-            apply_declare_with_dummies(&utxo_tree, sdp_ledger, declare_op, &zk_key, &config)
-                .unwrap();
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxo_tree,
+            sdp_ledger,
+            declare_op,
+            &zk_key,
+            &signing_key,
+            &config,
+        )
+        .unwrap();
 
         // Verify declaration is present
         assert!(sdp_ledger.get_declaration(&declaration_id).is_some());

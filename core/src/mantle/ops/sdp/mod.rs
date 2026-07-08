@@ -1,5 +1,6 @@
 pub mod active;
 pub mod declare;
+pub mod service;
 pub mod withdraw;
 
 pub use active::{SDPActiveExecutionContext, SDPActiveValidationContext};
@@ -9,7 +10,7 @@ use thiserror::Error;
 pub use withdraw::{SDPWithdrawExecutionContext, SDPWithdrawValidationContext};
 
 use crate::{
-    mantle::NoteId,
+    mantle::{NoteId, ops::sdp::service::blend},
     sdp::{DeclarationId, Nonce, ServiceType},
 };
 
@@ -27,6 +28,8 @@ pub enum SdpError {
     InvalidEddsaSignature,
     #[error("Duplicate sdp declaration id: {0:?}")]
     DuplicateDeclaration(DeclarationId),
+    #[error("Blend declaration validation error: {0}")]
+    BlendDeclaration(#[from] blend::Error),
     #[error("Note {note_id:?} insufficient value: {value}")]
     NoteInsufficientValue { note_id: NoteId, value: u64 },
     #[error("Note {note_id:?} already used for service {service_type:?}")]

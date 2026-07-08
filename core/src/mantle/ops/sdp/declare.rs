@@ -7,8 +7,9 @@ use crate::{
     mantle::{
         Note, TxHash,
         ledger::{Declarations, Operation, Utxos},
+        ops::sdp::service::blend,
     },
-    sdp::{Declaration, MinStake, locked_notes::LockedNotes},
+    sdp::{Declaration, MinStake, ServiceType, locked_notes::LockedNotes},
 };
 
 trait SDPDeclareValidationExt {
@@ -53,6 +54,12 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
                 note_id: self.locked_note_id,
                 service_type: self.service_type,
             });
+        }
+
+        match self.service_type {
+            ServiceType::BlendNetwork => {
+                blend::validate_declaration(self, declarations)?;
+            }
         }
 
         Ok(())
