@@ -10,24 +10,24 @@ use lb_key_management_system_keys::keys::{
 pub trait WireCodec: Sized {
     type Context;
 
-    fn encoded_length(context: Self::Context) -> usize;
+    fn encoded_length(_context: Self::Context) -> usize {
+        size_of::<Self>()
+    }
+
     fn encode_into(&self, out: &mut Vec<u8>);
+
     fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()>;
 }
 
 impl WireCodec for u8 {
     type Context = ();
 
-    fn encoded_length(_context: Self::Context) -> usize {
-        1
-    }
-
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.push(*self);
     }
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
-        if input.len() < 1 {
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
+        if input.is_empty() {
             return Err(());
         }
         let value = input[0];
@@ -36,15 +36,28 @@ impl WireCodec for u8 {
     }
 }
 
+impl WireCodec for u16 {
+    type Context = ();
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.to_le_bytes());
+    }
+
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
+        if input.len() < size_of::<Self>() {
+            return Err(());
+        }
+        let (bytes, remaining) = input.split_at(size_of::<Self>());
+        let value = Self::from_le_bytes(bytes.try_into().map_err(|_| ())?);
+        Ok((remaining, value))
+    }
+}
+
 impl WireCodec for bool {
     type Context = ();
 
-    fn encoded_length(context: Self::Context) -> usize {
-        u8::encoded_length(context)
-    }
-
     fn encode_into(&self, out: &mut Vec<u8>) {
-        (*self as u8).encode_into(out);
+        u8::from(*self).encode_into(out);
     }
 
     fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
@@ -56,15 +69,11 @@ impl WireCodec for bool {
 impl WireCodec for Ed25519PublicKey {
     type Context = ();
 
-    fn encoded_length(context: Self::Context) -> usize {
-        ED25519_PUBLIC_KEY_SIZE
-    }
-
     fn encode_into(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(self.as_bytes());
     }
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
         if input.len() < ED25519_PUBLIC_KEY_SIZE {
             return Err(());
         }
@@ -78,21 +87,17 @@ impl WireCodec for Ed25519PublicKey {
 impl WireCodec for ProofOfQuota {
     type Context = ();
 
-    fn encoded_length(context: Self::Context) -> usize {
-        PROOF_OF_QUOTA_SIZE
-    }
-
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(self.as_bytes());
+        out.extend_from_slice(&<[u8; _]>::from(self)[..]);
     }
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
         if input.len() < PROOF_OF_QUOTA_SIZE {
             return Err(());
         }
         let (proof_bytes, remaining) = input.split_at(PROOF_OF_QUOTA_SIZE);
         let proof_array: [u8; _] = proof_bytes.try_into().map_err(|_| ())?;
-        let proof = Self::from_bytes(&proof_array).map_err(|_| ())?;
+        let proof = proof_array.try_into().map_err(|_| ())?;
         Ok((remaining, proof))
     }
 }
@@ -100,21 +105,17 @@ impl WireCodec for ProofOfQuota {
 impl WireCodec for ProofOfSelection {
     type Context = ();
 
-    fn encoded_length(context: Self::Context) -> usize {
-        PROOF_OF_SELECTION_SIZE
-    }
-
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(self.as_bytes());
+        out.extend_from_slice(&<[u8; _]>::from(self)[..]);
     }
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
         if input.len() < PROOF_OF_SELECTION_SIZE {
             return Err(());
         }
         let (proof_bytes, remaining) = input.split_at(PROOF_OF_SELECTION_SIZE);
         let proof_array: [u8; _] = proof_bytes.try_into().map_err(|_| ())?;
-        let proof = Self::from_bytes(&proof_array).map_err(|_| ())?;
+        let proof = proof_array.try_into().map_err(|_| ())?;
         Ok((remaining, proof))
     }
 }
@@ -122,21 +123,17 @@ impl WireCodec for ProofOfSelection {
 impl WireCodec for Ed25519Signature {
     type Context = ();
 
-    fn encoded_length(context: Self::Context) -> usize {
-        ED25519_SIGNATURE_SIZE
-    }
-
     fn encode_into(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(self.as_bytes());
+        out.extend_from_slice(&self.to_bytes()[..]);
     }
 
-    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
         if input.len() < ED25519_SIGNATURE_SIZE {
             return Err(());
         }
         let (sig_bytes, remaining) = input.split_at(ED25519_SIGNATURE_SIZE);
         let sig_array: [u8; _] = sig_bytes.try_into().map_err(|_| ())?;
-        let signature = Self::from_bytes(&sig_array).map_err(|_| ())?;
+        let signature = sig_array.into();
         Ok((remaining, signature))
     }
 }

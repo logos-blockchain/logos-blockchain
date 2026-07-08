@@ -123,3 +123,61 @@ impl Payload {
         Ok((self.payload_type(), self.body()?.to_vec()))
     }
 }
+
+impl WireCodec for PayloadType {
+    type Context = ();
+
+    fn encoded_length(_context: Self::Context) -> usize {
+        u8::encoded_length(())
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        (*self as u8).encode_into(out);
+    }
+
+    fn decode(input: &[u8], _context: Self::Context) -> Result<(&[u8], Self), ()> {
+        let (remaining, discriminant) = u8::decode(input, ())?;
+        let payload_type = match discriminant {
+            0x00 => Self::Cover,
+            0x01 => Self::Data,
+            _ => return Err(()),
+        };
+        Ok((remaining, payload_type))
+    }
+}
+
+impl WireCodec for Payload {
+    type Context = ();
+
+    fn encoded_length(_context: Self::Context) -> usize {
+        PayloadType::encoded_length(())
+            .checked_add(u16::encoded_length(())) // `body_len`
+            .and_then(|len| len.checked_add(PaddedPayloadBody::encoded_length(())))
+            .expect("Payload encoded length overflow")
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.header.payload_type.encode_into(out);
+        self.header.body_len.encode_into(out);
+        self.body.encode_into(out);
+    }
+
+    fn decode(input: &[u8], _context: Self::Context) -> Result<(&[u8], Self), ()> {
+        let (input, payload_type) = PayloadType::decode(input, ())?;
+        let (input, body_len) = u16::decode(input, ())?;
+        let (input, mut body) = PaddedPayloadBody::decode(input, ())?;
+        // `PaddedPayloadBody` does not encode its own length; the authoritative
+        // value travels once as the header's `body_len`, so restore it here.
+        body.actual_len = body_len;
+        Ok((
+            input,
+            Self {
+                header: PayloadHeader {
+                    payload_type,
+                    body_len,
+                },
+                body,
+            },
+        ))
+    }
+}
