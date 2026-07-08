@@ -29,7 +29,7 @@ use crate::{
         BlendingHeader, Payload, PublicHeader,
         blending_header::BLENDING_HEADER_ENCODED_SIZE,
         payload::{PAYLOAD_ENCODED_SIZE, PaddedPayloadBody},
-        public_header::{PUBLIC_HEADER_ENCODED_SIZE, VerifiedPublicHeader},
+        public_header::VerifiedPublicHeader,
     },
 };
 
@@ -65,6 +65,9 @@ impl EncapsulatedMessage {
     }
 
     #[cfg(test)]
+    // Encoding (and sending) of unverified messages should not be done outside of
+    // tests, so this function is only available in tests.
+    #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let expected_encoded_len =
             crate::encap::expected_serialized_len(self.encapsulation_layers());
@@ -87,8 +90,8 @@ impl EncapsulatedMessage {
     /// unconsumed remainder.
     ///
     /// This does not check `bytes`'s length nor that it is fully consumed — the
-    /// caller (the network-side size gate) guarantees `bytes` is exactly a
-    /// well-formed `num_layers`-layer message and checks the remainder.
+    /// caller `bytes` is exactly a well-formed `num_layers`-layer message and
+    /// checks the remainder.
     pub fn decode(bytes: &[u8], num_layers: NonZeroU64) -> Result<(&[u8], Self), Error> {
         let (remaining, public_header) = PublicHeader::decode(bytes, ())?;
         let (remaining, encapsulated_part) = EncapsulatedPart::decode(remaining, num_layers)?;
@@ -300,8 +303,8 @@ impl WireEncode for EncapsulatedPart {
 impl WireDecode for EncapsulatedPart {
     type Context = NonZeroU64;
 
-    fn decode(input: &[u8], num_layers: Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
-        let (input, private_header) = EncapsulatedPrivateHeader::decode(input, num_layers)?;
+    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
+        let (input, private_header) = EncapsulatedPrivateHeader::decode(input, context)?;
         let (input, payload) = EncapsulatedPayload::decode(input, ())?;
         Ok((
             input,

@@ -52,9 +52,9 @@ pub fn deserialize_encapsulated_message(
     message: &[u8],
     num_blend_layers: NonZeroU64,
 ) -> Result<EncapsulatedMessage, Error> {
-    let (remaining, message) = EncapsulatedMessage::decode(message, num_blend_layers)?;
+    let (remaining, deserialized_message) = EncapsulatedMessage::decode(message, num_blend_layers)?;
     if !remaining.is_empty() {
         return Err(Error::MessageDeserializationFailed);
     }
-    Ok(message)
+    Ok(deserialized_message)
 }

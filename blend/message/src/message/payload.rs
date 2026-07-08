@@ -9,9 +9,22 @@ use crate::{
 pub const MAX_PAYLOAD_BODY_SIZE: usize = 34 * 1024;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[repr(u8)]
 pub enum PayloadType {
     Cover = 0x00,
     Data = 0x01,
+}
+
+impl TryFrom<u8> for PayloadType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(Self::Cover),
+            0x01 => Ok(Self::Data),
+            _ => Err(()),
+        }
+    }
 }
 
 impl WireEncode for PayloadType {
@@ -25,11 +38,8 @@ impl WireDecode for PayloadType {
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
         let (remaining, discriminant) = u8::decode(input, ())?;
-        let payload_type = match discriminant {
-            0x00 => Self::Cover,
-            0x01 => Self::Data,
-            _ => return Err(WireDecodeError::InvalidPayloadType),
-        };
+        let payload_type =
+            Self::try_from(discriminant).map_err(|()| WireDecodeError::InvalidPayloadType)?;
         Ok((remaining, payload_type))
     }
 }
@@ -106,7 +116,8 @@ impl WireDecode for PaddedPayloadBody {
 /// discriminant, the `u16` body length, and the body padded to
 /// [`MAX_PAYLOAD_BODY_SIZE`]. Compile-time constant, so the encapsulated
 /// (ciphered) form can be stored as a `Box<[u8; PAYLOAD_ENCODED_SIZE]>`.
-pub const PAYLOAD_ENCODED_SIZE: usize = size_of::<u8>() + size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE;
+pub const PAYLOAD_ENCODED_SIZE: usize =
+    size_of::<PayloadType>() + size_of::<u16>() + MAX_PAYLOAD_BODY_SIZE;
 
 /// A payload that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
