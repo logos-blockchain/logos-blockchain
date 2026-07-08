@@ -427,13 +427,13 @@ fn encode_decode_round_trip() {
         let message = EncapsulatedMessage::from(sample_message(num_layers as usize));
 
         let encoded = message.encode();
-        let decoded = EncapsulatedMessage::deserialize_from_remote(
-            &encoded,
-            num_layers.try_into().unwrap(),
-        )
-        .unwrap();
+        let decoded =
+            EncapsulatedMessage::decode(&encoded, num_layers.try_into().unwrap()).unwrap();
 
-        assert_eq!(decoded, message, "round-trip mismatch for {num_layers} layer(s)");
+        assert_eq!(
+            decoded, message,
+            "round-trip mismatch for {num_layers} layer(s)"
+        );
     }
 }
 
@@ -458,10 +458,7 @@ fn decode_rejects_wrong_layer_count() {
     let encoded = EncapsulatedMessage::from(sample_message(3)).encode();
     for expected_layers in [1u64, 2, 4] {
         assert!(matches!(
-            EncapsulatedMessage::deserialize_from_remote(
-                &encoded,
-                expected_layers.try_into().unwrap(),
-            ),
+            EncapsulatedMessage::decode(&encoded, expected_layers.try_into().unwrap(),),
             Err(Error::UnexpectedMessageSize)
         ));
     }

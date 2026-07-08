@@ -13,7 +13,7 @@ use crate::{
     encap::{
         ProofsVerifier,
         decapsulated::{DecapsulatedMessage, DecapsulationOutput, PartDecapsulationOutput},
-        encapsulated::{EncapsulatedMessage, EncapsulatedPart, encode_message},
+        encapsulated::{EncapsulatedMessage, EncapsulatedPart, encode_message_components},
     },
     input::EncapsulationInput,
     message::public_header::{PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
@@ -86,7 +86,7 @@ impl EncapsulatedMessageWithVerifiedSignature {
     /// receiver can decode it as one.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        encode_message(
+        encode_message_components(
             &self.public_header_with_verified_signature,
             &self.encapsulated_part,
         )
@@ -204,7 +204,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     /// receiver can decode it as one.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        encode_message(&self.validated_public_header, &self.encapsulated_part)
+        encode_message_components(&self.validated_public_header, &self.encapsulated_part)
     }
 
     /// Decapsulates the message using the provided key.

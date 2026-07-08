@@ -1,4 +1,4 @@
-use std::num::NonZeroU64;
+use core::num::NonZeroU64;
 
 use derivative::Derivative;
 use itertools::Itertools as _;
@@ -66,38 +66,47 @@ impl EncapsulatedMessage {
     /// The exact serialized size, in bytes, of any well-formed message with
     /// `num_layers` encapsulation layers.
     ///
-    /// The wire format is a fixed-size, prefix-free concatenation (see the Blend
-    /// Payload Formatting spec and [`Self::encode`]): the public header, every
-    /// encapsulated blending header, and the payload all have a constant size,
-    /// so the total is strictly linear in the number of layers and fully
-    /// determined by `num_layers`.
+    /// The wire format is a fixed-size, prefix-free concatenation (see the
+    /// Blend Payload Formatting spec and [`Self::encode`]): the public
+    /// header, every encapsulated blending header, and the payload all have
+    /// a constant size, so the total is strictly linear in the number of
+    /// layers and fully determined by `num_layers`.
     #[must_use]
     pub const fn expected_serialized_len(num_layers: NonZeroU64) -> u64 {
-        (PUBLIC_HEADER_SIZE + num_layers.get() as usize * BLENDING_HEADER_SIZE + PAYLOAD_SIZE)
-            as u64
+        let blending_headers_size = (num_layers.get() as usize)
+            .checked_mul(BLENDING_HEADER_SIZE)
+            .unwrap();
+        PUBLIC_HEADER_SIZE
+            .checked_add(blending_headers_size)
+            .unwrap()
+            .checked_add(PAYLOAD_SIZE)
+            .unwrap() as u64
     }
 
-    /// Serialize the message to its fixed-size, prefix-free wire representation:
-    /// `public_header || layer_0 || .. || layer_{N-1} || payload`, with no
-    /// length framing at the message level. The layer count is fixed by the
-    /// network-wide configuration, so it is not encoded on the wire.
+    /// Serialize the message to its fixed-size, prefix-free wire
+    /// representation: `public_header || layer_0 || .. || layer_{N-1} ||
+    /// payload`, with no length framing at the message level. The layer
+    /// count is fixed by the network-wide configuration, so it is not
+    /// encoded on the wire.
+    // TODO: Replace with `NomEncode` implementation.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        encode_message(&self.public_header, &self.encapsulated_part)
+        encode_message_components(&self.public_header, &self.encapsulated_part)
     }
 
-    /// Deserialize a message received from an untrusted remote peer.
+    ///  a message.
     ///
-    /// Because the format is fixed-size, we reject in O(1) — before allocating a
-    /// single layer — any input whose length is not exactly that of a
-    /// well-formed `num_layers`-layer message. A message encoding, say, 20 layers
-    /// when we expect 3 has a different length and is discarded up front. The
-    /// bytes are then sliced positionally into the public header, exactly
-    /// `num_layers` fixed-size layers, and the fixed-size payload, so the layout
-    /// is enforced by construction.
-    pub fn deserialize_from_remote(bytes: &[u8], num_layers: NonZeroU64) -> Result<Self, Error> {
+    /// Because the format is fixed-size, we reject in O(1) — before allocating
+    /// a single layer — any input whose length is not exactly that of a
+    /// well-formed `num_layers`-layer message. A message encoding, say, 20
+    /// layers when we expect 3 has a different length and is discarded up
+    /// front. The bytes are then sliced positionally into the public
+    /// header, exactly `num_layers` fixed-size layers, and the fixed-size
+    /// payload, so the layout is enforced by construction.
+    // TODO: Replace with `NomDecode` implementation.
+    pub fn decode(bytes: &[u8], num_layers: NonZeroU64) -> Result<Self, Error> {
         if bytes.len() as u64 != Self::expected_serialized_len(num_layers) {
-            return Err(Error::UnexpectedMessageSize);
+            return Err(Error::MessageDeserializationFailed);
         }
 
         let (public_header_bytes, part_bytes) = bytes.split_at(PUBLIC_HEADER_SIZE);
@@ -304,10 +313,10 @@ impl EncapsulatedPart {
     /// Reconstruct a part from the bytes following the public header.
     ///
     /// `part_bytes` is expected to be exactly
-    /// `num_layers * BLENDING_HEADER_SIZE + PAYLOAD_SIZE` bytes long. The caller
-    /// ([`EncapsulatedMessage::deserialize_from_remote`]) guarantees this via the
-    /// O(1) size gate, so the split points always land on layer/payload
-    /// boundaries and the layout is enforced by construction.
+    /// `num_layers * BLENDING_HEADER_SIZE + PAYLOAD_SIZE` bytes long. The
+    /// caller ([`EncapsulatedMessage::deserialize_from_remote`]) guarantees
+    /// this via the O(1) size gate, so the split points always land on
+    /// layer/payload boundaries and the layout is enforced by construction.
     pub(super) fn decode(part_bytes: &[u8], num_layers: NonZeroU64) -> Self {
         let layers_len = num_layers.get() as usize * BLENDING_HEADER_SIZE;
         let (layers_bytes, payload_bytes) = part_bytes.split_at(layers_len);
@@ -678,10 +687,13 @@ impl EncapsulatedPayload {
 /// yields byte-identical output regardless of which one is passed — which is
 /// what lets a peer serialize a verified variant and the receiver decode an
 /// [`EncapsulatedMessage`].
-pub(super) fn encode_message<Header: SerializeOp>(
+pub(super) fn encode_message_components<Header>(
     public_header: &Header,
     part: &EncapsulatedPart,
-) -> Vec<u8> {
+) -> Vec<u8>
+where
+    Header: SerializeOp,
+{
     let mut bytes = public_header
         .to_bytes()
         .expect("A public header is always serializable.")
@@ -692,8 +704,8 @@ pub(super) fn encode_message<Header: SerializeOp>(
 }
 
 // Fixed sizes of the message components. Every component is either a primitive,
-// a fixed-size crypto object, or the payload padded to [`MAX_PAYLOAD_BODY_SIZE`],
-// so all of these are compile-time constants.
+// a fixed-size crypto object, or the payload padded to
+// [`MAX_PAYLOAD_BODY_SIZE`], so all of these are compile-time constants.
 //
 // The message *framing* is now prefix-free (the layers and payload are
 // concatenated by [`encode_message`] with no length prefixes; the layer count
@@ -729,6 +741,7 @@ const PAYLOAD_SIZE: usize = ENUM_DISCRIMINANT_SIZE // `PayloadHeader::payload_ty
     + SEQUENCE_LENGTH_PREFIX_SIZE + MAX_PAYLOAD_BODY_SIZE // `PaddedPayloadBody::padded`
     + size_of::<u16>(); // `PaddedPayloadBody::actual_len`
 
-/// Serialized size of a [`PublicHeader`]: a version byte plus fixed-size fields.
+/// Serialized size of a [`PublicHeader`]: a version byte plus fixed-size
+/// fields.
 const PUBLIC_HEADER_SIZE: usize =
     size_of::<u8>() + ED25519_PUBLIC_KEY_SIZE + PROOF_OF_QUOTA_SIZE + ED25519_SIGNATURE_SIZE;

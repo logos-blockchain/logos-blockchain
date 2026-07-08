@@ -52,5 +52,5 @@ pub fn deserialize_encapsulated_message(
     message: &[u8],
     num_blend_layers: NonZeroU64,
 ) -> Result<EncapsulatedMessage, Error> {
-    EncapsulatedMessage::deserialize_from_remote(message, num_blend_layers)
+    EncapsulatedMessage::decode(message, num_blend_layers)
 }

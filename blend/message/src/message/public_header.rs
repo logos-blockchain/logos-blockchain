@@ -2,7 +2,10 @@ use lb_blend_proofs::quota::{self, ProofOfQuota, VerifiedProofOfQuota};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::{Error, MessageIdentifier, encap::ProofsVerifier};
+use crate::{
+    Error, MessageIdentifier,
+    encap::{ProofsVerifier, WireCodec},
+};
 
 const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
 

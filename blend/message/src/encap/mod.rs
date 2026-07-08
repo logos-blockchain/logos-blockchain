@@ -1,3 +1,5 @@
+use core::num::NonZeroU64;
+
 use lb_blend_proofs::{
     quota::{ProofOfQuota, VerifiedProofOfQuota},
     selection::{ProofOfSelection, VerifiedProofOfSelection, inputs::VerifyInputs},
@@ -34,4 +36,10 @@ pub trait ProofsVerifier {
         proof: ProofOfSelection,
         inputs: &VerifyInputs,
     ) -> Result<VerifiedProofOfSelection, Self::Error>;
+}
+
+pub(crate) trait WireCodec: Sized {
+    fn expected_serialized_len(num_layers: NonZeroU64) -> u64;
+    fn encode_into(&self, out: &mut Vec<u8>);
+    fn decode(bytes: &[u8], num_layers: NonZeroU64) -> Result<Self, ()>;
 }
