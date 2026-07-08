@@ -91,12 +91,14 @@ where
 
     /// Convert a successfully-ingested block into the public event. Handles
     /// the readiness-transition special case: when this is the block that
-    /// flips the sequencer to ready, emit `Ready` first and buffer the
-    /// `BlocksProcessed` for the next drive turn.
+    /// flips the sequencer to ready — or the one that completes a mid-life
+    /// reconnect — emit `Ready` first and buffer the `BlocksProcessed` for
+    /// the next drive turn.
     fn finish_block_processing(&mut self, result: BlockEventResult) -> Option<Event> {
         // We just processed a live block end-to-end — cached `channel_state`,
         // `current_tip`, and `lib_slot` reflect chain state up to this block,
         // so callers may rely on them.
+        let reconnected = !self.connected;
         self.connected = true;
         let became_ready = self.maybe_signal_ready();
         let (channel_update, finalized, mined) = self.apply_block_result(result);
@@ -121,7 +123,11 @@ where
                 finalized,
             });
 
-        if became_ready {
+        // Re-announce readiness after a mid-life reconnect: with funding
+        // configured, publishes fail fast with `Unavailable` while
+        // disconnected, so consumers need a positive "you can publish again"
+        // signal once a live block confirms the connection.
+        if became_ready || (reconnected && self.is_ready()) {
             if let Some(ev) = block_event {
                 self.buffered_events.push_back(ev);
             }
@@ -596,6 +602,7 @@ mod tests {
         header::{ContentId, HeaderId},
         mantle::{
             MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo,
+            gas::GasCost,
             ledger::{Inputs, Outputs},
             ops::{
                 OpProof,
@@ -606,12 +613,16 @@ mod tests {
                     inscribe::{Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
+                transfer::TransferOp,
             },
             transactions::Ops,
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_http_api_common::queries::BlocksStreamQuery;
+    use lb_http_api_common::{
+        bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+        queries::BlocksStreamQuery,
+    };
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -619,7 +630,7 @@ mod tests {
 
     use super::{
         super::{
-            types::{FinalizedOp, SequencerConfig},
+            types::{FinalizedOp, FundingConfig, SequencerConfig},
             zone_sequencer::restore_pending_tx,
         },
         *,
@@ -725,6 +736,9 @@ mod tests {
     struct MockNode {
         posted_transactions_sender: mpsc::Sender<SignedMantleTx>,
         channel_state: Option<ChannelState>,
+        /// When set, `fund_tx` appends this fee transfer and signs it with
+        /// the key, mimicking a node wallet funding at non-zero gas price.
+        fund_transfer: Option<(TransferOp, ZkKey)>,
     }
 
     impl MockNode {
@@ -747,10 +761,140 @@ mod tests {
                         withdrawal_nonce: 0,
                         withdraw_threshold: 1,
                     }),
+                    fund_transfer: None,
                 },
                 rx,
             )
         }
+
+        fn new_with_funding(
+            transfer: TransferOp,
+            signing_key: ZkKey,
+        ) -> (Self, mpsc::Receiver<SignedMantleTx>) {
+            let (mut node, rx) = Self::new();
+            node.fund_transfer = Some((transfer, signing_key));
+            (node, rx)
+        }
+
+        /// A node whose channel does not exist yet (unclaimed).
+        fn new_without_channel() -> (Self, mpsc::Receiver<SignedMantleTx>) {
+            let (mut node, rx) = Self::new();
+            node.channel_state = None;
+            (node, rx)
+        }
+    }
+
+    /// Publishing with a [`FundingConfig`] funds the transaction through the
+    /// node: the posted tx carries the appended fee transfer as its last op,
+    /// proven by the wallet's transfer proof, after the sequencer's own
+    /// inscription proof — all over the funded tx hash.
+    #[tokio::test]
+    async fn publish_funds_tx_via_node() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+
+        let (funding_sk, utxo) = utxo_with_sk();
+        let funding_pk = funding_sk.to_public_key();
+        let transfer = TransferOp {
+            inputs: Inputs::new([utxo.id()]),
+            outputs: Outputs::new([Note::new(1, funding_pk)]),
+        };
+        let (node, mut posted_txs) = MockNode::new_with_funding(transfer, funding_sk);
+
+        let config = SequencerConfig {
+            funding: Some(FundingConfig {
+                funding_pk,
+                max_tx_fee: GasCost::new(u64::MAX),
+            }),
+            ..SequencerConfig::default()
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        let (result, _checkpoint) = sequencer
+            .handle()
+            .publish(b"funded message".into())
+            .await
+            .unwrap();
+        let info = result.tx.inscription().clone();
+
+        // Drive `next_event` concurrently with the recv so the queued post
+        // future runs and MockNode delivers to `posted_txs`.
+        let posted = tokio::select! {
+            tx = posted_txs.recv() => tx.unwrap(),
+            () = async {
+                loop {
+                    drop(sequencer.next_event().await);
+                }
+            } => unreachable!(),
+        };
+
+        // Funded shape: [inscription, fee transfer], proofs in op order with
+        // the wallet's zk proof on the transfer.
+        assert_eq!(posted.mantle_tx.hash(), info.tx_hash);
+        assert_eq!(posted.mantle_tx.ops().len(), 2);
+        assert!(
+            matches!(&posted.mantle_tx.ops()[0], Op::ChannelInscribe(op) if op.id() == info.this_msg)
+        );
+        assert!(matches!(&posted.mantle_tx.ops()[1], Op::Transfer(_)));
+        assert_eq!(posted.ops_proofs.len(), 2);
+        assert!(matches!(&posted.ops_proofs[0], OpProof::Ed25519Sig(_)));
+        assert!(matches!(&posted.ops_proofs[1], OpProof::ZkSig(_)));
+    }
+
+    /// Claiming an unclaimed channel posts a config with an EMPTY multi-sig
+    /// proof: the spec requires no signatures for a channel that doesn't
+    /// exist, and the node wallet's fee prediction assumes the spec-minimal
+    /// (threshold-0) proof — a superfluous signature would leave the funded
+    /// fee 66 gas short of the actual storage cost.
+    #[tokio::test]
+    async fn claiming_config_carries_empty_multi_sig_proof() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let (node, mut posted_txs) = MockNode::new_without_channel();
+        let mut sequencer = ZoneSequencer::init(channel_id, sequencer_key.clone(), node, None);
+
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        let (_result, _checkpoint, signed_tx) = sequencer
+            .handle()
+            .channel_config(
+                Keys::from(sequencer_key.public_key()),
+                0u32.into(),
+                0u32.into(),
+                1,
+                1,
+            )
+            .await
+            .unwrap();
+
+        let posted = tokio::select! {
+            tx = posted_txs.recv() => tx.unwrap(),
+            () = async {
+                loop {
+                    drop(sequencer.next_event().await);
+                }
+            } => unreachable!(),
+        };
+
+        assert_eq!(posted, signed_tx);
+        let OpProof::ChannelMultiSigProof(proof) = &posted.ops_proofs[0] else {
+            panic!("config op should carry a multi-sig proof");
+        };
+        assert!(
+            proof.signatures().is_empty(),
+            "claiming config must not attach signatures"
+        );
     }
 
     /// Like [`MockNode`], but with a controllable connectivity flag.
@@ -886,6 +1030,13 @@ mod tests {
         ) -> Result<(), lb_common_http_client::Error> {
             self.inner.post_transaction(tx).await
         }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            self.inner.fund_tx(request).await
+        }
     }
 
     /// Comment #1 regression guard for client publishes during reconnect.
@@ -955,6 +1106,115 @@ mod tests {
                 .iter()
                 .any(|op| matches!(op, Op::ChannelInscribe(_))),
             "posted tx should carry the inscription published during reconnect"
+        );
+    }
+
+    /// With funding configured, a publish while the node is down fails fast
+    /// with `Unavailable` (funding needs a connected node), and a fresh
+    /// `Ready` is emitted once the reconnect completes — the caller's signal
+    /// to retry. Complements
+    /// `client_publish_accepted_locally_during_reconnect`, which pins the
+    /// fee-less accept-locally contract.
+    #[tokio::test]
+    async fn funded_publish_fails_fast_during_reconnect_and_ready_refires() {
+        let channel_id = ChannelId::from([0; 32]);
+        let sequencer_key = Ed25519Key::from_bytes(&[0; 32]);
+        let (node, mut posted_txs, up_tx) = ReconnectMockNode::new();
+        let config = SequencerConfig {
+            reconnect_delay: std::time::Duration::from_millis(20),
+            resubmit_interval: std::time::Duration::from_millis(20),
+            funding: Some(FundingConfig {
+                funding_pk: ZkKey::from(BigUint::from(0u64)).to_public_key(),
+                max_tx_fee: GasCost::new(u64::MAX),
+            }),
+            ..SequencerConfig::default()
+        };
+        let mut sequencer =
+            ZoneSequencer::init_with_config(channel_id, sequencer_key, node, config, None);
+        let client = sequencer.client();
+
+        // Drive until the sequencer has emitted `Ready`.
+        loop {
+            if matches!(sequencer.next_event().await, Event::Ready) {
+                break;
+            }
+        }
+
+        // Take the node down and drive until the sequencer notices the
+        // stream drop (it clears the turn-to-write watch on disconnect).
+        let mut turn_rx = sequencer.subscribe_turn_to_write();
+        up_tx.send(false).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if !turn_rx.borrow().our_turn_to_write {
+                    break;
+                }
+                tokio::select! {
+                    _ = sequencer.next_event() => {},
+                    result = turn_rx.changed() => result.unwrap(),
+                }
+            }
+        })
+        .await
+        .expect("sequencer should notice the disconnect");
+
+        // A publish while disconnected must fail fast with `Unavailable`
+        // instead of surfacing an HTTP error from the fund call.
+        let publish = client.publish(b"during-reconnect".into());
+        let error = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = publish => result,
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+            }
+        })
+        .await
+        .expect("publish must resolve promptly while disconnected")
+        .expect_err("funded publish must be rejected while disconnected");
+        assert!(
+            matches!(error, Error::Unavailable { .. }),
+            "expected Unavailable, got: {error:?}"
+        );
+
+        // Bring the node back: a fresh `Ready` must be emitted once a live
+        // block confirms the reconnect, and publishing works again.
+        up_tx.send(true).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                if matches!(sequencer.next_event().await, Event::Ready) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("Ready should be re-emitted after reconnect");
+
+        let publish = client.publish(b"after-reconnect".into());
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::select! {
+                result = publish => result,
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+            }
+        })
+        .await
+        .expect("publish must resolve after reconnect")
+        .expect("publish should succeed once reconnected");
+
+        let posted = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            tokio::select! {
+                tx = posted_txs.recv() => tx,
+                () = async { loop { drop(sequencer.next_event().await); } } => unreachable!(),
+            }
+        })
+        .await
+        .expect("inscription should be posted after reconnect")
+        .expect("posted_txs channel should be open");
+        assert!(
+            posted
+                .mantle_tx
+                .ops()
+                .iter()
+                .any(|op| matches!(op, Op::ChannelInscribe(_))),
+            "posted tx should carry the post-reconnect inscription"
         );
     }
 
@@ -1183,6 +1443,43 @@ mod tests {
             self.posted_transactions_sender.send(tx).await.unwrap();
             Ok(())
         }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            let build_error =
+                |e| lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"));
+            // With a fee transfer configured, append and sign it like the
+            // node wallet would at non-zero gas price; otherwise build the
+            // request's ops unchanged (fee-less passthrough).
+            let (funded_tx, transfer_proof) = match &self.fund_transfer {
+                Some((transfer, signing_key)) => {
+                    let funded_tx = request
+                        .tx_builder
+                        .push_op(Op::Transfer(transfer.clone()))
+                        .map_err(build_error)?
+                        .build()
+                        .map_err(build_error)?;
+                    let signature = ZkKey::multi_sign(
+                        std::slice::from_ref(signing_key),
+                        &funded_tx.hash().to_fr(),
+                    )
+                    .map_err(|e| {
+                        lb_common_http_client::Error::Server(format!(
+                            "mock transfer signing failed: {e:?}"
+                        ))
+                    })?;
+                    (funded_tx, Some(OpProof::ZkSig(signature)))
+                }
+                None => (request.tx_builder.build().map_err(build_error)?, None),
+            };
+            Ok(WalletFundResponseBody {
+                tip: HeaderId::from([0; 32]),
+                funded_tx,
+                transfer_proof,
+            })
+        }
     }
 
     /// Mock node that serves a single genesis-slot block with a channel
@@ -1298,6 +1595,21 @@ mod tests {
             _tx: SignedMantleTx,
         ) -> Result<(), lb_common_http_client::Error> {
             Ok(())
+        }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            // Fee-less passthrough: build the request's ops unchanged, as the
+            // node would at zero gas price.
+            Ok(WalletFundResponseBody {
+                tip: HeaderId::from([0; 32]),
+                funded_tx: request.tx_builder.build().map_err(|e| {
+                    lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
+                })?,
+                transfer_proof: None,
+            })
         }
 
         async fn channel_state(

@@ -25,7 +25,7 @@ use lb_key_management_system_service::keys::{
 use lb_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
-    sequencer::{Event, SequencerCheckpoint, ZoneSequencer},
+    sequencer::{Event, FundingConfig, SequencerCheckpoint, SequencerConfig, ZoneSequencer},
 };
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -334,6 +334,27 @@ pub fn build_deposit_op(
     })
 }
 
+/// Build the sequencer funding config from CLI args. `--funding-pk` enables
+/// funding transactions from the node's wallet; absent means fee-less
+/// transactions.
+pub fn funding_config(args: &NodeKeyArgs) -> RunResult<Option<FundingConfig>> {
+    let Some(funding_pk_hex) = &args.funding_pk else {
+        return Ok(None);
+    };
+    Ok(Some(FundingConfig {
+        funding_pk: decode_zk_public_key_hex(funding_pk_hex)?,
+        max_tx_fee: args.max_tx_fee.into(),
+    }))
+}
+
+/// Sequencer config for CLI commands, with funding taken from the args.
+pub fn cli_sequencer_config(args: &NodeKeyArgs) -> RunResult<SequencerConfig> {
+    Ok(SequencerConfig {
+        funding: funding_config(args)?,
+        ..SequencerConfig::default()
+    })
+}
+
 /// Start a zone sequencer for non-interactive CLI commands and wait for
 /// readiness.
 pub async fn start_cli_sequencer(args: &NodeKeyArgs) -> RunResult<ZoneSequencer<NodeHttpClient>> {
@@ -351,7 +372,13 @@ pub async fn start_cli_sequencer_with_channel_state(
     let node = node_client(&args.node_url)?;
     let channel_exists = query_channel_exists(&node, channel_id).await;
     let checkpoint = load_cli_checkpoint(&channel_id, channel_exists)?;
-    let mut sequencer = ZoneSequencer::init(channel_id, signing_key, node.clone(), checkpoint);
+    let mut sequencer = ZoneSequencer::init_with_config(
+        channel_id,
+        signing_key,
+        node.clone(),
+        cli_sequencer_config(args)?,
+        checkpoint,
+    );
     while !sequencer.is_ready() {
         drop(sequencer.next_event().await);
     }

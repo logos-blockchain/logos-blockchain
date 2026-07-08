@@ -5,12 +5,15 @@ use futures::future::join_all;
 use lb_common_http_client::CommonHttpClient;
 use lb_core::mantle::{
     TxHash, Utxo,
+    gas::GasCost,
     ops::channel::{config::Keys, deposit::Metadata, inscribe::Inscription},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
-    adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer, sequencer::ZoneSequencer,
+    adapter::NodeHttpClient as ZoneNodeHttpClient,
+    indexer::ZoneIndexer,
+    sequencer::{FundingConfig, ZoneSequencer},
 };
 use tokio::{
     sync::broadcast,
@@ -763,6 +766,20 @@ async fn start_named_sequencer_with_config(
         world.zone_node_http_client_for_sequencer(&sequencer_alias),
     )?;
     let node_url = log_step_error(step, world.zone_node_url_for_sequencer(&sequencer_alias))?;
+    // Fund sequencer transactions from the node's own funding wallet. Falls
+    // back to fee-less transactions when the node has no registered funding
+    // wallet (only viable on zero-gas-price clusters).
+    let funding = world
+        .zone
+        .sequencer_node_name(&sequencer_alias)
+        .and_then(|node_name| world.resolve_wallet(&format!("{node_name}_WALLET")))
+        .and_then(|wallet| wallet.public_key())
+        .map(|funding_pk| FundingConfig {
+            funding_pk,
+            max_tx_fee: GasCost::new(u64::MAX),
+        })
+        .ok();
+    let config = lb_zone_sdk::sequencer::SequencerConfig { funding, ..config };
     let sequencer = ZoneSequencer::init_with_config(
         world.zone.sequencer_channel_id(&sequencer_alias)?,
         signing_key,

@@ -135,7 +135,10 @@ mod tests {
         },
     };
     use lb_groth16::Fr;
-    use lb_http_api_common::queries::BlocksStreamQuery;
+    use lb_http_api_common::{
+        bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+        queries::BlocksStreamQuery,
+    };
 
     use super::*;
     use crate::{Deposit, ZoneBlock, adapter::BoxStream};
@@ -428,6 +431,13 @@ mod tests {
             &self,
             _tx: SignedMantleTx,
         ) -> Result<(), lb_common_http_client::Error> {
+            unimplemented!()
+        }
+
+        async fn fund_tx(
+            &self,
+            _request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
             unimplemented!()
         }
     }

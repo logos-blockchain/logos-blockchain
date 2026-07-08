@@ -298,7 +298,7 @@ where
             if adopted.contains(&info.payload) || self.finalized.contains(&info.payload) {
                 continue;
             }
-            if let Err(error) = sequencer.handle().publish(info.payload.clone()) {
+            if let Err(error) = sequencer.handle().publish(info.payload.clone()).await {
                 warn!(%error, "Failed to re-publish orphaned zone payload");
             }
         }
@@ -407,7 +407,7 @@ where
             Event::Ready if !self.published_initial => {
                 self.published_initial = true;
                 for payload in self.planned.clone() {
-                    match sequencer.handle().publish(payload) {
+                    match sequencer.handle().publish(payload).await {
                         Ok((result, _checkpoint)) => {
                             self.lineage
                                 .record_publish(result.tx.inscription().this_msg);
@@ -433,7 +433,7 @@ where
                     {
                         continue;
                     }
-                    match sequencer.handle().publish(info.payload.clone()) {
+                    match sequencer.handle().publish(info.payload.clone()).await {
                         Ok((result, _checkpoint)) => {
                             self.lineage
                                 .record_republish(info.this_msg, result.tx.inscription().this_msg);
@@ -488,7 +488,7 @@ where
                 if !self.balances.should_republish(&info.payload) {
                     continue;
                 }
-                if let Err(error) = sequencer.handle().publish(info.payload.clone()) {
+                if let Err(error) = sequencer.handle().publish(info.payload.clone()).await {
                     warn!(%error, "Failed to re-publish balance-aware zone payload");
                     continue;
                 }
@@ -503,7 +503,7 @@ where
             if !self.balances.should_republish(&payload) {
                 continue;
             }
-            if let Err(error) = sequencer.handle().publish(payload.clone()) {
+            if let Err(error) = sequencer.handle().publish(payload.clone()).await {
                 warn!(%error, "Failed to publish planned balance-aware zone payload");
                 self.planned.push_front(payload);
                 break;
@@ -570,7 +570,7 @@ where
                 continue;
             }
             if self.state.preserves_order(&payload) {
-                if let Err(error) = sequencer.handle().publish(payload.clone()) {
+                if let Err(error) = sequencer.handle().publish(payload.clone()).await {
                     warn!(%error, "Failed to re-publish sorted zone payload");
                     continue;
                 }
@@ -782,10 +782,11 @@ pub fn sequencer_config_with_pending_submit_depth(
     }
 }
 
-/// Publishes a zone payload synchronously through the runner and returns the
-/// SDK's [`PublishResult`] inline. Retries transient publish errors until
-/// the deadline elapses. No "wait for event" — the new SDK publishes
-/// synchronously and the runner forwards the call through the drive task.
+/// Publishes a zone payload through the runner and returns the SDK's
+/// [`PublishResult`] inline. Retries transient publish errors until the
+/// deadline elapses. No "wait for event" — the SDK accepts the publish
+/// inline (funding it via the node when configured) and the runner forwards
+/// the call through the drive task.
 pub async fn publish_message_with_retry(
     client: &SequencerClient,
     data: &Inscription,
@@ -1428,6 +1429,10 @@ pub fn build_zone_deposit(
     })
 }
 
+/// Generous cap on channel transaction fees at genesis gas prices; actual
+/// fees are a few hundred gas units for these small transactions.
+const MAX_ZONE_DEPOSIT_TX_FEE: u64 = 10_000;
+
 /// Submits a regular channel deposit through the node wallet API.
 pub async fn submit_zone_deposit(
     node_url: &Url,
@@ -1439,7 +1444,7 @@ pub async fn submit_zone_deposit(
         deposit: deposit.clone(),
         change_public_key: funding_public_key,
         funding_public_keys: vec![funding_public_key],
-        max_tx_fee: 10.into(),
+        max_tx_fee: MAX_ZONE_DEPOSIT_TX_FEE.into(),
     };
 
     let request_url =
@@ -1517,17 +1522,25 @@ pub async fn submit_atomic_zone_deposit(
 
 /// Builds the funding transfer that creates the note consumed by an atomic
 /// zone deposit.
+/// Generous fee margin for the atomic `[Transfer, Deposit, Inscribe]`
+/// transaction; the actual cost is a few hundred gas units at genesis prices.
+const ATOMIC_DEPOSIT_FEE_MARGIN: u64 = 2_000;
+
 fn build_atomic_deposit_transfer(
     available_utxos: Vec<Utxo>,
     funding_public_key: ZkPublicKey,
     amount: Value,
 ) -> Result<(TransferOp, Vec<Utxo>), ZoneTestError> {
     let deposit_note = Note::new(amount, funding_public_key);
-    let funded_transfer =
-        build_wallet_funded_transfer(available_utxos, vec![deposit_note], funding_public_key)
-            .map_err(|error| ZoneTestError::BuildAtomicDeposit {
-                message: error.to_string(),
-            })?;
+    let funded_transfer = build_wallet_funded_transfer(
+        available_utxos,
+        vec![deposit_note],
+        funding_public_key,
+        ATOMIC_DEPOSIT_FEE_MARGIN,
+    )
+    .map_err(|error| ZoneTestError::BuildAtomicDeposit {
+        message: error.to_string(),
+    })?;
 
     Ok(funded_transfer.into_parts())
 }

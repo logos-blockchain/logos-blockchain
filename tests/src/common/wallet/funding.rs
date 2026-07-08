@@ -217,17 +217,21 @@ impl WalletFundedTransfer {
 /// Build a transfer operation and change output from available UTXOs.
 ///
 /// Inputs are selected largest-first, and change is returned to `change_pk`.
+/// `fee` is deliberately left unreturned — it becomes the transaction's
+/// excess balance, which pays the mandatory fees at non-zero gas prices.
 pub fn build_wallet_funded_transfer(
     available_utxos: Vec<Utxo>,
     outputs: Vec<Note>,
     change_pk: ZkPublicKey,
+    fee: u64,
 ) -> Result<WalletFundedTransfer, WalletError> {
     let output_total = outputs
         .iter()
         .fold(0u64, |total, output| total.saturating_add(output.value));
+    let funding_target = output_total.saturating_add(fee);
     let selected_inputs =
-        WalletSelectedInputs::largest_first_covering(available_utxos, output_total)?;
-    let change = selected_inputs.total() - output_total;
+        WalletSelectedInputs::largest_first_covering(available_utxos, funding_target)?;
+    let change = selected_inputs.total() - funding_target;
     let mut transfer_outputs = outputs;
 
     if change > 0 {

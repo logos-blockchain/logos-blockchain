@@ -51,27 +51,33 @@ where
 {
     /// Enqueue an inscription onto the zone's channel.
     ///
-    /// Synchronously mutates state to record the inscription as pending and
-    /// queues a `post_transaction` future onto the drive loop's in-flight
-    /// pool — the post itself happens asynchronously the next time the drive
-    /// loop polls `next_event`. The returned [`PublishResult`] reflects this
-    /// queued state, not a network acknowledgement; the tx may not have
-    /// reached the node yet. The accompanying [`SequencerCheckpoint`]
-    /// captures the new pending state so the caller can persist outbox +
-    /// checkpoint atomically.
+    /// With funding configured ([`SequencerConfig::funding`]), first funds
+    /// the transaction from the node's wallet (one HTTP round-trip) and
+    /// signs the funded hash; a funding failure returns an error without
+    /// mutating state. Then records the inscription as pending and queues a
+    /// `post_transaction` future onto the drive loop's in-flight pool — the
+    /// post itself happens asynchronously the next time the drive loop polls
+    /// `next_event`. The returned [`PublishResult`] reflects this queued
+    /// state, not a network acknowledgement; the tx may not have reached the
+    /// node yet. The accompanying [`SequencerCheckpoint`] captures the new
+    /// pending state so the caller can persist outbox + checkpoint
+    /// atomically.
     ///
-    /// Returns [`Error::Unavailable`] only if cold-start backfill is still
-    /// in progress (the sequencer hasn't emitted [`super::Event::Ready`]
-    /// yet). After the first `Ready`, publishes are always accepted:
-    /// during a mid-life reconnect the tx is queued locally and posted
-    /// when the stream resumes (or when our turn comes back). To wait for
-    /// readiness asynchronously, subscribe via
+    /// Returns [`Error::Unavailable`] if cold-start backfill is still in
+    /// progress (the sequencer hasn't emitted [`super::Event::Ready`] yet)
+    /// — or, with funding configured, while the node is disconnected
+    /// (funding needs the node; a fresh `Ready` event is emitted when the
+    /// reconnect completes, signalling it is safe to retry). Fee-less
+    /// sequencers keep the old contract: after the first `Ready`, publishes
+    /// are always accepted — during a mid-life reconnect the tx is queued
+    /// locally and posted when the stream resumes (or when our turn comes
+    /// back). To wait for readiness asynchronously, subscribe via
     /// [`ZoneSequencer::subscribe_ready`].
-    pub fn publish(
+    pub async fn publish(
         &mut self,
         data: Inscription,
     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
-        self.sequencer.do_publish(data)
+        self.sequencer.do_publish(data).await
     }
 
     /// Build a [`MantleTx`] for the given ops and an inscription message,
@@ -120,12 +126,14 @@ where
     /// sequencer rotation (see Mantle spec). Pass `0` for both to keep a
     /// single fixed sequencer at index 0.
     ///
+    /// With funding configured ([`SequencerConfig::funding`]), first funds
+    /// the transaction from the node's wallet and signs the funded hash.
     /// Enqueues the config tx onto the drive loop's in-flight pool — the
     /// post runs the next time the drive loop polls `next_event`. The
     /// returned [`PublishResult`] reflects the queued state, not a network
     /// acknowledgement. The signed tx is also returned for callers that want
     /// to observe finalization via the event stream.
-    pub fn channel_config(
+    pub async fn channel_config(
         &mut self,
         keys: Keys,
         posting_timeframe: SlotTimeframe,
@@ -133,13 +141,15 @@ where
         configuration_threshold: u16,
         withdraw_threshold: u16,
     ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
-        self.sequencer.do_channel_config(
-            keys,
-            posting_timeframe,
-            posting_timeout,
-            configuration_threshold,
-            withdraw_threshold,
-        )
+        self.sequencer
+            .do_channel_config(
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                withdraw_threshold,
+            )
+            .await
     }
 
     /// Publish an atomic inscription+withdraw bundle.
@@ -147,9 +157,11 @@ where
     /// Reads the current on-chain `withdraw_nonce` and this sequencer's
     /// accredited-key index from cached channel state (kept fresh by the
     /// drive loop). Selects the inscription's `parent_msg` from the current
-    /// canonical tip, builds the bundled `MantleTx`, signs locally with the
-    /// sequencer's key, and submits. Scoped to single-sequencer (centralized)
-    /// channels — only the sequencer's own signature is used.
+    /// canonical tip, builds the bundled `MantleTx` (funding it from the
+    /// node's wallet when [`SequencerConfig::funding`] is set), signs the
+    /// funded hash locally with the sequencer's key, and submits. Scoped to
+    /// single-sequencer (centralized) channels — only the sequencer's own
+    /// signature is used.
     ///
     /// Returns [`Error::Unavailable`] only if cold-start backfill is still
     /// in progress (see [`Self::publish`] for the latched readiness
@@ -158,12 +170,13 @@ where
     /// stream resumes and our turn is current. Returns [`Error::Network`] if
     /// the channel's `withdraw_threshold > 1` (which would require multi-sig
     /// orchestration this API doesn't support).
-    pub fn publish_atomic_withdraw(
+    pub async fn publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
         self.sequencer
             .do_publish_atomic_withdraw(inscribe, withdraws)
+            .await
     }
 }
