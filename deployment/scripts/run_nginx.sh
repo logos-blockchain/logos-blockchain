@@ -8,6 +8,9 @@ cp -r /usr/share/nginx/html_template/* /usr/share/nginx/html/
 
 envsubst '$ENV_TITLE_STRING' < /usr/share/nginx/html/index.html.template > /usr/share/nginx/html/index.html
 
+mkdir -p /node-data/tracing
+touch /node-data/tracing/otel_tokens.map
+
 # If we update otlp auth tokens at runtime we need to reload the nginx service.
 (
   while inotifywait -e modify /node-data/tracing/otel_tokens.map; do
