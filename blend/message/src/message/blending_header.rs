@@ -9,7 +9,10 @@ use lb_key_management_system_keys::keys::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{codec::WireCodec, crypto::domains};
+use crate::{
+    codec::{WireDecode, WireDecodeError, WireEncode},
+    crypto::domains,
+};
 
 /// A blending header that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
@@ -74,13 +77,8 @@ pub const BLENDING_HEADER_ENCODED_SIZE: usize = ED25519_PUBLIC_KEY_SIZE
     .unwrap()
     .checked_add(size_of::<bool>())
     .unwrap();
-impl WireCodec for BlendingHeader {
-    type Context = ();
 
-    fn encoded_length((): Self::Context) -> usize {
-        BLENDING_HEADER_ENCODED_SIZE
-    }
-
+impl WireEncode for BlendingHeader {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.signing_pubkey.encode_into(out);
         self.proof_of_quota.encode_into(out);
@@ -88,8 +86,12 @@ impl WireCodec for BlendingHeader {
         self.proof_of_selection.encode_into(out);
         self.is_last.encode_into(out);
     }
+}
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
+impl WireDecode for BlendingHeader {
+    type Context = ();
+
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
         let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
         let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
         let (input, signature) = Ed25519Signature::decode(input, ())?;

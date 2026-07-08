@@ -52,5 +52,15 @@ pub fn deserialize_encapsulated_message(
     message: &[u8],
     num_blend_layers: NonZeroU64,
 ) -> Result<EncapsulatedMessage, Error> {
-    EncapsulatedMessage::decode(message, num_blend_layers)
+    // The message-crate decoder assumes a correctly-sized input, so the O(1) size
+    // gate that rejects malformed / wrongly-sized peer bytes up front — and the
+    // check that nothing is left over — live here, at the network boundary.
+    if message.len() as u64 != EncapsulatedMessage::expected_serialized_len(num_blend_layers) {
+        return Err(Error::MessageDeserializationFailed);
+    }
+    let (remaining, decoded) = EncapsulatedMessage::decode(message, num_blend_layers)?;
+    if !remaining.is_empty() {
+        return Err(Error::MessageDeserializationFailed);
+    }
+    Ok(decoded)
 }

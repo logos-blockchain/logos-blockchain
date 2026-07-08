@@ -16,9 +16,7 @@ use crate::{
         encapsulated::{EncapsulatedMessage, EncapsulatedPart, encode_message_components},
     },
     input::EncapsulationInput,
-    message::public_header::{
-        PublicHeader, PublicHeaderWithVerifiedSignature, VerifiedPublicHeader,
-    },
+    message::public_header::{PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
     reward::BlendingToken,
 };
 
@@ -88,10 +86,8 @@ impl EncapsulatedMessageWithVerifiedSignature {
     /// receiver can decode it as one.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        // All public-header variants encode to identical bytes; convert to the
-        // unverified form (a cheap copy) so encoding stays single-typed.
         encode_message_components(
-            &PublicHeader::from(self.public_header_with_verified_signature.clone()),
+            &self.public_header_with_verified_signature,
             &self.encapsulated_part,
         )
     }
@@ -208,12 +204,7 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     /// receiver can decode it as one.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        // All public-header variants encode to identical bytes; convert to the
-        // unverified form (a cheap copy) so encoding stays single-typed.
-        encode_message_components(
-            &PublicHeader::from(self.validated_public_header.clone()),
-            &self.encapsulated_part,
-        )
+        encode_message_components(&self.validated_public_header, &self.encapsulated_part)
     }
 
     /// Decapsulates the message using the provided key.

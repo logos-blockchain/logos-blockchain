@@ -4,7 +4,11 @@ use lb_key_management_system_keys::keys::{
 };
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::{Error, MessageIdentifier, codec::WireCodec, encap::ProofsVerifier};
+use crate::{
+    Error, MessageIdentifier,
+    codec::{WireDecode, WireDecodeError, WireEncode},
+    encap::ProofsVerifier,
+};
 
 const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
 
@@ -109,24 +113,22 @@ impl PublicHeader {
     }
 }
 
-impl WireCodec for PublicHeader {
-    type Context = ();
-
-    fn encoded_length((): Self::Context) -> usize {
-        PUBLIC_HEADER_ENCODED_SIZE
-    }
-
+impl WireEncode for PublicHeader {
     fn encode_into(&self, out: &mut Vec<u8>) {
         self.version.encode_into(out);
         self.signing_pubkey.encode_into(out);
         self.proof_of_quota.encode_into(out);
         self.signature.encode_into(out);
     }
+}
 
-    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), ()> {
+impl WireDecode for PublicHeader {
+    type Context = ();
+
+    fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
         let (input, version) = u8::decode(input, ())?;
         if version != LATEST_BLEND_MESSAGE_VERSION {
-            return Err(());
+            return Err(WireDecodeError::UnsupportedVersion);
         }
         let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
         let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
@@ -140,6 +142,29 @@ impl WireCodec for PublicHeader {
                 signature,
             },
         ))
+    }
+}
+
+// The verified public-header variants are never decoded from the wire (a peer's
+// bytes always decode into an unverified `PublicHeader`); they only need to
+// encode, and all three variants produce identical bytes. Implementing only
+// `WireEncode` for them means a verified message can be serialized directly,
+// with no conversion/copy through `PublicHeader`.
+impl WireEncode for PublicHeaderWithVerifiedSignature {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.version.encode_into(out);
+        self.signing_pubkey.encode_into(out);
+        self.proof_of_quota.encode_into(out);
+        self.signature.encode_into(out);
+    }
+}
+
+impl WireEncode for VerifiedPublicHeader {
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.version.encode_into(out);
+        self.signing_pubkey.encode_into(out);
+        self.proof_of_quota.as_ref().encode_into(out);
+        self.signature.encode_into(out);
     }
 }
 

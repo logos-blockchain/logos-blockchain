@@ -427,9 +427,10 @@ fn encode_decode_round_trip() {
         let message = EncapsulatedMessage::from(sample_message(num_layers as usize));
 
         let encoded = message.encode();
-        let decoded =
+        let (remaining, decoded) =
             EncapsulatedMessage::decode(&encoded, num_layers.try_into().unwrap()).unwrap();
 
+        assert!(remaining.is_empty(), "leftover bytes for {num_layers} layer(s)");
         assert_eq!(
             decoded, message,
             "round-trip mismatch for {num_layers} layer(s)"
@@ -451,18 +452,10 @@ fn wire_bytes_identical_across_message_types() {
     assert_eq!(unverified.encode(), bytes);
 }
 
-#[test]
-fn decode_rejects_wrong_layer_count() {
-    // A well-formed 3-layer message must be rejected in O(1) when a different
-    // layer count is expected, because its length no longer matches.
-    let encoded = EncapsulatedMessage::from(sample_message(3)).encode();
-    for expected_layers in [1u64, 2, 4] {
-        assert!(matches!(
-            EncapsulatedMessage::decode(&encoded, expected_layers.try_into().unwrap(),),
-            Err(Error::MessageDeserializationFailed)
-        ));
-    }
-}
+// Rejecting a message whose layer count differs from the expected one is now
+// the responsibility of the network-side size gate (it compares the received
+// length against `EncapsulatedMessage::expected_serialized_len`), covered by the
+// `blend-network` tests. `decode` itself assumes a correctly-sized input.
 
 fn generate_inputs(cnt: usize) -> (Vec<EncapsulationInput>, Vec<X25519PrivateKey>) {
     let recipient_signing_keys =
