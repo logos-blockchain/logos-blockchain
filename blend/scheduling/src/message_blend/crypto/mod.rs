@@ -10,7 +10,6 @@ use lb_blend_message::{
         },
     },
 };
-use lb_core::codec::SerializeOp;
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 pub mod core_and_leader;
@@ -39,24 +38,14 @@ pub struct EpochCryptographicProcessorSettings {
 pub fn serialize_encapsulated_message_with_verified_public_header(
     message: &EncapsulatedMessageWithVerifiedPublicHeader,
 ) -> Vec<u8> {
-    serialize_message(message)
+    message.encode()
 }
 
 #[must_use]
 pub fn serialize_encapsulated_message_with_verified_signature(
     message: &EncapsulatedMessageWithVerifiedSignature,
 ) -> Vec<u8> {
-    serialize_message(message)
-}
-
-fn serialize_message<Message>(message: &Message) -> Vec<u8>
-where
-    Message: SerializeOp,
-{
-    message
-        .to_bytes()
-        .expect("Message should be serializable")
-        .to_vec()
+    message.encode()
 }
 
 pub fn deserialize_encapsulated_message(

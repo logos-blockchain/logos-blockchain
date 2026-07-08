@@ -13,7 +13,7 @@ use crate::{
     encap::{
         ProofsVerifier,
         decapsulated::{DecapsulatedMessage, DecapsulationOutput, PartDecapsulationOutput},
-        encapsulated::{EncapsulatedMessage, EncapsulatedPart},
+        encapsulated::{EncapsulatedMessage, EncapsulatedPart, encode_message},
     },
     input::EncapsulationInput,
     message::public_header::{PublicHeaderWithVerifiedSignature, VerifiedPublicHeader},
@@ -79,6 +79,17 @@ impl EncapsulatedMessageWithVerifiedSignature {
     #[must_use]
     pub const fn id(&self) -> MessageIdentifier {
         self.public_header_with_verified_signature.id()
+    }
+
+    /// Serialize to the fixed-size, prefix-free wire format. Produces
+    /// byte-identical output to the equivalent [`EncapsulatedMessage`], so the
+    /// receiver can decode it as one.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        encode_message(
+            &self.public_header_with_verified_signature,
+            &self.encapsulated_part,
+        )
     }
 
     #[cfg(any(feature = "unsafe-test-functions", test))]
@@ -186,6 +197,14 @@ impl EncapsulatedMessageWithVerifiedPublicHeader {
     #[must_use]
     pub const fn id(&self) -> MessageIdentifier {
         self.validated_public_header.id()
+    }
+
+    /// Serialize to the fixed-size, prefix-free wire format. Produces
+    /// byte-identical output to the equivalent [`EncapsulatedMessage`], so the
+    /// receiver can decode it as one.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        encode_message(&self.validated_public_header, &self.encapsulated_part)
     }
 
     /// Decapsulates the message using the provided key.
