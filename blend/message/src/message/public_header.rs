@@ -2,10 +2,7 @@ use lb_blend_proofs::quota::{self, ProofOfQuota, VerifiedProofOfQuota};
 use lb_key_management_system_keys::keys::{Ed25519PublicKey, Ed25519Signature};
 use serde::{Deserialize, Deserializer, Serialize, de};
 
-use crate::{
-    Error, MessageIdentifier,
-    encap::{ProofsVerifier, WireCodec},
-};
+use crate::{Error, MessageIdentifier, codec::WireCodec, encap::ProofsVerifier};
 
 const LATEST_BLEND_MESSAGE_VERSION: u8 = 1;
 
@@ -102,6 +99,44 @@ impl PublicHeader {
     #[cfg(test)]
     pub const fn proof_of_quota_mut(&mut self) -> &mut ProofOfQuota {
         &mut self.proof_of_quota
+    }
+}
+
+impl WireCodec for PublicHeader {
+    type Context = ();
+
+    fn encoded_length(context: Self::Context) -> usize {
+        u8::encoded_length(())
+            .checked_add(Ed25519PublicKey::encoded_length(()))
+            .and_then(|len| len.checked_add(ProofOfQuota::encoded_length(())))
+            .and_then(|len| len.checked_add(Ed25519Signature::encoded_length(())))
+            .unwrap()
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.version.encode_into(out);
+        self.signing_pubkey.encode_into(out);
+        self.proof_of_quota.encode_into(out);
+        self.signature.encode_into(out);
+    }
+
+    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+        let (input, version) = u8::decode(input, ())?;
+        if version != LATEST_BLEND_MESSAGE_VERSION {
+            return Err(());
+        }
+        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
+        let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
+        let (input, signature) = Ed25519Signature::decode(input, ())?;
+        Ok((
+            input,
+            Self {
+                version,
+                signing_pubkey,
+                proof_of_quota,
+                signature,
+            },
+        ))
     }
 }
 

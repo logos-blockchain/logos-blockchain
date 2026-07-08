@@ -459,7 +459,7 @@ fn decode_rejects_wrong_layer_count() {
     for expected_layers in [1u64, 2, 4] {
         assert!(matches!(
             EncapsulatedMessage::decode(&encoded, expected_layers.try_into().unwrap(),),
-            Err(Error::UnexpectedMessageSize)
+            Err(Error::MessageDeserializationFailed)
         ));
     }
 }

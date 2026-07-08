@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 
-use crate::Error;
+use crate::{Error, codec::WireCodec};
 
 pub const MAX_PAYLOAD_BODY_SIZE: usize = 34 * 1024;
 
@@ -60,6 +60,27 @@ impl TryFrom<&[u8]> for PaddedPayloadBody {
             actual_len: body_len,
             padded,
         })
+    }
+}
+
+impl WireCodec for PaddedPayloadBody {
+    type Context = ();
+
+    fn encoded_length(context: Self::Context) -> usize {
+        MAX_PAYLOAD_BODY_SIZE
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.padded[..]);
+    }
+
+    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+        if input.len() < MAX_PAYLOAD_BODY_SIZE {
+            return Err(());
+        }
+        let (body_bytes, remaining) = input.split_at(MAX_PAYLOAD_BODY_SIZE);
+        let body = Self::try_from(body_bytes).map_err(|_| ())?;
+        Ok((remaining, body))
     }
 }
 

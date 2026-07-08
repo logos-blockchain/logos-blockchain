@@ -9,7 +9,7 @@ use lb_key_management_system_keys::keys::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::crypto::domains;
+use crate::{codec::WireCodec, crypto::domains};
 
 /// A blending header that is fully decapsulated.
 /// This must be encapsulated when being sent to the blend network.
@@ -60,4 +60,44 @@ impl BlendingHeader {
 
 fn concat(a: &[u8], b: &[u8]) -> Vec<u8> {
     a.iter().chain(b.iter()).copied().collect::<Vec<_>>()
+}
+
+impl WireCodec for BlendingHeader {
+    type Context = ();
+
+    fn encoded_length(context: Self::Context) -> usize {
+        Ed25519PublicKey::encoded_length(())
+            .checked_add(ProofOfQuota::encoded_length(()))
+            .and_then(|len| len.checked_add(Ed25519Signature::encoded_length(())))
+            .and_then(|len| len.checked_add(ProofOfSelection::encoded_length(())))
+            .and_then(|len| len.checked_add(bool::encoded_length(())))
+            .expect("BlendingHeader encoded length overflow")
+    }
+
+    fn encode_into(&self, out: &mut Vec<u8>) {
+        self.signing_pubkey.encode_into(out);
+        self.proof_of_quota.encode_into(out);
+        self.signature.encode_into(out);
+        self.proof_of_selection.encode_into(out);
+        self.is_last.encode_into(out);
+    }
+
+    fn decode(input: &[u8], context: Self::Context) -> Result<(&[u8], Self), ()> {
+        let (input, signing_pubkey) = Ed25519PublicKey::decode(input, ())?;
+        let (input, proof_of_quota) = ProofOfQuota::decode(input, ())?;
+        let (input, signature) = Ed25519Signature::decode(input, ())?;
+        let (input, proof_of_selection) = ProofOfSelection::decode(input, ())?;
+        let (input, is_last) = bool::decode(input, ())?;
+
+        Ok((
+            input,
+            Self {
+                signing_pubkey,
+                proof_of_quota,
+                signature,
+                proof_of_selection,
+                is_last,
+            },
+        ))
+    }
 }
