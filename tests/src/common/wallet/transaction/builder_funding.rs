@@ -332,3 +332,73 @@ fn funding_delta_for_chunked_builder(
         .and_then(|delta| delta.checked_sub(i128::try_from(gas_cost).expect("Gas fits in i128")))
         .expect("Chunked funding delta must fit in i128"))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use lb_core::mantle::{
+        ops::channel::{
+            ChannelId, MsgId,
+            inscribe::{Inscription, InscriptionOp},
+        },
+        transactions::{GasPrices, MantleTxGasContext},
+    };
+    use lb_key_management_system_service::keys::Ed25519Key;
+    use lb_testing_framework::configs::wallet::WalletAccount;
+
+    use super::*;
+
+    #[test]
+    fn zero_cost_wallet_transaction_still_uses_funding_input() {
+        let signing_key = Ed25519Key::from_bytes(&[0u8; 32]);
+        let context = MantleTxContext {
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
+            leader_reward_amount: 0,
+        };
+        let tx_builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(InscriptionOp {
+                channel_id: ChannelId::from([0xAA; 32]),
+                inscription: Inscription::new_unchecked(vec![0xab; 1024]),
+                parent: MsgId::root(),
+                signer: signing_key.public_key(),
+            }))
+            .expect("inscription test builder should fit op bounds");
+        assert_eq!(
+            tx_builder
+                .funding_delta::<MainnetGasConstants>(&context)
+                .expect("zero-gas inscription funding delta should calculate"),
+            0
+        );
+
+        let account = WalletAccount::deterministic(1, 2_000_000, false)
+            .expect("test wallet account should build");
+        let funding_utxo = Utxo::new([7u8; 32], 0, Note::new(2_000_000, account.public_key()));
+        let funding_source = WalletFundingSource::new(account, vec![funding_utxo]);
+
+        let funded_builder = fund_unsponsored_wallet_transaction(
+            &tx_builder,
+            funding_source.into_funding_utxos(),
+            &context,
+        )
+        .expect("zero-cost wallet transaction should still select a funding input");
+
+        assert_eq!(funded_builder.ledger_inputs(), &[funding_utxo]);
+        assert_eq!(
+            funded_builder
+                .funding_delta::<MainnetGasConstants>(&context)
+                .expect("funded inscription delta should calculate"),
+            0
+        );
+
+        let funded_tx = funded_builder.build().expect("funded builder should build");
+        let Some(Op::Transfer(transfer)) = funded_tx.ops().last() else {
+            panic!("wallet funding should leave a transfer op at the end");
+        };
+        assert!(!transfer.inputs.is_empty());
+    }
+}
