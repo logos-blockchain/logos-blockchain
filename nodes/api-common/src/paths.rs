@@ -34,6 +34,7 @@ pub mod wallet {
     pub const TRANSACTIONS_TRANSFER_FUNDS: &str = "/wallet/transactions/transfer-funds";
     pub const SIGN_TX_ED25519: &str = "/wallet/sign/ed25519";
     pub const SIGN_TX_ZK: &str = "/wallet/sign/zk";
+    pub const FUND: &str = "/wallet/fund";
 }
 
 pub mod admin {

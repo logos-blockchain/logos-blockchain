@@ -50,13 +50,18 @@
                 respDiv.style.display = 'block';
                 
                 if (response.ok) {
-                    const data = JSON.parse(text); 
-                    const hash = data.hash;
-
                     respDiv.className = 'success';
                     respDiv.innerHTML = `
-                        <strong>Success!</strong><br>
-                        <p>Transaction hash: <code>${hash.substring(0, 8)}...</code></p>
+                        <strong>Request queued!</strong><br>
+                        <p>Your funds are on the way and should arrive within a few blocks.</p>
+                    `;
+                } else if (response.status === 429) {
+                    const data = JSON.parse(text);
+
+                    respDiv.className = 'error';
+                    respDiv.innerHTML = `
+                        <strong>Cooldown active</strong><br>
+                        <p>Please wait ${data.retry_after_secs} seconds before requesting again.</p>
                     `;
                 } else {
                     respDiv.className = 'error';

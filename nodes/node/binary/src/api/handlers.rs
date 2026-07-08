@@ -26,7 +26,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        Op, SignedMantleTx, Transaction, TxHash, ops::channel::ChannelId,
+        Op, OpProof, SignedMantleTx, Transaction, TxHash, ops::channel::ChannelId,
         transactions::MantleTxBuilder,
     },
 };
@@ -1568,9 +1568,12 @@ where
 }
 
 pub mod wallet {
-    use lb_http_api_common::bodies::wallet::sign::{
-        WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody, WalletSignTxZkRequestBody,
-        WalletSignTxZkResponseBody,
+    use lb_http_api_common::bodies::wallet::{
+        fund::{WalletFundRequestBody, WalletFundResponseBody},
+        sign::{
+            WalletSignTxEd25519RequestBody, WalletSignTxEd25519ResponseBody,
+            WalletSignTxZkRequestBody, WalletSignTxZkResponseBody,
+        },
     };
     use lb_key_management_system_service::keys::ZkPublicKey;
 
@@ -1873,6 +1876,105 @@ pub mod wallet {
 
             let sig = wallet.sign_tx_with_zk(req.tx_hash, req.pks).await?;
             Ok::<_, DynError>(WalletSignTxZkResponseBody { sig })
+        })
+    }
+
+    #[utoipa::path(
+        post,
+        path = paths::wallet::FUND,
+        responses(
+            (status = 200, description = "Funded transaction with fee transfer proof"),
+            (status = 500, description = "Internal server error", body = String),
+        )
+    )]
+    pub async fn fund<WalletService, StorageAdapter, RuntimeServiceId>(
+        State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+        Json(req): Json<WalletFundRequestBody>,
+    ) -> Response
+    where
+        WalletService: WalletServiceData,
+        StorageAdapter: lb_tx_service::storage::MempoolStorageAdapter<
+                RuntimeServiceId,
+                Item = SignedMantleTx,
+                Key = <SignedMantleTx as Transaction>::Hash,
+            > + Send
+            + Sync
+            + Clone
+            + 'static,
+        StorageAdapter::Error: Debug,
+        RuntimeServiceId: Debug
+            + Display
+            + Send
+            + Sync
+            + 'static
+            + AsServiceId<WalletService>
+            + AsServiceId<
+                TxMempoolService<
+                    MempoolNetworkAdapter<
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        RuntimeServiceId,
+                    >,
+                    Mempool<
+                        HeaderId,
+                        SignedMantleTx,
+                        <SignedMantleTx as Transaction>::Hash,
+                        StorageAdapter,
+                        RuntimeServiceId,
+                    >,
+                    StorageAdapter,
+                    RuntimeServiceId,
+                >,
+            >,
+    {
+        make_request_and_return_response!(async {
+            let wallet = WalletApi::<WalletService, RuntimeServiceId>::new(
+                handle.relay::<WalletService>().await?,
+            );
+
+            let lb_wallet_service::TipResponse {
+                tip,
+                response: funded_tx_builder,
+            } = wallet
+                .fund_tx(
+                    req.tip,
+                    req.tx_builder,
+                    req.change_public_key,
+                    req.funding_public_keys,
+                )
+                .await?;
+
+            let tx_fee = funded_tx_builder.tx_fee()?;
+            if tx_fee > req.max_tx_fee {
+                return Err(overwatch::DynError::from(format!(
+                    "tx_fee({tx_fee}) exceeds max_tx_fee({})",
+                    req.max_tx_fee
+                )));
+            }
+
+            // Owners of the funding inputs, in input order — the ledger
+            // verifies the transfer proof against this exact list.
+            let funding_note_pks: Vec<ZkPublicKey> = funded_tx_builder
+                .ledger_inputs()
+                .iter()
+                .map(|utxo| utxo.note.pk)
+                .collect();
+
+            let funded_tx = funded_tx_builder.build()?;
+            let transfer_proof = if funding_note_pks.is_empty() {
+                None
+            } else {
+                let tx_hash = funded_tx.hash();
+                Some(OpProof::ZkSig(
+                    wallet.sign_tx_with_zk(tx_hash, funding_note_pks).await?,
+                ))
+            };
+
+            Ok::<_, DynError>(WalletFundResponseBody {
+                tip,
+                funded_tx,
+                transfer_proof,
+            })
         })
     }
 }

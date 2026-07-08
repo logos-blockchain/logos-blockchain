@@ -4574,6 +4574,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-node",
  "reqwest",
+ "serde_json",
  "serde_yaml",
  "tokio",
 ]
@@ -5016,6 +5017,7 @@ name = "logos-blockchain-tests"
 version = "0.0.0"
 dependencies = [
  "async-trait",
+ "axum",
  "bincode",
  "cucumber",
  "derivative",
@@ -5030,6 +5032,7 @@ dependencies = [
  "logos-blockchain-common-http-client",
  "logos-blockchain-config",
  "logos-blockchain-core",
+ "logos-blockchain-faucet",
  "logos-blockchain-groth16",
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",

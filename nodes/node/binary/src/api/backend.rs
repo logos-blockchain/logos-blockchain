@@ -346,6 +346,10 @@ where
                 routing::post(wallet::sign_tx_zk::<WalletService, MempoolStorageAdapter, _>),
             )
             .route(
+                paths::wallet::FUND,
+                routing::post(wallet::fund::<WalletService, MempoolStorageAdapter, _>),
+            )
+            .route(
                 paths::admin::TRACING_FILTER,
                 routing::put(reload_tracing_filter::<RuntimeServiceId>),
             );

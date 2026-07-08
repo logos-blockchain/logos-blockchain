@@ -19,8 +19,9 @@ lb-http-api-common            = { workspace = true }
 lb-key-management-system-keys = { workspace = true }
 lb-node                       = { workspace = true }
 reqwest                       = { workspace = true }
+serde_json                    = { workspace = true }
 serde_yaml                    = { workspace = true }
-tokio                         = { features = ["macros", "net", "rt-multi-thread"], workspace = true }
+tokio                         = { features = ["macros", "net", "rt-multi-thread", "sync", "time"], workspace = true }
 
 [lints]
 workspace = true

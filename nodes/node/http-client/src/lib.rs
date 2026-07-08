@@ -21,6 +21,7 @@ use lb_http_api_common::{
         wallet::{
             balance::WalletBalanceResponseBody,
             claimable_vouchers::WalletClaimableVouchersResponseBody,
+            fund::{WalletFundRequestBody, WalletFundResponseBody},
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
@@ -28,7 +29,7 @@ use lb_http_api_common::{
         BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
         BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS,
         MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
-        wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
+        wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
@@ -577,6 +578,23 @@ impl CommonHttpClient {
     ) -> Result<WalletTransferFundsResponseBody, Error> {
         let request_url = base_url
             .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Post a request to fund a transaction from the node's wallet.
+    ///
+    /// The node adds fee inputs and change from its own wallet, signs only
+    /// the appended fee transfer, and returns the funded (still unsigned)
+    /// transaction together with the transfer proof.
+    pub async fn fund_tx(
+        &self,
+        base_url: Url,
+        body: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error> {
+        let request_url = base_url
+            .join(FUND.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await
