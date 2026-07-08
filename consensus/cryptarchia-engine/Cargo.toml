@@ -27,5 +27,8 @@ time       = { workspace = true }
 tokio      = { features = ["time"], optional = true, workspace = true }
 tracing    = { workspace = true }
 
+[dev-dependencies]
+serde_json = { workspace = true }
+
 [features]
 tokio = ["dep:tokio"]
