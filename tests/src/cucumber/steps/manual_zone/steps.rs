@@ -269,6 +269,10 @@ async fn step_publish_zone_messages_for_sequencer(
 #[cucumber::then(
     expr = "publishing zone message with data {string} via sequencer {string} fails while the node is down"
 )]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
 async fn step_publish_fails_while_node_down(
     world: &mut CucumberWorld,
     step: &Step,

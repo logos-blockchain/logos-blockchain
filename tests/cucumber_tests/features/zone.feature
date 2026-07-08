@@ -587,10 +587,10 @@ Feature: Zone SDK
       | MSG_2 |
     And I stop all nodes
 
-  # Ignored at non-zero gas prices: this flow uses the manual `prepare_tx`
-  # path, which deliberately builds fee-less transactions until prepare-time
-  # funding lands (see the zone-sdk funding PR). Restore @zone_ci with that
-  # follow-up.
+  # Ignored: this flow uses the manual `prepare_tx` path, which builds
+  # fee-less transactions — valid only while gas prices are zero and broken
+  # once they go non-zero. Kept out of @zone_ci so the gas-price flip needs
+  # no test changes; restore @zone_ci when prepare-time funding lands.
   @zone_prepare_flow_pending_funding
   # [tests/src/tests/zone_sdk/e2e.rs] test_subscribe_to_finalized_withdraw
   Scenario: Finalized withdraws are returned by the zone indexer and sequencer

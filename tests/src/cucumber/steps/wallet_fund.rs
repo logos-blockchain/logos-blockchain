@@ -99,11 +99,18 @@ async fn step_fund_payment_transaction(
     Ok(())
 }
 
-/// Fund an inscription-only transaction: at non-zero gas prices the node
-/// appends a fee transfer paid from its wallet and returns the transfer
-/// proof. The caller signs the channel op over the FUNDED hash and
-/// assembles the proofs in op order — the full split-signing flow a zone
-/// sequencer uses.
+/// Genesis gas prices on this branch are zero, so funding an inscription is
+/// a no-op (no fee transfer appended, no transfer proof returned). The
+/// non-zero-genesis-gas-price PR flips this to `true`, which switches the
+/// step to expect a `[inscribe, fee transfer]` transaction with the wallet's
+/// transfer proof.
+const GENESIS_GAS_PRICES_NONZERO: bool = false;
+
+/// Fund an inscription-only transaction. The expected funding shape is
+/// pinned by [`GENESIS_GAS_PRICES_NONZERO`]: a no-op at zero gas prices, an
+/// appended fee transfer plus proof at non-zero prices. Either way the
+/// caller signs the channel op over the FUNDED hash and assembles the
+/// proofs in op order — the split-signing flow a zone sequencer uses.
 #[when(expr = "I fund an inscription transaction on node {string} as {string}")]
 async fn step_fund_inscription_transaction(
     world: &mut CucumberWorld,
@@ -146,40 +153,60 @@ async fn step_fund_inscription_transaction(
 
     let response = fund_via_node(&client, step, tx_builder, funding_pk).await?;
 
-    let Some(transfer_proof) = response.transfer_proof else {
-        return Err(StepError::LogicalError {
-            message: format!(
-                "Step `{}` error: funding an inscription at non-zero gas prices must return a \
-                transfer proof",
-                step.value
-            ),
-        });
-    };
-    let ops = response.funded_tx.ops();
-    if ops.len() != 2
-        || !matches!(ops[0], Op::ChannelInscribe(_))
-        || !matches!(ops[1], Op::Transfer(_))
-    {
-        return Err(StepError::LogicalError {
-            message: format!(
-                "Step `{}` error: funded inscription must be [inscribe, fee transfer], got {} ops",
-                step.value,
-                ops.len()
-            ),
-        });
-    }
-
     let tx_hash = response.funded_tx.hash();
     let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-    let signed_tx = SignedMantleTx::new(
-        response.funded_tx,
-        vec![OpProof::Ed25519Sig(signature), transfer_proof],
-    )
-    .map_err(|source| StepError::LogicalError {
-        message: format!(
-            "Step `{}` error: assembling the funded transaction failed: {source:?}",
-            step.value
-        ),
+    let ops = response.funded_tx.ops();
+    let ops_proofs = if GENESIS_GAS_PRICES_NONZERO {
+        if ops.len() != 2
+            || !matches!(ops[0], Op::ChannelInscribe(_))
+            || !matches!(ops[1], Op::Transfer(_))
+        {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Step `{}` error: at non-zero gas prices the funded inscription must be \
+                    [inscribe, fee transfer], got {} ops",
+                    step.value,
+                    ops.len()
+                ),
+            });
+        }
+        let Some(transfer_proof) = response.transfer_proof else {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Step `{}` error: at non-zero gas prices funding must return a transfer proof",
+                    step.value
+                ),
+            });
+        };
+        vec![OpProof::Ed25519Sig(signature), transfer_proof]
+    } else {
+        if response.transfer_proof.is_some() {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Step `{}` error: at zero gas prices funding must be a no-op without a \
+                    transfer proof",
+                    step.value
+                ),
+            });
+        }
+        if ops.len() != 1 {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "Step `{}` error: at zero gas prices funding must keep the single op, got {}",
+                    step.value,
+                    ops.len()
+                ),
+            });
+        }
+        vec![OpProof::Ed25519Sig(signature)]
+    };
+    let signed_tx = SignedMantleTx::new(response.funded_tx, ops_proofs).map_err(|source| {
+        StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: assembling the funded transaction failed: {source:?}",
+                step.value
+            ),
+        }
     })?;
 
     world
