@@ -301,11 +301,23 @@ impl CommonHttpClient {
         self.get::<(), ChainServiceInfo>(request_url, None).await
     }
 
-    /// Get the current gas prices from the ledger state at the tip.
-    pub async fn gas_prices(&self, base_url: Url) -> Result<GasPricesResponseBody, Error> {
-        let request_url = base_url
+    /// Get the gas prices from the ledger state at `tip`, or at the current
+    /// tip when `tip` is `None`.
+    pub async fn gas_prices(
+        &self,
+        base_url: Url,
+        tip: Option<HeaderId>,
+    ) -> Result<GasPricesResponseBody, Error> {
+        let mut request_url = base_url
             .join(MANTLE_GAS_PRICES.trim_start_matches('/'))
             .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
         self.get::<(), GasPricesResponseBody>(request_url, None)
             .await
     }

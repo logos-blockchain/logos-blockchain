@@ -1,9 +1,12 @@
 use std::str::FromStr;
 
 use cucumber::{Parameter, gherkin::Step, then};
-use lb_core::mantle::{
-    gas::GasPrice,
-    transactions::genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+use lb_core::{
+    header::HeaderId,
+    mantle::{
+        gas::GasPrice,
+        transactions::genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+    },
 };
 use tracing::info;
 
@@ -56,6 +59,43 @@ async fn step_gas_prices_equal_reference(
         world,
         step,
         &node_name,
+        None,
+        expected_execution,
+        expected_storage,
+    )
+    .await
+}
+
+#[then(
+    expr = "gas prices on node {string} at the genesis block equal the {gas_prices_reference} \
+            gas prices"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "cucumber step entrypoints must take `&mut World`"
+)]
+async fn step_gas_prices_at_genesis_equal_reference(
+    world: &mut CucumberWorld,
+    step: &Step,
+    node_name: String,
+    reference: GasPricesReference,
+) -> StepResult {
+    let genesis_block_id = world
+        .genesis_block_id
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Step `{}` error: genesis block id is not available for this cluster",
+                step.value
+            ),
+        })?;
+
+    let (expected_execution, expected_storage) = reference.expected();
+
+    assert_gas_prices(
+        world,
+        step,
+        &node_name,
+        Some(genesis_block_id),
         expected_execution,
         expected_storage,
     )
@@ -78,6 +118,7 @@ async fn step_gas_prices_are(
         world,
         step,
         &node_name,
+        None,
         GasPrice::new(execution),
         GasPrice::new(storage),
     )
@@ -88,13 +129,14 @@ async fn assert_gas_prices(
     world: &CucumberWorld,
     step: &Step,
     node_name: &str,
+    tip: Option<HeaderId>,
     expected_execution: GasPrice,
     expected_storage: GasPrice,
 ) -> StepResult {
     let client = world.resolve_node_http_client(node_name)?;
 
     let gas_prices = client
-        .gas_prices()
+        .gas_prices(tip)
         .await
         .map_err(|source| StepError::StepFail {
             message: format!(
