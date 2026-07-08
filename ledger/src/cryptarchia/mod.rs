@@ -1063,7 +1063,9 @@ pub mod tests {
         let mut zk_key = [0u8; 16];
         thread_rng().fill_bytes(&mut zk_key);
         let zk_key: ZkKey = fr_from_bytes(&zk_key).unwrap().into();
-        let signing_key = Ed25519Key::from_bytes(&[0; 32]);
+        let mut signing_key_bytes = [0u8; 32];
+        thread_rng().fill_bytes(&mut signing_key_bytes);
+        let signing_key = Ed25519Key::from_bytes(&signing_key_bytes);
         let declare_op = SDPDeclareOp {
             service_type: ServiceType::BlendNetwork,
             locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
