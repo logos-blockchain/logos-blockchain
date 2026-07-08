@@ -18,6 +18,7 @@ use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{
         MantleTx, SignedMantleTx, Transaction as _, TxHash,
+        nom::NomEncode as _,
         ops::{
             Op, OpProof,
             channel::{
@@ -25,7 +26,7 @@ use logos_blockchain_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::codec::{decode_signed_mantle_tx, encode_mantle_tx, encode_signed_mantle_tx},
+        transactions::codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
     },
 };
 
@@ -84,7 +85,7 @@ fn blake2b(inputs: &[&[u8]]) -> [u8; 32] {
 #[divan::bench(args = SIZES)]
 fn bench_encode_mantle_tx(bencher: Bencher, size: usize) {
     let tx = make_inscription_tx(size);
-    bencher.bench_local(|| black_box(encode_mantle_tx(&tx)));
+    bencher.bench_local(|| black_box(tx.encode()));
 }
 
 // Poseidon2 hash directly over payload field-elements.
@@ -103,7 +104,7 @@ fn bench_blake2b_poseidon2_hash(bencher: Bencher, size: usize) {
         .bench_values(|tx: MantleTx| {
             // Encoding is included here to compare fairly with the Poseidon2 hash function,
             // which includes it.
-            let encoded = encode_mantle_tx(&tx);
+            let encoded = tx.encode();
             let digest = blake2b(&[encoded.as_slice()]);
             let frs: Vec<Fr> = digest
                 .chunks(GROTH16_SAFE_BYTES_SIZE)

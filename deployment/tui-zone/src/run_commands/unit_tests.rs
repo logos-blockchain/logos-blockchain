@@ -9,15 +9,13 @@ mod tests {
     use lb_core::mantle::{
         MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo, Value,
         ledger::{Inputs, Outputs},
+        nom::NomEncode as _,
         ops::channel::{
             ChannelId, MsgId,
             inscribe::{Inscription, InscriptionOp},
             withdraw::ChannelWithdrawOp,
         },
-        transactions::{
-            Ops,
-            codec::{encode_mantle_tx, encode_signed_mantle_tx},
-        },
+        transactions::{Ops, codec::encode_signed_mantle_tx},
     };
     use lb_groth16::{Fr, fr_to_bytes};
     use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey};
@@ -115,7 +113,7 @@ mod tests {
     #[test]
     fn mantle_tx_decoders_reject_trailing_bytes_and_hash_mismatches() {
         let tx = empty_mantle_tx();
-        let encoded = hex::encode(encode_mantle_tx(&tx));
+        let encoded = hex::encode(tx.encode());
         assert_eq!(decode_mantle_tx_hex(&encoded).unwrap(), tx);
         assert!(decode_mantle_tx_hex(&format!("{encoded}00")).is_err());
 
@@ -251,7 +249,7 @@ mod tests {
             tx_hash: hex::encode(tx_hash.as_ref()),
             msg_id: hex::encode(msg_id.as_ref()),
             required_threshold: 1,
-            mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+            mantle_tx: hex::encode(tx.encode()),
             inscription_signature: encode_hex_bincode(
                 &inscriber.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
@@ -319,7 +317,7 @@ mod tests {
             tx_hash: hex::encode(tx.hash().as_ref()),
             msg_id: hex::encode(MsgId::root().as_ref()),
             required_threshold: 1,
-            mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+            mantle_tx: hex::encode(tx.encode()),
             inscription_signature: encode_hex_bincode(
                 &test_signing_key(4).sign_payload(tx.hash().as_signing_bytes().as_ref()),
             )
@@ -367,7 +365,7 @@ mod tests {
             tx_hash: hex::encode(tx_hash.as_ref()),
             msg_id: hex::encode(MsgId::root().as_ref()),
             required_threshold: 2,
-            mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+            mantle_tx: hex::encode(tx.encode()),
             inscription_signature: encode_hex_bincode(
                 &signer.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )
@@ -442,7 +440,7 @@ mod tests {
             tx_hash: hex::encode(tx_hash.as_ref()),
             msg_id: hex::encode(MsgId::root().as_ref()),
             required_threshold: 1,
-            mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+            mantle_tx: hex::encode(tx.encode()),
             inscription_signature: encode_hex_bincode(
                 &signer.sign_payload(tx_hash.as_signing_bytes().as_ref()),
             )

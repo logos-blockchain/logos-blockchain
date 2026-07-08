@@ -5,6 +5,7 @@ use std::{
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
+use lb_core_macros::NomCodec;
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -15,6 +16,7 @@ use crate::{
         AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
         channel::Channels,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
+        nom::{NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
             channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
@@ -23,8 +25,7 @@ use crate::{
         transactions::{
             Ops,
             codec::{
-                decode_mantle_tx, decode_signed_mantle_tx, encode_mantle_tx,
-                encode_signed_mantle_tx, predict_signed_mantle_tx_size,
+                decode_signed_mantle_tx, encode_signed_mantle_tx, predict_signed_mantle_tx_size,
             },
             genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
         },
@@ -173,7 +174,7 @@ impl MantleTxGasContext {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, NomCodec)]
 pub struct MantleTx(pub Ops);
 
 impl From<MantleTxDeSerImpl> for MantleTx {
@@ -197,7 +198,7 @@ impl Serialize for MantleTx {
             let tx_deser: MantleTxDeSerImpl = self.clone().into();
             tx_deser.serialize(serializer)
         } else {
-            let bytes = encode_mantle_tx(self);
+            let bytes = self.encode();
             serializer.serialize_bytes(&bytes)
         }
     }
@@ -212,7 +213,7 @@ impl<'de> Deserialize<'de> for MantleTx {
             <MantleTxDeSerImpl as Deserialize>::deserialize(deserializer).map(Into::into)
         } else {
             let bytes: Vec<u8> = <Vec<u8>>::deserialize(deserializer)?;
-            decode_mantle_tx(&bytes)
+            Self::decode(&bytes)
                 .map(|(_, tx)| tx)
                 .map_err(serde::de::Error::custom)
         }
@@ -292,7 +293,7 @@ impl Transaction for MantleTx {
         // constant and structure as defined in the Mantle specification:
         // https://www.notion.so/nomos-tech/v1-3-Mantle-Specification-31e261aa09df818f9327ee87e5a6d433#31e261aa09df80aea7cff4eb98d61b6e
         let mut buffer = MANTLE_TXHASH_V1_BYTES.to_vec();
-        buffer.extend(encode_mantle_tx(self));
+        buffer.extend(self.encode());
         buffer
     }
 }

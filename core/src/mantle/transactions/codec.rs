@@ -10,21 +10,14 @@ use crate::{
         MantleTx, Op, SignedMantleTx,
         nom::{NomDecode as _, NomEncode as _},
         ops::codec::{decode_ops_proofs, encode_ops_proofs},
-        transactions::{MantleTxGasContext, Ops},
+        transactions::MantleTxGasContext,
     },
     proofs::channel_multi_sig_proof::codec::calculate_channel_multi_sig_proof_byte_size,
 };
 
-pub fn decode_mantle_tx(input: &[u8]) -> IResult<&[u8], MantleTx> {
-    // MantleTx = Ops ExecutionGasPrice StorageGasPrice
-    let (input, ops) = Ops::decode(input)?;
-
-    Ok((input, MantleTx(ops)))
-}
-
 pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
     // SignedMantleTx = MantleTx OpsProofs
-    let (input, mantle_tx) = decode_mantle_tx(input)?;
+    let (input, mantle_tx) = MantleTx::decode(input)?;
     let (input, ops_proofs) = decode_ops_proofs(input, mantle_tx.ops())?;
 
     let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs)
@@ -34,21 +27,16 @@ pub fn decode_signed_mantle_tx(input: &[u8]) -> IResult<&[u8], SignedMantleTx> {
 }
 
 #[must_use]
-pub fn encode_mantle_tx(tx: &MantleTx) -> Vec<u8> {
-    tx.ops().encode()
-}
-
-#[must_use]
 pub fn encode_signed_mantle_tx(tx: &SignedMantleTx) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend(encode_mantle_tx(&tx.mantle_tx));
+    bytes.extend(tx.mantle_tx.encode());
     bytes.extend(encode_ops_proofs(&tx.ops_proofs, tx.mantle_tx.ops()));
     bytes
 }
 
 #[must_use]
 pub fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext) -> usize {
-    let mantle_tx_size = encode_mantle_tx(tx).len();
+    let mantle_tx_size = tx.encode().len();
 
     let ops_proofs_size = tx
         .ops()
@@ -113,15 +101,14 @@ mod tests {
                 channel::{
                     ChannelId, MsgId,
                     config::{ChannelConfigOp, Keys},
-                    inscribe,
-                    inscribe::{Inscription, InscriptionOp},
+                    inscribe::{self, Inscription, InscriptionOp},
                     withdraw::ChannelWithdrawOp,
                 },
                 leader_claim::{LeaderClaimOp, RewardsRoot, VoucherNullifier},
                 sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
                 transfer::TransferOp,
             },
-            transactions::GasPrices,
+            transactions::{GasPrices, Ops},
         },
         proofs::{
             channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
@@ -191,14 +178,15 @@ mod tests {
     #[test]
     fn test_decode_signed_mantle_tx_with_inscribe() {
         let signing_key = Ed25519Key::from_bytes(&[4u8; 32]);
-        let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelInscribe(
-            InscriptionOp {
+        let mantle_tx = MantleTx(
+            [Op::ChannelInscribe(InscriptionOp {
                 channel_id: ChannelId::from([0xAA; 32]),
                 inscription: b"hello".into(),
                 parent: MsgId::from([0xBB; 32]),
                 signer: signing_key.public_key(),
-            },
-        )]));
+            })]
+            .into(),
+        );
 
         let txhash = mantle_tx.hash();
         let inscribe_sig =
@@ -348,10 +336,10 @@ mod tests {
         let original_tx = MantleTx(Ops::new_unchecked(vec![]));
 
         // Encode
-        let encoded = encode_mantle_tx(&original_tx);
+        let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = decode_mantle_tx(&encoded).unwrap();
+        let (remaining, decoded_tx) = MantleTx::decode(&encoded).unwrap();
 
         // Verify
         assert!(remaining.is_empty());
@@ -369,10 +357,10 @@ mod tests {
         let original_tx = MantleTx(Ops::new_unchecked(vec![Op::Transfer(transfer_op)]));
 
         // Encode
-        let encoded = encode_mantle_tx(&original_tx);
+        let encoded = original_tx.encode();
 
         // Decode
-        let (remaining, decoded_tx) = decode_mantle_tx(&encoded).unwrap();
+        let (remaining, decoded_tx) = MantleTx::decode(&encoded).unwrap();
 
         // Verify
         assert!(remaining.is_empty());
