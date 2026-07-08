@@ -179,7 +179,7 @@ pub struct MantleTx(pub Ops);
 
 impl StorageSize for MantleTx {
     fn storage_size(&self) -> usize {
-        encode_mantle_tx(self).len()
+        self.encode().len()
     }
 }
 
