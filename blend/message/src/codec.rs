@@ -37,13 +37,13 @@ pub trait WireEncode {
     fn encode_into(&self, out: &mut Vec<u8>);
 }
 
-/// Decode a message component from the front of `input`, returning the value and
-/// the unconsumed remainder (`(rest, value)`, as in `nom`).
+/// Decode a message component from the front of `input`, returning the value
+/// and the unconsumed remainder (`(rest, value)`, as in `nom`).
 ///
 /// Implementations do not check `input`'s length — the caller guarantees it is
-/// large enough (see [`WireDecodeError`]). `Context` carries anything the decoder
-/// needs that is not on the wire (e.g. the layer count); `()` for self-describing
-/// fixed-size components.
+/// large enough (see [`WireDecodeError`]). `Context` carries anything the
+/// decoder needs that is not on the wire (e.g. the layer count); `()` for
+/// self-describing fixed-size components.
 pub trait WireDecode: Sized {
     type Context;
 
@@ -110,9 +110,11 @@ impl WireDecode for Ed25519PublicKey {
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
         let (key_bytes, remaining) = input.split_at(ED25519_PUBLIC_KEY_SIZE);
-        let key_array: [u8; ED25519_PUBLIC_KEY_SIZE] =
-            key_bytes.try_into().expect("split_at guarantees the length");
-        let public_key = Self::from_bytes(&key_array).map_err(|_| WireDecodeError::InvalidPublicKey)?;
+        let key_array: [u8; ED25519_PUBLIC_KEY_SIZE] = key_bytes
+            .try_into()
+            .expect("split_at guarantees the length");
+        let public_key =
+            Self::from_bytes(&key_array).map_err(|_| WireDecodeError::InvalidPublicKey)?;
         Ok((remaining, public_key))
     }
 }
@@ -128,9 +130,11 @@ impl WireDecode for ProofOfQuota {
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
         let (proof_bytes, remaining) = input.split_at(PROOF_OF_QUOTA_SIZE);
-        let proof_array: [u8; PROOF_OF_QUOTA_SIZE] =
-            proof_bytes.try_into().expect("split_at guarantees the length");
-        let proof = Self::try_from(proof_array).map_err(|_| WireDecodeError::InvalidProofOfQuota)?;
+        let proof_array: [u8; PROOF_OF_QUOTA_SIZE] = proof_bytes
+            .try_into()
+            .expect("split_at guarantees the length");
+        let proof =
+            Self::try_from(proof_array).map_err(|_| WireDecodeError::InvalidProofOfQuota)?;
         Ok((remaining, proof))
     }
 }
@@ -146,8 +150,9 @@ impl WireDecode for ProofOfSelection {
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
         let (proof_bytes, remaining) = input.split_at(PROOF_OF_SELECTION_SIZE);
-        let proof_array: [u8; PROOF_OF_SELECTION_SIZE] =
-            proof_bytes.try_into().expect("split_at guarantees the length");
+        let proof_array: [u8; PROOF_OF_SELECTION_SIZE] = proof_bytes
+            .try_into()
+            .expect("split_at guarantees the length");
         let proof =
             Self::try_from(proof_array).map_err(|_| WireDecodeError::InvalidProofOfSelection)?;
         Ok((remaining, proof))
@@ -165,8 +170,9 @@ impl WireDecode for Ed25519Signature {
 
     fn decode(input: &[u8], (): Self::Context) -> Result<(&[u8], Self), WireDecodeError> {
         let (sig_bytes, remaining) = input.split_at(ED25519_SIGNATURE_SIZE);
-        let sig_array: [u8; ED25519_SIGNATURE_SIZE] =
-            sig_bytes.try_into().expect("split_at guarantees the length");
+        let sig_array: [u8; ED25519_SIGNATURE_SIZE] = sig_bytes
+            .try_into()
+            .expect("split_at guarantees the length");
         // `Ed25519Signature::from_bytes` is infallible (any bytes are a valid
         // signature value; verification happens elsewhere).
         Ok((remaining, Self::from_bytes(&sig_array)))
