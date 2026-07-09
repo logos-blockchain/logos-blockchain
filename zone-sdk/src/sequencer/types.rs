@@ -7,6 +7,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx, Value,
         channel::ChannelState,
+        gas::GasCost,
         ledger::{Inputs, Outputs},
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
@@ -14,6 +15,7 @@ use lb_core::{
         transactions::TxHash,
     },
 };
+use lb_key_management_system_service::keys::ZkPublicKey;
 
 const DEFAULT_RESUBMIT_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_RECONNECT_DELAY: Duration = Duration::from_secs(5);
@@ -94,6 +96,19 @@ impl OrphanedTx {
     }
 }
 
+/// Configuration for funding transactions from the node's wallet.
+///
+/// Mirrors the node's SDP wallet config: both values come from the operator's
+/// own node configuration (the node sponsors the gas; change returns to
+/// `funding_pk`).
+#[derive(Clone, Debug)]
+pub struct FundingConfig {
+    /// The node wallet key that pays transaction fees.
+    pub funding_pk: ZkPublicKey,
+    /// Hard cap on the fee of a single transaction.
+    pub max_tx_fee: GasCost,
+}
+
 /// Configuration for the zone sequencer.
 #[derive(Clone)]
 pub struct SequencerConfig {
@@ -103,6 +118,9 @@ pub struct SequencerConfig {
     pub min_slots_remaining_in_turn: u64,
     pub max_pending_publish_depth: usize,
     pub max_local_tx_tracking: usize,
+    /// Fund transactions from the node's wallet before signing. `None`
+    /// builds fee-less transactions (only valid while gas prices are zero).
+    pub funding: Option<FundingConfig>,
 }
 
 impl Default for SequencerConfig {
@@ -114,6 +132,7 @@ impl Default for SequencerConfig {
             min_slots_remaining_in_turn: 1,
             max_pending_publish_depth: 10,
             max_local_tx_tracking: DEFAULT_MAX_LOCAL_TX_TRACKING,
+            funding: None,
         }
     }
 }
@@ -188,12 +207,16 @@ pub enum Event {
         channel_update: ChannelUpdate,
         finalized: Vec<FinalizedTx>,
     },
-    /// Cold-start backfill is complete and the sequencer has a baseline
-    /// channel view — publishes are now meaningful. Emitted exactly once
-    /// per sequencer lifetime. Stream drops and reconnects after this
-    /// point are invisible on the event stream: in-memory state stays
-    /// valid, publishes keep flowing, and any tx invalidated by the
-    /// catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
+    /// The sequencer is connected and ready to publish. Emitted once when
+    /// cold-start backfill completes, and again after every mid-life
+    /// reconnect once a live block confirms the connection.
+    ///
+    /// With funding configured ([`SequencerConfig::funding`]), publishes
+    /// fail fast with [`Error::Unavailable`] while disconnected (funding
+    /// needs the node), so the re-emission is the signal to retry. Fee-less
+    /// sequencers accept publishes locally throughout a disconnect;
+    /// in-memory state stays valid either way, and any tx invalidated by
+    /// the catch-up surfaces via [`ChannelUpdate::orphaned`] on the next
     /// `BlocksProcessed` once the stream resumes.
     Ready,
     /// Transaction was accepted by the node post API and is expected to be in

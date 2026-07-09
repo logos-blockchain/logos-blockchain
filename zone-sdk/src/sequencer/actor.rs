@@ -91,12 +91,14 @@ where
 
     /// Convert a successfully-ingested block into the public event. Handles
     /// the readiness-transition special case: when this is the block that
-    /// flips the sequencer to ready, emit `Ready` first and buffer the
-    /// `BlocksProcessed` for the next drive turn.
+    /// flips the sequencer to ready — or the one that completes a mid-life
+    /// reconnect — emit `Ready` first and buffer the `BlocksProcessed` for
+    /// the next drive turn.
     fn finish_block_processing(&mut self, result: BlockEventResult) -> Option<Event> {
         // We just processed a live block end-to-end — cached `channel_state`,
         // `current_tip`, and `lib_slot` reflect chain state up to this block,
         // so callers may rely on them.
+        let reconnected = !self.connected;
         self.connected = true;
         let became_ready = self.maybe_signal_ready();
         let (channel_update, finalized, mined) = self.apply_block_result(result);
@@ -121,7 +123,11 @@ where
                 finalized,
             });
 
-        if became_ready {
+        // Re-announce readiness after a mid-life reconnect: with funding
+        // configured, publishes fail fast with `Unavailable` while
+        // disconnected, so consumers need a positive "you can publish again"
+        // signal once a live block confirms the connection.
+        if became_ready || (reconnected && self.is_ready()) {
             if let Some(ev) = block_event {
                 self.buffered_events.push_back(ev);
             }
@@ -611,7 +617,10 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_http_api_common::queries::BlocksStreamQuery;
+    use lb_http_api_common::{
+        bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+        queries::BlocksStreamQuery,
+    };
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -885,6 +894,13 @@ mod tests {
             tx: SignedMantleTx,
         ) -> Result<(), lb_common_http_client::Error> {
             self.inner.post_transaction(tx).await
+        }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            self.inner.fund_tx(request).await
         }
     }
 
@@ -1183,6 +1199,21 @@ mod tests {
             self.posted_transactions_sender.send(tx).await.unwrap();
             Ok(())
         }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            // Fee-less passthrough: build the request's ops unchanged, as the
+            // node would at zero gas price.
+            Ok(WalletFundResponseBody {
+                tip: HeaderId::from([0; 32]),
+                funded_tx: request.tx_builder.build().map_err(|e| {
+                    lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
+                })?,
+                transfer_proof: None,
+            })
+        }
     }
 
     /// Mock node that serves a single genesis-slot block with a channel
@@ -1298,6 +1329,21 @@ mod tests {
             _tx: SignedMantleTx,
         ) -> Result<(), lb_common_http_client::Error> {
             Ok(())
+        }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            // Fee-less passthrough: build the request's ops unchanged, as the
+            // node would at zero gas price.
+            Ok(WalletFundResponseBody {
+                tip: HeaderId::from([0; 32]),
+                funded_tx: request.tx_builder.build().map_err(|e| {
+                    lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
+                })?,
+                transfer_proof: None,
+            })
         }
 
         async fn channel_state(
