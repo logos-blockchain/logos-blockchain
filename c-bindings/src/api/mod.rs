@@ -6,7 +6,6 @@ pub mod leader;
 pub mod lifecycle;
 pub(crate) mod memory;
 pub mod peer;
-pub mod sdp;
 pub mod storage;
 pub mod subscriptions;
 pub(crate) mod types;
