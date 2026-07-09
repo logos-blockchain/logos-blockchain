@@ -132,6 +132,7 @@ where
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
+        priority_fee: Value,
     ) -> Result<TipResponse<MantleTxBuilder>, WalletApiError> {
         let (resp_tx, rx) = oneshot::channel();
 
@@ -141,6 +142,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
+                priority_fee,
                 resp_tx,
             })
             .await?;
@@ -194,7 +196,7 @@ where
         let mantle_tx_builder =
             MantleTxBuilder::new().add_ledger_output(Note::new(amount, recipient_pk))?;
         let funded_tx_builder = self
-            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks)
+            .fund_tx(tip, mantle_tx_builder, change_pk, funding_pks, 0)
             .await?;
         self.sign_tx(tip, funded_tx_builder.response).await
     }

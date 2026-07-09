@@ -965,6 +965,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
                 tx_builder,
                 change_public_key,
                 funding_public_keys,
+                0,
             )
             .await
             .map_err(|error| {
@@ -1465,6 +1466,7 @@ pub(crate) fn wallet_fund_tx_sync(
                 request.tx_builder,
                 request.change_public_key,
                 request.funding_public_keys,
+                request.priority_fee,
             )
             .await
             .map_err(|error| {
