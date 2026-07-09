@@ -44,8 +44,9 @@ pub struct SequencerCheckpoint {
 /// atomic-withdraw bundles. The tx has been accepted into the sequencer's
 /// pending set and the post is queued onto the drive loop's in-flight pool;
 /// it has not necessarily been delivered to the node yet. Consumers use this
-/// to record their local outbox and to dedup the same entry when it later
-/// shows up in [`ChannelUpdate::adopted`] (match by `this_msg`).
+/// to apply the entry to their local state right away — it won't echo back
+/// in [`ChannelUpdate::adopted`] on chain extension. On a branch change the
+/// full delta is reported, where `this_msg` is the dedup identity.
 #[derive(Debug, Clone)]
 pub struct PublishResult {
     /// The enqueued tx (inscription or atomic withdraw bundle).

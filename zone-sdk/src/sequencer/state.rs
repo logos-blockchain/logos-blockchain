@@ -151,14 +151,17 @@ impl TxState {
     /// channel tip is retried byte-identically via [`Self::pending_txs`],
     /// no matter who authored it. No-op when the tx is already tracked.
     ///
-    /// Observed entries start `posted` — they were seen on chain, so they
-    /// never count as first-time publishes.
+    /// `withdraws` mirrors the tx's `ChannelWithdraw` ops (an atomic
+    /// inscription+withdraw bundle), matching [`Self::submit_atomic_withdraw`]
+    /// classification. Observed entries start `posted` — they were seen on
+    /// chain, so they never count as first-time publishes.
     pub fn observe_channel_inscription(
         &mut self,
         signed_tx: SignedMantleTx,
         parent_msg: MsgId,
         this_msg: MsgId,
         payload: Inscription,
+        withdraws: Option<Vec<WithdrawInfo>>,
     ) {
         let tx_hash = signed_tx.mantle_tx.hash();
         if self.is_tracked(&tx_hash) {
@@ -176,7 +179,7 @@ impl TxState {
                 parent_msg,
                 this_msg,
                 payload,
-                withdraws: None,
+                withdraws,
                 posted: true,
             },
         );
@@ -1024,7 +1027,7 @@ mod tests {
         // Mirror the observed inscription into pending before the safe-set
         // build, as `handle_block_event` does — the pending set reflects the
         // channel view, so c1 is retried too if it later reorgs out.
-        state.observe_channel_inscription(c1_tx, MsgId::root(), c1_msg, [99].into());
+        state.observe_channel_inscription(c1_tx, MsgId::root(), c1_msg, [99].into(), None);
         state.process_block(
             block2,
             block1,

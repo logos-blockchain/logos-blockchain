@@ -88,7 +88,10 @@ where
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind).
     //    Done BEFORE we advance `*lib_slot` and BEFORE we mutate state for the live
     //    event — so on a fetch failure the caller can retry the same event next
-    //    time around.
+    //    time around. Deliberately does NOT observe inscriptions into the pending
+    //    set: these blocks become finalized in this very event, and pending mirrors
+    //    the channel ABOVE LIB — observing here would insert entries only for the
+    //    `remove_pending(lib_finalized)` sweep below to delete.
     let mut lib_finalized = Vec::new();
     let mut finalized_items: Vec<FinalizedTx> = Vec::new();
     if lib != s.lib() {
@@ -192,28 +195,52 @@ where
 
 /// Mirror a block's channel inscriptions into the pending set
 /// (insert-if-absent), pairing each `ChannelInscribe` op with its full
-/// [`SignedMantleTx`] so a later retry re-posts the original bytes. Synthetic
-/// config entries have no inscribe op and are skipped naturally.
+/// [`SignedMantleTx`] so a later retry re-posts the original bytes. A tx
+/// also carrying `ChannelWithdraw` ops is classified as an atomic
+/// inscription+withdraw bundle, mirroring `restore_pending_tx`. Synthetic
+/// config entries have no inscribe op and are skipped naturally, as are the
+/// exotic multi-inscribe shapes `restore_pending_tx` tracks as opaque.
 fn observe_channel_inscriptions(
     state: &mut TxState,
     transactions: &[SignedMantleTx],
     channel_id: ChannelId,
 ) {
     for tx in transactions {
+        let mut inscribe = None;
+        let mut multi_inscribe = false;
+        let mut withdraws = Vec::new();
         for op in tx.mantle_tx.ops() {
-            if let Op::ChannelInscribe(inscribe) = op
-                && inscribe.channel_id == channel_id
-            {
-                state.observe_channel_inscription(
-                    tx.clone(),
-                    inscribe.parent,
-                    inscribe.id(),
-                    inscribe.inscription.clone(),
-                );
-                // One pending entry per tx — bundles carry one inscribe.
-                break;
+            match op {
+                Op::ChannelInscribe(i) if i.channel_id == channel_id => {
+                    if inscribe.is_some() {
+                        multi_inscribe = true;
+                    } else {
+                        inscribe = Some(i);
+                    }
+                }
+                Op::ChannelWithdraw(w) if w.channel_id == channel_id => {
+                    withdraws.push(w.clone());
+                }
+                _ => {}
             }
         }
+        let (Some(inscribe), false) = (inscribe, multi_inscribe) else {
+            continue;
+        };
+        let tx_hash = tx.mantle_tx.hash();
+        let withdraws = (!withdraws.is_empty()).then(|| {
+            withdraws
+                .into_iter()
+                .map(|op| WithdrawInfo { tx_hash, op })
+                .collect()
+        });
+        state.observe_channel_inscription(
+            tx.clone(),
+            inscribe.parent,
+            inscribe.id(),
+            inscribe.inscription.clone(),
+            withdraws,
+        );
     }
 }
 
