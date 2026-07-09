@@ -20,6 +20,7 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/logos-blockchain-node
   LC_CORE_VERSION: ${{ inputs.lc_core_version }}
   LB_NODE_VERSION: ${{ inputs.lb_node_version }}
+  VERSION_TAG: ${{ github.ref_name }}
   LATEST_TAG: ${{ contains(github.ref_name, '-rc.') && 'latest-rc' || 'latest' }}
 
 jobs:
@@ -71,7 +72,7 @@ jobs:
             LC_CORE_VERSION=${{ env.LC_CORE_VERSION }}
             LB_NODE_VERSION=${{ env.LB_NODE_VERSION }}
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.LB_NODE_VERSION }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.VERSION_TAG }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ env.LATEST_TAG }}
           labels: ${{ steps.meta.outputs.labels }}
 
