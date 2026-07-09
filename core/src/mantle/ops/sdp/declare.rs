@@ -7,9 +7,8 @@ use crate::{
     mantle::{
         Note, TxHash,
         ledger::{Declarations, Operation, Utxos},
-        ops::sdp::service::blend,
     },
-    sdp::{Declaration, MinStake, ServiceType, locked_notes::LockedNotes},
+    sdp::{Declaration, MinStake, locked_notes::LockedNotes},
 };
 
 trait SDPDeclareValidationExt {
@@ -40,6 +39,8 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
             return Err(SdpError::DuplicateDeclaration(self.id()));
         }
 
+        validate_service_scoped_uniqueness(self, declarations)?;
+
         // Ensure value of locked note is sufficient for joining the service.
         if note.value < min_stake.threshold {
             return Err(SdpError::NoteInsufficientValue {
@@ -54,12 +55,6 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
                 note_id: self.locked_note_id,
                 service_type: self.service_type,
             });
-        }
-
-        match self.service_type {
-            ServiceType::BlendNetwork => {
-                blend::validate_declaration(self, declarations)?;
-            }
         }
 
         Ok(())
@@ -91,6 +86,31 @@ impl SDPDeclareValidationExt for SDPDeclareOp {
 
         Ok((ctx, Vec::new()))
     }
+}
+
+/// `provider_id` and `zk_id` must each be unique within the same service.
+fn validate_service_scoped_uniqueness(
+    op: &SDPDeclareOp,
+    declarations: &Declarations,
+) -> Result<(), SdpError> {
+    declarations
+        .values()
+        .filter(|d| d.service_type == op.service_type)
+        .try_for_each(|existing| {
+            if existing.provider_id == op.provider_id {
+                Err(SdpError::DuplicateProviderId {
+                    service_type: op.service_type,
+                    provider_id: Box::new(op.provider_id),
+                })
+            } else if existing.zk_id == op.zk_id {
+                Err(SdpError::DuplicateZkId {
+                    service_type: op.service_type,
+                    zk_id: op.zk_id,
+                })
+            } else {
+                Ok(())
+            }
+        })
 }
 
 pub struct SDPDeclareValidationContext<'a> {

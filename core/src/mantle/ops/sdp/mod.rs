@@ -1,17 +1,17 @@
 pub mod active;
 pub mod declare;
-pub mod service;
 pub mod withdraw;
 
 pub use active::{SDPActiveExecutionContext, SDPActiveValidationContext};
 pub use declare::{SDPDeclareExecutionContext, SDPDeclareValidationContext};
 use lb_cryptarchia_engine::Epoch;
+use lb_key_management_system_keys::keys::ZkPublicKey;
 use thiserror::Error;
 pub use withdraw::{SDPWithdrawExecutionContext, SDPWithdrawValidationContext};
 
 use crate::{
-    mantle::{NoteId, ops::sdp::service::blend},
-    sdp::{DeclarationId, Nonce, ServiceType},
+    mantle::NoteId,
+    sdp::{DeclarationId, Nonce, ProviderId, ServiceType},
 };
 
 pub type SDPDeclareOp = crate::sdp::DeclarationMessage;
@@ -28,8 +28,16 @@ pub enum SdpError {
     InvalidEddsaSignature,
     #[error("Duplicate sdp declaration id: {0:?}")]
     DuplicateDeclaration(DeclarationId),
-    #[error("Blend declaration validation error: {0}")]
-    BlendDeclaration(#[from] blend::Error),
+    #[error("Duplicate provider_id within service {service_type:?}: {provider_id:?}")]
+    DuplicateProviderId {
+        service_type: ServiceType,
+        provider_id: Box<ProviderId>,
+    },
+    #[error("Duplicate zk_id within service {service_type:?}: {zk_id:?}")]
+    DuplicateZkId {
+        service_type: ServiceType,
+        zk_id: ZkPublicKey,
+    },
     #[error("Note {note_id:?} insufficient value: {value}")]
     NoteInsufficientValue { note_id: NoteId, value: u64 },
     #[error("Note {note_id:?} already used for service {service_type:?}")]

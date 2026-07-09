@@ -640,7 +640,7 @@ mod tests {
     use std::{num::NonZeroU64, sync::Arc};
 
     use lb_core::{
-        mantle::ledger::Utxos,
+        mantle::{ledger::Utxos, ops::sdp::SdpError},
         sdp::{Locator, SNAPSHOT_FINALIZATION_DELAY},
     };
     use lb_groth16::{AdditiveGroup as _, Fr};
@@ -1197,13 +1197,11 @@ mod tests {
         }
     }
 
-    /// Two Blend declarations sharing the same `provider_id` (different
-    /// `zk_id` and locators) must be rejected by the Blend-specific
-    /// declaration validation.
+    /// Two declarations in the same service sharing the same `provider_id`
+    /// (different `zk_id` and locators) must be rejected by the SDP
+    /// per-service uniqueness check.
     #[test]
-    fn rejects_duplicate_provider_id_in_blend_declarations() {
-        use lb_core::mantle::ops::sdp::{SdpError, service::blend};
-
+    fn rejects_duplicate_provider_id_within_service() {
         let config = setup(ServiceParameters {
             inactivity_period: 20.try_into().unwrap(),
             epoch: 0.into(),
@@ -1251,20 +1249,17 @@ mod tests {
         assert!(
             matches!(
                 result,
-                Err(Error::SdpOp(SdpError::BlendDeclaration(ref err)))
-                    if matches!(*err, blend::Error::DuplicateProviderId(_))
+                Err(Error::SdpOp(SdpError::DuplicateProviderId { .. }))
             ),
             "expected DuplicateProviderId, got {result:?}"
         );
     }
 
-    /// Two Blend declarations sharing the same `zk_id` (different
-    /// `provider_id` and locators) must be rejected by the Blend-specific
-    /// declaration validation.
+    /// Two declarations in the same service sharing the same `zk_id`
+    /// (different `provider_id` and locators) must be rejected by the SDP
+    /// per-service uniqueness check.
     #[test]
-    fn rejects_duplicate_zk_id_in_blend_declarations() {
-        use lb_core::mantle::ops::sdp::{SdpError, service::blend};
-
+    fn rejects_duplicate_zk_id_within_service() {
         let config = setup(ServiceParameters {
             inactivity_period: 20.try_into().unwrap(),
             epoch: 0.into(),
@@ -1312,11 +1307,7 @@ mod tests {
             &config,
         );
         assert!(
-            matches!(
-                result,
-                Err(Error::SdpOp(SdpError::BlendDeclaration(ref err)))
-                    if matches!(*err, blend::Error::DuplicateZkId(_))
-            ),
+            matches!(result, Err(Error::SdpOp(SdpError::DuplicateZkId { .. }))),
             "expected DuplicateZkId, got {result:?}"
         );
     }
