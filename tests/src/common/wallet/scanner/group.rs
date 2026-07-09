@@ -64,11 +64,27 @@ pub fn build_fork_group_scanner_configs(
     }
 
     for wallet in world.wallet_info.values() {
-        let group_id = world
-            .node_to_group
-            .get(&wallet.node_name)
-            .cloned()
-            .unwrap_or_default();
+        let group_id = if world.node_groups.is_empty() {
+            world
+                .node_to_group
+                .get(&wallet.node_name)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            world
+                .node_to_group
+                .get(&wallet.node_name)
+                .cloned()
+                .ok_or_else(|| StepError::LogicalError {
+                    message: format!(
+                        "wallet scanner grouping misconfiguration: wallet '{}' is bound to node '{}' \
+                         but that node is not present in `node_to_group` while explicit `node_groups` \
+                         are configured",
+                        wallet.wallet_name, wallet.node_name
+                    ),
+                })?
+        };
+
         let entry = groups
             .entry(group_id)
             .or_insert_with(|| (Vec::new(), Vec::new(), BTreeMap::new()));

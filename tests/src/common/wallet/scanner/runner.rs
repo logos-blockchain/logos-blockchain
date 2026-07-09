@@ -30,7 +30,8 @@ use crate::{
 };
 
 const TARGET: &str = "cucumber_wallet";
-const SCANNER_CHECKPOINTS: usize = 8;
+const MIN_SCANNER_CHECKPOINTS: usize = 8;
+const MAX_SCANNER_CHECKPOINTS: usize = 128;
 const SCANNER_ROLLBACK_BLOCKS: u64 = 5;
 
 #[derive(Clone)]
@@ -353,34 +354,50 @@ async fn run_group_scanner(config: ForkGroupScannerConfig, shutdown_requested: A
                 group.status = ScannerStatus::Error;
                 group.last_error = Some(scanner_iteration_error_message(&error));
             });
-            if matches!(error, ScannerIterationError::Continuity(_))
-                && let Some(checkpoint) = rollback_checkpoint(&checkpoints, applied_height)
-            {
-                warn!(
-                    target: TARGET,
-                    "wallet scanner group '{}' rolling back to height {} after continuity failure",
-                    display_group_key(&config.group_id),
-                    checkpoint.applied_height,
-                );
-                accounting = checkpoint.accounting;
-                applied_height = checkpoint.applied_height;
-                applied_tip = checkpoint.applied_tip;
-                applied_slot = checkpoint.applied_slot;
-                let source_node_names = checkpoint.source_node_names;
-                checkpoints.retain(|checkpoint| checkpoint.applied_height <= applied_height);
-                if let Some(applied_tip) = applied_tip
-                    && !source_node_names.is_empty()
-                    && let Err(error) = publish_wallet_state(
-                        &config.wallets,
-                        &source_node_names,
-                        applied_height,
-                        applied_tip.to_string(),
-                        accounting.wallet_utxos(),
-                    )
+            if matches!(error, ScannerIterationError::Continuity(_)) {
+                if let Some(checkpoint) = rollback_checkpoint(&checkpoints, applied_height)
+                    .filter(|checkpoint| checkpoint.applied_height < applied_height)
                 {
                     warn!(
                         target: TARGET,
-                        "wallet scanner group '{}' failed to publish rollback state: {error}",
+                        "wallet scanner group '{}' rolling back to height {} after continuity failure",
+                        display_group_key(&config.group_id),
+                        checkpoint.applied_height,
+                    );
+                    accounting = checkpoint.accounting;
+                    applied_height = checkpoint.applied_height;
+                    applied_tip = checkpoint.applied_tip;
+                    applied_slot = checkpoint.applied_slot;
+                    let source_node_names = checkpoint.source_node_names;
+                    checkpoints.retain(|checkpoint| checkpoint.applied_height <= applied_height);
+                    if let Some(applied_tip) = applied_tip
+                        && !source_node_names.is_empty()
+                        && let Err(error) = publish_wallet_state(
+                            &config.wallets,
+                            &source_node_names,
+                            applied_height,
+                            applied_tip.to_string(),
+                            accounting.wallet_utxos(),
+                        )
+                    {
+                        warn!(
+                            target: TARGET,
+                            "wallet scanner group '{}' failed to publish rollback state: {error}",
+                            display_group_key(&config.group_id),
+                        );
+                    }
+                } else if let Err(error) = reset_scanner_to_genesis(
+                    &config,
+                    &mut accounting,
+                    &mut applied_height,
+                    &mut applied_tip,
+                    &mut applied_slot,
+                    &mut checkpoints,
+                    &mut snapshot_rescan,
+                ) {
+                    warn!(
+                        target: TARGET,
+                        "wallet scanner group '{}' failed to reset to genesis after continuity failure: {error}",
                         display_group_key(&config.group_id),
                     );
                 }
@@ -423,6 +440,44 @@ fn check_shutdown(shutdown_requested: &Arc<AtomicBool>, group_id: &str) -> bool 
         return true;
     }
     false
+}
+
+fn reset_scanner_to_genesis(
+    config: &ForkGroupScannerConfig,
+    accounting: &mut ScannerAccounting,
+    applied_height: &mut u64,
+    applied_tip: &mut Option<HeaderId>,
+    applied_slot: &mut Option<u64>,
+    checkpoints: &mut VecDeque<ScannerCheckpoint>,
+    snapshot_rescan: &mut Option<SnapshotRescan>,
+) -> Result<(), StepError> {
+    warn!(
+        target: TARGET,
+        "wallet scanner group '{}' exhausted continuity checkpoints; resetting to genesis replay",
+        display_group_key(&config.group_id),
+    );
+
+    *accounting = ScannerAccounting::new(config.wallet_keys.clone(), &config.genesis_utxos)
+        .map_err(|error| StepError::LogicalError {
+            message: format!("wallet scanner accounting reset to genesis failed: {error}"),
+        })?;
+    *applied_height = 0;
+    *applied_tip = None;
+    *applied_slot = None;
+    *snapshot_rescan = None;
+    checkpoints.clear();
+    push_checkpoint(
+        checkpoints,
+        ScannerCheckpoint::new(
+            accounting,
+            *applied_height,
+            *applied_tip,
+            *applied_slot,
+            Vec::new(),
+        ),
+    );
+
+    Ok(())
 }
 
 #[expect(
@@ -758,12 +813,35 @@ async fn verify_snapshot_rescan(
 }
 
 fn push_checkpoint(checkpoints: &mut VecDeque<ScannerCheckpoint>, checkpoint: ScannerCheckpoint) {
+    let applied_height = checkpoint.applied_height;
     checkpoints.push_back(checkpoint);
-    while checkpoints.len() > SCANNER_CHECKPOINTS {
+    while checkpoints.len() > scanner_checkpoints_len(applied_height) {
         checkpoints.pop_front();
     }
 }
 
+/// Return the per-group checkpoint window size for the current applied height.
+///
+/// The scanner keeps a bounded history of `ScannerCheckpoint`s used for
+/// continuity rollback. The window grows gradually with chain depth, but is
+/// clamped to `[MIN_SCANNER_CHECKPOINTS, MAX_SCANNER_CHECKPOINTS]`.
+///
+/// Current rule:
+/// - `applied_height / MAX_SCANNER_CHECKPOINTS + 1` (integer division),
+/// - then clamped to the configured min/max bounds.
+fn scanner_checkpoints_len(applied_height: u64) -> usize {
+    let checkpoints = (applied_height / MAX_SCANNER_CHECKPOINTS as u64) as usize + 1;
+    checkpoints.clamp(MIN_SCANNER_CHECKPOINTS, MAX_SCANNER_CHECKPOINTS)
+}
+
+/// Select a rollback checkpoint after a continuity failure.
+///
+/// Prefers the newest checkpoint at or below
+/// `applied_height - SCANNER_ROLLBACK_BLOCKS`. If no such checkpoint exists,
+/// falls back to the oldest retained checkpoint (`front()`), which still allows
+/// progress toward recovery.
+///
+/// Returns `None` only when the checkpoint deque is empty.
 fn rollback_checkpoint(
     checkpoints: &VecDeque<ScannerCheckpoint>,
     applied_height: u64,
