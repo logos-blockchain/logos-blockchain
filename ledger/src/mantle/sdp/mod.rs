@@ -1321,6 +1321,103 @@ mod tests {
         );
     }
 
+    /// Once a Blend declaration is withdrawn/removed at its `withdraw_at`
+    /// epoch, its `provider_id` and `zk_id` become reusable
+    /// — a fresh declaration reusing both must be accepted.
+    #[test]
+    fn accepts_reused_ids_after_withdrawn_epoch() {
+        let config = setup(ServiceParameters {
+            inactivity_period: 20.try_into().unwrap(),
+            epoch: 0.into(),
+        });
+
+        let signing_key = create_signing_key();
+        let zk_key = create_zk_key(1);
+        let (utxo_sk_a, utxo_a) = utxo_with_sk();
+        let (_utxo_sk_b, utxo_b) = utxo_with_sk();
+
+        let declare_a = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_a.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/1.1.1.1/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        let declaration_id_a = declare_a.id();
+
+        let epoch0 = dummy_epoch_state(0.into());
+        let sdp_ledger = dummy_sdp_ledger(0.into(), &config);
+        let utxos = utxo_tree(vec![utxo_a, utxo_b]);
+
+        let sdp_ledger = apply_declare_with_dummies(
+            &utxos,
+            sdp_ledger,
+            &declare_a,
+            &zk_key,
+            &signing_key,
+            &config,
+        )
+        .unwrap();
+
+        // Withdraw A.
+        let withdraw_op = &SDPWithdrawOp {
+            declaration_id: declaration_id_a,
+            nonce: 1,
+            locked_note_id: utxo_a.id(),
+        };
+        let sdp_ledger = apply_withdraw_with_dummies(
+            sdp_ledger,
+            withdraw_op,
+            utxo_sk_a,
+            zk_key.clone(),
+            &config,
+        )
+        .unwrap();
+
+        let withdraw_epoch = sdp_ledger
+            .get_declaration(&declaration_id_a)
+            .expect("declaration must still exist until the withdrawn epoch is reached")
+            .withdraw_at
+            .expect("withdraw_at must be set after withdraw tx is accepted");
+
+        // Advance epochs until A is removed at `withdraw_epoch`.
+        let mut sdp_ledger = sdp_ledger;
+        let mut last_epoch_state = epoch0;
+        for epoch in 1..=withdraw_epoch.into_inner() {
+            let new_epoch_state = next_epoch_state(epoch.into(), &sdp_ledger, &config);
+            (sdp_ledger, _) = sdp_ledger
+                .try_apply_header(&config, &last_epoch_state, &new_epoch_state)
+                .unwrap();
+            last_epoch_state = new_epoch_state;
+        }
+        assert!(
+            sdp_ledger.get_declaration(&declaration_id_a).is_none(),
+            "declaration A must be removed at the withdrawn epoch"
+        );
+
+        // Re-declare reusing A's `provider_id` and `zk_id` (fresh locked note
+        // and locators, so the `declaration_id` differs). Must be accepted.
+        let declare_b = SDPDeclareOp {
+            service_type: ServiceType::BlendNetwork,
+            locked_note_id: utxo_b.id(),
+            zk_id: zk_key.to_public_key(),
+            provider_id: ProviderId(signing_key.public_key()),
+            locators: "/ip4/2.2.2.2/udp/0".parse::<Locator>().unwrap().into(),
+        };
+        assert!(
+            apply_declare_with_dummies(
+                &utxos,
+                sdp_ledger,
+                &declare_b,
+                &zk_key,
+                &signing_key,
+                &config,
+            )
+            .is_ok(),
+            "declaration reusing A's provider_id and zk_id must be accepted after A is removed"
+        );
+    }
+
     #[test]
     fn test_withdraw_provider() {
         let config = setup(ServiceParameters {
