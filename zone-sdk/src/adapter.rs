@@ -16,7 +16,10 @@ use lb_core::{
         ops::{OpId as _, channel::ChannelId},
     },
 };
-use lb_http_api_common::queries::BlocksStreamQuery;
+use lb_http_api_common::{
+    bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+    queries::BlocksStreamQuery,
+};
 use lb_log_targets::zone_sdk;
 use reqwest::Url;
 use tracing::warn;
@@ -69,6 +72,16 @@ pub trait Node {
     ) -> Result<BoxStream<(ZoneMessage, Slot)>, Error>;
 
     async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error>;
+
+    /// Fund a transaction from the node's wallet.
+    ///
+    /// The node adds fee inputs and change from its own wallet, signs only
+    /// the appended fee transfer, and returns the funded — still unsigned —
+    /// transaction together with the transfer proof.
+    async fn fund_tx(
+        &self,
+        request: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error>;
 }
 
 #[derive(Clone)]
@@ -214,6 +227,13 @@ impl Node for NodeHttpClient {
         self.client
             .post_transaction(self.base_url.clone(), tx)
             .await
+    }
+
+    async fn fund_tx(
+        &self,
+        request: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error> {
+        self.client.fund_tx(self.base_url.clone(), request).await
     }
 }
 
