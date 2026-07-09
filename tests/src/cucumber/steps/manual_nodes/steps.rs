@@ -53,8 +53,8 @@ use crate::{
         },
         wallet::{
             snapshot::{
-                prepare_wallet_snapshot_from_active_node_tips,
-                prepare_wallet_snapshot_restore_if_present, save_prepared_wallet_snapshot,
+                prepare_all_wallets_snapshot, prepare_wallet_snapshot_restore_if_present,
+                save_prepared_all_wallets_snapshot,
             },
             sync::{WalletSendReadiness, wait_wallet_send_ready},
         },
@@ -985,7 +985,7 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
         .collect();
 
     if world.snapshot_save_config.extensions.is_some() {
-        prepare_wallet_snapshot_from_active_node_tips(world).await?;
+        prepare_all_wallets_snapshot(world).await?;
     }
 
     world.reset_wallet_scanner_after_current_iteration().await;
@@ -997,7 +997,7 @@ async fn step_stop_all_nodes(world: &mut CucumberWorld) -> StepResult {
     }
 
     if let Some(snapshot_name) = world.snapshot_save_config.extensions.take() {
-        save_prepared_wallet_snapshot(&snapshot_name, world)?;
+        save_prepared_all_wallets_snapshot(&snapshot_name, world)?;
     }
 
     for (node_name, _) in &runtime_dir_by_node_name {

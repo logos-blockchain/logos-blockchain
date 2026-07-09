@@ -38,10 +38,7 @@ use crate::cucumber::{
         display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
         matching_child_dirs, peer_id_from_node_yaml, track_progress, truncate_hash,
     },
-    wallet::snapshot::{
-        restore_wallet_snapshot_if_present, save_wallet_snapshot_for_saved_nodes,
-        save_wallet_snapshot_from_saved_node_tips,
-    },
+    wallet::snapshot::{create_and_save_all_wallets_snapshot, restore_wallet_snapshot_if_present},
     world::{
         ChainInfoMap, ConfigOverride, CucumberWorld, ManualNodeConfigOverrides, NodeInfo,
         PublicCryptarchiaEndpointPeer, WalletInfo, WalletInfoMap, WalletType,
@@ -1730,8 +1727,8 @@ pub async fn create_snapshot_all_nodes_with_wallet_state(
         });
     }
 
-    create_snapshots_all_nodes(world, snapshot_name)?;
-    save_wallet_snapshot_from_saved_node_tips(snapshot_name, world).await
+    create_and_save_all_wallets_snapshot(snapshot_name, world).await?;
+    create_snapshots_all_nodes(world, snapshot_name)
 }
 
 pub async fn create_snapshot_node_with_wallet_state(
@@ -1751,8 +1748,8 @@ pub async fn create_snapshot_node_with_wallet_state(
         .map(|info| info.runtime_dir.clone())
     {
         reset_named_snapshot(snapshot_name)?;
+        create_and_save_all_wallets_snapshot(snapshot_name, world).await?;
         save_named_node_state_snapshot(snapshot_name, node_name, &runtime_dir)?;
-        save_wallet_snapshot_for_saved_nodes(snapshot_name, world, [node_name]).await?;
         info!(
             target: TARGET,
             "Saved snapshot `{snapshot_name}` for node {}",

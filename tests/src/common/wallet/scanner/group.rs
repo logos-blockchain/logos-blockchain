@@ -13,8 +13,8 @@ use super::{
 use crate::{
     common::wallet::TrackedWalletKeys,
     cucumber::{
-        fee_reserve::SCENARIO_FEE_ACCOUNT_NAME, wallet::best_node::get_best_node_info_from_clients,
-        world::CucumberWorld,
+        error::StepError, fee_reserve::SCENARIO_FEE_ACCOUNT_NAME,
+        wallet::best_node::get_best_node_info_from_clients, world::CucumberWorld,
     },
 };
 
@@ -39,7 +39,7 @@ const DEFAULT_SCANNER_RANGE_BATCH_SIZE: u64 = 1_000;
 pub fn build_fork_group_scanner_configs(
     world: &CucumberWorld,
     scanner_state: SharedWalletScannerState,
-) -> Result<Vec<ForkGroupScannerConfig>, crate::cucumber::error::StepError> {
+) -> Result<Vec<ForkGroupScannerConfig>, StepError> {
     let mut groups: BTreeMap<
         String,
         (
@@ -197,7 +197,7 @@ fn scanner_seed_for_group(
     world: &CucumberWorld,
     nodes: &[String],
     wallet_keys: &[TrackedWalletKeys],
-) -> Result<ScannerSeed, crate::cucumber::error::StepError> {
+) -> Result<ScannerSeed, StepError> {
     let mut merged_seed = None;
 
     for seed in nodes
@@ -239,7 +239,7 @@ fn scanner_seed_for_group(
         };
 
         if *merged_tip != tip || *merged_height != height || *merged_slot != slot {
-            return Err(crate::cucumber::error::StepError::LogicalError {
+            return Err(StepError::LogicalError {
                 message: format!(
                     "wallet scanner snapshot seeds for group have different chain positions: \
                      first={merged_tip}/{merged_height}/{merged_slot} next={tip}/{height}/{slot}",
