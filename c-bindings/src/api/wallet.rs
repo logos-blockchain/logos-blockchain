@@ -1541,7 +1541,9 @@ pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
 /// and submits the result via [`submit_signed_transaction`].
 ///
 /// The request and response are JSON strings with the exact same schemas as
-/// the node's `POST /wallet/fund` HTTP request and response bodies.
+/// the node's `POST /wallet/fund` HTTP request and response bodies. The
+/// optional `priority_fee` field (default 0) is left as excess balance above
+/// the mandatory fee, paid to the block producer as the execution tip.
 ///
 /// # Arguments
 ///

@@ -142,8 +142,6 @@ pub enum WalletMsg {
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
-        /// Excess balance to leave above the mandatory fee — the
-        /// transaction's execution tip. `0` funds the exact minimum.
         priority_fee: Value,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },

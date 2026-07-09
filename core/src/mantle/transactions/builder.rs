@@ -182,8 +182,6 @@ impl MantleTxBuilder {
                     pk: change_pk,
                 })?;
 
-                // Now the net balance should exceed the gas cost by exactly
-                // the priority fee.
                 assert_eq!(tx_with_change.funding_delta::<G>(context)?, target);
 
                 Ok(Some(tx_with_change))
