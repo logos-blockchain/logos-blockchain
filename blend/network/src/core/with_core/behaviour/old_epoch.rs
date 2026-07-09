@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
+    num::NonZeroU64,
     task::{Context, Poll, Waker},
 };
 
@@ -38,6 +39,7 @@ pub struct OldEpoch {
     waker: Option<Waker>,
     message_cache: MessageCache,
     epoch: Epoch,
+    num_blend_layers: NonZeroU64,
 }
 
 impl OldEpoch {
@@ -46,6 +48,7 @@ impl OldEpoch {
         negotiated_peers: HashMap<PeerId, ConnectionId>,
         message_cache: MessageCache,
         epoch: Epoch,
+        num_blend_layers: NonZeroU64,
     ) -> Self {
         Self {
             negotiated_peers,
@@ -53,6 +56,7 @@ impl OldEpoch {
             events: VecDeque::new(),
             waker: None,
             epoch,
+            num_blend_layers,
         }
     }
 
@@ -154,6 +158,7 @@ impl OldEpoch {
             &mut self.events,
             &mut self.waker,
             self.epoch,
+            self.num_blend_layers,
         ).inspect_err(|receive_error| {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the old epoch: {receive_error:?}. Closing connection with spammy peer.");
             self.events.push_back(ToSwarm::NotifyHandler {

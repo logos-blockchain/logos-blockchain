@@ -1,4 +1,4 @@
-use core::num::NonZeroUsize;
+use core::num::{NonZeroU64, NonZeroUsize};
 use std::{
     collections::{HashSet, VecDeque},
     convert::Infallible,
@@ -51,6 +51,10 @@ pub struct Config {
     pub connection_timeout: Duration,
     pub max_incoming_connections: usize,
     pub minimum_network_size: NonZeroUsize,
+    /// `ß_c`: the fixed number of encapsulation layers every well-formed Blend
+    /// message carries. Used to validate the layout of messages received from
+    /// remote peers before processing them.
+    pub num_blend_layers: NonZeroU64,
 }
 
 /// A [`NetworkBehaviour`]:
@@ -67,6 +71,7 @@ pub struct Behaviour {
     max_incoming_connections: usize,
     protocol_name: StreamProtocol,
     minimum_network_size: NonZeroUsize,
+    num_blend_layers: NonZeroU64,
 }
 
 impl Behaviour {
@@ -85,6 +90,7 @@ impl Behaviour {
             max_incoming_connections: config.max_incoming_connections,
             protocol_name,
             minimum_network_size: config.minimum_network_size,
+            num_blend_layers: config.num_blend_layers,
         }
     }
 
@@ -153,7 +159,7 @@ impl Behaviour {
 
     fn handle_received_serialized_encapsulated_message(&mut self, serialized_message: &[u8]) {
         let Ok(deserialized_encapsulated_message) =
-            deserialize_encapsulated_message(serialized_message)
+            deserialize_encapsulated_message(serialized_message, self.num_blend_layers)
         else {
             tracing::trace!(target: LOG_TARGET, "Failed to deserialize received message. Ignoring...");
             return;

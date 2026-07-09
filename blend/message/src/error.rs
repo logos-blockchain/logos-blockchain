@@ -14,6 +14,8 @@ pub enum Error {
     ProofOfQuotaVerificationFailed(quota::Error),
     #[error("Encapsulated message deserialization failed")]
     MessageDeserializationFailed,
+    #[error(transparent)]
+    WireDecode(#[from] crate::codec::WireDecodeError),
     #[error("Payload deserialization failed")]
     PayloadDeserializationFailed,
     #[error("Private header deserialization failed")]
