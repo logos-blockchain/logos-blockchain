@@ -78,6 +78,12 @@ where
 
     let old_tip = *current_tip;
 
+    // Snapshot which txs were tracked BEFORE this event mutates state: the
+    // extension-case `adopted` filter below distinguishes entries the
+    // sequencer already knew about (its own publishes and previously
+    // observed ones) from genuinely new network entries.
+    let tracked_before = s.tracked_tx_hashes();
+
     // Backfill if needed (self-healing on every event)
     // 1. Backfill finalized blocks up to LIB (only when state's LIB is behind).
     //    Done BEFORE we advance `*lib_slot` and BEFORE we mutate state for the live
@@ -119,6 +125,11 @@ where
     // to add to `block_inscriptions` (which the lineage walk bridges through).
     let old_lineage = old_tip.map(|old| s.channel_lineage(old));
 
+    // Mirror this block's inscriptions into the pending set BEFORE
+    // `process_block`, so on-branch entries land in the block's safe set and
+    // are excluded from re-posting while canonical.
+    observe_channel_inscriptions(s, &event.block.transactions, channel_id);
+
     // Process the actual event block
     s.process_block(block_id, parent_id, lib, our_txs, inscriptions);
 
@@ -155,11 +166,55 @@ where
         _ => None, // tip unchanged
     };
 
+    // On a pure extension (nothing orphaned — including the first event,
+    // whose `orphaned` is empty by construction), report only entries the
+    // sequencer didn't already track: its own publishes land on the channel
+    // through its own action and must not echo back. On a branch change the
+    // full delta flows through unfiltered. Updates emptied by the filter are
+    // dropped entirely.
+    let channel_update = channel_update
+        .map(|mut update| {
+            if update.orphaned.is_empty() {
+                update
+                    .adopted
+                    .retain(|info| !tracked_before.contains(&info.tx_hash));
+            }
+            update
+        })
+        .filter(|update| !(update.orphaned.is_empty() && update.adopted.is_empty()));
+
     Ok(BlockEventResult {
         finalized_items,
         channel_update,
         mined_inscriptions,
     })
+}
+
+/// Mirror a block's channel inscriptions into the pending set
+/// (insert-if-absent), pairing each `ChannelInscribe` op with its full
+/// [`SignedMantleTx`] so a later retry re-posts the original bytes. Synthetic
+/// config entries have no inscribe op and are skipped naturally.
+fn observe_channel_inscriptions(
+    state: &mut TxState,
+    transactions: &[SignedMantleTx],
+    channel_id: ChannelId,
+) {
+    for tx in transactions {
+        for op in tx.mantle_tx.ops() {
+            if let Op::ChannelInscribe(inscribe) = op
+                && inscribe.channel_id == channel_id
+            {
+                state.observe_channel_inscription(
+                    tx.clone(),
+                    inscribe.parent,
+                    inscribe.id(),
+                    inscribe.inscription.clone(),
+                );
+                // One pending entry per tx — bundles carry one inscribe.
+                break;
+            }
+        }
+    }
 }
 
 /// Convert a shed pending entry into an [`OrphanedTx`] for surfacing to the
@@ -508,6 +563,10 @@ fn apply_backfilled_block(
         .collect();
 
     let inscriptions = extract_channel_tip_ops(&block.transactions, channel_id);
+
+    // Mirror inscriptions into pending before the safe-set build, matching
+    // the live-block path in `handle_block_event`.
+    observe_channel_inscriptions(state, &block.transactions, channel_id);
 
     // Use current state lib to avoid premature finalization
     state.process_block(block_id, parent_id, lib, our_txs, inscriptions);

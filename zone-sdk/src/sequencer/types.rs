@@ -295,9 +295,14 @@ pub struct ChannelUpdate {
     /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
     /// `withdraw_nonce` internally on each publish.
     pub orphaned: Vec<OrphanedTx>,
-    /// Inscriptions added to the channel. Includes entries this instance
-    /// submitted — consumers dedup by `this_msg` against the values returned
-    /// from their publish calls.
+    /// Inscriptions added to the channel.
+    ///
+    /// On a pure extension (`orphaned` empty) this carries only entries the
+    /// sequencer wasn't already tracking — its own publishes apply to
+    /// consumer state at publish time and don't echo back. On a branch
+    /// change the full delta is reported (entries can move between
+    /// branches), so consumers dedup by `this_msg` against their own state
+    /// there.
     pub adopted: Vec<InscriptionInfo>,
 }
 
