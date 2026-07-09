@@ -24,6 +24,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN scripts/setup-logos-core.sh "$LC_CORE_VERSION" "$(uname -m)-linux"
 
+# Patch the AppImage magic bytes to restore standard ELF matching for QEMU
+RUN dd if=/dev/zero of=lgpd bs=1 count=3 seek=8 conv=notrunc && \
+    dd if=/dev/zero of=lgpm bs=1 count=3 seek=8 conv=notrunc && \
+    dd if=/dev/zero of=logoscore bs=1 count=3 seek=8 conv=notrunc
+
 RUN ./lgpd --appimage-extract && mv squashfs-root ext-lgpd && \
     ./lgpm --appimage-extract && mv squashfs-root ext-lgpm && \
     ./logoscore --appimage-extract && mv squashfs-root ext-logoscore
