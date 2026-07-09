@@ -1,4 +1,7 @@
-use core::{num::NonZeroUsize, time::Duration};
+use core::{
+    num::{NonZeroU64, NonZeroUsize},
+    time::Duration,
+};
 use std::collections::{HashSet, VecDeque};
 
 use async_trait::async_trait;
@@ -20,6 +23,7 @@ pub struct BehaviourBuilder {
     max_incoming_connections: Option<usize>,
     timeout: Option<Duration>,
     minimum_network_size: Option<NonZeroUsize>,
+    num_blend_layers: Option<NonZeroU64>,
 }
 
 impl BehaviourBuilder {
@@ -29,7 +33,13 @@ impl BehaviourBuilder {
             max_incoming_connections: None,
             timeout: None,
             minimum_network_size: None,
+            num_blend_layers: None,
         }
+    }
+
+    pub fn with_num_blend_layers(mut self, num_blend_layers: u64) -> Self {
+        self.num_blend_layers = Some(num_blend_layers.try_into().unwrap());
+        self
     }
 
     pub fn with_max_incoming_connections(mut self, max_incoming_connections: usize) -> Self {
@@ -71,6 +81,9 @@ impl BehaviourBuilder {
             minimum_network_size: self
                 .minimum_network_size
                 .unwrap_or_else(|| 1usize.try_into().unwrap()),
+            num_blend_layers: self
+                .num_blend_layers
+                .unwrap_or_else(|| 3.try_into().unwrap()),
         }
     }
 }

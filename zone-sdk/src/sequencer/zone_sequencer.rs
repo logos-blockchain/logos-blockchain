@@ -34,7 +34,7 @@ use super::{
     state::TxState,
     tx_builder::{
         build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
-        find_own_key_index, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
+        find_own_key_index, fund_ops, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
     },
     types::{
         AtomicWithdrawInfo, Error, Event, InscriptionInfo, PendingTx, PublishResult,
@@ -78,7 +78,9 @@ pub struct ZoneSequencer<Node> {
     // operations that depend on cached on-chain state (inscription turn
     // check, atomic withdraw nonce, channel config) so they fail-fast with
     // `Error::Unavailable` during reconnect rather than building txs from
-    // stale state.
+    // stale state. With funding configured it also gates every publish-type
+    // operation (funding needs the node); a fresh `Event::Ready` is emitted
+    // when the reconnect completes.
     pub(super) connected: bool,
 
     // Resubmission
@@ -290,9 +292,11 @@ where
     /// Obtain a borrowing handle for issuing commands to the sequencer.
     ///
     /// The handle's `&mut self` borrow means only the drive task can hold
-    /// one. Methods on the handle mutate state synchronously and return the
-    /// resulting [`SequencerCheckpoint`] inline, so the caller can persist
-    /// the publish + checkpoint atomically.
+    /// one. Methods on the handle mutate state directly on the drive task
+    /// and return the resulting [`SequencerCheckpoint`] inline, so the
+    /// caller can persist the publish + checkpoint atomically. Publish-type
+    /// methods await one funding round-trip first when
+    /// [`SequencerConfig::funding`] is set.
     pub const fn handle(&mut self) -> SequencerHandle<'_, Node> {
         SequencerHandle::new(self)
     }
@@ -468,23 +472,23 @@ where
                 self.buffered_events.pop_front().map(|event| self.emit_now(event))
             }
             Some(request) = self.request_rx.recv() => {
-                self.handle_request(request);
+                self.handle_request(request).await;
                 None
             }
         }
     }
 
-    fn handle_request(&mut self, request: ActorRequest) {
+    async fn handle_request(&mut self, request: ActorRequest) {
         match request {
             ActorRequest::Publish { data, response_tx } => {
-                drop(response_tx.send(self.do_publish(data)));
+                drop(response_tx.send(self.do_publish(data).await));
             }
             ActorRequest::PublishAtomicWithdraw {
                 inscribe,
                 withdraws,
                 response_tx,
             } => {
-                drop(response_tx.send(self.do_publish_atomic_withdraw(inscribe, withdraws)));
+                drop(response_tx.send(self.do_publish_atomic_withdraw(inscribe, withdraws).await));
             }
             ActorRequest::ChannelConfig {
                 keys,
@@ -494,13 +498,18 @@ where
                 withdraw_threshold,
                 response_tx,
             } => {
-                drop(response_tx.send(self.do_channel_config(
-                    keys,
-                    posting_timeframe,
-                    posting_timeout,
-                    configuration_threshold,
-                    withdraw_threshold,
-                )));
+                drop(
+                    response_tx.send(
+                        self.do_channel_config(
+                            keys,
+                            posting_timeframe,
+                            posting_timeout,
+                            configuration_threshold,
+                            withdraw_threshold,
+                        )
+                        .await,
+                    ),
+                );
             }
             ActorRequest::SubmitSignedTx {
                 tx,
@@ -544,9 +553,24 @@ where
         loop {
             tokio::select! {
                 () = &mut sleep => break,
-                Some(request) = self.request_rx.recv() => self.handle_request(request),
+                Some(request) = self.request_rx.recv() => self.handle_request(request).await,
             }
         }
+    }
+
+    /// With funding configured, building a transaction requires a round-trip
+    /// to the node's wallet — fail fast with [`Error::Unavailable`] while
+    /// disconnected instead of surfacing an HTTP error from the fund call.
+    /// A fresh [`Event::Ready`] is emitted once the reconnect completes, so
+    /// callers have a positive signal to retry. Fee-less sequencers
+    /// (`funding: None`) keep the accept-locally-while-disconnected contract.
+    const fn ensure_fundable(&self) -> Result<(), Error> {
+        if self.config.funding.is_some() && !self.connected {
+            return Err(Error::Unavailable {
+                reason: "node disconnected; funding a transaction requires a connected node",
+            });
+        }
+        Ok(())
     }
 
     fn ensure_ready(&self) -> Result<(), Error> {
@@ -566,15 +590,23 @@ where
     /// Core publish logic. Shared by [`SequencerHandle::publish`] (called
     /// from the drive task) and the actor's [`ActorRequest::Publish`] handler
     /// (called from outside the drive task via [`SequencerClient`]).
-    pub(super) fn do_publish(
+    pub(super) async fn do_publish(
         &mut self,
         data: Inscription,
     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
         self.ensure_ready()?;
+        self.ensure_fundable()?;
 
         let parent = self.compute_publish_parent();
-        let (signed_tx, new_msg_id) =
-            create_inscribe_tx(self.channel_id, &self.signing_key, data.clone(), parent);
+        let (signed_tx, new_msg_id) = create_inscribe_tx(
+            &self.node,
+            self.config.funding.as_ref(),
+            self.channel_id,
+            &self.signing_key,
+            data.clone(),
+            parent,
+        )
+        .await?;
         let id = signed_tx.mantle_tx.hash();
 
         debug!(target: TARGET,
@@ -616,12 +648,13 @@ where
         ))
     }
 
-    pub(super) fn do_publish_atomic_withdraw(
+    pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
         self.ensure_ready()?;
+        self.ensure_fundable()?;
 
         if withdraws.is_empty() {
             return Err(Error::Network(
@@ -672,11 +705,10 @@ where
         let msg_id = inscription_op.id();
         ops.push(Op::ChannelInscribe(inscription_op));
 
-        let tx = MantleTx(Ops::try_from(ops).map_err(|e| {
-            Error::Network(format!("atomic withdraw bundle exceeds op limit: {e:?}"))
-        })?);
+        let (tx, transfer_proof) = fund_ops(&self.node, self.config.funding.as_ref(), ops).await?;
         let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs = build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig)?;
+        let ops_proofs =
+            build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
         let signed_tx = SignedMantleTx::new(tx, ops_proofs)
             .map_err(|e| Error::Network(format!("signed tx assembly failed: {e:?}")))?;
 
@@ -725,7 +757,7 @@ where
         ))
     }
 
-    pub(super) fn do_channel_config(
+    pub(super) async fn do_channel_config(
         &mut self,
         keys: Keys,
         posting_timeframe: SlotTimeframe,
@@ -734,16 +766,33 @@ where
         withdraw_threshold: u16,
     ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
         self.ensure_ready()?;
+        self.ensure_fundable()?;
+
+        // Per the Mantle spec, configuring an unclaimed channel requires no
+        // signatures — validation skips the signature check entirely — so
+        // claim with an empty proof. This also keeps the node wallet's fee
+        // prediction exact: it predicts a threshold-0 multi-sig proof for a
+        // channel it cannot see yet, and a superfluous signature would make
+        // the funded fee undershoot the actual storage cost.
+        let own_key = [&self.signing_key];
+        let signing_keys: &[&Ed25519Key] = if self.channel_state.is_some() {
+            &own_key
+        } else {
+            &[]
+        };
 
         let signed_tx = create_channel_config_tx(
+            &self.node,
+            self.config.funding.as_ref(),
             self.channel_id,
-            &[&self.signing_key],
+            signing_keys,
             keys,
             posting_timeframe,
             posting_timeout,
             configuration_threshold,
             withdraw_threshold,
-        );
+        )
+        .await?;
         let tx_hash = signed_tx.mantle_tx.hash();
 
         // Safe to unwrap — `ensure_ready` checks state.

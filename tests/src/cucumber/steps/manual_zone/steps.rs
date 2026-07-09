@@ -260,6 +260,38 @@ async fn step_publish_zone_messages_for_sequencer(
     publish_zone_messages(world, step, sequencer_alias, zone_message_rows(step)?).await
 }
 
+/// Publishing while the sequencer's node is down must be rejected: with
+/// funding configured, building a transaction needs the node's wallet, so
+/// the sequencer fails fast with `Unavailable` once the stream drop is
+/// noticed (or surfaces the funding error in the brief window before). A
+/// fresh `Ready` event fires once the node is back and a live block
+/// confirms the reconnect.
+#[cucumber::then(
+    expr = "publishing zone message with data {string} via sequencer {string} fails while the node is down"
+)]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require the world as the first `&mut` argument"
+)]
+async fn step_publish_fails_while_node_down(
+    world: &mut CucumberWorld,
+    step: &Step,
+    data: String,
+    sequencer_alias: String,
+) -> StepResult {
+    let _ = step;
+    let payload = make_inscription(&data);
+    let client = world.zone.sequencer_client(&sequencer_alias)?.clone();
+    match client.publish(payload).await {
+        Ok(_) => Err(StepError::LogicalError {
+            message: format!(
+                "Zone publish unexpectedly succeeded for sequencer '{sequencer_alias}' while its node is down"
+            ),
+        }),
+        Err(_expected) => Ok(()),
+    }
+}
+
 #[when(
     expr = "I submit zone message {string} to sequencer {string} with data {string} immediately"
 )]

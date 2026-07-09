@@ -1,4 +1,4 @@
-use core::{convert::Infallible, task::Waker};
+use core::{convert::Infallible, num::NonZeroU64, task::Waker};
 use std::collections::VecDeque;
 
 use either::Either;
@@ -76,10 +76,12 @@ pub fn handle_received_serialized_encapsulated_message_and_update_cache(
     events_queue: &mut VecDeque<ToSwarm<Event, Either<FromBehaviour, Infallible>>>,
     waker: &mut Option<Waker>,
     epoch: Epoch,
+    num_blend_layers: NonZeroU64,
 ) -> Result<(), ReceiveError> {
     // Deserialize the message.
-    let deserialized_encapsulated_message = deserialize_encapsulated_message(serialized_message)
-        .map_err(|_| ReceiveError::UndeserializableMessage)?;
+    let deserialized_encapsulated_message =
+        deserialize_encapsulated_message(serialized_message, num_blend_layers)
+            .map_err(|_| ReceiveError::UndeserializableMessage)?;
 
     // Add the message to the set of exchanged message identifiers with the sender,
     // returning `Err` if the message was already sent by this peer previously.

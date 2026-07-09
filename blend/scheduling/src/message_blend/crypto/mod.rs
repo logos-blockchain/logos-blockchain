@@ -10,7 +10,6 @@ use lb_blend_message::{
         },
     },
 };
-use lb_core::codec::{DeserializeOp as _, SerializeOp};
 use lb_key_management_system_keys::keys::X25519PrivateKey;
 
 pub mod core_and_leader;
@@ -39,26 +38,23 @@ pub struct EpochCryptographicProcessorSettings {
 pub fn serialize_encapsulated_message_with_verified_public_header(
     message: &EncapsulatedMessageWithVerifiedPublicHeader,
 ) -> Vec<u8> {
-    serialize_message(message)
+    message.encode()
 }
 
 #[must_use]
 pub fn serialize_encapsulated_message_with_verified_signature(
     message: &EncapsulatedMessageWithVerifiedSignature,
 ) -> Vec<u8> {
-    serialize_message(message)
+    message.encode()
 }
 
-fn serialize_message<Message>(message: &Message) -> Vec<u8>
-where
-    Message: SerializeOp,
-{
-    message
-        .to_bytes()
-        .expect("Message should be serializable")
-        .to_vec()
-}
-
-pub fn deserialize_encapsulated_message(message: &[u8]) -> Result<EncapsulatedMessage, Error> {
-    EncapsulatedMessage::from_bytes(message).map_err(|_| Error::MessageDeserializationFailed)
+pub fn deserialize_encapsulated_message(
+    message: &[u8],
+    num_blend_layers: NonZeroU64,
+) -> Result<EncapsulatedMessage, Error> {
+    let (remaining, deserialized_message) = EncapsulatedMessage::decode(message, num_blend_layers)?;
+    if !remaining.is_empty() {
+        return Err(Error::MessageDeserializationFailed);
+    }
+    Ok(deserialized_message)
 }

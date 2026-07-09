@@ -40,7 +40,6 @@ members = [
   "consensus/cryptarchia-sync",
   "core",
   "core/macros",
-  "deployment/cfgsync",
   "deployment/faucet",
   "deployment/l2-sequencer-archival-demo/archiver",
   "deployment/l2-sequencer-archival-demo/sequencer",
@@ -111,7 +110,6 @@ lb-blend-network                   = { default-features = false, package = "logo
 lb-blend-proofs                    = { default-features = false, package = "logos-blockchain-blend-proofs", path = "./blend/proofs" }
 lb-blend-scheduling                = { default-features = false, package = "logos-blockchain-blend-scheduling", path = "./blend/scheduling" }
 lb-blend-service                   = { default-features = false, package = "logos-blockchain-blend-service", path = "./services/blend" }
-lb-cfgsync                         = { default-features = false, package = "logos-blockchain-cfgsync", path = "./deployment/cfgsync" }
 lb-chain-broadcast-service         = { default-features = false, package = "logos-blockchain-chain-broadcast-service", path = "./services/chain/broadcast-service" }
 lb-chain-leader-service            = { default-features = false, package = "logos-blockchain-chain-leader-service", path = "./services/chain/chain-leader" }
 lb-chain-network-service           = { default-features = false, package = "logos-blockchain-chain-network-service", path = "./services/chain/chain-network" }
