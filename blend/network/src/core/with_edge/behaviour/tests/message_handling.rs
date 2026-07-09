@@ -51,6 +51,50 @@ async fn receive_valid_message() {
 }
 
 #[test(tokio::test)]
+async fn reject_message_with_unexpected_layer_count() {
+    // The behaviour is configured to expect a single encapsulation layer, but
+    // the shared test helper builds a 3-layer message. The size gate in
+    // `EncapsulatedMessage::deserialize_from_remote` must reject it up front,
+    // before the (larger) message is fully parsed or its header processed.
+    let mut core_swarm = TestSwarm::new_ephemeral(|_| {
+        BehaviourBuilder::new(PeerId::random())
+            .with_num_blend_layers(1)
+            .build()
+    });
+    let mut edge_swarm = TestSwarm::new_ephemeral(|_| StreamBehaviour::new());
+
+    core_swarm.listen().with_memory_addr_external().await;
+    let stream = edge_swarm
+        .connect_and_upgrade_to_blend(&mut core_swarm)
+        .await;
+    let message = TestEncapsulatedMessage::new(b"unexpected_layer_count");
+    send_msg(
+        stream,
+        serialize_encapsulated_message_with_verified_public_header(message.as_ref()),
+    )
+    .await
+    .unwrap();
+
+    loop {
+        select! {
+            _ = edge_swarm.select_next_some() => {}
+            core_swarm_event = core_swarm.select_next_some() => {
+                match core_swarm_event {
+                    SwarmEvent::Behaviour(Event::Message(_)) => {
+                        panic!("No `Message` event should be generated for a message with an unexpected number of layers.");
+                    }
+                    SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                        assert_eq!(peer_id, *edge_swarm.local_peer_id());
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+#[test(tokio::test)]
 async fn message_timeout() {
     let mut core_swarm = TestSwarm::new_ephemeral(|_| {
         BehaviourBuilder::new(PeerId::random())
