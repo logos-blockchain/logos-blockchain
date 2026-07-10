@@ -806,102 +806,44 @@ pub async fn publish_message_with_retry(
     }
 }
 
-/// Waits until the sequencer's event stream surfaces the payload in
-/// [`ChannelUpdate::adopted`] while collecting any mempool-pending events
-/// passed on the same event stream — i.e. the inscription was published and
-/// landed on the canonical chain. This is the end-to-end signal a real
-/// SDK consumer would observe.
-pub async fn wait_for_adopted_payload_and_collect_mempool_pending(
-    events: &mut tokio::sync::broadcast::Receiver<Event>,
-    data: &[u8],
+/// Waits until every tx in `tx_hashes` reports [`TxStatus::OnChain`] on the
+/// sequencer's status stream, collecting the tx hashes seen as
+/// [`TxStatus::PendingMempool`] along the way. Own publishes don't echo in
+/// [`ChannelUpdate::adopted`] on chain extension (the sequencer already
+/// tracks them), so the per-tx status stream is where "landed on chain, not
+/// yet finalized" is observable.
+pub async fn wait_for_on_chain_statuses_and_collect_mempool_pending(
+    statuses: &mut tokio::sync::broadcast::Receiver<TxStatusUpdate>,
+    tx_hashes: &[InscriptionId],
     duration: Duration,
-) -> Result<(PublishResult, HashSet<InscriptionId>), ZoneTestError> {
-    let mut mempool_pending = HashSet::new();
+) -> Result<HashSet<InscriptionId>, ZoneTestError> {
     timeout(duration, async {
-        loop {
-            let event = match events.recv().await {
-                Ok(event) => event,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("event subscriber lagged by {n}, recovering");
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    return Err(ZoneTestError::SequencerStopped);
-                }
-            };
-            if let Event::MempoolPending(tx_hash) = event {
-                mempool_pending.insert(tx_hash);
-                continue;
-            }
-            let Event::BlocksProcessed { channel_update, .. } = event else {
-                continue;
-            };
-            for info in channel_update.adopted {
-                if info.payload.as_slice() == data {
-                    return Ok((
-                        PublishResult {
-                            tx: PendingTx::Inscription(info),
-                        },
-                        mempool_pending,
-                    ));
-                }
-            }
-        }
-    })
-    .await
-    .map_err(|_| ZoneTestError::PublishTimeout)?
-}
-
-/// Waits for every payload in `data` to appear in
-/// [`ChannelUpdate::adopted`], while collecting any mempool-pending events
-/// passed on the same event stream.
-pub async fn wait_for_adopted_payloads_and_collect_mempool_pending(
-    events: &mut tokio::sync::broadcast::Receiver<Event>,
-    data: &[Inscription],
-    duration: Duration,
-) -> Result<(Vec<PublishResult>, HashSet<InscriptionId>), ZoneTestError> {
-    timeout(duration, async {
-        let mut results: Vec<Option<PublishResult>> =
-            std::iter::repeat_with(|| None).take(data.len()).collect();
-        let mut remaining = data.len();
+        let mut on_chain: HashSet<InscriptionId> = HashSet::new();
         let mut mempool_pending = HashSet::new();
 
-        while remaining > 0 {
-            let event = match events.recv().await {
-                Ok(event) => event,
+        while on_chain.len() < tx_hashes.len() {
+            let update = match statuses.recv().await {
+                Ok(update) => update,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    warn!("event subscriber lagged by {n}, recovering");
+                    warn!("status subscriber lagged by {n}, recovering");
                     continue;
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                     return Err(ZoneTestError::SequencerStopped);
                 }
             };
-            if let Event::MempoolPending(tx_hash) = event {
-                mempool_pending.insert(tx_hash);
-                continue;
-            }
-            let Event::BlocksProcessed { channel_update, .. } = event else {
-                continue;
-            };
-            for info in channel_update.adopted {
-                let payload = info.payload.as_slice();
-                let Some(index) = data.iter().enumerate().find_map(|(index, expected)| {
-                    (results[index].is_none() && payload == expected.as_slice()).then_some(index)
-                }) else {
-                    continue;
-                };
-                results[index] = Some(PublishResult {
-                    tx: PendingTx::Inscription(info),
-                });
-                remaining -= 1;
-                if remaining == 0 {
-                    break;
+            match update.status {
+                TxStatus::PendingMempool => {
+                    mempool_pending.insert(update.tx_hash);
                 }
+                TxStatus::OnChain(_) if tx_hashes.contains(&update.tx_hash) => {
+                    on_chain.insert(update.tx_hash);
+                }
+                _ => {}
             }
         }
 
-        Ok((results.into_iter().flatten().collect(), mempool_pending))
+        Ok(mempool_pending)
     })
     .await
     .map_err(|_| ZoneTestError::PublishTimeout)?

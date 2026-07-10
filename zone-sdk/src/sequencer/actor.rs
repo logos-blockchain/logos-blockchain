@@ -513,8 +513,8 @@ where
         }
         // `OnChain` is a per-tx lifecycle signal — it fires when an inscription
         // lands in a block, independent of whether it moved the channel lineage.
-        // Our own publishes are already in the lineage, so they never appear in
-        // `adopted`; drive `OnChain` from what was actually mined this block.
+        // Our own publishes never appear in extension-case `adopted` (already
+        // tracked); drive `OnChain` from what was actually mined this block.
         for info in mined {
             let source = self
                 .state
