@@ -379,7 +379,6 @@ pub async fn insert_started_node_info<S: BuildHasher>(
     wallet_info: HashMap<String, WalletInfo, S>,
 ) -> StepResult {
     let wallet_info: HashMap<String, WalletInfo> = wallet_info.into_iter().collect();
-    let client = started_node.client.clone();
 
     world
         .wallet_info
@@ -397,9 +396,6 @@ pub async fn insert_started_node_info<S: BuildHasher>(
             immediate_start: world.network_immediate_start(logical_node_name),
         },
     );
-    world
-        .register_wallet_block_feed_source(logical_node_name, client)
-        .await?;
 
     Ok(())
 }

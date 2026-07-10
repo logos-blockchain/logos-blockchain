@@ -26,7 +26,7 @@ use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
-    BlockFeed, LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
+    LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
     ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
 };
 use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
@@ -41,8 +41,11 @@ use tracing::warn;
 use crate::{
     BIN_PATH_RELEASE,
     common::wallet::{
-        TrackedWalletKeys, TrackedWalletKeysBySource, TrackedWallets, WalletBlockFeedTracker,
-        WalletDiagnostics, WalletFeedTrackingBatch,
+        TrackedWalletKeys, TrackedWalletKeysBySource, TrackedWallets, WalletDiagnostics,
+        scanner::{
+            ScannerSeed, SharedWalletScannerState, WalletScannerRuntime, WalletScannerState,
+            build_fork_group_scanner_configs, start_wallet_scanners, wait_for_scanner_catch_up,
+        },
     },
     cucumber::{
         TARGET,
@@ -56,11 +59,7 @@ use crate::{
             Event, InscriptionId, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
         },
         utils::{make_builder, shared_host_bin_path},
-        wallet::{
-            feed::{CucumberWalletBlockFeed, CucumberWalletBlockFeedError},
-            snapshot::WalletSnapshot,
-            sync::track_wallet_feed_batches_with_backfill,
-        },
+        wallet::snapshot::WalletSnapshot,
     },
     non_zero,
 };
@@ -68,7 +67,6 @@ use crate::{
 type ScenarioBuilderWith = ScenarioBuilder;
 type ConsensusLiveness = workloads::ConsensusLiveness;
 pub type SharedTrackedWallets = Arc<Mutex<TrackedWallets>>;
-pub type SharedWalletBlockFeedTracker = Arc<Mutex<WalletBlockFeedTracker>>;
 pub type SharedObservedTransactionHashes = Arc<Mutex<HashSet<TxHash>>>;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -890,21 +888,26 @@ pub struct CucumberWorld {
     pub fee_state: ScenarioFeeState,
     /// Manual: Scenario-local wallet read model.
     ///
-    /// Chain-derived UTXOs are tracked by the wallet block-feed tracker.
-    /// Step code still records local intent, such as reserved inputs and
-    /// submitted transaction hashes, directly in this state.
+    /// This shared state contains wallet balances/UTXOs observed during a test
+    /// scenario. Chain-derived UTXOs are updated exclusively by the
+    /// background wallet scanner; step code must treat this state as
+    /// read-only. Stored behind `Arc<Mutex<_>>` so scanner tasks and step
+    /// code can safely share a single synchronized view for the scenario
+    /// lifetime.
     pub wallets: SharedTrackedWallets,
-    /// Manual: Runtime block feed used by wallet observation in manual
-    /// scenarios.
-    pub wallet_block_feed: Option<CucumberWalletBlockFeed>,
-    /// Manual: Per-source wallet state advanced from the block feed.
-    pub wallet_feed_tracker: SharedWalletBlockFeedTracker,
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
     /// Manual: Exact signed transactions prepared for later submission.
     pub prepared_transactions: HashMap<String, SignedMantleTx>,
-    /// Manual: Transaction hashes observed in blocks by the wallet block feed.
+    /// Manual: Transaction hashes observed in blocks by the wallet scanner.
     pub observed_transaction_hashes: SharedObservedTransactionHashes,
+    /// Manual: Background wallet scanner diagnostics state.
+    pub wallet_scanner_state: SharedWalletScannerState,
+    /// Manual: Background wallet scanner runtime.
+    pub wallet_scanner_runtime: Option<WalletScannerRuntime>,
+    /// Manual: Restored snapshot seeds available to wallet scanner startup,
+    /// keyed by runtime node name.
+    pub wallet_scanner_seeds: HashMap<String, ScannerSeed>,
     /// Manual: Mapping of logical node names to their corresponding libp2p peer
     /// IDs.
     pub node_peer_ids: HashMap<String, PeerId>,
@@ -969,6 +972,10 @@ pub struct CucumberWorld {
 impl Drop for CucumberWorld {
     fn drop(&mut self) {
         self.zone.clear();
+
+        if let Some(runtime) = self.wallet_scanner_runtime.take() {
+            runtime.cancel();
+        }
 
         if let Some(handles) = self.faucet_task_handles.take() {
             for handle in handles {
@@ -1079,14 +1086,26 @@ impl Debug for CucumberWorld {
             )
             .field("scenario_fee_state", &fee_state_summary(&self.fee_state))
             .field("wallets", &"SharedTrackedWallets")
-            .field("wallet_block_feed", &self.wallet_block_feed.is_some())
-            .field("wallet_feed_tracker", &"WalletBlockFeedTracker")
             .field("submitted_transactions", &self.submitted_transactions.len())
             .field("prepared_transactions", &self.prepared_transactions.len())
             .field(
                 "observed_transaction_hashes",
                 &self.observed_transaction_hashes_len(),
             )
+            .field(
+                "wallet_scanner_groups",
+                &self
+                    .wallet_scanner_state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .groups
+                    .len(),
+            )
+            .field(
+                "wallet_scanner_runtime",
+                &self.wallet_scanner_runtime.is_some(),
+            )
+            .field("wallet_scanner_seeds", &self.wallet_scanner_seeds.len())
             .field("wallet_utxos_by_block", &wallet_utxo_snapshot_count)
             .field("wallet_pending_states", &wallet_pending_count)
             .field(
@@ -1350,140 +1369,43 @@ impl CucumberWorld {
         Ok(action(&mut wallets))
     }
 
-    pub fn with_wallet_feed_state_mut<R>(
-        &self,
-        action: impl FnOnce(&mut WalletBlockFeedTracker, &mut TrackedWallets) -> R,
-    ) -> Result<R, StepError> {
-        let mut tracker = self
-            .wallet_feed_tracker
-            .lock()
-            .map_err(|_| wallet_feed_tracker_lock_error())?;
-        let mut wallets = self.wallets.lock().map_err(|_| wallet_state_lock_error())?;
-
-        Ok(action(&mut tracker, &mut wallets))
-    }
-
     fn wallet_diagnostics_for_debug(&self) -> Result<WalletDiagnostics, StepError> {
         self.with_wallets(TrackedWallets::diagnostics)
     }
 
-    pub async fn ensure_wallet_block_feed(&mut self) -> StepResult {
-        if self.wallet_block_feed.is_some() {
+    pub async fn ensure_wallet_scanner_started(&mut self) -> StepResult {
+        if self.wallet_scanner_runtime.is_some() {
+            tokio::task::yield_now().await;
             return Ok(());
         }
 
-        let feed = CucumberWalletBlockFeed::start(
-            Arc::clone(&self.wallets),
-            Arc::clone(&self.wallet_feed_tracker),
-            Arc::clone(&self.observed_transaction_hashes),
-            self.genesis_block_utxos.clone(),
-        )
-        .await
-        .map_err(|error| wallet_block_feed_error(&error))?;
+        let scanner_state = Arc::new(Mutex::new(WalletScannerState::default()));
+        let configs = build_fork_group_scanner_configs(self, Arc::clone(&scanner_state))?;
+        let runtime = start_wallet_scanners(configs);
 
-        for (node_name, node_info) in &self.nodes_info {
-            feed.register_source(node_name, node_info.started_node.client.clone())
-                .map_err(|error| wallet_block_feed_error(&error))?;
-        }
-
-        self.wallet_block_feed = Some(feed);
-        self.track_known_wallets_with_block_feed().await?;
-
+        self.wallet_scanner_state = scanner_state;
+        self.wallet_scanner_runtime = Some(runtime);
+        tokio::task::yield_now().await;
         Ok(())
     }
 
-    pub async fn register_wallet_block_feed_source(
-        &self,
-        node_name: &str,
-        client: NodeHttpClient,
-    ) -> StepResult {
-        let Some(feed) = &self.wallet_block_feed else {
-            return Ok(());
-        };
-
-        feed.register_source(node_name, client)
-            .map_err(|error| wallet_block_feed_error(&error))?;
-        self.track_known_wallets_with_block_feed().await
+    pub async fn wait_for_wallet_scanner_catch_up(&mut self, timeout: Duration) -> StepResult {
+        self.ensure_wallet_scanner_started().await?;
+        wait_for_scanner_catch_up(&self.wallet_scanner_state, timeout).await
     }
 
-    pub fn wallet_block_feed(&self) -> Result<BlockFeed, StepError> {
-        self.wallet_block_feed
-            .as_ref()
-            .map(CucumberWalletBlockFeed::feed)
-            .ok_or_else(|| StepError::LogicalError {
-                message: "Wallet block feed is not running".to_owned(),
-            })
+    pub fn reset_wallet_scanner(&mut self) {
+        if let Some(runtime) = self.wallet_scanner_runtime.take() {
+            runtime.cancel();
+        }
+        self.wallet_scanner_state = Arc::new(Mutex::new(WalletScannerState::default()));
     }
 
-    pub fn reset_wallet_block_feed(&mut self) {
-        self.wallet_block_feed = None;
-        self.wallet_feed_tracker = Arc::new(Mutex::new(WalletBlockFeedTracker::default()));
-    }
-
-    /// Register currently known, unambiguous wallets with their owning feed
-    /// source.
-    ///
-    /// This makes the feed tracker keep wallet state current in the
-    /// background without letting unrelated fork sources overwrite the same
-    /// wallet. Legacy sync-style steps can still add best-node tracking
-    /// explicitly when needed.
-    pub async fn track_known_wallets_with_block_feed(&self) -> StepResult {
-        if self.wallet_block_feed.is_none()
-            || self.nodes_info.is_empty()
-            || self.wallet_info.is_empty()
-        {
-            return Ok(());
+    pub async fn reset_wallet_scanner_after_current_iteration(&mut self) {
+        if let Some(runtime) = self.wallet_scanner_runtime.take() {
+            runtime.shutdown_after_current_iteration().await;
         }
-
-        let tracking_batches = self.known_wallet_tracking_batches()?;
-        if tracking_batches.is_empty() {
-            return Ok(());
-        }
-
-        let genesis_utxos = self.genesis_block_utxos.clone();
-        track_wallet_feed_batches_with_backfill(self, &tracking_batches, &genesis_utxos).await
-    }
-
-    fn known_wallet_tracking_batches(&self) -> Result<Vec<WalletFeedTrackingBatch>, StepError> {
-        let wallets_by_source = self.wallets_by_source_with_unique_public_keys()?;
-        if wallets_by_source.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut tracking_batches = Vec::new();
-        for (source_node_name, wallets) in wallets_by_source {
-            if !self.nodes_info.contains_key(&source_node_name) {
-                continue;
-            }
-
-            let group_key = self
-                .node_to_group
-                .get(&source_node_name)
-                .cloned()
-                .unwrap_or_default();
-
-            let mut wallet_keys = TrackedWalletKeysBySource::new();
-            for (wallet_name, public_key) in wallets {
-                wallet_keys.add_wallet(&group_key, wallet_name, public_key);
-            }
-
-            if let Some(fee_wallet_account) = self.fee_state.wallet_account.clone() {
-                wallet_keys.add_wallet(
-                    &group_key,
-                    SCENARIO_FEE_ACCOUNT_NAME,
-                    fee_wallet_account.public_key(),
-                );
-            }
-
-            tracking_batches.extend(wallet_keys.batches().map(|wallet_keys_for_group| {
-                WalletFeedTrackingBatch::new(
-                    source_node_name.clone(),
-                    wallet_keys_for_group.wallet_keys().iter().cloned(),
-                )
-            }));
-        }
-
-        Ok(tracking_batches)
+        self.wallet_scanner_state = Arc::new(Mutex::new(WalletScannerState::default()));
     }
 
     pub(crate) fn wallet_tracking_keys_for_source(
@@ -1546,7 +1468,7 @@ impl CucumberWorld {
                 } else {
                     warn!(
                         target: TARGET,
-                        "Skipping automatic wallet feed tracking for aliases on `{}` with the same public key: {}",
+                        "Skipping automatic scanner state tracking for aliases on `{}` with the same public key: {}",
                         source_node_name,
                         wallet_names.join(", ")
                     );
@@ -2184,21 +2106,9 @@ fn running_in_ci() -> bool {
     env::var_os("CI").is_some() || env::var_os("GITHUB_ACTIONS").is_some()
 }
 
-fn wallet_block_feed_error(error: &CucumberWalletBlockFeedError) -> StepError {
-    StepError::LogicalError {
-        message: error.to_string(),
-    }
-}
-
 fn wallet_state_lock_error() -> StepError {
     StepError::LogicalError {
         message: "wallet state lock is poisoned".to_owned(),
-    }
-}
-
-fn wallet_feed_tracker_lock_error() -> StepError {
-    StepError::LogicalError {
-        message: "wallet feed tracker lock is poisoned".to_owned(),
     }
 }
 

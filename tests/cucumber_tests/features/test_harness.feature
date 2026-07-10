@@ -10,7 +10,7 @@ Feature: Test harness
     And node "NODE_2" has at least 1 peers within 15 seconds
     And I stop all nodes
 
-  @snapshot_restore_smoke
+  @smoke_ci
   Scenario: Local snapshot restore after shutdown
     Given I have a cluster with capacity of 1 nodes
     And all peers must be mode online after startup in 30 seconds
@@ -26,7 +26,7 @@ Feature: Test harness
     When node "NODE_1" is at height 3 in 300 seconds
     Then I stop all nodes
 
-  @snapshot_wallet_restore_smoke
+  @smoke_ci
   Scenario: Local snapshot restores wallet extension state
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |
