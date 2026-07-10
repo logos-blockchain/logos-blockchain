@@ -20,7 +20,7 @@ pub use crate::mantle::transactions::{MantleTx, SignedMantleTx, TxHash, Verifica
 use crate::mantle::{
     gas::{Gas, GasCost, GasOverflow},
     ops::transfer::TransferOp,
-    transactions::OperationVerificationHelper,
+    transactions::tx::VerifiedOps,
 };
 
 pub const MAX_MANTLE_TXS: usize = 1024;
@@ -48,9 +48,12 @@ pub trait Transaction {
 // TODO: Purge out gas fns
 pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + StorageSize {
     type Context;
+
     /// Returns the underlying `MantleTx` that this transaction represents.
     fn mantle_tx(&self) -> &MantleTx;
 
+    /// Returns an iterator over the operations and their corresponding proofs
+    /// in this transaction.
     fn ops_with_proof(&self) -> impl Iterator<Item = (&Op, &OpProof)>;
 
     // Gas Cost functions with context already handled
@@ -70,6 +73,11 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + St
         &self,
         context: <Self as AuthenticatedMantleTx>::Context,
     ) -> Result<Gas, GasOverflow>;
+}
+
+pub trait PreverifiedMantleTx: AuthenticatedMantleTx {
+    /// Returns the cursor to the verified operations in this transaction.
+    fn verified_ops(&self) -> VerifiedOps<'_>;
 }
 
 /// A genesis transaction as specified in
@@ -101,6 +109,7 @@ impl<T: StorageSize> StorageSize for &T {
 
 impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
     type Context = <T as AuthenticatedMantleTx>::Context;
+
     fn mantle_tx(&self) -> &MantleTx {
         T::mantle_tx(self)
     }
@@ -135,6 +144,12 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
         context: <Self as AuthenticatedMantleTx>::Context,
     ) -> Result<Gas, GasOverflow> {
         <T as AuthenticatedMantleTx>::storage_gas_consumption(self, context)
+    }
+}
+
+impl<T: PreverifiedMantleTx> PreverifiedMantleTx for &T {
+    fn verified_ops(&self) -> VerifiedOps<'_> {
+        T::verified_ops(self)
     }
 }
 

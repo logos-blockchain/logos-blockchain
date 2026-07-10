@@ -9,14 +9,15 @@ use lb_core_macros::NomCodec;
 use lb_cryptarchia_engine::{Epoch, Slot};
 use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
+use nom::{Parser as _, combinator::all_consuming};
 use lb_utils::bounded::UpperBoundedVec;
-use nom::combinator::all_consuming;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
     mantle::{
-        AuthenticatedMantleTx, StorageSize, Transaction, TransactionHasher, Value,
+        AuthenticatedMantleTx, PreverifiedMantleTx, StorageSize, Transaction, TransactionHasher,
+        Value,
         channel::Channels,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         ledger::{Declarations, Operation, Utxos},
@@ -429,7 +430,7 @@ pub trait OperationVerificationHelper {
 
     fn get_declarations_by_service(
         &self,
-        service: &ServiceType,
+        service: ServiceType,
     ) -> Result<&Declarations, VerificationError>;
 
     fn get_declarations_by_id(
@@ -481,17 +482,18 @@ impl<State: VerificationState> SignedMantleTx<State> {
         self.mantle_tx.ops().iter().zip(self.ops_proofs.iter())
     }
 
-    pub fn mantle_tx(&self) -> &MantleTx {
+    pub const fn mantle_tx(&self) -> &MantleTx {
         &self.mantle_tx
     }
 
-    pub fn ops_proofs(&self) -> &OpsProofs {
+    pub const fn ops_proofs(&self) -> &OpsProofs {
         &self.ops_proofs
     }
 }
 
 impl SignedMantleTx<Unverified> {
-    pub fn new(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
+    #[must_use]
+    pub const fn new(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
         Self {
             mantle_tx,
             ops_proofs,
@@ -499,7 +501,7 @@ impl SignedMantleTx<Unverified> {
         }
     }
 
-    fn ensure_one_proof_per_op(&self) -> Result<(), VerificationError> {
+    const fn ensure_one_proof_per_op(&self) -> Result<(), VerificationError> {
         if self.mantle_tx.ops().len() == self.ops_proofs.len() {
             return Ok(());
         }
@@ -523,7 +525,6 @@ impl SignedMantleTx<Unverified> {
             (Op::ChannelInscribe(inscribe_op), OpProof::Ed25519Sig(sig)) => inscribe_op
                 .signer
                 .verify(tx_hash_bytes.as_ref(), sig)
-                .map(|_| ())
                 .map_err(|_| VerificationError::InvalidSignature { op_index }),
             (Op::LeaderClaim(leader_claim_op), OpProof::PoC(poc)) => {
                 let is_verified = poc.verify(&LeaderClaimPublic {
@@ -577,15 +578,43 @@ impl SignedMantleTx<Unverified> {
     ///
     /// - `ops` and `proofs` have the same length
     /// - Each operation has a corresponding proof of the correct type
-    /// - Inscribe and LeaderClaim operations have valid signatures/proofs.
+    /// - [`InscriptionOp`](crate::mantle::ops::channel::inscribe::InscriptionOp)
+    ///   and [`LeaderClaimOp`](crate::mantle::ops::leader_claim::LeaderClaimOp) have valid signatures/proofs.
     pub fn preverify(self) -> Result<SignedMantleTx<Preverified>, VerificationError> {
         self.ensure_one_proof_per_op()?;
         self.verify_stateless_ops()?;
         Ok(self.into_preverified())
     }
+
+    /// Skips verification. Genesis/testing only — see `new_trusted`.
+    #[must_use]
+    #[doc(hidden)]
+    pub fn into_trusted(self) -> SignedMantleTx<Preverified> {
+        SignedMantleTx::new_trusted(self.mantle_tx, self.ops_proofs)
+    }
 }
 
 impl SignedMantleTx<Preverified> {
+    /// Creates a new `SignedMantleTx<Preverified>` without performing any
+    /// verification.
+    ///
+    /// This function is intended for
+    /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) and
+    /// testing purposes only.
+    #[must_use]
+    #[doc(hidden)]
+    pub const fn new_trusted(mantle_tx: MantleTx, ops_proofs: OpsProofs) -> Self {
+        Self {
+            mantle_tx,
+            ops_proofs,
+            state: Preverified,
+        }
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "The match arms are long due to the validation context construction. Split later."
+    )]
     pub(crate) fn verify_stateful_op(
         op_index: usize,
         op: &Op,
@@ -697,7 +726,7 @@ impl SignedMantleTx<Preverified> {
                     declare_zk_sig: zk_sig,
                     declare_eddsa_sig: ed25519_sig,
                     declarations: helper
-                        .get_declarations_by_service(&sdp_declare_op.service_type)?,
+                        .get_declarations_by_service(sdp_declare_op.service_type)?,
                     min_stake: helper.get_min_stake(),
                 };
                 sdp_declare_op
@@ -758,6 +787,7 @@ impl SignedMantleTx<Preverified> {
         }
     }
 
+    #[must_use]
     pub fn verified_ops(&self) -> VerifiedOps<'_> {
         self.into()
     }
@@ -927,6 +957,12 @@ impl<State: VerificationState> AuthenticatedMantleTx for SignedMantleTx<State> {
     }
 }
 
+impl PreverifiedMantleTx for SignedMantleTx<Preverified> {
+    fn verified_ops(&self) -> VerifiedOps<'_> {
+        self.verified_ops()
+    }
+}
+
 impl<State: VerificationState> GasCalculator for SignedMantleTx<State> {
     type Context = GasPrices;
 
@@ -1038,13 +1074,27 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Unverified> {
         D: Deserializer<'de>,
     {
         if deserializer.is_human_readable() {
-            OwnedSignedMantleTxHelper::deserialize(deserializer).map(SignedMantleTx::from)
+            OwnedSignedMantleTxHelper::deserialize(deserializer).map(Self::from)
         } else {
             let bytes: Vec<u8> = Deserialize::deserialize(deserializer)?;
             all_consuming(decode_signed_mantle_tx)
                 .parse(bytes.as_slice())
                 .map(|(_, tx)| tx)
+                .map_err(serde::de::Error::custom)
         }
+    }
+}
+
+// This `impl` might be removed in favor of explicit preverification at specific
+// boundaries. E.g.: Make an HTTP service work with `Unverify` and only
+// `Preverify` at that Service's boundary.
+impl<'de> Deserialize<'de> for SignedMantleTx<Preverified> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let unverified_tx = SignedMantleTx::<Unverified>::deserialize(deserializer)?;
+        unverified_tx.preverify().map_err(serde::de::Error::custom)
     }
 }
 
@@ -1088,20 +1138,36 @@ mod tests {
 
     struct TestOperationVerificationHelper {
         channels: Channels,
-        // thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         keys: HashMap<(ChannelId, ChannelKeyIndex), Ed25519PublicKey>,
+        locked_notes: LockedNotes,
+        utxos: Utxos,
+        declarations: Declarations,
+        min_stake: MinStake,
+        epoch: Epoch,
+        block_slot: Slot,
+        nullifiers: HashTrieSetSync<VoucherNullifier>,
+        claimable_vouchers_root: RewardsRoot,
     }
 
     impl TestOperationVerificationHelper {
         fn new(
             channels: Channels,
-            // thresholds: impl IntoIterator<Item = (ChannelId, ChannelKeyIndex)>,
             keys: impl IntoIterator<Item = ((ChannelId, ChannelKeyIndex), Ed25519PublicKey)>,
         ) -> Self {
             Self {
                 channels,
-                // thresholds: thresholds.into_iter().collect(),
                 keys: keys.into_iter().collect(),
+                locked_notes: LockedNotes::new(),
+                utxos: Utxos::new(),
+                declarations: Declarations::new_sync(),
+                min_stake: MinStake {
+                    threshold: 0,
+                    timestamp: 0,
+                },
+                epoch: Epoch::from(0u32),
+                block_slot: Slot::from(0u64),
+                nullifiers: HashTrieSetSync::new_sync(),
+                claimable_vouchers_root: RewardsRoot::default(),
             }
         }
     }
@@ -1112,45 +1178,45 @@ mod tests {
         }
 
         fn get_locked_notes(&self) -> &LockedNotes {
-            todo!()
+            &self.locked_notes
         }
 
         fn get_utxos(&self) -> &Utxos {
-            todo!()
+            &self.utxos
         }
 
         fn get_declarations_by_service(
             &self,
-            service: &ServiceType,
+            _service: ServiceType,
         ) -> Result<&Declarations, VerificationError> {
-            todo!()
+            Ok(&self.declarations)
         }
 
         fn get_declarations_by_id(
             &self,
-            id: &DeclarationId,
+            _id: &DeclarationId,
         ) -> Result<&Declarations, VerificationError> {
-            todo!()
+            Ok(&self.declarations)
         }
 
         fn get_min_stake(&self) -> &MinStake {
-            todo!()
+            &self.min_stake
         }
 
         fn get_epoch(&self) -> Epoch {
-            todo!()
+            self.epoch
         }
 
         fn get_block_slot(&self) -> Slot {
-            todo!()
+            self.block_slot
         }
 
         fn get_nullifiers(&self) -> &HashTrieSetSync<VoucherNullifier> {
-            todo!()
+            &self.nullifiers
         }
 
         fn get_claimable_vouchers_root(&self) -> &RewardsRoot {
-            todo!()
+            &self.claimable_vouchers_root
         }
 
         fn get_channel_transfer_threshold(
@@ -1202,15 +1268,15 @@ mod tests {
     // TODO: The generated channels are bare. We should add more realistic channel
     // states for testing.
     fn make_channel_state(transfer_threshold: ChannelKeyIndex) -> ChannelState {
-        let keys = Keys::empty();
+        let keys = Keys::new_unchecked(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]);
         ChannelState {
             accredited_keys: Arc::new(keys),
             configuration_threshold: 0,
 
             tip_message: MsgId::root(),
-            tip_slot: Default::default(),
-            tip_sequencer: Default::default(),
-            tip_sequencer_starting_slot: Default::default(),
+            tip_slot: Slot::default(),
+            tip_sequencer: u16::default(),
+            tip_sequencer_starting_slot: Slot::default(),
 
             posting_timeframe: SlotTimeframe::from(0),
             posting_timeout: SlotTimeout::from(0),
@@ -1222,7 +1288,7 @@ mod tests {
     fn create_withdraw_tx(
         channel_id: ChannelId,
         signing_keys: &[&Ed25519Key],
-    ) -> SignedMantleTx<Unverified> {
+    ) -> SignedMantleTx<Preverified> {
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
             inputs: Inputs::new([NoteId(Fr::from(0u64))]),
@@ -1231,7 +1297,13 @@ mod tests {
         let tx_hash = mantle_tx.hash();
         let proof = create_channel_multi_sig_proof(&tx_hash, signing_keys);
 
-        SignedMantleTx::new(mantle_tx, [OpProof::ChannelMultiSigProof(proof)].into())
+        let tx = SignedMantleTx::new(mantle_tx, [OpProof::ChannelMultiSigProof(proof)].into()).preverify().unwrap();
+        assert_eq!(
+            tx.ops_with_proof().count(),
+            1,
+            "The tests that rely on this function assume that the transaction has exactly one operation."
+        );
+        tx
     }
 
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
@@ -1592,7 +1664,7 @@ mod tests {
             ],
         );
 
-        assert!(signed_tx.verify_ops_proofs_with_helper(&helper).is_ok());
+        assert!(signed_tx.verified_ops().next(&helper).unwrap().is_ok());
     }
 
     #[test]
@@ -1604,7 +1676,7 @@ mod tests {
         let channels = Channels::new();
         let helper = TestOperationVerificationHelper::new(channels, []);
 
-        let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
+        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
         assert_eq!(
             verification_result,
             Err(VerificationError::ChannelNotFound { channel_id })
@@ -1627,7 +1699,7 @@ mod tests {
         let helper =
             TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
 
-        let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
+        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
         assert_eq!(
             verification_result,
             Err(VerificationError::KeyNotFound {
@@ -1652,7 +1724,7 @@ mod tests {
         let helper =
             TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
 
-        let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
+        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
         assert_eq!(
             verification_result,
             Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
@@ -1681,7 +1753,7 @@ mod tests {
             [((channel_id, 0), expected_key.public_key())],
         );
 
-        let verification_result = signed_tx.verify_ops_proofs_with_helper(&helper);
+        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
         assert_eq!(
             verification_result,
             Err(VerificationError::ChannelMultiSigProofInvalidSignature {

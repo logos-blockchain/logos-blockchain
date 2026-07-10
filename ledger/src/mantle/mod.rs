@@ -7,27 +7,21 @@ use lb_core::{
     crypto::ZkHasher,
     events::TxEvent,
     mantle::{
-        GenesisTx, NoteId, TxHash, Value,
+        GenesisTx, NoteId, Value,
         ledger::Operation as _,
         ops::{
             channel::{
-                config::{
-                    ChannelConfigExecutionContext, ChannelConfigOp, ChannelConfigValidationContext,
-                },
-                inscribe::{
-                    InscriptionExecutionContext, InscriptionOp, InscriptionValidationContext,
-                },
+                config::{ChannelConfigExecutionContext, ChannelConfigOp},
+                inscribe::{InscriptionExecutionContext, InscriptionOp},
             },
             leader_claim::{LeaderClaimError, RewardsRoot, VoucherCm},
             sdp::{SDPActiveOp, SDPDeclareOp, SDPWithdrawOp},
             transfer::TransferError,
         },
     },
-    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     sdp::locked_notes::LockedNotes,
 };
 use lb_cryptarchia_engine::Slot;
-use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_mmr::MerkleMountainRange;
 use sdp::Error as SdpLedgerError;
 use tracing::error;
@@ -126,7 +120,7 @@ impl LedgerState {
 
     /// Get the root of the voucher commitments snapshot.
     #[must_use]
-    pub const fn vouchers_snapshot_root(&self) -> RewardsRoot {
+    pub const fn vouchers_snapshot_root(&self) -> &RewardsRoot {
         self.leaders.vouchers_snapshot_root()
     }
 

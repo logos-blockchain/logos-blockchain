@@ -1273,10 +1273,10 @@ mod tests {
             CryptarchiaParameter, GenesisTime, GenesisTx as _, NoteId,
             nom::NomEncode as _,
             ops::channel::{ChannelId, MsgId, inscribe::Inscription},
+            transactions::states::Preverified,
         },
         sdp::{Locator, ProviderId, ServiceType},
     };
-
     // ── helpers ───────────────────────────────────────────────────────────────
 
     fn valid_inscription() -> InscriptionOp {
@@ -1337,7 +1337,7 @@ mod tests {
 
     // ── helpers for the with_genesis_tx path ──────────────────────────────────
 
-    fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx {
+    fn make_signed_genesis_tx(extra_ops: Vec<Op>) -> SignedMantleTx<Preverified> {
         let mut ops = vec![
             Op::Transfer(TransferOp::new(
                 Inputs::empty(),

@@ -764,7 +764,10 @@ where
         let signed_tx = wallet
             .build_leader_claim_tx(
                 tip,
-                ledger_state.mantle_ledger().vouchers_snapshot_root(),
+                ledger_state
+                    .mantle_ledger()
+                    .vouchers_snapshot_root()
+                    .clone(),
                 reward_amount,
                 config.funding_pk,
                 config.max_tx_fee,
