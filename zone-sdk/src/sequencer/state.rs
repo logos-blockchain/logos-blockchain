@@ -75,10 +75,9 @@ pub struct TxState {
 }
 
 /// A channel-touching tx's tip-advancing content, classified once at block
-/// scan and stored per block. `Custom` shapes participate in channel-tip
-/// derivation (the tip must mirror the ledger) but are excluded from
-/// consumer-facing channel updates — the SDK cannot classify or retry them,
-/// so consumers observe them only at finalization.
+/// scan and stored per block. All variants feed channel-tip derivation and
+/// channel updates; only `Inscription` and `AtomicWithdraw` are mirrored
+/// into the pending retry set.
 #[derive(Debug, Clone)]
 pub enum BlockChannelTx {
     /// `publish` shape: a single inscription.
@@ -87,9 +86,14 @@ pub enum BlockChannelTx {
     AtomicWithdraw(AtomicWithdrawInfo),
     /// `channel_config` shape: a synthetic tip-reset entry (empty payload).
     Config(InscriptionInfo),
-    /// A shape the SDK cannot produce; carries its tip-advancing entries in
-    /// op order.
-    Custom(Vec<InscriptionInfo>),
+    /// A shape the SDK cannot produce (bundled deposits, multi-inscribe,
+    /// custom-built txs). Kept whole — updates hand the tx back to the
+    /// caller's own recovery logic — along with its tip-advancing entries
+    /// in op order.
+    Custom {
+        tx: SignedMantleTx,
+        entries: Vec<InscriptionInfo>,
+    },
 }
 
 impl BlockChannelTx {
@@ -98,7 +102,7 @@ impl BlockChannelTx {
         match self {
             Self::Inscription(i) | Self::Config(i) => std::slice::from_ref(i),
             Self::AtomicWithdraw(a) => std::slice::from_ref(&a.inscription),
-            Self::Custom(infos) => infos,
+            Self::Custom { entries, .. } => entries,
         }
     }
 
@@ -680,17 +684,17 @@ impl TxState {
         let old_ids: HashSet<MsgId> = old_lineage.iter().map(|i| i.this_msg).collect();
         let new_ids: HashSet<MsgId> = new_lineage.iter().map(|i| i.this_msg).collect();
 
-        let adopted: Vec<ChannelUpdateTx> = new_lineage
-            .iter()
-            .filter(|i| !old_ids.contains(&i.this_msg))
-            .filter_map(|i| self.classify_update_tx(i))
-            .collect();
+        let adopted = self.update_txs_from_infos(
+            new_lineage
+                .iter()
+                .filter(|i| !old_ids.contains(&i.this_msg)),
+        );
 
-        let orphaned: Vec<ChannelUpdateTx> = old_lineage
-            .iter()
-            .filter(|i| !new_ids.contains(&i.this_msg))
-            .filter_map(|i| self.classify_update_tx(i))
-            .collect();
+        let orphaned = self.update_txs_from_infos(
+            old_lineage
+                .iter()
+                .filter(|i| !new_ids.contains(&i.this_msg)),
+        );
 
         if orphaned.is_empty() && adopted.is_empty() {
             return None;
@@ -703,11 +707,25 @@ impl TxState {
         })
     }
 
+    /// Build the consumer-facing update entries from diffed lineage infos,
+    /// one entry per tx: a multi-op custom tx contributes several lineage
+    /// infos but is reported once, whole.
+    fn update_txs_from_infos<'a>(
+        &'a self,
+        infos: impl Iterator<Item = &'a InscriptionInfo>,
+    ) -> Vec<ChannelUpdateTx> {
+        let mut seen: HashSet<TxHash> = HashSet::new();
+        infos
+            .filter(|info| seen.insert(info.tx_hash))
+            .map(|info| self.classify_update_tx(info))
+            .collect()
+    }
+
     /// Type a lineage entry for a consumer-facing channel update from its
     /// block classification (or its pending entry when the lineage bridged
-    /// through a held link). `Custom` shapes yield `None` — the SDK cannot
-    /// classify or retry them, so they are not reported.
-    fn classify_update_tx(&self, info: &InscriptionInfo) -> Option<ChannelUpdateTx> {
+    /// through a held link). `Custom` shapes are reported whole — the
+    /// caller's own logic parses the tx.
+    fn classify_update_tx(&self, info: &InscriptionInfo) -> ChannelUpdateTx {
         if let Some(block_tx) = self
             .block_txs
             .values()
@@ -715,13 +733,11 @@ impl TxState {
             .find(|tx| tx.tx_hash() == Some(info.tx_hash))
         {
             return match block_tx {
+                BlockChannelTx::AtomicWithdraw(a) => ChannelUpdateTx::AtomicWithdraw(a.clone()),
                 BlockChannelTx::Inscription(_) | BlockChannelTx::Config(_) => {
-                    Some(ChannelUpdateTx::Inscription(info.clone()))
+                    ChannelUpdateTx::Inscription(info.clone())
                 }
-                BlockChannelTx::AtomicWithdraw(a) => {
-                    Some(ChannelUpdateTx::AtomicWithdraw(a.clone()))
-                }
-                BlockChannelTx::Custom(_) => None,
+                BlockChannelTx::Custom { tx, .. } => ChannelUpdateTx::Custom(tx.clone()),
             };
         }
         // Not in any held block — the lineage bridged through a pending link.
@@ -729,7 +745,7 @@ impl TxState {
             .pending
             .get(&info.tx_hash)
             .and_then(|p| p.withdraws.clone());
-        Some(withdraws.map_or_else(
+        withdraws.map_or_else(
             || ChannelUpdateTx::Inscription(info.clone()),
             |withdraws| {
                 ChannelUpdateTx::AtomicWithdraw(AtomicWithdrawInfo {
@@ -738,7 +754,7 @@ impl TxState {
                     withdraws,
                 })
             },
-        ))
+        )
     }
 
     /// The channel's inscription chain at an L1 tip: the mined inscriptions,
@@ -849,14 +865,10 @@ impl TxState {
     }
 
     /// Collect the channel txs on a branch from the given block back to LIB,
-    /// in oldest-first order, typed for a consumer-facing update. Custom
-    /// shapes are excluded.
+    /// in oldest-first order, typed for a consumer-facing update.
     #[must_use]
     pub fn collect_update_txs_on_branch(&self, tip: HeaderId) -> Vec<ChannelUpdateTx> {
-        self.infos_on_branch(tip)
-            .iter()
-            .filter_map(|i| self.classify_update_tx(i))
-            .collect()
+        self.update_txs_from_infos(self.infos_on_branch(tip).iter())
     }
 }
 
@@ -1141,7 +1153,7 @@ mod tests {
 
         assert!(update.orphaned.is_empty(), "extension never orphans");
         assert_eq!(update.adopted.len(), 1);
-        assert_eq!(update.adopted[0].inscription().this_msg, c1_msg);
+        assert_eq!(update.adopted[0].inscription().unwrap().this_msg, c1_msg);
         // Local pending is still tracked, and the observed network entry
         // joined it (already `posted`, excluded from re-posting while its
         // block is on-branch via the safe set).
@@ -1195,7 +1207,7 @@ mod tests {
         let update = state.detect_channel_update(&old_lineage, block2).unwrap();
         assert!(update.orphaned.is_empty());
         assert_eq!(update.adopted.len(), 1);
-        assert_eq!(update.adopted[0].inscription().this_msg, c1_msg);
+        assert_eq!(update.adopted[0].inscription().unwrap().this_msg, c1_msg);
         assert_eq!(state.pending.len(), 2);
     }
 

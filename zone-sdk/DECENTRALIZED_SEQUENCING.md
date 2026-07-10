@@ -269,6 +269,8 @@ The integration tests provide reference policies that run this re-publish loop a
 
 If the orphan policy is too aggressive — e.g., the orphan was caused by genuine application-level conflict, not a race — the consumer can choose to drop the payload, deduplicate against a higher-level transaction stream, or apply any other custom rule. The SDK only surfaces the event; the resolution policy is yours.
 
+Channel txs built outside the publish API — directly via the node API, or with `prepare_tx` + `submit_signed_tx` — surface in `adopted`/`orphaned` as `ChannelUpdateTx::Custom(SignedMantleTx)`: the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish` and `publish_atomic_withdraw`.
+
 
 ## Current limitations
 

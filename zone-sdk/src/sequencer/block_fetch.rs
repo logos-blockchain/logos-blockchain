@@ -197,10 +197,11 @@ where
     })
 }
 
-/// Mirror a block's supported channel txs into the pending set
+/// Mirror a block's channel inscriptions into the pending set
 /// (insert-if-absent), pairing each entry with its full [`SignedMantleTx`]
 /// so a later retry re-posts the original bytes. Config and custom shapes
-/// are ignored — their submitter already tracks them (`pending_other`).
+/// are ignored — configs are tracked by their submitter (`pending_other`)
+/// and multi-inscribe txs are not representable in the pending lineage.
 fn observe_channel_inscriptions(
     state: &mut TxState,
     classified: &[BlockChannelTx],
@@ -214,7 +215,7 @@ fn observe_channel_inscriptions(
         let (info, withdraws) = match block_tx {
             BlockChannelTx::Inscription(i) => (i, None),
             BlockChannelTx::AtomicWithdraw(a) => (&a.inscription, Some(a.withdraws.clone())),
-            BlockChannelTx::Config(_) | BlockChannelTx::Custom(_) => continue,
+            BlockChannelTx::Config(_) | BlockChannelTx::Custom { .. } => continue,
         };
         let tx = by_hash
             .get(&info.tx_hash)
@@ -227,6 +228,39 @@ fn observe_channel_inscriptions(
             withdraws,
         );
     }
+}
+
+/// Extract a tx's channel inscriptions, in op order. `ChannelConfig` ops
+/// yield synthetic empty-payload entries (they reset the channel tip).
+#[must_use]
+pub fn channel_inscriptions(tx: &SignedMantleTx, channel_id: ChannelId) -> Vec<InscriptionInfo> {
+    let tx_hash = tx.mantle_tx.hash();
+    let mut entries: Vec<InscriptionInfo> = Vec::new();
+    for op in tx.mantle_tx.ops() {
+        match op {
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                entries.push(InscriptionInfo {
+                    tx_hash,
+                    parent_msg: inscribe.parent,
+                    this_msg: inscribe.id(),
+                    payload: inscribe.inscription.clone(),
+                });
+            }
+            Op::ChannelConfig(config) if config.channel == channel_id => {
+                let parent_msg = entries
+                    .last()
+                    .map_or_else(MsgId::root, |prev| prev.this_msg);
+                entries.push(InscriptionInfo {
+                    tx_hash,
+                    parent_msg,
+                    this_msg: config.id(),
+                    payload: [].into(),
+                });
+            }
+            _ => {}
+        }
+    }
+    entries
 }
 
 /// Convert a shed pending entry into a [`ChannelUpdateTx`] for surfacing to
@@ -588,11 +622,13 @@ fn apply_backfilled_block(
 /// pass that decides what each tx *is*: a `publish` inscription, an atomic
 /// inscription+withdraw bundle, a `channel_config` (a synthetic tip-reset
 /// entry with an empty payload so payload-keyed consumers ignore it
-/// naturally), or a custom shape the SDK cannot produce (multiple
-/// tip-advancing ops, foreign ops such as deposits, or more than the one
-/// funding fee transfer). Custom shapes keep their tip-advancing entries so
-/// channel-tip derivation stays ledger-true, but are neither mirrored into
-/// pending nor reported in channel updates.
+/// naturally), or a custom shape the SDK cannot produce (bundled deposits,
+/// multiple tip-advancing ops, more than the one funding fee transfer).
+/// Custom shapes keep their tip-advancing entries so channel-tip derivation
+/// stays ledger-true, and those entries still reach channel updates as
+/// [`ChannelUpdateTx::Custom`]; custom txs are only excluded from the
+/// pending retry mirror — the SDK cannot rebuild them, their author
+/// recovers them.
 ///
 /// The ledger validates ops in tx-then-op order, with each `ChannelInscribe`
 /// requiring `parent == channel.tip_message` and each `ChannelConfig`
@@ -681,6 +717,9 @@ fn classify_channel_txs(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<Bl
             continue;
         }
 
+        // Only the exact shapes the publish API produces classify as
+        // supported; anything else — bundled deposits, multi-inscribe,
+        // extra transfers — is `Custom`.
         let clean = !foreign_ops && transfers <= 1;
         let block_tx = if clean && inscribes == 1 && configs == 0 {
             let inscription = entries.pop().expect("exactly one inscribe entry");
@@ -696,7 +735,10 @@ fn classify_channel_txs(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<Bl
         } else if clean && configs == 1 && inscribes == 0 && withdraws.is_empty() {
             BlockChannelTx::Config(entries.pop().expect("exactly one config entry"))
         } else {
-            BlockChannelTx::Custom(entries)
+            BlockChannelTx::Custom {
+                tx: tx.clone(),
+                entries,
+            }
         };
         classified.push(block_tx);
     }
@@ -890,6 +932,162 @@ mod tests {
         assert_eq!(items[0].ops.len(), 2);
         assert!(matches!(items[0].ops[0], FinalizedOp::Deposit(_)));
         assert!(matches!(items[0].ops[1], FinalizedOp::Inscription(_)));
+    }
+
+    #[test]
+    fn deposit_plus_inscription_is_adopted_as_custom() {
+        // The atomic bridge pattern: [ChannelDeposit, ChannelInscribe] in
+        // one tx. The SDK cannot rebuild a deposit, so the tx classifies as
+        // `Custom`: its payload still reaches the consumer via `adopted`
+        // (typed so it isn't republished as a bare message, which could
+        // race and invalidate the author's deposit), and it is not mirrored
+        // for retry — its author recovers it.
+        let channel_id = ChannelId::from([0; 32]);
+        let dep = deposit_op(channel_id, 1, b"deposit-meta".into());
+        let inscribe = inscribe_op(channel_id, MsgId::root(), b"bridge");
+        let msg_id = inscribe.id();
+        let tx =
+            unverified_tx_with_ops(vec![Op::ChannelDeposit(dep), Op::ChannelInscribe(inscribe)]);
+        let tx_hash = tx.mantle_tx.hash();
+
+        let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+        assert_eq!(classified.len(), 1);
+        assert!(
+            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 1)
+        );
+
+        let genesis = header_id(0);
+        let block = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let old_lineage = state.channel_lineage(genesis);
+        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        state.process_block(block, genesis, genesis, vec![tx_hash], classified);
+
+        assert!(
+            !state.is_tracked(&tx_hash),
+            "custom tx is not mirrored for retry"
+        );
+        let update = state
+            .detect_channel_update(&old_lineage, block)
+            .expect("update");
+        assert_eq!(update.new_channel_tip, msg_id);
+        assert_eq!(update.adopted.len(), 1);
+        match &update.adopted[0] {
+            ChannelUpdateTx::Custom(adopted_tx) => {
+                assert_eq!(
+                    adopted_tx.mantle_tx.hash(),
+                    tx_hash,
+                    "the whole tx is handed over"
+                );
+                let inscriptions = channel_inscriptions(adopted_tx, channel_id);
+                assert_eq!(inscriptions.len(), 1);
+                assert_eq!(inscriptions[0].this_msg, msg_id);
+            }
+            other => panic!("expected Custom, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn multi_inscribe_tx_advances_tip_and_delivers_adopted_entries() {
+        // A valid tx can chain several inscriptions internally (each parents
+        // the previous). It cannot be mirrored for retry, but every payload
+        // that advanced the canonical tip must still reach the consumer via
+        // `adopted` — otherwise consumer state falls behind the reported
+        // `new_channel_tip` until finalization.
+        let channel_id = ChannelId::from([0; 32]);
+        let first = inscribe_op(channel_id, MsgId::root(), b"first");
+        let second = inscribe_op(channel_id, first.id(), b"second");
+        let (first_msg, second_msg) = (first.id(), second.id());
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(first),
+            Op::ChannelInscribe(second),
+        ]);
+        let tx_hash = tx.mantle_tx.hash();
+
+        let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+        assert_eq!(classified.len(), 1);
+        assert!(
+            matches!(&classified[0], BlockChannelTx::Custom { entries, .. } if entries.len() == 2)
+        );
+
+        let genesis = header_id(0);
+        let block = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let old_lineage = state.channel_lineage(genesis);
+        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        state.process_block(block, genesis, genesis, vec![tx_hash], classified);
+
+        assert!(
+            !state.is_tracked(&tx_hash),
+            "multi-inscribe is not mirrored for retry"
+        );
+        let update = state
+            .detect_channel_update(&old_lineage, block)
+            .expect("update");
+        assert_eq!(update.new_channel_tip, second_msg, "tip stays ledger-true");
+        // The tx is reported once, whole; its payloads are recoverable via
+        // the public helper.
+        assert_eq!(update.adopted.len(), 1);
+        match &update.adopted[0] {
+            ChannelUpdateTx::Custom(adopted_tx) => {
+                let adopted_msgs: Vec<MsgId> = channel_inscriptions(adopted_tx, channel_id)
+                    .iter()
+                    .map(|i| i.this_msg)
+                    .collect();
+                assert_eq!(
+                    adopted_msgs,
+                    vec![first_msg, second_msg],
+                    "every tip-advancing payload is delivered"
+                );
+            }
+            other => panic!("expected Custom, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn adopted_bundle_carries_its_withdraws() {
+        // An inscription+withdraw bundle observed on chain surfaces in
+        // `adopted` as a typed bundle, withdraws included.
+        let channel_id = ChannelId::from([0; 32]);
+        let inscribe = inscribe_op(channel_id, MsgId::root(), b"bundle");
+        let msg_id = inscribe.id();
+        let outputs = Outputs::new([Note::new(
+            42,
+            ZkKey::from(BigUint::from(0u64)).to_public_key(),
+        )]);
+        let withdraw = ChannelWithdrawOp {
+            channel_id,
+            outputs,
+            withdraw_nonce: 3,
+        };
+        let tx = unverified_tx_with_ops(vec![
+            Op::ChannelInscribe(inscribe),
+            Op::ChannelWithdraw(withdraw),
+        ]);
+        let tx_hash = tx.mantle_tx.hash();
+
+        let classified = classify_channel_txs(std::slice::from_ref(&tx), channel_id);
+        assert!(matches!(classified[0], BlockChannelTx::AtomicWithdraw(_)));
+
+        let genesis = header_id(0);
+        let block = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+        let old_lineage = state.channel_lineage(genesis);
+        observe_channel_inscriptions(&mut state, &classified, std::slice::from_ref(&tx));
+        state.process_block(block, genesis, genesis, vec![tx_hash], classified);
+
+        let update = state
+            .detect_channel_update(&old_lineage, block)
+            .expect("update");
+        assert_eq!(update.adopted.len(), 1);
+        match &update.adopted[0] {
+            ChannelUpdateTx::AtomicWithdraw(a) => {
+                assert_eq!(a.inscription.this_msg, msg_id);
+                assert_eq!(a.withdraws.len(), 1);
+                assert_eq!(a.withdraws[0].op.withdraw_nonce, 3);
+            }
+            other => panic!("expected AtomicWithdraw, got {other:?}"),
+        }
     }
 
     #[test]

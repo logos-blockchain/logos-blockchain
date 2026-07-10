@@ -539,21 +539,25 @@ where
             hex::encode(update.new_channel_tip.as_ref()),
         );
         for tx in &update.orphaned {
-            let info = tx.inscription();
+            Self::log_update_entry("orphaned", tx);
+        }
+        for tx in &update.adopted {
+            Self::log_update_entry("adopted", tx);
+        }
+    }
+
+    fn log_update_entry(kind: &str, tx: &ChannelUpdateTx) {
+        if let Some(info) = tx.inscription() {
             debug!(target: TARGET,
-                "  orphaned: payload={:?}, tx={}, msg_id={}",
+                "  {kind}: payload={:?}, tx={}, msg_id={}",
                 String::from_utf8_lossy(&info.payload),
                 hex::encode(info.tx_hash.0),
                 hex::encode(info.this_msg.as_ref()),
             );
-        }
-        for tx in &update.adopted {
-            let info = tx.inscription();
+        } else {
             debug!(target: TARGET,
-                "  adopted: payload={:?}, tx={}, msg_id={}",
-                String::from_utf8_lossy(&info.payload),
-                hex::encode(info.tx_hash.0),
-                hex::encode(info.this_msg.as_ref()),
+                "  {kind}: custom tx {}",
+                hex::encode(tx.tx_hash().0),
             );
         }
     }

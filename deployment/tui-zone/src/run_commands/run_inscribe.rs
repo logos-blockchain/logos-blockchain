@@ -166,7 +166,7 @@ async fn apply_channel_update(
     // the channel reappears in `adopted`, so don't republish it.
     let adopted_payloads: HashSet<&[u8]> = adopted
         .iter()
-        .map(|tx| tx.inscription().payload.as_slice())
+        .filter_map(|tx| tx.inscription().map(|i| i.payload.as_slice()))
         .collect();
     for entry in &orphaned {
         handle_orphan(state, sequencer, entry, &adopted_payloads).await;

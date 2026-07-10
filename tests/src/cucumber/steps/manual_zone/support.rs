@@ -292,7 +292,7 @@ where
         let adopted: HashSet<&Inscription> = channel_update
             .adopted
             .iter()
-            .map(|tx| &tx.inscription().payload)
+            .filter_map(|tx| tx.inscription().map(|i| &i.payload))
             .collect();
         for entry in &channel_update.orphaned {
             let ChannelUpdateTx::Inscription(info) = entry else {
@@ -347,8 +347,11 @@ impl LineageTracker {
     /// Fold a delta into per-intent liveness — only our `msg_id`s are relevant.
     /// Adopted members become live; orphaned members stop being live.
     fn observe(&mut self, channel_update: &ChannelUpdate) {
-        for tx in &channel_update.adopted {
-            let info = tx.inscription();
+        for info in channel_update
+            .adopted
+            .iter()
+            .filter_map(ChannelUpdateTx::inscription)
+        {
             if let Some(&root) = self.intent_root.get(&info.this_msg) {
                 self.live.entry(root).or_default().insert(info.this_msg);
             }
@@ -482,7 +485,7 @@ where
                 .iter()
                 .filter_map(|o| match o {
                     ChannelUpdateTx::Inscription(i) => Some(i.clone()),
-                    ChannelUpdateTx::AtomicWithdraw(_) => None,
+                    ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
                 })
                 .collect();
             self.balances
@@ -547,7 +550,7 @@ where
             .iter()
             .filter_map(|o| match o {
                 ChannelUpdateTx::Inscription(i) => Some(i),
-                ChannelUpdateTx::AtomicWithdraw(_) => None,
+                ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
             })
             .collect();
 
@@ -555,8 +558,10 @@ where
         self.state.revert_orphaned(&orphaned_inscriptions);
         self.state.record_adoptions(adopted).await;
 
-        let readopted: HashSet<&Inscription> =
-            adopted.iter().map(|tx| &tx.inscription().payload).collect();
+        let readopted: HashSet<&Inscription> = adopted
+            .iter()
+            .filter_map(|tx| tx.inscription().map(|i| &i.payload))
+            .collect();
 
         // Consider this round's fresh orphans together with everything parked,
         // in sorted order (a `BTreeSet` iterates ascending). A payload parked
@@ -638,8 +643,8 @@ impl BalanceAwareState {
     }
 
     fn record_adopted_payloads(&mut self, adopted: &[ChannelUpdateTx]) {
-        for tx in adopted {
-            self.record_applied_payload(&tx.inscription().payload);
+        for info in adopted.iter().filter_map(ChannelUpdateTx::inscription) {
+            self.record_applied_payload(&info.payload);
         }
     }
 
@@ -710,10 +715,9 @@ impl SortedConflictState {
     }
 
     async fn record_adoptions(&mut self, adopted: &[ChannelUpdateTx]) {
-        for tx in adopted {
-            let payload = &tx.inscription().payload;
-            self.discarded.lock().await.remove(payload);
-            self.on_chain.insert(payload.clone());
+        for info in adopted.iter().filter_map(ChannelUpdateTx::inscription) {
+            self.discarded.lock().await.remove(&info.payload);
+            self.on_chain.insert(info.payload.clone());
         }
     }
 

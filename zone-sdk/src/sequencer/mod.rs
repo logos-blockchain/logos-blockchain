@@ -75,6 +75,7 @@ mod zone_sequencer;
 
 pub(super) const TARGET: &str = lb_log_targets::zone_sdk::SEQUENCER;
 
+pub use block_fetch::channel_inscriptions;
 pub use client::SequencerClient;
 pub use handle::SequencerHandle;
 pub use types::{
