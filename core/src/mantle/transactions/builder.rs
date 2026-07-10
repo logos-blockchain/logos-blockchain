@@ -159,9 +159,9 @@ impl MantleTxBuilder {
         // Calculate the funding delta with a dummy change note to account for
         // the gas cost increase from adding the output
         let delta_with_change = self.with_dummy_change_note()?.funding_delta::<G>(context)?;
-        let target = i128::from(priority_fee);
+        let delta_target = i128::from(priority_fee);
 
-        match delta_with_change.cmp(&target) {
+        match delta_with_change.cmp(&delta_target) {
             Ordering::Less | Ordering::Equal => {
                 // NOTE: the `Equal` is important here since we
                 // cannot create zero-valued outputs.
@@ -174,7 +174,7 @@ impl MantleTxBuilder {
                 // We have enough balance to cover the increase in cost from the change
                 // note. Use return_change which properly accounts for the gas cost
                 // increase from adding the change output.
-                let change = u64::try_from(delta_with_change - target)
+                let change = u64::try_from(delta_with_change - delta_target)
                     .expect("Positive delta must fit in u64");
 
                 let tx_with_change = self.add_ledger_output(Note {
@@ -182,7 +182,7 @@ impl MantleTxBuilder {
                     pk: change_pk,
                 })?;
 
-                assert_eq!(tx_with_change.funding_delta::<G>(context)?, target);
+                assert_eq!(tx_with_change.funding_delta::<G>(context)?, delta_target);
 
                 Ok(Some(tx_with_change))
             }

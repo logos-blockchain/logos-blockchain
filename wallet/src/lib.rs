@@ -229,13 +229,13 @@ impl WalletState {
 
         // The funding target: the tx's excess balance over the mandatory fee
         // must end up exactly at `priority_fee` (the execution tip).
-        let target = i128::from(priority_fee);
+        let delta_target = i128::from(priority_fee);
 
         // The transaction may already be funded before we add any of the
         // wallet's UTXOs, for example when it pays no fee or the caller already
         // supplied inputs. In that case we must not pull in an extra input (and
         // the change note it would require).
-        match tx_builder.funding_delta::<G>(context)?.cmp(&target) {
+        match tx_builder.funding_delta::<G>(context)?.cmp(&delta_target) {
             Ordering::Equal => return Ok(tx_builder.clone()),
             Ordering::Greater => {
                 if let Some(tx_with_change) =
@@ -258,7 +258,7 @@ impl WalletState {
 
             let funding_delta = funded_tx_builder.funding_delta::<G>(context)?;
 
-            match funding_delta.cmp(&target) {
+            match funding_delta.cmp(&delta_target) {
                 Ordering::Less => {
                     // Insufficient funds, need more UTXO's.
                 }

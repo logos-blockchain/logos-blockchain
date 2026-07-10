@@ -21,11 +21,9 @@ use super::types::{Error, FundingConfig};
 use crate::adapter;
 
 /// Execution tip paid on top of the mandatory fee when funding a transaction,
-/// buffering gas-price movement between funding and inclusion (the base fee
-/// moves at most 12.5% per block — the ledger updates it as
-/// `fee × (11_176_760 + avg_gas) / 12_773_440` with `avg_gas` bounded by the
-/// block gas limit of `3_193_360`, giving factors of exactly 0.875..1.125 —
-/// so this covers a few blocks of drift at current fee levels).
+/// buffering gas-price movement between funding and inclusion: in the current
+/// spec the base fee moves at most 12.5% per block, so this covers a few
+/// blocks of drift at current fee levels.
 ///
 /// TODO: promote to [`FundingConfig`] if clients need to tune it.
 const PRIORITY_FEE: Value = 200;
