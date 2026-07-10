@@ -1685,7 +1685,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: enable once we determine non-zero genesis execution gas price"]
     fn test_fee_rejection() {
         let utxo = utxo();
         let config = config();
@@ -1725,7 +1724,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "TODO: enable once we determine non-zero genesis execution/storage gas price"]
     fn test_priority_fees_go_to_leader() {
         let utxo = utxo();
         let config = config();

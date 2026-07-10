@@ -16,8 +16,12 @@ use reqwest::StatusCode;
 use serial_test::serial;
 use tokio::{net::TcpListener, sync::mpsc, time::sleep};
 
-const FAUCET_FUNDS: u64 = 2000;
+const FAUCET_FUNDS: u64 = 10_000;
 const DRIP_AMOUNT: u64 = 50;
+/// Upper bound on the combined gas fees of the two drip transfers. Each drip
+/// costs 244 at genesis gas prices; the generous margin keeps the test stable
+/// if gas constants or prices change.
+const MAX_TOTAL_FEES: u64 = 2000;
 const DRIP_QUEUE_CAPACITY: usize = 16;
 const COOLDOWN: Duration = Duration::from_hours(1);
 const BALANCE_TIMEOUT: Duration = Duration::from_mins(3);
@@ -31,7 +35,7 @@ const BALANCE_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// 4. Verify both are accepted and an immediate repeat request is rejected with
 ///    the cooldown status.
 /// 5. Verify both recipients are credited on chain, one drip per block, and the
-///    faucet balance decreases by exactly two drips.
+///    faucet balance decreases by two drips plus bounded gas fees.
 #[tokio::test]
 #[serial]
 async fn faucet_drips_concurrent_requests_in_order() {
@@ -107,10 +111,10 @@ async fn faucet_drips_concurrent_requests_in_order() {
     .await;
 
     let faucet_balance = get_wallet_balance(&validator.client, faucet_account.public_key()).await;
-    assert_eq!(
-        faucet_balance,
-        FAUCET_FUNDS - 2 * DRIP_AMOUNT,
-        "faucet should have paid out exactly two drips"
+    let paid_out = FAUCET_FUNDS - faucet_balance;
+    assert!(
+        (2 * DRIP_AMOUNT..=2 * DRIP_AMOUNT + MAX_TOTAL_FEES).contains(&paid_out),
+        "faucet should have paid out two drips plus bounded gas fees, paid_out={paid_out}"
     );
 }
 
