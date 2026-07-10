@@ -15,7 +15,7 @@ use lb_core::{
     block::BlockNumber,
     events::{Events, HeaderEvent, TxEvent},
     mantle::{
-        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, SignedMantleTx, Utxo, Value,
+        AuthenticatedMantleTx, GenesisTx, NoteId, Op, OpProof, SignedMantleTx, TxHash, Utxo, Value,
         VerificationError,
         gas::{Gas, GasConstants, GasCost, GasOverflow},
         ledger::Operation as _,
@@ -29,10 +29,7 @@ use lb_core::{
             },
             leader_claim::{LeaderClaimExecutionContext, LeaderClaimValidationContext},
         },
-        transactions::{
-            GasPrices, MantleTxContext, MantleTxGasContext,
-            states::{Preverified, Verified},
-        },
+        transactions::{GasPrices, MantleTxContext, MantleTxGasContext, states::Preverified},
     },
     proofs::leader_proof,
 };
@@ -111,8 +108,6 @@ pub enum LedgerError<Id> {
     InputInGenesis(NoteId),
     #[error("The first Transfer Operation is missing in genesis tx")]
     MissingTransferGenesis(),
-    #[error("Unsupported operation")]
-    UnsupportedOp,
     #[error("Fees don't cover the minimal execution base fee cost")]
     InsufficientExecutionFee,
     #[error("The execution gas of the block ({gas:?}) exceeds the maximum limit ({limit:?}")]
@@ -151,7 +146,7 @@ where
         parent_id: Id,
         slot: Slot,
         proof: &LeaderProof,
-        txs: impl Iterator<Item = SignedMantleTx<Verified>>,
+        txs: impl Iterator<Item = SignedMantleTx<Preverified>>,
     ) -> Result<(Id, LedgerState, Events), LedgerError<Id>>
     where
         LeaderProof: leader_proof::LeaderProof,
@@ -217,7 +212,7 @@ impl LedgerState {
         self,
         slot: Slot,
         proof: &LeaderProof,
-        txs: impl Iterator<Item = SignedMantleTx<Verified>>,
+        txs: impl Iterator<Item = SignedMantleTx<Preverified>>,
         config: &Config,
     ) -> Result<(Self, Events), LedgerError<Id>>
     where
@@ -529,250 +524,161 @@ impl LedgerState {
         }
     }
 
-    fn verify_transaction<Id>(
-        &self,
-        transaction: SignedMantleTx<Preverified>,
-    ) -> Result<SignedMantleTx<Verified>, LedgerError<Id>> {
-        let operation_verification_helper =
-            MantleOperationVerificationHelper::new(&self.mantle_ledger);
-        transaction
-            .verify(&operation_verification_helper)
-            .map_err(LedgerError::VerificationError)
+    fn try_apply_op<Id, Constants: GasConstants>(
+        mut self,
+        op: &Op,
+        config: &Config,
+        tx_hash: &TxHash,
+        mut balance: Balance,
+        mut tx_events: Vec<TxEvent>,
+    ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
+        match op {
+            Op::ChannelInscribe(op) => {
+                let (result, events) = self
+                    .mantle_ledger
+                    .try_apply_channel_inscription(op, self.cryptarchia_ledger.slot)?;
+                self.mantle_ledger = result;
+                tx_events.extend(events);
+            }
+            Op::ChannelConfig(op) => {
+                let (result, events) = self
+                    .mantle_ledger
+                    .try_apply_channel_set_keys(op, self.cryptarchia_ledger.slot)?;
+                self.mantle_ledger = result;
+                tx_events.extend(events);
+            }
+            Op::ChannelDeposit(op) => {
+                let channels = self.mantle_ledger.channels();
+                let utxos = self.cryptarchia_ledger.latest_utxos();
+
+                // Execute the Deposit
+                let (result, events) = op
+                    .execute(DepositExecutionContext {
+                        channels: channels.clone(),
+                        utxos: utxos.clone(),
+                        tx_hash: *tx_hash,
+                    })
+                    .map_err(mantle::Error::Channel)?;
+                self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
+                tx_events.extend(events);
+            }
+            Op::ChannelWithdraw(op) => {
+                let channels = self.mantle_ledger.channels();
+
+                let (result, events) = op
+                    .execute(WithdrawExecutionContext {
+                        channels: channels.clone(),
+                        tx_hash: *tx_hash,
+                    })
+                    .map_err(mantle::Error::Channel)?;
+                self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
+                tx_events.extend(events);
+            }
+            Op::ChannelTransfer(op) => {
+                let channels = self.mantle_ledger.channels();
+                let utxos = self.cryptarchia_ledger.latest_utxos();
+
+                let context = ChannelTransferExecutionContext {
+                    channels: channels.clone(),
+                    utxos: utxos.clone(),
+                    tx_hash: *tx_hash,
+                };
+                let (result, events) = op.execute(context).map_err(mantle::Error::Channel)?;
+                self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
+                self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
+                tx_events.extend(events);
+            }
+            Op::SDPDeclare(op) => {
+                let (result, events) = self.mantle_ledger.try_apply_sdp_declaration(
+                    op,
+                    self.cryptarchia_ledger.latest_utxos(),
+                    config,
+                )?;
+                self.mantle_ledger = result;
+                tx_events.extend(events);
+            }
+            Op::SDPActive(op) => {
+                let (result, events) = self.mantle_ledger.try_apply_sdp_active(op, config)?;
+                self.mantle_ledger = result;
+                tx_events.extend(events);
+            }
+            Op::SDPWithdraw(op) => {
+                let (result, events) = self.mantle_ledger.try_apply_sdp_withdraw(op, config)?;
+                self.mantle_ledger = result;
+                tx_events.extend(events);
+            }
+            Op::LeaderClaim(op) => {
+                let (result, events) = op
+                    .execute(LeaderClaimExecutionContext {
+                        nullifiers: self.mantle_ledger.leaders.nullifiers_cloned(),
+                        reward_amount: self.mantle_ledger.leaders.reward_amount(),
+                        claimable_rewards: self.mantle_ledger.leaders.claimable_rewards(),
+                        utxos: self.cryptarchia_ledger.latest_utxos().clone(),
+                        tx_hash: *tx_hash,
+                    })
+                    .map_err(mantle::Error::LeaderClaim)?;
+                self.mantle_ledger
+                    .leaders
+                    .update_nullifiers(result.nullifiers);
+                self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
+
+                self.mantle_ledger
+                    .leaders
+                    .update_rewards(result.claimable_rewards);
+                tx_events.extend(events);
+            }
+            Op::Transfer(op) => {
+                let transfer_balance;
+                let events;
+                (self.cryptarchia_ledger, transfer_balance, events) =
+                    self.cryptarchia_ledger
+                        .try_apply_transfer::<_, Constants>(op)?;
+                balance = balance
+                    .checked_add(transfer_balance)
+                    .ok_or(LedgerError::BalanceOverflow)?;
+                tx_events.extend(events);
+            }
+        }
+        Ok((self, balance, tx_events))
     }
 
-    /// Applies a transaction to the ledger state, returning the updated state
-    /// and the net balance change.
+    /// Applies a transaction to the ledger state.
     ///
-    /// # Prerequisites
+    /// # Note
     ///
-    /// A transaction must not be applied unless all required proofs have been
-    /// fully verified.
+    /// Verification is interleaved with execution: each operation is verified
+    /// against the current ledger state (via
+    /// [`SignedMantleTx::verified_ops`]) immediately before it is executed, so
+    /// an operation may depend on state produced by earlier operations in
+    /// the same transaction.
     ///
-    /// Proof verification is currently split across multiple paths depending on
-    /// the operation:
-    /// - `SignedMantleTx::verify_ops_proofs`: Invoked during construction
-    ///   (`SignedMantleTx::new`, e.g. on deserialization). Handles:
-    ///   `ChannelInscribe`, `LeaderClaim`.
-    /// - `SignedMantleTx::verify_ops_proofs_with_helper`: Invoked here before
-    ///   applying the transaction. Handles: `ChannelWithdraw`.
-    /// - Additional validation: Performed by the ledger or implicitly satisfied
-    ///   by certain operations.
+    /// # Returns
     ///
-    /// This fragmented design means verification may be:
-    /// - Distributed across different stages, and
-    /// - Potentially duplicated or missed if assumptions about prior
-    ///   verification are incorrect.
+    /// On success, returns the updated ledger state, the net balance change of
+    /// the transaction, and any events emitted during execution.
     ///
-    /// Callers are responsible for ensuring that all required proofs have been
-    /// verified before applying the transaction.
-    ///
-    /// TODO: A refactor into a typed state model to enforce verification at
-    /// compile is planned.
-    #[expect(clippy::too_many_lines, reason = "We need to refactor this.")]
+    /// If any operation fails verification or execution, returns a
+    /// [`LedgerError`] describing the failure.
     fn try_apply_tx<Id, Constants: GasConstants>(
         mut self,
         config: &Config,
         tx: SignedMantleTx<Preverified>,
     ) -> Result<(Self, Balance, Vec<TxEvent>), LedgerError<Id>> {
-        let tx = self.verify_transaction(tx)?;
+        let mut verified_ops = tx.verified_ops();
+        let tx_hash = AuthenticatedMantleTx::hash(&tx);
 
         let mut balance: Balance = 0;
         let mut tx_events = Vec::new();
-        let tx_hash = AuthenticatedMantleTx::hash(&self);
-        for (op, proof) in tx.ops_with_proof() {
-            match (op, proof) {
-                // The signature for channel ops can be verified before reaching this point,
-                // as you only need the signer's public key and tx hash
-                // Callers are expected to validate the proof before calling this function.
-                (Op::ChannelInscribe(op), OpProof::Ed25519Sig(sig)) => {
-                    let (result, events) = self.mantle_ledger.try_apply_channel_inscription(
-                        op,
-                        // sig,
-                        // tx_hash,
-                        self.cryptarchia_ledger.slot,
-                    )?;
-                    self.mantle_ledger = result;
-                    tx_events.extend(events);
-                }
-                (Op::ChannelConfig(op), OpProof::ChannelMultiSigProof(sig)) => {
-                    let (result, events) = self.mantle_ledger.try_apply_channel_set_keys(
-                        op,
-                        // sig,
-                        // &tx_hash,
-                        self.cryptarchia_ledger.slot,
-                    )?;
-                    self.mantle_ledger = result;
-                    tx_events.extend(events);
-                }
-                (Op::ChannelDeposit(op), OpProof::ZkSig(sig)) => {
-                    let channels = self.mantle_ledger.channels();
-                    let locked_notes = self.mantle_ledger.locked_notes();
-                    let utxos = self.cryptarchia_ledger.latest_utxos();
 
-                    // // Validate the Deposit
-                    // op.validate(&DepositValidationContext {
-                    //     channels,
-                    //     locked_notes,
-                    //     utxos,
-                    //     tx_hash: &tx_hash,
-                    //     deposit_sig: sig,
-                    // })
-                    // .map_err(mantle::Error::Channel)?;
-
-                    // Execute the Deposit
-                    let (result, events) = op
-                        .execute(DepositExecutionContext {
-                            channels: channels.clone(),
-                            utxos: utxos.clone(),
-                            tx_hash,
-                        })
-                        .map_err(mantle::Error::Channel)?;
-                    self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
-                    tx_events.extend(events);
-                }
-                (Op::ChannelWithdraw(op), OpProof::ChannelMultiSigProof(sigs)) => {
-                    let channels = self.mantle_ledger.channels();
-                    let locked_notes = self.mantle_ledger.locked_notes();
-                    let utxos = self.cryptarchia_ledger.latest_utxos();
-
-                    // Moved
-                    // // Validate the Withdraw
-                    // op.validate(&WithdrawValidationContext {
-                    //     channels,
-                    //     locked_notes,
-                    //     utxos,
-                    //     tx_hash: &tx_hash,
-                    //     withdraw_sigs: sigs,
-                    // })
-                    // .map_err(mantle::Error::Channel)?;
-
-                    // Execute the Withdraw
-                    let (result, events) = op
-                        .execute(WithdrawExecutionContext {
-                            channels: channels.clone(),
-                            tx_hash,
-                        })
-                        .map_err(mantle::Error::Channel)?;
-                    self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
-                    tx_events.extend(events);
-                }
-                (Op::ChannelTransfer(op), OpProof::ChannelMultiSigProof(sigs)) => {
-                    let channels = self.mantle_ledger.channels();
-                    let locked_notes = self.mantle_ledger.locked_notes();
-                    let utxos = self.cryptarchia_ledger.latest_utxos();
-
-                    // Validate the Channel Transfer
-                    op.validate(&ChannelTransferValidationContext {
-                        channels,
-                        locked_notes,
-                        utxos,
-                        tx_hash: &tx_hash,
-                        transfer_sigs: sigs,
-                    })
-                    .map_err(mantle::Error::Channel)?;
-
-                    // Execute the Channel Transfer
-                    let (result, events) = op
-                        .execute(ChannelTransferExecutionContext {
-                            channels: channels.clone(),
-                            utxos: utxos.clone(),
-                            tx_hash,
-                        })
-                        .map_err(mantle::Error::Channel)?;
-                    self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
-                    self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
-                    tx_events.extend(events);
-                }
-                (
-                    Op::SDPDeclare(op),
-                    OpProof::ZkAndEd25519Sigs {
-                        zk_sig,
-                        ed25519_sig,
-                    },
-                ) => {
-                    let (result, events) = self.mantle_ledger.try_apply_sdp_declaration(
-                        op,
-                        // zk_sig,
-                        // ed25519_sig,
-                        self.cryptarchia_ledger.latest_utxos(),
-                        // tx_hash,
-                        config,
-                    )?;
-                    self.mantle_ledger = result;
-                    tx_events.extend(events);
-                }
-                (Op::SDPActive(op), OpProof::ZkSig(sig)) => {
-                    let (result, events) = self.mantle_ledger.try_apply_sdp_active(
-                        op, // sig,
-                        // tx_hash,
-                        config,
-                    )?;
-                    self.mantle_ledger = result;
-                    tx_events.extend(events);
-                }
-                (Op::SDPWithdraw(op), OpProof::ZkSig(sig)) => {
-                    let (result, events) = self.mantle_ledger.try_apply_sdp_withdraw(
-                        op, // sig,
-                        // tx_hash,
-                        config,
-                    )?;
-                    self.mantle_ledger = result;
-                    tx_events.extend(events);
-                }
-                (Op::LeaderClaim(op), OpProof::PoC(poc)) => {
-                    // // Validate the LeaderClaim
-                    // op.validate(&LeaderClaimValidationContext {
-                    //     nullifiers: self.mantle_ledger.leaders.nullifiers(),
-                    //     claimable_vouchers_root: &self
-                    //         .mantle_ledger
-                    //         .leaders
-                    //         .vouchers_snapshot_root(),
-                    //     proof_of_claim: poc,
-                    //     tx_hash: &tx_hash,
-                    // })
-                    // .map_err(mantle::Error::LeaderClaim)?;
-
-                    // Execute the LeaderClaim
-                    let (result, events) = op
-                        .execute(LeaderClaimExecutionContext {
-                            nullifiers: self.mantle_ledger.leaders.nullifiers_cloned(),
-                            reward_amount: self.mantle_ledger.leaders.reward_amount(),
-                            claimable_rewards: self.mantle_ledger.leaders.claimable_rewards(),
-                            utxos: self.cryptarchia_ledger.latest_utxos().clone(),
-                            tx_hash,
-                        })
-                        .map_err(mantle::Error::LeaderClaim)?;
-                    self.mantle_ledger
-                        .leaders
-                        .update_nullifiers(result.nullifiers);
-                    self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
-
-                    self.mantle_ledger
-                        .leaders
-                        .update_rewards(result.claimable_rewards);
-                    tx_events.extend(events);
-                }
-                (Op::Transfer(op), OpProof::ZkSig(sig)) => {
-                    let transfer_balance;
-                    let events;
-                    (self.cryptarchia_ledger, transfer_balance, events) =
-                        self.cryptarchia_ledger.try_apply_transfer::<_, Constants>(
-                            // self.mantle_ledger.locked_notes(),
-                            self.mantle_ledger.channels(),
-                            op,
-                            // sig,
-                            // tx_hash,
-                        )?;
-                    balance = balance
-                        .checked_add(transfer_balance)
-                        .ok_or(LedgerError::BalanceOverflow)?;
-                    tx_events.extend(events);
-                }
-                _ => {
-                    return Err(LedgerError::UnsupportedOp);
-                }
-            }
+        loop {
+            let helper = MantleOperationVerificationHelper::new(&self.mantle_ledger);
+            let Some(op) = verified_ops.next(&helper).transpose()? else {
+                break;
+            };
+            (self, balance, tx_events) =
+                self.try_apply_op(op, config, &tx_hash, balance, tx_events)?;
         }
+
         Ok((self, balance, tx_events))
     }
 }
@@ -996,11 +902,7 @@ mod tests {
         block_ledger.mantle_ledger = block_ledger
             .mantle_ledger
             .clone()
-            .try_apply_sdp_active(
-                &active_op, // &zk_sig,
-                // tx_hash,
-                &config,
-            )
+            .try_apply_sdp_active(&active_op, &config)
             .unwrap()
             .0;
         id

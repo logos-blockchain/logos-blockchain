@@ -120,8 +120,6 @@ pub struct ServiceRewardsParameters {
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
 pub enum Error {
-    // #[error("Invalid Sdp state transition: {0:?}")]
-    // SdpStateError(#[from] DeclarationStateError),
     #[error("Sdp declaration id not found: {0:?}")]
     DeclarationNotFound(DeclarationId),
     #[error("Locked period did not pass yet")]
@@ -408,6 +406,8 @@ impl SdpLedger {
         };
 
         // Validate SDP Declare
+        // TODO: Genesis has a different verification flow than `SignedMantleTx`.
+        // Refactor into a   type state.
         op.validate(&SDPDeclareGenesisValidationContext {
             utxo_tree,
             channels,
@@ -443,29 +443,12 @@ impl SdpLedger {
         utxo_tree: &UtxoTree,
         // channels: &Channels,
         op: &SDPDeclareOp,
-        // zk_sig: &ZkSignature,
-        // ed25519_sig: &Ed25519Signature,
-        // tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let Some(service_state) = self.services.get_mut(&op.service_type) else {
             return Err(Error::ServiceNotFound(op.service_type));
         };
 
-        // // Moved
-        // // Validate SDP Declare
-        // op.validate(&SDPDeclareValidationContext {
-        //     utxo_tree,
-        //     channels,
-        //     locked_notes: &self.locked_notes,
-        //     tx_hash: &tx_hash,
-        //     declare_zk_sig: zk_sig,
-        //     declare_eddsa_sig: ed25519_sig,
-        //     declarations: service_state.declarations(),
-        //     min_stake: &config.min_stake,
-        // })?;
-
-        // Execute SDP Declare
         let (result, events) = <SDPDeclareOp as Operation<SDPDeclareValidationContext>>::execute(
             op,
             SDPDeclareExecutionContext {
@@ -485,8 +468,6 @@ impl SdpLedger {
     pub fn apply_active_msg(
         mut self,
         op: &SDPActiveOp,
-        // zksig: &ZkSignature,
-        // tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
@@ -494,15 +475,6 @@ impl SdpLedger {
             return Err(Error::ServiceNotFound(service));
         };
 
-        //Validate SDP Active
-        // op.validate(&SDPActiveValidationContext {
-        //     declarations: service_state.declarations(),
-        //     tx_hash: &tx_hash,
-        //     active_sig: zksig,
-        //     epoch: self.epoch,
-        // })?;
-
-        // Execute SDP Active
         let (result, events) = op.execute(SDPActiveExecutionContext {
             epoch: self.epoch,
             declarations: service_state.declarations_clone(),
@@ -523,8 +495,6 @@ impl SdpLedger {
     pub fn apply_withdrawn_msg(
         mut self,
         op: &SDPWithdrawOp,
-        // zksig: &ZkSignature,
-        // tx_hash: TxHash,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {
         let (service, _) = self.get_service(&op.declaration_id, config)?;
@@ -532,16 +502,6 @@ impl SdpLedger {
             return Err(Error::ServiceNotFound(service));
         };
 
-        // // Validate SDP Withdraw
-        // op.validate(&SDPWithdrawValidationContext {
-        //     declarations: service_state.declarations(),
-        //     epoch: self.epoch,
-        //     locked_notes: &self.locked_notes,
-        //     tx_hash: &tx_hash,
-        //     sdp_withdraw_sig: zksig,
-        // })?;
-
-        // Execute SDP Withdraw
         let (result, events) = op.execute(SDPWithdrawExecutionContext {
             declarations: service_state.declarations_clone(),
             locked_notes: self.locked_notes.clone(),
@@ -727,14 +687,7 @@ mod tests {
         let ed25519_sig = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
 
         sdp_ledger
-            .try_apply_sdp_declaration(
-                utxos, // &Channels::new(),
-                op,
-                // &zk_sig,
-                // &ed25519_sig,
-                // tx_hash,
-                config,
-            )
+            .try_apply_sdp_declaration(utxos, op, config)
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
@@ -747,11 +700,7 @@ mod tests {
         let tx_hash = TxHash([2u8; 32]);
         let zk_sig = ZkKey::multi_sign(&[zk_sk], &tx_hash.to_fr()).unwrap();
         sdp_ledger
-            .apply_active_msg(
-                op, // &zk_sig,
-                // tx_hash,
-                config,
-            )
+            .apply_active_msg(op, config)
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 
@@ -766,11 +715,7 @@ mod tests {
         let zk_sig = ZkKey::multi_sign(&[note_sk, zk_key], &tx_hash.to_fr()).unwrap();
 
         sdp_ledger
-            .apply_withdrawn_msg(
-                op, // &zk_sig,
-                // tx_hash,
-                config,
-            )
+            .apply_withdrawn_msg(op, config)
             .map(|(sdp_ledger, _)| sdp_ledger)
     }
 

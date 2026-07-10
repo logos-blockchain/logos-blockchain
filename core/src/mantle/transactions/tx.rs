@@ -634,6 +634,9 @@ impl SignedMantleTx<Preverified> {
                     .validate(&channel_deposit_context)
                     .map_err(VerificationError::ChannelVerificationError)
             }
+            // TODO: Duplicate check. `verify_channel_withdraw` and `ChannelWithdrawOp::validate`,
+            //   both called in this arm, overlap in functionality. We probably need to purge the
+            //   `verify_channel_withdraw` function.
             (
                 Op::ChannelWithdraw(channel_withdraw_op),
                 OpProof::ChannelMultiSigProof(channel_withdraw_proof),
@@ -755,20 +758,6 @@ impl SignedMantleTx<Preverified> {
         }
     }
 
-    fn verify_stateful_ops(
-        &self,
-        helper: &impl OperationVerificationHelper,
-    ) -> Result<(), VerificationError> {
-        let tx_hash = self.hash();
-        let tx_hash_bytes = tx_hash.as_signing_bytes();
-
-        for (op_index, (op, proof)) in self.ops_with_proof().enumerate() {
-            Self::verify_stateful_op(op_index, op, proof, &tx_hash, &tx_hash_bytes, helper)?;
-        }
-
-        Ok(())
-    }
-
     pub fn verified_ops(&self) -> VerifiedOps<'_> {
         self.into()
     }
@@ -797,16 +786,24 @@ impl<'tx> VerifiedOps<'tx> {
         }
     }
 
+    /// Yields the next operation, in order, if it passes verification.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(Ok(op))` if the next operation is successfully verified.
+    /// - `Some(Err(error))` if the next operation fails verification.
+    /// - `None` if there are no more operations to verify.
+    ///
     /// # Errors
     ///
-    /// Returns `VerificationError` if the operation at the current index fails
-    /// stateful verification. On error, the cursor is not advanced. In the
+    /// Returns [`VerificationError`] if the operation at the current index
+    /// fails verification. On error, the cursor is not advanced. In the
     /// current implementation, the callers are expected to abort since only
     /// linear verification is supported.
     pub fn next(
         &mut self,
         helper: &impl OperationVerificationHelper,
-    ) -> Option<Result<(&'tx Op, &'tx OpProof), VerificationError>> {
+    ) -> Option<Result<&'tx Op, VerificationError>> {
         let index = self.index;
         let op = self.ops.get(index)?;
         let proof = self
@@ -824,7 +821,7 @@ impl<'tx> VerifiedOps<'tx> {
             return Some(Err(error));
         }
         self.index += 1;
-        Some(Ok((op, proof)))
+        Some(Ok(op))
     }
 }
 
@@ -927,13 +924,6 @@ impl<State: VerificationState> AuthenticatedMantleTx for SignedMantleTx<State> {
         context: <Self as AuthenticatedMantleTx>::Context,
     ) -> Result<Gas, GasOverflow> {
         GasCalculator::storage_gas_consumption(&self, &context)
-    }
-
-    fn verify_ops_proofs_with_helper(
-        &self,
-        operation_verification_helper: &impl OperationVerificationHelper,
-    ) -> Result<(), VerificationError> {
-        Self::verify_ops_proofs_with_helper(self, operation_verification_helper)
     }
 }
 

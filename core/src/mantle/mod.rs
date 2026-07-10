@@ -45,6 +45,7 @@ pub trait Transaction {
     fn as_signing(&self) -> Vec<u8>;
 }
 
+// TODO: Purge out gas fns
 pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + StorageSize {
     type Context;
     /// Returns the underlying `MantleTx` that this transaction represents.
@@ -69,11 +70,6 @@ pub trait AuthenticatedMantleTx: Transaction<Hash = TxHash> + GasCalculator + St
         &self,
         context: <Self as AuthenticatedMantleTx>::Context,
     ) -> Result<Gas, GasOverflow>;
-
-    fn verify_ops_proofs_with_helper(
-        &self,
-        helper: &impl OperationVerificationHelper,
-    ) -> Result<(), VerificationError>;
 }
 
 /// A genesis transaction as specified in
@@ -139,16 +135,6 @@ impl<T: AuthenticatedMantleTx> AuthenticatedMantleTx for &T {
         context: <Self as AuthenticatedMantleTx>::Context,
     ) -> Result<Gas, GasOverflow> {
         <T as AuthenticatedMantleTx>::storage_gas_consumption(self, context)
-    }
-
-    fn verify_ops_proofs_with_helper(
-        &self,
-        operation_verification_helper: &impl OperationVerificationHelper,
-    ) -> Result<(), VerificationError> {
-        <T as AuthenticatedMantleTx>::verify_ops_proofs_with_helper(
-            self,
-            operation_verification_helper,
-        )
     }
 }
 
