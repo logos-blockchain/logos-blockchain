@@ -78,8 +78,8 @@ pub(super) const TARGET: &str = lb_log_targets::zone_sdk::SEQUENCER;
 pub use client::SequencerClient;
 pub use handle::SequencerHandle;
 pub use types::{
-    AtomicWithdrawInfo, ChannelUpdate, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
-    FundingConfig, InscriptionId, InscriptionInfo, OrphanedTx, PendingTx, PublishResult,
+    AtomicWithdrawInfo, ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedOp,
+    FinalizedTx, FundingConfig, InscriptionId, InscriptionInfo, PendingTx, PublishResult,
     SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
     TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo,
 };

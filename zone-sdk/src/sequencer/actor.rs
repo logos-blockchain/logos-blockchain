@@ -15,7 +15,7 @@ use super::{
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
     types::{
-        ChannelUpdate, Error, Event, FinalizedTx, InscriptionInfo, OrphanedTx,
+        ChannelUpdate, ChannelUpdateTx, Error, Event, FinalizedTx, InscriptionInfo,
         SequencerChannelView, SequencerCheckpoint, TurnNotification, TxSource, TxStatus,
     },
     zone_sequencer::{ZoneSequencer, build_checkpoint},
@@ -538,7 +538,8 @@ where
             update.adopted.len(),
             hex::encode(update.new_channel_tip.as_ref()),
         );
-        for info in &update.orphaned {
+        for tx in &update.orphaned {
+            let info = tx.inscription();
             debug!(target: TARGET,
                 "  orphaned: payload={:?}, tx={}, msg_id={}",
                 String::from_utf8_lossy(&info.payload),
@@ -546,7 +547,8 @@ where
                 hex::encode(info.this_msg.as_ref()),
             );
         }
-        for info in &update.adopted {
+        for tx in &update.adopted {
+            let info = tx.inscription();
             debug!(target: TARGET,
                 "  adopted: payload={:?}, tx={}, msg_id={}",
                 String::from_utf8_lossy(&info.payload),
@@ -559,27 +561,24 @@ where
     /// Build the [`ChannelUpdate`] returned to the consumer.
     ///
     /// `orphaned` combines two sources, deduped by `tx_hash`:
-    /// - inscriptions that left the channel chain between the old and new
-    ///   canonical tip, and
+    /// - txs that left the channel chain between the old and new canonical tip,
+    ///   and
     /// - our own pending that can no longer land on the new tip
     ///   ([`TxState::shed_off_branch_pending`]), including pending that never
     ///   mined and so appears in no on-chain delta.
     ///
-    /// A tx in both keeps the shed variant: it carries the `AtomicWithdraw`
-    /// bundle metadata the on-chain delta lacks.
-    ///
-    /// `adopted` is the inscriptions added to the channel chain.
+    /// `adopted` is the txs added to the channel chain.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
         let shed = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
             _ => Vec::new(),
         };
-        let mut orphaned: Vec<OrphanedTx> = shed.into_iter().map(orphan_from_shed).collect();
+        let mut orphaned: Vec<ChannelUpdateTx> = shed.into_iter().map(orphan_from_shed).collect();
 
-        let mut seen: HashSet<_> = orphaned.iter().map(OrphanedTx::tx_hash).collect();
-        for info in u.orphaned {
-            if seen.insert(info.tx_hash) {
-                orphaned.push(OrphanedTx::Inscription(info));
+        let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
+        for tx in u.orphaned {
+            if seen.insert(tx.tx_hash()) {
+                orphaned.push(tx);
             }
         }
 
@@ -979,7 +978,7 @@ mod tests {
         // Bundle: [ChannelWithdraw(channel_id), ChannelInscribe(channel_id)]
         // Restore should put it in pending (not pending_other) with the
         // withdraws field populated, so on orphan we emit
-        // OrphanedTx::AtomicWithdraw (not Inscription).
+        // ChannelUpdateTx::AtomicWithdraw (not Inscription).
         let channel_id = ChannelId::from([1u8; 32]);
         let outputs = Outputs::new([Note::new(
             5,

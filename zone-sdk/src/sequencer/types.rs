@@ -70,29 +70,38 @@ pub struct WithdrawArg {
     pub outputs: Outputs,
 }
 
-/// A pending tx that has been orphaned by a chain update.
+/// A tx reported in a [`ChannelUpdate`], in both `adopted` and `orphaned`.
 ///
-/// The consumer republishes by calling the same SDK method they used
-/// originally with the data carried inside the variant:
-/// - [`OrphanedTx::Inscription`] → [`super::SequencerHandle::publish`] with
-///   `info.payload`
-/// - [`OrphanedTx::AtomicWithdraw`] →
+/// For orphaned entries the consumer republishes by calling the same SDK
+/// method they used originally with the data carried inside the variant:
+/// - [`ChannelUpdateTx::Inscription`] → [`super::SequencerHandle::publish`]
+///   with `info.payload`
+/// - [`ChannelUpdateTx::AtomicWithdraw`] →
 ///   [`super::SequencerHandle::publish_atomic_withdraw`] with
 ///   `info.inscription.payload` and `WithdrawArg`s reconstructed from
 ///   `info.withdraws[i].op.outputs`. The SDK fills fresh `parent_msg` and
 ///   current `withdraw_nonce` internally on each publish.
 #[derive(Debug, Clone)]
-pub enum OrphanedTx {
+pub enum ChannelUpdateTx {
     Inscription(InscriptionInfo),
     AtomicWithdraw(AtomicWithdrawInfo),
 }
 
-impl OrphanedTx {
+impl ChannelUpdateTx {
     #[must_use]
     pub const fn tx_hash(&self) -> TxHash {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
+        }
+    }
+
+    /// The inscription carried by this tx.
+    #[must_use]
+    pub const fn inscription(&self) -> &InscriptionInfo {
+        match self {
+            Self::Inscription(i) => i,
+            Self::AtomicWithdraw(a) => &a.inscription,
         }
     }
 }
@@ -306,20 +315,21 @@ pub enum TxSource {
 ///    genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
-    /// Inscriptions removed from the channel: ones that were on chain, plus our
+    /// Txs removed from the channel: ones that were on chain, plus our
     /// own pending that can no longer finalize because a conflicting
     /// inscription took their place in the chain (a parent double-spend).
     /// Revert from state and treat as republish candidates.
     ///
-    /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
+    /// For [`ChannelUpdateTx::Inscription`] entries, the consumer republishes
     /// via [`super::SequencerHandle::publish`]. For
-    /// [`OrphanedTx::AtomicWithdraw`] entries, the consumer republishes
+    /// [`ChannelUpdateTx::AtomicWithdraw`] entries, the consumer republishes
     /// via [`super::SequencerHandle::publish_atomic_withdraw`] with the
     /// original payload and reconstructed [`WithdrawArg`]s from the
     /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
     /// `withdraw_nonce` internally on each publish.
-    pub orphaned: Vec<OrphanedTx>,
-    /// Inscriptions added to the channel.
+    pub orphaned: Vec<ChannelUpdateTx>,
+    /// Txs added to the channel: published messages or atomic withdraw
+    /// bundles.
     ///
     /// On a pure extension (`orphaned` empty) this carries only entries the
     /// sequencer wasn't already tracking — its own publishes apply to
@@ -327,7 +337,7 @@ pub struct ChannelUpdate {
     /// change the full delta is reported (entries can move between
     /// branches), so consumers dedup by `this_msg` against their own state
     /// there.
-    pub adopted: Vec<InscriptionInfo>,
+    pub adopted: Vec<ChannelUpdateTx>,
 }
 
 /// Information about whose turn it is to post and the current posting
@@ -416,7 +426,7 @@ pub struct DepositInfo {
 ///
 /// Either our own pending publish (inscription / atomic withdraw bundle), or
 /// a pending bundle reconstructed on checkpoint resume. Returned from publish
-/// methods and carried by [`OrphanedTx`] adjacent contexts. The "pending"
+/// methods and carried by [`ChannelUpdateTx`] adjacent contexts. The "pending"
 /// framing reflects that the tx has been accepted into local pending state
 /// and queued for posting, not that the node has accepted it yet — see
 /// [`PublishResult`].

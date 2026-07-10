@@ -1032,7 +1032,7 @@ fn restored_pending_channel_tip(
 ///   `submit_atomic_withdraw` so `PendingInscription.withdraws` is repopulated
 ///   and orphan/finalize emit the correct
 ///   [`super::types::PendingTx::AtomicWithdraw`] /
-///   [`super::types::OrphanedTx::AtomicWithdraw`] variant.
+///   [`super::types::ChannelUpdateTx::AtomicWithdraw`] variant.
 /// - Only `Op::ChannelInscribe` for our channel → plain inscription.
 /// - Neither → treated as opaque (`submit_other`).
 ///

@@ -14,8 +14,8 @@
 //! hasn't been applied to the SDK's state.
 
 pub use lb_zone_sdk::sequencer::{
-    AtomicWithdrawInfo, ChannelUpdate, DepositInfo, Error, Event, FinalizedOp, FinalizedTx,
-    InscriptionId, InscriptionInfo, OrphanedTx, PendingTx, PublishResult, SequencerChannelView,
+    AtomicWithdrawInfo, ChannelUpdate, ChannelUpdateTx, DepositInfo, Error, Event, FinalizedOp,
+    FinalizedTx, InscriptionId, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
     SequencerCheckpoint, SequencerClient, SequencerConfig, TurnNotification, TxSource, TxStatus,
     TxStatusUpdate, WithdrawArg, WithdrawInfo,
 };
