@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::{ffi::c_void, mem::ManuallyDrop};
 
 use lb_node::RuntimeServiceId;
 use overwatch::overwatch::{Overwatch, OverwatchHandle};
@@ -56,13 +56,13 @@ impl LogosBlockchainNode {
     }
 
     /// Gets ownership of the inner [`LogosBlockchainOverwatch`] and [`Runtime`]
-    /// instances. `mem::forget` prevents `Drop` from freeing the pointers we
-    /// just moved into the returned boxes.
+    /// instances. Wrapping `self` in [`ManuallyDrop`] prevents `Drop` from
+    /// freeing the pointers we just moved into the returned boxes.
     #[must_use]
     pub fn into_parts(self) -> (Box<LogosBlockchainOverwatch>, Box<Runtime>) {
-        let overwatch = unsafe { Box::from_raw(self.overwatch.cast::<LogosBlockchainOverwatch>()) };
-        let runtime = unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) };
-        std::mem::forget(self);
+        let this = ManuallyDrop::new(self);
+        let overwatch = unsafe { Box::from_raw(this.overwatch.cast::<LogosBlockchainOverwatch>()) };
+        let runtime = unsafe { Box::from_raw(this.runtime.cast::<Runtime>()) };
         (overwatch, runtime)
     }
 
