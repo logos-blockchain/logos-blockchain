@@ -24,6 +24,10 @@ impl Gas {
     pub fn checked_add(self, rhs: Self) -> Result<Self, GasOverflow> {
         self.0.checked_add(rhs.0).ok_or(GasOverflow).map(Self)
     }
+
+    pub fn checked_mul(self, rhs: Value) -> Result<Self, GasOverflow> {
+        self.0.checked_mul(rhs).ok_or(GasOverflow).map(Self)
+    }
 }
 
 impl From<Value> for Gas {

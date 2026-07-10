@@ -10,7 +10,10 @@ use crate::{
         GasCalculator as _, GasConstants, Note, NoteId, Op, Utxo,
         gas::{GasCost, GasOverflow},
         ledger::{BoundedUtxos, Inputs, Outputs},
-        ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
+        ops::{
+            channel::{ChannelId, withdraw::ChannelWithdrawOp},
+            transfer::TransferOp,
+        },
         transactions::{MantleTx, MantleTxContext},
     },
     proofs::channel_multi_sig_proof::ChannelMultiSigProof,
@@ -26,6 +29,8 @@ pub enum TxBuilderError {
     InvalidOutputsBounds { source: BoundedError },
     #[error("Gas computation overflow: {0}")]
     GasOverflow(#[from] GasOverflow),
+    #[error("Missing withdrawal threshold for channel {channel_id:?}")]
+    MissingWithdrawThreshold { channel_id: ChannelId },
     #[error("Funded transaction has negative net balance: {net_balance}")]
     NegativeNetBalance { net_balance: i128 },
 }
@@ -229,6 +234,19 @@ impl MantleTxBuilder {
         &self,
         context: &MantleTxContext,
     ) -> Result<GasCost, TxBuilderError> {
+        for op in self.mantle_tx.ops() {
+            if let Op::ChannelWithdraw(operation) = op
+                && context
+                    .gas_context
+                    .withdraw_threshold(&operation.channel_id)
+                    .is_none()
+            {
+                return Err(TxBuilderError::MissingWithdrawThreshold {
+                    channel_id: operation.channel_id,
+                });
+            }
+        }
+
         let build = self.clone().build()?;
         Ok(build.total_gas_cost::<G>(&context.gas_context)?)
     }
@@ -297,7 +315,6 @@ mod tests {
             gas::MainnetGasConstants,
             ops::{
                 channel::{
-                    ChannelId,
                     deposit::{DepositOp, Metadata},
                     inscribe::InscriptionOp,
                 },
@@ -435,6 +452,42 @@ mod tests {
                 .unwrap(),
             0
         );
+    }
+
+    #[test]
+    fn withdraw_gas_cost_without_threshold_returns_error() {
+        let channel_id = ChannelId::from([9; 32]);
+
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id,
+            outputs: Outputs::new([Note {
+                value: 5,
+                pk: ZkPublicKey::zero(),
+            }]),
+            withdraw_nonce: 0,
+        };
+
+        let builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelWithdraw(withdraw_op))
+            .unwrap();
+
+        let context = MantleTxContext {
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(1, 0),
+            ),
+            leader_reward_amount: 0,
+        };
+
+        let result = builder.gas_cost::<MainnetGasConstants>(&context);
+
+        assert!(matches!(
+            result,
+            Err(TxBuilderError::MissingWithdrawThreshold {
+                channel_id: missing_channel_id
+            }) if missing_channel_id == channel_id
+        ));
     }
 
     #[test]
