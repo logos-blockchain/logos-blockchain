@@ -50,13 +50,16 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
         start_cli_sequencer_with_channel_state(&args.node_key).await?;
     print_channel_state("zone_config before", &channel_id, channel_state.as_ref());
     let status_rx = sequencer.subscribe_tx_status();
-    let (_result, _checkpoint, signed_tx) = sequencer.handle().channel_config(
-        Keys::try_from(authorized_keys)?,
-        args.posting_timeframe.into(),
-        args.posting_timeout.into(),
-        args.configuration_threshold,
-        args.withdraw_threshold,
-    )?;
+    let (_result, _checkpoint, signed_tx) = sequencer
+        .handle()
+        .channel_config(
+            Keys::try_from(authorized_keys)?,
+            args.posting_timeframe.into(),
+            args.posting_timeout.into(),
+            args.configuration_threshold,
+            args.withdraw_threshold,
+        )
+        .await?;
     let tx_hash = signed_tx.hash();
     let goal = CommandGoal::Tx { tx_hash };
     let wait_for = if args.wait_finalized {

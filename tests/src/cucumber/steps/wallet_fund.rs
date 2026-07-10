@@ -99,9 +99,11 @@ async fn step_fund_payment_transaction(
     Ok(())
 }
 
-/// Fund an inscription-only transaction: with zero gas prices the transaction
-/// owes no fee, so funding must be a no-op — no transfer appended and no
-/// proof returned — and the caller signs the channel op over the funded hash.
+/// Fund an inscription-only transaction: at non-zero gas prices the node
+/// appends a fee transfer paid from its wallet and returns the transfer
+/// proof. The caller signs the channel op over the FUNDED hash and
+/// assembles the proofs in op order — the split-signing flow a zone
+/// sequencer uses.
 #[when(expr = "I fund an inscription transaction on node {string} as {string}")]
 async fn step_fund_inscription_transaction(
     world: &mut CucumberWorld,
@@ -144,28 +146,36 @@ async fn step_fund_inscription_transaction(
 
     let response = fund_via_node(&client, step, tx_builder, funding_pk).await?;
 
-    if response.transfer_proof.is_some() {
+    let Some(transfer_proof) = response.transfer_proof else {
         return Err(StepError::LogicalError {
             message: format!(
-                "Step `{}` error: feeless transaction must not get a transfer proof",
+                "Step `{}` error: funding an inscription at non-zero gas prices must return a \
+                transfer proof",
                 step.value
             ),
         });
-    }
-    if response.funded_tx.ops().len() != 1 {
+    };
+    let ops = response.funded_tx.ops();
+    if ops.len() != 2
+        || !matches!(ops[0], Op::ChannelInscribe(_))
+        || !matches!(ops[1], Op::Transfer(_))
+    {
         return Err(StepError::LogicalError {
             message: format!(
-                "Step `{}` error: feeless transaction must keep its single op, got {}",
+                "Step `{}` error: funded inscription must be [inscribe, fee transfer], got {} ops",
                 step.value,
-                response.funded_tx.ops().len()
+                ops.len()
             ),
         });
     }
 
     let tx_hash = response.funded_tx.hash();
     let signature = signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref());
-    let signed_tx = SignedMantleTx::new(response.funded_tx, vec![OpProof::Ed25519Sig(signature)])
-        .map_err(|source| StepError::LogicalError {
+    let signed_tx = SignedMantleTx::new(
+        response.funded_tx,
+        vec![OpProof::Ed25519Sig(signature), transfer_proof],
+    )
+    .map_err(|source| StepError::LogicalError {
         message: format!(
             "Step `{}` error: assembling the funded transaction failed: {source:?}",
             step.value

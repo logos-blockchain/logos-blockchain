@@ -2,8 +2,8 @@
 # check=skip=SecretsUsedInArgOrEnv
 # Ignore warnings about sensitive information as this is test data.
 
-ARG CORE_VERSION=0.2.0
-ARG NODE_VERSION=0.2.0
+ARG LC_CORE_VERSION=0.2.0
+ARG LB_NODE_VERSION=0.2.0
 
 # ===========================
 # BUILD IMAGE
@@ -11,8 +11,8 @@ ARG NODE_VERSION=0.2.0
 
 FROM debian:trixie-slim AS builder
 
-ARG CORE_VERSION
-ARG NODE_VERSION
+ARG LC_CORE_VERSION
+ARG LB_NODE_VERSION
 
 WORKDIR /logos-blockchain
 COPY . .
@@ -22,14 +22,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-RUN scripts/setup-logos-core.sh "$CORE_VERSION" "$(uname -m)-linux"
+RUN scripts/setup-logos-core.sh "$LC_CORE_VERSION" "$(uname -m)-linux"
+
+# Patch the AppImage magic bytes to restore standard ELF matching for QEMU
+RUN dd if=/dev/zero of=lgpd bs=1 count=3 seek=8 conv=notrunc && \
+    dd if=/dev/zero of=lgpm bs=1 count=3 seek=8 conv=notrunc && \
+    dd if=/dev/zero of=logoscore bs=1 count=3 seek=8 conv=notrunc
 
 RUN ./lgpd --appimage-extract && mv squashfs-root ext-lgpd && \
     ./lgpm --appimage-extract && mv squashfs-root ext-lgpm && \
     ./logoscore --appimage-extract && mv squashfs-root ext-logoscore
 
-RUN ./ext-lgpd/AppRun download blockchain_module --version "$NODE_VERSION" --output ./ && \
-    ./ext-lgpm/AppRun --modules-dir ./modules install --file "blockchain_module-${NODE_VERSION}.lgx"
+RUN ./ext-lgpd/AppRun download blockchain_module --version "$LB_NODE_VERSION" --output ./ && \
+    ./ext-lgpm/AppRun --modules-dir ./modules install --file "blockchain_module-${LB_NODE_VERSION}.lgx"
 
 # ===========================
 # NODE IMAGE
