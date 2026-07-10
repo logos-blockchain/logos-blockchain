@@ -200,8 +200,7 @@ where
 /// Mirror a block's supported channel txs into the pending set
 /// (insert-if-absent), pairing each entry with its full [`SignedMantleTx`]
 /// so a later retry re-posts the original bytes. Config and custom shapes
-/// are not mirrored: configs are tracked by their submitter (`pending_other`)
-/// and custom shapes are not retriable by the SDK.
+/// are ignored — their submitter already tracks them (`pending_other`).
 fn observe_channel_inscriptions(
     state: &mut TxState,
     classified: &[BlockChannelTx],
