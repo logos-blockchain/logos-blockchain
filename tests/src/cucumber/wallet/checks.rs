@@ -126,6 +126,15 @@ pub async fn assert_tracked_wallet_fees_equal_sponsored_fee_account_spend(
     world: &mut CucumberWorld,
     step_value: &str,
 ) -> StepResult {
+    let submitted_tx_hashes = world.with_wallets(TrackedWallets::submitted_tx_hashes)?;
+    wait_for_observed_transaction_hashes(
+        world,
+        step_value,
+        &submitted_tx_hashes,
+        Duration::from_secs(30),
+    )
+    .await?;
+
     let sponsored_genesis_account =
         world
             .fee_state

@@ -58,6 +58,14 @@ impl TrackedWallets {
     }
 
     #[must_use]
+    pub fn submitted_tx_hashes(&self) -> HashSet<TxHash> {
+        self.submitted_tx_hashes
+            .values()
+            .flat_map(|hashes| hashes.iter().copied())
+            .collect()
+    }
+
+    #[must_use]
     pub fn total_tracked_spent_fees(&self) -> u64 {
         self.wallets
             .values()
