@@ -26,14 +26,13 @@ use super::{
     support::{
         PublishDeadline, balance_update_payload, collect_indexed_messages,
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
-        parse_balance_payload, publish_message_with_retry,
-        wait_for_adopted_payload_and_collect_mempool_pending,
-        wait_for_adopted_payloads_and_collect_mempool_pending, wait_for_channel_view,
-        wait_for_deposit, wait_for_exact_indexed_payload_count,
+        parse_balance_payload, publish_message_with_retry, wait_for_channel_view, wait_for_deposit,
+        wait_for_exact_indexed_payload_count,
         wait_for_finalized_deposit_via_sequencer_and_collect_mempool_pending,
         wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pending,
-        wait_for_lib_advance, wait_for_transactions_finalized, wait_for_turn_to_write,
-        wait_for_tx_status_lifecycle, wait_for_withdraw,
+        wait_for_lib_advance, wait_for_on_chain_statuses_and_collect_mempool_pending,
+        wait_for_transactions_finalized, wait_for_turn_to_write, wait_for_tx_status_lifecycle,
+        wait_for_withdraw,
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
@@ -306,7 +305,7 @@ async fn step_publish_single_zone_message_for_sequencer(
     let payload = make_inscription(&data);
     let handle = world.zone.sequencer_client(&sequencer_alias)?.clone();
 
-    handle
+    let (published, _checkpoint) = handle
         .publish(payload.clone())
         .await
         .map_err(|error| StepError::LogicalError {
@@ -315,9 +314,7 @@ async fn step_publish_single_zone_message_for_sequencer(
             ),
         })?;
 
-    world
-        .zone
-        .remember_zone_message(message_alias, payload, None, None, None);
+    remember_published_zone_message(world, &sequencer_alias, message_alias, payload, &published);
 
     Ok(())
 }
@@ -387,7 +384,7 @@ async fn step_publish_zone_messages_to_queue_for_sequencer(
     let handle = world.zone.sequencer_client(&sequencer_alias)?.clone();
 
     for (message_alias, payload) in rows {
-        handle
+        let (published, _checkpoint) = handle
             .publish(payload.clone())
             .await
             .map_err(|error| StepError::LogicalError {
@@ -396,9 +393,13 @@ async fn step_publish_zone_messages_to_queue_for_sequencer(
                 ),
             })?;
 
-        world
-            .zone
-            .remember_zone_message(message_alias, payload, None, None, None);
+        remember_published_zone_message(
+            world,
+            &sequencer_alias,
+            message_alias,
+            payload,
+            &published,
+        );
     }
 
     Ok(())
@@ -1034,7 +1035,7 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
     timeout_seconds: u64,
 ) -> StepResult {
     let aliases = single_column_table(step, "alias", "zone message aliases")?;
-    let payloads = log_step_error(step, world.zone.message_payloads_for_aliases(&aliases))?;
+    let tx_hashes = log_step_error(step, world.zone.message_tx_hashes_for_aliases(&aliases))?;
     let mut view_rx = log_step_error(step, world.zone.sequencer_channel_view_rx(&sequencer_alias))?;
     wait_for_channel_view(&mut view_rx, Duration::from_secs(timeout_seconds), |view| {
         view.our_turn_to_write
@@ -1042,26 +1043,20 @@ async fn step_sequencer_emits_published_events_for_queued_zone_messages_on_turn(
     .await
     .map_err(|error| zone_step_error(step, &error))?;
 
-    let (published, mempool_pending) = {
-        let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-        wait_for_adopted_payloads_and_collect_mempool_pending(
-            events,
-            &payloads,
-            Duration::from_secs(timeout_seconds),
-        )
-        .await
-        .map_err(|error| zone_step_error(step, &error))?
-    };
+    // The messages were remembered when queued; wait until they're mined
+    // (`OnChain`, not yet finalized) via the per-tx status stream.
+    let mut statuses = log_step_error(
+        step,
+        world.zone.take_sequencer_tx_status_rx(&sequencer_alias),
+    )?;
+    let mempool_pending = wait_for_on_chain_statuses_and_collect_mempool_pending(
+        &mut statuses,
+        &tx_hashes,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
 
-    for ((message_alias, payload), published) in aliases.into_iter().zip(payloads).zip(published) {
-        remember_published_zone_message(
-            world,
-            &sequencer_alias,
-            message_alias,
-            payload,
-            &published,
-        );
-    }
     world
         .zone
         .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
@@ -1137,19 +1132,26 @@ async fn step_sequencer_publishes_immediately_while_in_turn(
     message_alias: String,
     timeout_seconds: u64,
 ) -> StepResult {
-    let payload = message_payload(world, &message_alias)?;
-    let (published, mempool_pending) = {
-        let events = log_step_error(step, world.zone.sequencer_events_mut(&sequencer_alias))?;
-        wait_for_adopted_payload_and_collect_mempool_pending(
-            events,
-            &payload,
-            Duration::from_secs(timeout_seconds),
-        )
-        .await
-        .map_err(|error| zone_step_error(step, &error))?
-    };
+    // The message was remembered when submitted; wait until it's mined
+    // (`OnChain`, not yet finalized) via the per-tx status stream.
+    let tx_hashes = log_step_error(
+        step,
+        world
+            .zone
+            .message_tx_hashes_for_aliases(std::slice::from_ref(&message_alias)),
+    )?;
+    let mut statuses = log_step_error(
+        step,
+        world.zone.take_sequencer_tx_status_rx(&sequencer_alias),
+    )?;
+    let mempool_pending = wait_for_on_chain_statuses_and_collect_mempool_pending(
+        &mut statuses,
+        &tx_hashes,
+        Duration::from_secs(timeout_seconds),
+    )
+    .await
+    .map_err(|error| zone_step_error(step, &error))?;
 
-    remember_published_zone_message(world, &sequencer_alias, message_alias, payload, &published);
     world
         .zone
         .record_mempool_pending(sequencer_alias.clone(), mempool_pending);
@@ -1509,16 +1511,6 @@ fn published_payload_set(
     let expected_payloads = log_step_error(step, world.zone.published_message_payloads())?;
 
     Ok(expected_payloads.into_iter().collect())
-}
-
-fn message_payload(world: &CucumberWorld, message_alias: &str) -> Result<Inscription, StepError> {
-    let payloads = world
-        .zone
-        .message_payloads_for_aliases(&[message_alias.to_owned()])?;
-
-    payloads.into_iter().next().ok_or(StepError::LogicalError {
-        message: format!("Zone message alias '{message_alias}' not found"),
-    })
 }
 
 fn ensure_indexed_payloads_match_once(

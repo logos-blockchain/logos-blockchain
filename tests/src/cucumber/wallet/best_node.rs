@@ -1,4 +1,7 @@
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    time::Duration,
+};
 
 use hex::ToHex as _;
 use lb_chain_service::CryptarchiaInfo;
@@ -19,7 +22,7 @@ use crate::{
 const BEST_NODE_SELECTION_TIMEOUT: Duration = Duration::from_mins(3);
 const BEST_NODE_SELECTION_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const BEST_NODE_SELECTION_LOG_INTERVAL: Duration = Duration::from_secs(5);
-const BEST_NODE_QUERY_TIMEOUT: Duration = Duration::from_secs(2);
+const BEST_NODE_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Best-node selection result, keyed by group name.
 /// When no groups are configured the single key is the empty string "".
@@ -38,6 +41,10 @@ pub struct BestGroupNode {
     pub tip: String,
     /// Chain height at selection time.
     pub height: u64,
+    /// Consensus slot at selection time. Used by background scanners to avoid
+    /// replaying the whole stream while preserving the existing best-node
+    /// selection.
+    pub slot: u64,
     /// All nodes in the selected group that shared this winning tip at
     /// resolution time. Includes `node_name`, sorted lexicographically, and
     /// deduplicated for stable fanout.
@@ -77,6 +84,18 @@ impl BestNodeInfo {
             });
         };
         Ok(node_info.name.clone())
+    }
+
+    pub fn best_node_for_group(&self, group_id: &str) -> Result<&BestGroupNode, StepError> {
+        self.best_nodes
+            .get(group_id)
+            .or_else(|| self.best_nodes.get(""))
+            .ok_or_else(|| StepError::LogicalError {
+                message: format!(
+                    "could not select a best node for group '{}'",
+                    display_group_key(group_id)
+                ),
+            })
     }
 }
 
@@ -171,122 +190,61 @@ pub async fn sanitize_best_node_info_for_group_with_feed<'a>(
 /// Falls back to all nodes when no groups are configured.
 /// Nodes that do not respond within 2 seconds are excluded from the majority
 /// denominator.
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "Selection loop includes polling, timeout handling, and majority/tie logic."
-)]
 pub async fn determine_best_node(
     world: &CucumberWorld,
     wallet_node_name: &str,
     last_verbose_msg: Option<&mut String>,
 ) -> Result<BestNodeInfo, StepError> {
-    let (group_key, candidates) = resolve_candidate_nodes(world, wallet_node_name)?;
+    let (group_key, mut candidates) = resolve_candidate_nodes(world, wallet_node_name)?;
+    candidates.sort();
+
     if candidates.is_empty() {
         return Err(StepError::LogicalError {
             message: "No available nodes to query for UTXOs".to_owned(),
         });
     }
 
-    let start = Instant::now();
-    let mut last_log_at: Option<Instant> = None;
-    let mut last_group_summary = String::from("no responsive nodes");
-
-    loop {
-        let (mut ordered_snapshots, mut unreachable) =
-            collect_ordered_group_snapshots(world, &candidates).await;
-        unreachable.sort();
-        if !unreachable.is_empty() {
-            warn!(
-                target: TARGET,
-                "Best-node selection unreachable nodes in group '{}': {}",
-                display_group_key(&group_key),
-                unreachable.join(", ")
-            );
+    let mut node_to_group = BTreeMap::new();
+    if world.node_groups.is_empty() {
+        for node_name in &candidates {
+            node_to_group.insert(node_name.clone(), String::new());
         }
-
-        let responsive_count = ordered_snapshots.len();
-
-        if responsive_count > 0 {
-            last_group_summary = summarize_tip_groups(&ordered_snapshots);
-
-            if let Some(majority_group) = select_majority_tip_group(&ordered_snapshots)
-                && let Some(best_idx) =
-                    select_best_snapshot_index(&ordered_snapshots, &majority_group)
-            {
-                let same_tip_nodes = stable_unique_node_names(
-                    majority_group
-                        .iter()
-                        .map(|idx| ordered_snapshots[*idx].node_name.clone()),
-                );
-                let best_snapshot = ordered_snapshots.swap_remove(best_idx);
-                let best_node_name = best_snapshot.node_name;
-                let best_consensus = best_snapshot.consensus;
-                let majority_size = majority_group.len();
-
-                if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
-                    let this_msg = format!(
-                        "Chosen best node {best_node_name} in group '{}' with block height: '{}' \
-                        header id: '{}' (majority {}/{})",
-                        display_group_key(&group_key),
-                        best_consensus.height,
-                        best_consensus.tip,
-                        majority_size,
-                        responsive_count
-                    );
-                    if let Some(last) = last_verbose_msg {
-                        if last != &this_msg {
-                            last.clone_from(&this_msg);
-                            info!(target: TARGET, "{this_msg}");
-                        }
-                    } else {
-                        info!(target: TARGET, "{this_msg}");
-                    }
-                }
-
-                return Ok(BestNodeInfo {
-                    best_nodes: HashMap::from([(
-                        group_key.clone(),
-                        BestGroupNode {
-                            node_name: best_node_name,
-                            tip: best_consensus.tip.encode_hex::<String>(),
-                            height: best_consensus.height,
-                            same_tip_nodes,
-                        },
-                    )]),
-                });
-            }
+    } else {
+        for node_name in &candidates {
+            let group = world
+                .node_to_group
+                .get(node_name)
+                .ok_or(StepError::LogicalError {
+                    message: format!("Node '{node_name}' is not in any configured node group"),
+                })?
+                .clone();
+            node_to_group.insert(node_name.clone(), group);
         }
-
-        if start.elapsed() >= BEST_NODE_SELECTION_TIMEOUT {
-            return Err(StepError::LogicalError {
-                message: format!(
-                    "No stable majority tip across candidate nodes for group '{}' after {:.2?}. \
-                    Reachable nodes: {}/{}. Tip groups: {}",
-                    display_group_key(&group_key),
-                    start.elapsed(),
-                    responsive_count,
-                    candidates.len(),
-                    last_group_summary
-                ),
-            });
-        }
-
-        if last_log_at.is_none_or(|last| last.elapsed() >= BEST_NODE_SELECTION_LOG_INTERVAL) {
-            info!(
-                target: TARGET,
-                "Waiting for consensus majority tip before selecting best node for group '{}' - \
-                elapsed: {:.2?}, reachable: {}/{}, tips: {}",
-                display_group_key(&group_key),
-                start.elapsed(),
-                responsive_count,
-                candidates.len(),
-                last_group_summary
-            );
-            last_log_at = Some(Instant::now());
-        }
-
-        sleep(BEST_NODE_SELECTION_POLL_INTERVAL).await;
     }
+
+    if !node_to_group.contains_key(wallet_node_name) {
+        node_to_group.insert(wallet_node_name.to_owned(), group_key.clone());
+    }
+
+    let node_clients = candidates
+        .iter()
+        .filter_map(|node_name| {
+            world
+                .nodes_info
+                .get(node_name)
+                .map(|node| (node_name.clone(), node.started_node.client.clone()))
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    determine_best_node_from_clients(
+        wallet_node_name,
+        &node_to_group,
+        &candidates,
+        &node_clients,
+        last_verbose_msg,
+        None,
+    )
+    .await
 }
 
 /// Get best-node info for the wallet's fork group.
@@ -301,6 +259,33 @@ pub async fn get_best_node_info(
 ) -> Result<BestNodeInfo, StepError> {
     let wallet = world.resolve_wallet(wallet_name)?;
     determine_best_node(world, &wallet.node_name, last_verbose_msg).await
+}
+
+pub async fn get_best_node_info_from_clients(
+    representative_wallet_name: &str,
+    wallet_to_node: &BTreeMap<String, String>,
+    node_to_group: &BTreeMap<String, String>,
+    group_nodes: &[String],
+    node_clients: &BTreeMap<String, NodeHttpClient>,
+    last_verbose_msg: Option<&mut String>,
+) -> Result<BestNodeInfo, StepError> {
+    let wallet_node_name = wallet_to_node
+        .get(representative_wallet_name)
+        .ok_or_else(|| StepError::LogicalError {
+            message: format!(
+                "Representative wallet '{representative_wallet_name}' does not map to a node"
+            ),
+        })?;
+
+    determine_best_node_from_clients(
+        wallet_node_name,
+        node_to_group,
+        group_nodes,
+        node_clients,
+        last_verbose_msg,
+        Some("scanner"),
+    )
+    .await
 }
 
 #[derive(Debug)]
@@ -435,7 +420,9 @@ fn selected_tip_still_on_observed_chain(
     normalize_header_id_str(&selected.tip) == observed_header.encode_hex::<String>()
 }
 
-const fn display_group_key(group_key: &str) -> &str {
+/// Group key display helper
+#[must_use]
+pub const fn display_group_key(group_key: &str) -> &str {
     if group_key.is_empty() {
         "<ungrouped>"
     } else {
@@ -474,26 +461,163 @@ fn resolve_candidate_nodes(
     Ok((group_name.clone(), candidates))
 }
 
-/// Query all candidate nodes in parallel and return their consensus snapshots,
-/// sorted by node name for stable ordering. Nodes that do not respond within 2
-/// seconds are excluded from the result, and their names are returned in the
-/// `unreachable` vector.
-async fn collect_ordered_group_snapshots(
-    world: &CucumberWorld,
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "The owned-client adapter intentionally mirrors the existing best-node polling logic."
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "The owned-client adapter intentionally mirrors the existing best-node polling logic."
+)]
+async fn determine_best_node_from_clients(
+    wallet_node_name: &str,
+    node_to_group: &BTreeMap<String, String>,
+    group_nodes: &[String],
+    node_clients: &BTreeMap<String, NodeHttpClient>,
+    mut last_verbose_msg: Option<&mut String>,
+    tag: Option<&str>,
+) -> Result<BestNodeInfo, StepError> {
+    let tag = tag.map_or(String::new(), |tag| format!("[{tag}]: "));
+    let group_key = node_to_group
+        .get(wallet_node_name)
+        .cloned()
+        .unwrap_or_default();
+    let mut candidates = if group_nodes.is_empty() {
+        node_clients.keys().cloned().collect::<Vec<_>>()
+    } else {
+        group_nodes.to_vec()
+    };
+    candidates.sort();
+
+    if candidates.is_empty() {
+        return Err(StepError::LogicalError {
+            message: format!("{tag}No available nodes to query for UTXOs"),
+        });
+    }
+
+    let start = Instant::now();
+    let mut last_log_at: Option<Instant> = None;
+    let mut last_group_summary = None;
+
+    loop {
+        let (mut ordered_snapshots, mut unreachable) =
+            collect_ordered_group_snapshots_from_clients(&candidates, node_clients).await;
+        unreachable.sort();
+        if !unreachable.is_empty() {
+            warn!(
+                target: TARGET,
+                "{tag}Best-node selection unreachable nodes in group '{}': {}",
+                display_group_key(&group_key),
+                unreachable.join(", ")
+            );
+        }
+
+        let responsive_count = ordered_snapshots.len();
+
+        if responsive_count > 0 {
+            last_group_summary = Some(summarize_tip_groups(&ordered_snapshots));
+
+            if let Some(majority_group) = select_majority_tip_group(&ordered_snapshots)
+                && let Some(best_idx) =
+                    select_best_snapshot_index(&ordered_snapshots, &majority_group)
+            {
+                let same_tip_nodes = stable_unique_node_names(
+                    majority_group
+                        .iter()
+                        .map(|idx| ordered_snapshots[*idx].node_name.clone()),
+                );
+                let best_snapshot = ordered_snapshots.swap_remove(best_idx);
+                let best_node_name = best_snapshot.node_name;
+                let best_consensus = best_snapshot.consensus;
+                let majority_size = majority_group.len();
+
+                if is_truthy_env(CUCUMBER_VERBOSE_CONSOLE) {
+                    let this_msg = format!(
+                        "{tag}Chosen best node {best_node_name} in group '{}', block height: '{}', \
+                        header id: '{}', (majority {}/{})",
+                        display_group_key(&group_key),
+                        best_consensus.height,
+                        best_consensus.tip,
+                        majority_size,
+                        responsive_count
+                    );
+                    if let Some(last) = last_verbose_msg.as_deref_mut() {
+                        if last != &this_msg {
+                            last.clone_from(&this_msg);
+                            info!(target: TARGET, "{this_msg}");
+                        }
+                    } else {
+                        info!(target: TARGET, "{this_msg}");
+                    }
+                }
+
+                return Ok(BestNodeInfo {
+                    best_nodes: HashMap::from([(
+                        group_key.clone(),
+                        BestGroupNode {
+                            node_name: best_node_name,
+                            tip: best_consensus.tip.encode_hex::<String>(),
+                            height: best_consensus.height,
+                            slot: u64::from(best_consensus.slot),
+                            same_tip_nodes,
+                        },
+                    )]),
+                });
+            }
+        }
+
+        let last_group_summary = last_group_summary
+            .clone()
+            .unwrap_or_else(|| format!("no responsive nodes [{}]", unreachable.join(", ")));
+
+        if start.elapsed() >= BEST_NODE_SELECTION_TIMEOUT {
+            return Err(StepError::LogicalError {
+                message: format!(
+                    "{tag}No stable majority tip for group '{}' after {:.2?}, reachable nodes: \
+                    {}/{}, tip groups: {}",
+                    display_group_key(&group_key),
+                    start.elapsed(),
+                    responsive_count,
+                    candidates.len(),
+                    last_group_summary,
+                ),
+            });
+        }
+
+        if last_log_at.is_none_or(|last| last.elapsed() >= BEST_NODE_SELECTION_LOG_INTERVAL) {
+            info!(
+                target: TARGET,
+                "{tag}Waiting for consensus majority tip for group '{}' - elapsed: {:.2?}, \
+                reachable: {}/{}, tips: {}",
+                display_group_key(&group_key),
+                start.elapsed(),
+                responsive_count,
+                candidates.len(),
+                last_group_summary,
+            );
+            last_log_at = Some(Instant::now());
+        }
+
+        sleep(BEST_NODE_SELECTION_POLL_INTERVAL).await;
+    }
+}
+
+async fn collect_ordered_group_snapshots_from_clients(
     candidates: &[String],
+    node_clients: &BTreeMap<String, NodeHttpClient>,
 ) -> (Vec<NodeConsensusSnapshot>, Vec<String>) {
     let mut snapshots = Vec::with_capacity(candidates.len());
     let mut unreachable = Vec::new();
     let mut jobs = JoinSet::new();
 
     for node_name in candidates {
-        let Some(node) = world.nodes_info.get(node_name) else {
+        let Some(client) = node_clients.get(node_name) else {
             unreachable.push(node_name.clone());
             continue;
         };
 
         let node_name = node_name.clone();
-        let client = node.started_node.client.clone();
+        let client = client.clone();
         jobs.spawn(async move {
             match timeout(BEST_NODE_QUERY_TIMEOUT, client.consensus_info()).await {
                 Ok(Ok(consensus)) => Some(NodeConsensusSnapshot {
