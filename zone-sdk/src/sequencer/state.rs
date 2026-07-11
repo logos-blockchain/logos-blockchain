@@ -4,7 +4,10 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx, Transaction as _,
-        ops::channel::{MsgId, inscribe::Inscription},
+        ops::{
+            Op,
+            channel::{ChannelId, MsgId, inscribe::Inscription},
+        },
         transactions::TxHash,
     },
 };
@@ -32,6 +35,45 @@ pub struct ChannelUpdateInfo {
     pub new_channel_tip: MsgId,
 }
 
+/// Opaque pending tx plus the lineage facts needed to shed it: the parent of
+/// its first tip-advancing inscription and the id of its last tip-advancing
+/// op (the channel tip once it mines). `first_parent` is `None` when the tx
+/// opens with a `ChannelConfig` (a config resets the tip, so the tx is
+/// always mineable) or carries no tip-advancing op — such entries are never
+/// shed.
+#[derive(Debug, Clone)]
+struct PendingOtherTx {
+    signed_tx: SignedMantleTx,
+    first_parent: Option<MsgId>,
+    last_msg: Option<MsgId>,
+}
+
+/// A tx's chaining facts on the channel: the parent of its first
+/// tip-advancing op (when that op is an inscription) and the id of its last
+/// tip-advancing op.
+fn opaque_lineage(tx: &SignedMantleTx, channel_id: ChannelId) -> (Option<MsgId>, Option<MsgId>) {
+    let mut first_parent = None;
+    let mut first_seen = false;
+    let mut last_msg = None;
+    for op in tx.mantle_tx.ops() {
+        match op {
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                if !first_seen {
+                    first_seen = true;
+                    first_parent = Some(inscribe.parent);
+                }
+                last_msg = Some(inscribe.id());
+            }
+            Op::ChannelConfig(config) if config.channel == channel_id => {
+                first_seen = true;
+                last_msg = Some(config.id());
+            }
+            _ => {}
+        }
+    }
+    (first_parent, last_msg)
+}
+
 /// Local pending inscription with lineage metadata.
 ///
 /// `withdraws == None` is a plain inscription; `Some(_)` is an atomic
@@ -55,9 +97,10 @@ pub struct TxState {
     /// Reverse index: parent `MsgId` → tx hashes that chain from it.
     pending_by_parent: HashMap<MsgId, Vec<TxHash>>,
     /// Opaque pending txs: `channel_config` submissions and raw
-    /// `submit_signed_tx` transactions. Retried byte-identically, no
-    /// inscription lineage.
-    pending_other: HashMap<TxHash, SignedMantleTx>,
+    /// `submit_signed_tx` transactions. Retried byte-identically; shed (and
+    /// orphaned as [`ChannelUpdateTx::Custom`]) once their first
+    /// inscription's parent slot is consumed on the canonical branch.
+    pending_other: HashMap<TxHash, PendingOtherTx>,
     /// Bounded insertion-ordered tx hashes accepted locally by this sequencer
     /// runtime or restored from its checkpoint.
     local_txs: VecDeque<TxHash>,
@@ -249,11 +292,20 @@ impl TxState {
             .collect()
     }
 
-    /// Submit a non-inscription tx for tracking (e.g. `set_keys`).
-    pub fn submit_other(&mut self, signed_tx: SignedMantleTx) {
+    /// Submit an opaque tx for tracking (`channel_config` or a raw
+    /// `submit_signed_tx`).
+    pub fn submit_other(&mut self, signed_tx: SignedMantleTx, channel_id: ChannelId) {
         let tx_hash = signed_tx.mantle_tx.hash();
+        let (first_parent, last_msg) = opaque_lineage(&signed_tx, channel_id);
         self.track_local_tx(tx_hash);
-        self.pending_other.insert(tx_hash, signed_tx);
+        self.pending_other.insert(
+            tx_hash,
+            PendingOtherTx {
+                signed_tx,
+                first_parent,
+                last_msg,
+            },
+        );
     }
 
     fn track_local_tx(&mut self, tx_hash: TxHash) {
@@ -407,7 +459,7 @@ impl TxState {
             .pending_other
             .iter()
             .filter(|(hash, _)| !safe.contains(hash))
-            .map(|(hash, tx)| (*hash, tx.clone()));
+            .map(|(hash, entry)| (*hash, entry.signed_tx.clone()));
         inscriptions.chain(others).collect()
     }
 
@@ -525,6 +577,64 @@ impl TxState {
         ordered
     }
 
+    /// Shed pending opaque txs that can no longer land on the canonical
+    /// branch: their first inscription's parent slot is neither the channel
+    /// tip nor on the pending path to it (consumed by a conflicting entry).
+    /// Config-led txs are never shed — a config resets the tip and is always
+    /// mineable. The shed txs are removed from retry and returned whole for
+    /// consumer-facing orphan reporting.
+    pub fn shed_off_branch_pending_other(&mut self, tip: HeaderId) -> Vec<SignedMantleTx> {
+        if self.pending_other.is_empty() {
+            return Vec::new();
+        }
+        let channel_tip = self.channel_tip_at(tip);
+        let mut landable: HashSet<MsgId> = self
+            .collect_pending_suffix(channel_tip)
+            .iter()
+            .map(|info| info.this_msg)
+            .collect();
+        landable.insert(channel_tip);
+        // Extend through our own opaque chain: an entry whose first parent is
+        // landable (or that opens with a tip-resetting config) makes its own
+        // last message landable, so entries chained on it are kept too.
+        loop {
+            let mut changed = false;
+            for entry in self.pending_other.values() {
+                let viable = entry
+                    .first_parent
+                    .is_none_or(|parent| landable.contains(&parent));
+                if viable && let Some(last_msg) = entry.last_msg {
+                    changed |= landable.insert(last_msg);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let safe: HashSet<TxHash> = self
+            .block_states
+            .get(&tip)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+
+        let mut shed: Vec<TxHash> = self
+            .pending_other
+            .iter()
+            .filter(|(hash, entry)| {
+                !safe.contains(*hash)
+                    && entry
+                        .first_parent
+                        .is_some_and(|parent| !landable.contains(&parent))
+            })
+            .map(|(hash, _)| *hash)
+            .collect();
+        // Sort for determinism across `HashMap` iteration order.
+        shed.sort_unstable_by_key(|hash| hash.0);
+        shed.into_iter()
+            .filter_map(|hash| self.remove_pending(&hash))
+            .collect()
+    }
+
     /// Check if we have state for a block.
     #[must_use]
     pub fn has_block(&self, block_id: &HeaderId) -> bool {
@@ -583,7 +693,7 @@ impl TxState {
         let others = self
             .pending_other
             .iter()
-            .map(|(hash, tx)| (*hash, tx.clone()));
+            .map(|(hash, entry)| (*hash, entry.signed_tx.clone()));
         inscriptions.chain(others).collect()
     }
 
@@ -598,7 +708,9 @@ impl TxState {
             }
             Some(removed.signed_tx)
         } else {
-            self.pending_other.remove(tx_hash)
+            self.pending_other
+                .remove(tx_hash)
+                .map(|entry| entry.signed_tx)
         }
     }
 
@@ -717,15 +829,17 @@ impl TxState {
         let mut seen: HashSet<TxHash> = HashSet::new();
         infos
             .filter(|info| seen.insert(info.tx_hash))
-            .map(|info| self.classify_update_tx(info))
+            .filter_map(|info| self.classify_update_tx(info))
             .collect()
     }
 
     /// Type a lineage entry for a consumer-facing channel update from its
     /// block classification (or its pending entry when the lineage bridged
     /// through a held link). `Custom` shapes are reported whole — the
-    /// caller's own logic parses the tx.
-    fn classify_update_tx(&self, info: &InscriptionInfo) -> ChannelUpdateTx {
+    /// caller's own logic parses the tx. `Config` entries yield `None`: a
+    /// config carries no payload to apply — its effects (tip reset, key
+    /// rotation) reach consumers through the channel view.
+    fn classify_update_tx(&self, info: &InscriptionInfo) -> Option<ChannelUpdateTx> {
         if let Some(block_tx) = self
             .block_txs
             .values()
@@ -733,11 +847,15 @@ impl TxState {
             .find(|tx| tx.tx_hash() == Some(info.tx_hash))
         {
             return match block_tx {
-                BlockChannelTx::AtomicWithdraw(a) => ChannelUpdateTx::AtomicWithdraw(a.clone()),
-                BlockChannelTx::Inscription(_) | BlockChannelTx::Config(_) => {
-                    ChannelUpdateTx::Inscription(info.clone())
+                BlockChannelTx::AtomicWithdraw(a) => {
+                    Some(ChannelUpdateTx::AtomicWithdraw(a.clone()))
                 }
-                BlockChannelTx::Custom { tx, .. } => ChannelUpdateTx::Custom(tx.clone()),
+                BlockChannelTx::Inscription(_) => Some(ChannelUpdateTx::Inscription(info.clone())),
+                BlockChannelTx::Config(_) => None,
+                BlockChannelTx::Custom { tx, entries } => entries
+                    .iter()
+                    .any(|entry| !entry.payload.is_empty())
+                    .then(|| ChannelUpdateTx::Custom(tx.clone())),
             };
         }
         // Not in any held block — the lineage bridged through a pending link.
@@ -745,7 +863,7 @@ impl TxState {
             .pending
             .get(&info.tx_hash)
             .and_then(|p| p.withdraws.clone());
-        withdraws.map_or_else(
+        Some(withdraws.map_or_else(
             || ChannelUpdateTx::Inscription(info.clone()),
             |withdraws| {
                 ChannelUpdateTx::AtomicWithdraw(AtomicWithdrawInfo {
@@ -754,7 +872,7 @@ impl TxState {
                     withdraws,
                 })
             },
-        )
+        ))
     }
 
     /// The channel's inscription chain at an L1 tip: the mined inscriptions,
@@ -909,8 +1027,128 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         let tx = make_dummy_tx(1);
 
-        state.submit_other(tx);
+        state.submit_other(tx, ChannelId::from([0u8; 32]));
         assert_eq!(state.unfinalized_count(), 1);
+    }
+
+    #[test]
+    fn shed_pending_other_on_conflicting_parent() {
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        // Opaque tx whose first inscription chains from root.
+        let tx = make_dummy_tx(1);
+        let hash = tx.mantle_tx.hash();
+        state.submit_other(tx, channel_id);
+
+        // While the channel tip is still the tx's parent, nothing is shed.
+        assert!(state.shed_off_branch_pending_other(genesis).is_empty());
+
+        // A competing inscription consumes the root slot.
+        let competing = InscriptionInfo {
+            tx_hash: make_dummy_tx(2).mantle_tx.hash(),
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(9),
+            payload: [9].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Inscription(competing)],
+        );
+
+        let shed = state.shed_off_branch_pending_other(b1);
+        assert_eq!(shed.len(), 1);
+        assert_eq!(shed[0].mantle_tx.hash(), hash);
+        assert!(!state.is_tracked(&hash), "shed txs leave the retry set");
+    }
+
+    #[test]
+    fn shed_pending_other_cascades_through_own_chain() {
+        // Two opaque txs chained on each other: tx1 from root, tx2 from
+        // tx1's inscription. While tx1 is viable both are kept; once a
+        // competing entry consumes root, both are shed together.
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let channel_id = ChannelId::from([0u8; 32]);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        let tx1 = make_dummy_tx(1);
+        let tx1_msg = match &tx1.mantle_tx.ops()[0] {
+            ChannelInscribe(op) => op.id(),
+            _ => unreachable!(),
+        };
+        state.submit_other(tx1, channel_id);
+
+        let tx2 = {
+            let mantle_tx = MantleTx(
+                [ChannelInscribe(InscriptionOp {
+                    channel_id: [0u8; 32].into(),
+                    inscription: [2].into(),
+                    parent: tx1_msg,
+                    signer: Ed25519PublicKey::from_bytes(&[0u8; 32]).unwrap(),
+                })]
+                .into(),
+            );
+            SignedMantleTx {
+                ops_proofs: vec![],
+                mantle_tx,
+            }
+        };
+        state.submit_other(tx2, channel_id);
+
+        assert!(state.shed_off_branch_pending_other(genesis).is_empty());
+
+        let competing = InscriptionInfo {
+            tx_hash: make_dummy_tx(3).mantle_tx.hash(),
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(9),
+            payload: [9].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Inscription(competing)],
+        );
+
+        assert_eq!(state.shed_off_branch_pending_other(b1).len(), 2);
+        assert_eq!(state.unfinalized_count(), 0);
+    }
+
+    #[test]
+    fn opaque_tx_without_matching_inscription_is_never_shed() {
+        // No inscription for the tracked channel (same code path as a
+        // config-led tx): the entry has no shed parent and always stays.
+        let genesis = header_id(0);
+        let b1 = header_id(1);
+        let mut state = TxState::new(genesis, MsgId::root());
+
+        let tx = make_dummy_tx(1);
+        let hash = tx.mantle_tx.hash();
+        state.submit_other(tx, ChannelId::from([1u8; 32]));
+
+        let competing = InscriptionInfo {
+            tx_hash: make_dummy_tx(2).mantle_tx.hash(),
+            parent_msg: MsgId::root(),
+            this_msg: msg_id(9),
+            payload: [9].into(),
+        };
+        state.process_block(
+            b1,
+            genesis,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Inscription(competing)],
+        );
+
+        assert!(state.shed_off_branch_pending_other(b1).is_empty());
+        assert!(state.is_tracked(&hash));
     }
 
     #[test]
@@ -921,7 +1159,7 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(tx);
+        state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // Process block containing our tx, lib stays at genesis
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
@@ -942,7 +1180,7 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(tx);
+        state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 with our tx
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
@@ -973,8 +1211,8 @@ mod tests {
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
-        state.submit_other(tx1);
-        state.submit_other(tx2);
+        state.submit_other(tx1, ChannelId::from([0u8; 32]));
+        state.submit_other(tx2, ChannelId::from([0u8; 32]));
 
         // b1 contains only tx1
         state.process_block(b1, genesis, genesis, vec![hash1], vec![]);
@@ -996,7 +1234,7 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(tx);
+        state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 has our tx
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
@@ -1301,8 +1539,8 @@ mod tests {
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
-        state.submit_other(tx1);
-        state.submit_other(tx2);
+        state.submit_other(tx1, ChannelId::from([0u8; 32]));
+        state.submit_other(tx2, ChannelId::from([0u8; 32]));
 
         // b1 has tx1
         state.process_block(b1, genesis, genesis, vec![hash1], vec![]);

@@ -797,7 +797,7 @@ where
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        state.submit_other(signed_tx.clone());
+        state.submit_other(signed_tx.clone(), self.channel_id);
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
@@ -834,7 +834,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         let id = tx.mantle_tx.hash();
-        state.submit_other(tx.clone());
+        state.submit_other(tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
         self.last_msg_id = msg_id;
         self.queue_tx_status(id, TxStatus::AcceptedLocally);
@@ -1074,7 +1074,7 @@ pub(super) fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channe
             "restore_pending_tx: tx has multiple ChannelInscribe ops for our channel; \
              tracking as opaque (no bundle lineage)"
         );
-        state.submit_other(tx);
+        state.submit_other(tx, channel_id);
         return;
     }
     match inscribe_meta {
@@ -1085,6 +1085,6 @@ pub(super) fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channe
                 state.submit_atomic_withdraw(tx, parent, this_msg, payload, withdraws);
             }
         }
-        None => state.submit_other(tx),
+        None => state.submit_other(tx, channel_id),
     }
 }

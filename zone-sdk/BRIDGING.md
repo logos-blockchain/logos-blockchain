@@ -236,4 +236,4 @@ if let Event::BlocksProcessed { channel_update, .. } = event {
 }
 ```
 
-For multi-sig bundles the orphan event carries the same `ChannelUpdateTx::AtomicWithdraw` data once the bundle was mined, but the SDK cannot re-sign the tx — recovery means re-running the `prepare_tx` → collect-signatures → `submit_signed_tx` flow against the fresh parent and nonce. A multi-sig bundle that never mined produces no orphan event; it stays tracked opaquely and is retried byte-identically.
+For multi-sig bundles the orphan event carries the same `ChannelUpdateTx::AtomicWithdraw` data once the bundle was mined, but the SDK cannot re-sign the tx — recovery means re-running the `prepare_tx` → collect-signatures → `submit_signed_tx` flow against the fresh parent and nonce. A `submit_signed_tx` bundle that never mined is retried byte-identically until its parent slot is consumed by a competing entry, at which point it is shed and orphaned as `ChannelUpdateTx::Custom` carrying the whole transaction.

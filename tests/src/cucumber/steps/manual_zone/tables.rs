@@ -208,6 +208,33 @@ pub(super) fn concurrent_zone_message_rows(
     )
 }
 
+#[derive(Clone)]
+pub(super) struct CustomTxRow {
+    pub sequencer_alias: String,
+    pub transactions: u32,
+    pub inscriptions: u32,
+}
+
+pub(super) fn custom_tx_rows(step: &Step) -> Result<Vec<CustomTxRow>, StepError> {
+    parse_zone_table_rows(
+        step,
+        &["sequencer", "transactions", "inscriptions"],
+        "Concurrent custom transaction",
+        |row| match row {
+            [sequencer_alias, transactions, inscriptions] => Ok(CustomTxRow {
+                sequencer_alias: sequencer_alias.clone(),
+                transactions: parse_u32_cell(transactions, "transactions")?,
+                inscriptions: parse_u32_cell(inscriptions, "inscriptions")?,
+            }),
+            _ => invalid_zone_table_row(
+                "Concurrent custom transaction",
+                &["sequencer", "transactions", "inscriptions"],
+                row.len(),
+            ),
+        },
+    )
+}
+
 pub(super) fn group_zone_messages_by_sequencer(
     rows: &[ConcurrentZoneMessageRow],
 ) -> HashMap<String, Vec<ConcurrentZoneMessageRow>> {

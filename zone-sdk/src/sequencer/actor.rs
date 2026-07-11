@@ -564,20 +564,26 @@ where
 
     /// Build the [`ChannelUpdate`] returned to the consumer.
     ///
-    /// `orphaned` combines two sources, deduped by `tx_hash`:
+    /// `orphaned` combines three sources, deduped by `tx_hash`:
     /// - txs that left the channel chain between the old and new canonical tip,
-    ///   and
     /// - our own pending that can no longer land on the new tip
     ///   ([`TxState::shed_off_branch_pending`]), including pending that never
-    ///   mined and so appears in no on-chain delta.
+    ///   mined and so appears in no on-chain delta, and
+    /// - our own opaque pending in the same situation
+    ///   ([`TxState::shed_off_branch_pending_other`]), surfaced whole as
+    ///   [`ChannelUpdateTx::Custom`].
     ///
     /// `adopted` is the txs added to the channel chain.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
-        let shed = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
-            _ => Vec::new(),
+        let (shed, shed_other) = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => (
+                s.shed_off_branch_pending(tip),
+                s.shed_off_branch_pending_other(tip),
+            ),
+            _ => (Vec::new(), Vec::new()),
         };
         let mut orphaned: Vec<ChannelUpdateTx> = shed.into_iter().map(orphan_from_shed).collect();
+        orphaned.extend(shed_other.into_iter().map(ChannelUpdateTx::Custom));
 
         let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
         for tx in u.orphaned {
