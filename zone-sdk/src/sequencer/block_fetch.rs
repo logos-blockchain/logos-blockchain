@@ -198,10 +198,8 @@ where
 }
 
 /// Mirror a block's channel inscriptions into the pending set
-/// (insert-if-absent), pairing each entry with its full [`SignedMantleTx`]
-/// so a later retry re-posts the original bytes. Config and custom shapes
-/// are ignored — configs are tracked by their submitter (`pending_other`)
-/// and multi-inscribe txs are not representable in the pending lineage.
+/// (insert-if-absent) so a later retry re-posts the original bytes. Config
+/// and custom shapes are ignored.
 fn observe_channel_inscriptions(
     state: &mut TxState,
     classified: &[BlockChannelTx],
@@ -618,17 +616,9 @@ fn apply_backfilled_block(
     state.process_block(block_id, parent_id, lib, our_txs, channel_txs);
 }
 
-/// Classify a block's channel-touching txs, in tx-then-op order — the single
-/// pass that decides what each tx *is*: a `publish` inscription, an atomic
-/// inscription+withdraw bundle, a `channel_config` (a synthetic tip-reset
-/// entry with an empty payload so payload-keyed consumers ignore it
-/// naturally), or a custom shape the SDK cannot produce (bundled deposits,
-/// multiple tip-advancing ops, more than the one funding fee transfer).
-/// Custom shapes keep their tip-advancing entries so channel-tip derivation
-/// stays ledger-true, and those entries still reach channel updates as
-/// [`ChannelUpdateTx::Custom`]; custom txs are only excluded from the
-/// pending retry mirror — the SDK cannot rebuild them, their author
-/// recovers them.
+/// Classify a block's channel-touching txs in tx-then-op order: a `publish`
+/// inscription, an atomic bundle, a `channel_config` (a synthetic tip-reset
+/// entry with an empty payload), or a custom shape the SDK cannot produce.
 ///
 /// The ledger validates ops in tx-then-op order, with each `ChannelInscribe`
 /// requiring `parent == channel.tip_message` and each `ChannelConfig`
@@ -717,9 +707,6 @@ fn classify_channel_txs(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<Bl
             continue;
         }
 
-        // Only the exact shapes the publish API produces classify as
-        // supported; anything else — bundled deposits, multi-inscribe,
-        // extra transfers — is `Custom`.
         let clean = !foreign_ops && transfers <= 1;
         let block_tx = if clean && inscribes == 1 && configs == 0 {
             let inscription = entries.pop().expect("exactly one inscribe entry");

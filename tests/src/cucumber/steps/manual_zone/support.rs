@@ -1486,10 +1486,8 @@ pub async fn submit_atomic_zone_deposit(
     })
 }
 
-/// Builds one funded custom multi-inscription tx: `payloads` chained
-/// internally starting from `parent`, funded from the node's wallet and
-/// signed with the sequencer key. Returns the signed tx and its resulting
-/// channel tip (the last inscription's message id).
+/// Builds one funded custom multi-inscription tx; returns the signed tx and
+/// its last inscription's message id.
 async fn build_funded_custom_tx(
     node_client: &NodeHttpClient,
     channel_id: ChannelId,
@@ -1553,10 +1551,8 @@ pub struct CustomRepublishDeps {
     pub batches: VecDeque<Vec<Inscription>>,
 }
 
-/// Drives a competing-sequencer policy for the `prepare_tx`/`submit_signed_tx`
-/// flow: submits its planned custom multi-inscription txs one at a time and
-/// owns their recovery, the way BRIDGING.md prescribes — the SDK only retries
-/// custom txs byte-identically and cannot rebuild them.
+/// Drives a competing-sequencer policy for the `prepare_tx` +
+/// `submit_signed_tx` flow.
 pub fn start_custom_republish_policy(
     sequencer: ZoneSequencer<ZoneNodeHttpClient>,
     deps: CustomRepublishDeps,
@@ -1573,25 +1569,23 @@ pub fn start_custom_republish_policy(
     to_policy_runtime(runner::spawn(sequencer, policy))
 }
 
-/// [`OrphanRepublishPolicy`] for the custom-tx flow: `pending` mirrors the
-/// non-finalized channel view; after applying a channel update, orphans that
-/// are neither in `pending` nor finalized are rebuilt and re-submitted.
+/// [`OrphanRepublishPolicy`] for the custom-tx flow: orphans that are
+/// neither in `pending` nor finalized are rebuilt and re-submitted.
 struct CustomRepublishPolicy {
     deps: CustomRepublishDeps,
     view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
     pending: HashSet<Inscription>,
     finalized: HashSet<Inscription>,
-    /// Where our own submitted chain ends; the next submission chains here.
-    /// Reset on orphans so rebuilds chain from the channel tip instead.
+    /// Where our own submitted chain ends; reset on orphans so rebuilds
+    /// chain from the channel tip instead.
     chain_tip: Option<MsgId>,
-    /// No submissions until the sequencer is ready: every attempt funds a tx
-    /// first, and a fail-fast submit would leak the funding reservation.
+    /// No submissions until ready — a fail-fast submit would leak its
+    /// funding reservation.
     ready: bool,
 }
 
 impl CustomRepublishPolicy {
-    /// Builds, funds and submits `payloads` as one custom tx chained from the
-    /// current channel tip.
+    /// Builds, funds and submits `payloads` as one custom tx.
     async fn submit<Node>(
         &mut self,
         sequencer: &mut ZoneSequencer<Node>,

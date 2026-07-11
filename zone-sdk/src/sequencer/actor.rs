@@ -562,18 +562,9 @@ where
         }
     }
 
-    /// Build the [`ChannelUpdate`] returned to the consumer.
-    ///
-    /// `orphaned` combines three sources, deduped by `tx_hash`:
-    /// - txs that left the channel chain between the old and new canonical tip,
-    /// - our own pending that can no longer land on the new tip
-    ///   ([`TxState::shed_off_branch_pending`]), including pending that never
-    ///   mined and so appears in no on-chain delta, and
-    /// - our own opaque pending in the same situation
-    ///   ([`TxState::shed_off_branch_pending_other`]), surfaced whole as
-    ///   [`ChannelUpdateTx::Custom`].
-    ///
-    /// `adopted` is the txs added to the channel chain.
+    /// Build the [`ChannelUpdate`] returned to the consumer: `orphaned`
+    /// combines the on-chain delta with our own shed pending (lineage and
+    /// opaque), deduped by `tx_hash`.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
         let (shed, shed_other) = match (self.state.as_mut(), self.current_tip) {
             (Some(s), Some(tip)) => (

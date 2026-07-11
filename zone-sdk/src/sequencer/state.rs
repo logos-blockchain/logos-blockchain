@@ -35,12 +35,8 @@ pub struct ChannelUpdateInfo {
     pub new_channel_tip: MsgId,
 }
 
-/// Opaque pending tx plus the lineage facts needed to shed it: the parent of
-/// its first tip-advancing inscription and the id of its last tip-advancing
-/// op (the channel tip once it mines). `first_parent` is `None` when the tx
-/// opens with a `ChannelConfig` (a config resets the tip, so the tx is
-/// always mineable) or carries no tip-advancing op — such entries are never
-/// shed.
+/// `first_parent` is `None` for config-led txs (a config resets the tip, so
+/// the tx is always mineable) — such entries are never shed.
 #[derive(Debug, Clone)]
 struct PendingOtherTx {
     signed_tx: SignedMantleTx,
@@ -48,9 +44,7 @@ struct PendingOtherTx {
     last_msg: Option<MsgId>,
 }
 
-/// A tx's chaining facts on the channel: the parent of its first
-/// tip-advancing op (when that op is an inscription) and the id of its last
-/// tip-advancing op.
+/// A tx's chaining facts on the channel.
 fn opaque_lineage(tx: &SignedMantleTx, channel_id: ChannelId) -> (Option<MsgId>, Option<MsgId>) {
     let mut first_parent = None;
     let mut first_seen = false;
@@ -96,10 +90,8 @@ pub struct TxState {
     pending: HashMap<TxHash, PendingInscription>,
     /// Reverse index: parent `MsgId` → tx hashes that chain from it.
     pending_by_parent: HashMap<MsgId, Vec<TxHash>>,
-    /// Opaque pending txs: `channel_config` submissions and raw
-    /// `submit_signed_tx` transactions. Retried byte-identically; shed (and
-    /// orphaned as [`ChannelUpdateTx::Custom`]) once their first
-    /// inscription's parent slot is consumed on the canonical branch.
+    /// Opaque pending txs (`channel_config`, raw `submit_signed_tx`):
+    /// retried byte-identically until finalized or shed.
     pending_other: HashMap<TxHash, PendingOtherTx>,
     /// Bounded insertion-ordered tx hashes accepted locally by this sequencer
     /// runtime or restored from its checkpoint.
@@ -118,9 +110,7 @@ pub struct TxState {
 }
 
 /// A channel-touching tx's tip-advancing content, classified once at block
-/// scan and stored per block. All variants feed channel-tip derivation and
-/// channel updates; only `Inscription` and `AtomicWithdraw` are mirrored
-/// into the pending retry set.
+/// scan and stored per block.
 #[derive(Debug, Clone)]
 pub enum BlockChannelTx {
     /// `publish` shape: a single inscription.
@@ -577,12 +567,9 @@ impl TxState {
         ordered
     }
 
-    /// Shed pending opaque txs that can no longer land on the canonical
-    /// branch: their first inscription's parent slot is neither the channel
-    /// tip nor on the pending path to it (consumed by a conflicting entry).
-    /// Config-led txs are never shed — a config resets the tip and is always
-    /// mineable. The shed txs are removed from retry and returned whole for
-    /// consumer-facing orphan reporting.
+    /// Shed pending opaque txs whose first inscription's parent slot was
+    /// consumed by a conflicting entry: removed from retry and returned
+    /// whole for orphan reporting.
     pub fn shed_off_branch_pending_other(&mut self, tip: HeaderId) -> Vec<SignedMantleTx> {
         if self.pending_other.is_empty() {
             return Vec::new();
@@ -594,9 +581,8 @@ impl TxState {
             .map(|info| info.this_msg)
             .collect();
         landable.insert(channel_tip);
-        // Extend through our own opaque chain: an entry whose first parent is
-        // landable (or that opens with a tip-resetting config) makes its own
-        // last message landable, so entries chained on it are kept too.
+        // A viable entry makes its own last message landable, so entries
+        // chained on it are kept too.
         loop {
             let mut changed = false;
             for entry in self.pending_other.values() {
@@ -819,9 +805,8 @@ impl TxState {
         })
     }
 
-    /// Build the consumer-facing update entries from diffed lineage infos,
-    /// one entry per tx: a multi-op custom tx contributes several lineage
-    /// infos but is reported once, whole.
+    /// One update entry per tx: a multi-op custom tx contributes several
+    /// lineage infos but is reported once, whole.
     fn update_txs_from_infos<'a>(
         &'a self,
         infos: impl Iterator<Item = &'a InscriptionInfo>,
@@ -833,12 +818,8 @@ impl TxState {
             .collect()
     }
 
-    /// Type a lineage entry for a consumer-facing channel update from its
-    /// block classification (or its pending entry when the lineage bridged
-    /// through a held link). `Custom` shapes are reported whole — the
-    /// caller's own logic parses the tx. `Config` entries yield `None`: a
-    /// config carries no payload to apply — its effects (tip reset, key
-    /// rotation) reach consumers through the channel view.
+    /// `None` for entries with no payload to apply (configs, config-only
+    /// customs) — their effects reach consumers through the channel view.
     fn classify_update_tx(&self, info: &InscriptionInfo) -> Option<ChannelUpdateTx> {
         if let Some(block_tx) = self
             .block_txs
@@ -950,9 +931,7 @@ impl TxState {
         suffix
     }
 
-    /// All tip-advancing entries on a branch from the given block back to
-    /// LIB, in oldest-first order — the ledger-true lineage, custom shapes
-    /// included.
+    /// All tip-advancing entries on a branch back to LIB, oldest first.
     fn infos_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
         let mut blocks = Vec::new();
         let mut current = tip;
@@ -982,8 +961,7 @@ impl TxState {
             .collect()
     }
 
-    /// Collect the channel txs on a branch from the given block back to LIB,
-    /// in oldest-first order, typed for a consumer-facing update.
+    /// The branch's channel txs back to LIB, typed for a channel update.
     #[must_use]
     pub fn collect_update_txs_on_branch(&self, tip: HeaderId) -> Vec<ChannelUpdateTx> {
         self.update_txs_from_infos(self.infos_on_branch(tip).iter())
