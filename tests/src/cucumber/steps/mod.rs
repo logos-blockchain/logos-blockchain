@@ -9,6 +9,8 @@ pub mod manual_mempool;
 pub mod manual_nodes;
 pub mod manual_transactions;
 pub mod manual_zone;
+pub mod parse_steps;
+pub mod tokio_console;
 pub mod wallet_fund;
 
 const TARGET: &str = "cucumber_steps";

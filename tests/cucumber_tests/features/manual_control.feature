@@ -69,6 +69,27 @@ Feature: Manual control of transactions
     Then I stop all nodes
 
   @manual_control_transactions
+  Scenario: Tokio console transactions manual control
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 1000000      |
+      | 2             | 3           | 1000000      |
+    And I will have tokio console profile nodes:
+      | node_name |
+      | NODE_1    |
+      | NODE_2    |
+    And I have a cluster with capacity of 2 nodes
+#    And we use IBD peers
+    And all peers must be mode online after startup in 30 seconds
+    And I start nodes with wallet resources:
+      | node_name | account_index | wallet_name | connected_to |
+      | NODE_1    | 1             | WALLET_1A   |              |
+      | NODE_2    | 2             | WALLET_2A   | NODE_1       |
+    When all nodes have at least 2 blocks and converged to within 1 blocks in 300 seconds
+    When I perform manual control of transactions for all wallets no time-out
+    Then I stop all nodes
+
+  @manual_control_transactions
   Scenario: Transactions stress manual control
     Given the genesis block has the following wallet resources:
       | account_index | token_count | token_amount |

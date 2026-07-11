@@ -12,6 +12,7 @@ use super::{
     wallet::{WalletConfig, WalletConfigError},
 };
 use crate::{
+    env::set_default_env,
     get_reserved_available_udp_port,
     node::{
         DeploymentPlan, NodePlan,
@@ -38,6 +39,39 @@ pub enum TopologyBuildError {
     InvalidWallet(#[from] WalletConfigError),
 }
 
+/// Defines the profile of the node binary to be used in the deployment.
+#[derive(Default, Clone, Eq, PartialEq)]
+pub enum NodeBinaryProfile {
+    #[default]
+    Normal,
+    TokioConsole,
+}
+
+/// Environment variable name for the node binary profile.
+pub const NODE_BINARY_PROFILE: &str = "NODE_BINARY_PROFILE";
+///  Environment variable value for the normal node binary profile.
+const NODE_BINARY_PROFILE_NORMAL: &str = "normal";
+/// Environment variable value for the tokio-console node binary profile.
+const NODE_BINARY_PROFILE_TOKIO_CONSOLE: &str = "tokio-console";
+
+impl NodeBinaryProfile {
+    #[must_use]
+    pub fn from_string(s: &str) -> Self {
+        match s {
+            NODE_BINARY_PROFILE_TOKIO_CONSOLE => Self::TokioConsole,
+            _ => Self::Normal,
+        }
+    }
+
+    #[must_use]
+    pub const fn to_string(&self) -> &'static str {
+        match self {
+            Self::Normal => NODE_BINARY_PROFILE_NORMAL,
+            Self::TokioConsole => NODE_BINARY_PROFILE_TOKIO_CONSOLE,
+        }
+    }
+}
+
 /// High-level topology settings used to generate node configs for a scenario.
 #[derive(Clone)]
 pub struct TopologyConfig {
@@ -54,6 +88,7 @@ pub struct TopologyConfig {
     allow_multiple_genesis_tokens: bool,
     allow_zero_value_genesis_tokens: bool,
     pub test_context: Option<String>,
+    node_binary_profile: NodeBinaryProfile,
 }
 
 impl TopologyConfig {
@@ -80,6 +115,15 @@ impl TopologyConfig {
     #[must_use]
     pub fn with_test_context(mut self, test_context: Option<String>) -> Self {
         self.test_context = test_context;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_node_binary_profile(
+        mut self,
+        node_binary_profile: NodeBinaryProfile,
+    ) -> Self {
+        self.node_binary_profile = node_binary_profile;
         self
     }
 
@@ -121,6 +165,7 @@ impl Default for TopologyConfig {
             allow_multiple_genesis_tokens: false,
             allow_zero_value_genesis_tokens: false,
             test_context: None,
+            node_binary_profile: NodeBinaryProfile::default(),
         }
     }
 }
@@ -234,6 +279,15 @@ impl DeploymentBuilder {
 
         let nodes = build_node_plans(node_count, &ids, &node_configs)?;
         self.config.genesis_block = Some(genesis_block);
+
+        if self.config.node_binary_profile == NodeBinaryProfile::Normal {
+            set_default_env(NODE_BINARY_PROFILE, NodeBinaryProfile::Normal.to_string());
+        } else {
+            set_default_env(
+                NODE_BINARY_PROFILE,
+                NodeBinaryProfile::TokioConsole.to_string(),
+            );
+        }
 
         Ok(DeploymentPlan::new(self.config, nodes))
     }

@@ -3,7 +3,8 @@ use std::{collections::HashMap, hash::BuildHasher, time::Duration};
 use lb_libp2p::{Multiaddr, PeerId, Protocol};
 use lb_testing_framework::{
     DeploymentBuilder, LbcEnv, LbcLocalDeployer, NodeHttpClient, TopologyConfig,
-    configs::wallet::WalletAccount, internal::DeploymentPlan,
+    configs::{deployment::NodeBinaryProfile, wallet::WalletAccount},
+    internal::DeploymentPlan,
 };
 use testing_framework_core::scenario::{StartNodeOptions, StartedNode};
 use tokio::time::{Instant, sleep};
@@ -45,7 +46,12 @@ pub fn build_manual_cluster_deployment(
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
-        .with_test_context(world.test_context.clone());
+        .with_test_context(world.test_context.clone())
+        .with_node_binary_profile(if world.tokio_console_profile_enabled() {
+            NodeBinaryProfile::TokioConsole
+        } else {
+            NodeBinaryProfile::Normal
+        });
     let mut config = apply_blend_core_nodes(world, config, nodes_count)?;
 
     for genesis_token in &world.genesis_tokens {
@@ -135,7 +141,12 @@ fn build_devnet_manual_cluster_deployment(
     let config = TopologyConfig::with_node_numbers(nodes_count)
         .with_allow_multiple_genesis_tokens(true)
         .with_allow_zero_value_genesis_tokens(true)
-        .with_test_context(world.test_context.clone());
+        .with_test_context(world.test_context.clone())
+        .with_node_binary_profile(if world.tokio_console_profile_enabled() {
+            NodeBinaryProfile::TokioConsole
+        } else {
+            NodeBinaryProfile::Normal
+        });
     let config = apply_blend_core_nodes(world, config, nodes_count)?;
 
     DeploymentBuilder::new(config)

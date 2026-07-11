@@ -37,8 +37,10 @@ use tracing::debug;
 
 use crate::{
     LOG_LEVEL,
+    configs::deployment::NodeBinaryProfile,
     diagnostics::{record_system_monitor_event, register_system_monitor_output_file},
     env as tf_env,
+    env::{remove_default_env, replace_default_env},
     framework::LbcEnv,
     node::{
         DeploymentPlan, NodeHttpClient, NodePlan,
@@ -257,9 +259,11 @@ fn build_node_launch_spec(
     let deployment_path = dir.join(DEPLOYMENT_CONFIG_FILE);
     let time_backend =
         env::var("LOGOS_BLOCKCHAIN_TIME_BACKEND").unwrap_or_else(|_| "monotonic".to_owned());
+    let node_binary_profile =
+        NodeBinaryProfile::from_string(&env::var("NODE_BINARY_PROFILE").unwrap_or_default());
 
     Ok(LaunchSpec {
-        binary: node_binary_provider().resolve()?,
+        binary: node_binary_provider(&node_binary_profile).resolve()?,
         files: vec![
             launch_file(USER_CONFIG_FILE, user_yaml.into_bytes()),
             launch_file(DEPLOYMENT_CONFIG_FILE, deployment_yaml.into_bytes()),
@@ -283,11 +287,16 @@ fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
     }
 }
 
-fn node_binary_provider() -> BinaryProviderRef {
-    Arc::new(FallbackBinaryProvider::new([
+fn node_binary_provider(node_binary_profile: &NodeBinaryProfile) -> BinaryProviderRef {
+    let providers: [BinaryProviderRef; 2] = [
         Arc::new(EnvBinaryProvider::new("LOGOS_BLOCKCHAIN_NODE_BIN")),
-        default_node_binary_provider(),
-    ]))
+        match node_binary_profile {
+            NodeBinaryProfile::Normal => default_node_binary_provider(),
+            NodeBinaryProfile::TokioConsole => tokio_console_node_binary_provider(),
+        },
+    ];
+
+    Arc::new(FallbackBinaryProvider::new(providers))
 }
 
 fn default_node_binary_provider() -> BinaryProviderRef {
@@ -315,6 +324,42 @@ fn release_node_binary_path() -> PathBuf {
     workspace_root()
         .join("target")
         .join("release")
+        .join("logos-blockchain-node")
+}
+
+fn tokio_console_node_binary_provider() -> BinaryProviderRef {
+    if running_in_ci() {
+        Arc::new(PathBinaryProvider::new(release_node_binary_path()))
+    } else {
+        let current = replace_default_env("RUSTFLAGS", "--cfg tokio_unstable");
+        let provider = Arc::new(BuildBinaryProvider {
+            command: BuildCommand::new("cargo").with_args([
+                "build",
+                "--locked",
+                "--profile",
+                "release-profiling",
+                "-p",
+                "logos-blockchain-node",
+                "--features",
+                "testing,tokio-console",
+            ]),
+            output_path: release_profiling_node_binary_path(),
+            working_dir: Some(workspace_root()),
+            lock_dir: Some(workspace_root().join("target").join(".tf-binaries")),
+        });
+        if let Some(val) = current {
+            let _unused = replace_default_env("RUSTFLAGS", &val);
+        } else {
+            remove_default_env("RUSTFLAGS");
+        }
+        provider
+    }
+}
+
+fn release_profiling_node_binary_path() -> PathBuf {
+    workspace_root()
+        .join("target")
+        .join("release-profiling")
         .join("logos-blockchain-node")
 }
 

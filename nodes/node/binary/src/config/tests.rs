@@ -1,4 +1,7 @@
-use std::path::Path;
+use std::{
+    net::{IpAddr, Ipv4Addr},
+    path::Path,
+};
 
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_utils::yaml::{OnUnknownKeys, deserialize_value_at_path};
@@ -27,13 +30,43 @@ use crate::{
             ServiceConfig as StorageServiceConfig,
             serde::{Config as StorageConfig, RocksDbSettings},
         },
-        tracing::serde::filter::{EnvConfig, Layer},
+        tracing::serde::{
+            console::{Layer as ConsoleLayer, TokioConfig},
+            filter::{EnvConfig, Layer},
+        },
         wallet::{
             ServiceConfig as WalletServiceConfig,
             serde::{Config as WalletConfig, RequiredValues as WalletRequiredValues},
         },
     },
 };
+
+#[test]
+fn tokio_console_config_defaults_to_loopback_default_console_port() {
+    let config = TokioConfig::default();
+
+    assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    assert_eq!(config.port, 6_669);
+}
+
+#[test]
+fn tokio_console_config_deserializes() {
+    let layer: ConsoleLayer = serde_yaml::from_str(
+        "
+            !Console
+            bind_address: 127.0.0.1
+            port: 6669
+        ",
+    )
+    .expect("tokio-console config should deserialize");
+
+    let ConsoleLayer::Console(config) = layer else {
+        panic!("expected console layer");
+    };
+
+    assert_eq!(config.bind_address, IpAddr::V4(Ipv4Addr::LOCALHOST));
+    assert_eq!(config.port, 6_669);
+}
 
 #[test]
 fn parse_config_path() {

@@ -32,7 +32,7 @@ use tracing_subscriber::{
     EnvFilter, filter::LevelFilter, layer::SubscriberExt as _, util::SubscriberInitExt as _,
 };
 
-#[cfg(feature = "profiling")]
+#[cfg(feature = "tokio-console")]
 mod console;
 
 type LoggerSubscriber =
@@ -361,17 +361,21 @@ where
             let mut layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> = vec![];
 
             let level_filter = {
-                #[cfg(feature = "profiling")]
-                if let ConsoleLayerSettings::Console(console_config) = &config.console
-                    && let Some(console_layer) = console::create_console_layer(console_config)
+                #[cfg(feature = "tokio-console")]
                 {
-                    layers.push(console_layer);
-                    LevelFilter::TRACE
-                } else {
+                    if let ConsoleLayerSettings::Console(console_config) = &config.console
+                        && let Some(console_layer) = console::create_console_layer(console_config)
+                    {
+                        layers.push(console_layer);
+                        LevelFilter::TRACE
+                    } else {
+                        LevelFilter::from(config.level)
+                    }
+                }
+                #[cfg(not(feature = "tokio-console"))]
+                {
                     LevelFilter::from(config.level)
                 }
-                #[cfg(not(feature = "profiling"))]
-                LevelFilter::from(config.level)
             };
 
             layers.extend(other_layers);
