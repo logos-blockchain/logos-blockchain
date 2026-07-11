@@ -639,98 +639,102 @@ fn apply_backfilled_block(
 /// subsequent entries. Downstream consumers that want unique-by-`this_msg`
 /// semantics dedup themselves.
 fn classify_channel_txs(txs: &[SignedMantleTx], channel_id: ChannelId) -> Vec<BlockChannelTx> {
-    let mut classified: Vec<BlockChannelTx> = Vec::new();
     // Running in-block channel tip, for the chain-order assertion and for
     // synthetic config parents.
     let mut block_tip: Option<MsgId> = None;
+    txs.iter()
+        .filter_map(|tx| classify_channel_tx(tx, channel_id, &mut block_tip))
+        .collect()
+}
 
-    for tx in txs {
-        let tx_hash = tx.mantle_tx.hash();
-        let mut entries: Vec<InscriptionInfo> = Vec::new();
-        let mut inscribes = 0usize;
-        let mut configs = 0usize;
-        let mut withdraws: Vec<WithdrawInfo> = Vec::new();
-        let mut transfers = 0usize;
-        let mut foreign_ops = false;
+/// Classify one tx's channel ops; `None` when the tx has no tip-advancing op.
+pub(super) fn classify_channel_tx(
+    tx: &SignedMantleTx,
+    channel_id: ChannelId,
+    block_tip: &mut Option<MsgId>,
+) -> Option<BlockChannelTx> {
+    let tx_hash = tx.mantle_tx.hash();
+    let mut entries: Vec<InscriptionInfo> = Vec::new();
+    let mut inscribes = 0usize;
+    let mut configs = 0usize;
+    let mut withdraws: Vec<WithdrawInfo> = Vec::new();
+    let mut transfers = 0usize;
+    let mut foreign_ops = false;
 
-        for op in tx.mantle_tx.ops() {
-            match op {
-                Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
-                    if let Some(prev) = block_tip {
-                        assert_eq!(
-                            inscribe.parent, prev,
-                            "block delivered inscription out of execution order: \
-                             inscribe.parent {:?} does not chain off the prior in-block tip {:?}",
-                            inscribe.parent, prev
-                        );
-                    }
-                    inscribes += 1;
-                    let this_msg = inscribe.id();
-                    entries.push(InscriptionInfo {
-                        tx_hash,
-                        parent_msg: inscribe.parent,
-                        this_msg,
-                        payload: inscribe.inscription.clone(),
-                    });
-                    block_tip = Some(this_msg);
+    for op in tx.mantle_tx.ops() {
+        match op {
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                if let Some(prev) = *block_tip {
+                    assert_eq!(
+                        inscribe.parent, prev,
+                        "block delivered inscription out of execution order: \
+                         inscribe.parent {:?} does not chain off the prior in-block tip {:?}",
+                        inscribe.parent, prev
+                    );
                 }
-                Op::ChannelConfig(config) if config.channel == channel_id => {
-                    // `ChannelConfig` has no parent on the wire — it unconditionally
-                    // overwrites the channel tip. The `parent_msg` field below is
-                    // unused by lineage walks for config entries; we set it to the
-                    // prior in-block tip (or root) so the value remains coherent
-                    // with surrounding entries if a consumer ever inspects it.
-                    configs += 1;
-                    let parent_msg = block_tip.unwrap_or_else(MsgId::root);
-                    let this_msg = config.id();
-                    entries.push(InscriptionInfo {
-                        tx_hash,
-                        parent_msg,
-                        this_msg,
-                        payload: [].into(),
-                    });
-                    block_tip = Some(this_msg);
-                }
-                Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
-                    withdraws.push(WithdrawInfo {
-                        tx_hash,
-                        op: withdraw.clone(),
-                    });
-                }
-                Op::Transfer(_) => transfers += 1,
-                _ => foreign_ops = true,
-            }
-        }
-
-        if entries.is_empty() {
-            // No tip-advancing op — nothing to store for this tx.
-            continue;
-        }
-
-        let clean = !foreign_ops && transfers <= 1;
-        let block_tx = if clean && inscribes == 1 && configs == 0 {
-            let inscription = entries.pop().expect("exactly one inscribe entry");
-            if withdraws.is_empty() {
-                BlockChannelTx::Inscription(inscription)
-            } else {
-                BlockChannelTx::AtomicWithdraw(AtomicWithdrawInfo {
+                inscribes += 1;
+                let this_msg = inscribe.id();
+                entries.push(InscriptionInfo {
                     tx_hash,
-                    inscription,
-                    withdraws,
-                })
+                    parent_msg: inscribe.parent,
+                    this_msg,
+                    payload: inscribe.inscription.clone(),
+                });
+                *block_tip = Some(this_msg);
             }
-        } else if clean && configs == 1 && inscribes == 0 && withdraws.is_empty() {
-            BlockChannelTx::Config(entries.pop().expect("exactly one config entry"))
-        } else {
-            BlockChannelTx::Custom {
-                tx: tx.clone(),
-                entries,
+            Op::ChannelConfig(config) if config.channel == channel_id => {
+                // `ChannelConfig` has no parent on the wire — it unconditionally
+                // overwrites the channel tip. The `parent_msg` field below is
+                // unused by lineage walks for config entries; we set it to the
+                // prior in-block tip (or root) so the value remains coherent
+                // with surrounding entries if a consumer ever inspects it.
+                configs += 1;
+                let parent_msg = block_tip.unwrap_or_else(MsgId::root);
+                let this_msg = config.id();
+                entries.push(InscriptionInfo {
+                    tx_hash,
+                    parent_msg,
+                    this_msg,
+                    payload: [].into(),
+                });
+                *block_tip = Some(this_msg);
             }
-        };
-        classified.push(block_tx);
+            Op::ChannelWithdraw(withdraw) if withdraw.channel_id == channel_id => {
+                withdraws.push(WithdrawInfo {
+                    tx_hash,
+                    op: withdraw.clone(),
+                });
+            }
+            Op::Transfer(_) => transfers += 1,
+            _ => foreign_ops = true,
+        }
     }
 
-    classified
+    if entries.is_empty() {
+        // No tip-advancing op — nothing to store for this tx.
+        return None;
+    }
+
+    let clean = !foreign_ops && transfers <= 1;
+    Some(if clean && inscribes == 1 && configs == 0 {
+        let inscription = entries.pop().expect("exactly one inscribe entry");
+        if withdraws.is_empty() {
+            BlockChannelTx::Inscription(inscription)
+        } else {
+            BlockChannelTx::AtomicWithdraw(AtomicWithdrawInfo {
+                tx_hash,
+                inscription,
+                withdraws,
+            })
+        }
+    } else if clean && configs == 1 && inscribes == 0 && withdraws.is_empty() {
+        BlockChannelTx::Config(entries.pop().expect("exactly one config entry"))
+    } else {
+        BlockChannelTx::Custom {
+            tx: tx.clone(),
+            entries,
+        }
+    })
 }
 
 /// True iff this tx contains any op that advances our channel's tip pointer

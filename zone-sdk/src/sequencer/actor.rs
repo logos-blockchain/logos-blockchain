@@ -629,7 +629,7 @@ mod tests {
     use super::{
         super::{
             types::{FinalizedOp, SequencerConfig},
-            zone_sequencer::restore_pending_tx,
+            zone_sequencer::track_pending_tx,
         },
         *,
     };
@@ -975,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_classifies_atomic_bundle_with_withdraws() {
+    fn track_pending_tx_classifies_atomic_bundle_with_withdraws() {
         // Bundle: [ChannelWithdraw(channel_id), ChannelInscribe(channel_id)]
         // Restore should put it in pending (not pending_other) with the
         // withdraws field populated, so on orphan we emit
@@ -1010,7 +1010,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, channel_id);
+        track_pending_tx(&mut state, signed_tx, channel_id);
 
         let pending = state
             .pending_inscription(&tx_hash)
@@ -1028,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_classifies_plain_inscription_with_none_withdraws() {
+    fn track_pending_tx_classifies_plain_inscription_with_none_withdraws() {
         // Plain inscription: pending with `withdraws == None`.
         let channel_id = ChannelId::from([2u8; 32]);
         let inscribe_op = InscriptionOp {
@@ -1045,7 +1045,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, channel_id);
+        track_pending_tx(&mut state, signed_tx, channel_id);
 
         let pending = state
             .pending_inscription(&tx_hash)
@@ -1054,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
+    fn track_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
         // Inscribe for a different channel: should fall back to pending_other
         // (treated as opaque).
         let our_channel = ChannelId::from([3u8; 32]);
@@ -1073,7 +1073,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, our_channel);
+        track_pending_tx(&mut state, signed_tx, our_channel);
 
         assert!(
             state.pending_inscription(&tx_hash).is_none(),

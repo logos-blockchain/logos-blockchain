@@ -269,7 +269,7 @@ The integration tests provide reference policies that run this re-publish loop a
 
 If the orphan policy is too aggressive — e.g., the orphan was caused by genuine application-level conflict, not a race — the consumer can choose to drop the payload, deduplicate against a higher-level transaction stream, or apply any other custom rule. The SDK only surfaces the event; the resolution policy is yours.
 
-Channel txs built outside the publish API — directly via the node API, or with `prepare_tx` + `submit_signed_tx` — surface in `adopted`/`orphaned` as `ChannelUpdateTx::Custom(SignedMantleTx)`: the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish` and `publish_atomic_withdraw`.
+Channel txs built outside the publish API are classified by shape, not by how they were submitted: a tx that looks like publish output (a single inscription, optionally with withdraws and one funding transfer) surfaces as `ChannelUpdateTx::Inscription` / `ChannelUpdateTx::AtomicWithdraw`; anything else surfaces as `ChannelUpdateTx::Custom(SignedMantleTx)` — the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish` and `publish_atomic_withdraw`.
 
 
 ## Current limitations
@@ -280,4 +280,4 @@ Channel txs built outside the publish API — directly via the node API, or with
 
 - **No SDK-level coordination layer.** Off-chain coordination (who proposes config changes, how unsigned txs and signatures are transported between sequencers, how orphan-republish is gated across competing writers) is the application's responsibility. The SDK surfaces per-sequencer state and accepts independent calls; coordination is built on top.
 
-- **Reorg-aware recovery for multi-sig.** A mined-then-orphaned bundle surfaces as `ChannelUpdateTx::AtomicWithdraw` with its withdraws regardless of how it was signed, but the SDK cannot re-sign a multi-sig tx: the consumer must re-run the `prepare_tx` → collect-signatures → `submit_signed_tx` flow. A `submit_signed_tx` bundle that never mined is retried byte-identically until its parent slot is consumed by a competing entry, at which point it is shed and orphaned as `ChannelUpdateTx::Custom`. This is documented in [`BRIDGING.md`](BRIDGING.md#reorgs-and-republish) and applies equally to multi-sig config changes.
+- **Reorg-aware recovery for multi-sig.** An orphaned bundle surfaces as `ChannelUpdateTx::AtomicWithdraw` with its withdraws regardless of how it was signed and of whether it was ever mined, but the SDK cannot re-sign a multi-sig tx: the consumer must re-run the `prepare_tx` → collect-signatures → `submit_signed_tx` flow. This is documented in [`BRIDGING.md`](BRIDGING.md#reorgs-and-republish) and applies equally to multi-sig config changes.
