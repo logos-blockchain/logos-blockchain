@@ -44,7 +44,6 @@ struct PendingOtherTx {
     last_msg: Option<MsgId>,
 }
 
-/// A tx's chaining facts on the channel.
 fn opaque_lineage(tx: &SignedMantleTx, channel_id: ChannelId) -> (Option<MsgId>, Option<MsgId>) {
     let mut first_parent = None;
     let mut first_seen = false;
@@ -282,8 +281,6 @@ impl TxState {
             .collect()
     }
 
-    /// Submit an opaque tx for tracking (`channel_config` or a raw
-    /// `submit_signed_tx`).
     pub fn submit_other(&mut self, signed_tx: SignedMantleTx, channel_id: ChannelId) {
         let tx_hash = signed_tx.mantle_tx.hash();
         let (first_parent, last_msg) = opaque_lineage(&signed_tx, channel_id);
@@ -961,7 +958,6 @@ impl TxState {
             .collect()
     }
 
-    /// The branch's channel txs back to LIB, typed for a channel update.
     #[must_use]
     pub fn collect_update_txs_on_branch(&self, tip: HeaderId) -> Vec<ChannelUpdateTx> {
         self.update_txs_from_infos(self.infos_on_branch(tip).iter())

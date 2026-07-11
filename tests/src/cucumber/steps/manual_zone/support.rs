@@ -1486,8 +1486,6 @@ pub async fn submit_atomic_zone_deposit(
     })
 }
 
-/// Builds one funded custom multi-inscription tx; returns the signed tx and
-/// its last inscription's message id.
 async fn build_funded_custom_tx(
     node_client: &NodeHttpClient,
     channel_id: ChannelId,
@@ -1541,8 +1539,6 @@ async fn build_funded_custom_tx(
     Ok((signed_tx, parent))
 }
 
-/// Everything a custom-republish policy needs to build and fund custom
-/// transactions outside the sequencer's publish API.
 pub struct CustomRepublishDeps {
     pub node_client: NodeHttpClient,
     pub channel_id: ChannelId,
@@ -1551,8 +1547,6 @@ pub struct CustomRepublishDeps {
     pub batches: VecDeque<Vec<Inscription>>,
 }
 
-/// Drives a competing-sequencer policy for the `prepare_tx` +
-/// `submit_signed_tx` flow.
 pub fn start_custom_republish_policy(
     sequencer: ZoneSequencer<ZoneNodeHttpClient>,
     deps: CustomRepublishDeps,
@@ -1585,7 +1579,6 @@ struct CustomRepublishPolicy {
 }
 
 impl CustomRepublishPolicy {
-    /// Builds, funds and submits `payloads` as one custom tx.
     async fn submit<Node>(
         &mut self,
         sequencer: &mut ZoneSequencer<Node>,
@@ -1626,7 +1619,6 @@ impl CustomRepublishPolicy {
         }
     }
 
-    /// The payloads an update entry carries on our channel.
     fn entry_payloads(&self, entry: &ChannelUpdateTx) -> Vec<Inscription> {
         match entry {
             ChannelUpdateTx::Custom(tx) => channel_inscriptions(tx, self.deps.channel_id)
