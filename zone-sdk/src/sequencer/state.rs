@@ -811,13 +811,13 @@ impl TxState {
         let mut seen: HashSet<TxHash> = HashSet::new();
         infos
             .filter(|info| seen.insert(info.tx_hash))
-            .filter_map(|info| self.classify_update_tx(info))
+            .filter_map(|info| self.to_update_tx(info))
             .collect()
     }
 
     /// `None` for entries with no payload to apply (configs, config-only
     /// customs) — their effects reach consumers through the channel view.
-    fn classify_update_tx(&self, info: &InscriptionInfo) -> Option<ChannelUpdateTx> {
+    fn to_update_tx(&self, info: &InscriptionInfo) -> Option<ChannelUpdateTx> {
         if let Some(block_tx) = self
             .block_txs
             .values()
