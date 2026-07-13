@@ -2,15 +2,13 @@ version: '3.8'
 
 services:
 
-  cfgsync:
-    container_name: cfgsync
+  setup:
+    container_name: setup
     image: ghcr.io/logos-blockchain/logos-blockchain:${TOOLS_IMAGE_LABEL}
     volumes:
       - node-data:/node-data
       - ./nodes/node/binary/src/config/deployment/settings.yaml:/deployment.yaml
       - ./deployment:/etc/logos-blockchain
-    ports:
-      - "4400:4400/tcp"
     entrypoint: /etc/logos-blockchain/scripts/cleanup_node_data.sh
 
   nginx:
@@ -20,7 +18,7 @@ services:
       - "13000:13000"
       - "13001:13001"
     depends_on:
-      - cfgsync
+      - setup
     environment:
       - ENV_TITLE_STRING=${ENV_TITLE_STRING}
     volumes:

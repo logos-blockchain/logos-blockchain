@@ -9,4 +9,4 @@ set -e
 
 mkdir /node-data/explorer
 mkdir /node-data/cfgsync
-cp /deployment.yaml /node-data/cfgsync/deployment-settings.yaml
+cp /deployment.yaml /node-data/deployment.yaml
