@@ -4,30 +4,67 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         SignedMantleTx, Transaction as _,
-        ops::channel::{MsgId, inscribe::Inscription},
+        ops::{
+            Op,
+            channel::{ChannelId, MsgId, inscribe::Inscription},
+        },
         transactions::TxHash,
     },
 };
 use rpds::HashTrieSetSync;
 
-use super::types::{AtomicWithdrawInfo, InscriptionInfo, PendingTx, TxSource, WithdrawInfo};
+use super::types::{
+    AtomicWithdrawInfo, ChannelUpdateTx, InscriptionInfo, PendingTx, TxSource, WithdrawInfo,
+};
 
 /// Result of channel update detection — the linear block-level delta
 /// between two canonical chains.
 ///
-/// - `orphaned`: inscriptions on blocks of the old canonical chain that are not
-///   on blocks of the new canonical chain. Revert from state.
-/// - `adopted`: inscriptions on blocks of the new canonical chain that are not
-///   on blocks of the old canonical chain. Apply to state.
+/// - `orphaned`: txs on blocks of the old canonical chain that are not on
+///   blocks of the new canonical chain. Revert from state.
+/// - `adopted`: txs on blocks of the new canonical chain that are not on blocks
+///   of the old canonical chain. Apply to state.
 /// - When `orphaned` is empty, this is an extension-only update.
 #[derive(Debug)]
 pub struct ChannelUpdateInfo {
-    /// Inscriptions removed from the canonical chain (revert from state).
-    pub orphaned: Vec<InscriptionInfo>,
-    /// Inscriptions added to the canonical chain (apply to state).
-    pub adopted: Vec<InscriptionInfo>,
+    /// Txs removed from the canonical chain (revert from state).
+    pub orphaned: Vec<ChannelUpdateTx>,
+    /// Txs added to the canonical chain (apply to state).
+    pub adopted: Vec<ChannelUpdateTx>,
     /// The new channel tip `MsgId`.
     pub new_channel_tip: MsgId,
+}
+
+/// `first_parent` is `None` for config-led txs (a config resets the tip, so
+/// the tx is always mineable) — such entries are never shed.
+#[derive(Debug, Clone)]
+struct PendingOtherTx {
+    signed_tx: SignedMantleTx,
+    first_parent: Option<MsgId>,
+    last_msg: Option<MsgId>,
+}
+
+fn opaque_lineage(tx: &SignedMantleTx, channel_id: ChannelId) -> (Option<MsgId>, Option<MsgId>) {
+    let mut first_parent = None;
+    let mut first_seen = false;
+    let mut last_msg = None;
+    for op in tx.mantle_tx.ops() {
+        match op {
+            Op::ChannelInscribe(inscribe) if inscribe.channel_id == channel_id => {
+                if !first_seen {
+                    first_seen = true;
+                    first_parent = Some(inscribe.parent);
+                }
+                last_msg = Some(inscribe.id());
+            }
+            Op::ChannelConfig(config) if config.channel == channel_id => {
+                first_seen = true;
+                last_msg = Some(config.id());
+            }
+            _ => {}
+        }
+    }
+    (first_parent, last_msg)
 }
 
 /// Local pending inscription with lineage metadata.
@@ -52,8 +89,9 @@ pub struct TxState {
     pending: HashMap<TxHash, PendingInscription>,
     /// Reverse index: parent `MsgId` → tx hashes that chain from it.
     pending_by_parent: HashMap<MsgId, Vec<TxHash>>,
-    /// Non-inscription pending txs (e.g. `set_keys`).
-    pending_other: HashMap<TxHash, SignedMantleTx>,
+    /// Opaque pending txs (`channel_config`, raw `submit_signed_tx`):
+    /// retried byte-identically until finalized or shed.
+    pending_other: HashMap<TxHash, PendingOtherTx>,
     /// Bounded insertion-ordered tx hashes accepted locally by this sequencer
     /// runtime or restored from its checkpoint.
     local_txs: VecDeque<TxHash>,
@@ -63,10 +101,52 @@ pub struct TxState {
     parent_map: HashMap<HeaderId, HeaderId>,
     /// Current LIB for pruning.
     current_lib: HeaderId,
-    /// Channel inscriptions per L1 block (unfinalized window only).
-    block_inscriptions: HashMap<HeaderId, Vec<InscriptionInfo>>,
+    /// Channel-touching txs per L1 block (unfinalized window only),
+    /// classified at block scan by `block_fetch::classify_channel_txs`.
+    block_txs: HashMap<HeaderId, Vec<BlockChannelTx>>,
     /// Last finalized channel tip — used as parent when pending is empty.
     finalized_msg: MsgId,
+}
+
+/// A channel-touching tx's tip-advancing content, classified once at block
+/// scan and stored per block.
+#[derive(Debug, Clone)]
+pub enum BlockChannelTx {
+    /// `publish` shape: a single inscription.
+    Inscription(InscriptionInfo),
+    /// `publish_atomic_withdraw` shape: an inscription + its withdraws.
+    AtomicWithdraw(AtomicWithdrawInfo),
+    /// `channel_config` shape: a synthetic tip-reset entry (empty payload).
+    Config(InscriptionInfo),
+    /// A shape the SDK cannot produce (bundled deposits, multi-inscribe,
+    /// custom-built txs). Kept whole — updates hand the tx back to the
+    /// caller's own recovery logic — along with its tip-advancing entries
+    /// in op order.
+    Custom {
+        tx: SignedMantleTx,
+        entries: Vec<InscriptionInfo>,
+    },
+}
+
+impl BlockChannelTx {
+    /// The tip-advancing entries of this tx, in op order.
+    pub fn infos(&self) -> &[InscriptionInfo] {
+        match self {
+            Self::Inscription(i) | Self::Config(i) => std::slice::from_ref(i),
+            Self::AtomicWithdraw(a) => std::slice::from_ref(&a.inscription),
+            Self::Custom { entries, .. } => entries,
+        }
+    }
+
+    /// The channel tip after this tx (its last tip-advancing op).
+    fn tip_msg(&self) -> Option<MsgId> {
+        self.infos().last().map(|i| i.this_msg)
+    }
+
+    #[must_use]
+    pub fn tx_hash(&self) -> Option<TxHash> {
+        self.infos().first().map(|i| i.tx_hash)
+    }
 }
 
 impl TxState {
@@ -82,7 +162,7 @@ impl TxState {
             block_states,
             parent_map: HashMap::new(),
             current_lib: lib,
-            block_inscriptions: HashMap::new(),
+            block_txs: HashMap::new(),
             finalized_msg,
         }
     }
@@ -201,11 +281,18 @@ impl TxState {
             .collect()
     }
 
-    /// Submit a non-inscription tx for tracking (e.g. `set_keys`).
-    pub fn submit_other(&mut self, signed_tx: SignedMantleTx) {
+    pub fn submit_other(&mut self, signed_tx: SignedMantleTx, channel_id: ChannelId) {
         let tx_hash = signed_tx.mantle_tx.hash();
+        let (first_parent, last_msg) = opaque_lineage(&signed_tx, channel_id);
         self.track_local_tx(tx_hash);
-        self.pending_other.insert(tx_hash, signed_tx);
+        self.pending_other.insert(
+            tx_hash,
+            PendingOtherTx {
+                signed_tx,
+                first_parent,
+                last_msg,
+            },
+        );
     }
 
     fn track_local_tx(&mut self, tx_hash: TxHash) {
@@ -232,7 +319,7 @@ impl TxState {
         parent_id: HeaderId,
         lib: HeaderId,
         our_txs: impl IntoIterator<Item = TxHash>,
-        inscriptions: Vec<InscriptionInfo>,
+        channel_txs: Vec<BlockChannelTx>,
     ) {
         // Store parent relationship for pruning
         self.parent_map.insert(block_id, parent_id);
@@ -255,9 +342,9 @@ impl TxState {
         }
         self.block_states.insert(block_id, safe_set);
 
-        // Store channel inscriptions for this block
-        if !inscriptions.is_empty() {
-            self.block_inscriptions.insert(block_id, inscriptions);
+        // Store the block's classified channel txs
+        if !channel_txs.is_empty() {
+            self.block_txs.insert(block_id, channel_txs);
         }
 
         // When lib advances: update finalized_msg and prune.
@@ -276,7 +363,7 @@ impl TxState {
             let mut prune_cursor = self.parent_map.get(&lib).copied();
             while let Some(b) = prune_cursor {
                 self.block_states.remove(&b);
-                self.block_inscriptions.remove(&b);
+                self.block_txs.remove(&b);
                 prune_cursor = self.parent_map.remove(&b);
             }
 
@@ -325,7 +412,7 @@ impl TxState {
 
             for orphan in orphans {
                 self.block_states.remove(&orphan);
-                self.block_inscriptions.remove(&orphan);
+                self.block_txs.remove(&orphan);
                 self.parent_map.remove(&orphan);
             }
         }
@@ -359,7 +446,7 @@ impl TxState {
             .pending_other
             .iter()
             .filter(|(hash, _)| !safe.contains(hash))
-            .map(|(hash, tx)| (*hash, tx.clone()));
+            .map(|(hash, entry)| (*hash, entry.signed_tx.clone()));
         inscriptions.chain(others).collect()
     }
 
@@ -477,6 +564,60 @@ impl TxState {
         ordered
     }
 
+    /// Shed pending opaque txs whose first inscription's parent slot was
+    /// consumed by a conflicting entry: removed from retry and returned
+    /// whole for orphan reporting.
+    pub fn shed_off_branch_pending_other(&mut self, tip: HeaderId) -> Vec<SignedMantleTx> {
+        if self.pending_other.is_empty() {
+            return Vec::new();
+        }
+        let channel_tip = self.channel_tip_at(tip);
+        let mut landable: HashSet<MsgId> = self
+            .collect_pending_suffix(channel_tip)
+            .iter()
+            .map(|info| info.this_msg)
+            .collect();
+        landable.insert(channel_tip);
+        // A viable entry makes its own last message landable, so entries
+        // chained on it are kept too.
+        loop {
+            let mut changed = false;
+            for entry in self.pending_other.values() {
+                let viable = entry
+                    .first_parent
+                    .is_none_or(|parent| landable.contains(&parent));
+                if viable && let Some(last_msg) = entry.last_msg {
+                    changed |= landable.insert(last_msg);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        let safe: HashSet<TxHash> = self
+            .block_states
+            .get(&tip)
+            .map(|s| s.iter().copied().collect())
+            .unwrap_or_default();
+
+        let mut shed: Vec<TxHash> = self
+            .pending_other
+            .iter()
+            .filter(|(hash, entry)| {
+                !safe.contains(*hash)
+                    && entry
+                        .first_parent
+                        .is_some_and(|parent| !landable.contains(&parent))
+            })
+            .map(|(hash, _)| *hash)
+            .collect();
+        // Sort for determinism across `HashMap` iteration order.
+        shed.sort_unstable_by_key(|hash| hash.0);
+        shed.into_iter()
+            .filter_map(|hash| self.remove_pending(&hash))
+            .collect()
+    }
+
     /// Check if we have state for a block.
     #[must_use]
     pub fn has_block(&self, block_id: &HeaderId) -> bool {
@@ -535,7 +676,7 @@ impl TxState {
         let others = self
             .pending_other
             .iter()
-            .map(|(hash, tx)| (*hash, tx.clone()));
+            .map(|(hash, entry)| (*hash, entry.signed_tx.clone()));
         inscriptions.chain(others).collect()
     }
 
@@ -550,7 +691,9 @@ impl TxState {
             }
             Some(removed.signed_tx)
         } else {
-            self.pending_other.remove(tx_hash)
+            self.pending_other
+                .remove(tx_hash)
+                .map(|entry| entry.signed_tx)
         }
     }
 
@@ -596,10 +739,10 @@ impl TxState {
     pub fn channel_tip_at(&self, block_id: HeaderId) -> MsgId {
         let mut current = block_id;
         loop {
-            if let Some(inscs) = self.block_inscriptions.get(&current)
-                && let Some(last) = inscs.last()
+            if let Some(txs) = self.block_txs.get(&current)
+                && let Some(tip) = txs.iter().rev().find_map(BlockChannelTx::tip_msg)
             {
-                return last.this_msg;
+                return tip;
             }
 
             if current == self.current_lib {
@@ -619,15 +762,15 @@ impl TxState {
     /// caller via [`Self::channel_lineage`] **before** this event's block is
     /// inserted, so the "before" side isn't contaminated by the just-added
     /// block; `new_lineage` is computed here, after the insert.
-    /// - `adopted`: inscriptions that entered the channel branch (first mined).
-    /// - `orphaned`: inscriptions that left it (replaced by a conflict). A bare
-    ///   un-mine is a no-op — the link stays in the lineage via its held block.
+    /// - `adopted`: txs that entered the channel branch (first mined).
+    /// - `orphaned`: txs that left it (replaced by a conflict). A bare un-mine
+    ///   is a no-op — the link stays in the lineage via its held block.
     ///
     /// Returns `None` if no channel state change.
     #[must_use]
     pub fn detect_channel_update(
         &self,
-        old_lineage: Vec<InscriptionInfo>,
+        old_lineage: &[InscriptionInfo],
         new_tip: HeaderId,
     ) -> Option<ChannelUpdateInfo> {
         let new_channel_tip = self.channel_tip_at(new_tip);
@@ -636,16 +779,17 @@ impl TxState {
         let old_ids: HashSet<MsgId> = old_lineage.iter().map(|i| i.this_msg).collect();
         let new_ids: HashSet<MsgId> = new_lineage.iter().map(|i| i.this_msg).collect();
 
-        let adopted: Vec<InscriptionInfo> = new_lineage
-            .iter()
-            .filter(|i| !old_ids.contains(&i.this_msg))
-            .cloned()
-            .collect();
+        let adopted = self.update_txs_from_infos(
+            new_lineage
+                .iter()
+                .filter(|i| !old_ids.contains(&i.this_msg)),
+        );
 
-        let orphaned: Vec<InscriptionInfo> = old_lineage
-            .into_iter()
-            .filter(|i| !new_ids.contains(&i.this_msg))
-            .collect();
+        let orphaned = self.update_txs_from_infos(
+            old_lineage
+                .iter()
+                .filter(|i| !new_ids.contains(&i.this_msg)),
+        );
 
         if orphaned.is_empty() && adopted.is_empty() {
             return None;
@@ -658,6 +802,57 @@ impl TxState {
         })
     }
 
+    /// One update entry per tx: a multi-op custom tx contributes several
+    /// lineage infos but is reported once, whole.
+    fn update_txs_from_infos<'a>(
+        &'a self,
+        infos: impl Iterator<Item = &'a InscriptionInfo>,
+    ) -> Vec<ChannelUpdateTx> {
+        let mut seen: HashSet<TxHash> = HashSet::new();
+        infos
+            .filter(|info| seen.insert(info.tx_hash))
+            .filter_map(|info| self.to_update_tx(info))
+            .collect()
+    }
+
+    /// `None` for entries with no payload to apply (configs, config-only
+    /// customs) — their effects reach consumers through the channel view.
+    fn to_update_tx(&self, info: &InscriptionInfo) -> Option<ChannelUpdateTx> {
+        if let Some(block_tx) = self
+            .block_txs
+            .values()
+            .flatten()
+            .find(|tx| tx.tx_hash() == Some(info.tx_hash))
+        {
+            return match block_tx {
+                BlockChannelTx::AtomicWithdraw(a) => {
+                    Some(ChannelUpdateTx::AtomicWithdraw(a.clone()))
+                }
+                BlockChannelTx::Inscription(_) => Some(ChannelUpdateTx::Inscription(info.clone())),
+                BlockChannelTx::Config(_) => None,
+                BlockChannelTx::Custom { tx, entries } => entries
+                    .iter()
+                    .any(|entry| !entry.payload.is_empty())
+                    .then(|| ChannelUpdateTx::Custom(tx.clone())),
+            };
+        }
+        // Not in any held block — the lineage bridged through a pending link.
+        let withdraws = self
+            .pending
+            .get(&info.tx_hash)
+            .and_then(|p| p.withdraws.clone());
+        Some(withdraws.map_or_else(
+            || ChannelUpdateTx::Inscription(info.clone()),
+            |withdraws| {
+                ChannelUpdateTx::AtomicWithdraw(AtomicWithdrawInfo {
+                    tx_hash: info.tx_hash,
+                    inscription: info.clone(),
+                    withdraws,
+                })
+            },
+        ))
+    }
+
     /// The channel's inscription chain at an L1 tip: the mined inscriptions,
     /// extended forward through on-chain links we still hold whose position
     /// hasn't been taken by a competing inscription.
@@ -666,20 +861,23 @@ impl TxState {
     /// afterwards would let the just-added block bridge into the "before" view.
     #[must_use]
     pub(crate) fn channel_lineage(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
-        let mut lineage = self.collect_inscriptions_on_branch(tip);
+        let mut lineage = self.infos_on_branch(tip);
         let mut ids: HashSet<MsgId> = lineage.iter().map(|i| i.this_msg).collect();
 
         // Index every inscription we hold to form the channel lineage.
         let mut by_msg: HashMap<MsgId, InscriptionInfo> = HashMap::new();
         let mut children: HashMap<MsgId, HashSet<MsgId>> = HashMap::new();
-        for inscriptions in self.block_inscriptions.values() {
-            for info in inscriptions {
-                children
-                    .entry(info.parent_msg)
-                    .or_default()
-                    .insert(info.this_msg);
-                by_msg.entry(info.this_msg).or_insert_with(|| info.clone());
-            }
+        for info in self
+            .block_txs
+            .values()
+            .flatten()
+            .flat_map(BlockChannelTx::infos)
+        {
+            children
+                .entry(info.parent_msg)
+                .or_default()
+                .insert(info.this_msg);
+            by_msg.entry(info.this_msg).or_insert_with(|| info.clone());
         }
 
         // Walk forward from the mined tip, extending only where a single
@@ -730,10 +928,8 @@ impl TxState {
         suffix
     }
 
-    /// Collect all inscriptions on a branch from the given block back to LIB,
-    /// in oldest-first order.
-    #[must_use]
-    pub fn collect_inscriptions_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
+    /// All tip-advancing entries on a branch back to LIB, oldest first.
+    fn infos_on_branch(&self, tip: HeaderId) -> Vec<InscriptionInfo> {
         let mut blocks = Vec::new();
         let mut current = tip;
 
@@ -752,12 +948,19 @@ impl TxState {
         blocks
             .into_iter()
             .flat_map(|block_id| {
-                self.block_inscriptions
-                    .get(&block_id)
-                    .cloned()
-                    .unwrap_or_default()
+                self.block_txs.get(&block_id).map_or_else(Vec::new, |txs| {
+                    txs.iter()
+                        .flat_map(BlockChannelTx::infos)
+                        .cloned()
+                        .collect()
+                })
             })
             .collect()
+    }
+
+    #[must_use]
+    pub fn collect_update_txs_on_branch(&self, tip: HeaderId) -> Vec<ChannelUpdateTx> {
+        self.update_txs_from_infos(self.infos_on_branch(tip).iter())
     }
 }
 
@@ -798,7 +1001,7 @@ mod tests {
         let mut state = TxState::new(genesis, MsgId::root());
         let tx = make_dummy_tx(1);
 
-        state.submit_other(tx);
+        state.submit_other(tx, ChannelId::from([0u8; 32]));
         assert_eq!(state.unfinalized_count(), 1);
     }
 
@@ -810,7 +1013,7 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(tx);
+        state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // Process block containing our tx, lib stays at genesis
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
@@ -831,7 +1034,7 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(tx);
+        state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 with our tx
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
@@ -862,8 +1065,8 @@ mod tests {
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
-        state.submit_other(tx1);
-        state.submit_other(tx2);
+        state.submit_other(tx1, ChannelId::from([0u8; 32]));
+        state.submit_other(tx2, ChannelId::from([0u8; 32]));
 
         // b1 contains only tx1
         state.process_block(b1, genesis, genesis, vec![hash1], vec![]);
@@ -885,7 +1088,7 @@ mod tests {
 
         let tx = make_dummy_tx(1);
         let hash = tx.mantle_tx.hash();
-        state.submit_other(tx);
+        state.submit_other(tx, ChannelId::from([0u8; 32]));
 
         // b1 has our tx
         state.process_block(b1, genesis, genesis, vec![hash], vec![]);
@@ -1033,16 +1236,16 @@ mod tests {
             block1,
             genesis,
             vec![c1_tx_hash],
-            vec![c1_inscription],
+            vec![BlockChannelTx::Inscription(c1_inscription)],
         );
 
         let update = state
-            .detect_channel_update(old_lineage, block2)
+            .detect_channel_update(&old_lineage, block2)
             .expect("should detect channel update");
 
         assert!(update.orphaned.is_empty(), "extension never orphans");
         assert_eq!(update.adopted.len(), 1);
-        assert_eq!(update.adopted[0].this_msg, c1_msg);
+        assert_eq!(update.adopted[0].inscription().unwrap().this_msg, c1_msg);
         // Local pending is still tracked, and the observed network entry
         // joined it (already `posted`, excluded from re-posting while its
         // block is on-branch via the safe set).
@@ -1085,12 +1288,18 @@ mod tests {
             this_msg: c1_msg,
             payload: [99].into(),
         };
-        state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
+        state.process_block(
+            block2,
+            block1,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Inscription(c1_inscription)],
+        );
 
-        let update = state.detect_channel_update(old_lineage, block2).unwrap();
+        let update = state.detect_channel_update(&old_lineage, block2).unwrap();
         assert!(update.orphaned.is_empty());
         assert_eq!(update.adopted.len(), 1);
-        assert_eq!(update.adopted[0].this_msg, c1_msg);
+        assert_eq!(update.adopted[0].inscription().unwrap().this_msg, c1_msg);
         assert_eq!(state.pending.len(), 2);
     }
 
@@ -1155,7 +1364,13 @@ mod tests {
             this_msg: c1_msg,
             payload: [99].into(),
         };
-        state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
+        state.process_block(
+            block2,
+            block1,
+            genesis,
+            vec![],
+            vec![BlockChannelTx::Inscription(c1_inscription)],
+        );
 
         // b1 is stale — publish_parent should return canonical tip (c1)
         assert_eq!(state.publish_parent(block2), c1_msg);
@@ -1178,8 +1393,8 @@ mod tests {
         let hash1 = tx1.mantle_tx.hash();
         let hash2 = tx2.mantle_tx.hash();
 
-        state.submit_other(tx1);
-        state.submit_other(tx2);
+        state.submit_other(tx1, ChannelId::from([0u8; 32]));
+        state.submit_other(tx2, ChannelId::from([0u8; 32]));
 
         // b1 has tx1
         state.process_block(b1, genesis, genesis, vec![hash1], vec![]);

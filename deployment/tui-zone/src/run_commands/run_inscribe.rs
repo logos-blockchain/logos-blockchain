@@ -5,7 +5,8 @@ use lb_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
     sequencer::{
-        ChannelUpdate, Event, FinalizedOp, FinalizedTx, InscriptionInfo, OrphanedTx, ZoneSequencer,
+        ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionInfo,
+        ZoneSequencer,
     },
 };
 use reqwest::Url;
@@ -163,7 +164,10 @@ async fn apply_channel_update(
     }
     // Dedup by payload (carries a unique tx_uuid): an orphan already back on
     // the channel reappears in `adopted`, so don't republish it.
-    let adopted_payloads: HashSet<&[u8]> = adopted.iter().map(|i| i.payload.as_slice()).collect();
+    let adopted_payloads: HashSet<&[u8]> = adopted
+        .iter()
+        .filter_map(|tx| tx.inscription().map(|i| i.payload.as_slice()))
+        .collect();
     for entry in &orphaned {
         handle_orphan(state, sequencer, entry, &adopted_payloads).await;
     }
@@ -172,10 +176,10 @@ async fn apply_channel_update(
 async fn handle_orphan(
     state: &mut InMemoryZoneState,
     sequencer: &mut ZoneSequencer<NodeHttpClient>,
-    entry: &OrphanedTx,
+    entry: &ChannelUpdateTx,
     adopted_payloads: &HashSet<&[u8]>,
 ) {
-    let OrphanedTx::Inscription(info) = entry else {
+    let ChannelUpdateTx::Inscription(info) = entry else {
         debug!("ignoring atomic-withdraw orphan; TUI does not publish bundles");
         return;
     };

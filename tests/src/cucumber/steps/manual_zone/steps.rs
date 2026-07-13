@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
     time::Duration,
 };
@@ -24,7 +24,7 @@ use super::{
     errors::{log_step_error, zone_step_error},
     runner::{TxSource, TxStatus},
     support::{
-        PublishDeadline, balance_update_payload, collect_indexed_messages,
+        CustomRepublishDeps, PublishDeadline, balance_update_payload, collect_indexed_messages,
         collect_indexed_messages_exactly_once, ensure_zone_transactions_included,
         parse_balance_payload, publish_message_with_retry, wait_for_channel_view, wait_for_deposit,
         wait_for_exact_indexed_payload_count,
@@ -36,7 +36,7 @@ use super::{
     },
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
-        generated_zone_message_batches, generated_zone_message_sequencers,
+        custom_tx_rows, generated_zone_message_batches, generated_zone_message_sequencers,
         group_zone_messages_by_sequencer, single_column_table, zone_account_balances,
         zone_atomic_withdraw_rows, zone_balance_rows, zone_config_row, zone_message_rows,
         zone_node_resource_rows, zone_sequencer_start_rows, zone_sequencing_state_row,
@@ -337,6 +337,100 @@ async fn step_publish_single_zone_message_to_queue_for_sequencer(
         data,
     )
     .await
+}
+
+#[when(
+    "the following custom transactions are published concurrently with custom republish policy:"
+)]
+async fn step_publish_custom_txs_concurrently_with_policy(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    let rows = custom_tx_rows(step)?;
+    let mut expected_payloads = Vec::new();
+
+    for row in &rows {
+        let batches: VecDeque<Vec<Inscription>> = (0..row.transactions)
+            .map(|tx_index| {
+                (0..row.inscriptions)
+                    .map(|entry_index| {
+                        make_inscription(&format!(
+                            "custom-{}-{tx_index}-{entry_index}",
+                            row.sequencer_alias
+                        ))
+                    })
+                    .collect()
+            })
+            .collect();
+        expected_payloads.extend(batches.iter().flatten().cloned());
+
+        let node_client = log_step_error(
+            step,
+            world.zone_node_http_client_for_sequencer(&row.sequencer_alias),
+        )?;
+        let node_name = world
+            .zone
+            .sequencer_node_name(&row.sequencer_alias)?
+            .to_owned();
+        let funding_pk = world
+            .resolve_wallet(&format!("{node_name}_WALLET"))?
+            .public_key()?;
+        let deps = CustomRepublishDeps {
+            node_client,
+            channel_id: world.zone.sequencer_channel_id(&row.sequencer_alias)?,
+            signing_key: world
+                .zone
+                .sequencer_signing_key(&row.sequencer_alias)?
+                .clone(),
+            funding_pk,
+            batches,
+        };
+
+        start_named_sequencer(
+            world,
+            step,
+            &row.sequencer_alias,
+            None,
+            DriveMode::CustomRepublish {
+                deps: Box::new(deps),
+            },
+        )
+        .await?;
+    }
+
+    world
+        .zone
+        .remember_expected_custom_payloads(expected_payloads);
+    Ok(())
+}
+
+#[cucumber::then(expr = "the zone indexer returns all custom payloads in {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn step_zone_indexer_returns_all_custom_payloads(
+    world: &mut CucumberWorld,
+    step: &Step,
+    timeout_seconds: u64,
+) -> StepResult {
+    let expected: HashSet<Inscription> = world
+        .zone
+        .expected_custom_payloads()
+        .iter()
+        .cloned()
+        .collect();
+    if expected.is_empty() {
+        return Err(StepError::LogicalError {
+            message: "no custom transactions were planned".to_owned(),
+        });
+    }
+    let indexer = log_step_error(step, world.zone.indexer())?;
+
+    wait_for_indexer_unordered(indexer, &expected, Duration::from_secs(timeout_seconds))
+        .await
+        .map_err(|error| zone_step_error(step, &error))?;
+    Ok(())
 }
 
 #[when(

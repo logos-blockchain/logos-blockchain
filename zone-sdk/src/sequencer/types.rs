@@ -5,7 +5,7 @@ use lb_core::{
     crypto::Hash,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, Value,
+        SignedMantleTx, Transaction as _, Value,
         channel::ChannelState,
         gas::GasCost,
         ledger::{Inputs, Outputs},
@@ -70,29 +70,55 @@ pub struct WithdrawArg {
     pub outputs: Outputs,
 }
 
-/// A pending tx that has been orphaned by a chain update.
+/// A tx reported in a [`ChannelUpdate`], in both `adopted` and `orphaned`.
 ///
-/// The consumer republishes by calling the same SDK method they used
-/// originally with the data carried inside the variant:
-/// - [`OrphanedTx::Inscription`] → [`super::SequencerHandle::publish`] with
+/// The variants mirror the submission flows, so an orphaned entry is
+/// recovered with the same method that produced it:
+/// - [`ChannelUpdateTx::Inscription`] →
+///   [`SequencerHandle::publish`](super::SequencerHandle::publish) with
 ///   `info.payload`
-/// - [`OrphanedTx::AtomicWithdraw`] →
-///   [`super::SequencerHandle::publish_atomic_withdraw`] with
-///   `info.inscription.payload` and `WithdrawArg`s reconstructed from
+/// - [`ChannelUpdateTx::AtomicWithdraw`] →
+///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
+///   with `info.inscription.payload` and `WithdrawArg`s reconstructed from
 ///   `info.withdraws[i].op.outputs`. The SDK fills fresh `parent_msg` and
 ///   current `withdraw_nonce` internally on each publish.
+/// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
+///   the SDK cannot demystify the tx, so it hands back the whole
+///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
+///   whether/how to rebuild it (an orphaned tx cannot be re-posted as-is — its
+///   parent slot is consumed).
+///   [`channel_inscriptions`](super::channel_inscriptions) extracts the tx's
+///   channel inscriptions the way the SDK sees them.
 #[derive(Debug, Clone)]
-pub enum OrphanedTx {
+pub enum ChannelUpdateTx {
+    /// A published message.
     Inscription(InscriptionInfo),
+    /// An atomic inscription+withdraw bundle.
     AtomicWithdraw(AtomicWithdrawInfo),
+    /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
+    /// other custom-built txs), reported whole as a unit.
+    Custom(SignedMantleTx),
 }
 
-impl OrphanedTx {
+impl ChannelUpdateTx {
     #[must_use]
-    pub const fn tx_hash(&self) -> TxHash {
+    pub fn tx_hash(&self) -> TxHash {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
+            Self::Custom(tx) => tx.mantle_tx.hash(),
+        }
+    }
+
+    /// The inscription carried by this entry; `None` for [`Self::Custom`]
+    /// entries, whose content the caller parses itself (see
+    /// [`channel_inscriptions`](super::channel_inscriptions)).
+    #[must_use]
+    pub const fn inscription(&self) -> Option<&InscriptionInfo> {
+        match self {
+            Self::Inscription(i) => Some(i),
+            Self::AtomicWithdraw(a) => Some(&a.inscription),
+            Self::Custom(_) => None,
         }
     }
 }
@@ -193,9 +219,10 @@ pub enum Error {
 /// status signals; they do not mutate consumer state and do not carry a
 /// checkpoint.
 ///
-/// Publishes mutate state synchronously inside the [`super::SequencerHandle`]
-/// methods that produce them; those methods return the resulting
-/// [`SequencerCheckpoint`] inline. There is no separate `Published` event.
+/// Publishes mutate state synchronously inside the
+/// [`SequencerHandle`](super::SequencerHandle) methods that produce them; those
+/// methods return the resulting [`SequencerCheckpoint`] inline. There is no
+/// separate `Published` event.
 #[derive(Debug, Clone)]
 pub enum Event {
     /// Fires per ingested block. Carries finalized txs and the non-finalized
@@ -306,20 +333,16 @@ pub enum TxSource {
 ///    genuinely-dead work is re-sent.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
-    /// Inscriptions removed from the channel: ones that were on chain, plus our
+    /// Txs removed from the channel: ones that were on chain, plus our
     /// own pending that can no longer finalize because a conflicting
     /// inscription took their place in the chain (a parent double-spend).
     /// Revert from state and treat as republish candidates.
     ///
-    /// For [`OrphanedTx::Inscription`] entries, the consumer republishes
-    /// via [`super::SequencerHandle::publish`]. For
-    /// [`OrphanedTx::AtomicWithdraw`] entries, the consumer republishes
-    /// via [`super::SequencerHandle::publish_atomic_withdraw`] with the
-    /// original payload and reconstructed [`WithdrawArg`]s from the
-    /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
-    /// `withdraw_nonce` internally on each publish.
-    pub orphaned: Vec<OrphanedTx>,
-    /// Inscriptions added to the channel.
+    /// See [`ChannelUpdateTx`] for how the consumer republishes each
+    /// variant.
+    pub orphaned: Vec<ChannelUpdateTx>,
+    /// Txs added to the channel — every tx that advanced the canonical
+    /// channel tip: messages, atomic withdraw bundles or custom txs.
     ///
     /// On a pure extension (`orphaned` empty) this carries only entries the
     /// sequencer wasn't already tracking — its own publishes apply to
@@ -327,7 +350,7 @@ pub struct ChannelUpdate {
     /// change the full delta is reported (entries can move between
     /// branches), so consumers dedup by `this_msg` against their own state
     /// there.
-    pub adopted: Vec<InscriptionInfo>,
+    pub adopted: Vec<ChannelUpdateTx>,
 }
 
 /// Information about whose turn it is to post and the current posting
@@ -416,7 +439,7 @@ pub struct DepositInfo {
 ///
 /// Either our own pending publish (inscription / atomic withdraw bundle), or
 /// a pending bundle reconstructed on checkpoint resume. Returned from publish
-/// methods and carried by [`OrphanedTx`] adjacent contexts. The "pending"
+/// methods and carried by [`ChannelUpdateTx`] adjacent contexts. The "pending"
 /// framing reflects that the tx has been accepted into local pending state
 /// and queued for posting, not that the node has accepted it yet — see
 /// [`PublishResult`].

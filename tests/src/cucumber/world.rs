@@ -198,6 +198,7 @@ pub struct ZoneState {
     observed_mempool_pending: HashMap<String, HashSet<InscriptionId>>,
     sorted_total_payloads: Option<usize>,
     sorted_expected_by_sequencer: Option<HashMap<String, Vec<Inscription>>>,
+    expected_custom_payloads: Vec<Inscription>,
 }
 
 impl ZoneState {
@@ -780,6 +781,16 @@ impl ZoneState {
         self.published_order.clear();
         self.saved_checkpoints.clear();
         self.latest_checkpoints.clear();
+        self.expected_custom_payloads.clear();
+    }
+
+    pub fn remember_expected_custom_payloads(&mut self, payloads: Vec<Inscription>) {
+        self.expected_custom_payloads = payloads;
+    }
+
+    #[must_use]
+    pub fn expected_custom_payloads(&self) -> &[Inscription] {
+        &self.expected_custom_payloads
     }
 }
 
