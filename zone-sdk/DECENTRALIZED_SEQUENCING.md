@@ -250,14 +250,14 @@ The multi-admin flow is not currently exercised by integration tests (see `tests
 
 In a decentralized channel, two sequencers can race on the same parent slot — for instance, when rotation is mid-transition or when sequencers are temporarily disconnected and resync at different rates. The on-chain rule is *first valid inscription wins*; the loser's tx becomes invalid because its parent slot is now claimed.
 
-The SDK detects this via the `channel_update` field of `Event::BlocksProcessed`: the losing tx surfaces in `channel_update.orphaned` as an `OrphanedTx::Inscription(InscriptionInfo)`. The consumer decides whether to republish — re-call `publish` with the same payload and the SDK fills in the new (current) parent.
+The SDK detects this via the `channel_update` field of `Event::BlocksProcessed`: the losing tx surfaces in `channel_update.orphaned` as a `ChannelUpdateTx::Inscription(InscriptionInfo)`. The consumer decides whether to republish — re-call `publish` with the same payload and the SDK fills in the new (current) parent.
 
 ```rust
-use lb_zone_sdk::sequencer::{Event, OrphanedTx};
+use lb_zone_sdk::sequencer::{ChannelUpdateTx, Event};
 
 if let Event::BlocksProcessed { channel_update, .. } = event {
     for entry in channel_update.orphaned {
-        if let OrphanedTx::Inscription(info) = entry {
+        if let ChannelUpdateTx::Inscription(info) = entry {
             let (result, checkpoint) = sequencer.handle().publish(info.payload)?;
             // Persist `result` + `checkpoint` exactly as on the original publish.
         }
@@ -269,6 +269,8 @@ The integration tests provide reference policies that run this re-publish loop a
 
 If the orphan policy is too aggressive — e.g., the orphan was caused by genuine application-level conflict, not a race — the consumer can choose to drop the payload, deduplicate against a higher-level transaction stream, or apply any other custom rule. The SDK only surfaces the event; the resolution policy is yours.
 
+Channel txs built outside the publish API are classified by shape, not by how they were submitted: a tx that looks like publish output (a single inscription, optionally with withdraws and one funding transfer) surfaces as `ChannelUpdateTx::Inscription` / `ChannelUpdateTx::AtomicWithdraw`; anything else surfaces as `ChannelUpdateTx::Custom(SignedMantleTx)` — the SDK hands back the whole transaction and it is up to the consumer to parse it (the `channel_inscriptions` helper extracts its inscriptions) and decide how to recover it. The main API is `publish` and `publish_atomic_withdraw`.
+
 
 ## Current limitations
 
@@ -278,4 +280,4 @@ If the orphan policy is too aggressive — e.g., the orphan was caused by genuin
 
 - **No SDK-level coordination layer.** Off-chain coordination (who proposes config changes, how unsigned txs and signatures are transported between sequencers, how orphan-republish is gated across competing writers) is the application's responsibility. The SDK surfaces per-sequencer state and accepts independent calls; coordination is built on top.
 
-- **Reorg-aware recovery for multi-sig.** The SDK tracks single-sig atomic withdraws as bundles and surfaces them as `OrphanedTx::AtomicWithdraw` on reorg. Multi-sig txs submitted via `submit_signed_tx` are tracked opaquely — no `OrphanedTx::AtomicWithdraw` event is emitted for them. This is documented in [`BRIDGING.md`](BRIDGING.md#reorgs-and-republish) and applies equally to multi-sig config changes.
+- **Reorg-aware recovery for multi-sig.** An orphaned bundle surfaces as `ChannelUpdateTx::AtomicWithdraw` with its withdraws regardless of how it was signed and of whether it was ever mined, but the SDK cannot re-sign a multi-sig tx: the consumer must re-run the `prepare_tx` → collect-signatures → `submit_signed_tx` flow. This is documented in [`BRIDGING.md`](BRIDGING.md#reorgs-and-republish) and applies equally to multi-sig config changes.

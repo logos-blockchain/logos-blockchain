@@ -28,10 +28,11 @@ use tracing::{debug, info, warn};
 
 use super::{
     TARGET,
+    block_fetch::classify_channel_tx,
     client::SequencerClient,
     handle::SequencerHandle,
     slot_clock::SlotClock,
-    state::TxState,
+    state::{BlockChannelTx, TxState},
     tx_builder::{
         build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
         find_own_key_index, fund_ops, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
@@ -229,7 +230,7 @@ where
                 restored_pending_channel_tip(&pending_txs, channel_id).unwrap_or(last_msg_id);
             let mut tx_state = TxState::new(lib, finalized_msg);
             for (_hash, tx) in pending_txs {
-                restore_pending_tx(&mut tx_state, tx, channel_id);
+                track_pending_tx(&mut tx_state, tx, channel_id);
             }
             tx_state.prune_local_tx_tracking(config.max_local_tx_tracking);
             (Some(tx_state), lib_slot, last_msg_id, false)
@@ -797,7 +798,7 @@ where
 
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
-        state.submit_other(signed_tx.clone());
+        state.submit_other(signed_tx.clone(), self.channel_id);
         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
 
         info!(target: TARGET, "Submitted channel_config transaction {}", hex::encode(tx_hash.0));
@@ -834,7 +835,7 @@ where
         // Safe to unwrap — `ensure_ready` checks state.
         let state = self.state.as_mut().unwrap();
         let id = tx.mantle_tx.hash();
-        state.submit_other(tx.clone());
+        track_pending_tx(state, tx.clone(), self.channel_id);
         let parent_msg = self.last_msg_id;
         self.last_msg_id = msg_id;
         self.queue_tx_status(id, TxStatus::AcceptedLocally);
@@ -1025,65 +1026,20 @@ fn restored_pending_channel_tip(
         .find(|parent| !children.contains(parent))
 }
 
-/// Restore a single pending tx into `TxState` on checkpoint resume.
-///
-/// Inspects the tx ops:
-/// - Any `Op::ChannelWithdraw` targeting our channel → bundle. Restored via
-///   `submit_atomic_withdraw` so `PendingInscription.withdraws` is repopulated
-///   and orphan/finalize emit the correct
-///   [`super::types::PendingTx::AtomicWithdraw`] /
-///   [`super::types::OrphanedTx::AtomicWithdraw`] variant.
-/// - Only `Op::ChannelInscribe` for our channel → plain inscription.
-/// - Neither → treated as opaque (`submit_other`).
-///
-/// Txs for other channels (checkpoint reused across channels) hit the
-/// `submit_other` fallback.
-///
-/// A tx with 2+ `ChannelInscribe` ops for our channel (constructable via
-/// `prepare_tx` + `submit_signed_tx`) isn't a bundle our API can represent.
-/// We log an error and fall back to `submit_other` — the tx is still tracked
-/// for finalize/orphan, just without per-tx inscription lineage.
-pub(super) fn restore_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: ChannelId) {
-    let tx_hash = tx.mantle_tx.hash();
-    let mut inscribe_meta: Option<(MsgId, MsgId, Inscription)> = None;
-    let mut multi_inscribe = false;
-    let mut withdraws: Vec<WithdrawInfo> = Vec::new();
-    for op in tx.mantle_tx.ops() {
-        match op {
-            Op::ChannelInscribe(i) if i.channel_id == channel_id => {
-                if inscribe_meta.is_some() {
-                    multi_inscribe = true;
-                } else {
-                    inscribe_meta = Some((i.parent, i.id(), i.inscription.clone()));
-                }
-            }
-            Op::ChannelWithdraw(w) if w.channel_id == channel_id => {
-                withdraws.push(WithdrawInfo {
-                    tx_hash,
-                    op: w.clone(),
-                });
-            }
-            _ => {}
+/// Track a signed tx in pending state: publish-shaped txs enter the
+/// inscription lineage, everything else is tracked opaquely.
+pub(super) fn track_pending_tx(state: &mut TxState, tx: SignedMantleTx, channel_id: ChannelId) {
+    match classify_channel_tx(&tx, channel_id, &mut None) {
+        Some(BlockChannelTx::Inscription(i)) => {
+            state.submit_inscription(tx, i.parent_msg, i.this_msg, i.payload);
         }
-    }
-    if multi_inscribe {
-        tracing::error!(
-            target: TARGET,
-            tx_hash = %hex::encode(tx.mantle_tx.hash().0),
-            "restore_pending_tx: tx has multiple ChannelInscribe ops for our channel; \
-             tracking as opaque (no bundle lineage)"
-        );
-        state.submit_other(tx);
-        return;
-    }
-    match inscribe_meta {
-        Some((parent, this_msg, payload)) => {
-            if withdraws.is_empty() {
-                state.submit_inscription(tx, parent, this_msg, payload);
-            } else {
-                state.submit_atomic_withdraw(tx, parent, this_msg, payload, withdraws);
-            }
-        }
-        None => state.submit_other(tx),
+        Some(BlockChannelTx::AtomicWithdraw(aw)) => state.submit_atomic_withdraw(
+            tx,
+            aw.inscription.parent_msg,
+            aw.inscription.this_msg,
+            aw.inscription.payload,
+            aw.withdraws,
+        ),
+        _ => state.submit_other(tx, channel_id),
     }
 }

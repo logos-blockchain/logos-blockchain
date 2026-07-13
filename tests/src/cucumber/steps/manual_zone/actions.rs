@@ -27,12 +27,13 @@ use super::{
     runner::{Event, PublishResult, SequencerCheckpoint, SequencerClient},
     steps::DEFAULT_ZONE_SEQUENCER,
     support::{
-        AtomicZoneDepositRequest, DiscardedPayloads, PublishDeadline, ZoneAccountBalances,
-        ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included, keygen,
-        publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
+        AtomicZoneDepositRequest, CustomRepublishDeps, DiscardedPayloads, PublishDeadline,
+        ZoneAccountBalances, ZoneDeposit, build_zone_deposit, ensure_zone_transactions_included,
+        keygen, publish_atomic_zone_withdraw, publish_message_with_retry, sequencer_config,
         sequencer_config_with_pending_submit_depth, start_balance_aware_policy,
-        start_republish_lineage_policy, start_sequencer_event_loop, start_sorted_conflict_policy,
-        submit_atomic_zone_deposit, submit_zone_deposit, submit_zone_withdraw,
+        start_custom_republish_policy, start_republish_lineage_policy, start_sequencer_event_loop,
+        start_sorted_conflict_policy, submit_atomic_zone_deposit, submit_zone_deposit,
+        submit_zone_withdraw,
     },
     tables::{ConcurrentZoneMessageRow, ZoneNodeResourcesRow, group_zone_messages_by_sequencer},
 };
@@ -78,6 +79,9 @@ pub(super) enum DriveMode {
     BalanceAware {
         initial_balances: ZoneAccountBalances,
         planned_payloads: Vec<Inscription>,
+    },
+    CustomRepublish {
+        deps: Box<CustomRepublishDeps>,
     },
 }
 
@@ -902,5 +906,8 @@ fn start_sequencer_runtime(
             start_balance_aware_policy(sequencer, initial_balances, planned_payloads),
             None,
         ),
+        DriveMode::CustomRepublish { deps } => {
+            from_policy_runtime(start_custom_republish_policy(sequencer, *deps), None)
+        }
     }
 }
