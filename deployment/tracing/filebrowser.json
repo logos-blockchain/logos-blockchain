@@ -1,0 +1,9 @@
+{
+  "port": 80,
+  "baseURL": "/internal/filebrowser/",
+  "address": "",
+  "noAuth": true,
+  "log": "stdout",
+  "database": "/database/filebrowser.db",
+  "root": "/srv"
+}
