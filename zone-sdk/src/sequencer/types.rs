@@ -44,8 +44,9 @@ pub struct SequencerCheckpoint {
 /// atomic-withdraw bundles. The tx has been accepted into the sequencer's
 /// pending set and the post is queued onto the drive loop's in-flight pool;
 /// it has not necessarily been delivered to the node yet. Consumers use this
-/// to record their local outbox and to dedup the same entry when it later
-/// shows up in [`ChannelUpdate::adopted`] (match by `this_msg`).
+/// to apply the entry to their local state right away — it won't echo back
+/// in [`ChannelUpdate::adopted`] on chain extension. On a branch change the
+/// full delta is reported, where `this_msg` is the dedup identity.
 #[derive(Debug, Clone)]
 pub struct PublishResult {
     /// The enqueued tx (inscription or atomic withdraw bundle).
@@ -318,9 +319,14 @@ pub struct ChannelUpdate {
     /// bundle's `withdraws`. The SDK fills fresh `parent_msg` and current
     /// `withdraw_nonce` internally on each publish.
     pub orphaned: Vec<OrphanedTx>,
-    /// Inscriptions added to the channel. Includes entries this instance
-    /// submitted — consumers dedup by `this_msg` against the values returned
-    /// from their publish calls.
+    /// Inscriptions added to the channel.
+    ///
+    /// On a pure extension (`orphaned` empty) this carries only entries the
+    /// sequencer wasn't already tracking — its own publishes apply to
+    /// consumer state at publish time and don't echo back. On a branch
+    /// change the full delta is reported (entries can move between
+    /// branches), so consumers dedup by `this_msg` against their own state
+    /// there.
     pub adopted: Vec<InscriptionInfo>,
 }
 

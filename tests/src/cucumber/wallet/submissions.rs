@@ -32,8 +32,8 @@ use crate::{
         fee_reserve::{DEFAULT_STORAGE_GAS_PRICE, ScenarioFeeFundingError},
         wallet::{
             TARGET,
-            best_node::{BestNodeInfo, get_best_node_info, sanitize_best_node_info_with_feed},
-            sync::{current_available_utxos_for_user_wallets, filter_utxos_to_node_wallet_balance},
+            best_node::{BestNodeInfo, get_best_node_info, sanitize_best_node_info},
+            sync::current_available_utxos_for_user_wallets,
         },
         world::{CucumberWorld, WalletInfo, WalletType},
     },
@@ -96,7 +96,7 @@ impl ReservedUserWalletSubmission {
 /// caller's UTXO cache.
 ///
 /// Updating the cache prevents a batch of pending transactions from selecting
-/// the same input notes before the wallet feed observes the submissions.
+/// the same input notes before the scanner state observes the submissions.
 pub(crate) async fn reserve_user_wallet_transaction_submission_with_utxo_cache(
     world: &mut CucumberWorld,
     step: &str,
@@ -220,8 +220,6 @@ pub(crate) async fn submit_signed_user_wallet_submissions_concurrently(
     if signed_submissions.is_empty() {
         return Ok(Vec::new());
     }
-    world.ensure_wallet_block_feed().await?;
-
     let same_tip_nodes = get_best_n_nodes_for_submissions(world, &signed_submissions, 3).await?;
 
     let mut join_set = JoinSet::new();
@@ -479,11 +477,8 @@ pub async fn submit_prepared_user_wallet_transaction(
         })?;
     let tx_hash = signed_submission.tx_hash();
 
-    world.ensure_wallet_block_feed().await?;
-    let feed = world.wallet_block_feed()?;
     let (_, best_node_client, _) =
-        sanitize_best_node_info_with_feed(world, &wallet.wallet_name, best_node_info, Some(&feed))
-            .await?;
+        sanitize_best_node_info(world, &wallet.wallet_name, best_node_info).await?;
     world
         .submit_transaction(&wallet, signed_submission.signed_tx(), best_node_client)
         .await
@@ -617,15 +612,6 @@ async fn reserve_user_wallet_transaction_submission(
             .ok_or(StepError::LogicalError {
                 message: format!("Wallet '{sender_wallet_name}' not found in updated balances"),
             })?;
-
-    let sender_available_utxos = filter_utxos_to_node_wallet_balance(
-        world,
-        &wallet.node_name,
-        sender_wallet_name,
-        wallet_account.public_key(),
-        sender_available_utxos,
-    )
-    .await?;
 
     let scenario_fee_funds =
         scenario_fee_account_state(world, sender_wallet_name, available_utxos)?;

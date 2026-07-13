@@ -127,6 +127,8 @@ impl TrackedWallet {
         self.utxos_by_note.clear();
         self.utxos_by_note
             .extend(utxos.into_iter().map(|utxo| (utxo.id(), utxo)));
+        self.pending_state
+            .retain_reserved_note_ids(&self.utxos_by_note.keys().copied().collect());
     }
 
     pub fn reserve_utxos(&mut self, reserved_utxos: Vec<Utxo>) {
@@ -144,15 +146,15 @@ impl TrackedWallet {
 
     #[must_use]
     pub fn state_view(&self, wallet_id: impl Into<WalletId>) -> WalletStateView {
-        WalletStateView::new(
-            wallet_id,
-            self.on_chain_utxos(),
-            self.pending_state.reserved_utxos().to_vec(),
-        )
-    }
+        let reserved_utxos = self
+            .pending_state
+            .reserved_utxos()
+            .iter()
+            .copied()
+            .filter(|utxo| self.utxos_by_note.contains_key(&utxo.id()))
+            .collect();
 
-    pub fn release_spent_note(&mut self, note_id: NoteId) {
-        self.pending_state.release_spent_note(note_id);
+        WalletStateView::new(wallet_id, self.on_chain_utxos(), reserved_utxos)
     }
 
     pub fn clear_pending_state(&mut self) {
@@ -248,6 +250,11 @@ impl PendingWalletState {
         );
     }
 
+    fn retain_reserved_note_ids(&mut self, on_chain_note_ids: &HashSet<NoteId>) {
+        self.reserved_utxos
+            .retain(|utxo| on_chain_note_ids.contains(&utxo.id()));
+    }
+
     const fn record_spent_fee(&mut self, spent_fee: u64) {
         self.tracked_spent_fees += spent_fee;
     }
@@ -262,9 +269,5 @@ impl PendingWalletState {
 
     fn reserved_utxos(&self) -> &[Utxo] {
         &self.reserved_utxos
-    }
-
-    fn release_spent_note(&mut self, spent: NoteId) {
-        self.reserved_utxos.retain(|utxo| utxo.id() != spent);
     }
 }

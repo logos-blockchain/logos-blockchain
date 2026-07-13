@@ -348,7 +348,11 @@ mod tests {
 
         // Init a tx builder
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::default(),
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -376,7 +380,11 @@ mod tests {
 
         // Init a tx builder
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::default(),
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -440,7 +448,11 @@ mod tests {
 
         // Init a tx builder
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::default(),
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(op)).unwrap();
@@ -459,7 +471,11 @@ mod tests {
     fn transfer_op() {
         // Init a tx builder for sending 30 to the recipient
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::default(),
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()

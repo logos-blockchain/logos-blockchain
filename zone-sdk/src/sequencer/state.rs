@@ -145,6 +145,62 @@ impl TxState {
         );
     }
 
+    /// Track an inscription observed on the canonical channel (ours or
+    /// another sequencer's) so the pending set mirrors the channel view
+    /// above LIB: a reorged-out entry whose lineage still reaches the
+    /// channel tip is retried byte-identically via [`Self::pending_txs`],
+    /// no matter who authored it. No-op when the tx is already tracked.
+    ///
+    /// `withdraws` mirrors the tx's `ChannelWithdraw` ops (an atomic
+    /// inscription+withdraw bundle), matching [`Self::submit_atomic_withdraw`]
+    /// classification. Observed entries start `posted` — they were seen on
+    /// chain, so they never count as first-time publishes.
+    pub fn observe_channel_inscription(
+        &mut self,
+        signed_tx: SignedMantleTx,
+        parent_msg: MsgId,
+        this_msg: MsgId,
+        payload: Inscription,
+        withdraws: Option<Vec<WithdrawInfo>>,
+    ) {
+        let tx_hash = signed_tx.mantle_tx.hash();
+        if self.is_tracked(&tx_hash) {
+            return;
+        }
+        self.pending_by_parent
+            .entry(parent_msg)
+            .or_default()
+            .push(tx_hash);
+        self.pending.insert(
+            tx_hash,
+            PendingInscription {
+                tx_hash,
+                signed_tx,
+                parent_msg,
+                this_msg,
+                payload,
+                withdraws,
+                posted: true,
+            },
+        );
+    }
+
+    /// Whether the tx is tracked in either pending map.
+    #[must_use]
+    pub fn is_tracked(&self, tx_hash: &TxHash) -> bool {
+        self.pending.contains_key(tx_hash) || self.pending_other.contains_key(tx_hash)
+    }
+
+    /// Tx hashes currently tracked in either pending map.
+    #[must_use]
+    pub fn tracked_tx_hashes(&self) -> HashSet<TxHash> {
+        self.pending
+            .keys()
+            .chain(self.pending_other.keys())
+            .copied()
+            .collect()
+    }
+
     /// Submit a non-inscription tx for tracking (e.g. `set_keys`).
     pub fn submit_other(&mut self, signed_tx: SignedMantleTx) {
         let tx_hash = signed_tx.mantle_tx.hash();
@@ -960,13 +1016,25 @@ mod tests {
         let old_lineage = state.channel_lineage(block1);
 
         let c1_msg = msg_id(20);
+        let c1_tx = make_dummy_tx(99);
+        let c1_tx_hash = c1_tx.mantle_tx.hash();
         let c1_inscription = InscriptionInfo {
-            tx_hash: make_dummy_tx(99).mantle_tx.hash(),
+            tx_hash: c1_tx_hash,
             parent_msg: MsgId::root(),
             this_msg: c1_msg,
             payload: [99].into(),
         };
-        state.process_block(block2, block1, genesis, vec![], vec![c1_inscription]);
+        // Mirror the observed inscription into pending before the safe-set
+        // build, as `handle_block_event` does — the pending set reflects the
+        // channel view, so c1 is retried too if it later reorgs out.
+        state.observe_channel_inscription(c1_tx, MsgId::root(), c1_msg, [99].into(), None);
+        state.process_block(
+            block2,
+            block1,
+            genesis,
+            vec![c1_tx_hash],
+            vec![c1_inscription],
+        );
 
         let update = state
             .detect_channel_update(old_lineage, block2)
@@ -975,8 +1043,18 @@ mod tests {
         assert!(update.orphaned.is_empty(), "extension never orphans");
         assert_eq!(update.adopted.len(), 1);
         assert_eq!(update.adopted[0].this_msg, c1_msg);
-        // Local pending is still tracked.
-        assert_eq!(state.pending.len(), 3);
+        // Local pending is still tracked, and the observed network entry
+        // joined it (already `posted`, excluded from re-posting while its
+        // block is on-branch via the safe set).
+        assert_eq!(state.pending.len(), 4);
+        assert!(state.is_tracked(&c1_tx_hash));
+        assert!(
+            state
+                .pending_txs(block2)
+                .iter()
+                .all(|(hash, _)| *hash != c1_tx_hash),
+            "on-branch observed entry must not be re-posted"
+        );
     }
 
     #[test]
