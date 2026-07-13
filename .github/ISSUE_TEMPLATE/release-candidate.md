@@ -57,7 +57,27 @@ Most of the template content is the same or very similar to what is in `release.
 - [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
 - [ ] Publish release
 - [ ] Post the link to the published release to this issue for easier review
-- [ ] Post the link to the Docker image building workflow as appearing in [the Actions section][node-docker-build-workflow]
+- [ ] Without waiting for the workflow to complete, move on to the next section
+
+## Release candidate module
+
+- [ ] Enter the [logos-blockchain-module] repository locally.
+- [ ] Branch out from the latest `master` commit with a release branch named `release/X.Y.Z`. If this is not the first release candidate for this version, HARD reset the branch on top of `master` and force-push the new tip
+- [ ] Bump the `logos-blockchain.url` input in the `flake.nix` file: `logos-blockchain.url = "github:logos-blockchain/logos-blockchain?ref=X.Y.Z-rc.N";`
+- [ ] Set the version to `0.0.999` inside the `metadata.json` file
+- [ ] Re-generate the `flake.lock` file using the command `nix flake lock`
+- [ ] Commit the changes and tag them with `X.Y.Z-rc.N`
+- [ ] Push the commit and the tag
+- [ ] Enter the [logos-modules-release] repository locally. If you just cloned the repository, run `git submodule update --init --recursive`
+- [ ] Branch out from the latest `master` commit with a release branch named `blockchain-module-X.Y.Z-rc.N`
+- [ ] Navigate to the `submodules/logos-blockchain-module` directory and checkout the `X.Y.Z-rc.N` tag
+- [ ] Commit the changes to the [logos-modules-release] repository
+- [ ] Manually trigger the [logos-blockchain-module-workflow] workflow with the `Force build` option selected from the `blockchain-module-X.Y.Z-rc.N` branch
+- [ ] Post the link to the workflow run to this issue for easier review
+- [ ] Wait for the workflow to complete before moving on to the next step
+- [ ] Manually trigger the [node-docker-build-workflow] from the `X.Y.Z-rc.N` tag
+- [ ] Post the link to the workflow run to this issue for easier review
+- [ ] Wait for the workflow to complete before moving on to the next section
 
 ## Devnet deployment
 
@@ -94,3 +114,6 @@ Most of the template content is the same or very similar to what is in `release.
 [release-bundling-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/prepare-release.yml
 [github-release-candidate-section]: #release-candidate-publication
 [node-docker-build-workflow]: https://github.com/logos-blockchain/logos-blockchain/actions/workflows/publish-node-image.yml
+[logos-blockchain-module]: https://github.com/logos-blockchain/logos-blockchain-module
+[logos-modules-release]: https://github.com/logos-co/logos-modules-release
+[logos-blockchain-module-workflow]: https://github.com/logos-co/logos-modules-release/actions/workflows/release-logos-blockchain-module.yml

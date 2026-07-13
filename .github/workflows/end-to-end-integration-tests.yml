@@ -1,0 +1,168 @@
+on:
+  pull_request:
+  push:
+    branches: [ master ]
+
+name: End-to-end integration tests
+
+# Ensure only one workflow run per branch/workflow is active at a time.
+# Cancels any in-progress runs for the same group to avoid overlap.
+concurrency:
+  group: ${{ github.workflow }}@${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Run end-to-end integration tests
+
+    permissions:
+      contents: read
+      actions: write
+      checks: write
+
+    # Only run if not a WIP or DO NOT MERGE PR
+    if: >
+      ${{
+        github.event_name != 'pull_request' ||
+        (
+          !startsWith(github.event.pull_request.title, '[WIP]') &&
+          !contains(toJson(github.event.pull_request.labels), 'DO NOT MERGE')
+        )
+      }}
+
+    strategy:
+      # All OSes should be tested even if one fails (default: true)
+      fail-fast: false
+      matrix:
+        platform:
+          # Using self-hosted runners because we were running out of memory on GitHub-hosted runners
+          - os: [ self-hosted, Linux ]
+            label: self-hosted-linux
+          - os: [ self-hosted, macOS ]
+            label: self-hosted-macos
+    runs-on: ${{ matrix.platform.os }}
+    env:
+      # Heavy Rust e2e tests become less stable when nextest oversubscribes the
+      # self-hosted runners. Keep these lanes single-job to reduce retries.
+      E2E_NEXTEST_JOBS: 1
+      LOGOS_BLOCKCHAIN_NODE_BIN: ${{ github.workspace }}/target/release/logos-blockchain-node
+
+    steps:
+      # Remove any rustup override to ensure default toolchain is used
+      - name: Disable rustup override
+        run: rustup override unset || true
+
+      - name: Expose gmp to cargo (macOS runners)
+        if: runner.os == 'macOS'
+        run: |
+          echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
+          echo "RUSTFLAGS=-C linker=rust-lld -L /run/current-system/sw/lib" >> "$GITHUB_ENV"
+          echo "LIBRARY_PATH=/run/current-system/sw/lib" >> "$GITHUB_ENV"
+
+      # Checkout the repository code
+      # Notes:
+      # - We need to test the exact PR code, immutable, no synthetic merge commit from master
+      # - For PRs we use `github.event.pull_request.head.sha` - the exact commit from the PR branch
+      # - For pushes to master this falls back to `github.sha` - the commit that triggered the workflow
+      # - Uses SHA (immutable) rather than branch name (which could move during workflow execution)
+      # - You control integration - manually merge/rebase when YOU decide the PR is ready
+      - name: Checkout repository
+        uses: actions/checkout@85e6279cec87321a52edac9c87bce653a07cf6c2  # Version 4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      # Prune before any builds.
+      - name: Prune disk space (cache-aware, self-hosted)
+        uses: ./.github/actions/prune-disk-space
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # Version 2.79.11
+        with:
+          tool: cargo-nextest
+
+      # Ensure a local NTP server is running for deterministic time sync in e2e tests
+      - name: Verify Local NTP Server
+        id: verify_local_ntp
+        uses: ./.github/actions/verify-local-ntp-server
+
+      # Build the testing-featured node binary required by mantle_sdp.
+      - name: Build testing binary for mantle_sdp
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          args: --locked --release -p logos-blockchain-node --features testing
+        env:
+          CARGO_INCREMENTAL: 0  # Disable incremental compilation
+
+      # Run the isolated SDP ops target that requires the testing-featured node binary.
+      - name: End-to-end integration tests - mantle_sdp
+        id: mantle_sdp_end_to_end
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 90
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+        with:
+          command: nextest
+          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features mantle_sdp --test test_mantle_sdp_ops --test test_mantle_sdp_blend --no-fail-fast
+
+      # Build the testing-featured node binary required by tip_poll_self_heal.
+      - name: Build testing binary for tip_poll_self_heal
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          args: --locked --release -p logos-blockchain-node --features testing-disable-proposal-publish
+        env:
+          CARGO_INCREMENTAL: 0  # Disable incremental compilation
+
+      # Run the isolated tip-poll self-heal test that requires the testing-featured node binary.
+      - name: End-to-end integration tests - tip_poll_self_heal
+        id: tip_poll_self_heal_end_to_end
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 90
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+        with:
+          command: nextest
+          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --features tip_poll_self_heal --test test_cryptarchia_tip_poll_self_heal --no-fail-fast
+
+      # Build release binaries for the remaining end-to-end tests.
+      - name: Build binaries for remaining end-to-end tests
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72
+        with:
+          command: build
+          args: --locked --release --all
+        env:
+          CARGO_INCREMENTAL: 0  # Disable incremental compilation
+
+      # Run the remaining end-to-end integration tests using cargo-nextest for better performance and reliability
+      - name: End-to-end integration tests
+        id: end_to_end
+        if: ${{ !cancelled() && steps.verify_local_ntp.conclusion == 'success' }}
+        timeout-minutes: 90
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        env:
+          USE_LOCAL_HOST_NTP_TIME_CONFIG: true # Ensure tests use local NTP server for time sync
+        with:
+          command: nextest
+          # - We don't test benches as they take 6h+, leading to a timeout
+          args: run --locked --jobs ${{ env.E2E_NEXTEST_JOBS }} --retries 2 -p logos-blockchain-tests --no-fail-fast
+
+      - name: Upload integration tests results on failure
+        if: ${{ failure() && (steps.mantle_sdp_end_to_end.conclusion == 'failure' || steps.tip_poll_self_heal_end_to_end.conclusion == 'failure' || steps.end_to_end.conclusion == 'failure') }}
+        uses: actions/upload-artifact@6027e3dd177782cd8ab9af838c04fd81a07f1d47 # Version 4.6.2
+        with:
+          name: integration-test-artifacts-${{ runner.os }}-${{ github.sha }}
+          include-hidden-files: true
+          path: tests/.e2e_artefacts
+          if-no-files-found: ignore
+
+      - name: Clean up build artifacts
+        if: success() || failure()
+        uses: actions-rs/cargo@9e120dd99b0fbad1c065f686657e914e76bd7b72  # Version 1.0.1
+        with:
+          command: clean
