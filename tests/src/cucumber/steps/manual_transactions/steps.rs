@@ -15,8 +15,8 @@ use crate::{
                 command_file_utils::{
                     execute_coin_splits_all_user_wallets,
                     execute_continuous_next_wallet_user_wallet,
-                    execute_continuous_round_robin_user_wallets, perform_manual_step_control,
-                    verify_min_outputs_all_user_wallets,
+                    execute_continuous_round_robin_user_wallets, log_wallet_balances,
+                    perform_manual_step_control, verify_min_outputs_all_user_wallets,
                 },
                 tracked_transactions::{
                     submit_funded_transfer_transaction, submit_invalid_transfer_transaction,
@@ -398,6 +398,15 @@ async fn step_wallet_has_exact_coins_and_value(
     .await
 }
 
+#[when(expr = "I log wallet balances for all wallets")]
+#[then(expr = "I log wallet balances for all wallets")]
+async fn step_wallet_balance_all_wallets(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    let mut wallets = world.all_user_wallets();
+    wallets.extend(world.all_funding_wallets());
+
+    log_wallet_balances(world, &step.value, wallets).await
+}
+
 #[when(expr = "wallet {string} has all submitted transactions settled in {int} seconds")]
 #[then(expr = "wallet {string} has all submitted transactions settled in {int} seconds")]
 #[when(expr = "wallet {string} has all submitted transactions included in {int} seconds")]
@@ -757,7 +766,11 @@ fn step_faucet_details(world: &mut CucumberWorld, base_url: String) {
 
 #[given(expr = "I request {int} rounds of faucet funds for wallet {string}")]
 #[when(expr = "I request {int} rounds of faucet funds for wallet {string}")]
-async fn step_request_faucet_funds_for_wallet(
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Required by cucumber expression"
+)]
+fn step_request_faucet_funds_for_wallet(
     world: &mut CucumberWorld,
     step: &Step,
     number_of_rounds: usize,
@@ -769,8 +782,6 @@ async fn step_request_faucet_funds_for_wallet(
 
     let wallet_pk_hex = wallet.public_key_hex();
 
-    track_wallets_before_faucet_request(world, step).await?;
-
     utils::request_faucet_funds(
         world,
         &step.value,
@@ -781,7 +792,7 @@ async fn step_request_faucet_funds_for_wallet(
 
 #[given(expr = "I request {int} rounds of faucet funds for all wallets")]
 #[when(expr = "I request {int} rounds of faucet funds for all wallets")]
-async fn step_request_faucet_funds_for_all_wallets(
+fn step_request_faucet_funds_for_all_wallets(
     world: &mut CucumberWorld,
     step: &Step,
     number_of_rounds: usize,
@@ -791,8 +802,6 @@ async fn step_request_faucet_funds_for_all_wallets(
         .values()
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
-
-    track_wallets_before_faucet_request(world, step).await?;
 
     utils::request_faucet_funds(
         world,
@@ -804,7 +813,7 @@ async fn step_request_faucet_funds_for_all_wallets(
 
 #[given(expr = "I request {int} rounds of faucet funds for all user wallets")]
 #[when(expr = "I request {int} rounds of faucet funds for all user wallets")]
-async fn step_request_faucet_funds_for_all_user_wallets(
+fn step_request_faucet_funds_for_all_user_wallets(
     world: &mut CucumberWorld,
     step: &Step,
     number_of_rounds: usize,
@@ -816,8 +825,6 @@ async fn step_request_faucet_funds_for_all_user_wallets(
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 
-    track_wallets_before_faucet_request(world, step).await?;
-
     utils::request_faucet_funds(
         world,
         &step.value,
@@ -828,7 +835,7 @@ async fn step_request_faucet_funds_for_all_user_wallets(
 
 #[given(expr = "I request {int} rounds of faucet funds for all funding wallets")]
 #[when(expr = "I request {int} rounds of faucet funds for all funding wallets")]
-async fn step_request_faucet_funds_for_all_funding_wallets(
+fn step_request_faucet_funds_for_all_funding_wallets(
     world: &mut CucumberWorld,
     step: &Step,
     number_of_rounds: usize,
@@ -840,28 +847,10 @@ async fn step_request_faucet_funds_for_all_funding_wallets(
         .map(WalletInfo::public_key_hex)
         .collect::<Vec<_>>();
 
-    track_wallets_before_faucet_request(world, step).await?;
-
     utils::request_faucet_funds(
         world,
         &step.value,
         non_zero!("number of rounds", number_of_rounds)?,
         &all_wallets_pk_hex,
     )
-}
-
-async fn track_wallets_before_faucet_request(world: &mut CucumberWorld, step: &Step) -> StepResult {
-    world
-        .ensure_wallet_block_feed()
-        .await
-        .inspect_err(|error| {
-            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
-        })?;
-
-    world
-        .track_known_wallets_with_block_feed()
-        .await
-        .inspect_err(|error| {
-            warn!(target: TARGET, "Step `{}` error: {error}", step.value);
-        })
 }
