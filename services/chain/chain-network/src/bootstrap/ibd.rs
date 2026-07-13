@@ -62,10 +62,7 @@ where
             &self.mempool_adapter,
         )
         .await
-        .map_err(|e| {
-            error!("Error processing block during IBD: {:?}", e);
-            Error::from(e)
-        })
+        .map_err(Error::from)
     }
 
     async fn has_processed_block(&self, block_id: HeaderId) -> Result<bool, Error> {
@@ -200,12 +197,18 @@ where
         // TODO: improve `OrphanBlocksDownloader` to simplify this.
         while downloader.should_poll() {
             match tokio::time::timeout(Duration::from_secs(1), downloader.next()).await {
-                Ok(Some(block)) => {
-                    if let Err(e) = self.block_processor.process_block(block).await {
-                        warn!("failed to process block: {e:?}");
+                Ok(Some(block)) => match self.block_processor.process_block(block).await {
+                    Ok(()) => {}
+                    Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                        lb_chain_service::api::ApiError::AlreadyApplied(header_id),
+                    ))) => {
+                        debug!(?header_id, "block already applied; continuing");
+                    }
+                    Err(err) => {
+                        warn!(?err, "failed to process block; cancelling the download");
                         downloader.cancel_active_download();
                     }
-                }
+                },
                 Ok(None) => {
                     debug!("orphan downloader returned None; re-checking should_poll");
                 }
