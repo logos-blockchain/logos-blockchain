@@ -1,5 +1,5 @@
 use core::fmt::Debug;
-use std::{fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
+use std::{collections::HashMap, fmt::Display, num::NonZeroUsize, ops::RangeInclusive};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt as _, future::join_all};
@@ -13,7 +13,7 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{SignedMantleTx, Transaction, TxHash, channel::ChannelState, ops::channel::ChannelId},
-    sdp::Declaration,
+    sdp::{Declaration, DeclarationId},
 };
 use lb_log_targets::api;
 use lb_storage_service::{
@@ -901,7 +901,7 @@ where
 
 pub async fn get_sdp_declarations<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-) -> Result<Vec<Declaration>, super::DynError>
+) -> Result<HashMap<DeclarationId, Declaration>, super::DynError>
 where
     RuntimeServiceId: Debug
         + Send
@@ -921,11 +921,5 @@ where
         .await
         .map_err(|(e, _)| e)?;
 
-    let declarations = receiver
-        .await?
-        .into_iter()
-        .map(|(_, declaration)| declaration)
-        .collect();
-
-    Ok(declarations)
+    Ok(receiver.await?)
 }

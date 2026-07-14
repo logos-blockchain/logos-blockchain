@@ -11,7 +11,7 @@ mod tests;
 
 use core::fmt::Debug;
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     path::PathBuf,
     pin::Pin,
@@ -144,7 +144,7 @@ pub enum ConsensusMsg<Tx> {
         reply_channel: oneshot::Sender<Option<LedgerState>>,
     },
     GetSdpDeclarations {
-        reply_channel: oneshot::Sender<Vec<(DeclarationId, Declaration)>>,
+        reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
     GetEpochState {
         slot: Slot,
