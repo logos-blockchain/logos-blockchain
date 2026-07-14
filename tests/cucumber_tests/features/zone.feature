@@ -670,3 +670,28 @@ Feature: Zone SDK
       | MSG_A2   |
       | MSG_BURN |
     And I stop all nodes
+
+  @zone_ci
+  Scenario: Concurrent custom multi-inscription transactions recover from conflicts
+    Given the genesis block has the following wallet resources:
+      | account_index | token_count | token_amount |
+      | 1             | 3           | 100000       |
+    And I have a cluster with capacity of 1 nodes
+    And I start nodes with wallet and sequencer resources:
+      | node_name | account_index | wallet_name | connected_to | sequencers   |
+      | NODE_1    | 1             | WALLET_1A   |              | SEQ_A, SEQ_B |
+    When node "NODE_1" is at height 1 in 120 seconds
+    And wallet "WALLET_1A" sends 100 notes of 1500 LGO to node "NODE_1" funding wallet as "FUNDING_TOPUP"
+    And transaction "FUNDING_TOPUP" is included on node "NODE_1" in 180 seconds
+    And I start zone sequencer "SEQ_A" with indexer
+    And sequencer "SEQ_A" submits zone config transaction:
+      | config_name      | posting_timeframe | posting_timeout | authorized_sequencers |
+      | CHANNEL_CONFIG_1 | 10                | 0               | SEQ_A, SEQ_B          |
+    Then zone transaction "CHANNEL_CONFIG_1" is finalized in 180 seconds
+    When I stop zone sequencer "SEQ_A"
+    And the following custom transactions are published concurrently with custom republish policy:
+      | sequencer | transactions | inscriptions |
+      | SEQ_A     | 5            | 5            |
+      | SEQ_B     | 5            | 5            |
+    Then the zone indexer returns all custom payloads in 600 seconds
+    And I stop all nodes

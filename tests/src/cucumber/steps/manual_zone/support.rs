@@ -16,29 +16,36 @@ use lb_common_http_client::{CommonHttpClient, Slot};
 use lb_core::{
     mantle::{
         MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
+        gas::GasCost,
         ledger::{Inputs, Outputs, OutputsError},
         ops::{
             channel::{
                 ChannelId, MsgId,
                 deposit::{DepositOp, Metadata},
-                inscribe::Inscription,
+                inscribe::{Inscription, InscriptionOp},
                 withdraw::ChannelWithdrawOp,
             },
             transfer::TransferOp,
         },
+        transactions::builder::MantleTxBuilder,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-    wallet::sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
+    wallet::{
+        fund::WalletFundRequestBody,
+        sign::{WalletSignTxZkRequestBody, WalletSignTxZkResponseBody},
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey, ZkSignature};
 use lb_node::SignedMantleTx;
 use lb_testing_framework::NodeHttpClient;
 use lb_zone_sdk::{
-    ZoneMessage, adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer,
-    sequencer::ZoneSequencer,
+    ZoneMessage,
+    adapter::NodeHttpClient as ZoneNodeHttpClient,
+    indexer::ZoneIndexer,
+    sequencer::{ZoneSequencer, channel_inscriptions},
 };
 use rand::{Rng as _, thread_rng};
 use reqwest::Url;
@@ -49,8 +56,8 @@ use tokio::{
 use tracing::warn;
 
 use super::runner::{
-    self, ChannelUpdate, Event, FinalizedOp, FinalizedTx, InscriptionId, InscriptionInfo,
-    OrphanedTx, PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
+    self, ChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx, InscriptionId,
+    InscriptionInfo, PendingTx, PublishResult, SequencerChannelView, SequencerCheckpoint,
     SequencerClient, SequencerConfig, TurnNotification, TxStatus, TxStatusUpdate, WithdrawArg,
 };
 
@@ -112,6 +119,10 @@ pub enum ZoneTestError {
     SubmitWithdraw { message: String },
     #[error("timed out waiting for zone withdraw to appear in the indexer")]
     WithdrawTimeout,
+    #[error("failed to build custom zone transaction: {message}")]
+    BuildCustomTx { message: String },
+    #[error("failed to submit custom zone transaction: {message}")]
+    SubmitCustomTx { message: String },
     #[error("zone sequencer event stream stopped before observing the expected event")]
     SequencerStopped,
     #[error(transparent)]
@@ -289,10 +300,13 @@ where
             .extend(finalized_inscriptions(finalized).map(|i| i.payload.clone()));
         // Skip orphans whose payload is already on chain (adopted) or finalized
         // — republishing them would duplicate.
-        let adopted: HashSet<&Inscription> =
-            channel_update.adopted.iter().map(|i| &i.payload).collect();
+        let adopted: HashSet<&Inscription> = channel_update
+            .adopted
+            .iter()
+            .filter_map(|tx| tx.inscription().map(|i| &i.payload))
+            .collect();
         for entry in &channel_update.orphaned {
-            let OrphanedTx::Inscription(info) = entry else {
+            let ChannelUpdateTx::Inscription(info) = entry else {
                 continue;
             };
             if adopted.contains(&info.payload) || self.finalized.contains(&info.payload) {
@@ -320,8 +334,9 @@ struct LineageTracker {
     /// Every `this_msg` we've published (originals + republishes) → intent
     /// root.
     intent_root: HashMap<MsgId, MsgId>,
-    /// Per intent root, the `this_msg`s currently live.
-    live: HashMap<MsgId, HashSet<MsgId>>,
+    /// Per intent root, the `this_msg`s currently pending (in the
+    /// non-finalized channel view).
+    pending: HashMap<MsgId, HashSet<MsgId>>,
     /// Intent roots that have finalized — permanently landed, so the intent is
     /// considered live forever and never re-homed again.
     finalized_roots: HashSet<MsgId>,
@@ -331,28 +346,32 @@ impl LineageTracker {
     /// Record an original publish as its own intent, in flight.
     fn record_publish(&mut self, this_msg: MsgId) {
         self.intent_root.insert(this_msg, this_msg);
-        self.live.entry(this_msg).or_default().insert(this_msg);
+        self.pending.entry(this_msg).or_default().insert(this_msg);
     }
 
     /// Record a republish of `orphan` as a new live member of its intent.
     fn record_republish(&mut self, orphan: MsgId, republished: MsgId) {
         let root = self.intent_root.get(&orphan).copied().unwrap_or(orphan);
         self.intent_root.insert(republished, root);
-        self.live.entry(root).or_default().insert(republished);
+        self.pending.entry(root).or_default().insert(republished);
     }
 
     /// Fold a delta into per-intent liveness — only our `msg_id`s are relevant.
     /// Adopted members become live; orphaned members stop being live.
     fn observe(&mut self, channel_update: &ChannelUpdate) {
-        for info in &channel_update.adopted {
+        for info in channel_update
+            .adopted
+            .iter()
+            .filter_map(ChannelUpdateTx::inscription)
+        {
             if let Some(&root) = self.intent_root.get(&info.this_msg) {
-                self.live.entry(root).or_default().insert(info.this_msg);
+                self.pending.entry(root).or_default().insert(info.this_msg);
             }
         }
         for entry in &channel_update.orphaned {
-            if let OrphanedTx::Inscription(info) = entry
+            if let ChannelUpdateTx::Inscription(info) = entry
                 && let Some(&root) = self.intent_root.get(&info.this_msg)
-                && let Some(members) = self.live.get_mut(&root)
+                && let Some(members) = self.pending.get_mut(&root)
             {
                 members.remove(&info.this_msg);
             }
@@ -380,7 +399,7 @@ impl LineageTracker {
         let root = self.intent_root.get(this_msg).copied().unwrap_or(*this_msg);
         self.finalized_roots.contains(&root)
             || self
-                .live
+                .pending
                 .get(&root)
                 .is_some_and(|members| !members.is_empty())
     }
@@ -425,7 +444,7 @@ where
                     .observe_finalized(finalized_inscriptions(finalized).map(|i| i.this_msg));
                 self.lineage.observe(channel_update);
                 for entry in &channel_update.orphaned {
-                    let OrphanedTx::Inscription(info) = entry else {
+                    let ChannelUpdateTx::Inscription(info) = entry else {
                         continue;
                     };
                     if !self.lineage.is_ours(&info.this_msg)
@@ -477,8 +496,8 @@ where
             let orphaned_inscriptions: Vec<InscriptionInfo> = orphaned
                 .iter()
                 .filter_map(|o| match o {
-                    OrphanedTx::Inscription(i) => Some(i.clone()),
-                    OrphanedTx::AtomicWithdraw(_) => None,
+                    ChannelUpdateTx::Inscription(i) => Some(i.clone()),
+                    ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
                 })
                 .collect();
             self.balances
@@ -542,8 +561,8 @@ where
         let orphaned_inscriptions: Vec<&InscriptionInfo> = orphaned
             .iter()
             .filter_map(|o| match o {
-                OrphanedTx::Inscription(i) => Some(i),
-                OrphanedTx::AtomicWithdraw(_) => None,
+                ChannelUpdateTx::Inscription(i) => Some(i),
+                ChannelUpdateTx::AtomicWithdraw(_) | ChannelUpdateTx::Custom(_) => None,
             })
             .collect();
 
@@ -551,7 +570,10 @@ where
         self.state.revert_orphaned(&orphaned_inscriptions);
         self.state.record_adoptions(adopted).await;
 
-        let readopted: HashSet<&Inscription> = adopted.iter().map(|i| &i.payload).collect();
+        let readopted: HashSet<&Inscription> = adopted
+            .iter()
+            .filter_map(|tx| tx.inscription().map(|i| &i.payload))
+            .collect();
 
         // Consider this round's fresh orphans together with everything parked,
         // in sorted order (a `BTreeSet` iterates ascending). A payload parked
@@ -632,9 +654,9 @@ impl BalanceAwareState {
         }
     }
 
-    fn record_adopted_payloads(&mut self, adopted: &[InscriptionInfo]) {
-        for inscription in adopted {
-            self.record_applied_payload(&inscription.payload);
+    fn record_adopted_payloads(&mut self, adopted: &[ChannelUpdateTx]) {
+        for info in adopted.iter().filter_map(ChannelUpdateTx::inscription) {
+            self.record_applied_payload(&info.payload);
         }
     }
 
@@ -667,7 +689,9 @@ impl BalanceAwareState {
 static EMPTY_BALANCE_UPDATES: LazyLock<HashMap<String, i64>> = LazyLock::new(HashMap::new);
 
 struct SortedConflictState {
-    on_chain: BTreeSet<Inscription>,
+    /// The local channel view: pending (non-finalized) payloads plus the
+    /// pinned finalized base, kept as the ordering floor.
+    channel_view: BTreeSet<Inscription>,
     discarded: DiscardedPayloads,
     finalized: HashSet<Inscription>,
 }
@@ -675,17 +699,17 @@ struct SortedConflictState {
 impl SortedConflictState {
     fn new(discarded: DiscardedPayloads) -> Self {
         Self {
-            on_chain: BTreeSet::new(),
+            channel_view: BTreeSet::new(),
             discarded,
             finalized: HashSet::new(),
         }
     }
 
-    /// Pin finalized payloads into the on-chain set permanently.
+    /// Pin finalized payloads into the channel view permanently.
     fn record_finalized(&mut self, finalized: &[FinalizedTx]) {
         for inscription in finalized_inscriptions(finalized) {
             self.finalized.insert(inscription.payload.clone());
-            self.on_chain.insert(inscription.payload.clone());
+            self.channel_view.insert(inscription.payload.clone());
         }
     }
 
@@ -693,31 +717,31 @@ impl SortedConflictState {
         self.finalized.contains(payload)
     }
 
-    /// Drop orphaned payloads from the on-chain set — the order floor falls
+    /// Drop orphaned payloads from the channel view — the order floor falls
     /// back to the max of whatever remains. Finalized payloads stay put.
     fn revert_orphaned(&mut self, orphaned: &[&InscriptionInfo]) {
         for inscription in orphaned {
             if self.finalized.contains(&inscription.payload) {
                 continue;
             }
-            self.on_chain.remove(&inscription.payload);
+            self.channel_view.remove(&inscription.payload);
         }
     }
 
-    async fn record_adoptions(&mut self, adopted: &[InscriptionInfo]) {
-        for inscription in adopted {
-            self.discarded.lock().await.remove(&inscription.payload);
-            self.on_chain.insert(inscription.payload.clone());
+    async fn record_adoptions(&mut self, adopted: &[ChannelUpdateTx]) {
+        for info in adopted.iter().filter_map(ChannelUpdateTx::inscription) {
+            self.discarded.lock().await.remove(&info.payload);
+            self.channel_view.insert(info.payload.clone());
         }
     }
 
     async fn record_published_payload(&mut self, payload: Inscription) {
         self.discarded.lock().await.remove(&payload);
-        self.on_chain.insert(payload);
+        self.channel_view.insert(payload);
     }
 
     fn preserves_order(&self, payload: &Inscription) -> bool {
-        self.on_chain.last().is_none_or(|max| payload >= max)
+        self.channel_view.last().is_none_or(|max| payload >= max)
     }
 
     async fn discard(&self, payload: Inscription) {
@@ -1460,6 +1484,221 @@ pub async fn submit_atomic_zone_deposit(
         publish: result,
         reserved_inputs,
     })
+}
+
+async fn build_funded_custom_tx(
+    node_client: &NodeHttpClient,
+    channel_id: ChannelId,
+    signing_key: &Ed25519Key,
+    funding_pk: ZkPublicKey,
+    payloads: &[Inscription],
+    mut parent: MsgId,
+) -> Result<(SignedMantleTx, MsgId), ZoneTestError> {
+    let signer = signing_key.public_key();
+    let mut tx_builder = MantleTxBuilder::new();
+    for payload in payloads {
+        let op = InscriptionOp {
+            channel_id,
+            inscription: payload.clone(),
+            parent,
+            signer,
+        };
+        parent = op.id();
+        tx_builder = tx_builder
+            .push_op(Op::ChannelInscribe(op))
+            .map_err(|error| ZoneTestError::BuildCustomTx {
+                message: format!("too many ops: {error}"),
+            })?;
+    }
+
+    let response = node_client
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            tx_builder,
+            change_public_key: funding_pk,
+            funding_public_keys: vec![funding_pk],
+            max_tx_fee: GasCost::new(u64::MAX),
+        })
+        .await
+        .map_err(|error| ZoneTestError::SubmitCustomTx {
+            message: format!("funding failed: {error}"),
+        })?;
+
+    // Funding appends the fee transfer as the last op; every inscription is
+    // proven by the sequencer key over the funded tx hash.
+    let funded_tx = response.funded_tx;
+    let signature = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
+    let mut ops_proofs = vec![OpProof::Ed25519Sig(signature); payloads.len()];
+    ops_proofs.extend(response.transfer_proof);
+    let signed_tx = SignedMantleTx::new(funded_tx, ops_proofs).map_err(|error| {
+        ZoneTestError::BuildCustomTx {
+            message: format!("assembling the signed tx failed: {error:?}"),
+        }
+    })?;
+
+    Ok((signed_tx, parent))
+}
+
+pub struct CustomRepublishDeps {
+    pub node_client: NodeHttpClient,
+    pub channel_id: ChannelId,
+    pub signing_key: Ed25519Key,
+    pub funding_pk: ZkPublicKey,
+    pub batches: VecDeque<Vec<Inscription>>,
+}
+
+pub fn start_custom_republish_policy(
+    sequencer: ZoneSequencer<ZoneNodeHttpClient>,
+    deps: CustomRepublishDeps,
+) -> PolicyRuntime {
+    let view_rx = sequencer.subscribe_channel_view();
+    let policy = CustomRepublishPolicy {
+        deps,
+        view_rx,
+        pending: HashSet::new(),
+        finalized: HashSet::new(),
+        chain_tip: None,
+        ready: false,
+    };
+    to_policy_runtime(runner::spawn(sequencer, policy))
+}
+
+/// [`OrphanRepublishPolicy`] for the custom-tx flow: orphans that are
+/// neither in `pending` nor finalized are rebuilt and re-submitted.
+struct CustomRepublishPolicy {
+    deps: CustomRepublishDeps,
+    view_rx: tokio::sync::watch::Receiver<SequencerChannelView>,
+    pending: HashSet<Inscription>,
+    finalized: HashSet<Inscription>,
+    /// Where our own submitted chain ends; reset on orphans so rebuilds
+    /// chain from the channel tip instead.
+    chain_tip: Option<MsgId>,
+    /// No submissions until ready — a fail-fast submit would leak its
+    /// funding reservation.
+    ready: bool,
+}
+
+impl CustomRepublishPolicy {
+    async fn submit<Node>(
+        &mut self,
+        sequencer: &mut ZoneSequencer<Node>,
+        payloads: Vec<Inscription>,
+    ) -> bool
+    where
+        Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+    {
+        let parent = self
+            .chain_tip
+            .unwrap_or_else(|| self.view_rx.borrow().tip_message);
+        let built = build_funded_custom_tx(
+            &self.deps.node_client,
+            self.deps.channel_id,
+            &self.deps.signing_key,
+            self.deps.funding_pk,
+            &payloads,
+            parent,
+        )
+        .await;
+        let (signed_tx, msg_id) = match built {
+            Ok(built) => built,
+            Err(error) => {
+                warn!(%error, "Failed to build custom zone tx");
+                return false;
+            }
+        };
+        match sequencer.handle().submit_signed_tx(signed_tx, msg_id) {
+            Ok((_result, _checkpoint)) => {
+                self.pending.extend(payloads);
+                self.chain_tip = Some(msg_id);
+                true
+            }
+            Err(error) => {
+                warn!(%error, "Failed to submit custom zone tx");
+                false
+            }
+        }
+    }
+
+    fn entry_payloads(&self, entry: &ChannelUpdateTx) -> Vec<Inscription> {
+        match entry {
+            ChannelUpdateTx::Custom(tx) => channel_inscriptions(tx, self.deps.channel_id)
+                .into_iter()
+                .map(|info| info.payload)
+                .collect(),
+            typed => typed
+                .inscription()
+                .map(|info| info.payload.clone())
+                .into_iter()
+                .collect(),
+        }
+    }
+}
+
+impl<Node> runner::Policy<Node> for CustomRepublishPolicy
+where
+    Node: lb_zone_sdk::adapter::Node + Clone + Send + Sync + 'static,
+{
+    async fn on_event(&mut self, sequencer: &mut ZoneSequencer<Node>, event: &Event) {
+        let (channel_update, finalized) = match event {
+            Event::Ready => {
+                self.ready = true;
+                (None, None)
+            }
+            Event::BlocksProcessed {
+                channel_update,
+                finalized,
+                ..
+            } => (Some(channel_update), Some(finalized)),
+            _ => return,
+        };
+
+        if let Some(finalized) = finalized {
+            self.finalized
+                .extend(finalized_inscriptions(finalized).map(|info| info.payload.clone()));
+        }
+
+        if let Some(channel_update) = channel_update {
+            let orphaned: HashSet<Inscription> = channel_update
+                .orphaned
+                .iter()
+                .flat_map(|entry| self.entry_payloads(entry))
+                .collect();
+            let adopted: Vec<Inscription> = channel_update
+                .adopted
+                .iter()
+                .flat_map(|entry| self.entry_payloads(entry))
+                .collect();
+            for payload in &orphaned {
+                self.pending.remove(payload);
+            }
+            self.pending.extend(adopted);
+
+            let republish: Vec<Inscription> = orphaned
+                .into_iter()
+                .filter(|payload| {
+                    !self.pending.contains(payload) && !self.finalized.contains(payload)
+                })
+                .collect();
+            if self.ready && !republish.is_empty() {
+                self.chain_tip = None;
+                if !self.submit(sequencer, republish.clone()).await {
+                    self.deps.batches.push_back(republish);
+                }
+            }
+        }
+
+        // One attempt per batch per event: a failed submission stops the
+        // drain and is retried on the next event.
+        while self.ready {
+            let Some(batch) = self.deps.batches.pop_front() else {
+                break;
+            };
+            if !self.submit(sequencer, batch.clone()).await {
+                self.deps.batches.push_front(batch);
+                break;
+            }
+        }
+    }
 }
 
 /// Builds the funding transfer that creates the note consumed by an atomic

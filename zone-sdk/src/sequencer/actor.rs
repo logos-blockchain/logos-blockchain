@@ -15,7 +15,7 @@ use super::{
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
     types::{
-        ChannelUpdate, Error, Event, FinalizedTx, InscriptionInfo, OrphanedTx,
+        ChannelUpdate, ChannelUpdateTx, Error, Event, FinalizedTx, InscriptionInfo,
         SequencerChannelView, SequencerCheckpoint, TurnNotification, TxSource, TxStatus,
     },
     zone_sequencer::{ZoneSequencer, build_checkpoint},
@@ -538,48 +538,48 @@ where
             update.adopted.len(),
             hex::encode(update.new_channel_tip.as_ref()),
         );
-        for info in &update.orphaned {
+        for tx in &update.orphaned {
+            Self::log_update_entry("orphaned", tx);
+        }
+        for tx in &update.adopted {
+            Self::log_update_entry("adopted", tx);
+        }
+    }
+
+    fn log_update_entry(kind: &str, tx: &ChannelUpdateTx) {
+        if let Some(info) = tx.inscription() {
             debug!(target: TARGET,
-                "  orphaned: payload={:?}, tx={}, msg_id={}",
+                "  {kind}: payload={:?}, tx={}, msg_id={}",
                 String::from_utf8_lossy(&info.payload),
                 hex::encode(info.tx_hash.0),
                 hex::encode(info.this_msg.as_ref()),
             );
-        }
-        for info in &update.adopted {
+        } else {
             debug!(target: TARGET,
-                "  adopted: payload={:?}, tx={}, msg_id={}",
-                String::from_utf8_lossy(&info.payload),
-                hex::encode(info.tx_hash.0),
-                hex::encode(info.this_msg.as_ref()),
+                "  {kind}: custom tx {}",
+                hex::encode(tx.tx_hash().0),
             );
         }
     }
 
-    /// Build the [`ChannelUpdate`] returned to the consumer.
-    ///
-    /// `orphaned` combines two sources, deduped by `tx_hash`:
-    /// - inscriptions that left the channel chain between the old and new
-    ///   canonical tip, and
-    /// - our own pending that can no longer land on the new tip
-    ///   ([`TxState::shed_off_branch_pending`]), including pending that never
-    ///   mined and so appears in no on-chain delta.
-    ///
-    /// A tx in both keeps the shed variant: it carries the `AtomicWithdraw`
-    /// bundle metadata the on-chain delta lacks.
-    ///
-    /// `adopted` is the inscriptions added to the channel chain.
+    /// Build the [`ChannelUpdate`] returned to the consumer: `orphaned`
+    /// combines the on-chain delta with our own shed pending (lineage and
+    /// opaque), deduped by `tx_hash`.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
-        let shed = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
-            _ => Vec::new(),
+        let (shed, shed_other) = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => (
+                s.shed_off_branch_pending(tip),
+                s.shed_off_branch_pending_other(tip),
+            ),
+            _ => (Vec::new(), Vec::new()),
         };
-        let mut orphaned: Vec<OrphanedTx> = shed.into_iter().map(orphan_from_shed).collect();
+        let mut orphaned: Vec<ChannelUpdateTx> = shed.into_iter().map(orphan_from_shed).collect();
+        orphaned.extend(shed_other.into_iter().map(ChannelUpdateTx::Custom));
 
-        let mut seen: HashSet<_> = orphaned.iter().map(OrphanedTx::tx_hash).collect();
-        for info in u.orphaned {
-            if seen.insert(info.tx_hash) {
-                orphaned.push(OrphanedTx::Inscription(info));
+        let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
+        for tx in u.orphaned {
+            if seen.insert(tx.tx_hash()) {
+                orphaned.push(tx);
             }
         }
 
@@ -629,7 +629,7 @@ mod tests {
     use super::{
         super::{
             types::{FinalizedOp, SequencerConfig},
-            zone_sequencer::restore_pending_tx,
+            zone_sequencer::track_pending_tx,
         },
         *,
     };
@@ -975,11 +975,11 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_classifies_atomic_bundle_with_withdraws() {
+    fn track_pending_tx_classifies_atomic_bundle_with_withdraws() {
         // Bundle: [ChannelWithdraw(channel_id), ChannelInscribe(channel_id)]
         // Restore should put it in pending (not pending_other) with the
         // withdraws field populated, so on orphan we emit
-        // OrphanedTx::AtomicWithdraw (not Inscription).
+        // ChannelUpdateTx::AtomicWithdraw (not Inscription).
         let channel_id = ChannelId::from([1u8; 32]);
         let outputs = Outputs::new([Note::new(
             5,
@@ -1010,7 +1010,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, channel_id);
+        track_pending_tx(&mut state, signed_tx, channel_id);
 
         let pending = state
             .pending_inscription(&tx_hash)
@@ -1028,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_classifies_plain_inscription_with_none_withdraws() {
+    fn track_pending_tx_classifies_plain_inscription_with_none_withdraws() {
         // Plain inscription: pending with `withdraws == None`.
         let channel_id = ChannelId::from([2u8; 32]);
         let inscribe_op = InscriptionOp {
@@ -1045,7 +1045,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, channel_id);
+        track_pending_tx(&mut state, signed_tx, channel_id);
 
         let pending = state
             .pending_inscription(&tx_hash)
@@ -1054,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
+    fn track_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
         // Inscribe for a different channel: should fall back to pending_other
         // (treated as opaque).
         let our_channel = ChannelId::from([3u8; 32]);
@@ -1073,7 +1073,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, our_channel);
+        track_pending_tx(&mut state, signed_tx, our_channel);
 
         assert!(
             state.pending_inscription(&tx_hash).is_none(),

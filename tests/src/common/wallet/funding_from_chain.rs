@@ -11,11 +11,12 @@ use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
 use thiserror::Error;
 
 use super::{
-    NodeHttpWalletChainSource, WalletChainSource, WalletId, WalletUtxos,
+    NodeHttpWalletChainSource, WalletChainSource, WalletId,
     chain::state::{TrackedWalletKeys, TrackedWalletKeysError, WalletChainState},
 };
 use crate::common::wallet::{
-    WalletFundingSource, fund_builder_from_wallet_source, transfer_proofs_for_funded_wallet_tx,
+    WalletFundingSource, chain::state::WalletUtxos, fund_builder_from_wallet_source,
+    transfer_proofs_for_funded_wallet_tx,
 };
 
 #[derive(Debug, Error)]
