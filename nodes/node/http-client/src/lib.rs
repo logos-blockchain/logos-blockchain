@@ -5,7 +5,7 @@ pub use lb_chain_broadcast_service::BlockInfo;
 pub use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Slot, State};
 pub use lb_core::events::{Event, Events, TxEventPayload};
 use lb_core::{
-    block::MAX_BLOCK_SIZE,
+    block::MAX_BLOCK_TRANSACTIONS_SIZE,
     header::{ContentId, HeaderId},
     mantle::{SignedMantleTx, channel::ChannelState, ops::channel::ChannelId},
     proofs::leader_proof::Groth16LeaderProof,
@@ -21,6 +21,7 @@ use lb_http_api_common::{
         wallet::{
             balance::WalletBalanceResponseBody,
             claimable_vouchers::WalletClaimableVouchersResponseBody,
+            fund::{WalletFundRequestBody, WalletFundResponseBody},
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
@@ -28,7 +29,7 @@ use lb_http_api_common::{
         BLEND_JOIN_NETWORK, BLOCK_EVENTS, BLOCKS, BLOCKS_DETAIL, BLOCKS_RANGE_STREAM,
         BLOCKS_STREAM, CHANNEL, CRYPTARCHIA_INFO, CRYPTARCHIA_LIB_STREAM, LEADER_CLAIM_VOUCHERS,
         MANTLE_GAS_PRICES, MEMPOOL_ADD_TX, SDP_POST_DECLARATION, TIME_INFO,
-        wallet::{BALANCE, TRANSACTIONS_TRANSFER_FUNDS},
+        wallet::{BALANCE, FUND, TRANSACTIONS_TRANSFER_FUNDS},
     },
     queries::BlocksStreamQuery,
     settings::default_max_body_size,
@@ -300,11 +301,23 @@ impl CommonHttpClient {
         self.get::<(), ChainServiceInfo>(request_url, None).await
     }
 
-    /// Get the current gas prices from the ledger state at the tip.
-    pub async fn gas_prices(&self, base_url: Url) -> Result<GasPricesResponseBody, Error> {
-        let request_url = base_url
+    /// Get the gas prices from the ledger state at `tip`, or at the current
+    /// tip when `tip` is `None`.
+    pub async fn gas_prices(
+        &self,
+        base_url: Url,
+        tip: Option<HeaderId>,
+    ) -> Result<GasPricesResponseBody, Error> {
+        let mut request_url = base_url
             .join(MANTLE_GAS_PRICES.trim_start_matches('/'))
             .map_err(Error::Url)?;
+
+        if let Some(t) = tip {
+            request_url
+                .query_pairs_mut()
+                .append_pair("tip", &t.to_string());
+        }
+
         self.get::<(), GasPricesResponseBody>(request_url, None)
             .await
     }
@@ -494,7 +507,7 @@ impl CommonHttpClient {
         response: reqwest::Response,
     ) -> impl Stream<Item = ProcessedBlockEvent> {
         // NDJSON event upper bound; margin above max serialized single event line
-        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_SIZE * 3 / 2;
+        const MAX_NDJSON_LINE_BYTES: usize = MAX_BLOCK_TRANSACTIONS_SIZE * 3 / 2;
         const LOG_LINE_PREVIEW_CHARS: usize = 256;
 
         let byte_stream = response.bytes_stream().map_err(std::io::Error::other);
@@ -577,6 +590,23 @@ impl CommonHttpClient {
     ) -> Result<WalletTransferFundsResponseBody, Error> {
         let request_url = base_url
             .join(TRANSACTIONS_TRANSFER_FUNDS.trim_start_matches('/'))
+            .map_err(Error::Url)?;
+
+        self.post(request_url, &body).await
+    }
+
+    /// Post a request to fund a transaction from the node's wallet.
+    ///
+    /// The node adds fee inputs and change from its own wallet, signs only
+    /// the appended fee transfer, and returns the funded (still unsigned)
+    /// transaction together with the transfer proof.
+    pub async fn fund_tx(
+        &self,
+        base_url: Url,
+        body: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error> {
+        let request_url = base_url
+            .join(FUND.trim_start_matches('/'))
             .map_err(Error::Url)?;
 
         self.post(request_url, &body).await

@@ -4,7 +4,7 @@ mod tests {
     use lb_key_management_system_keys::keys::Ed25519Key;
 
     use crate::{
-        block::{Block, tests::create_proof},
+        block::{Block, BlockTransactions, tests::create_proof},
         mantle::MantleTx,
     };
 
@@ -14,7 +14,7 @@ mod tests {
             [0u8; 32].into(),
             Slot::from(1u64),
             create_proof(),
-            vec![],
+            BlockTransactions::empty(),
             &signing_key,
         )
         .expect("block creation should succeed")

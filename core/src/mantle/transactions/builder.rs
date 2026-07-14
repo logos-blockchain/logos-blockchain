@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     mantle::{
-        GasCalculator as _, GasConstants, Note, NoteId, Op, Utxo,
+        GasCalculator as _, GasConstants, Note, NoteId, Op, Utxo, Value,
         gas::{GasCost, GasOverflow},
         ledger::{BoundedUtxos, Inputs, Outputs},
         ops::{channel::withdraw::ChannelWithdrawOp, transfer::TransferOp},
@@ -148,16 +148,20 @@ impl MantleTxBuilder {
         Ok(self)
     }
 
+    /// `priority_fee` is deliberately left unreturned: the resulting excess
+    /// balance above the mandatory fee is the transaction's execution tip.
     pub fn return_change<G: GasConstants>(
         self,
         context: &MantleTxContext,
         change_pk: ZkPublicKey,
+        priority_fee: Value,
     ) -> Result<Option<Self>, TxBuilderError> {
         // Calculate the funding delta with a dummy change note to account for
         // the gas cost increase from adding the output
         let delta_with_change = self.with_dummy_change_note()?.funding_delta::<G>(context)?;
+        let delta_target = i128::from(priority_fee);
 
-        match delta_with_change.cmp(&0) {
+        match delta_with_change.cmp(&delta_target) {
             Ordering::Less | Ordering::Equal => {
                 // NOTE: the `Equal` is important here since we
                 // cannot create zero-valued outputs.
@@ -170,16 +174,15 @@ impl MantleTxBuilder {
                 // We have enough balance to cover the increase in cost from the change
                 // note. Use return_change which properly accounts for the gas cost
                 // increase from adding the change output.
-                let change =
-                    u64::try_from(delta_with_change).expect("Positive delta must fit in u64");
+                let change = u64::try_from(delta_with_change - delta_target)
+                    .expect("Positive delta must fit in u64");
 
                 let tx_with_change = self.add_ledger_output(Note {
                     value: change,
                     pk: change_pk,
                 })?;
 
-                // Now the net balance should exactly equal the gas cost.
-                assert_eq!(tx_with_change.funding_delta::<G>(context)?, 0);
+                assert_eq!(tx_with_change.funding_delta::<G>(context)?, delta_target);
 
                 Ok(Some(tx_with_change))
             }
@@ -310,6 +313,33 @@ mod tests {
     };
 
     #[test]
+    fn serde_round_trip() {
+        // The builder crosses the HTTP boundary (e.g. the wallet fund
+        // endpoint), so a serialized builder must deserialize back to the
+        // same transaction.
+        let builder = MantleTxBuilder::new()
+            .push_op(Op::ChannelInscribe(InscriptionOp {
+                channel_id: [0; 32].into(),
+                inscription: b"hello".into(),
+                parent: [1; 32].into(),
+                signer: Ed25519Key::from_bytes(&[0; 32]).public_key(),
+            }))
+            .unwrap()
+            .add_ledger_input(Utxo::new([0u8; 32], 0, Note::new(50, ZkPublicKey::zero())))
+            .unwrap()
+            .add_ledger_output(Note::new(40, ZkPublicKey::zero()))
+            .unwrap();
+
+        let json = serde_json::to_string(&builder).expect("builder should serialize");
+        let restored: MantleTxBuilder =
+            serde_json::from_str(&json).expect("builder should deserialize");
+
+        assert_eq!(restored.net_balance(), builder.net_balance());
+        assert_eq!(restored.ledger_inputs(), builder.ledger_inputs());
+        assert_eq!(restored.build().unwrap(), builder.build().unwrap());
+    }
+
+    #[test]
     fn inscription_op() {
         // Build an operation
         let op = InscriptionOp {
@@ -321,7 +351,11 @@ mod tests {
 
         // Init a tx builder
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::default(),
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -349,7 +383,11 @@ mod tests {
 
         // Init a tx builder
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::default(),
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -413,7 +451,11 @@ mod tests {
 
         // Init a tx builder
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::default(),
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new().push_op(Op::LeaderClaim(op)).unwrap();
@@ -432,7 +474,11 @@ mod tests {
     fn transfer_op() {
         // Init a tx builder for sending 30 to the recipient
         let context = MantleTxContext {
-            gas_context: MantleTxGasContext::default(),
+            gas_context: MantleTxGasContext::new(
+                HashMap::new(),
+                HashMap::new(),
+                GasPrices::new(0, 0),
+            ),
             leader_reward_amount: 30,
         };
         let builder = MantleTxBuilder::new()
@@ -452,7 +498,7 @@ mod tests {
 
         // Add change note
         let builder = builder
-            .return_change::<MainnetGasConstants>(&context, ZkPublicKey::zero())
+            .return_change::<MainnetGasConstants>(&context, ZkPublicKey::zero(), 0)
             .unwrap()
             .unwrap();
 

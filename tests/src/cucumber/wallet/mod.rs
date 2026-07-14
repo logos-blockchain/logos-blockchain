@@ -1,6 +1,5 @@
 pub mod best_node;
 pub mod checks;
-pub mod feed;
 pub mod snapshot;
 pub mod submissions;
 pub mod sync;

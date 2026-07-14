@@ -15,7 +15,7 @@ use super::{
     slot_clock::{SlotClock, slot_to_u64},
     state::{ChannelUpdateInfo, TxState},
     types::{
-        ChannelUpdate, Error, Event, FinalizedTx, InscriptionInfo, OrphanedTx,
+        ChannelUpdate, ChannelUpdateTx, Error, Event, FinalizedTx, InscriptionInfo,
         SequencerChannelView, SequencerCheckpoint, TurnNotification, TxSource, TxStatus,
     },
     zone_sequencer::{ZoneSequencer, build_checkpoint},
@@ -91,12 +91,14 @@ where
 
     /// Convert a successfully-ingested block into the public event. Handles
     /// the readiness-transition special case: when this is the block that
-    /// flips the sequencer to ready, emit `Ready` first and buffer the
-    /// `BlocksProcessed` for the next drive turn.
+    /// flips the sequencer to ready — or the one that completes a mid-life
+    /// reconnect — emit `Ready` first and buffer the `BlocksProcessed` for
+    /// the next drive turn.
     fn finish_block_processing(&mut self, result: BlockEventResult) -> Option<Event> {
         // We just processed a live block end-to-end — cached `channel_state`,
         // `current_tip`, and `lib_slot` reflect chain state up to this block,
         // so callers may rely on them.
+        let reconnected = !self.connected;
         self.connected = true;
         let became_ready = self.maybe_signal_ready();
         let (channel_update, finalized, mined) = self.apply_block_result(result);
@@ -121,7 +123,11 @@ where
                 finalized,
             });
 
-        if became_ready {
+        // Re-announce readiness after a mid-life reconnect: with funding
+        // configured, publishes fail fast with `Unavailable` while
+        // disconnected, so consumers need a positive "you can publish again"
+        // signal once a live block confirms the connection.
+        if became_ready || (reconnected && self.is_ready()) {
             if let Some(ev) = block_event {
                 self.buffered_events.push_back(ev);
             }
@@ -507,8 +513,8 @@ where
         }
         // `OnChain` is a per-tx lifecycle signal — it fires when an inscription
         // lands in a block, independent of whether it moved the channel lineage.
-        // Our own publishes are already in the lineage, so they never appear in
-        // `adopted`; drive `OnChain` from what was actually mined this block.
+        // Our own publishes never appear in extension-case `adopted` (already
+        // tracked); drive `OnChain` from what was actually mined this block.
         for info in mined {
             let source = self
                 .state
@@ -532,48 +538,48 @@ where
             update.adopted.len(),
             hex::encode(update.new_channel_tip.as_ref()),
         );
-        for info in &update.orphaned {
+        for tx in &update.orphaned {
+            Self::log_update_entry("orphaned", tx);
+        }
+        for tx in &update.adopted {
+            Self::log_update_entry("adopted", tx);
+        }
+    }
+
+    fn log_update_entry(kind: &str, tx: &ChannelUpdateTx) {
+        if let Some(info) = tx.inscription() {
             debug!(target: TARGET,
-                "  orphaned: payload={:?}, tx={}, msg_id={}",
+                "  {kind}: payload={:?}, tx={}, msg_id={}",
                 String::from_utf8_lossy(&info.payload),
                 hex::encode(info.tx_hash.0),
                 hex::encode(info.this_msg.as_ref()),
             );
-        }
-        for info in &update.adopted {
+        } else {
             debug!(target: TARGET,
-                "  adopted: payload={:?}, tx={}, msg_id={}",
-                String::from_utf8_lossy(&info.payload),
-                hex::encode(info.tx_hash.0),
-                hex::encode(info.this_msg.as_ref()),
+                "  {kind}: custom tx {}",
+                hex::encode(tx.tx_hash().0),
             );
         }
     }
 
-    /// Build the [`ChannelUpdate`] returned to the consumer.
-    ///
-    /// `orphaned` combines two sources, deduped by `tx_hash`:
-    /// - inscriptions that left the channel chain between the old and new
-    ///   canonical tip, and
-    /// - our own pending that can no longer land on the new tip
-    ///   ([`TxState::shed_off_branch_pending`]), including pending that never
-    ///   mined and so appears in no on-chain delta.
-    ///
-    /// A tx in both keeps the shed variant: it carries the `AtomicWithdraw`
-    /// bundle metadata the on-chain delta lacks.
-    ///
-    /// `adopted` is the inscriptions added to the channel chain.
+    /// Build the [`ChannelUpdate`] returned to the consumer: `orphaned`
+    /// combines the on-chain delta with our own shed pending (lineage and
+    /// opaque), deduped by `tx_hash`.
     fn build_channel_update(&mut self, u: ChannelUpdateInfo) -> ChannelUpdate {
-        let shed = match (self.state.as_mut(), self.current_tip) {
-            (Some(s), Some(tip)) => s.shed_off_branch_pending(tip),
-            _ => Vec::new(),
+        let (shed, shed_other) = match (self.state.as_mut(), self.current_tip) {
+            (Some(s), Some(tip)) => (
+                s.shed_off_branch_pending(tip),
+                s.shed_off_branch_pending_other(tip),
+            ),
+            _ => (Vec::new(), Vec::new()),
         };
-        let mut orphaned: Vec<OrphanedTx> = shed.into_iter().map(orphan_from_shed).collect();
+        let mut orphaned: Vec<ChannelUpdateTx> = shed.into_iter().map(orphan_from_shed).collect();
+        orphaned.extend(shed_other.into_iter().map(ChannelUpdateTx::Custom));
 
-        let mut seen: HashSet<_> = orphaned.iter().map(OrphanedTx::tx_hash).collect();
-        for info in u.orphaned {
-            if seen.insert(info.tx_hash) {
-                orphaned.push(OrphanedTx::Inscription(info));
+        let mut seen: HashSet<_> = orphaned.iter().map(ChannelUpdateTx::tx_hash).collect();
+        for tx in u.orphaned {
+            if seen.insert(tx.tx_hash()) {
+                orphaned.push(tx);
             }
         }
 
@@ -611,7 +617,10 @@ mod tests {
         },
         proofs::leader_proof::Groth16LeaderProof,
     };
-    use lb_http_api_common::queries::BlocksStreamQuery;
+    use lb_http_api_common::{
+        bodies::wallet::fund::{WalletFundRequestBody, WalletFundResponseBody},
+        queries::BlocksStreamQuery,
+    };
     use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
     use num_bigint::BigUint;
     use rand::{RngCore as _, thread_rng};
@@ -620,7 +629,7 @@ mod tests {
     use super::{
         super::{
             types::{FinalizedOp, SequencerConfig},
-            zone_sequencer::restore_pending_tx,
+            zone_sequencer::track_pending_tx,
         },
         *,
     };
@@ -886,6 +895,13 @@ mod tests {
         ) -> Result<(), lb_common_http_client::Error> {
             self.inner.post_transaction(tx).await
         }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            self.inner.fund_tx(request).await
+        }
     }
 
     /// Comment #1 regression guard for client publishes during reconnect.
@@ -959,11 +975,11 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_classifies_atomic_bundle_with_withdraws() {
+    fn track_pending_tx_classifies_atomic_bundle_with_withdraws() {
         // Bundle: [ChannelWithdraw(channel_id), ChannelInscribe(channel_id)]
         // Restore should put it in pending (not pending_other) with the
         // withdraws field populated, so on orphan we emit
-        // OrphanedTx::AtomicWithdraw (not Inscription).
+        // ChannelUpdateTx::AtomicWithdraw (not Inscription).
         let channel_id = ChannelId::from([1u8; 32]);
         let outputs = Outputs::new([Note::new(
             5,
@@ -994,7 +1010,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, channel_id);
+        track_pending_tx(&mut state, signed_tx, channel_id);
 
         let pending = state
             .pending_inscription(&tx_hash)
@@ -1012,7 +1028,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_classifies_plain_inscription_with_none_withdraws() {
+    fn track_pending_tx_classifies_plain_inscription_with_none_withdraws() {
         // Plain inscription: pending with `withdraws == None`.
         let channel_id = ChannelId::from([2u8; 32]);
         let inscribe_op = InscriptionOp {
@@ -1029,7 +1045,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, channel_id);
+        track_pending_tx(&mut state, signed_tx, channel_id);
 
         let pending = state
             .pending_inscription(&tx_hash)
@@ -1038,7 +1054,7 @@ mod tests {
     }
 
     #[test]
-    fn restore_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
+    fn track_pending_tx_falls_back_to_other_when_no_inscribe_for_channel() {
         // Inscribe for a different channel: should fall back to pending_other
         // (treated as opaque).
         let our_channel = ChannelId::from([3u8; 32]);
@@ -1057,7 +1073,7 @@ mod tests {
         };
 
         let mut state = TxState::new(HeaderId::from([0; 32]), MsgId::root());
-        restore_pending_tx(&mut state, signed_tx, our_channel);
+        track_pending_tx(&mut state, signed_tx, our_channel);
 
         assert!(
             state.pending_inscription(&tx_hash).is_none(),
@@ -1183,6 +1199,21 @@ mod tests {
             self.posted_transactions_sender.send(tx).await.unwrap();
             Ok(())
         }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            // Fee-less passthrough: build the request's ops unchanged, as the
+            // node would at zero gas price.
+            Ok(WalletFundResponseBody {
+                tip: HeaderId::from([0; 32]),
+                funded_tx: request.tx_builder.build().map_err(|e| {
+                    lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
+                })?,
+                transfer_proof: None,
+            })
+        }
     }
 
     /// Mock node that serves a single genesis-slot block with a channel
@@ -1298,6 +1329,21 @@ mod tests {
             _tx: SignedMantleTx,
         ) -> Result<(), lb_common_http_client::Error> {
             Ok(())
+        }
+
+        async fn fund_tx(
+            &self,
+            request: WalletFundRequestBody,
+        ) -> Result<WalletFundResponseBody, lb_common_http_client::Error> {
+            // Fee-less passthrough: build the request's ops unchanged, as the
+            // node would at zero gas price.
+            Ok(WalletFundResponseBody {
+                tip: HeaderId::from([0; 32]),
+                funded_tx: request.tx_builder.build().map_err(|e| {
+                    lb_common_http_client::Error::Server(format!("mock funding failed: {e:?}"))
+                })?,
+                transfer_proof: None,
+            })
         }
 
         async fn channel_state(

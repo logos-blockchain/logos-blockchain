@@ -356,8 +356,7 @@ where
         let stream = receiver.await?;
         let stream = stream.map_err(|e| Box::new(e) as DynError).map(|result| {
             let block = result?;
-            let block: Self::Block =
-                Block::from_bytes(&block).map_err(|e| Box::new(e) as DynError)?;
+            let block: Self::Block = Block::try_from(block).map_err(|e| Box::new(e) as DynError)?;
             Ok((block.header().id(), block))
         });
 

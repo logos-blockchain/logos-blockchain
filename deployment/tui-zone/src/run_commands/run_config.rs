@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use lb_core::{
     mantle::{
         Op, OpProof, SignedMantleTx, Transaction as _,
+        nom::NomEncode as _,
         ops::channel::{
             ChannelId, ChannelKeyIndex,
             config::{ChannelConfigOp, Keys},
         },
-        transactions::codec::{encode_mantle_tx, encode_signed_mantle_tx},
+        transactions::codec::encode_signed_mantle_tx,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -49,13 +50,16 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
         start_cli_sequencer_with_channel_state(&args.node_key).await?;
     print_channel_state("zone_config before", &channel_id, channel_state.as_ref());
     let status_rx = sequencer.subscribe_tx_status();
-    let (_result, _checkpoint, signed_tx) = sequencer.handle().channel_config(
-        Keys::try_from(authorized_keys)?,
-        args.posting_timeframe.into(),
-        args.posting_timeout.into(),
-        args.configuration_threshold,
-        args.withdraw_threshold,
-    )?;
+    let (_result, _checkpoint, signed_tx) = sequencer
+        .handle()
+        .channel_config(
+            Keys::try_from(authorized_keys)?,
+            args.posting_timeframe.into(),
+            args.posting_timeout.into(),
+            args.configuration_threshold,
+            args.withdraw_threshold,
+        )
+        .await?;
     let tx_hash = signed_tx.hash();
     let goal = CommandGoal::Tx { tx_hash };
     let wait_for = if args.wait_finalized {
@@ -109,7 +113,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         tx_hash: hex::encode(tx_hash.as_ref()),
         msg_id: hex::encode(msg_id.as_ref()),
         required_threshold: channel_state.configuration_threshold,
-        mantle_tx: hex::encode(encode_mantle_tx(&tx)),
+        mantle_tx: hex::encode(tx.encode()),
         new_authorized_keys: authorized_keys
             .iter()
             .map(|key| hex::encode(key.to_bytes()))

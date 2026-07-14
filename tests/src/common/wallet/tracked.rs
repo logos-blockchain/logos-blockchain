@@ -1,6 +1,6 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
-use lb_core::mantle::{NoteId, TxHash, Utxo};
+use lb_core::mantle::{TxHash, Utxo};
 use serde::{Deserialize, Serialize};
 
 use super::{
@@ -55,6 +55,14 @@ impl TrackedWallets {
         self.submitted_tx_hashes
             .get(wallet_name)
             .map_or(&[], Vec::as_slice)
+    }
+
+    #[must_use]
+    pub fn submitted_tx_hashes(&self) -> HashSet<TxHash> {
+        self.submitted_tx_hashes
+            .values()
+            .flat_map(|hashes| hashes.iter().copied())
+            .collect()
     }
 
     #[must_use]
@@ -166,15 +174,6 @@ impl TrackedWallets {
             })
     }
 
-    pub(crate) fn ensure_wallets_from_tracked_keys(
-        &mut self,
-        tracked_wallets: &[TrackedWalletKeys],
-    ) {
-        for tracked_wallet in tracked_wallets {
-            self.ensure_wallet(tracked_wallet.wallet_id().clone());
-        }
-    }
-
     pub(crate) fn record_observed_wallets_utxos(
         &mut self,
         header_id: String,
@@ -211,12 +210,6 @@ impl TrackedWallets {
     pub(crate) fn record_header_height(&mut self, node_name: &str, header_id: &str, height: u64) {
         self.chain_state_cache
             .record_header_height(node_name, header_id, height);
-    }
-
-    pub(crate) fn release_spent_note(&mut self, wallet_id: &WalletId, spent: NoteId) {
-        if let Some(wallet) = self.wallet_mut(wallet_id.as_str()) {
-            wallet.release_spent_note(spent);
-        }
     }
 
     #[must_use]
@@ -374,6 +367,24 @@ impl TrackedWalletsState {
                 )
             })
             .collect()
+    }
+
+    #[must_use]
+    pub fn filtered_to_wallets(&self, wallet_ids: &HashSet<WalletId>) -> Self {
+        Self {
+            wallets: self
+                .wallets
+                .iter()
+                .filter(|(wallet_id, _)| wallet_ids.contains(*wallet_id))
+                .map(|(wallet_id, wallet)| (wallet_id.clone(), wallet.clone()))
+                .collect(),
+            submitted_tx_hashes: self
+                .submitted_tx_hashes
+                .iter()
+                .filter(|(wallet_id, _)| wallet_ids.contains(*wallet_id))
+                .map(|(wallet_id, tx_hashes)| (wallet_id.clone(), tx_hashes.clone()))
+                .collect(),
+        }
     }
 
     #[must_use]

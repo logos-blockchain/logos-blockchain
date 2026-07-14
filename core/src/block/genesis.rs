@@ -1,11 +1,13 @@
 use std::fmt::{Debug, Formatter};
 
+use lb_cryptarchia_engine::Slot;
 use lb_groth16::CompressedGroth16Proof;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use lb_utils::bounded::BoundedError;
+use serde::{Deserialize, Serialize};
 
 use crate::{
-    block::Block,
+    block::{Block, BlockTransactions},
     header::Header,
     mantle::{
         MantleTx, Note, Op, OpProof, SignedMantleTx,
@@ -101,7 +103,40 @@ where
 /// [`Groth16LeaderProof`](crate::proofs::leader_proof::Groth16LeaderProof)
 /// and an all-zero signature; it is not produced by a normal slot leader
 /// election.
-pub type GenesisBlock = Block<GenesisTx>;
+#[derive(Clone, Debug, Serialize)]
+pub struct GenesisBlock(Block<GenesisTx>);
+
+impl<'de> Deserialize<'de> for GenesisBlock {
+    fn deserialize<D>(deserializer: D) -> core::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawGenesisBlock {
+            header: Header,
+            signature: Ed25519Signature,
+            transactions: BlockTransactions<GenesisTx>,
+        }
+
+        let raw = RawGenesisBlock::deserialize(deserializer)?;
+
+        if raw.header.slot() != Slot::genesis() {
+            return Err(serde::de::Error::custom("expected genesis slot"));
+        }
+
+        if raw.transactions.len() != 1 {
+            return Err(serde::de::Error::custom(
+                "genesis block must contain exactly one transaction",
+            ));
+        }
+
+        Ok(Self(Block {
+            header: raw.header,
+            signature: raw.signature,
+            transactions: raw.transactions,
+        }))
+    }
+}
 
 impl GenesisBlock {
     /// Create a genesis block from the given transaction.
@@ -113,17 +148,35 @@ impl GenesisBlock {
     pub fn genesis(genesis_tx: GenesisTx) -> Self {
         let header = Header::genesis(&genesis_tx);
         let signature = Ed25519Signature::from_bytes(&[0; 64]);
-        let transactions = vec![genesis_tx];
-        Self {
+        let transactions = BlockTransactions::from([genesis_tx]);
+        Self(Block {
             header,
             signature,
             transactions,
-        }
+        })
     }
 
     #[must_use]
     pub fn genesis_tx(&self) -> GenesisTx {
-        self.transactions[0].clone()
+        self.0.transactions_vec()[0].clone()
+    }
+
+    #[must_use]
+    pub fn into_inner(self) -> Block<GenesisTx> {
+        self.0
+    }
+}
+
+impl AsRef<Block<GenesisTx>> for GenesisBlock {
+    fn as_ref(&self) -> &Block<GenesisTx> {
+        &self.0
+    }
+}
+
+impl core::ops::Deref for GenesisBlock {
+    type Target = Block<GenesisTx>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -1180,7 +1233,6 @@ impl GenesisBlockBuilder<WithGenesisTx> {
 
 #[cfg(test)]
 mod tests {
-    use lb_cryptarchia_engine::Slot;
     use lb_groth16::{AdditiveGroup as _, Fr};
     use lb_key_management_system_keys::keys::{Ed25519PublicKey, ZkPublicKey};
     use num_bigint::BigUint;
@@ -1587,5 +1639,58 @@ mod tests {
         assert!(matches!(ops[0], Op::Transfer(_)));
         assert!(matches!(ops[1], Op::ChannelInscribe(_)));
         assert!(matches!(ops[2], Op::SDPDeclare(_)));
+    }
+
+    #[test]
+    fn genesis_block_serde_roundtrip_wrapper() {
+        let block = GenesisBlockBuilder::new()
+            .with_genesis_tx(make_genesis_tx(vec![]))
+            .build();
+
+        let json = serde_json::to_string(&block).expect("genesis block serialize");
+        let decoded: GenesisBlock = serde_json::from_str(&json).expect("genesis block deserialize");
+
+        assert_eq!(decoded.header().slot(), Slot::genesis());
+        assert_eq!(decoded.transactions().len(), 1);
+        assert_eq!(decoded.header().id(), block.header().id());
+    }
+
+    #[test]
+    fn genesis_block_deserialize_rejects_non_genesis_slot() {
+        // Build a valid genesis block first.
+        let block = GenesisBlockBuilder::new()
+            .with_genesis_tx(make_genesis_tx(vec![]))
+            .build();
+
+        // Mutate only slot in JSON to a non-genesis value.
+        let mut value = serde_json::to_value(&block).expect("to_value should work");
+        value["header"]["slot"] = serde_json::json!(1);
+
+        let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
+        assert!(
+            err.to_string().contains("expected genesis slot"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn genesis_block_deserialize_rejects_transaction_count_not_one() {
+        // Build a valid genesis block first.
+        let block = GenesisBlockBuilder::new()
+            .with_genesis_tx(make_genesis_tx(vec![]))
+            .build();
+
+        let mut value = serde_json::to_value(&block).expect("to_value should work");
+
+        // Duplicate the tx so count becomes 2.
+        let tx0 = value["transactions"][0].clone();
+        value["transactions"] = serde_json::Value::Array(vec![tx0.clone(), tx0]);
+
+        let err = serde_json::from_value::<GenesisBlock>(value).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("genesis block must contain exactly one transaction"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -17,6 +17,7 @@ use lb_http_api_common::{
         mantle::GasPricesResponseBody,
         wallet::{
             balance::WalletBalanceResponseBody,
+            fund::{WalletFundRequestBody, WalletFundResponseBody},
             transfer_funds::{WalletTransferFundsRequestBody, WalletTransferFundsResponseBody},
         },
     },
@@ -76,10 +77,10 @@ impl NodeHttpClient {
         .await
     }
 
-    pub async fn gas_prices(&self) -> Result<GasPricesResponseBody, Error> {
+    pub async fn gas_prices(&self, tip: Option<HeaderId>) -> Result<GasPricesResponseBody, Error> {
         self.with_timeout(
             "Gas prices request",
-            self.http_client.gas_prices(self.base_url.clone()),
+            self.http_client.gas_prices(self.base_url.clone(), tip),
         )
         .await
     }
@@ -178,6 +179,17 @@ impl NodeHttpClient {
         self.with_timeout(
             "Transfer funds request",
             self.http_client.transfer_funds(self.base_url.clone(), body),
+        )
+        .await
+    }
+
+    pub async fn fund_tx(
+        &self,
+        body: WalletFundRequestBody,
+    ) -> Result<WalletFundResponseBody, Error> {
+        self.with_timeout(
+            "Fund transaction request",
+            self.http_client.fund_tx(self.base_url.clone(), body),
         )
         .await
     }

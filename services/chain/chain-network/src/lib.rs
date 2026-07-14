@@ -17,7 +17,7 @@ use bootstrap::ibd::ChainNetworkIbdBlockProcessor;
 use futures::{StreamExt as _, future::join_all};
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
-    block::{Block, Proposal},
+    block::{Block, BlockTransactions, Proposal},
     header::HeaderId,
     mantle::{AuthenticatedMantleTx, Transaction, TxHash},
 };
@@ -30,6 +30,7 @@ use lb_tx_service::{
     TxMempoolService, backend::RecoverableMempool,
     network::NetworkAdapter as MempoolNetworkAdapter, storage::MempoolStorageAdapter,
 };
+use lb_utils::bounded::BoundedError;
 use network::NetworkAdapter;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -82,6 +83,8 @@ pub enum Error {
     Mempool(String),
     #[error("Block header id not found: {0}")]
     HeaderIdNotFound(HeaderId),
+    #[error(transparent)]
+    BoundedError(#[from] BoundedError),
 }
 
 #[derive(Debug)]
@@ -995,7 +998,7 @@ where
         return Err(Error::MissingMempoolTransactions(missing_count));
     }
 
-    let reconstructed_transactions = mempool_response.into_found();
+    let reconstructed_transactions = BlockTransactions::try_from(mempool_response.into_found())?;
 
     let header = proposal.header().clone();
     let signature = *proposal.signature();

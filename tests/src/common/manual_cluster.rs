@@ -1,24 +1,28 @@
 use std::{
     fs,
+    num::NonZero,
     path::{Path, PathBuf},
     time::Duration,
 };
 
+use lb_core::mantle::{GenesisTx as _, Utxo};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_libp2p::Multiaddr;
 use lb_node::{UserConfig, config::RunConfig};
 use lb_testing_framework::{
-    DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient,
-    USER_CONFIG_FILE, internal::DeploymentPlan, is_truthy_env, record_system_monitor_event,
-    register_system_monitor_output_file, unregister_system_monitor_output_file,
+    DeploymentBuilder, LbcEnv, LbcLocalDeployer, LbcManualCluster, NodeHttpClient, TopologyConfig,
+    USER_CONFIG_FILE, configs::wallet::WalletConfig, internal::DeploymentPlan, is_truthy_env,
+    record_system_monitor_event, register_system_monitor_output_file,
+    unregister_system_monitor_output_file,
 };
+use lb_utils::math::NonNegativeRatio;
 use lb_zone_sdk::Slot;
 use reqwest::Url;
 use tempfile::TempDir;
 use testing_framework_core::scenario::{DynError, PeerSelection, StartNodeOptions, StartedNode};
 use tokio::time::error::Elapsed;
 
-use crate::cucumber::defaults::{E2E_KEEP_LOGS, E2E_TESTS_BASE_DIR_OVERRIDE};
+use crate::cucumber::defaults::{E2E_ARTIFACTS_DIR, E2E_KEEP_LOGS, E2E_TESTS_BASE_DIR_OVERRIDE};
 
 pub struct LocalManualClusterHarnessBase {
     scenario_base_dir: PathBuf,
@@ -156,6 +160,40 @@ where
         .expect("manual cluster should become ready");
 
     (base, nodes)
+}
+
+/// Starts a local cluster of `node_count` nodes with fast blocks (2s slots)
+/// and the given wallet accounts funded at genesis. Artifacts are written
+/// under [`E2E_ARTIFACTS_DIR`].
+pub async fn start_fast_cluster_with_wallet(
+    test_name: &str,
+    prefix: &str,
+    node_count: usize,
+    wallet_config: WalletConfig,
+) -> (LocalManualClusterHarnessBase, Vec<StartedNode<LbcEnv>>) {
+    start_local_manual_cluster_with_layout(
+        test_name,
+        prefix,
+        DeploymentBuilder::new(
+            TopologyConfig::with_node_numbers(node_count)
+                .with_allow_multiple_genesis_tokens(true)
+                .with_test_context(Some(test_name.to_owned())),
+        )
+        .with_wallet_config(wallet_config),
+        node_count,
+        ManualNodeLayout::SelectNodeSeed(0),
+        |config| Ok(fast_chain_config(config)),
+        Some(PathBuf::from(E2E_ARTIFACTS_DIR)),
+    )
+    .await
+}
+
+fn fast_chain_config(mut config: RunConfig) -> RunConfig {
+    config.deployment.time.slot_duration = Duration::from_secs(2);
+    config.deployment.cryptarchia.security_param = NonZero::new(3).expect("nonzero");
+    config.deployment.cryptarchia.slot_activation_coeff =
+        NonNegativeRatio::new(1, 2.try_into().expect("nonzero"));
+    config
 }
 
 pub async fn start_manual_nodes_with_layout<F>(
@@ -308,6 +346,19 @@ pub fn api_url(node: &NodeHttpClient, path: &str) -> Url {
     node.base_url()
         .join(path)
         .expect("manual-cluster client base URL should join API path")
+}
+
+/// UTXOs created by the genesis transfer of the deployment's genesis block.
+#[must_use]
+pub fn genesis_wallet_utxos(config: &TopologyConfig) -> Vec<Utxo> {
+    let genesis_tx = config
+        .genesis_block
+        .as_ref()
+        .expect("manual-cluster deployment should include genesis tx")
+        .genesis_tx();
+    let genesis_transfer = genesis_tx.genesis_transfer();
+
+    genesis_transfer.outputs.utxos(genesis_transfer).collect()
 }
 
 #[must_use]

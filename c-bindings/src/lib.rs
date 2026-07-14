@@ -9,7 +9,6 @@ mod errors;
 pub(crate) mod logging;
 mod macros;
 mod node;
-mod pointers;
 mod result;
 
 pub use errors::{OperationStatus, OperationStatusCode};

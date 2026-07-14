@@ -200,9 +200,17 @@ impl FaucetTask {
         let json: serde_json::Value = serde_json::from_str(&body)
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-        json.get("hash").and_then(|v| v.as_str()).map_or_else(
-            || Err(format!("[request_funds] Missing or invalid `hash` in response: {body}").into()),
-            |hash| Ok(hash.to_owned()),
-        )
+        json.get("hash")
+            .or_else(|| json.get("status"))
+            .and_then(|v| v.as_str())
+            .map_or_else(
+                || {
+                    Err(format!(
+                        "[request_funds] Missing or invalid `hash`/`status` in response: {body}"
+                    )
+                    .into())
+                },
+                |hash| Ok(hash.to_owned()),
+            )
     }
 }

@@ -1,6 +1,6 @@
 use core::{
     mem::{self},
-    num::NonZeroUsize,
+    num::{NonZeroU64, NonZeroUsize},
 };
 use std::{
     collections::{HashMap, VecDeque, hash_map::Entry},
@@ -59,6 +59,10 @@ pub struct Config {
     pub peering_degree: RangeInclusive<usize>,
     /// The minimum Blend network size for messages to be relayed between peers.
     pub minimum_network_size: NonZeroUsize,
+    /// `ß_c`: the fixed number of encapsulation layers every well-formed Blend
+    /// message carries. Used to validate the layout of messages received from
+    /// remote peers before processing them.
+    pub num_blend_layers: NonZeroU64,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -121,6 +125,9 @@ pub struct Behaviour<ObservationWindowClockProvider> {
     protocol_name: StreamProtocol,
     /// The minimum Blend network size for messages to be relayed between peers.
     minimum_network_size: NonZeroUsize,
+    /// `ß_c`: the fixed number of encapsulation layers every well-formed Blend
+    /// message carries.
+    num_blend_layers: NonZeroU64,
     /// States for processing messages from the old epoch
     /// before the transition period has passed.
     old_epoch: Option<OldEpoch>,
@@ -239,6 +246,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             local_peer_id,
             protocol_name,
             minimum_network_size: config.minimum_network_size,
+            num_blend_layers: config.num_blend_layers,
             old_epoch: None,
         }
     }
@@ -266,6 +274,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
                 .collect(),
             mem::take(&mut self.message_cache),
             current_epoch_number,
+            self.num_blend_layers,
         ));
 
         tracing::debug!(target: LOG_TARGET, "Started a new epoch by passing negotiated peers and exchanged message IDs to the old epoch. Now, no negotiated peers in the current epoch.");
@@ -933,6 +942,7 @@ impl<ObservationWindowClockProvider> Behaviour<ObservationWindowClockProvider> {
             &mut self.events,
             &mut self.waker,
             self.current_epoch_info.1,
+            self.num_blend_layers,
         ) {
             tracing::debug!(target: LOG_TARGET, "Failed to handle message from the current epoch: {receive_error:?}");
             let spam_reason = match receive_error {

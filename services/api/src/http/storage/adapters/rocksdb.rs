@@ -5,7 +5,11 @@ use std::{
 
 use bytes::Bytes;
 use futures::{StreamExt as _, TryStreamExt as _};
-use lb_core::{block::Block, header::HeaderId, mantle::TxHash};
+use lb_core::{
+    block::Block,
+    header::HeaderId,
+    mantle::{StorageSize, Transaction, TxHash},
+};
 use lb_storage_service::{StorageMsg, StorageService, backends::rocksdb::RocksBackend};
 use overwatch::services::{ServiceData, relay::OutboundRelay};
 use serde::{Serialize, de::DeserializeOwned};
@@ -28,7 +32,13 @@ where
         id: HeaderId,
     ) -> Result<Option<Block<Tx>>, crate::http::DynError>
     where
-        Tx: Serialize + DeserializeOwned + Clone + Eq + 'static,
+        Tx: Serialize
+            + DeserializeOwned
+            + Clone
+            + Eq
+            + Transaction<Hash = TxHash>
+            + StorageSize
+            + 'static,
     {
         let key: [u8; 32] = id.into();
         let (msg, receiver) = StorageMsg::new_load_message(Bytes::copy_from_slice(&key));
