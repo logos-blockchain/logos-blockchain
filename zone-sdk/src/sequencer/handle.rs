@@ -2,7 +2,7 @@ use lb_core::mantle::{
     MantleTx, SignedMantleTx,
     channel::{SlotTimeframe, SlotTimeout},
     ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-    transactions::Ops,
+    transactions::{Ops, states::Unverified},
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 
@@ -10,7 +10,7 @@ use super::{
     types::{Error, PublishResult, SequencerCheckpoint, WithdrawArg},
     zone_sequencer::ZoneSequencer,
 };
-use crate::adapter;
+use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
 
 /// Drive-loop handle for issuing commands to the sequencer.
 ///
@@ -110,7 +110,7 @@ where
     /// acknowledgement.
     pub fn submit_signed_tx(
         &mut self,
-        tx: SignedMantleTx,
+        tx: SignedMantleTx<Unverified>,
         msg_id: MsgId,
     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
         self.sequencer.do_submit_signed_tx(tx, msg_id)
@@ -140,7 +140,7 @@ where
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
+    ) -> Result<(PublishReceipt, SignedMantleTx<Unverified>), Error> {
         self.sequencer
             .do_channel_config(
                 keys,

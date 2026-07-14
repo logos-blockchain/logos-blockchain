@@ -12,6 +12,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
+        transactions::states::{Unverified, VerificationState},
     },
 };
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
@@ -156,7 +157,7 @@ impl Sequencer {
     }
 
     /// Create and sign a transaction for inscribing data
-    fn create_inscribe_tx(&self, data: Inscription, parent: MsgId) -> SignedMantleTx {
+    fn create_inscribe_tx(&self, data: Inscription, parent: MsgId) -> SignedMantleTx<Unverified> {
         let verifying_key_bytes = self.signing_key.public_key().to_bytes();
         let verifying_key =
             Ed25519PublicKey::from_bytes(&verifying_key_bytes).expect("valid ed25519 public key");
@@ -178,14 +179,12 @@ impl Sequencer {
         let signature =
             lb_key_management_system_service::keys::Ed25519Signature::from_bytes(&signature_bytes);
 
-        SignedMantleTx {
-            ops_proofs: [OpProof::Ed25519Sig(signature)].into(),
-            mantle_tx: inscribe_tx,
-        }
+        // TODO: Should preverify?
+        SignedMantleTx::new(inscribe_tx, [OpProof::Ed25519Sig(signature)].into())
     }
 
     /// Post a transaction to the node and wait for inclusion
-    async fn post_and_wait(&self, tx: &SignedMantleTx) -> Result<()> {
+    async fn post_and_wait(&self, tx: &SignedMantleTx<Unverified>) -> Result<()> {
         // Post the transaction
         self.http_client
             .post_transaction(self.node_url.clone(), tx.clone())
@@ -205,7 +204,7 @@ impl Sequencer {
         block_id: HeaderId,
     ) -> bool {
         for tx in &block.transactions {
-            for op in tx.mantle_tx.ops() {
+            for op in tx.mantle_tx().ops() {
                 if let Op::ChannelInscribe(inscribe) = op {
                     tracing::debug!(
                         "Found inscription: channel={}, parent={}",
@@ -269,9 +268,11 @@ impl Sequencer {
         Ok(false)
     }
 
-    fn get_expected_inscription(tx: &SignedMantleTx) -> &InscriptionOp {
+    fn get_expected_inscription<State: VerificationState>(
+        tx: &SignedMantleTx<State>,
+    ) -> &InscriptionOp {
         let expected_op = tx
-            .mantle_tx
+            .mantle_tx()
             .ops()
             .first()
             .expect("transaction should have at least one op");
@@ -307,7 +308,7 @@ impl Sequencer {
     }
 
     /// Wait for a transaction to be included in a block.
-    async fn wait_for_inclusion(&self, tx: &SignedMantleTx) -> Result<()> {
+    async fn wait_for_inclusion(&self, tx: &SignedMantleTx<Unverified>) -> Result<()> {
         let expected_inscription = Self::get_expected_inscription(tx);
 
         let timeout_duration = Duration::from_mins(5);
@@ -517,7 +518,7 @@ impl Sequencer {
         let parent = self.get_last_msg_id().await?;
         let tx = self.create_inscribe_tx(inscription_data, parent);
 
-        let new_msg_id = match tx.mantle_tx.ops().first() {
+        let new_msg_id = match tx.mantle_tx().ops().first() {
             Some(Op::ChannelInscribe(inscribe)) => inscribe.id(),
             _ => panic!("Expected ChannelInscribe op"),
         };

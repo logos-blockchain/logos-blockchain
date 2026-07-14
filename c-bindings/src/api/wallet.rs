@@ -18,7 +18,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::MantleTxBuilder,
+        transactions::{MantleTxBuilder, states::Preverified},
     },
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
@@ -687,7 +687,7 @@ pub(crate) fn transfer_funds_sync(
     funding_public_keys: Vec<ZkPublicKey>,
     recipient_public_key: ZkPublicKey,
     amount: u64,
-) -> StatusResult<SignedMantleTx> {
+) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -940,7 +940,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
     change_public_key: ZkPublicKey,
     funding_public_keys: Vec<ZkPublicKey>,
     max_tx_fee: GasCost,
-) -> StatusResult<SignedMantleTx> {
+) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1244,7 +1244,7 @@ pub(crate) fn channel_deposit_sync(
     funding_public_key: ZkPublicKey,
     amount: Value,
     metadata: Metadata,
-) -> StatusResult<SignedMantleTx> {
+) -> StatusResult<SignedMantleTx<Preverified>> {
     let runtime_handle = node.get_runtime_handle();
     runtime_handle.block_on(async {
         let handle = node.get_overwatch_handle();
@@ -1341,6 +1341,7 @@ pub(crate) fn channel_deposit_sync(
             tx,
             [OpProof::ZkSig(user_sig.clone()), OpProof::ZkSig(user_sig)].into(),
         )
+        .preverify()
         .map_err(|error| {
             OperationStatus::error(
                 OperationStatusCode::DynError,

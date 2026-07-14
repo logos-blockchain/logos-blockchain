@@ -1322,7 +1322,7 @@ pub async fn wait_for_transactions_finalized(
                 })?
             {
                 for tx in &block.transactions {
-                    let hash = tx.mantle_tx.hash();
+                    let hash = tx.mantle_tx().hash();
                     if expected.contains(&hash) {
                         found.insert(hash);
                     }
@@ -1465,10 +1465,7 @@ pub async fn submit_atomic_zone_deposit(
             OpProof::Ed25519Sig(sequencer_sig),
         ]
         .into(),
-    )
-    .map_err(|error| ZoneTestError::SubmitAtomicDeposit {
-        message: error.to_string(),
-    })?;
+    );
 
     let (result, _cp) = client
         .submit_signed_tx(signed_tx, msg_id)

@@ -5,6 +5,7 @@ use lb_core::mantle::{
     MantleTx, Note, Op, OpProof, SignedMantleTx, Transaction as _, TxHash,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
+    transactions::states::Unverified,
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use tokio::time::{sleep, timeout};
@@ -197,7 +198,7 @@ async fn transaction_is_in_chain(
     .is_some()
 }
 
-pub fn create_invalid_transaction() -> SignedMantleTx {
+pub fn create_invalid_transaction() -> SignedMantleTx<Unverified> {
     let output_note = Note::new(1000, ZkPublicKey::new(1u8.into()));
     let transfer_op = TransferOp::new(
         Inputs::empty(),
@@ -210,8 +211,8 @@ pub fn create_invalid_transaction() -> SignedMantleTx {
     let transfer_proof = ZkKey::multi_sign(&[], &mantle_tx.hash().to_fr())
         .expect("invalid transfer proof should still be constructible");
 
-    SignedMantleTx {
-        ops_proofs: [OpProof::ZkSig(transfer_proof)].into(),
+    SignedMantleTx::new(
         mantle_tx,
-    }
+        [OpProof::ZkSig(transfer_proof)].into(),
+    )
 }

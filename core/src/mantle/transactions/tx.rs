@@ -489,6 +489,10 @@ impl<State: VerificationState> SignedMantleTx<State> {
     pub const fn ops_proofs(&self) -> &OpsProofs {
         &self.ops_proofs
     }
+
+    pub fn into_parts(self) -> (MantleTx, Vec<OpProof>) {
+        (self.mantle_tx, self.ops_proofs)
+    }
 }
 
 impl SignedMantleTx<Unverified> {

@@ -50,7 +50,7 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
             OpProof::Ed25519Sig(sequencer_sig),
         ]
         .into(),
-    )?;
+    );
     let tx_hash = signed_tx.hash();
 
     let goal = CommandGoal::Deposit {
@@ -59,7 +59,7 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
         amount: args.amount,
         metadata: goal_metadata,
     };
-    let (_result, _checkpoint) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
+    let (_receipt, _signed_tx) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
     println!(
         "{} deposit: submitted tx_hash={} msg_id={}",
         timestamp(),

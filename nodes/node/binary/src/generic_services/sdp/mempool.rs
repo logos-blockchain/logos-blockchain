@@ -2,7 +2,7 @@ use std::{fmt::Debug, marker::PhantomData};
 
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, Transaction as _, TxHash},
+    mantle::{SignedMantleTx, Transaction as _, TxHash, transactions::states::Preverified},
 };
 use lb_sdp_service::mempool::{MempoolAdapterError, SdpMempoolAdapter as SdpMempoolAdapterTrait};
 use lb_tx_service::{
@@ -32,8 +32,9 @@ where
 impl<MempoolNetAdapter, Mempool, RuntimeServiceId> SdpMempoolAdapterTrait
     for SdpMempoolAdapter<MempoolNetAdapter, Mempool, RuntimeServiceId>
 where
-    Mempool:
-        RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = SignedMantleTx> + Send + Sync,
+    Mempool: RecoverableMempool<BlockId = HeaderId, Key = TxHash, Item = SignedMantleTx<Preverified>>
+        + Send
+        + Sync,
     Mempool::RecoveryState: Serialize + for<'de> Deserialize<'de>,
     Mempool::Settings: Clone + Send + Sync,
     Mempool::Storage: MempoolStorageAdapter<RuntimeServiceId> + Send + Sync + Clone,
@@ -45,7 +46,7 @@ where
 {
     type MempoolService =
         TxMempoolService<MempoolNetAdapter, Mempool, Mempool::Storage, RuntimeServiceId>;
-    type Tx = SignedMantleTx;
+    type Tx = SignedMantleTx<Preverified>;
 
     fn new(mempool_relay: OutboundRelay<<Self::MempoolService as ServiceData>::Message>) -> Self {
         Self {

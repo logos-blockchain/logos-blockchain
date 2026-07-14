@@ -4,7 +4,9 @@ use lb_api_service::http::storage::StorageAdapter as _;
 use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
-    mantle::{StorageSize, Transaction, TransactionHasher, TxHash},
+    mantle::{
+        StorageSize, Transaction, TransactionHasher, TxHash, transactions::states::Unverified,
+    },
 };
 use lb_node::{
     ApiStorageAdapter, RuntimeServiceId, SignedMantleTx, StorageService,
@@ -26,12 +28,15 @@ use crate::{
 pub struct TxWithId {
     id: TxHash,
     #[serde(flatten)]
-    tx: SignedMantleTx,
+    tx: SignedMantleTx<Unverified>,
 }
 
 impl Transaction for TxWithId {
-    const HASHER: TransactionHasher<Self> = |tx| <SignedMantleTx as Transaction>::HASHER(&tx.tx);
-    type Hash = <SignedMantleTx as Transaction>::Hash;
+    //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+    // the closure.
+    const HASHER: TransactionHasher<Self> =
+        |tx| <SignedMantleTx<Unverified> as Transaction>::HASHER(&tx.tx);
+    type Hash = <SignedMantleTx<Unverified> as Transaction>::Hash;
 
     fn as_signing(&self) -> Vec<u8> {
         self.tx.as_signing()
@@ -76,7 +81,7 @@ pub fn subscribe_to_new_blocks_sync(
                 runtime_handler.spawn(async move {
                     while let Ok(event) = block_stream.recv().await {
                         let relay = storage_relay.clone();
-                        let res: Result<Option<CoreBlock<SignedMantleTx>>, _> =
+                        let res: Result<Option<CoreBlock<SignedMantleTx<Unverified>>>, _> =
                             ApiStorageAdapter::<RuntimeServiceId>::get_block(relay, event.block_id)
                                 .await;
                         if let Ok(Some(block)) = res {

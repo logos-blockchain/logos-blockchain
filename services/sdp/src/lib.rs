@@ -20,7 +20,10 @@ use lb_chain_service::{
 use lb_core::{
     block::BlockNumber,
     header::HeaderId,
-    mantle::{NoteId, SignedMantleTx, transactions::MantleTxBuilder},
+    mantle::{
+        NoteId, SignedMantleTx,
+        transactions::{MantleTxBuilder, MantleTxContext, states::Preverified},
+    },
     sdp::{
         ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,
         ServiceType, WithdrawMessage,
@@ -146,9 +149,9 @@ impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId
     ServiceCore<RuntimeServiceId>
     for SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
-    MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
+    MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx<Preverified>> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData<Tx = SignedMantleTx<Preverified>> + Send + Sync + 'static,
     StateStorage: SdpStateStorage + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>
@@ -273,9 +276,9 @@ where
 impl<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
     SdpService<MempoolAdapter, WalletAdapter, ChainService, StateStorage, RuntimeServiceId>
 where
-    MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx> + Send + Sync + 'static,
+    MempoolAdapter: SdpMempoolAdapter<Tx = SignedMantleTx<Preverified>> + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
-    ChainService: CryptarchiaServiceData<Tx = SignedMantleTx> + Send + Sync + 'static,
+    ChainService: CryptarchiaServiceData<Tx = SignedMantleTx<Preverified>> + Send + Sync + 'static,
     StateStorage: SdpStateStorage + Send + Sync,
     RuntimeServiceId: Debug
         + AsServiceId<Self>

@@ -8,7 +8,7 @@ use lb_blend_service::message::NetworkInfo as BlendNetworkInfo;
 use lb_chain_service::ChainServiceInfo;
 use lb_core::{
     header::HeaderId,
-    mantle::{NoteId, SignedMantleTx, TxHash},
+    mantle::{NoteId, SignedMantleTx, TxHash, transactions::states::VerificationState},
     sdp::{Declaration, DeclarationId, Locator},
 };
 use lb_http_api_common::{
@@ -163,7 +163,10 @@ impl NodeHttpClient {
         Ok(Box::pin(stream))
     }
 
-    pub async fn submit_transaction(&self, tx: &SignedMantleTx) -> Result<(), Error> {
+    pub async fn submit_transaction<State>(&self, tx: &SignedMantleTx<State>) -> Result<(), Error>
+    where
+        State: VerificationState + Send + Sync + Clone + 'static,
+    {
         self.with_timeout(
             "Submit transaction request",
             self.http_client

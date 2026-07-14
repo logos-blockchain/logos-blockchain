@@ -17,7 +17,7 @@ use lb_core::mantle::{
         },
         transfer::TransferOp,
     },
-    transactions::codec::decode_signed_mantle_tx,
+    transactions::{codec::decode_signed_mantle_tx, states::Unverified},
 };
 use lb_key_management_system_service::keys::{
     ED25519_SECRET_KEY_SIZE, Ed25519Key, Ed25519PublicKey, ZkPublicKey,
@@ -236,7 +236,7 @@ pub fn decode_mantle_tx_hex(value: &str) -> RunResult<MantleTx> {
 }
 
 /// Decode a hex-encoded signed mantle transaction and reject trailing bytes.
-pub fn decode_signed_mantle_tx_hex(value: &str) -> RunResult<SignedMantleTx> {
+pub fn decode_signed_mantle_tx_hex(value: &str) -> RunResult<SignedMantleTx<Unverified>> {
     let bytes = decode_hex(value)?;
     let (remaining, tx) = decode_signed_mantle_tx(&bytes).map_err(|error| format!("{error:?}"))?;
     if !remaining.is_empty() {

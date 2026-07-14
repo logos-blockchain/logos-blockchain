@@ -19,6 +19,7 @@ use lb_core::{
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
+        transactions::states::Preverified,
     },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
@@ -911,7 +912,7 @@ pub struct CucumberWorld {
     /// Manual: Mapping of scenario transaction aliases to submitted hashes.
     pub submitted_transactions: HashMap<String, TxHash>,
     /// Manual: Exact signed transactions prepared for later submission.
-    pub prepared_transactions: HashMap<String, SignedMantleTx>,
+    pub prepared_transactions: HashMap<String, SignedMantleTx<Preverified>>,
     /// Manual: Transaction hashes observed in blocks by the wallet scanner.
     pub observed_transaction_hashes: SharedObservedTransactionHashes,
     /// Manual: Background wallet scanner diagnostics state.
@@ -1868,11 +1869,18 @@ impl CucumberWorld {
             })
     }
 
-    pub fn remember_prepared_transaction(&mut self, alias: String, signed_tx: SignedMantleTx) {
+    pub fn remember_prepared_transaction(
+        &mut self,
+        alias: String,
+        signed_tx: SignedMantleTx<Preverified>,
+    ) {
         self.prepared_transactions.insert(alias, signed_tx);
     }
 
-    pub fn resolve_prepared_transaction(&self, alias: &str) -> Result<SignedMantleTx, StepError> {
+    pub fn resolve_prepared_transaction(
+        &self,
+        alias: &str,
+    ) -> Result<SignedMantleTx<Preverified>, StepError> {
         self.prepared_transactions
             .get(alias)
             .cloned()
@@ -1902,7 +1910,7 @@ impl CucumberWorld {
     pub async fn submit_transaction(
         &self,
         wallet: &WalletInfo,
-        signed_tx: &SignedMantleTx,
+        signed_tx: &SignedMantleTx<Preverified>,
         node_client: &NodeHttpClient,
     ) -> Result<(), StepError> {
         tokio::time::timeout(

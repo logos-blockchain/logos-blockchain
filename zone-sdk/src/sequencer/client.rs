@@ -2,7 +2,7 @@ use lb_core::mantle::{
     MantleTx, SignedMantleTx,
     channel::{SlotTimeframe, SlotTimeout},
     ops::channel::{MsgId, config::Keys, inscribe::Inscription},
-    transactions::Ops,
+    transactions::{Ops, states::Unverified},
 };
 use lb_key_management_system_service::keys::Ed25519Signature;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -14,6 +14,7 @@ use super::{
     },
     zone_sequencer::ActorRequest,
 };
+use crate::sequencer::zone_sequencer::PublishReceipt;
 
 /// Cheap-to-clone client for driving the sequencer from any task.
 ///
@@ -101,7 +102,7 @@ impl SequencerClient {
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
         transfer_threshold: u16,
-    ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
+    ) -> Result<(PublishReceipt, SignedMantleTx<Unverified>), Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::ChannelConfig {
             keys,
@@ -119,7 +120,7 @@ impl SequencerClient {
     /// Async counterpart of [`super::SequencerHandle::submit_signed_tx`].
     pub async fn submit_signed_tx(
         &self,
-        tx: SignedMantleTx,
+        tx: SignedMantleTx<Unverified>,
         msg_id: MsgId,
     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
         let (response_tx, response_rx) = oneshot::channel();

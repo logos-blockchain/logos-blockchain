@@ -7,6 +7,7 @@ use lb_core::{
     mantle::{
         Op, SignedMantleTx, Transaction as _, TxHash,
         ops::channel::{ChannelId, inscribe::InscriptionOp},
+        transactions::states::Unverified,
     },
 };
 use lb_demo_sequencer::{BlockData, db::AccountDb};
@@ -82,14 +83,14 @@ impl BlockStream {
 }
 
 fn extract_l2_blocks(
-    block_txs: impl Iterator<Item = SignedMantleTx>,
+    block_txs: impl Iterator<Item = SignedMantleTx<Unverified>>,
     decoded_channel_id: &ChannelId,
     token_name: &str,
 ) -> Vec<(BlockData, TxHash)> {
     let block_channel_ops: Vec<(BlockData, TxHash)> = block_txs
         .flat_map(|tx| {
-            let tx_hash = tx.mantle_tx.hash();
-            tx.mantle_tx
+            let tx_hash = tx.mantle_tx().hash();
+            tx.mantle_tx()
                 .0
                 .iter()
                 .filter_map(|op| match op {

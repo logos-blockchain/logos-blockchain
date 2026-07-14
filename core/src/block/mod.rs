@@ -472,6 +472,8 @@ mod tests {
     struct TestMantleTx<const SIZE: usize>;
 
     impl<const SIZE: usize> Transaction for TestMantleTx<SIZE> {
+        //noinspection RsTypeCheck: The type is correct, but the linter is confused by
+        // the closure.
         const HASHER: TransactionHasher<Self> = |_tx| TxHash::from([0u8; 32]);
         type Hash = TxHash;
 

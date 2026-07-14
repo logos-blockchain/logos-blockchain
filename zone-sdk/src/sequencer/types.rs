@@ -12,7 +12,7 @@ use lb_core::{
         ops::channel::{
             ChannelId, MsgId, deposit::Metadata, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
-        transactions::TxHash,
+        transactions::{TxHash, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -31,7 +31,7 @@ pub struct SequencerCheckpoint {
     /// Last message ID for chain continuity.
     pub last_msg_id: MsgId,
     /// Pending transactions to restore.
-    pub pending_txs: Vec<(TxHash, SignedMantleTx)>,
+    pub pending_txs: Vec<(TxHash, SignedMantleTx<Unverified>)>,
     /// Last known LIB.
     pub lib: HeaderId,
     /// Last known LIB slot (for backfill range queries).

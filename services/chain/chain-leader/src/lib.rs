@@ -21,7 +21,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         AuthenticatedMantleTx, SignedMantleTx, StorageSize, Transaction, TxHash,
-        gas::MainnetGasConstants,
+        gas::MainnetGasConstants, transactions::states::Preverified,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };
@@ -257,7 +257,7 @@ where
         + Send
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Item = SignedMantleTx>
+    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
@@ -536,7 +536,7 @@ where
         + Send
         + 'static,
     BlendService::BroadcastSettings: Clone + Send + Sync,
-    Mempool: MemPool<Item = SignedMantleTx>
+    Mempool: MemPool<Item = SignedMantleTx<Preverified>>
         + RecoverableMempool<BlockId = HeaderId, Key = TxHash>
         + Send
         + Sync
@@ -621,9 +621,9 @@ where
             for tx in pending {
                 match ledger_state
                     .clone()
-                    .try_apply_contents::<HeaderId, MainnetGasConstants>(
+                    .try_apply_contents::<_, HeaderId, MainnetGasConstants>(
                         ledger_config,
-                        iter::once(tx.clone()),
+                        iter::once(&tx),
                     ) {
                     Ok((new_state, _events)) => {
                         ledger_state = new_state;
@@ -764,10 +764,7 @@ where
         let signed_tx = wallet
             .build_leader_claim_tx(
                 tip,
-                ledger_state
-                    .mantle_ledger()
-                    .vouchers_snapshot_root()
-                    .clone(),
+                *ledger_state.mantle_ledger().vouchers_snapshot_root(),
                 reward_amount,
                 config.funding_pk,
                 config.max_tx_fee,

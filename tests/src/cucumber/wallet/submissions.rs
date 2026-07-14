@@ -8,7 +8,7 @@ use std::{collections::HashSet, time::Duration};
 use hex::ToHex as _;
 use lb_core::{
     codec::SerializeOp as _,
-    mantle::{SignedMantleTx, TxHash, Utxo, transactions::tx::OpsProofs},
+    mantle::{SignedMantleTx, TxHash, Utxo, transactions::tx::OpsProofs, transactions::states::Preverified},
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
 use lb_key_management_system_service::keys::ZkPublicKey;
@@ -75,7 +75,7 @@ impl SignedUserWalletSubmission {
         self.submission.tx_hash()
     }
 
-    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx {
+    pub(crate) const fn signed_tx(&self) -> &SignedMantleTx<Preverified> {
         self.submission.signed_tx()
     }
 

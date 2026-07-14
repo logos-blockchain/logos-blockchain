@@ -6,6 +6,7 @@ use std::{
 };
 
 use lb_core::mantle::{SignedMantleTx, Transaction as _, TxHash, transactions::tx::OpsProofs};
+use lb_core::mantle::{transactions::states::Preverified};
 use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_tx_service::{backend::PoolRecoveryState, tx::state::TxMempoolState};
 use tokio::time::{sleep, timeout};
@@ -264,7 +265,7 @@ async fn submit_prepared_transaction_to_node(
     world: &CucumberWorld,
     step: &str,
     transaction_alias: &str,
-    signed_tx: &SignedMantleTx,
+    signed_tx: &SignedMantleTx<Preverified>,
     tx_hash: TxHash,
     node_name: &str,
 ) -> Result<(), StepError> {

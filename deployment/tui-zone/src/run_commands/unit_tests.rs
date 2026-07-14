@@ -121,7 +121,7 @@ mod tests {
         ensure_tx_hash(&hex::encode(tx.hash().as_ref()), tx.hash()).unwrap();
         assert!(ensure_tx_hash(&hex::encode([1u8; 32]), tx.hash()).is_err());
 
-        let signed_tx = SignedMantleTx::new(tx, OpsProofs::empty()).unwrap();
+        let signed_tx = SignedMantleTx::new(tx, OpsProofs::empty());
         let signed_encoded = hex::encode(encode_signed_mantle_tx(&signed_tx));
         assert_eq!(
             decode_signed_mantle_tx_hex(&signed_encoded).unwrap(),

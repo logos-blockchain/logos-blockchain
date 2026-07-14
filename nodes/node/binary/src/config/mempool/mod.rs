@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
-use lb_core::mantle::{SignedMantleTx, Transaction as _, TxHash};
+use lb_core::mantle::{
+    SignedMantleTx, Transaction as _, TxHash, transactions::states::Preverified,
+};
 use lb_tx_service::{
     TxMempoolSettings, network::adapters::libp2p::Settings as Libp2pNetworkAdapterSettings,
 };
@@ -20,7 +22,8 @@ impl ServiceConfig {
     pub fn into_mempool_service_settings(
         self,
         state_config: &StateConfig,
-    ) -> TxMempoolSettings<(), Libp2pNetworkAdapterSettings<TxHash, SignedMantleTx>> {
+    ) -> TxMempoolSettings<(), Libp2pNetworkAdapterSettings<TxHash, SignedMantleTx<Preverified>>>
+    {
         let recovery_path = state_config.get_path_for_recovery_state(
             PathBuf::new()
                 .join("mempool")
@@ -31,7 +34,7 @@ impl ServiceConfig {
 
         TxMempoolSettings {
             network_adapter: Libp2pNetworkAdapterSettings {
-                id: SignedMantleTx::hash,
+                id: SignedMantleTx::<Preverified>::hash,
                 topic: self.deployment.pubsub_topic,
             },
             pool: (),
