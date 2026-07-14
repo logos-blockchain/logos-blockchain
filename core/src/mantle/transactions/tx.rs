@@ -1107,21 +1107,25 @@ mod tests {
     use std::sync::Arc;
 
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+    use num_bigint::BigUint;
     use rpds::HashTrieSetSync;
 
     use super::*;
     use crate::{
         mantle::{
-            NoteId,
+            Note, NoteId, Utxo,
             channel::{ChannelState, SlotTimeframe, SlotTimeout},
             gas::MainnetGasConstants,
-            ledger::Inputs,
-            ops::channel::{
-                MsgId,
-                config::{ChannelConfigOp, Keys},
-                deposit::DepositOp,
-                inscribe::InscriptionOp,
-                withdraw::ChannelWithdrawOp,
+            ledger::{Inputs, Outputs, OutputsError},
+            ops::{
+                channel::{
+                    MsgId,
+                    config::{ChannelConfigOp, Keys},
+                    deposit::DepositOp,
+                    inscribe::InscriptionOp,
+                    withdraw::ChannelWithdrawOp,
+                },
+                transfer::TransferError,
             },
         },
         proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
@@ -1173,6 +1177,13 @@ mod tests {
                 nullifiers: HashTrieSetSync::new_sync(),
                 claimable_vouchers_root: RewardsRoot::default(),
             }
+        }
+
+        fn with_utxos(mut self, utxos: impl IntoIterator<Item = Utxo>) -> Self {
+            for utxo in utxos {
+                self.utxos = self.utxos.insert(utxo.id(), utxo).0;
+            }
+            self
         }
     }
 
@@ -1271,8 +1282,13 @@ mod tests {
 
     // TODO: The generated channels are bare. We should add more realistic channel
     // states for testing.
-    fn make_channel_state(transfer_threshold: ChannelKeyIndex) -> ChannelState {
-        let keys = Keys::new_unchecked(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()]);
+    fn make_channel_state(
+        transfer_threshold: ChannelKeyIndex,
+        accredited_keys: Option<Keys>,
+    ) -> ChannelState {
+        let keys = accredited_keys.unwrap_or_else(|| {
+            Keys::new_unchecked(vec![Ed25519Key::from_bytes(&[0; 32]).public_key()])
+        });
         ChannelState {
             accredited_keys: Arc::new(keys),
             configuration_threshold: 0,
@@ -1569,7 +1585,7 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_mantle_tx_deserialize_with_missing_proof() {
+    fn test_signed_mantle_tx_deserialize_preverified_with_missing_proof() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelInscribe(inscribe_op)]);
@@ -1577,10 +1593,20 @@ mod tests {
         let helper = SignedMantleTx::new(mantle_tx, OpsProofs::empty());
 
         let serialized = serde_json::to_string(&helper).unwrap();
-        let deserialized: Result<SignedMantleTx<Unverified>, _> = serde_json::from_str(&serialized);
 
-        assert!(deserialized.is_err());
-        let err_msg = deserialized.unwrap_err().to_string();
+        // Deserialization into `SignedMantleTx<Unverified>` should succeed, even with
+        // missing proof.
+        serde_json::from_str::<SignedMantleTx<Unverified>>(&serialized)
+            .expect("Unverified deserialization should succeed");
+
+        // Deserialization into `SignedMantleTx<Preverified>` should fail due to missing
+        // proof.
+        let deserialized: Result<SignedMantleTx<Preverified>, _> =
+            serde_json::from_str(&serialized);
+
+        let err_msg = deserialized
+            .expect_err("Preverified deserialization should fail")
+            .to_string();
         assert_eq!(
             err_msg,
             "The number of proofs (0) does not match the number of operations (1)"
@@ -1588,7 +1614,7 @@ mod tests {
     }
 
     #[test]
-    fn test_signed_mantle_tx_deserialize_with_invalid_signature() {
+    fn test_signed_mantle_tx_deserialize_preverified_with_invalid_signature() {
         let signing_key = Ed25519Key::from_bytes(&[1; 32]);
         let wrong_key = Ed25519Key::from_bytes(&[2; 32]);
         let inscribe_op = create_test_inscribe_op(&signing_key);
@@ -1603,10 +1629,20 @@ mod tests {
         );
 
         let serialized = serde_json::to_string(&helper).unwrap();
-        let deserialized: Result<SignedMantleTx<Unverified>, _> = serde_json::from_str(&serialized);
 
-        assert!(deserialized.is_err());
-        let err_msg = deserialized.unwrap_err().to_string();
+        // Deserialization into `SignedMantleTx<Unverified>` should succeed, even with
+        // invalid signature.
+        serde_json::from_str::<SignedMantleTx<Unverified>>(&serialized)
+            .expect("Unverified deserialization should succeed");
+
+        // Deserialization into `SignedMantleTx<Preverified>` should fail due to invalid
+        // signature.
+        let deserialized: Result<SignedMantleTx<Preverified>, _> =
+            serde_json::from_str(&serialized);
+
+        let err_msg = deserialized
+            .expect_err("Preverified deserialization should fail")
+            .to_string();
         assert!(err_msg.contains("Invalid signature"));
     }
 
@@ -1651,11 +1687,12 @@ mod tests {
         let channel_id = ChannelId::from([8u8; 32]);
         let key0 = Ed25519Key::from_bytes(&[8; 32]);
         let key1 = Ed25519Key::from_bytes(&[9; 32]);
+        let keys = Keys::new_unchecked(vec![key0.public_key(), key1.public_key()]);
         let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1]);
 
         let channels = {
             let mut channels = Channels::new();
-            let channel_state = make_channel_state(2);
+            let channel_state = make_channel_state(2, Some(keys));
             channels.channels.insert_mut(channel_id, channel_state);
             channels
         };
@@ -1668,7 +1705,48 @@ mod tests {
             ],
         );
 
-        assert!(signed_tx.verified_ops().next(&helper).unwrap().is_ok());
+        signed_tx
+            .verified_ops()
+            .next(&helper)
+            .expect("Cursor should yield the WithdrawOp")
+            .expect("WithdrawOp should verify");
+    }
+
+    #[test]
+    fn helper_backed_verification_rejects_zero_value_transfer_output() {
+        let input_sk = ZkKey::from(BigUint::from(1u8));
+        let input_utxo = Utxo {
+            op_id: [1u8; 32],
+            output_index: 0,
+            note: Note::new(10000, input_sk.to_public_key()),
+        };
+
+        let signed_tx = {
+            let transfer_op = TransferOp::new(
+                Inputs::new([input_utxo.id()]),
+                Outputs::new([Note::new(0, Fr::from(BigUint::from(2u8)).into())]),
+            );
+            let mantle_tx = create_test_mantle_tx(vec![Op::Transfer(transfer_op)]);
+            let transfer_sig = ZkKey::multi_sign(&[input_sk], &mantle_tx.hash().to_fr())
+                .expect("Signing should succeed");
+            SignedMantleTx::new(mantle_tx, vec![OpProof::ZkSig(transfer_sig)])
+                .preverify()
+                .expect("Transfer transaction should preverify")
+        };
+
+        let helper =
+            TestOperationVerificationHelper::new(Channels::new(), []).with_utxos([input_utxo]);
+
+        let verification_result = signed_tx
+            .verified_ops()
+            .next(&helper)
+            .expect("Cursor should yield the TransferOp");
+        assert_eq!(
+            verification_result,
+            Err(VerificationError::TransferVerificationError(
+                TransferError::Outputs(OutputsError::ZeroValueNote)
+            ))
+        );
     }
 
     #[test]
@@ -1696,7 +1774,7 @@ mod tests {
 
         let channels = {
             let mut channels = Channels::new();
-            let channel_state = make_channel_state(2);
+            let channel_state = make_channel_state(2, None);
             channels.channels.insert_mut(channel_id, channel_state);
             channels
         };
@@ -1721,7 +1799,7 @@ mod tests {
 
         let channels = {
             let mut channels = Channels::new();
-            let channel_state = make_channel_state(2);
+            let channel_state = make_channel_state(2, None);
             channels.channels.insert_mut(channel_id, channel_state);
             channels
         };
@@ -1748,7 +1826,7 @@ mod tests {
 
         let channels = {
             let mut channels = Channels::new();
-            let channel_state = make_channel_state(1);
+            let channel_state = make_channel_state(1, None);
             channels.channels.insert_mut(channel_id, channel_state);
             channels
         };

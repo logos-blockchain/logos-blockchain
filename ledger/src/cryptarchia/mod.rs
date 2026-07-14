@@ -1779,25 +1779,6 @@ pub mod tests {
     }
 
     #[test]
-    fn test_output_not_zero() {
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10000, input_sk.to_public_key()),
-        };
-
-        let ledger_state = LedgerState::from_utxos([input_utxo], &config(), Fr::ZERO);
-        let (_tx, transfer_op, _transfer_sig) = create_tx_with_transfer(
-            &[(&input_sk, &input_utxo)],
-            vec![Note::new(0, Fr::from(BigUint::from(2u8)).into())],
-        );
-
-        let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(&transfer_op);
-        assert!(matches!(result, Err(LedgerError::Mantle(_))));
-    }
-
-    #[test]
     fn test_epoch_state_for_slot_with_empty_epochs() {
         let utxo = utxo();
         let config = config();
