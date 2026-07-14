@@ -53,11 +53,10 @@ Most of the template content is the same or very similar to what is in `release.
 
 - [ ] Manually trigger the [bundling workflow][release-bundling-workflow] from the `X.Y.Z-rc.N` tag on GitHub with the `release-candidate` input to prepare the GitHub release draft with the built binaries
 - [ ] Post the link to the workflow run to this issue for easier review
-- [ ] Wait for the bundling workflow to complete and generate a draft GitHub pre-release.
+- [ ] Without waiting for the workflow to complete, move on to the next section
 - [ ] Address checklist of the generated GitHub release in [https://github.com/logos-blockchain/logos-blockchain/releases](https://github.com/logos-blockchain/logos-blockchain/releases)
 - [ ] Publish release
 - [ ] Post the link to the published release to this issue for easier review
-- [ ] Without waiting for the workflow to complete, move on to the next section
 
 ## Release candidate module
 
