@@ -21,6 +21,7 @@ use utoipa::OpenApi;
         crate::api::handlers::post_activity,
         crate::api::handlers::post_withdrawal,
         crate::api::handlers::get_sdp_declarations,
+        crate::api::handlers::get_sdp_snapshot,
         crate::api::handlers::leader_claim,
         crate::api::handlers::immutable_blocks,
         crate::api::handlers::block,
