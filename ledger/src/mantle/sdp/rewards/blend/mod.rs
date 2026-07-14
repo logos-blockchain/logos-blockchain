@@ -13,6 +13,7 @@ use lb_core::{
     sdp::{ActivityMetadata, ProviderId, ServiceParameters},
 };
 use lb_utils::math::NonNegativeF64;
+use tracing::debug;
 
 use crate::{
     EpochState,
@@ -25,7 +26,7 @@ use crate::{
     },
 };
 
-const LOG_TARGET: &str = "ledger::mantle::rewards::blend";
+const LOG_TARGET: &str = "ledger::mantle::sdp::rewards::blend";
 
 /// Tracks Blend rewards based on activity proofs submitted by providers.
 /// Activity proofs for the epoch `E-1` must be submitted during epoch `E`.
@@ -64,6 +65,11 @@ where
         match self {
             Self::WithoutTargetEpoch { .. } => {
                 // Reject all activity messages.
+                debug!(
+                    target: LOG_TARGET,
+                    ?provider_id,
+                    "rejecting activity proof because target epoch is not set",
+                );
                 Err(Error::TargetEpochNotSet)
             }
             Self::WithTargetEpoch {
@@ -72,6 +78,14 @@ where
                 current_epoch_state,
                 current_epoch_tracker,
             } => {
+                debug!(
+                    target: LOG_TARGET,
+                    ?provider_id,
+                    target_epoch = %target_epoch_state.epoch(),
+                    current_epoch = %current_epoch_state.epoch(),
+                    "verifying activity proof",
+                );
+
                 let ActivityMetadata::Blend(proof) = metadata;
 
                 let (zk_id, hamming_distance) = target_epoch_state.verify_proof(
