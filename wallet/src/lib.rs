@@ -197,6 +197,9 @@ impl WalletState {
             .collect()
     }
 
+    /// Funds the transaction so its excess balance is exactly
+    /// `priority_fee` above the mandatory fee — the excess is the
+    /// transaction's execution tip. `0` funds to the exact minimum.
     pub fn fund_tx<G: GasConstants>(
         &self,
         tx_builder: &MantleTxBuilder,
@@ -204,6 +207,7 @@ impl WalletState {
         pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &MantleTxContext,
         excluded_notes: &HashSet<NoteId>,
+        priority_fee: Value,
     ) -> Result<MantleTxBuilder, WalletError> {
         // Get all UTXOs owned by the provided PKs, excluding the following notes:
         // - Notes that are being consumed/locked by the tx
@@ -223,15 +227,21 @@ impl WalletState {
         // Consume large valued notes first to ensure we converge.
         utxos.sort_by_key(|utxo| -i128::from(utxo.note.value));
 
+        // The funding target: the tx's excess balance over the mandatory fee
+        // must end up exactly at `priority_fee` (the execution tip).
+        let delta_target = i128::from(priority_fee);
+
         // The transaction may already be funded before we add any of the
         // wallet's UTXOs, for example when it pays no fee or the caller already
         // supplied inputs. In that case we must not pull in an extra input (and
         // the change note it would require).
-        match tx_builder.funding_delta::<G>(context)?.cmp(&0) {
+        match tx_builder.funding_delta::<G>(context)?.cmp(&delta_target) {
             Ordering::Equal => return Ok(tx_builder.clone()),
             Ordering::Greater => {
                 if let Some(tx_with_change) =
-                    tx_builder.clone().return_change::<G>(context, change_pk)?
+                    tx_builder
+                        .clone()
+                        .return_change::<G>(context, change_pk, priority_fee)?
                 {
                     return Ok(tx_with_change);
                 }
@@ -248,12 +258,13 @@ impl WalletState {
 
             let funding_delta = funded_tx_builder.funding_delta::<G>(context)?;
 
-            match funding_delta.cmp(&0) {
+            match funding_delta.cmp(&delta_target) {
                 Ordering::Less => {
                     // Insufficient funds, need more UTXO's.
                 }
                 Ordering::Equal => {
-                    // We can exactly pay the tx cost, no change note needed.
+                    // We can exactly pay the tx cost plus the tip, no change
+                    // note needed.
                     return Ok(funded_tx_builder);
                 }
                 Ordering::Greater => {
@@ -261,7 +272,7 @@ impl WalletState {
                     // The change note will slightly increase the storage cost of the tx so there is
                     // a chance that we will not be able to fund the tx with the change note.
                     if let Some(tx_with_change) =
-                        funded_tx_builder.return_change::<G>(context, change_pk)?
+                        funded_tx_builder.return_change::<G>(context, change_pk, priority_fee)?
                     {
                         // We were able to fund the tx with change note added.
                         return Ok(tx_with_change);
@@ -703,6 +714,10 @@ where
         Ok(self.wallet_state_at(tip)?.balance(pk))
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "thin passthrough to `WalletState::fund_tx` plus the tip"
+    )]
     pub fn fund_tx<G: GasConstants>(
         &self,
         tip: HeaderId,
@@ -711,6 +726,7 @@ where
         funding_pks: impl IntoIterator<Item = impl Borrow<ZkPublicKey>>,
         context: &MantleTxContext,
         excluded_notes: &HashSet<NoteId>,
+        priority_fee: Value,
     ) -> Result<MantleTxBuilder, WalletError> {
         self.wallet_state_at(tip)?.fund_tx::<G>(
             tx_builder,
@@ -718,6 +734,7 @@ where
             funding_pks,
             context,
             excluded_notes,
+            priority_fee,
         )
     }
 
@@ -1248,7 +1265,7 @@ mod tests {
 
         // Fund the transaction
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new())
+            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap();
 
         assert_eq!(
@@ -1271,6 +1288,64 @@ mod tests {
                 transfer_op.outputs,
                 Outputs::new([Note {
                     value: 4206,
+                    pk: alice,
+                }])
+            );
+        } else {
+            panic!("last op must be a transfer")
+        }
+    }
+
+    #[test]
+    fn test_fund_tx_with_priority_fee() {
+        let alice = pk(1);
+        let utxo = Utxo::new(tx_hash(0), 0, Note::new(5000, alice));
+        let ledger_state = LedgerState::from_utxos([utxo], &ledger_config());
+        let wallet_state =
+            WalletState::from_ledger(&HashMap::from_iter([(alice, 1)]), &ledger_state);
+
+        let context = MantleTxContext {
+            gas_context: MantleTxGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+            ),
+            leader_reward_amount: 0,
+        };
+        let tx_builder = MantleTxBuilder::new();
+        let priority_fee = 200;
+
+        let funded_tx_builder = wallet_state
+            .fund_tx::<Gas>(
+                &tx_builder,
+                alice,
+                [alice],
+                &context,
+                &HashSet::new(),
+                priority_fee,
+            )
+            .unwrap();
+
+        // The tip is left as excess balance above the mandatory fee.
+        let gas_cost = funded_tx_builder
+            .gas_cost::<Gas>(&context)
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            i128::from(gas_cost + priority_fee),
+            funded_tx_builder.net_balance()
+        );
+        assert_eq!(
+            i128::from(priority_fee),
+            funded_tx_builder.funding_delta::<Gas>(&context).unwrap()
+        );
+
+        // The change output shrank by exactly the tip.
+        let funded_tx = funded_tx_builder.build().unwrap();
+        if let Op::Transfer(transfer_op) = &funded_tx.ops()[funded_tx.ops().len() - 1] {
+            assert_eq!(
+                transfer_op.outputs,
+                Outputs::new([Note {
+                    value: 5000 - gas_cost - priority_fee,
                     pk: alice,
                 }])
             );
@@ -1312,7 +1387,7 @@ mod tests {
         assert_eq!(0, tx_builder.funding_delta::<Gas>(&context).unwrap());
 
         let funded_tx_builder = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new())
+            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap();
 
         // No input was pulled in (an added input would push the net balance to
@@ -1368,7 +1443,7 @@ mod tests {
 
         // Fund the transaction
         let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
+            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1397,7 +1472,7 @@ mod tests {
 
         // Fund the transaction
         let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
+            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1429,7 +1504,7 @@ mod tests {
 
         // Fund the transaction
         let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
+            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1462,7 +1537,7 @@ mod tests {
 
         // Attempt to fund the transaction with Alice's notes.
         let fund_attempt =
-            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
+            wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0);
 
         assert_eq!(
             fund_attempt.unwrap_err(),
@@ -1471,7 +1546,7 @@ mod tests {
 
         // Fund the transaction with Bob's notes.
         wallet_state
-            .fund_tx::<Gas>(&tx_builder, bob, [bob], &context, &HashSet::new())
+            .fund_tx::<Gas>(&tx_builder, bob, [bob], &context, &HashSet::new(), 0)
             .unwrap(); // succesfully funded;
     }
 
@@ -1511,7 +1586,7 @@ mod tests {
         );
 
         let funded_tx_wo_change = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new())
+            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap()
             .build()
             .unwrap(); // successfully funded the tx
@@ -1551,8 +1626,14 @@ mod tests {
                 ),
             );
 
-            let fund_attempt =
-                wallet_state.fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new());
+            let fund_attempt = wallet_state.fund_tx::<Gas>(
+                &tx_builder,
+                alice,
+                [alice],
+                &context,
+                &HashSet::new(),
+                0,
+            );
 
             assert_eq!(
                 fund_attempt.unwrap_err(),
@@ -1570,7 +1651,7 @@ mod tests {
         );
 
         let funded_tx_wo_change = wallet_state
-            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new())
+            .fund_tx::<Gas>(&tx_builder, alice, [alice], &context, &HashSet::new(), 0)
             .unwrap()
             .build()
             .unwrap(); // successfully funded the tx

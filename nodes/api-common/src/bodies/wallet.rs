@@ -147,7 +147,7 @@ pub mod fund {
     use lb_core::{
         header::HeaderId,
         mantle::{
-            OpProof,
+            OpProof, Value,
             gas::GasCost,
             transactions::{MantleTx, builder::MantleTxBuilder},
         },
@@ -162,6 +162,8 @@ pub mod fund {
         pub change_public_key: ZkPublicKey,
         pub funding_public_keys: Vec<ZkPublicKey>,
         pub max_tx_fee: GasCost,
+        #[serde(default)]
+        pub priority_fee: Value,
     }
 
     #[derive(Serialize, Deserialize)]

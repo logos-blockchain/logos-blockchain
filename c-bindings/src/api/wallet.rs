@@ -965,6 +965,7 @@ pub(crate) fn channel_deposit_with_notes_sync(
                 tx_builder,
                 change_public_key,
                 funding_public_keys,
+                0,
             )
             .await
             .map_err(|error| {
@@ -1465,6 +1466,7 @@ pub(crate) fn wallet_fund_tx_sync(
                 request.tx_builder,
                 request.change_public_key,
                 request.funding_public_keys,
+                request.priority_fee,
             )
             .await
             .map_err(|error| {
@@ -1539,7 +1541,9 @@ pub type FfiWalletFundResult = FfiStatusResult<*mut c_char>;
 /// and submits the result via [`submit_signed_transaction`].
 ///
 /// The request and response are JSON strings with the exact same schemas as
-/// the node's `POST /wallet/fund` HTTP request and response bodies.
+/// the node's `POST /wallet/fund` HTTP request and response bodies. The
+/// optional `priority_fee` field (default 0) is left as excess balance above
+/// the mandatory fee, paid to the block producer as the execution tip.
 ///
 /// # Arguments
 ///
