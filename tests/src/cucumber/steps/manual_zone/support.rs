@@ -1514,6 +1514,7 @@ async fn build_funded_custom_tx(
     let response = node_client
         .fund_tx(WalletFundRequestBody {
             tip: None,
+            priority_fee: 0,
             tx_builder,
             change_public_key: funding_pk,
             funding_public_keys: vec![funding_pk],
