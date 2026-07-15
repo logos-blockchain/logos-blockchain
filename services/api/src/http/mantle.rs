@@ -923,3 +923,28 @@ where
 
     Ok(receiver.await?)
 }
+
+pub async fn get_sdp_snapshot<RuntimeServiceId>(
+    handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
+) -> Result<HashMap<DeclarationId, Declaration>, super::DynError>
+where
+    RuntimeServiceId: Debug
+        + Send
+        + Sync
+        + Display
+        + 'static
+        + AsServiceId<Cryptarchia<RuntimeServiceId>>
+        + 'static,
+{
+    let relay = handle.relay::<Cryptarchia<RuntimeServiceId>>().await?;
+    let (sender, receiver) = oneshot::channel();
+
+    relay
+        .send(ConsensusMsg::GetSdpSnapshot {
+            reply_channel: sender,
+        })
+        .await
+        .map_err(|(e, _)| e)?;
+
+    Ok(receiver.await?)
+}
