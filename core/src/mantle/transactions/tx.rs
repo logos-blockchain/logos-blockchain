@@ -8,7 +8,7 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         MantleTx, Value, VerificationError,
-        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
+        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
         ledger::Operation as _,
         ops::{
             Op, OpProof,
@@ -30,40 +30,14 @@ use crate::{
             mantle_tx::OpWithProof,
         },
         transactions::{
-            OperationVerificationHelper, OpsProofs,
+            GasPrices, OperationVerificationHelper, OpsProofs,
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
-            genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
             hash::TxHash,
             states::{Preverified, Unverified, VerificationState},
         },
     },
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
 };
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct GasPrices {
-    pub execution_base_gas_price: GasPrice,
-    pub storage_gas_price: GasPrice,
-}
-
-impl GasPrices {
-    #[must_use]
-    pub fn new(execution: u64, storage: u64) -> Self {
-        Self {
-            execution_base_gas_price: execution.into(),
-            storage_gas_price: storage.into(),
-        }
-    }
-}
-
-impl Default for GasPrices {
-    fn default() -> Self {
-        Self {
-            execution_base_gas_price: GENESIS_EXECUTION_GAS_PRICE,
-            storage_gas_price: GENESIS_STORAGE_GAS_PRICE,
-        }
-    }
-}
 
 // TODO: Increase test coverage after type state refactor.
 //   The current tests behave just like the old code.

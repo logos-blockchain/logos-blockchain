@@ -26,7 +26,7 @@ use lb_core::{
             leader_claim::LeaderClaimExecutionContext,
         },
         traits::{GenesisTx, MantleTxWithProofs, PreverifiedMantleTx},
-        transactions::{GasPrices, MantleTxContext, MantleTxGasContext, hash::TxHash},
+        transactions::{GasPrices, MantleTxGasContext, hash::TxHash, mantle_tx::MantleTxContext},
     },
     proofs::leader_proof,
 };

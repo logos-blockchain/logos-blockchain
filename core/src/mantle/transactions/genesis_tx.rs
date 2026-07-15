@@ -10,12 +10,11 @@ use nom::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::SignedMantleTx;
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         OpProof,
-        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
+        gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
         nom::{NomDecode, NomEncode},
         ops::{
             Op,
@@ -25,18 +24,11 @@ use crate::{
             transfer::TransferOp,
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
-        transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
+        transactions::{
+            hash::TxHash, mantle_tx::MantleTx, states::Preverified, tx::SignedMantleTx,
+        },
     },
 };
-
-/// Initial storage gas price at genesis
-///
-/// [Spec](https://www.notion.so/nomos-tech/v1-1-Storage-Markets-Specification-326261aa09df804ab483f573f522baf5?source=copy_link#326261aa09df804280b1fd5da1120a14):
-/// `P_STR(0)` = 1 LGO/gas
-pub const GENESIS_STORAGE_GAS_PRICE: GasPrice = GasPrice::new(1);
-
-/// Initial execution gas price at genesis
-pub const GENESIS_EXECUTION_GAS_PRICE: GasPrice = GasPrice::new(1);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GenesisTx {
