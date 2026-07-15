@@ -394,12 +394,6 @@ impl SignedMantleTx<Preverified> {
     }
 }
 
-impl<'tx> From<&'tx SignedMantleTx<Preverified>> for VerifiedOps<'tx> {
-    fn from(transaction: &'tx SignedMantleTx<Preverified>) -> Self {
-        VerifiedOps::new(transaction)
-    }
-}
-
 impl<State: VerificationState> Hashable for SignedMantleTx<State> {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
@@ -421,12 +415,6 @@ impl<State: VerificationState> MantleTxWithProofs for SignedMantleTx<State> {
 
     fn ops_with_proof(&self) -> impl Iterator<Item = OpWithProof<'_>> {
         self.ops_with_proof()
-    }
-}
-
-impl PreverifiedMantleTx for SignedMantleTx<Preverified> {
-    fn verified_ops(&self) -> VerifiedOps<'_> {
-        self.verified_ops()
     }
 }
 
@@ -490,6 +478,12 @@ fn signed_op_execution_gas<Constants: GasConstants>(
 impl<State: VerificationState> StorageSize for SignedMantleTx<State> {
     fn storage_size(&self) -> usize {
         self.gas_storage_size() as usize
+    }
+}
+
+impl PreverifiedMantleTx for SignedMantleTx<Preverified> {
+    fn verified_ops(&self) -> VerifiedOps<'_> {
+        self.verified_ops()
     }
 }
 

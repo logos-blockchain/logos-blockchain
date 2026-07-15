@@ -78,6 +78,12 @@ impl<'tx> VerifiedOps<'tx> {
     }
 }
 
+impl<'tx> From<&'tx SignedMantleTx<Preverified>> for VerifiedOps<'tx> {
+    fn from(transaction: &'tx SignedMantleTx<Preverified>) -> Self {
+        VerifiedOps::new(transaction)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use lb_groth16::Fr;
