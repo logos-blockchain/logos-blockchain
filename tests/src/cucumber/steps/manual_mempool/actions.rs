@@ -5,7 +5,7 @@ use lb_core::{
     mantle::{
         SignedMantleTx, TxHash,
         traits::Hashable as _,
-        transactions::{states::Preverified, tx::OpsProofs},
+        transactions::{states::Preverified, OpsProofs},
     },
 };
 use lb_key_management_system_service::keys::ZkPublicKey;

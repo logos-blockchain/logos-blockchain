@@ -14,7 +14,7 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::{GenesisTx, Ops, tx::OpsProofs},
+        transactions::{GenesisTx, Ops, OpsProofs},
     },
     sdp::{DeclarationMessage, Locator, ProviderId, ServiceType},
 };

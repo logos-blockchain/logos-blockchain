@@ -607,7 +607,7 @@ mod tests {
                 },
             },
             traits::Hashable as _,
-            transactions::{Ops, tx::OpsProofs},
+            transactions::{Ops, OpsProofs},
         },
     };
     use lb_key_management_system_service::keys::{Ed25519Key, ZkKey};

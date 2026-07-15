@@ -321,11 +321,10 @@ mod tests {
     use crate::{
         crypto::ZkHasher,
         mantle::{
-            MantleTx,
             ledger::{Note, Utxo},
             ops::leader_claim::VoucherCm,
             traits::hashable,
-            transactions::Ops,
+            transactions::{Ops, mantle_tx::MantleTx},
         },
         proofs::leader_proof::{LeaderPrivate, LeaderPublic},
     };

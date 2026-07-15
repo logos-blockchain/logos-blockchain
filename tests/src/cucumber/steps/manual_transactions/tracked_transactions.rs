@@ -2,11 +2,11 @@ use std::{collections::HashSet, time::Duration};
 
 use lb_common_http_client::ApiBlock;
 use lb_core::mantle::{
-    MantleTx, Note, Op, OpProof, SignedMantleTx,
+    Note, Op, OpProof, SignedMantleTx,
     ledger::{Inputs, Outputs},
     ops::transfer::TransferOp,
     traits::Hashable as _,
-    transactions::{hash::TxHash, states::Unverified},
+    transactions::{hash::TxHash, mantle_tx::MantleTx, states::Unverified},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use tokio::time::{sleep, timeout};

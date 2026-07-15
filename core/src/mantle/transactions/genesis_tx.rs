@@ -14,7 +14,7 @@ use super::SignedMantleTx;
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        MantleTx, OpProof,
+        OpProof,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
         nom::{NomDecode, NomEncode},
         ops::{
@@ -25,7 +25,7 @@ use crate::{
             transfer::TransferOp,
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
-        transactions::{hash::TxHash, states::Preverified},
+        transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
     },
 };
 
@@ -409,7 +409,7 @@ mod tests {
         mantle::{
             ledger::{Inputs, Note, Outputs, Utxo, Value},
             ops::channel::{Ed25519PublicKey, inscribe::Inscription},
-            transactions::{Ops, tx::OpsProofs},
+            transactions::{Ops, OpsProofs},
         },
         sdp::{Locator, ProviderId, ServiceType},
     };

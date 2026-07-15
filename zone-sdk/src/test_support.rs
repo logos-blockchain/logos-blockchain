@@ -19,7 +19,7 @@ use lb_core::{
                 inscribe::{Inscription, InscriptionOp},
             },
         },
-        transactions::{Ops, states::Unverified, tx::OpsProofs},
+        transactions::{Ops, OpsProofs, states::Unverified},
     },
     proofs::leader_proof::Groth16LeaderProof,
 };

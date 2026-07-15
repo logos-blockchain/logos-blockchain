@@ -35,9 +35,10 @@ mod tests {
 
     use super::*;
     use crate::mantle::{
-        MantleTx, Note, Op,
+        Note, Op,
         ledger::{Inputs, Outputs},
         ops::transfer::TransferOp,
+        transactions::mantle_tx::MantleTx,
     };
 
     fn create_random_tx(seed: u32) -> MantleTx {

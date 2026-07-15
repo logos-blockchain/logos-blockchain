@@ -975,7 +975,7 @@ impl TxState {
 mod tests {
     use lb_core::mantle::{
         MantleTx, Op::ChannelInscribe, ops::channel::inscribe::InscriptionOp,
-        traits::Hashable as _, transactions::tx::OpsProofs,
+        traits::Hashable as _, transactions::OpsProofs,
     };
     use lb_key_management_system_service::keys::Ed25519PublicKey;
 

@@ -27,7 +27,7 @@ use lb_core::mantle::{
         transfer::TransferOp,
     },
     traits::Hashable as _,
-    transactions::{builder::MantleTxBuilder, states::Unverified, tx::OpsProofs},
+    transactions::{OpsProofs, builder::MantleTxBuilder, states::Unverified},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},

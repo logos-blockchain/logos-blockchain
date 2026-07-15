@@ -8,7 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use lb_core::mantle::{
-    MantleTx, SignedMantleTx,
+    SignedMantleTx,
     ops::{
         Op, OpProof,
         channel::{
@@ -17,7 +17,7 @@ use lb_core::mantle::{
         },
     },
     traits::Hashable as _,
-    transactions::{hash::TxHash, states::Preverified},
+    transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};

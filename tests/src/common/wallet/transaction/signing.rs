@@ -6,7 +6,7 @@ use lb_core::mantle::{
     GasCalculator as _, MantleTx, NoteId, Op, OpProof, SignedMantleTx, TxHash,
     gas::MainnetGasConstants,
     traits::Hashable as _,
-    transactions::{MantleTxBuilder, MantleTxContext, tx::OpsProofs},
+    transactions::{MantleTxBuilder, MantleTxContext, OpsProofs},
 };
 use lb_key_management_system_service::keys::ZkKey;
 

@@ -266,7 +266,7 @@ mod tests {
         MantleTx, Note,
         ledger::Inputs,
         ops::channel::{ChannelId, deposit::DepositOp},
-        transactions::tx::OpsProofs,
+        transactions::OpsProofs,
     };
 
     use super::*;

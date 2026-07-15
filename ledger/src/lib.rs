@@ -719,9 +719,8 @@ mod tests {
             },
             traits::Hashable as _,
             transactions::{
-                Ops,
+                Ops, OpsProofs,
                 states::{Preverified, Unverified},
-                tx::OpsProofs,
             },
         },
         proofs::{

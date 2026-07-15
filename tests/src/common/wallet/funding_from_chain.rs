@@ -7,8 +7,8 @@ use lb_core::mantle::{
     ops::channel::{ChannelId, ChannelKeyIndex},
     traits::Hashable as _,
     transactions::{
-        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, states::Unverified,
-        tx::OpsProofs,
+        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, OpsProofs,
+        states::Unverified,
     },
 };
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};

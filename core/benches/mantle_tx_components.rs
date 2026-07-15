@@ -17,7 +17,7 @@ use lb_poseidon2::Digest;
 use logos_blockchain_core::{
     crypto::{Hasher, ZkHasher},
     mantle::{
-        MantleTx, SignedMantleTx, TxHash,
+        SignedMantleTx,
         nom::NomEncode as _,
         ops::{
             Op, OpProof,
@@ -29,6 +29,8 @@ use logos_blockchain_core::{
         traits::Hashable as _,
         transactions::{
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
+            hash::TxHash,
+            mantle_tx::MantleTx,
             states::Unverified,
         },
     },

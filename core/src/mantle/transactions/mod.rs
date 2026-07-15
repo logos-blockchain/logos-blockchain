@@ -2,6 +2,7 @@ pub mod builder;
 pub mod codec;
 pub mod genesis_tx;
 pub mod hash;
+pub mod mantle_tx;
 pub mod states;
 pub mod tx;
 
@@ -12,12 +13,10 @@ pub use genesis_tx::{
 };
 pub use hash::TxHash;
 use lb_utils::bounded::UpperBoundedVec;
-pub use tx::{
-    GasPrices, MantleTx, MantleTxContext, MantleTxGasContext, OperationVerificationHelper,
-    SignedMantleTx, VerificationError,
-};
+pub use mantle_tx::{MantleTx, MantleTxContext, MantleTxGasContext};
+pub use tx::{GasPrices, OperationVerificationHelper, SignedMantleTx, VerificationError};
 
-use crate::mantle::Op;
+use crate::mantle::{Op, OpProof};
 
 // ==============================================================================
 // Memory Safety Limits
@@ -31,3 +30,4 @@ use crate::mantle::Op;
 // allow 4MiB.
 pub const MAX_OPS_PER_TX: usize = u8::MAX as usize;
 pub type Ops = UpperBoundedVec<Op, MAX_OPS_PER_TX>;
+pub type OpsProofs = UpperBoundedVec<OpProof, MAX_OPS_PER_TX>;

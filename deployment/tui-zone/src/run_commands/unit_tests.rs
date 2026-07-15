@@ -16,7 +16,7 @@ mod tests {
             withdraw::ChannelWithdrawOp,
         },
         traits::Hashable as _,
-        transactions::{Ops, codec::encode_signed_mantle_tx, tx::OpsProofs},
+        transactions::{Ops, OpsProofs, codec::encode_signed_mantle_tx},
     };
     use lb_groth16::{Fr, fr_to_bytes};
     use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey};

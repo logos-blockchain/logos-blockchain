@@ -1,6 +1,6 @@
 use lb_core::mantle::{
     MantleTx, SignedMantleTx, TxHash,
-    transactions::{Ops, states::VerificationState, tx::OpsProofs},
+    transactions::{Ops, OpsProofs, states::VerificationState},
 };
 use serde::Serialize;
 

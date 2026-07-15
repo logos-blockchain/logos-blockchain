@@ -219,7 +219,7 @@ mod tests {
                 transfer::TransferOp,
             },
             traits::Hashable as _,
-            transactions::{states::Unverified, tx::OpsProofs},
+            transactions::{OpsProofs, states::Unverified},
         },
         proofs::leader_proof::Groth16LeaderProof,
         sdp::{DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},

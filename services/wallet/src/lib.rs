@@ -28,7 +28,7 @@ use lb_core::{
         },
         traits::{Hashable as _, MantleTxWithProofs},
         transactions::{
-            MantleTxBuilder, MantleTxContext, TxBuilderError, states::Preverified, tx::OpsProofs,
+            MantleTxBuilder, MantleTxContext, OpsProofs, TxBuilderError, states::Preverified,
         },
     },
     proofs::leader_claim_proof::{Groth16LeaderClaimProof, LeaderClaimPrivate, LeaderClaimPublic},

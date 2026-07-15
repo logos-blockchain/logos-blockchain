@@ -4,7 +4,7 @@ use lb_common_http_client::{ChainServiceInfo, CommonHttpClient};
 use lb_core::{
     header::HeaderId,
     mantle::{
-        MantleTx, SignedMantleTx,
+        SignedMantleTx,
         ops::{
             Op, OpProof,
             channel::{
@@ -13,7 +13,10 @@ use lb_core::{
             },
         },
         traits::Hashable as _,
-        transactions::states::{Unverified, VerificationState},
+        transactions::{
+            mantle_tx::MantleTx,
+            states::{Unverified, VerificationState},
+        },
     },
 };
 use lb_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
