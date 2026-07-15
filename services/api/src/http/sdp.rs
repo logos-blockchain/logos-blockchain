@@ -18,7 +18,7 @@ pub async fn post_declaration_handler<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData + Send + Sync + 'static,
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Send
         + Sync
         + Debug
@@ -55,7 +55,7 @@ pub async fn post_activity_handler<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData + Send + Sync + 'static,
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Send
         + Sync
         + Debug
@@ -88,7 +88,7 @@ pub async fn post_withdrawal_handler<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData + Send + Sync + 'static,
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Send
         + Sync
         + Debug
@@ -121,7 +121,7 @@ pub async fn post_set_declaration_id_handler<
 where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     ChainService: CryptarchiaServiceData + Send + Sync + 'static,
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Send
         + Sync
         + Debug

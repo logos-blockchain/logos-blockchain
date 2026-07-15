@@ -13,7 +13,6 @@ use core::fmt::Debug;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
-    path::PathBuf,
     pin::Pin,
     time::Duration,
 };
@@ -39,10 +38,15 @@ pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
-    overwatch::{JsonFileBackend, RecoveryOperator, recovery::backends::FileBackendSettings},
+    overwatch::{RecoveryOperator, RecoveryReader},
     wait_until_services_are_ready,
 };
-use lb_storage_service::{StorageService, api::chain::StorageChainApi, backends::StorageBackend};
+use lb_storage_service::{
+    StorageService,
+    api::chain::StorageChainApi,
+    backends::StorageBackend,
+    recovery::{StorageRecoveryBackend, StorageRecoverySettings},
+};
 use lb_time_service::TimeService;
 use overwatch::{
     DynError, OpaqueServiceResourcesHandle,
@@ -62,13 +66,13 @@ use tracing_futures::Instrument as _;
 
 pub use crate::{
     bootstrap::config::{BootstrapConfig, OfflineGracePeriodConfig},
+    states::CryptarchiaConsensusState,
     sync::config::{BlockProviderConfig, SyncConfig},
 };
 use crate::{
     bootstrap::state::choose_engine_state,
     notifier::ChainOnlineNotifier,
     relays::CryptarchiaConsensusRelays,
-    states::CryptarchiaConsensusState,
     storage::{StorageAdapter as _, adapters::StorageAdapter},
     sync::block_provider::BlockProvider,
 };
@@ -486,9 +490,18 @@ impl Cryptarchia {
 pub struct CryptarchiaSettings {
     pub config: lb_ledger::Config,
     pub starting_state: StartingState,
-    pub recovery_file: PathBuf,
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
+    #[serde(skip)]
+    pub recovery_reader: Option<RecoveryReader>,
+}
+
+impl StorageRecoverySettings for CryptarchiaSettings {
+    const RECOVERY_KEY: &'static [u8] = b"recovery/cryptarchia";
+
+    fn recovery_reader(&self) -> Option<&RecoveryReader> {
+        self.recovery_reader.as_ref()
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -508,12 +521,6 @@ impl From<GenesisBlock> for StartingState {
         Self::Genesis {
             genesis_block: Box::new(genesis_block),
         }
-    }
-}
-
-impl FileBackendSettings for CryptarchiaSettings {
-    fn recovery_file(&self) -> &PathBuf {
-        &self.recovery_file
     }
 }
 
@@ -541,7 +548,9 @@ where
 {
     type Settings = CryptarchiaSettings;
     type State = CryptarchiaConsensusState;
-    type StateOperator = RecoveryOperator<JsonFileBackend<Self::State, Self::Settings>>;
+    type StateOperator = RecoveryOperator<
+        StorageRecoveryBackend<Self::State, Self::Settings, Storage, RuntimeServiceId>,
+    >;
     type Message = ConsensusMsg<Tx>;
 }
 

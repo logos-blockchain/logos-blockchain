@@ -21,6 +21,7 @@ workspace = true
 
 [dependencies]
 async-trait    = { workspace = true }
+bytes          = { workspace = true }
 futures        = { workspace = true }
 lb-log-targets = { workspace = true }
 log            = { workspace = true }

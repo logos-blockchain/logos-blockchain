@@ -1,11 +1,13 @@
 pub mod backends;
 pub mod errors;
 pub mod operators;
+pub mod readers;
 pub mod serializer;
 
 pub use backends::{FileBackend, JsonFileBackend};
 pub use errors::RecoveryError;
-pub use operators::RecoveryOperator;
+pub use operators::{RecoveryBackend, RecoveryOperator};
+pub use readers::RecoveryReader;
 pub use serializer::JsonRecoverySerializer;
 
 pub type RecoveryResult<T> = Result<T, RecoveryError>;
@@ -24,7 +26,7 @@ mod tests {
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::{overwatch::recovery::backends::FileBackendSettings, traits::FromSettings as _};
+    use crate::{overwatch::recovery::backends::FileBackendSettings, traits::FromSettings};
 
     const LOG_TARGET: &str = utils::RECOVERY;
 
@@ -112,7 +114,9 @@ mod tests {
         let recovery_file = temp_dir().join("recovery_test.json");
         let recovery_settings = SettingsWithRecovery { recovery_file };
         let file_backend =
-            JsonFileBackend::<MyState, SettingsWithRecovery>::from_settings(&recovery_settings);
+            <JsonFileBackend<MyState, SettingsWithRecovery> as FromSettings>::from_settings(
+                &recovery_settings,
+            );
 
         // Run the service with recovery enabled
         let service_settings = RecoveryTestServiceSettings {

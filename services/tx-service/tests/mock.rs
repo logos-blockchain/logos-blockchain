@@ -21,9 +21,8 @@ use lb_network_service::{
     config::NetworkConfig,
     message::NetworkMsg,
 };
-use lb_services_utils::{
-    overwatch::{JsonFileBackend, recovery::operators::RecoveryBackend as _},
-    traits::FromSettings as _,
+use lb_services_utils::overwatch::{
+    JsonFileBackend, recovery::operators::RecoveryBackend as RecoveryBackendTrait,
 };
 use lb_storage_service::{
     StorageService,
@@ -676,14 +675,17 @@ fn test_mock_mempool() {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
 
-        let recovery_backend = MockRecoveryBackend::from_settings(&TxMempoolSettings {
+        let recovery_settings = TxMempoolSettings {
             pool: (),
             network_adapter: (),
             recovery_path: recovery_file_path.clone(),
-        });
-        let recovered_state = recovery_backend
-            .load_state()
-            .expect("Should not fail to load the state.");
+        };
+        let recovered_state =
+            <MockRecoveryBackend as RecoveryBackendTrait<RuntimeServiceId>>::load_state(
+                &recovery_settings,
+            )
+            .expect("Should not fail to load the state.")
+            .expect("Recovery state should exist.");
         assert_eq!(recovered_state.pool().unwrap().pending_items.len(), 2);
         assert!(recovered_state.pool().unwrap().last_item_timestamp > 0);
 

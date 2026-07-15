@@ -21,7 +21,7 @@ pub use lb_core::{
 };
 pub use lb_network_service::backends::libp2p::Libp2p as NetworkBackend;
 pub use lb_storage_service::backends::{
-    SerdeOp,
+    SerdeOp, StorageBackend,
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
 pub use lb_system_sig_service::SystemSig;
@@ -156,11 +156,19 @@ pub fn run_node_from_config(
     }
     .into_time_service_settings(&config.deployment.cryptarchia);
 
+    let storage_config = StorageConfig {
+        user: config.user.storage,
+    }
+    .into_rocks_backend_settings(&config.user.state);
+
+    let recovery_reader = RocksBackend::open_read_only_if_exists(storage_config.clone())?
+        .map(RocksBackend::into_recovery_reader);
+
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
         user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
-    .into_cryptarchia_services_settings(blend_rewards_params, &config.user.state);
+    .into_cryptarchia_services_settings(blend_rewards_params, recovery_reader);
 
     let mempool_service_config = MempoolConfig {
         deployment: config.deployment.mempool,
@@ -177,11 +185,6 @@ pub fn run_node_from_config(
         user: config.user.wallet,
     }
     .into_wallet_service_settings(&config.user.state);
-
-    let storage_config = StorageConfig {
-        user: config.user.storage,
-    }
-    .into_rocks_backend_settings(&config.user.state);
 
     let kms_config = KmsConfig {
         user: config.user.kms,

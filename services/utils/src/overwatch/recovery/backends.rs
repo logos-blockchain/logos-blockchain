@@ -1,6 +1,6 @@
 use std::{marker::PhantomData, path::PathBuf};
 
-use overwatch::services::state::ServiceState;
+use overwatch::{overwatch::OverwatchHandle, services::state::ServiceState};
 
 use crate::{
     overwatch::recovery::{
@@ -48,22 +48,32 @@ where
     }
 }
 
-impl<State, RecoverySettings, Serializer> RecoveryBackend
+#[async_trait::async_trait]
+impl<State, RecoverySettings, Serializer, RuntimeServiceId> RecoveryBackend<RuntimeServiceId>
     for FileBackend<State, RecoverySettings, Serializer>
 where
-    State: ServiceState,
-    Serializer: RecoverySerializer<State = State>,
+    State: ServiceState<Settings = RecoverySettings> + Send,
+    RecoverySettings: FileBackendSettings + Send,
+    Serializer: RecoverySerializer<State = State> + Send,
 {
     type State = State;
 
-    fn load_state(&self) -> RecoveryResult<Self::State> {
-        let serialized_state =
-            std::fs::read_to_string(&self.recovery_file).map_err(RecoveryError::from)?;
-        Serializer::deserialize(&serialized_state)
+    fn from_settings(
+        settings: &RecoverySettings,
+        _overwatch_handle: OverwatchHandle<RuntimeServiceId>,
+    ) -> Self {
+        <Self as FromSettings>::from_settings(settings)
     }
 
-    fn save_state(&self, state: &Self::State) -> RecoveryResult<()> {
-        let serialized_state = Serializer::serialize(state)?;
+    fn load_state(settings: &RecoverySettings) -> RecoveryResult<Option<Self::State>> {
+        let Ok(serialized_state) = std::fs::read_to_string(settings.recovery_file()) else {
+            return Ok(None);
+        };
+        Ok(Serializer::deserialize(&serialized_state).ok())
+    }
+
+    async fn save_state(&mut self, state: Self::State) -> RecoveryResult<()> {
+        let serialized_state = Serializer::serialize(&state)?;
         if let Some(parent) = self.recovery_file.parent() {
             std::fs::create_dir_all(parent).map_err(RecoveryError::from)?;
         }

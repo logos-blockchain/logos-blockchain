@@ -1,7 +1,8 @@
-use std::{num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{io, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use lb_services_utils::overwatch::recovery::{RecoveryError, RecoveryReader};
 use rocksdb::{DB, Direction, Error, IteratorMode, Options};
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +55,40 @@ impl RocksBackend {
             rocks: Arc::clone(&self.rocks),
             executor: Box::new(executor),
         }
+    }
+
+    #[must_use]
+    pub fn into_recovery_reader(self) -> RecoveryReader {
+        RecoveryReader::new(move |key| {
+            self.rocks
+                .get(key)
+                .map(|value| value.map(Into::into))
+                .map_err(|error| RecoveryError::Backend(error.to_string()))
+        })
+    }
+
+    pub fn open_read_only_if_exists(
+        mut settings: RocksBackendSettings,
+    ) -> Result<Option<Self>, overwatch::DynError> {
+        // A missing or empty directory is the normal first-start state. The
+        // read-only recovery probe must not create the database; the writable
+        // storage service will create it after recovery finishes. RocksDB
+        // reports an uninitialized directory as a generic I/O error, which
+        // cannot be safely treated as "not found" without also hiding real
+        // permission or database errors, so distinguish these filesystem
+        // states before asking RocksDB to validate any existing database.
+        let mut entries = match std::fs::read_dir(&settings.db_path) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+
+        if entries.next().transpose()?.is_none() {
+            return Ok(None);
+        }
+
+        settings.read_only = true;
+        Self::new(settings).map(Some).map_err(Into::into)
     }
 }
 
@@ -281,6 +316,76 @@ mod test {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn open_read_only_returns_none_for_missing_or_empty_database() {
+        let directory = TempDir::new().unwrap();
+        let missing_path = directory.path().join("missing");
+
+        assert!(
+            RocksBackend::open_read_only_if_exists(RocksBackendSettings {
+                db_path: missing_path,
+                read_only: false,
+                column_family: None,
+            })
+            .unwrap()
+            .is_none()
+        );
+
+        assert!(
+            RocksBackend::open_read_only_if_exists(RocksBackendSettings {
+                db_path: directory.path().into(),
+                read_only: false,
+                column_family: None,
+            })
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn open_read_only_opens_existing_database() {
+        let directory = TempDir::new().unwrap();
+        let settings = RocksBackendSettings {
+            db_path: directory.path().into(),
+            read_only: false,
+            column_family: None,
+        };
+
+        let writer = RocksBackend::new(settings.clone()).unwrap();
+        writer
+            .txn(|database| {
+                database.put(b"key", b"value")?;
+                Ok(None)
+            })
+            .execute()
+            .unwrap();
+        drop(writer);
+
+        let reader = RocksBackend::open_read_only_if_exists(settings)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(
+            reader.into_recovery_reader().read(b"key").unwrap(),
+            Some(Bytes::from_static(b"value"))
+        );
+    }
+
+    #[test]
+    fn open_read_only_rejects_non_empty_invalid_database() {
+        let directory = TempDir::new().unwrap();
+        std::fs::write(directory.path().join("not-a-database"), b"invalid").unwrap();
+
+        assert!(
+            RocksBackend::open_read_only_if_exists(RocksBackendSettings {
+                db_path: directory.path().into(),
+                read_only: false,
+                column_family: None,
+            })
+            .is_err()
+        );
+    }
 
     #[tokio::test]
     async fn test_store_load_remove() -> Result<(), <RocksBackend as StorageBackend>::Error> {

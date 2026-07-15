@@ -95,7 +95,7 @@ pub struct GenericTxMempoolService<
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
     initial_state: <Self as ServiceData>::State,
@@ -110,7 +110,7 @@ where
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     pub const fn new(
         service_resources_handle: OpaqueServiceResourcesHandle<Self, RuntimeServiceId>,
@@ -138,7 +138,7 @@ where
     <Pool as MemPoolTrait>::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId> + Send + Sync,
     NetworkAdapter::Settings: Clone,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
 {
     type Settings = TxMempoolSettings<<Pool as MemPoolTrait>::Settings, NetworkAdapter::Settings>;
     type State = TxMempoolState<
@@ -169,7 +169,7 @@ where
     NetworkAdapter:
         NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item, Key = Pool::Key> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + Sync + 'static,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: Display
         + Debug
         + Sync
@@ -269,7 +269,7 @@ where
     Pool::Settings: Clone,
     NetworkAdapter: NetworkAdapterTrait<RuntimeServiceId, Payload = Pool::Item> + Send + Sync,
     NetworkAdapter::Settings: Clone + Send + 'static,
-    RecoveryBackend: RecoveryBackendTrait + Send + Sync,
+    RecoveryBackend: RecoveryBackendTrait<RuntimeServiceId> + Send + Sync,
     RuntimeServiceId: 'static,
 {
     async fn run_event_loop(

@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use lb_blend_service::core::network::libp2p::Libp2pBroadcastSettings;
 use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapterSettings;
@@ -6,11 +6,9 @@ use lb_core::sdp::ServiceParameters;
 use lb_cryptarchia_engine::EpochConfig;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
+use lb_services_utils::overwatch::RecoveryReader;
 
-use crate::config::{
-    cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config},
-    state::Config as StateConfig,
-};
+use crate::config::cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config};
 
 pub mod deployment;
 pub mod serde;
@@ -29,7 +27,7 @@ impl ServiceConfig {
     pub fn into_cryptarchia_services_settings(
         self,
         blend_rewards_params: RewardsParameters,
-        state_config: &StateConfig,
+        recovery_reader: Option<RecoveryReader>,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
@@ -93,13 +91,7 @@ impl ServiceConfig {
                 },
             },
             config: ledger_config.clone(),
-            recovery_file: state_config.get_path_for_recovery_state(
-                PathBuf::new()
-                    .join("consensus")
-                    .join("chain_service")
-                    .with_extension("json")
-                    .as_path(),
-            ),
+            recovery_reader,
             starting_state: self.deployment.genesis_block.into(),
             sync: lb_chain_service::SyncConfig {
                 block_provider: lb_chain_service::BlockProviderConfig {

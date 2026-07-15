@@ -122,7 +122,7 @@ where
     SdpMempool: SdpMempoolAdapter + Send + Sync + 'static,
     SdpWallet: SdpWalletAdapter + Send + Sync + 'static,
     ChainLeader: ChainLeaderServiceData,
-    SdpStateStorage: SdpStateStorageTrait + Send + 'static,
+    SdpStateStorage: SdpStateStorageTrait<RuntimeServiceId> + Send + 'static,
     RuntimeServiceId: Debug
         + Sync
         + Send

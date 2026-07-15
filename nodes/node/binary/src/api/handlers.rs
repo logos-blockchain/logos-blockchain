@@ -1047,7 +1047,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -1095,7 +1095,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -1143,7 +1143,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
         + Send
@@ -1191,7 +1191,7 @@ where
     MempoolAdapter: SdpMempoolAdapter + Send + Sync + 'static,
     WalletAdapter: SdpWalletAdapter + Send + Sync + 'static,
     ChainService: lb_chain_service::api::CryptarchiaServiceData + Send + Sync + 'static,
-    StateStorage: SdpStateStorage,
+    StateStorage: SdpStateStorage<RuntimeServiceId>,
     RuntimeServiceId: Debug
         + Sync
         + Send

@@ -16,9 +16,8 @@ use crate::{
             ServiceConfig as BlendServiceConfig,
             serde::{Config as BlendConfig, RequiredValues as BlendRequiredValues},
         },
-        cryptarchia::{
-            ServiceConfig as CryptarchiaServiceConfig,
-            serde::{Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues},
+        cryptarchia::serde::{
+            Config as CryptarchiaConfig, RequiredValues as CryptarchiaRequiredValues,
         },
         mempool::ServiceConfig as MempoolServiceConfig,
         parse_log_filter_layer,
@@ -142,8 +141,6 @@ fn common_recovery_folder() {
 
     let deployment_settings = DeploymentSettings::default();
 
-    let blend_rewards_params = deployment_settings.blend_reward_params();
-
     let (blend_service_settings, _, _) = BlendServiceConfig {
         user: user_config.blend.clone(),
         deployment: deployment_settings.blend,
@@ -158,17 +155,6 @@ fn common_recovery_folder() {
             .common
             .recovery_path_prefix
             .starts_with(Path::new(STATE_PATH).join("recovery").join("blend"))
-    );
-
-    let (chain_service_settings, _, _) = CryptarchiaServiceConfig {
-        user: user_config.cryptarchia.clone(),
-        deployment: deployment_settings.cryptarchia,
-    }
-    .into_cryptarchia_services_settings(blend_rewards_params, &user_config.state);
-    assert!(
-        chain_service_settings
-            .recovery_file
-            .starts_with(Path::new(STATE_PATH).join("recovery").join("consensus"))
     );
 
     let wallet_service_settings = WalletServiceConfig {
