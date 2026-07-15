@@ -1353,7 +1353,7 @@ async fn step_verify_blend_sdp_declaration_included(
             }
         };
 
-        if declarations.iter().any(|declaration| {
+        if declarations.values().any(|declaration| {
             declaration.locked_note_id == locked_note_id && declaration.zk_id == blend_zk_pk
         }) {
             info!(
