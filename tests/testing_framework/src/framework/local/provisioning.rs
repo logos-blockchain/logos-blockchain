@@ -263,7 +263,22 @@ fn build_node_launch_spec(
         NodeBinaryProfile::from_string(&env::var("NODE_BINARY_PROFILE").unwrap_or_default());
 
     Ok(LaunchSpec {
-        binary: node_binary_provider(&node_binary_profile).resolve()?,
+        binary: {
+            let current = if node_binary_profile == NodeBinaryProfile::TokioConsole {
+                replace_default_env("RUSTFLAGS", &rustflags_with_tokio_unstable())
+            } else {
+                None
+            };
+            let resolve_result = node_binary_provider(&node_binary_profile).resolve();
+            if node_binary_profile == NodeBinaryProfile::TokioConsole {
+                if let Some(val) = current {
+                    let _unused = replace_default_env("RUSTFLAGS", &val);
+                } else {
+                    remove_default_env("RUSTFLAGS");
+                }
+            }
+            resolve_result?
+        },
         files: vec![
             launch_file(USER_CONFIG_FILE, user_yaml.into_bytes()),
             launch_file(DEPLOYMENT_CONFIG_FILE, deployment_yaml.into_bytes()),
@@ -278,6 +293,17 @@ fn build_node_launch_spec(
             time_backend,
         )],
     })
+}
+
+fn rustflags_with_tokio_unstable() -> String {
+    const TOKIO_UNSTABLE_CFG: &str = "--cfg tokio_unstable";
+
+    match env::var("RUSTFLAGS") {
+        Ok(flags) if flags.contains(TOKIO_UNSTABLE_CFG) => flags,
+        Ok(flags) if flags.trim().is_empty() => TOKIO_UNSTABLE_CFG.to_owned(),
+        Ok(flags) => format!("{flags} {TOKIO_UNSTABLE_CFG}"),
+        Err(_) => TOKIO_UNSTABLE_CFG.to_owned(),
+    }
 }
 
 fn launch_file(relative_path: &str, contents: Vec<u8>) -> LaunchFile {
@@ -331,8 +357,7 @@ fn tokio_console_node_binary_provider() -> BinaryProviderRef {
     if running_in_ci() {
         Arc::new(PathBinaryProvider::new(release_node_binary_path()))
     } else {
-        let current = replace_default_env("RUSTFLAGS", "--cfg tokio_unstable");
-        let provider = Arc::new(BuildBinaryProvider {
+        Arc::new(BuildBinaryProvider {
             command: BuildCommand::new("cargo").with_args([
                 "build",
                 "--locked",
@@ -346,13 +371,7 @@ fn tokio_console_node_binary_provider() -> BinaryProviderRef {
             output_path: release_profiling_node_binary_path(),
             working_dir: Some(workspace_root()),
             lock_dir: Some(workspace_root().join("target").join(".tf-binaries")),
-        });
-        if let Some(val) = current {
-            let _unused = replace_default_env("RUSTFLAGS", &val);
-        } else {
-            remove_default_env("RUSTFLAGS");
-        }
-        provider
+        })
     }
 }
 

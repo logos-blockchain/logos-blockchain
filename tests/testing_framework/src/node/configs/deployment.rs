@@ -12,7 +12,7 @@ use super::{
     wallet::{WalletConfig, WalletConfigError},
 };
 use crate::{
-    env::set_default_env,
+    env::replace_default_env,
     get_reserved_available_udp_port,
     node::{
         DeploymentPlan, NodePlan,
@@ -281,9 +281,10 @@ impl DeploymentBuilder {
         self.config.genesis_block = Some(genesis_block);
 
         if self.config.node_binary_profile == NodeBinaryProfile::Normal {
-            set_default_env(NODE_BINARY_PROFILE, NodeBinaryProfile::Normal.to_string());
+            let _unused =
+                replace_default_env(NODE_BINARY_PROFILE, NodeBinaryProfile::Normal.to_string());
         } else {
-            set_default_env(
+            let _unused = replace_default_env(
                 NODE_BINARY_PROFILE,
                 NodeBinaryProfile::TokioConsole.to_string(),
             );
