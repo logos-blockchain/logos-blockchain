@@ -13,7 +13,7 @@ use time::OffsetDateTime;
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
-        OpProof,
+        OpProof, SignedMantleTx,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow},
         nom::{NomDecode, NomEncode},
         ops::{
@@ -24,9 +24,7 @@ use crate::{
             transfer::TransferOp,
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
-        transactions::{
-            hash::TxHash, mantle_tx::MantleTx, states::Preverified, tx::SignedMantleTx,
-        },
+        transactions::{hash::TxHash, mantle_tx::MantleTx, states::Preverified},
     },
 };
 

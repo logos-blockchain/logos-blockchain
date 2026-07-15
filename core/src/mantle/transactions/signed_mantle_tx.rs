@@ -566,46 +566,32 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Preverified> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{collections::HashMap, sync::Arc};
+pub mod test_utils {
+    use std::sync::Arc;
 
-    use lb_cryptarchia_engine::{Epoch, Slot};
+    use lb_cryptarchia_engine::Slot;
     use lb_groth16::Fr;
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
-    use num_bigint::BigUint;
-    use rpds::HashTrieSetSync;
+    use lb_key_management_system_keys::keys::Ed25519Key;
 
-    use super::*;
-    use crate::{
-        mantle::{
-            Note, NoteId, Utxo,
-            channel::{ChannelState, Channels, SlotTimeframe, SlotTimeout},
-            gas::MainnetGasConstants,
-            ledger::{Declarations, Inputs, Outputs, OutputsError, Utxos},
-            ops::{
-                channel::{
-                    ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId,
-                    config::{ChannelConfigOp, Keys},
-                    deposit::DepositOp,
-                    inscribe::InscriptionOp,
-                    withdraw::ChannelWithdrawOp,
-                },
-                leader_claim::{RewardsRoot, VoucherNullifier},
-                transfer::{TransferError, TransferOp},
-            },
-            transactions::{MantleTxGasContext, Ops},
+    use crate::mantle::{
+        MantleTx, NoteId, Op, OpProof, SignedMantleTx,
+        channel::{ChannelState, SlotTimeframe, SlotTimeout},
+        ledger::Inputs,
+        ops::channel::{
+            ChannelId, ChannelKeyIndex, MsgId, config::Keys, inscribe::InscriptionOp,
+            verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
         },
-        proofs::channel_multi_sig_proof::{
-            ChannelMultiSigProof, IndexedSignature, IndexedSignatures,
-        },
-        sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
+        traits::Hashable as _,
+        transactions::{Ops, states::Preverified},
     };
 
-    fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
+    #[must_use]
+    pub fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
         MantleTx(Ops::new_unchecked(ops))
     }
 
-    fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
+    #[must_use]
+    pub fn create_test_inscribe_op(signing_key: &Ed25519Key) -> InscriptionOp {
         InscriptionOp {
             channel_id: [0; 32].into(),
             inscription: [1, 2, 3].into(),
@@ -614,145 +600,10 @@ mod tests {
         }
     }
 
-    struct TestOperationVerificationHelper {
-        channels: Channels,
-        keys: HashMap<(ChannelId, ChannelKeyIndex), Ed25519PublicKey>,
-        locked_notes: LockedNotes,
-        utxos: Utxos,
-        declarations: Declarations,
-        min_stake: MinStake,
-        epoch: Epoch,
-        block_slot: Slot,
-        nullifiers: HashTrieSetSync<VoucherNullifier>,
-        claimable_vouchers_root: RewardsRoot,
-    }
-
-    impl TestOperationVerificationHelper {
-        fn new(
-            channels: Channels,
-            keys: impl IntoIterator<Item = ((ChannelId, ChannelKeyIndex), Ed25519PublicKey)>,
-        ) -> Self {
-            Self {
-                channels,
-                keys: keys.into_iter().collect(),
-                locked_notes: LockedNotes::new(),
-                utxos: Utxos::new(),
-                declarations: Declarations::new_sync(),
-                min_stake: MinStake {
-                    threshold: 0,
-                    timestamp: 0,
-                },
-                epoch: Epoch::from(0u32),
-                block_slot: Slot::from(0u64),
-                nullifiers: HashTrieSetSync::new_sync(),
-                claimable_vouchers_root: RewardsRoot::default(),
-            }
-        }
-
-        fn with_utxos(mut self, utxos: impl IntoIterator<Item = Utxo>) -> Self {
-            for utxo in utxos {
-                self.utxos = self.utxos.insert(utxo.id(), utxo).0;
-            }
-            self
-        }
-    }
-
-    impl OperationVerificationHelper for TestOperationVerificationHelper {
-        fn get_channels(&self) -> &Channels {
-            &self.channels
-        }
-
-        fn get_locked_notes(&self) -> &LockedNotes {
-            &self.locked_notes
-        }
-
-        fn get_utxos(&self) -> &Utxos {
-            &self.utxos
-        }
-
-        fn get_declarations_by_service(
-            &self,
-            _service: ServiceType,
-        ) -> Result<&Declarations, VerificationError> {
-            Ok(&self.declarations)
-        }
-
-        fn get_declarations_by_id(
-            &self,
-            _id: &DeclarationId,
-        ) -> Result<&Declarations, VerificationError> {
-            Ok(&self.declarations)
-        }
-
-        fn get_min_stake(&self) -> &MinStake {
-            &self.min_stake
-        }
-
-        fn get_epoch(&self) -> Epoch {
-            self.epoch
-        }
-
-        fn get_block_slot(&self) -> Slot {
-            self.block_slot
-        }
-
-        fn get_nullifiers(&self) -> &HashTrieSetSync<VoucherNullifier> {
-            &self.nullifiers
-        }
-
-        fn get_claimable_vouchers_root(&self) -> &RewardsRoot {
-            &self.claimable_vouchers_root
-        }
-
-        fn get_channel_transfer_threshold(
-            &self,
-            channel_id: &ChannelId,
-        ) -> Result<ChannelKeyIndex, VerificationError> {
-            self.channels
-                .channels
-                .get(channel_id)
-                .ok_or(VerificationError::ChannelNotFound {
-                    channel_id: *channel_id,
-                })
-                .map(|channel| channel.transfer_threshold)
-        }
-
-        fn get_key_from_channel_at_index(
-            &self,
-            channel_id: &ChannelId,
-            key_index: &ChannelKeyIndex,
-        ) -> Result<Ed25519PublicKey, VerificationError> {
-            self.keys.get(&(*channel_id, *key_index)).copied().ok_or(
-                VerificationError::KeyNotFound {
-                    channel_id: *channel_id,
-                    key_index: *key_index,
-                },
-            )
-        }
-    }
-
-    fn create_channel_multi_sig_proof(
-        tx_hash: &TxHash,
-        signing_keys: &[&Ed25519Key],
-    ) -> ChannelMultiSigProof {
-        let signatures: IndexedSignatures = signing_keys
-            .iter()
-            .enumerate()
-            .map(|(index, key)| {
-                IndexedSignature::new(
-                    index as ChannelKeyIndex,
-                    key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
-                )
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap();
-        ChannelMultiSigProof::try_new(signatures).unwrap()
-    }
-
     // TODO: The generated channels are bare. We should add more realistic channel
     // states for testing.
-    fn make_channel_state(
+    #[must_use]
+    pub fn make_channel_state(
         transfer_threshold: ChannelKeyIndex,
         accredited_keys: Option<Keys>,
     ) -> ChannelState {
@@ -775,7 +626,8 @@ mod tests {
         }
     }
 
-    fn create_withdraw_tx(
+    #[must_use]
+    pub fn create_withdraw_tx(
         channel_id: ChannelId,
         signing_keys: &[&Ed25519Key],
         inputs: Option<Inputs>,
@@ -799,6 +651,27 @@ mod tests {
         );
         tx
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use lb_groth16::Fr;
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
+
+    use super::*;
+    use crate::mantle::{
+        NoteId,
+        gas::MainnetGasConstants,
+        ledger::Inputs,
+        ops::channel::{
+            ChannelId, config::ChannelConfigOp, deposit::DepositOp,
+            verification::test_utils::create_channel_multi_sig_proof, withdraw::ChannelWithdrawOp,
+        },
+        transactions::{
+            MantleTxGasContext,
+            signed_mantle_tx::test_utils::{create_test_inscribe_op, create_test_mantle_tx},
+        },
+    };
 
     fn create_config_op(channel: ChannelId, signing_key: &Ed25519Key) -> ChannelConfigOp {
         ChannelConfigOp {
@@ -1157,181 +1030,5 @@ mod tests {
                 proofs_count: 2
             })
         ));
-    }
-
-    #[test]
-    fn helper_backed_verification_accepts_valid_channel_withdraw() {
-        let channel_id = ChannelId::from([8u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[8; 32]);
-        let key1 = Ed25519Key::from_bytes(&[9; 32]);
-        let keys = Keys::new_unchecked(vec![key0.public_key(), key1.public_key()]);
-
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10, input_sk.to_public_key()),
-        };
-        let note_id = utxo.id();
-        let withdraw_inputs = Inputs::from([note_id]);
-
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], Some(withdraw_inputs));
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(2, Some(keys));
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-                .register_channel_note(&note_id, &channel_id)
-                .expect("Note should be registered.")
-        };
-
-        let helper = TestOperationVerificationHelper::new(
-            channels,
-            [
-                ((channel_id, 0), key0.public_key()),
-                ((channel_id, 1), key1.public_key()),
-            ],
-        )
-        .with_utxos(vec![utxo]);
-
-        signed_tx
-            .verified_ops()
-            .next(&helper)
-            .expect("Cursor should yield the WithdrawOp")
-            .expect("WithdrawOp should verify");
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_zero_value_transfer_output() {
-        let input_sk = ZkKey::from(BigUint::from(1u8));
-        let input_utxo = Utxo {
-            op_id: [1u8; 32],
-            output_index: 0,
-            note: Note::new(10000, input_sk.to_public_key()),
-        };
-
-        let signed_tx = {
-            let transfer_op = TransferOp::new(
-                Inputs::new([input_utxo.id()]),
-                Outputs::new([Note::new(0, Fr::from(BigUint::from(2u8)).into())]),
-            );
-            let mantle_tx = create_test_mantle_tx(vec![Op::Transfer(transfer_op)]);
-            let transfer_sig = ZkKey::multi_sign(&[input_sk], &mantle_tx.hash().to_fr())
-                .expect("Signing should succeed");
-            SignedMantleTx::new(mantle_tx, [OpProof::ZkSig(transfer_sig)].into())
-                .preverify()
-                .expect("Transfer transaction should preverify")
-        };
-
-        let helper =
-            TestOperationVerificationHelper::new(Channels::new(), []).with_utxos([input_utxo]);
-
-        let verification_result = signed_tx
-            .verified_ops()
-            .next(&helper)
-            .expect("Cursor should yield the TransferOp");
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::TransferVerificationError(
-                TransferError::Outputs(OutputsError::ZeroValueNote)
-            ))
-        );
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_missing_channel() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
-
-        let channels = Channels::new();
-        let helper = TestOperationVerificationHelper::new(channels, []);
-
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::ChannelNotFound { channel_id })
-        );
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_missing_key() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let key1 = Ed25519Key::from_bytes(&[1; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0, &key1], None);
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(2, None);
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-        };
-        let helper =
-            TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
-
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::KeyNotFound {
-                channel_id,
-                key_index: 1
-            })
-        );
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_not_enough_signatures() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let key0 = Ed25519Key::from_bytes(&[0; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&key0], None);
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(2, None);
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-        };
-        let helper =
-            TestOperationVerificationHelper::new(channels, [((channel_id, 0), key0.public_key())]);
-
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
-                op_index: 0,
-                actual: 1,
-                required: 2
-            })
-        );
-    }
-
-    #[test]
-    fn helper_backed_verification_rejects_invalid_signature() {
-        let channel_id = ChannelId::from([10u8; 32]);
-        let expected_key = Ed25519Key::from_bytes(&[0; 32]);
-        let wrong_key = Ed25519Key::from_bytes(&[9; 32]);
-        let signed_tx = create_withdraw_tx(channel_id, &[&wrong_key], None);
-
-        let channels = {
-            let mut channels = Channels::new();
-            let channel_state = make_channel_state(1, None);
-            channels.channels.insert_mut(channel_id, channel_state);
-            channels
-        };
-        let helper = TestOperationVerificationHelper::new(
-            channels,
-            [((channel_id, 0), expected_key.public_key())],
-        );
-
-        let verification_result = signed_tx.verified_ops().next(&helper).unwrap();
-        assert_eq!(
-            verification_result,
-            Err(VerificationError::ChannelMultiSigProofInvalidSignature {
-                op_index: 0,
-                signature_index: 0
-            })
-        );
     }
 }
