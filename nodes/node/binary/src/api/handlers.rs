@@ -1219,7 +1219,7 @@ where
     get,
     path = paths::MANTLE_SDP_DECLARATIONS,
     responses(
-        (status = 200, description = "Get current SDP declarations", body = Vec<lb_core::sdp::Declaration>),
+        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
         (status = 500, description = "Internal server error", body = String),
     )
 )]

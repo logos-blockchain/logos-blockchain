@@ -13,7 +13,10 @@ use lb_chain_service::Epoch;
 use lb_common_http_client::Error;
 use lb_core::{
     mantle::{NoteId, OpProof, Transaction as _, Utxo, ops::Op},
-    sdp::{Declaration, DeclarationMessage, Locator, ProviderId, ServiceType, WithdrawMessage},
+    sdp::{
+        Declaration, DeclarationId, DeclarationMessage, Locator, ProviderId, ServiceType,
+        WithdrawMessage,
+    },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
 use lb_node::config::{
@@ -76,7 +79,7 @@ async fn sdp_ops_e2e() {
     let existing = wait_for_sdp_declarations(&node0, Duration::from_secs(30))
         .await
         .expect("fetching SDP declarations should succeed");
-    let locked: HashSet<_> = existing.iter().map(|decl| decl.locked_note_id).collect();
+    let locked: HashSet<_> = existing.values().map(|decl| decl.locked_note_id).collect();
     let locked_note_id = spare_note_id;
     assert!(
         !locked.contains(&locked_note_id),
@@ -202,7 +205,7 @@ async fn sdp_ops_e2e() {
             .get_sdp_declarations()
             .await
             .unwrap()
-            .iter()
+            .values()
             .any(|declaration| declaration.provider_id == provider_id)
     );
 }
@@ -229,7 +232,7 @@ async fn sdp_declaration_restoration_e2e() {
         "validators should have declarations from genesis"
     );
 
-    let initial_declaration = declarations.first().unwrap().clone();
+    let initial_declaration = declarations.values().next().unwrap().clone();
     let target_locked_note = initial_declaration.locked_note_id;
 
     cluster_harness
@@ -253,7 +256,7 @@ async fn sdp_declaration_restoration_e2e() {
     );
 
     let restored_declaration = post_restart_declarations
-        .iter()
+        .values()
         .find(|d| d.locked_note_id == target_locked_note)
         .expect("original declaration should still exist after restart");
 
@@ -280,14 +283,14 @@ async fn get_declaration(
     Ok(node
         .get_sdp_declarations()
         .await?
-        .into_iter()
+        .into_values()
         .find(|declaration| &declaration.provider_id == provider_id))
 }
 
 async fn wait_for_sdp_declarations(
     node: &NodeHttpClient,
     duration: Duration,
-) -> Option<Vec<Declaration>> {
+) -> Option<HashMap<DeclarationId, Declaration>> {
     timeout(duration, async {
         loop {
             if let Ok(declarations) = node.get_sdp_declarations().await {

@@ -901,7 +901,7 @@ where
 
 pub async fn get_sdp_declarations<RuntimeServiceId>(
     handle: &overwatch::overwatch::handle::OverwatchHandle<RuntimeServiceId>,
-) -> Result<Vec<Declaration>, super::DynError>
+) -> Result<HashMap<DeclarationId, Declaration>, super::DynError>
 where
     RuntimeServiceId: Debug
         + Send
@@ -921,13 +921,7 @@ where
         .await
         .map_err(|(e, _)| e)?;
 
-    let declarations = receiver
-        .await?
-        .into_iter()
-        .map(|(_, declaration)| declaration)
-        .collect();
-
-    Ok(declarations)
+    Ok(receiver.await?)
 }
 
 pub async fn get_sdp_snapshot<RuntimeServiceId>(

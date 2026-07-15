@@ -145,7 +145,7 @@ pub enum ConsensusMsg<Tx> {
     },
     /// Returns all declarations in the current SDP registry, not snapshot
     GetSdpDeclarations {
-        reply_channel: oneshot::Sender<Vec<(DeclarationId, Declaration)>>,
+        reply_channel: oneshot::Sender<HashMap<DeclarationId, Declaration>>,
     },
     /// Returns the frozen SDP snapshot for the current epoch
     GetSdpSnapshot {
