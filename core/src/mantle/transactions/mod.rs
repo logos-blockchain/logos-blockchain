@@ -1,5 +1,6 @@
 pub mod builder;
 pub mod codec;
+pub mod errors;
 pub mod genesis_tx;
 pub mod hash;
 pub mod mantle_tx;
@@ -7,6 +8,7 @@ pub mod states;
 pub mod tx;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};
+pub use errors::VerificationError;
 pub use genesis_tx::{
     CryptarchiaParameter, GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE, GenesisTime,
     GenesisTx,
@@ -14,7 +16,7 @@ pub use genesis_tx::{
 pub use hash::TxHash;
 use lb_utils::bounded::UpperBoundedVec;
 pub use mantle_tx::{MantleTx, MantleTxContext, MantleTxGasContext};
-pub use tx::{GasPrices, OperationVerificationHelper, SignedMantleTx, VerificationError};
+pub use tx::{GasPrices, OperationVerificationHelper, SignedMantleTx};
 
 use crate::mantle::{Op, OpProof};
 
