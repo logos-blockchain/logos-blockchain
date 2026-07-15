@@ -5,8 +5,8 @@ pub mod gas;
 pub mod genesis_tx;
 pub mod hash;
 pub mod mantle_tx;
+pub mod signed_mantle_tx;
 pub mod states;
-pub mod tx;
 pub mod verification_helper;
 pub mod verified_ops;
 
@@ -17,7 +17,7 @@ pub use genesis_tx::{CryptarchiaParameter, GenesisTime, GenesisTx};
 pub use hash::TxHash;
 use lb_utils::bounded::UpperBoundedVec;
 pub use mantle_tx::{MantleTx, MantleTxContext, MantleTxGasContext};
-pub use tx::SignedMantleTx;
+pub use signed_mantle_tx::SignedMantleTx;
 pub use verification_helper::OperationVerificationHelper;
 pub use verified_ops::VerifiedOps;
 
