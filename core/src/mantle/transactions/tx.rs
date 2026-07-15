@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    marker::PhantomData,
-    sync::LazyLock,
-};
+use std::{collections::HashMap, marker::PhantomData, sync::LazyLock};
 
 use ark_ff::PrimeField as _;
 use bytes::Bytes;
@@ -27,7 +23,8 @@ use crate::{
             channel::{
                 ChannelId, ChannelKeyIndex, channel_transfer::ChannelTransferValidationContext,
                 config::ChannelConfigValidationContext, deposit::DepositValidationContext,
-                inscribe::InscriptionValidationContext, withdraw::WithdrawValidationContext,
+                inscribe::InscriptionValidationContext, verification::verify_channel_multi_sig,
+                withdraw::WithdrawValidationContext,
             },
             leader_claim::{LeaderClaimValidationContext, RewardsRoot, VoucherNullifier},
             sdp::{
@@ -49,10 +46,7 @@ use crate::{
             states::{Preverified, Unverified, VerificationState},
         },
     },
-    proofs::{
-        channel_multi_sig_proof::ChannelMultiSigProof,
-        leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
-    },
+    proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
     sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
     utils::serde_bytes_newtype,
 };
@@ -887,48 +881,6 @@ impl<'tx> From<&'tx SignedMantleTx<Preverified>> for VerifiedOps<'tx> {
     }
 }
 
-fn verify_channel_multi_sig(
-    channel_id: &ChannelId,
-    proof: &ChannelMultiSigProof,
-    tx_hash_bytes: &Bytes,
-    helper: &impl OperationVerificationHelper,
-    op_index: usize,
-) -> Result<(), VerificationError> {
-    let transfer_threshold = helper.get_channel_transfer_threshold(channel_id)?;
-
-    let signatures = proof.signatures();
-    let signatures_len = signatures.len();
-    if signatures_len != transfer_threshold as usize {
-        return Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
-            op_index,
-            actual: signatures_len,
-            required: transfer_threshold,
-        });
-    }
-
-    let indices_set = signatures
-        .iter()
-        .map(|signature| signature.channel_key_index)
-        .collect::<HashSet<_>>();
-    let indices_set_len = indices_set.len();
-    if indices_set_len != signatures_len {
-        return Err(VerificationError::ChannelMultiSigProofDuplicateIndices { op_index });
-    }
-
-    for (i, signature) in signatures.iter().enumerate() {
-        let public_key =
-            helper.get_key_from_channel_at_index(channel_id, &signature.channel_key_index)?;
-        if let Err(_error) = public_key.verify(tx_hash_bytes.as_ref(), &signature.signature) {
-            return Err(VerificationError::ChannelMultiSigProofInvalidSignature {
-                op_index,
-                signature_index: i,
-            });
-        }
-    }
-
-    Ok(())
-}
-
 impl<State: VerificationState> Hashable for SignedMantleTx<State> {
     //noinspection RsTypeCheck: The type is correct, but the linter is confused by
     // the closure.
@@ -1120,7 +1072,9 @@ mod tests {
                 transfer::TransferError,
             },
         },
-        proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
+        proofs::channel_multi_sig_proof::{
+            ChannelMultiSigProof, IndexedSignature, IndexedSignatures,
+        },
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {
