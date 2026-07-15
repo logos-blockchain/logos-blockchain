@@ -1219,7 +1219,7 @@ where
     get,
     path = paths::MANTLE_SDP_DECLARATIONS,
     responses(
-        (status = 200, description = "Get current SDP declarations", body = Vec<lb_core::sdp::Declaration>),
+        (status = 200, description = "Get current SDP declarations keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
         (status = 500, description = "Internal server error", body = String),
     )
 )]
@@ -1231,6 +1231,24 @@ where
         Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
 {
     make_request_and_return_response!(mantle::get_sdp_declarations::<RuntimeServiceId>(&handle))
+}
+
+#[utoipa::path(
+    get,
+    path = paths::MANTLE_SDP_SNAPSHOT,
+    responses(
+        (status = 200, description = "Get the SDP snapshot for the current epoch keyed by declaration id", body = std::collections::HashMap<lb_core::sdp::DeclarationId, lb_core::sdp::Declaration>),
+        (status = 500, description = "Internal server error", body = String),
+    )
+)]
+pub async fn get_sdp_snapshot<RuntimeServiceId>(
+    State(handle): State<OverwatchHandle<RuntimeServiceId>>,
+) -> Response
+where
+    RuntimeServiceId:
+        Debug + Send + Sync + Display + 'static + AsServiceId<Cryptarchia<RuntimeServiceId>>,
+{
+    make_request_and_return_response!(mantle::get_sdp_snapshot::<RuntimeServiceId>(&handle))
 }
 
 #[utoipa::path(
