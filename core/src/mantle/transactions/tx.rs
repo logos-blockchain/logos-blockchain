@@ -1,8 +1,6 @@
 use std::marker::PhantomData;
 
 use bytes::Bytes;
-use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use nom::{Parser as _, combinator::all_consuming};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -10,18 +8,17 @@ use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
         MantleTx, Value, VerificationError,
-        channel::Channels,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
-        ledger::{Declarations, Operation as _, Utxos},
+        ledger::Operation as _,
         ops::{
             Op, OpProof,
             channel::{
-                ChannelId, ChannelKeyIndex, channel_transfer::ChannelTransferValidationContext,
+                channel_transfer::ChannelTransferValidationContext,
                 config::ChannelConfigValidationContext, deposit::DepositValidationContext,
                 inscribe::InscriptionValidationContext, verification::verify_channel_multi_sig,
                 withdraw::WithdrawValidationContext,
             },
-            leader_claim::{LeaderClaimValidationContext, RewardsRoot, VoucherNullifier},
+            leader_claim::LeaderClaimValidationContext,
             sdp::{
                 SDPActiveValidationContext, SDPDeclareValidationContext,
                 SDPWithdrawValidationContext,
@@ -33,7 +30,7 @@ use crate::{
             mantle_tx::OpWithProof,
         },
         transactions::{
-            OpsProofs,
+            OperationVerificationHelper, OpsProofs,
             codec::{decode_signed_mantle_tx, encode_signed_mantle_tx},
             genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
             hash::TxHash,
@@ -41,7 +38,6 @@ use crate::{
         },
     },
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
-    sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -77,45 +73,6 @@ pub struct SignedMantleTx<State: VerificationState> {
     // TODO: make this more efficient
     ops_proofs: OpsProofs,
     state: PhantomData<State>,
-}
-
-pub trait OperationVerificationHelper {
-    fn get_channels(&self) -> &Channels;
-
-    fn get_locked_notes(&self) -> &LockedNotes;
-
-    fn get_utxos(&self) -> &Utxos;
-
-    fn get_declarations_by_service(
-        &self,
-        service: ServiceType,
-    ) -> Result<&Declarations, VerificationError>;
-
-    fn get_declarations_by_id(
-        &self,
-        id: &DeclarationId,
-    ) -> Result<&Declarations, VerificationError>;
-
-    fn get_min_stake(&self) -> &MinStake;
-
-    fn get_epoch(&self) -> Epoch;
-
-    fn get_block_slot(&self) -> Slot;
-
-    fn get_nullifiers(&self) -> &rpds::HashTrieSetSync<VoucherNullifier>;
-
-    fn get_claimable_vouchers_root(&self) -> &RewardsRoot;
-
-    fn get_channel_transfer_threshold(
-        &self,
-        channel_id: &ChannelId,
-    ) -> Result<ChannelKeyIndex, VerificationError>;
-
-    fn get_key_from_channel_at_index(
-        &self,
-        channel_id: &ChannelId,
-        key_index: &ChannelKeyIndex,
-    ) -> Result<Ed25519PublicKey, VerificationError>;
 }
 
 impl<State: VerificationState> SignedMantleTx<State> {
@@ -710,6 +667,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Preverified> {
 mod tests {
     use std::{collections::HashMap, sync::Arc};
 
+    use lb_cryptarchia_engine::{Epoch, Slot};
     use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
@@ -719,17 +677,18 @@ mod tests {
     use crate::{
         mantle::{
             Note, NoteId, Utxo,
-            channel::{ChannelState, SlotTimeframe, SlotTimeout},
+            channel::{ChannelState, Channels, SlotTimeframe, SlotTimeout},
             gas::MainnetGasConstants,
-            ledger::{Inputs, Outputs, OutputsError},
+            ledger::{Declarations, Inputs, Outputs, OutputsError, Utxos},
             ops::{
                 channel::{
-                    MsgId,
+                    ChannelId, ChannelKeyIndex, Ed25519PublicKey, MsgId,
                     config::{ChannelConfigOp, Keys},
                     deposit::DepositOp,
                     inscribe::InscriptionOp,
                     withdraw::ChannelWithdrawOp,
                 },
+                leader_claim::{RewardsRoot, VoucherNullifier},
                 transfer::{TransferError, TransferOp},
             },
             transactions::{MantleTxGasContext, Ops},
@@ -737,6 +696,7 @@ mod tests {
         proofs::channel_multi_sig_proof::{
             ChannelMultiSigProof, IndexedSignature, IndexedSignatures,
         },
+        sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
     };
 
     fn create_test_mantle_tx(ops: Vec<Op>) -> MantleTx {

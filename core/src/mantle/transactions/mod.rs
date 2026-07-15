@@ -6,6 +6,7 @@ pub mod hash;
 pub mod mantle_tx;
 pub mod states;
 pub mod tx;
+pub mod verification_helper;
 
 pub use builder::{MantleTxBuilder, TxBuilderError};
 pub use errors::VerificationError;
@@ -16,7 +17,8 @@ pub use genesis_tx::{
 pub use hash::TxHash;
 use lb_utils::bounded::UpperBoundedVec;
 pub use mantle_tx::{MantleTx, MantleTxContext, MantleTxGasContext};
-pub use tx::{GasPrices, OperationVerificationHelper, SignedMantleTx};
+pub use tx::{GasPrices, SignedMantleTx};
+pub use verification_helper::OperationVerificationHelper;
 
 use crate::mantle::{Op, OpProof};
 
