@@ -988,6 +988,7 @@ where
                 tx_builder,
                 req.change_public_key,
                 req.funding_public_keys,
+                0,
             )
             .await?;
 
@@ -1941,6 +1942,7 @@ pub mod wallet {
                     req.tx_builder,
                     req.change_public_key,
                     req.funding_public_keys,
+                    req.priority_fee,
                 )
                 .await?;
 

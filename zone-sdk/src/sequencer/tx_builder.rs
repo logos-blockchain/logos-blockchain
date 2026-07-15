@@ -1,6 +1,6 @@
 use lb_core::{
     mantle::{
-        MantleTx, SignedMantleTx, Transaction as _,
+        MantleTx, SignedMantleTx, Transaction as _, Value,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
@@ -19,6 +19,14 @@ use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
 use super::types::{Error, FundingConfig};
 use crate::adapter;
+
+/// Execution tip paid on top of the mandatory fee when funding a transaction,
+/// buffering gas-price movement between funding and inclusion: in the current
+/// spec the base fee moves at most 12.5% per block, so this covers a few
+/// blocks of drift at current fee levels.
+///
+/// TODO: promote to [`FundingConfig`] if clients need to tune it.
+const PRIORITY_FEE: Value = 200;
 
 /// Assemble the ops for a transaction, funding it from the node's wallet when
 /// a [`FundingConfig`] is present.
@@ -53,6 +61,7 @@ where
             change_public_key: funding.funding_pk,
             funding_public_keys: vec![funding.funding_pk],
             max_tx_fee: funding.max_tx_fee,
+            priority_fee: PRIORITY_FEE,
         })
         .await
         .map_err(|e| Error::Network(format!("funding failed: {e}")))?;
