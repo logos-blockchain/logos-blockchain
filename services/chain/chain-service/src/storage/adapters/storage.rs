@@ -11,7 +11,7 @@ use lb_core::{
     codec::{DeserializeOp as _, SerializeOp as _},
     events::Events,
     header::HeaderId,
-    mantle::{TxHash, traits::Hashable},
+    mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 use lb_cryptarchia_engine::Slot;
 use lb_storage_service::{

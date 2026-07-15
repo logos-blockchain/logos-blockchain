@@ -13,8 +13,11 @@ use lb_core::{
     events::Events,
     header::HeaderId,
     mantle::{
-        SignedMantleTx, TxHash, channel::ChannelState, ops::channel::ChannelId, traits::Hashable,
-        transactions::states::Preverified,
+        SignedMantleTx,
+        channel::ChannelState,
+        ops::channel::ChannelId,
+        traits::Hashable,
+        transactions::{hash::TxHash, states::Preverified},
     },
     sdp::{Declaration, DeclarationId},
 };

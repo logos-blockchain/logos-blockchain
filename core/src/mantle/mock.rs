@@ -9,8 +9,8 @@ use serde::{Serialize, de::DeserializeOwned};
 use crate::{
     codec::SerializeOp as _,
     mantle::{
-        TxHash,
         traits::{Hashable, Hasher, StorageSize},
+        transactions::hash::TxHash,
     },
 };
 

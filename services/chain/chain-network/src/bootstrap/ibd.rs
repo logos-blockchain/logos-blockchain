@@ -12,7 +12,7 @@ use lb_chain_service::{
 use lb_core::{
     block::Block,
     header::HeaderId,
-    mantle::{TxHash, traits::MantleTxWithProofs},
+    mantle::{traits::MantleTxWithProofs, transactions::hash::TxHash},
 };
 use lb_cryptarchia_sync::GetTipResponse;
 use lb_tx_service::backend::RecoverableMempool;

@@ -183,7 +183,7 @@ pub mod fund {
 }
 
 pub mod sign {
-    use lb_core::mantle::TxHash;
+    use lb_core::mantle::transactions::hash::TxHash;
     use lb_key_management_system_keys::keys::{
         Ed25519Key, ZkPublicKey, ZkSignature, secured_key::SecuredKey,
     };

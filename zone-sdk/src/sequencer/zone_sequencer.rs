@@ -15,7 +15,7 @@ use lb_core::{
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
         ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
         traits::Hashable as _,
-        transactions::{Ops, TxHash, states::Unverified},
+        transactions::{Ops, hash::TxHash, states::Unverified},
     },
 };
 use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};

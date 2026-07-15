@@ -1,6 +1,6 @@
 use lb_core::{
     header::HeaderId,
-    mantle::{TxHash, traits::Hashable},
+    mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 use lb_tx_service::{MempoolMsg, TransactionsByHashesResponse};
 use overwatch::services::relay::OutboundRelay;

@@ -10,7 +10,7 @@ use nom::{
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
-use super::{SignedMantleTx, TxHash};
+use super::SignedMantleTx;
 use crate::{
     crypto::{Digest as _, Hasher},
     mantle::{
@@ -25,7 +25,7 @@ use crate::{
             transfer::TransferOp,
         },
         traits::{GenesisTx as GenesisTxTrait, Hashable, hashable},
-        transactions::states::Preverified,
+        transactions::{hash::TxHash, states::Preverified},
     },
 };
 

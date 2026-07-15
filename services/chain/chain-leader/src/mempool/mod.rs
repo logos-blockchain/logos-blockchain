@@ -2,7 +2,7 @@ use std::pin::Pin;
 
 use async_trait::async_trait;
 use futures::Stream;
-use lb_core::{header::HeaderId, mantle::TxHash};
+use lb_core::{header::HeaderId, mantle::transactions::hash::TxHash};
 
 pub mod adapter;
 

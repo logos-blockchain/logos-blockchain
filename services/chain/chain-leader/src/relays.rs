@@ -4,7 +4,7 @@ use std::fmt::Debug;
 use lb_chain_service::api::CryptarchiaServiceData;
 use lb_core::{
     header::HeaderId,
-    mantle::{TxHash, traits::MantleTxWithProofs},
+    mantle::{traits::MantleTxWithProofs, transactions::hash::TxHash},
 };
 use lb_storage_service::StorageService;
 use lb_time_service::{TimeService, TimeServiceMessage, backends::TimeBackend as TimeBackendTrait};

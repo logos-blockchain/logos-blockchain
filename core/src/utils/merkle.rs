@@ -1,6 +1,6 @@
 use crate::{
     crypto::{Digest as _, Hash, Hasher},
-    mantle::{TxHash, traits::Hashable},
+    mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 
 pub fn node(left: impl AsRef<[u8]>, right: impl AsRef<[u8]>) -> [u8; 32] {

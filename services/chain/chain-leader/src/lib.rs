@@ -20,10 +20,10 @@ use lb_core::{
     block::{Block, BlockTransactions, Error as BlockError, MAX_BLOCK_TRANSACTIONS_SIZE},
     header::HeaderId,
     mantle::{
-        SignedMantleTx, TxHash,
+        SignedMantleTx,
         gas::MainnetGasConstants,
         traits::{Hashable, MantleTxWithProofs, StorageSize},
-        transactions::states::Preverified,
+        transactions::{hash::TxHash, states::Preverified},
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderPrivate},
 };

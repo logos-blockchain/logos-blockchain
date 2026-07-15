@@ -3,7 +3,11 @@ use lb_chain_network_service::network::adapters::libp2p::LibP2pAdapter;
 use lb_chain_service::CryptarchiaConsensus;
 use lb_core::{
     header::HeaderId,
-    mantle::{SignedMantleTx, TxHash, traits::Hashable, transactions::states::Preverified},
+    mantle::{
+        SignedMantleTx,
+        traits::Hashable,
+        transactions::{hash::TxHash, states::Preverified},
+    },
 };
 use lb_key_management_system_service::backend::preload::PreloadKMSBackend;
 use lb_sdp_service::{SdpSettings, state::SdpState};

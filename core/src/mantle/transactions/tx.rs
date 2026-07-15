@@ -1,17 +1,15 @@
 use std::{collections::HashMap, marker::PhantomData, sync::LazyLock};
 
-use ark_ff::PrimeField as _;
 use bytes::Bytes;
 use lb_core_macros::NomCodec;
 use lb_cryptarchia_engine::{Epoch, Slot};
-use lb_groth16::Fr;
 use lb_key_management_system_keys::keys::Ed25519PublicKey;
 use lb_utils::bounded::UpperBoundedVec;
 use nom::{Parser as _, combinator::all_consuming};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
-    crypto::{Digest as _, Hash, Hasher},
+    crypto::{Digest as _, Hasher},
     mantle::{
         Value,
         channel::Channels,
@@ -43,62 +41,13 @@ use crate::{
                 decode_signed_mantle_tx, encode_signed_mantle_tx, predict_signed_mantle_tx_size,
             },
             genesis_tx::{GENESIS_EXECUTION_GAS_PRICE, GENESIS_STORAGE_GAS_PRICE},
+            hash::TxHash,
             states::{Preverified, Unverified, VerificationState},
         },
     },
     proofs::leader_claim_proof::{LeaderClaimProof as _, LeaderClaimPublic},
     sdp::{DeclarationId, MinStake, ServiceType, locked_notes::LockedNotes},
-    utils::serde_bytes_newtype,
 };
-
-/// The hash of a transaction
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash, PartialOrd, Ord)]
-pub struct TxHash(pub Hash);
-serde_bytes_newtype!(TxHash, 32);
-
-impl From<Hash> for TxHash {
-    fn from(hash: Hash) -> Self {
-        Self(hash)
-    }
-}
-
-impl From<TxHash> for Hash {
-    fn from(hash: TxHash) -> Self {
-        hash.0
-    }
-}
-
-impl AsRef<Hash> for TxHash {
-    fn as_ref(&self) -> &Hash {
-        &self.0
-    }
-}
-
-impl From<TxHash> for Bytes {
-    fn from(tx_hash: TxHash) -> Self {
-        Self::copy_from_slice(&tx_hash.0)
-    }
-}
-
-impl TxHash {
-    /// For testing purposes
-    #[cfg(test)]
-    pub fn random(mut rng: impl rand::RngCore) -> Self {
-        let mut bytes = [0u8; 32];
-        rng.fill_bytes(&mut bytes);
-        Self(bytes)
-    }
-
-    #[must_use]
-    pub fn as_signing_bytes(&self) -> Bytes {
-        Bytes::from(self.0.to_vec())
-    }
-
-    #[must_use]
-    pub fn to_fr(&self) -> Fr {
-        Fr::from_le_bytes_mod_order(&self.0)
-    }
-}
 
 #[derive(Serialize, Deserialize)]
 struct MantleTxDeSerImpl {
@@ -1050,6 +999,7 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Preverified> {
 mod tests {
     use std::sync::Arc;
 
+    use lb_groth16::Fr;
     use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
     use num_bigint::BigUint;
     use rpds::HashTrieSetSync;

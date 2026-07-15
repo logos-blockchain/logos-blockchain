@@ -1,7 +1,8 @@
 use crate::mantle::{
-    CryptarchiaParameter, MantleTx, OpProof, TxHash,
+    CryptarchiaParameter, MantleTx, OpProof,
     ops::{channel::inscribe::InscriptionOp, sdp::SDPDeclareOp, transfer::TransferOp},
     traits::Hashable,
+    transactions::hash::TxHash,
 };
 
 /// A genesis transaction as specified in the

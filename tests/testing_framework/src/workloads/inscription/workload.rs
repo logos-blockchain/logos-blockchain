@@ -17,7 +17,7 @@ use lb_core::mantle::{
         },
     },
     traits::Hashable as _,
-    transactions::{TxHash, states::Preverified},
+    transactions::{hash::TxHash, states::Preverified},
 };
 use lb_key_management_system_service::keys::Ed25519Key;
 use rand::{seq::SliceRandom as _, thread_rng};

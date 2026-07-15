@@ -13,8 +13,8 @@ use crate::{
     codec::{DeserializeOp as _, SerializeOp as _},
     header::{ContentId, Header, HeaderId},
     mantle::{
-        TxHash,
         traits::{Hashable, StorageSize},
+        transactions::hash::TxHash,
     },
     proofs::leader_proof::{Groth16LeaderProof, LeaderProof as _},
     utils::merkle,

@@ -9,7 +9,7 @@ use lb_core::{
             channel::{ChannelId, MsgId, inscribe::Inscription},
         },
         traits::Hashable as _,
-        transactions::{TxHash, states::Unverified},
+        transactions::{hash::TxHash, states::Unverified},
     },
 };
 use rpds::HashTrieSetSync;

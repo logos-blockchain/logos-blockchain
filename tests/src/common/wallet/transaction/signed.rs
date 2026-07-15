@@ -1,6 +1,9 @@
 //! Signed wallet transaction plus reservation and fee accounting metadata.
 
-use lb_core::mantle::{SignedMantleTx, TxHash, transactions::states::Preverified};
+use lb_core::mantle::{
+    SignedMantleTx,
+    transactions::{hash::TxHash, states::Preverified},
+};
 
 use crate::common::wallet::WalletReservedInputs;
 

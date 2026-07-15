@@ -3,7 +3,7 @@ use std::pin::Pin;
 use futures::Stream;
 use lb_core::{
     header::HeaderId,
-    mantle::{TxHash, traits::Hashable},
+    mantle::{traits::Hashable, transactions::hash::TxHash},
 };
 use lb_tx_service::MempoolMsg;
 use overwatch::services::relay::OutboundRelay;

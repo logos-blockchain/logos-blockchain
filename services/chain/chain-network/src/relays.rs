@@ -7,7 +7,7 @@ use std::{
 use lb_chain_service::api::{CryptarchiaServiceApi, CryptarchiaServiceData};
 use lb_core::{
     header::HeaderId,
-    mantle::{TxHash, traits::MantleTxWithProofs},
+    mantle::{traits::MantleTxWithProofs, transactions::hash::TxHash},
 };
 use lb_network_service::{NetworkService, message::BackendNetworkMsg};
 use lb_storage_service::StorageService;

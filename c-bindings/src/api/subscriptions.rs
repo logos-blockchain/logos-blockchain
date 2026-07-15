@@ -5,9 +5,8 @@ use lb_chain_service::api::CryptarchiaServiceApi;
 use lb_core::{
     block::{Block as CoreBlock, BlockTransactions},
     mantle::{
-        TxHash,
         traits::{Hashable, StorageSize, hashable},
-        transactions::states::Unverified,
+        transactions::{hash::TxHash, states::Unverified},
     },
 };
 use lb_node::{

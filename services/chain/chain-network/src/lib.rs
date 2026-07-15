@@ -20,8 +20,8 @@ use lb_core::{
     block::{Block, BlockTransactions, Proposal},
     header::HeaderId,
     mantle::{
-        TxHash,
         traits::{Hashable, MantleTxWithProofs},
+        transactions::hash::TxHash,
     },
 };
 pub use lb_cryptarchia_engine::{Epoch, Slot};

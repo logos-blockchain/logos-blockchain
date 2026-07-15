@@ -15,7 +15,7 @@ use lb_core::{
     events::{Event, Events, HeaderEvent, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GasConstants, NoteId, TxHash, Utxo, Value,
+        GasConstants, NoteId, Utxo, Value,
         ops::{
             Op, OpId as _,
             channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
@@ -23,7 +23,7 @@ use lb_core::{
             transfer::TransferOp,
         },
         traits::MantleTxWithProofs,
-        transactions::{MantleTxContext, builder::MantleTxBuilder},
+        transactions::{MantleTxContext, builder::MantleTxBuilder, hash::TxHash},
     },
     proofs::leader_proof::LeaderProof as _,
 };

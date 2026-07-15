@@ -12,7 +12,7 @@ use lb_core::{
         },
         traits::Hashable as _,
         transactions::{
-            TxHash,
+            hash::TxHash,
             states::{Unverified, VerificationState},
         },
     },
