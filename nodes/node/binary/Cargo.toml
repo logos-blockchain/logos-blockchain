@@ -100,5 +100,5 @@ testing-disable-proposal-publish = ["lb-chain-leader-service/testing-disable-pro
 #
 # Builds using this feature must also be compiled with:
 #   RUSTFLAGS="--cfg tokio_unstable"
-tokio-console = ["lb-tracing-service/tokio-console", "tokio/tracing"]
+tokio-console = ["lb-tracing-service/tokio-console", "overwatch/tokio-task-names", "tokio/tracing"]
 tracing       = []
