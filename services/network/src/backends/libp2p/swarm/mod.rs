@@ -266,6 +266,13 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                 self.connect(dial);
             }
             NetworkCommand::Info { reply } => {
+                let discovered_peers: Vec<PeerId> = self
+                    .swarm
+                    .kademlia_discovered_peers()
+                    .into_iter()
+                    .map(|peer_info| peer_info.peer_id)
+                    .collect();
+                let n_discovered_peers = discovered_peers.len();
                 let swarm = self.swarm.swarm();
                 let network_info = swarm.network_info();
                 let counters = network_info.connection_counters();
@@ -276,6 +283,8 @@ impl<R: Clone + Send + RngCore + 'static> SwarmHandler<R> {
                     n_peers: network_info.num_peers(),
                     n_connections: counters.num_connections(),
                     n_pending_connections: counters.num_pending(),
+                    discovered_peers,
+                    n_discovered_peers,
                 };
                 log_error!(reply.send(info));
             }
