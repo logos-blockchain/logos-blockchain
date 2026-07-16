@@ -59,7 +59,7 @@ pub(crate) async fn run_deposit(args: DepositArgs) -> RunResult<()> {
         amount: args.amount,
         metadata: goal_metadata,
     };
-    let (_receipt, _signed_tx) = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
+    let _receipt = sequencer.handle().submit_signed_tx(signed_tx, msg_id)?;
     println!(
         "{} deposit: submitted tx_hash={} msg_id={}",
         timestamp(),

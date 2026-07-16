@@ -9,8 +9,8 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 use super::{
     types::{
-        Error, Event, PublishResult, SequencerChannelView, SequencerCheckpoint, TurnNotification,
-        TxStatusUpdate, WithdrawArg,
+        Error, Event, SequencerChannelView, SequencerCheckpoint, TurnNotification, TxStatusUpdate,
+        WithdrawArg,
     },
     zone_sequencer::ActorRequest,
 };
@@ -65,10 +65,7 @@ impl SequencerClient {
     /// Enqueue an inscription onto the zone's channel.
     ///
     /// Async counterpart of [`super::SequencerHandle::publish`].
-    pub async fn publish(
-        &self,
-        data: Inscription,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    pub async fn publish(&self, data: Inscription) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::Publish { data, response_tx })?;
         Self::recv(response_rx).await?
@@ -82,7 +79,7 @@ impl SequencerClient {
         &self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    ) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::PublishAtomicWithdraw {
             inscribe,
@@ -122,7 +119,7 @@ impl SequencerClient {
         &self,
         tx: SignedMantleTx<Unverified>,
         msg_id: MsgId,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    ) -> Result<PublishReceipt, Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::SubmitSignedTx {
             tx,

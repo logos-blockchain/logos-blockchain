@@ -592,10 +592,7 @@ where
     /// Core publish logic. Shared by [`SequencerHandle::publish`] (called
     /// from the drive task) and the actor's [`ActorRequest::Publish`] handler
     /// (called from outside the drive task via [`SequencerClient`]).
-    pub(super) async fn do_publish(
-        &mut self,
-        data: Inscription,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    pub(super) async fn do_publish(&mut self, data: Inscription) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
 
@@ -850,7 +847,7 @@ where
         &mut self,
         tx: SignedMantleTx<Unverified>,
         msg_id: MsgId,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    ) -> Result<PublishReceipt, Error> {
         self.ensure_ready()?;
 
         // Safe to unwrap — `ensure_ready` checks state.
@@ -1003,6 +1000,15 @@ where
         match node.post_transaction(signed_tx).await {
             Ok(()) => results.push((tx_hash, true)),
             Err(e) => {
+                // TODO: We need to distinguish node rejection (invalid tx) from node
+                // unavailability.   Any post error (e.g. network failure, badly
+                // formed tx) lands here: the tx stays   pending, is retried
+                // every time, and is only ever evicted by chain inclusion.
+                //   That never happens for a rejected tx.
+                //   Since batches are parent-before-child and we abort on first error, one
+                // rejected   inscription also blocks every tx behind it.
+                //   Rejections should evict the tx.
+
                 // Node looks unavailable — bail on the rest of the batch.
                 // Remaining txs stay `!posted` in `state.pending` and the
                 // next `resubmit_pending` tick retries.

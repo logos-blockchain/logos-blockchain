@@ -7,7 +7,8 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 
 use super::{
-    types::{Error, PublishResult, SequencerCheckpoint, WithdrawArg},
+    PublishResult,
+    types::{Error, WithdrawArg},
     zone_sequencer::ZoneSequencer,
 };
 use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
@@ -18,7 +19,7 @@ use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
 /// borrow of the sequencer, only the drive task can hold one — the borrow
 /// checker enforces "drive-loop only," which removes any actor-vs-caller
 /// deadlock window and lets every state-mutating method return the resulting
-/// [`SequencerCheckpoint`] inline so the caller can persist outbox + checkpoint
+/// [`PublishReceipt`] inline so the caller can persist outbox + checkpoint
 /// atomically.
 ///
 /// Pattern:
@@ -26,8 +27,11 @@ use crate::{adapter, sequencer::zone_sequencer::PublishReceipt};
 /// loop {
 ///     tokio::select! {
 ///         Some(msg) = ui_rx.recv() => {
-///             let (result, cp) = sequencer.handle().publish(msg)?;
-///             db.tx(|t| { t.outbox(result); t.save_checkpoint(cp); });
+///             let publish_receipt = sequencer.handle().publish(msg)?;
+///             db.tx(|t| {
+///                 t.outbox(publish_receipt);
+///                 t.save_checkpoint(publish_receipt.checkpoint());
+///             });
 ///         }
 ///         ev = sequencer.next_event() => {
 ///             handle_event(ev, &mut sequencer, &mut db).await;
@@ -73,10 +77,7 @@ where
     /// locally and posted when the stream resumes (or when our turn comes
     /// back). To wait for readiness asynchronously, subscribe via
     /// [`ZoneSequencer::subscribe_ready`].
-    pub async fn publish(
-        &mut self,
-        data: Inscription,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    pub async fn publish(&mut self, data: Inscription) -> Result<PublishResult, Error> {
         self.sequencer.do_publish(data).await
     }
 
@@ -106,13 +107,13 @@ where
     /// Synchronously records the tx as pending and queues a
     /// `post_transaction` future onto the drive loop's in-flight pool — the
     /// post runs the next time the drive loop polls `next_event`. The
-    /// returned [`PublishResult`] reflects the queued state, not a network
+    /// returned [`PublishReceipt`] reflects the queued state, not a network
     /// acknowledgement.
     pub fn submit_signed_tx(
         &mut self,
         tx: SignedMantleTx<Unverified>,
         msg_id: MsgId,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    ) -> Result<PublishReceipt, Error> {
         self.sequencer.do_submit_signed_tx(tx, msg_id)
     }
 
@@ -174,7 +175,7 @@ where
         &mut self,
         inscribe: Inscription,
         withdraws: Vec<WithdrawArg>,
-    ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    ) -> Result<PublishReceipt, Error> {
         self.sequencer
             .do_publish_atomic_withdraw(inscribe, withdraws)
             .await

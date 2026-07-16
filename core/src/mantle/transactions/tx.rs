@@ -590,10 +590,15 @@ impl SignedMantleTx<Unverified> {
         Ok(self.into_preverified())
     }
 
-    /// Skips verification. Genesis/testing only — see `new_trusted`.
+    /// Converts a `SignedMantleTx<Unverified>` into a
+    /// `SignedMantleTx<Preverified>` without performing any verification.
+    ///
+    /// This function is intended for
+    /// [`GenesisTx`](crate::mantle::transactions::genesis_tx::GenesisTx) and
+    /// testing purposes only.
     #[must_use]
     #[doc(hidden)]
-    pub fn into_trusted(self) -> SignedMantleTx<Preverified> {
+    pub(crate) fn into_trusted(self) -> SignedMantleTx<Preverified> {
         SignedMantleTx::new_trusted(self.mantle_tx, self.ops_proofs)
     }
 }
@@ -857,6 +862,16 @@ impl<'tx> VerifiedOps<'tx> {
         self.index += 1;
         Some(Ok(op))
     }
+
+    #[must_use]
+    pub const fn tx_hash(&self) -> &TxHash {
+        &self.tx_hash
+    }
+
+    #[must_use]
+    pub const fn tx_hash_bytes(&self) -> &Bytes {
+        &self.tx_hash_bytes
+    }
 }
 
 impl<'tx> From<&'tx SignedMantleTx<Preverified>> for VerifiedOps<'tx> {
@@ -1089,9 +1104,9 @@ impl<'de> Deserialize<'de> for SignedMantleTx<Unverified> {
     }
 }
 
-// This `impl` might be removed in favor of explicit preverification at specific
-// boundaries. E.g.: Make an HTTP service work with `Unverify` and only
-// `Preverify` at that Service's boundary.
+// TODO: This `impl` might be removed in favor of explicit preverification at
+// specific boundaries.   E.g.: HTTP service uses `Unverify` and only runs
+// `preverify` when crossing the boundary.
 impl<'de> Deserialize<'de> for SignedMantleTx<Preverified> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

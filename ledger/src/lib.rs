@@ -676,7 +676,6 @@ impl LedgerState {
         Tx: PreverifiedMantleTx + 'tx + AuthenticatedMantleTx<Context = GasPrices>,
     {
         let mut verified_ops = tx.verified_ops();
-        let tx_hash = tx.hash();
 
         let mut balance: Balance = 0;
         let mut tx_events = Vec::new();
@@ -690,8 +689,13 @@ impl LedgerState {
             let Some(op) = verified_ops.next(&helper).transpose()? else {
                 break;
             };
-            (self, balance, tx_events) =
-                self.try_apply_op::<_, Constants>(op, config, &tx_hash, balance, tx_events)?;
+            (self, balance, tx_events) = self.try_apply_op::<_, Constants>(
+                op,
+                config,
+                verified_ops.tx_hash(),
+                balance,
+                tx_events,
+            )?;
         }
 
         Ok((self, balance, tx_events))
