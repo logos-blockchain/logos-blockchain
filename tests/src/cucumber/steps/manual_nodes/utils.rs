@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -12,7 +13,10 @@ use lb_chain_service::{ChainServiceInfo, ChainServiceMode, CryptarchiaInfo, Stat
 use lb_core::mantle::{GenesisTx as _, Utxo, ops::OpId as _};
 use lb_http_api_common::paths::CRYPTARCHIA_INFO;
 use lb_libp2p::PeerId;
-use lb_node::config::{DeploymentSettings, RunConfig};
+use lb_node::config::{
+    DeploymentSettings, RunConfig,
+    tracing::serde::console::{Layer as ConsoleLayer, TokioConfig},
+};
 use lb_testing_framework::{
     LbcEnv, LbcManualCluster, NodeHttpClient, USER_CONFIG_FILE, configs::wallet::WalletAccount,
 };
@@ -33,6 +37,7 @@ use crate::cucumber::{
                 save_named_node_state_snapshot, validate_snapshot_path_component,
             },
         },
+        tokio_console::profile::TokioConsoleProfileNode,
     },
     utils::{
         display_last_path_components, extract_child_dir_name, funding_wallet_pk_from_node_yaml,
@@ -631,14 +636,16 @@ pub async fn start_node(
             message: "No local cluster available".into(),
         });
     }
-    let startup_settings = get_startup_settings(world, initial_peers).inspect_err(|e| {
-        warn!(target: TARGET, "Step `{step}` error: {e}");
-    })?;
+    let startup_settings =
+        get_startup_settings(world, initial_peers, node_name).inspect_err(|e| {
+            warn!(target: TARGET, "Step `{step}` error: {e}");
+        })?;
     let is_bootstrap_node = startup_settings.is_bootstrap_node;
     let join_external_network = startup_settings.join_external_network;
     let persist_dir = world.scenario_base_dir.join(node_name);
     let runtime_dir_prefix = format!("{node_name}_");
     let final_dir_ignore_list = matching_child_dirs(&persist_dir, &runtime_dir_prefix);
+    let tokio_console_node = startup_settings.tokio_console_node.clone();
     let start_options = StartNodeOptions::default()
         .with_peers(startup_settings.peer_selection)
         .with_persist_dir(persist_dir)
@@ -652,6 +659,7 @@ pub async fn start_node(
                 &startup_settings.ibd_peers,
                 &startup_settings.user_config_overrides,
                 &startup_settings.deployment_config_overrides,
+                startup_settings.tokio_console_node.as_ref(),
             )?;
             Ok(config)
         });
@@ -817,7 +825,29 @@ pub async fn start_node(
         }
     }
 
+    if let Some(tokio_console) = tokio_console_node {
+        check_tokio_console_port(node_name, tokio_console.port);
+    }
+
     Ok(())
+}
+
+fn check_tokio_console_port(node_name: &str, port: u16) {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+
+    match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+        Ok(_) => info!(
+            target: TARGET,
+            "Tokio console endpoint for `{node_name}` is listening at port `{port}`, connect with \
+            `tokio-console http://127.0.0.1:{port}`"
+        ),
+        Err(error) => warn!(
+            target: TARGET,
+            "Tokio console endpoint for `{node_name}` is not reachable at \
+            `http://127.0.0.1:{port}`: {error}. Refer to the repo root `README.md -> Tokio task \
+            profiling` for general instructions."
+        ),
+    }
 }
 
 /// Stop a node and leave it down.
@@ -938,11 +968,13 @@ struct StartupSettings {
     deployment_config_overrides: Vec<ConfigOverride>,
     deployment_settings_override: Option<DeploymentSettings>,
     manual_node_config_overrides: ManualNodeConfigOverrides,
+    tokio_console_node: Option<TokioConsoleProfileNode>,
 }
 
 fn get_startup_settings(
     world: &CucumberWorld,
     initial_peers: &[String],
+    node_name: &str,
 ) -> Result<StartupSettings, StepError> {
     let peer_selection = if initial_peers.is_empty() {
         PeerSelection::None
@@ -974,6 +1006,7 @@ fn get_startup_settings(
         .transpose()?;
     let user_config_overrides = world.user_config_overrides.clone();
     let deployment_config_overrides = world.deployment_config_overrides.clone();
+    let tokio_console_node = world.tokio_console_profile.node(node_name).cloned();
 
     Ok(StartupSettings {
         peer_selection,
@@ -985,6 +1018,7 @@ fn get_startup_settings(
         manual_node_config_overrides: world.manual_node_config_overrides.clone(),
         user_config_overrides,
         deployment_config_overrides,
+        tokio_console_node,
     })
 }
 
@@ -998,6 +1032,7 @@ fn prepare_config_patch(
     ibd_peers: &HashSet<PeerId>,
     user_config_overrides: &[ConfigOverride],
     deployment_config_overrides: &[ConfigOverride],
+    tokio_console_node: Option<&TokioConsoleProfileNode>,
 ) -> Result<(), StepError> {
     if join_external_network {
         config.deployment = deployment_override
@@ -1025,6 +1060,12 @@ fn prepare_config_patch(
         .ibd
         .peers
         .clone_from(ibd_peers);
+    if let Some(node) = &tokio_console_node {
+        config.user.tracing.console = ConsoleLayer::Console(TokioConfig {
+            bind_address: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port: node.port,
+        });
+    }
 
     apply_user_config_overrides(config, user_config_overrides)?;
     apply_deployment_config_overrides(config, deployment_config_overrides)?;

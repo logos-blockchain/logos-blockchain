@@ -37,15 +37,16 @@ use super::{
     tables::{
         ConcurrentZoneMessageRow, GeneratedZoneMessageBatch, concurrent_zone_message_rows,
         custom_tx_rows, generated_zone_message_batches, generated_zone_message_sequencers,
-        group_zone_messages_by_sequencer, single_column_table, zone_account_balances,
-        zone_atomic_withdraw_rows, zone_balance_rows, zone_config_row, zone_message_rows,
-        zone_node_resource_rows, zone_sequencer_start_rows, zone_sequencing_state_row,
+        group_zone_messages_by_sequencer, zone_account_balances, zone_atomic_withdraw_rows,
+        zone_balance_rows, zone_config_row, zone_message_rows, zone_node_resource_rows,
+        zone_sequencer_start_rows, zone_sequencing_state_row,
     },
 };
 use crate::{
     common::mantle_inscription::make_inscription,
     cucumber::{
         error::{StepError, StepResult},
+        steps::parse_steps::single_column_table,
         world::{CucumberWorld, ZoneSequencerStartup},
     },
 };

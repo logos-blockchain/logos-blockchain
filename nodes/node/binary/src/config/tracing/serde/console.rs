@@ -32,8 +32,8 @@ pub struct TokioConfig {
 impl Default for TokioConfig {
     fn default() -> Self {
         Self {
-            bind_address: Ipv4Addr::UNSPECIFIED.into(),
-            port: 9_000,
+            bind_address: Ipv4Addr::LOCALHOST.into(),
+            port: 6_669,
         }
     }
 }

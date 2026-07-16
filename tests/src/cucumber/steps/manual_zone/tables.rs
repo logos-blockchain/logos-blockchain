@@ -3,7 +3,17 @@ use std::collections::{HashMap, HashSet};
 use cucumber::gherkin::Step;
 use lb_core::mantle::ops::channel::inscribe::Inscription;
 
-use crate::{common::mantle_inscription::make_inscription, cucumber::error::StepError};
+use crate::{
+    common::mantle_inscription::make_inscription,
+    cucumber::{
+        error::StepError,
+        steps::parse_steps::{
+            comma_separated_aliases, invalid_table_row, optional_string_cell, parse_list_cell,
+            parse_required_bool_cell, parse_required_string_cell, parse_single_table_row,
+            parse_table_rows, parse_u32_cell, parse_u64_cell, parse_usize_cell,
+        },
+    },
+};
 
 #[derive(Clone)]
 pub(super) struct ConcurrentZoneMessageRow {
@@ -60,7 +70,7 @@ pub(super) struct ZoneNodeResourcesRow {
 }
 
 pub(super) fn zone_node_resource_rows(step: &Step) -> Result<Vec<ZoneNodeResourcesRow>, StepError> {
-    let rows = parse_zone_table_rows(
+    let rows = parse_table_rows(
         step,
         &[
             "node_name",
@@ -69,7 +79,7 @@ pub(super) fn zone_node_resource_rows(step: &Step) -> Result<Vec<ZoneNodeResourc
             "connected_to",
             "sequencers",
         ],
-        "Zone node resources",
+        "Zone node",
         parse_zone_node_resource_row,
     )?;
 
@@ -87,7 +97,7 @@ fn parse_zone_node_resource_row(row: &[String]) -> Result<ZoneNodeResourcesRow, 
             connected_to,
             sequencers,
         ] => {
-            let node_name = required_cell(node_name, "node_name")?;
+            let node_name = parse_required_string_cell(node_name, "node_name", "Zone node")?;
             let account_index =
                 account_index
                     .trim()
@@ -95,9 +105,9 @@ fn parse_zone_node_resource_row(row: &[String]) -> Result<ZoneNodeResourcesRow, 
                     .map_err(|error| StepError::InvalidArgument {
                         message: format!("Invalid zone account index '{account_index}': {error}"),
                     })?;
-            let wallet_name = required_cell(wallet_name, "wallet_name")?;
-            let connected_to = optional_cell(connected_to);
-            let sequencers = comma_separated_aliases(sequencers, "sequencers")?;
+            let wallet_name = parse_required_string_cell(wallet_name, "wallet_name", "Zone node")?;
+            let connected_to = optional_string_cell(connected_to);
+            let sequencers = comma_separated_aliases(sequencers, "sequencers", "Zone node")?;
 
             Ok(ZoneNodeResourcesRow {
                 node_name,
@@ -107,8 +117,8 @@ fn parse_zone_node_resource_row(row: &[String]) -> Result<ZoneNodeResourcesRow, 
                 sequencers,
             })
         }
-        _ => invalid_zone_table_row(
-            "Zone node resources",
+        _ => invalid_table_row(
+            "Zone node",
             &[
                 "node_name",
                 "account_index",
@@ -144,52 +154,17 @@ fn ensure_unique_zone_node_resources(rows: &[ZoneNodeResourcesRow]) -> Result<()
     Ok(())
 }
 
-fn required_cell(value: &str, name: &str) -> Result<String, StepError> {
-    let value = value.trim();
-
-    if value.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: format!("Zone node resources `{name}` cannot be empty"),
-        });
-    }
-
-    Ok(value.to_owned())
-}
-
-fn optional_cell(value: &str) -> Option<String> {
-    let value = value.trim();
-
-    (!value.is_empty()).then(|| value.to_owned())
-}
-
-fn comma_separated_aliases(value: &str, name: &str) -> Result<Vec<String>, StepError> {
-    let aliases = value
-        .split(',')
-        .map(str::trim)
-        .filter(|alias| !alias.is_empty())
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-
-    if aliases.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: format!("Zone node resources `{name}` must list at least one alias"),
-        });
-    }
-
-    Ok(aliases)
-}
-
 pub(super) fn zone_message_rows(step: &Step) -> Result<Vec<(String, Inscription)>, StepError> {
-    parse_zone_table_rows(step, &["alias", "data"], "Zone message", |row| match row {
+    parse_table_rows(step, &["alias", "data"], "Zone message", |row| match row {
         [alias, data] => Ok((alias.clone(), make_inscription(data))),
-        _ => invalid_zone_table_row("Zone message", &["alias", "data"], row.len()),
+        _ => invalid_table_row("Zone message", &["alias", "data"], row.len()),
     })
 }
 
 pub(super) fn concurrent_zone_message_rows(
     step: &Step,
 ) -> Result<Vec<ConcurrentZoneMessageRow>, StepError> {
-    parse_zone_table_rows(
+    parse_table_rows(
         step,
         &["sequencer", "alias", "data"],
         "Concurrent zone message",
@@ -199,7 +174,7 @@ pub(super) fn concurrent_zone_message_rows(
                 message_alias: message_alias.clone(),
                 payload: make_inscription(data),
             }),
-            _ => invalid_zone_table_row(
+            _ => invalid_table_row(
                 "Concurrent zone message",
                 &["sequencer", "alias", "data"],
                 row.len(),
@@ -216,7 +191,7 @@ pub(super) struct CustomTxRow {
 }
 
 pub(super) fn custom_tx_rows(step: &Step) -> Result<Vec<CustomTxRow>, StepError> {
-    parse_zone_table_rows(
+    parse_table_rows(
         step,
         &["sequencer", "transactions", "inscriptions"],
         "Concurrent custom transaction",
@@ -226,7 +201,7 @@ pub(super) fn custom_tx_rows(step: &Step) -> Result<Vec<CustomTxRow>, StepError>
                 transactions: parse_u32_cell(transactions, "transactions")?,
                 inscriptions: parse_u32_cell(inscriptions, "inscriptions")?,
             }),
-            _ => invalid_zone_table_row(
+            _ => invalid_table_row(
                 "Concurrent custom transaction",
                 &["sequencer", "transactions", "inscriptions"],
                 row.len(),
@@ -253,7 +228,7 @@ pub(super) fn group_zone_messages_by_sequencer(
 pub(super) fn generated_zone_message_batches(
     step: &Step,
 ) -> Result<Vec<GeneratedZoneMessageBatch>, StepError> {
-    parse_zone_table_rows(
+    parse_table_rows(
         step,
         &["sequencer", "data_prefix"],
         "Generated zone message batch",
@@ -262,7 +237,7 @@ pub(super) fn generated_zone_message_batches(
                 sequencer_alias: sequencer_alias.clone(),
                 data_prefix: data_prefix.clone(),
             }),
-            _ => invalid_zone_table_row(
+            _ => invalid_table_row(
                 "Generated zone message batch",
                 &["sequencer", "data_prefix"],
                 row.len(),
@@ -272,13 +247,13 @@ pub(super) fn generated_zone_message_batches(
 }
 
 pub(super) fn generated_zone_message_sequencers(step: &Step) -> Result<Vec<String>, StepError> {
-    parse_zone_table_rows(
+    parse_table_rows(
         step,
         &["sequencer"],
         "Generated zone message sequencer",
         |row| match row {
             [sequencer_alias] => Ok(sequencer_alias.clone()),
-            _ => invalid_zone_table_row(
+            _ => invalid_table_row(
                 "Generated zone message sequencer",
                 &["sequencer"],
                 row.len(),
@@ -290,7 +265,7 @@ pub(super) fn generated_zone_message_sequencers(step: &Step) -> Result<Vec<Strin
 pub(super) fn zone_sequencer_start_rows(
     step: &Step,
 ) -> Result<Vec<ZoneSequencerStartRow>, StepError> {
-    parse_zone_table_rows(
+    parse_table_rows(
         step,
         &[
             "alias",
@@ -307,14 +282,15 @@ pub(super) fn zone_sequencer_start_rows(
                 passive_republish_orphans,
             ] => Ok(ZoneSequencerStartRow {
                 alias: alias.clone(),
-                indexer: parse_bool_cell(indexer, "indexer")?,
+                indexer: parse_required_bool_cell(indexer, "indexer", "Zone sequencer startup")?,
                 pending_submit_depth: pending_submit_depth.clone(),
-                passive_republish_orphans: parse_bool_cell(
+                passive_republish_orphans: parse_required_bool_cell(
                     passive_republish_orphans,
                     "passive_republish_orphans",
+                    "Zone sequencer startup",
                 )?,
             }),
-            _ => invalid_zone_table_row(
+            _ => invalid_table_row(
                 "Zone sequencer startup",
                 &[
                     "alias",
@@ -329,7 +305,7 @@ pub(super) fn zone_sequencer_start_rows(
 }
 
 pub(super) fn zone_sequencing_state_row(step: &Step) -> Result<ZoneSequencingStateRow, StepError> {
-    parse_single_zone_table_row(
+    parse_single_table_row(
         step,
         &[
             "own_key_index",
@@ -353,7 +329,7 @@ pub(super) fn zone_sequencing_state_row(step: &Step) -> Result<ZoneSequencingSta
                 )?,
                 timeout_seconds: parse_u64_cell(timeout_seconds, "time_out")?,
             }),
-            _ => invalid_zone_table_row(
+            _ => invalid_table_row(
                 "Zone sequencing state",
                 &[
                     "own_key_index",
@@ -368,7 +344,7 @@ pub(super) fn zone_sequencing_state_row(step: &Step) -> Result<ZoneSequencingSta
 }
 
 pub(super) fn zone_config_row(step: &Step) -> Result<ZoneConfigRow, StepError> {
-    parse_single_zone_table_row(
+    parse_single_table_row(
         step,
         &[
             "config_name",
@@ -390,9 +366,10 @@ pub(super) fn zone_config_row(step: &Step) -> Result<ZoneConfigRow, StepError> {
                 authorized_sequencers: parse_list_cell(
                     authorized_sequencers,
                     "authorized_sequencers",
+                    "Zone config transaction",
                 )?,
             }),
-            _ => invalid_zone_table_row(
+            _ => invalid_table_row(
                 "Zone config transaction",
                 &[
                     "config_name",
@@ -407,7 +384,7 @@ pub(super) fn zone_config_row(step: &Step) -> Result<ZoneConfigRow, StepError> {
 }
 
 pub(super) fn zone_account_balances(step: &Step) -> Result<Vec<ZoneAccountBalance>, StepError> {
-    parse_zone_table_rows(
+    parse_table_rows(
         step,
         &["account", "balance"],
         "Zone account balance",
@@ -420,13 +397,13 @@ pub(super) fn zone_account_balances(step: &Step) -> Result<Vec<ZoneAccountBalanc
                         message: format!("Invalid zone account balance '{balance}': {error}"),
                     })?,
             }),
-            _ => invalid_zone_table_row("Zone account balance", &["account", "balance"], row.len()),
+            _ => invalid_table_row("Zone account balance", &["account", "balance"], row.len()),
         },
     )
 }
 
 pub(super) fn zone_balance_rows(step: &Step) -> Result<Vec<ZoneBalanceRow>, StepError> {
-    parse_zone_table_rows(
+    parse_table_rows(
         step,
         &["sequencer", "alias", "account", "delta"],
         "Zone balance update",
@@ -439,7 +416,7 @@ pub(super) fn zone_balance_rows(step: &Step) -> Result<Vec<ZoneBalanceRow>, Step
                     message: format!("Invalid zone balance delta '{delta}': {error}"),
                 })?,
             }),
-            _ => invalid_zone_table_row(
+            _ => invalid_table_row(
                 "Zone balance update",
                 &["sequencer", "alias", "account", "delta"],
                 row.len(),
@@ -454,7 +431,7 @@ pub(super) fn zone_balance_rows(step: &Step) -> Result<Vec<ZoneBalanceRow>, Step
 /// notes so the SDK's `publish_atomic_withdraw(inscribe, vec![WithdrawArg])`
 /// signature is exercised at full width (multi-arg + multi-output-per-arg).
 pub(super) fn zone_atomic_withdraw_rows(step: &Step) -> Result<Vec<(String, Vec<u64>)>, StepError> {
-    parse_zone_table_rows(
+    parse_table_rows(
         step,
         &["withdraw", "outputs"],
         "Atomic withdraw",
@@ -479,77 +456,10 @@ pub(super) fn zone_atomic_withdraw_rows(step: &Step) -> Result<Vec<(String, Vec<
                 }
                 Ok((alias.clone(), amounts))
             }
-            _ => invalid_zone_table_row("Atomic withdraw", &["withdraw", "outputs"], row.len()),
+            _ => invalid_table_row("Atomic withdraw", &["withdraw", "outputs"], row.len()),
         },
     )
 }
-
-pub(super) fn single_column_table(
-    step: &Step,
-    header_name: &str,
-    description: &str,
-) -> Result<Vec<String>, StepError> {
-    parse_zone_table_rows(step, &[header_name], description, |row| match row {
-        [value] => Ok(value.clone()),
-        _ => invalid_zone_table_row(description, &[header_name], row.len()),
-    })
-}
-
-fn parse_zone_table_rows<T>(
-    step: &Step,
-    headers: &[&str],
-    description: &str,
-    parse_row: impl Fn(&[String]) -> Result<T, StepError>,
-) -> Result<Vec<T>, StepError> {
-    let table = step.table.as_ref().ok_or(StepError::MissingTable)?;
-
-    if table.rows.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: format!("{description} must include a header row"),
-        });
-    }
-
-    let header = table.rows[0].iter().map(String::as_str).collect::<Vec<_>>();
-    if header.as_slice() != headers {
-        return Err(StepError::InvalidArgument {
-            message: format!("{description} must use `{}` header", headers.join("`, `")),
-        });
-    }
-
-    table
-        .rows
-        .iter()
-        .skip(1)
-        .map(|row| parse_row(row))
-        .collect()
-}
-
-fn parse_single_zone_table_row<T>(
-    step: &Step,
-    headers: &[&str],
-    description: &str,
-    parse_row: impl Fn(&[String]) -> Result<T, StepError>,
-) -> Result<T, StepError> {
-    let mut rows = parse_zone_table_rows(step, headers, description, parse_row)?;
-    if rows.len() != 1 {
-        return Err(StepError::InvalidArgument {
-            message: format!("{description} must contain exactly one data row"),
-        });
-    }
-
-    Ok(rows.remove(0))
-}
-
-fn parse_bool_cell(value: &str, column: &str) -> Result<bool, StepError> {
-    match value.to_lowercase().trim() {
-        "true" => Ok(true),
-        "false" => Ok(false),
-        _ => Err(StepError::InvalidArgument {
-            message: format!("Zone sequencer startup `{column}` must be `true` or `false`"),
-        }),
-    }
-}
-
 fn parse_turn_cell(value: &str) -> Result<bool, StepError> {
     match value.to_uppercase().trim() {
         "OUR_TURN" => Ok(true),
@@ -560,53 +470,4 @@ fn parse_turn_cell(value: &str) -> Result<bool, StepError> {
             ),
         }),
     }
-}
-
-fn parse_usize_cell(value: &str, column: &str) -> Result<usize, StepError> {
-    value.parse().map_err(|error| StepError::InvalidArgument {
-        message: format!("Invalid `{column}` value `{value}`: {error}"),
-    })
-}
-
-fn parse_u32_cell(value: &str, column: &str) -> Result<u32, StepError> {
-    value.parse().map_err(|error| StepError::InvalidArgument {
-        message: format!("Invalid `{column}` value `{value}`: {error}"),
-    })
-}
-
-fn parse_u64_cell(value: &str, column: &str) -> Result<u64, StepError> {
-    value.parse().map_err(|error| StepError::InvalidArgument {
-        message: format!("Invalid `{column}` value `{value}`: {error}"),
-    })
-}
-
-fn parse_list_cell(value: &str, column: &str) -> Result<Vec<String>, StepError> {
-    let values = value
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-
-    if values.is_empty() {
-        return Err(StepError::InvalidArgument {
-            message: format!("Zone config transaction `{column}` must list at least one alias"),
-        });
-    }
-
-    Ok(values)
-}
-
-fn invalid_zone_table_row<T>(
-    description: &str,
-    headers: &[&str],
-    actual_columns: usize,
-) -> Result<T, StepError> {
-    Err(StepError::InvalidArgument {
-        message: format!(
-            "{description} rows must have exactly {} columns (`{}`), got {actual_columns}",
-            headers.len(),
-            headers.join("`, `"),
-        ),
-    })
 }
