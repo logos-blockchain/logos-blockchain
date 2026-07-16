@@ -7,7 +7,6 @@ use lb_core::mantle::{
 use lb_key_management_system_service::keys::Ed25519Signature;
 
 use super::{
-    PublishResult,
     types::{Error, WithdrawArg},
     zone_sequencer::ZoneSequencer,
 };
@@ -77,7 +76,7 @@ where
     /// locally and posted when the stream resumes (or when our turn comes
     /// back). To wait for readiness asynchronously, subscribe via
     /// [`ZoneSequencer::subscribe_ready`].
-    pub async fn publish(&mut self, data: Inscription) -> Result<PublishResult, Error> {
+    pub async fn publish(&mut self, data: Inscription) -> Result<PublishReceipt, Error> {
         self.sequencer.do_publish(data).await
     }
 

@@ -179,7 +179,10 @@ pub(super) async fn create_inscribe_tx<Node>(
     signing_key: &Ed25519Key,
     inscription: Inscription,
     parent: MsgId,
-) -> Result<(SignedMantleTx<Unverified>, MsgId), Error> {
+) -> Result<(SignedMantleTx<Unverified>, MsgId), Error>
+where
+    Node: adapter::Node + Sync,
+{
     let signer = signing_key.public_key();
 
     let inscribe_op = InscriptionOp {

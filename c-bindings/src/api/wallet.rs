@@ -18,7 +18,10 @@ use lb_core::{
             },
             transfer::TransferOp,
         },
-        transactions::{MantleTxBuilder, states::Preverified},
+        transactions::{
+            MantleTxBuilder,
+            states::{Preverified, Unverified},
+        },
     },
 };
 use lb_groth16::{fr_from_bytes, fr_to_bytes};
@@ -1647,29 +1650,45 @@ pub unsafe extern "C" fn submit_signed_transaction(
     return_error_if_null_pointer!(signed_tx_json);
     let node = unsafe { &*node };
 
-    let signed_tx_json = match unsafe { CStr::from_ptr(signed_tx_json) }.to_str() {
-        Ok(signed_tx_json) => signed_tx_json,
-        Err(error) => {
-            return FfiSubmitTransactionResult::err(OperationStatus::error(
-                OperationStatusCode::ValidationError,
-                format!("Transaction is not valid UTF-8: {error}"),
-            ));
-        }
-    };
-    let signed_tx: SignedMantleTx = match serde_json::from_str(signed_tx_json) {
-        Ok(signed_tx) => signed_tx,
-        Err(error) => {
-            return FfiSubmitTransactionResult::err(OperationStatus::error(
-                OperationStatusCode::ValidationError,
-                format!("Failed to parse signed transaction: {error}"),
-            ));
+    let preverified_tx = {
+        let signed_tx_json = match unsafe { CStr::from_ptr(signed_tx_json) }.to_str() {
+            Ok(signed_tx_json) => signed_tx_json,
+            Err(error) => {
+                return FfiSubmitTransactionResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Transaction is not valid UTF-8: {error}"),
+                ));
+            }
+        };
+        let signed_tx: SignedMantleTx<Unverified> = match serde_json::from_str(signed_tx_json) {
+            Ok(signed_tx) => signed_tx,
+            Err(error) => {
+                return FfiSubmitTransactionResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Failed to parse signed transaction: {error}"),
+                ));
+            }
+        };
+        match signed_tx.preverify() {
+            Ok(preverified_tx) => preverified_tx,
+            Err(error) => {
+                return FfiSubmitTransactionResult::err(OperationStatus::error(
+                    OperationStatusCode::ValidationError,
+                    format!("Failed to preverify signed transaction: {error}"),
+                ));
+            }
         }
     };
 
-    let transaction_hash = signed_tx.hash().as_signing_bytes();
+    let transaction_hash = preverified_tx.hash().as_signing_bytes();
     let runtime_handle = node.get_runtime_handle();
     let submit_result = runtime_handle.block_on(async {
-        mempool::add_tx(node.get_overwatch_handle(), signed_tx, Transaction::hash).await
+        mempool::add_tx(
+            node.get_overwatch_handle(),
+            preverified_tx,
+            Transaction::hash,
+        )
+        .await
     });
     if let Err(error) = submit_result {
         return FfiSubmitTransactionResult::err(OperationStatus::error(

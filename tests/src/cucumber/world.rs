@@ -19,7 +19,7 @@ use lb_core::{
         ops::channel::{
             ChannelId, deposit::DepositOp, inscribe::Inscription, withdraw::ChannelWithdrawOp,
         },
-        transactions::states::Preverified,
+        transactions::states::{Preverified, VerificationState},
     },
 };
 use lb_http_api_common::bodies::wallet::transfer_funds::WalletTransferFundsRequestBody;
@@ -1907,12 +1907,15 @@ impl CucumberWorld {
 
     /// Helper to submit a transaction to the node associated with the given
     /// wallet.
-    pub async fn submit_transaction(
+    pub async fn submit_transaction<State>(
         &self,
         wallet: &WalletInfo,
-        signed_tx: &SignedMantleTx<Preverified>,
+        signed_tx: &SignedMantleTx<State>,
         node_client: &NodeHttpClient,
-    ) -> Result<(), StepError> {
+    ) -> Result<(), StepError>
+    where
+        State: VerificationState + Clone + Send + Sync + 'static,
+    {
         tokio::time::timeout(
             Duration::from_secs(10),
             node_client.submit_transaction(signed_tx),

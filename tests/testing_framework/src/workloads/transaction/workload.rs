@@ -12,9 +12,7 @@ use lb_core::mantle::{
     GasCalculator as _, GenesisTx as _, Note, OpProof, SignedMantleTx, Transaction as _, Utxo,
     gas::MainnetGasConstants,
     ops::OpId as _,
-    transactions::{
-        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, states::Preverified,
-    },
+    transactions::{GasPrices, MantleTxBuilder, MantleTxGasContext, states::Preverified},
 };
 use lb_key_management_system_service::keys::{ZkKey, ZkPublicKey};
 use rand::{seq::SliceRandom as _, thread_rng};

@@ -27,7 +27,6 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         Op, OpProof, SignedMantleTx, Transaction, TxHash,
-        gas::MainnetGasConstants,
         ops::channel::ChannelId,
         transactions::{
             MantleTxBuilder,

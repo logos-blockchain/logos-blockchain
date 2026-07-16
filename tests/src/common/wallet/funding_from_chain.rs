@@ -6,7 +6,7 @@ use lb_core::mantle::{
     gas::MainnetGasConstants,
     ops::channel::{ChannelId, ChannelKeyIndex},
     transactions::{
-        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, tx::OpsProofs,
+        GasPrices, MantleTxBuilder, MantleTxContext, MantleTxGasContext, tx::OpsProofs, states::Unverified,
     },
 };
 use lb_testing_framework::{NodeHttpClient, configs::wallet::WalletAccount};
@@ -58,7 +58,7 @@ pub async fn funded_signed_tx(
     transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     op: Op,
     op_proof: impl FnOnce(TxHash) -> OpProof,
-) -> (SignedMantleTx, u64) {
+) -> (SignedMantleTx<Unverified>, u64) {
     let funding_source =
         current_wallet_funding_source(node, genesis_utxos, funding_account.clone())
             .await
@@ -91,9 +91,7 @@ pub async fn funded_signed_tx(
         transfer_proofs_for_funded_wallet_tx(&mantle_tx, &funding_account.secret_key)
             .expect("transfer proofs should build"),
     );
-
-    let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::try_from(proofs).unwrap())
-        .expect("funded transaction should be valid");
+    let signed_tx = SignedMantleTx::new(mantle_tx, OpsProofs::try_from(proofs).unwrap());
 
     (signed_tx, fee)
 }

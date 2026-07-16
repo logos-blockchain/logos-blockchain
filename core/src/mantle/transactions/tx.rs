@@ -20,7 +20,7 @@ use crate::{
         Value,
         channel::Channels,
         gas::{Gas, GasCalculator, GasConstants, GasCost, GasOverflow, GasPrice},
-        ledger::{Declarations, Operation, Utxos},
+        ledger::{Declarations, Operation as _, Utxos},
         nom::{NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,

@@ -22,7 +22,7 @@ use lb_core::{
     header::HeaderId,
     mantle::{
         NoteId, SignedMantleTx,
-        transactions::{MantleTxBuilder, MantleTxContext, states::Preverified},
+        transactions::{MantleTxBuilder, states::Preverified},
     },
     sdp::{
         ActiveMessage, ActivityMetadata, DeclarationId, DeclarationMessage, Locator, ProviderId,

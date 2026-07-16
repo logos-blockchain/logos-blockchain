@@ -97,7 +97,7 @@ pub enum ChannelUpdateTx {
     AtomicWithdraw(AtomicWithdrawInfo),
     /// A tx shape the SDK cannot produce (bundled deposits, multi-inscribe,
     /// other custom-built txs), reported whole as a unit.
-    Custom(SignedMantleTx),
+    Custom(SignedMantleTx<Unverified>),
 }
 
 impl ChannelUpdateTx {
@@ -106,7 +106,7 @@ impl ChannelUpdateTx {
         match self {
             Self::Inscription(i) => i.tx_hash,
             Self::AtomicWithdraw(a) => a.tx_hash,
-            Self::Custom(tx) => tx.mantle_tx.hash(),
+            Self::Custom(tx) => tx.mantle_tx().hash(),
         }
     }
 

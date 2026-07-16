@@ -588,7 +588,7 @@ mod tests {
     use futures::StreamExt as _;
     use lb_core::{
         block::BlockTransactions,
-        codec::DeserializeOp,
+        codec::DeserializeOp as _,
         crypto::ZkHasher,
         events::Events,
         mantle::{
