@@ -248,24 +248,24 @@ ssh -L 6669:127.0.0.1:6669 user@remote-host
 
 #### Tokio console client
 
-The `tokio-console` client version must be compatible with the `console-subscriber` version compiled into the node.
+The `tokio-console` client version must be compatible with the `console-subscriber` version compiled into the node,
+see https://github.com/tokio-rs/console/releases.
 
-This repository currently uses `console-subscriber 0.4.x`, which is compatible with `tokio-console 0.1.13`. Keep the 
+This repository currently uses `console-subscriber 0.5.x`, which is compatible with `tokio-console 0.1.14`. Keep the 
 client version in sync with the node version to avoid connection issues.
 
-
-Install the client locally (version 0.1.13):
-
-```bash
-cargo install --locked tokio-console --version 0.1.13
-```
-
-or 
-
-Install the client locally (latest version):
+Install the client (latest version):
 
 ```bash
 cargo install --locked tokio-console
+```
+
+or  
+
+Install a specific client version, e.g version 0.X.Y:
+
+```bash 
+cargo install --locked tokio-console --version 0.X.Y  
 ```
 
 Run the node with that config, then connect from another terminal:
