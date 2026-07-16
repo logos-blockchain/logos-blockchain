@@ -1,6 +1,5 @@
 use std::net::SocketAddr;
 
-#[cfg(feature = "profiling")]
 use console_subscriber::ConsoleLayer;
 use tracing_subscriber::Layer;
 

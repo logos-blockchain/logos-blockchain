@@ -27,7 +27,7 @@ use lb_libp2p::{Multiaddr, PeerId};
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     LbcEnv, LbcK8sManualCluster, LbcManualCluster, NodeHttpClient, ScenarioBuilder,
-    ScenarioBuilderExt as _, configs::wallet::WalletAccount, workloads,
+    ScenarioBuilderExt as _, configs::wallet::WalletAccount, env::set_default_env, workloads,
 };
 use lb_zone_sdk::{adapter::NodeHttpClient as ZoneNodeHttpClient, indexer::ZoneIndexer};
 use reqwest::Url;
@@ -51,12 +51,14 @@ use crate::{
         TARGET,
         defaults::{
             CUCUMBER_NODE_CONFIG_OVERRIDE, LOGOS_BLOCKCHAIN_NODE_BIN, init_node_log_dir_defaults,
-            set_default_env,
         },
         error::{StepError, StepResult},
         fee_reserve::{SCENARIO_FEE_ACCOUNT_NAME, ScenarioFeeState},
-        steps::manual_zone::runner::{
-            Event, InscriptionId, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
+        steps::{
+            manual_zone::runner::{
+                Event, InscriptionId, SequencerCheckpoint, SequencerClient, TxStatusUpdate,
+            },
+            tokio_console::profile::TokioConsoleProfile,
         },
         utils::{make_builder, shared_host_bin_path},
         wallet::snapshot::WalletSnapshot,
@@ -978,6 +980,8 @@ pub struct CucumberWorld {
     pub faucet_task_handles: Option<Vec<JoinHandle<()>>>,
     /// Manual: Zone-specific state for SDK/sequencer scenarios.
     pub zone: ZoneState,
+    /// Manual: Per-node Tokio console profiling requested by Cucumber steps.
+    pub tokio_console_profile: TokioConsoleProfile,
 }
 
 impl Drop for CucumberWorld {
@@ -1172,6 +1176,7 @@ impl Debug for CucumberWorld {
                 "node_snapshot_on_startup",
                 &node_snapshot_on_startup_display(self.node_snapshot_on_startup.as_ref()),
             )
+            .field("tokio_console_profile", &self.tokio_console_profile)
             .finish()
     }
 }
@@ -1556,6 +1561,14 @@ impl CucumberWorld {
         });
 
         Ok(())
+    }
+
+    /// Check if Tokio console profiling is enabled for this scenario. This is
+    /// determined by whether any profiling nodes have been configured in the
+    /// `tokio_console_profile` field of the world.
+    #[must_use]
+    pub fn tokio_console_profile_enabled(&self) -> bool {
+        !self.tokio_console_profile.profile_nodes.is_empty()
     }
 
     /// Build a scenario for local deployment based on the current world
