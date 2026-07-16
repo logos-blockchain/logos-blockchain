@@ -199,7 +199,7 @@ async fn wait_for_declarations(
         loop {
             if let Ok(declarations) = node.get_sdp_declarations().await {
                 return declarations
-                    .into_iter()
+                    .into_values()
                     .map(|declaration| (declaration.provider_id, declaration))
                     .collect();
             }

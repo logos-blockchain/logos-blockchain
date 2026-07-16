@@ -207,6 +207,90 @@ If the `dhat-heap` feature is enabled, it replaces the memory allocator with `dh
 Run, then stop the node normally to capture the output, then read the generated `dhat-heap.json` file with 
 https://nnethercote.github.io/dh_view/dh_view.html or other.
 
+### Tokio task profiling
+
+#### Build and node user config
+
+Tokio task/resource profiling is available through `tokio-console`, which  is disabled in normal builds. 
+
+Instrumented builds require both:
+- the Cargo feature `tokio-console`
+- `RUSTFLAGS="--cfg tokio_unstable"`
+
+Manual build:
+
+```bash
+RUSTFLAGS="--cfg tokio_unstable" \
+cargo build \
+  --profile release-profiling \
+  -p logos-blockchain-node \
+  --features tokio-console
+```
+
+Enable the console endpoint at runtime by selecting the console tracing layer in your node config:
+
+```yaml
+tracing:
+  console: !Console
+    bind_address: 127.0.0.1
+    port: 6669
+```
+
+**Note:** Port `6669` is the default port for the console, but you can change it in your config and use the 
+corresponding value in the runtime if needed, for example, use a different port when multiple instrumented node 
+processes are running on the same host.
+
+Keep the console bound to loopback. When profiling a remote node, forward the port over SSH:
+
+```bash
+ssh -L 6669:127.0.0.1:6669 user@remote-host
+```
+
+#### Tokio console client
+
+The `tokio-console` client version must be compatible with the `console-subscriber` version compiled into the node.
+
+This repository currently uses `console-subscriber 0.4.x`, which is compatible with `tokio-console 0.1.13`. Keep the 
+client version in sync with the node version to avoid connection issues.
+
+
+Install the client locally (version 0.1.13):
+
+```bash
+cargo install --locked tokio-console --version 0.1.13
+```
+
+or 
+
+Install the client locally (latest version):
+
+```bash
+cargo install --locked tokio-console
+```
+
+Run the node with that config, then connect from another terminal:
+
+```bash
+tokio-console http://127.0.0.1:6669
+```
+
+#### Manual connection checks
+
+While the node is running, verify that the console endpoint is listening:
+
+```bash
+ss -ltnp | grep -E ':(6669)\b'
+```
+
+or:
+
+```bash
+nc -vz 127.0.0.1 6669
+```
+
+A successful TCP connection proves the node-side console server is listening. If the client UI is empty, check 
+the `tokio-console` client version first.
+
 ---
 
 ## Contributing

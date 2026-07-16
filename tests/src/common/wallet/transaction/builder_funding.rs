@@ -31,6 +31,7 @@ pub fn fund_builder_from_wallet_source(
         [source.public_key()],
         context,
         &HashSet::new(),
+        0,
     )
 }
 
@@ -195,7 +196,7 @@ fn evaluate_standard_funding_inputs(
         Ordering::Less => Ok(WalletFundingOutcome::NeedsMoreInputs),
         Ordering::Equal => Ok(WalletFundingOutcome::Funded(funded_builder)),
         Ordering::Greater => Ok(funded_builder
-            .return_change::<MainnetGasConstants>(context, change_pk)?
+            .return_change::<MainnetGasConstants>(context, change_pk, 0)?
             .map_or(
                 WalletFundingOutcome::NeedsMoreInputs,
                 WalletFundingOutcome::Funded,

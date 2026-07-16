@@ -27,8 +27,11 @@ use lb_core::{
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::{Ed25519Signature, ZkSignature};
 use rewards::{Error as RewardsError, Rewards};
+use tracing::debug;
 
 use crate::{EpochState, UtxoTree, mantle::sdp::rewards::blend};
+
+const LOG_TARGET: &str = "ledger::mantle::sdp";
 
 type Declarations = rpds::RedBlackTreeMapSync<DeclarationId, Declaration>;
 
@@ -191,14 +194,20 @@ impl<R: Rewards> ServiceState<R> {
                 &service_params,
                 rewards_params,
             );
-            events.extend(
-                reward_utxos
-                    .iter()
-                    .map(|utxo| HeaderEvent::SdpRewardDistributed {
-                        service_type: self.service_type,
-                        utxo: *utxo,
-                    }),
-            );
+            events.extend(reward_utxos.iter().map(|utxo| {
+                debug!(
+                    target: LOG_TARGET,
+                    service_type = ?self.service_type,
+                    ?utxo,
+                    old_epoch = %last_epoch_state.epoch,
+                    new_epoch = %epoch_state.epoch,
+                    "SDP reward distributed",
+                );
+                HeaderEvent::SdpRewardDistributed {
+                    service_type: self.service_type,
+                    utxo: *utxo,
+                }
+            }));
         }
 
         (self, reward_utxos, events)

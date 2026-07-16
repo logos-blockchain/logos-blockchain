@@ -1,6 +1,6 @@
 use std::{fs, path::PathBuf};
 
-use lb_testing_framework::LOG_LEVEL;
+use lb_testing_framework::{LOG_LEVEL, env};
 use tracing::warn;
 use tracing_subscriber::{EnvFilter, fmt};
 
@@ -32,28 +32,17 @@ pub const MAX_CUCUMBER_CONCURRENT_SCENARIOS: &str = "MAX_CUCUMBER_CONCURRENT_SCE
 pub const E2E_TESTS_BASE_DIR_OVERRIDE: &str = "E2E_TESTS_BASE_DIR_OVERRIDE";
 pub const E2E_ARTIFACTS_DIR: &str = ".e2e_artefacts"; // Relative to `tests`
 
-/// Set an environment variable to a default value if it is not already set.
-pub fn set_default_env(key: &str, value: &str) {
-    if std::env::var_os(key).is_none() {
-        // SAFETY: Used as an early-run default. Prefer setting env vars in the
-        // shell for multi-threaded runs.
-        unsafe {
-            std::env::set_var(key, value);
-        }
-    }
-}
-
 pub fn init_logging_defaults() {
-    set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "false");
-    set_default_env(TF_KEEP_LOGS, "true");
+    env::set_default_env(LOGOS_BLOCKCHAIN_TESTS_TRACING, "false");
+    env::set_default_env(TF_KEEP_LOGS, "true");
     // Always keep RUST_LOG at info for console output
-    set_default_env(RUST_LOG, "info");
+    env::set_default_env(RUST_LOG, "info");
 
     if let Some(log_level) = std::env::var_os(CUCUMBER_LOG_LEVEL) {
         let log_level = log_level.to_string_lossy().to_lowercase();
         match log_level.as_str() {
             "trace" | "debug" | "info" | "warn" | "error" => {
-                set_default_env(LOG_LEVEL, log_level.as_str());
+                env::set_default_env(LOG_LEVEL, log_level.as_str());
             }
             other => {
                 warn!(
@@ -80,7 +69,7 @@ fn resolve_host_log_dir(log_dir: Option<&PathBuf>) -> PathBuf {
         std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
             || {
                 let dir = PathBuf::from(SCENARIO_OUTPUT_DIR_REL).join(ARTEFACTS);
-                set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
+                env::set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, &dir.display().to_string());
                 dir
             },
             PathBuf::from,
@@ -91,7 +80,7 @@ fn resolve_host_log_dir(log_dir: Option<&PathBuf>) -> PathBuf {
 fn resolve_compose_log_dir() -> PathBuf {
     std::env::var_os(LOGOS_BLOCKCHAIN_LOG_DIR).map_or_else(
         || {
-            set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, CONTAINER_NODE_LOG_DIR);
+            env::set_default_env(LOGOS_BLOCKCHAIN_LOG_DIR, CONTAINER_NODE_LOG_DIR);
             PathBuf::from(CONTAINER_NODE_LOG_DIR)
         },
         PathBuf::from,

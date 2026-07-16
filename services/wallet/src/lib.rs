@@ -142,6 +142,7 @@ pub enum WalletMsg {
         tx_builder: MantleTxBuilder,
         change_pk: ZkPublicKey,
         funding_pks: Vec<ZkPublicKey>,
+        priority_fee: Value,
         resp_tx: Sender<Result<TipResponse<MantleTxBuilder>, WalletServiceError>>,
     },
     BuildLeaderClaimTx {
@@ -508,6 +509,7 @@ where
                 tx_builder,
                 change_pk,
                 funding_pks,
+                priority_fee,
                 resp_tx,
             } => {
                 let tip = match Self::msg_tip_or_latest(tip, cryptarchia).await {
@@ -535,6 +537,7 @@ where
                     change_pk,
                     funding_pks,
                     &context,
+                    priority_fee,
                 ) {
                     Ok(funded) => funded,
                     Err(err) => {
@@ -1237,6 +1240,7 @@ where
             request.funding_pk,
             [request.funding_pk],
             &context,
+            0,
         )?;
 
         let funded_notes: Vec<NoteId> = funded_tx_builder.consumed_or_locked_notes().collect();

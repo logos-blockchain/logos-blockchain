@@ -62,10 +62,7 @@ where
             &self.mempool_adapter,
         )
         .await
-        .map_err(|e| {
-            error!("Error processing block during IBD: {:?}", e);
-            Error::from(e)
-        })
+        .map_err(Error::from)
     }
 
     async fn has_processed_block(&self, block_id: HeaderId) -> Result<bool, Error> {
@@ -200,12 +197,18 @@ where
         // TODO: improve `OrphanBlocksDownloader` to simplify this.
         while downloader.should_poll() {
             match tokio::time::timeout(Duration::from_secs(1), downloader.next()).await {
-                Ok(Some(block)) => {
-                    if let Err(e) = self.block_processor.process_block(block).await {
-                        warn!("failed to process block: {e:?}");
+                Ok(Some(block)) => match self.block_processor.process_block(block).await {
+                    Ok(()) => {}
+                    Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                        lb_chain_service::api::ApiError::AlreadyApplied(header_id),
+                    ))) => {
+                        debug!(?header_id, "block already applied; continuing");
+                    }
+                    Err(err) => {
+                        warn!(?err, "failed to process block; cancelling the download");
                         downloader.cancel_active_download();
                     }
-                }
+                },
                 Ok(None) => {
                     debug!("orphan downloader returned None; re-checking should_poll");
                 }
@@ -553,6 +556,65 @@ mod tests {
         assert!(chain.iter().all(|b| cryptarchia.has_block(&b.id)));
     }
 
+    /// The peer streams a chain whose prefix is shared with the local ledger
+    /// (up to a fork point) and whose suffix is the peer's own fork:
+    ///
+    /// ```text
+    ///   G--A--B--C--D          (local tip)
+    ///         \
+    ///          E--F--H         (remote tip)
+    ///   |<--->|
+    ///   overlapped
+    /// ```
+    ///
+    /// Since `local_tip=D` is not on the peer's chain, the peer streams from
+    /// `A`, so `A` and `B` come back as `AlreadyApplied`.
+    /// IBD must skip those and keep the stream flowing so the remote fork
+    /// `[E, F, H]` gets applied instead of cancelling on the first duplicate.
+    #[tokio::test]
+    async fn already_applied_prefix_does_not_cancel_download() {
+        let local_a = Block::new(1, GENESIS_ID, 1, 1);
+        let local_b = Block::new(2, 1, 2, 2);
+        let local_c = Block::new(3, 2, 3, 3);
+        let local_d = Block::new(4, 3, 4, 4);
+        let remote_e = Block::new(5, 2, 3, 3);
+        let remote_f = Block::new(6, 5, 4, 4);
+        let remote_h = Block::new(7, 6, 5, 5);
+        let remote_chain = vec![
+            Block::genesis(),
+            local_a.clone(),
+            local_b.clone(),
+            remote_e.clone(),
+            remote_f.clone(),
+            remote_h.clone(),
+        ];
+
+        let mut processor = MockBlockProcessor::new();
+        for block in [&local_a, &local_b, &local_c, &local_d] {
+            processor.process_block(block.clone()).await.unwrap();
+        }
+
+        let peer = BlockProvider::new(remote_chain, Ok(remote_h.clone()));
+        let ibd = InitialBlockDownload::new(
+            processor,
+            MockNetworkAdapter::<()>::new(vec![(NodeId(0), peer)]),
+        );
+        let block_processor = tokio::time::timeout(
+            Duration::from_secs(5),
+            ibd.run(config([NodeId(0)].into()), &orphan_config()),
+        )
+        .await
+        .expect("IBD test timed out")
+        .expect("IBD should complete");
+
+        let cryptarchia = block_processor.cryptarchia;
+        assert!(
+            [&remote_e, &remote_f, &remote_h]
+                .iter()
+                .all(|b| cryptarchia.has_block(&b.id)),
+        );
+    }
+
     /// First round succeeds (peer returns a tip we sync), second round the
     /// peer goes dark. Since the synced tip is already local, the only
     /// remaining peer fails tip fetch -> `AllPeersFailed`.
@@ -602,6 +664,12 @@ mod tests {
         }
 
         async fn process_block(&mut self, block: Block) -> Result<(), Error> {
+            if self.cryptarchia.has_block(&block.id) {
+                return Err(Error::BlockProcessing(ChainError::Cryptarchia(
+                    lb_chain_service::api::ApiError::AlreadyApplied(block.id),
+                )));
+            }
+
             self.cryptarchia
                 .consensus
                 .receive_block(block.id, block.parent, block.slot)

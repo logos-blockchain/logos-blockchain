@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, pin::Pin, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, pin::Pin, time::Duration};
 
 use common_http_client::{
     ApiBlock, BasicAuthCredentials, CommonHttpClient, Error, ProcessedBlockEvent,
@@ -194,7 +194,7 @@ impl NodeHttpClient {
         .await
     }
 
-    pub async fn get_sdp_declarations(&self) -> Result<Vec<Declaration>, Error> {
+    pub async fn get_sdp_declarations(&self) -> Result<HashMap<DeclarationId, Declaration>, Error> {
         self.get_sdp_declarations_at(self.base_url.clone()).await
     }
 
@@ -234,13 +234,16 @@ impl NodeHttpClient {
     }
 
     /// Fetches testing-only SDP declarations from one explicit base URL.
-    async fn get_sdp_declarations_at(&self, base_url: Url) -> Result<Vec<Declaration>, Error> {
+    async fn get_sdp_declarations_at(
+        &self,
+        base_url: Url,
+    ) -> Result<HashMap<DeclarationId, Declaration>, Error> {
         let request_url = Self::join_path(&base_url, MANTLE_SDP_DECLARATIONS)?;
 
         self.with_timeout(
             "SDP declarations request",
             self.http_client
-                .get::<(), Vec<Declaration>>(request_url, None),
+                .get::<(), HashMap<DeclarationId, Declaration>>(request_url, None),
         )
         .await
     }

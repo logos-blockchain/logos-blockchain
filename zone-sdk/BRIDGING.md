@@ -216,11 +216,11 @@ The finalization pattern is the same as in the single-sig case: `Event::BlocksPr
 If a withdraw submitted via `publish_atomic_withdraw` has its parent inscription orphaned by a chain reorg, the SDK reports it via the `channel_update` field of `Event::BlocksProcessed`, with the abandoned tx in `channel_update.orphaned`. The original signed transaction is no longer valid. The consumer decides whether to republish — re-call `publish_atomic_withdraw` with the same inscription payload and `WithdrawArg`s reconstructed from the bundle; the SDK refills the inscription parent and the `withdraw_nonce` from current on-chain state.
 
 ```rust
-use lb_zone_sdk::sequencer::{Event, OrphanedTx, WithdrawArg};
+use lb_zone_sdk::sequencer::{ChannelUpdateTx, Event, WithdrawArg};
 
 if let Event::BlocksProcessed { channel_update, .. } = event {
     for tx in channel_update.orphaned {
-        if let OrphanedTx::AtomicWithdraw(info) = tx {
+        if let ChannelUpdateTx::AtomicWithdraw(info) = tx {
             let withdraws = info
                 .withdraws
                 .into_iter()
@@ -236,4 +236,4 @@ if let Event::BlocksProcessed { channel_update, .. } = event {
 }
 ```
 
-The reorg-aware recovery path for multi-sig is **not** supported by the SDK at the moment and is planned for a future release.
+For multi-sig bundles the orphan event carries the same `ChannelUpdateTx::AtomicWithdraw` data — whether the bundle was mined and reorged out, or never mined and shed once its parent slot was consumed by a competing entry — but the SDK cannot re-sign the tx: recovery means re-running the `prepare_tx` → collect-signatures → `submit_signed_tx` flow against the fresh parent and nonce.

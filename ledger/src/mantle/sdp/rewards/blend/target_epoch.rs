@@ -11,10 +11,11 @@ use lb_core::{
 use lb_cryptarchia_engine::Epoch;
 use lb_key_management_system_keys::keys::ZkPublicKey;
 use rpds::{HashTrieMapSync, HashTrieSetSync};
+use tracing::debug;
 
 use crate::mantle::sdp::rewards::{
     Error,
-    blend::{RewardsParameters, current_epoch::CurrentEpochState},
+    blend::{LOG_TARGET, RewardsParameters, current_epoch::CurrentEpochState},
     distribute_rewards,
 };
 
@@ -160,6 +161,16 @@ impl TargetEpochTracker {
                 provider_id: Box::new(provider_id),
             });
         }
+
+        debug!(
+            target: LOG_TARGET,
+            target_epoch = %epoch,
+            ?provider_id,
+            ?zk_id,
+            ?hamming_distance,
+            "activity proof inserted into target epoch tracker"
+        );
+
         Ok(Self {
             submitted_proofs: self
                 .submitted_proofs
@@ -175,6 +186,12 @@ impl TargetEpochTracker {
         target_epoch_state: &TargetEpochState<ProofsVerifier>,
     ) -> (Self, Vec<Utxo>) {
         if self.submitted_proofs.is_empty() {
+            debug!(
+                target: LOG_TARGET,
+                target_epoch = %target_epoch_state.epoch(),
+                epoch_income = target_epoch_state.epoch_income(),
+                "target epoch tracker finalized with no activity proofs. no rewards to distribute",
+            );
             return (Self::new(), vec![]);
         }
 
@@ -195,6 +212,17 @@ impl TargetEpochTracker {
             };
             rewards.insert(*zk_id, reward);
         }
+
+        debug!(
+            target: LOG_TARGET,
+            target_epoch = %target_epoch_state.epoch(),
+            submitted_proofs = self.submitted_proofs.size(),
+            premium_providers = premium_providers.size(),
+            epoch_income = target_epoch_state.epoch_income(),
+            base_reward,
+            reward_receivers = rewards.len(),
+            "target epoch tracker finalized with activity proofs",
+        );
 
         (
             Self::new(),
