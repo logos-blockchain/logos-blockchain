@@ -1,13 +1,13 @@
 pub mod backends;
+pub mod data;
 pub mod errors;
 pub mod operators;
-pub mod readers;
 pub mod serializer;
 
 pub use backends::{FileBackend, JsonFileBackend};
+pub use data::RecoveryData;
 pub use errors::RecoveryError;
 pub use operators::{RecoveryBackend, RecoveryOperator};
-pub use readers::RecoveryReader;
 pub use serializer::JsonRecoverySerializer;
 
 pub type RecoveryResult<T> = Result<T, RecoveryError>;

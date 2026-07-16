@@ -6,7 +6,7 @@ use lb_core::sdp::ServiceParameters;
 use lb_cryptarchia_engine::EpochConfig;
 use lb_ledger::mantle::sdp::{ServiceRewardsParameters, rewards::blend::RewardsParameters};
 use lb_libp2p::PeerId;
-use lb_services_utils::overwatch::RecoveryReader;
+use lb_services_utils::overwatch::RecoveryData;
 
 use crate::config::cryptarchia::{deployment::Settings as DeploymentSettings, serde::Config};
 
@@ -27,7 +27,7 @@ impl ServiceConfig {
     pub fn into_cryptarchia_services_settings(
         self,
         blend_rewards_params: RewardsParameters,
-        recovery_reader: Option<RecoveryReader>,
+        recovery_data: RecoveryData,
     ) -> (
         lb_chain_service::CryptarchiaSettings,
         lb_chain_network_service::ChainNetworkSettings<PeerId, LibP2pAdapterSettings>,
@@ -91,7 +91,7 @@ impl ServiceConfig {
                 },
             },
             config: ledger_config.clone(),
-            recovery_reader,
+            recovery_data,
             starting_state: self.deployment.genesis_block.into(),
             sync: lb_chain_service::SyncConfig {
                 block_provider: lb_chain_service::BlockProviderConfig {

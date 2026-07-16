@@ -38,7 +38,7 @@ pub use lb_ledger::EpochState;
 use lb_ledger::LedgerState;
 use lb_network_service::message::ChainSyncEvent;
 use lb_services_utils::{
-    overwatch::{RecoveryOperator, RecoveryReader},
+    overwatch::{RecoveryData, RecoveryOperator},
     wait_until_services_are_ready,
 };
 use lb_storage_service::{
@@ -493,14 +493,14 @@ pub struct CryptarchiaSettings {
     pub bootstrap: BootstrapConfig,
     pub sync: SyncConfig,
     #[serde(skip)]
-    pub recovery_reader: Option<RecoveryReader>,
+    pub recovery_data: RecoveryData,
 }
 
 impl StorageRecoverySettings for CryptarchiaSettings {
     const RECOVERY_KEY: &'static [u8] = b"recovery/cryptarchia";
 
-    fn recovery_reader(&self) -> Option<&RecoveryReader> {
-        self.recovery_reader.as_ref()
+    fn recovery_data(&self) -> &RecoveryData {
+        &self.recovery_data
     }
 }
 

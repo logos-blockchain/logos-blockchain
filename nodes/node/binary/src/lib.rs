@@ -24,6 +24,7 @@ pub use lb_storage_service::backends::{
     SerdeOp, StorageBackend,
     rocksdb::{RocksBackend, RocksBackendSettings},
 };
+use lb_storage_service::recovery::load_recovery_data;
 pub use lb_system_sig_service::SystemSig;
 use lb_time_service::backends::NtpTimeBackend;
 pub use lb_tracing_service::Tracing;
@@ -161,14 +162,13 @@ pub fn run_node_from_config(
     }
     .into_rocks_backend_settings(&config.user.state);
 
-    let recovery_reader = RocksBackend::open_read_only_if_exists(storage_config.clone())?
-        .map(RocksBackend::into_recovery_reader);
+    let recovery_data = load_recovery_data(storage_config.clone())?;
 
     let (chain_service_config, chain_network_config, chain_leader_config) = CryptarchiaConfig {
         user: config.user.cryptarchia,
         deployment: config.deployment.cryptarchia,
     }
-    .into_cryptarchia_services_settings(blend_rewards_params, recovery_reader);
+    .into_cryptarchia_services_settings(blend_rewards_params, recovery_data);
 
     let mempool_service_config = MempoolConfig {
         deployment: config.deployment.mempool,

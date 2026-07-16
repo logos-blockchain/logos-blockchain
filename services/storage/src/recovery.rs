@@ -3,8 +3,10 @@ use std::{fmt::Display, marker::PhantomData};
 use bytes::Bytes;
 use lb_core::codec::{DeserializeOp as _, SerializeOp as _};
 use lb_services_utils::overwatch::recovery::{
-    RecoveryBackend, RecoveryError, RecoveryReader, RecoveryResult,
+    RecoveryBackend, RecoveryData, RecoveryError, RecoveryResult,
 };
+#[cfg(feature = "rocksdb-backend")]
+use overwatch::DynError;
 use overwatch::{
     overwatch::OverwatchHandle,
     services::{AsServiceId, relay::OutboundRelay, state::ServiceState},
@@ -12,12 +14,31 @@ use overwatch::{
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::OnceCell;
 
+#[cfg(feature = "rocksdb-backend")]
+use crate::backends::rocksdb::{RocksBackend, RocksBackendSettings};
 use crate::{StorageMsg, StorageService, backends::StorageBackend};
+
+#[cfg(feature = "rocksdb-backend")]
+pub(crate) const RECOVERY_PREFIX: &[u8] = b"recovery/";
+
+#[cfg(feature = "rocksdb-backend")]
+pub fn load_recovery_data(settings: RocksBackendSettings) -> Result<RecoveryData, DynError> {
+    let backend = RocksBackend::new(settings)?;
+    recovery_data_from_backend(&backend)
+}
+
+#[cfg(feature = "rocksdb-backend")]
+fn recovery_data_from_backend(backend: &RocksBackend) -> Result<RecoveryData, DynError> {
+    backend
+        .load_prefix_entries(RECOVERY_PREFIX)
+        .map(RecoveryData::new)
+        .map_err(Into::into)
+}
 
 pub trait StorageRecoverySettings {
     const RECOVERY_KEY: &'static [u8];
 
-    fn recovery_reader(&self) -> Option<&RecoveryReader>;
+    fn recovery_data(&self) -> &RecoveryData;
 }
 
 pub struct StorageRecoveryBackend<State, Settings, Storage: StorageBackend, RuntimeServiceId> {
@@ -73,11 +94,7 @@ where
     }
 
     fn load_state(settings: &Settings) -> RecoveryResult<Option<Self::State>> {
-        let Some(reader) = settings.recovery_reader() else {
-            return Ok(None);
-        };
-
-        let Some(bytes) = reader.read(Settings::RECOVERY_KEY)? else {
+        let Some(bytes) = settings.recovery_data().get(Settings::RECOVERY_KEY) else {
             return Ok(None);
         };
 
@@ -113,11 +130,9 @@ where
 
 #[cfg(all(test, feature = "rocksdb-backend"))]
 mod tests {
-    use overwatch::DynError;
     use serde::{Deserialize, Serialize};
 
     use super::*;
-    use crate::backends::rocksdb::RocksBackend;
 
     type TestBackend =
         StorageRecoveryBackend<TestState, TestSettings, RocksBackend, TestRuntimeServiceId>;
@@ -155,14 +170,14 @@ mod tests {
 
     #[derive(Clone, Debug)]
     struct TestSettings {
-        recovery_reader: Option<RecoveryReader>,
+        recovery_data: RecoveryData,
     }
 
     impl StorageRecoverySettings for TestSettings {
         const RECOVERY_KEY: &'static [u8] = b"recovery/test";
 
-        fn recovery_reader(&self) -> Option<&RecoveryReader> {
-            self.recovery_reader.as_ref()
+        fn recovery_data(&self) -> &RecoveryData {
+            &self.recovery_data
         }
     }
 
@@ -172,7 +187,7 @@ mod tests {
             value: "restored".into(),
         };
         let directory = tempfile::tempdir().unwrap();
-        let reader = RocksBackend::new(crate::backends::rocksdb::RocksBackendSettings {
+        let reader = RocksBackend::new(RocksBackendSettings {
             db_path: directory.path().into(),
             read_only: false,
             column_family: None,
@@ -186,25 +201,24 @@ mod tests {
             })
             .execute()
             .unwrap();
-        let recovery_reader = reader.into_recovery_reader();
-        let settings = TestSettings {
-            recovery_reader: Some(recovery_reader),
-        };
+        let recovery_data = recovery_data_from_backend(&reader).unwrap();
+        let settings = TestSettings { recovery_data };
 
         let state = <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
             .unwrap()
             .unwrap();
 
         assert_eq!(state, expected);
-        assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings).is_err()
+        assert_eq!(
+            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings).unwrap(),
+            Some(expected)
         );
     }
 
     #[test]
     fn missing_recovery_state_returns_none() {
         let settings = TestSettings {
-            recovery_reader: None,
+            recovery_data: RecoveryData::default(),
         };
 
         assert!(
@@ -215,18 +229,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_recovery_key_returns_none_and_releases_reader() {
+    fn missing_recovery_key_returns_none() {
         let directory = tempfile::tempdir().unwrap();
-        let recovery_reader = RocksBackend::new(crate::backends::rocksdb::RocksBackendSettings {
+        let backend = RocksBackend::new(RocksBackendSettings {
             db_path: directory.path().into(),
             read_only: false,
             column_family: None,
         })
-        .unwrap()
-        .into_recovery_reader();
-        let settings = TestSettings {
-            recovery_reader: Some(recovery_reader),
-        };
+        .unwrap();
+        let recovery_data = recovery_data_from_backend(&backend).unwrap();
+        let settings = TestSettings { recovery_data };
 
         assert!(
             <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
@@ -234,14 +246,16 @@ mod tests {
                 .is_none()
         );
         assert!(
-            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings).is_err()
+            <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings)
+                .unwrap()
+                .is_none()
         );
     }
 
     #[test]
-    fn invalid_recovery_state_consumes_reader() {
+    fn invalid_recovery_state_remains_an_error() {
         let directory = tempfile::tempdir().unwrap();
-        let reader = RocksBackend::new(crate::backends::rocksdb::RocksBackendSettings {
+        let reader = RocksBackend::new(RocksBackendSettings {
             db_path: directory.path().into(),
             read_only: false,
             column_family: None,
@@ -254,10 +268,8 @@ mod tests {
             })
             .execute()
             .unwrap();
-        let recovery_reader = reader.into_recovery_reader();
-        let settings = TestSettings {
-            recovery_reader: Some(recovery_reader),
-        };
+        let recovery_data = recovery_data_from_backend(&reader).unwrap();
+        let settings = TestSettings { recovery_data };
 
         assert!(
             <TestBackend as RecoveryBackend<TestRuntimeServiceId>>::load_state(&settings).is_err()
