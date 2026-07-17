@@ -339,8 +339,12 @@ where
         let deposit_amounts =
             fetch_block_deposit_amounts(node, block.header.id, &block.transactions, channel_id)
                 .await?;
-        let block_items =
-            extract_finalized_items(&block.transactions, channel_id, &deposit_amounts);
+        let block_items = extract_finalized_items(
+            &block.transactions,
+            channel_id,
+            block.header.slot,
+            &deposit_amounts,
+        );
 
         result.our_tx_hashes.extend(our_txs.iter().copied());
         result.items.extend(block_items);
@@ -453,6 +457,7 @@ where
 fn extract_finalized_items(
     transactions: &[SignedMantleTx],
     channel_id: ChannelId,
+    l1_slot: Slot,
     deposit_amounts: &HashMap<(TxHash, Hash), Value>,
 ) -> Vec<FinalizedTx> {
     let mut items: Vec<FinalizedTx> = Vec::new();
@@ -521,7 +526,11 @@ fn extract_finalized_items(
             }
         }
         if !ops.is_empty() {
-            items.push(FinalizedTx { tx_hash, ops });
+            items.push(FinalizedTx {
+                tx_hash,
+                l1_slot,
+                ops,
+            });
         }
     }
 
@@ -785,7 +794,7 @@ mod tests {
         channel_id: ChannelId,
         amounts: &HashMap<(TxHash, Hash), u64>,
     ) -> Vec<DepositInfo> {
-        extract_finalized_items(transactions, channel_id, amounts)
+        extract_finalized_items(transactions, channel_id, Slot::from(0), amounts)
             .into_iter()
             .flat_map(|t| t.ops.into_iter())
             .filter_map(|op| match op {
@@ -843,6 +852,7 @@ mod tests {
         drop(extract_finalized_items(
             std::slice::from_ref(&tx),
             channel_id,
+            Slot::from(0),
             &HashMap::new(),
         ));
     }
@@ -902,10 +912,16 @@ mod tests {
         let mut amounts = HashMap::new();
         amounts.insert((tx_hash, dep_op_id), 500u64);
 
-        let items = extract_finalized_items(std::slice::from_ref(&tx), channel_id, &amounts);
+        let items = extract_finalized_items(
+            std::slice::from_ref(&tx),
+            channel_id,
+            Slot::from(42),
+            &amounts,
+        );
 
         assert_eq!(items.len(), 1, "one FinalizedTx for the single Mantle tx");
         assert_eq!(items[0].tx_hash, tx_hash);
+        assert_eq!(items[0].l1_slot, Slot::from(42));
         assert_eq!(items[0].ops.len(), 2);
         assert!(matches!(items[0].ops[0], FinalizedOp::Deposit(_)));
         assert!(matches!(items[0].ops[1], FinalizedOp::Inscription(_)));
@@ -1086,10 +1102,16 @@ mod tests {
         ]);
         let tx_hash = tx.mantle_tx.hash();
 
-        let items = extract_finalized_items(std::slice::from_ref(&tx), channel_id, &HashMap::new());
+        let items = extract_finalized_items(
+            std::slice::from_ref(&tx),
+            channel_id,
+            Slot::from(7),
+            &HashMap::new(),
+        );
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].tx_hash, tx_hash);
+        assert_eq!(items[0].l1_slot, Slot::from(7));
         assert_eq!(items[0].ops.len(), 1, "only our channel's withdraw");
         match &items[0].ops[0] {
             FinalizedOp::Withdraw(w) => {
