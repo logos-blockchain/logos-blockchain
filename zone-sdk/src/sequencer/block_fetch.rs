@@ -751,9 +751,9 @@ fn touches_channel_tip(tx: &SignedMantleTx, channel_id: ChannelId) -> bool {
 #[cfg(test)]
 mod tests {
     use lb_core::mantle::{
-        MantleTx, Note,
+        MantleTx, NoteId,
         channel::{SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, Outputs},
+        ledger::Inputs,
         ops::{
             OpId as _, OpProof,
             channel::{
@@ -765,8 +765,8 @@ mod tests {
         },
         transactions::Ops,
     };
-    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature, ZkKey};
-    use num_bigint::BigUint;
+    use lb_groth16::Fr;
+    use lb_key_management_system_service::keys::{Ed25519Key, Ed25519Signature};
 
     use super::*;
 
@@ -783,8 +783,6 @@ mod tests {
     }
 
     fn deposit_op(channel_id: ChannelId, input_seed: u32, metadata: Metadata) -> DepositOp {
-        use lb_core::mantle::NoteId;
-        use lb_groth16::Fr;
         DepositOp {
             channel_id,
             inputs: Inputs::new([NoteId::from(Fr::from(input_seed))]),
@@ -1042,14 +1040,10 @@ mod tests {
         let channel_id = ChannelId::from([0; 32]);
         let inscribe = inscribe_op(channel_id, MsgId::root(), b"bundle");
         let msg_id = inscribe.id();
-        let outputs = Outputs::new([Note::new(
-            42,
-            ZkKey::from(BigUint::from(0u64)).to_public_key(),
-        )]);
+        let withdrawn_note = NoteId::from(Fr::from(3u64));
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs,
-            withdraw_nonce: 3,
+            inputs: Inputs::new([withdrawn_note]),
         };
         let tx = unverified_tx_with_ops(vec![
             Op::ChannelInscribe(inscribe),
@@ -1075,7 +1069,7 @@ mod tests {
             ChannelUpdateTx::AtomicWithdraw(a) => {
                 assert_eq!(a.inscription.this_msg, msg_id);
                 assert_eq!(a.withdraws.len(), 1);
-                assert_eq!(a.withdraws[0].op.withdraw_nonce, 3);
+                assert_eq!(a.withdraws[0].op.inputs, Inputs::new([withdrawn_note]));
             }
             other => panic!("expected AtomicWithdraw, got {other:?}"),
         }
@@ -1089,19 +1083,13 @@ mod tests {
         // finalized view, not a "what we tracked locally" view.
         let channel_id = ChannelId::from([0; 32]);
         let other_channel = ChannelId::from([9; 32]);
-        let outputs = Outputs::new([Note::new(
-            42,
-            ZkKey::from(BigUint::from(0u64)).to_public_key(),
-        )]);
         let withdraw_for_us = ChannelWithdrawOp {
             channel_id,
-            outputs: outputs.clone(),
-            withdraw_nonce: 7,
+            inputs: Inputs::new([NoteId::from(Fr::from(7u64))]),
         };
         let withdraw_other = ChannelWithdrawOp {
             channel_id: other_channel,
-            outputs,
-            withdraw_nonce: 0,
+            inputs: Inputs::new([NoteId::from(Fr::from(0u64))]),
         };
 
         let tx = unverified_tx_with_ops(vec![
@@ -1119,7 +1107,7 @@ mod tests {
             FinalizedOp::Withdraw(w) => {
                 assert_eq!(w.tx_hash, tx_hash);
                 assert_eq!(w.op.channel_id, channel_id);
-                assert_eq!(w.op.withdraw_nonce, 7);
+                assert_eq!(w.op.inputs, Inputs::new([NoteId::from(Fr::from(7u64))]));
             }
             other => panic!("expected Withdraw, got {other:?}"),
         }
@@ -1133,7 +1121,7 @@ mod tests {
             posting_timeframe: SlotTimeframe::from(0u32),
             posting_timeout: SlotTimeout::from(0u32),
             configuration_threshold: 1,
-            withdraw_threshold: 1,
+            transfer_threshold: 1,
         }
     }
 

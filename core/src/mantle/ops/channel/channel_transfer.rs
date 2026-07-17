@@ -5,7 +5,7 @@ use crate::{
     mantle::{
         TxHash,
         channel::{Channels, Error},
-        ledger::{Inputs, Operation, Utxos},
+        ledger::{Inputs, Operation, Outputs, Utxos},
         nom::{NomCodec, NomEncode as _},
         ops::{OpId, channel::ChannelId},
     },
@@ -13,40 +13,45 @@ use crate::{
     sdp::locked_notes::LockedNotes,
 };
 
-// ChannelWithdraw = ChannelId Inputs — plain field-order concat.
+// ChannelTransfer = ChannelId Inputs Outputs — plain field-order concat.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, NomCodec)]
-pub struct ChannelWithdrawOp {
+pub struct ChannelTransferOp {
     pub channel_id: ChannelId,
     pub inputs: Inputs,
+    pub outputs: Outputs,
 }
 
-impl OpId for ChannelWithdrawOp {
+impl OpId for ChannelTransferOp {
     fn op_bytes(&self) -> Vec<u8> {
         self.encode()
     }
 }
 
-pub struct WithdrawValidationContext<'a> {
+pub struct ChannelTransferValidationContext<'a> {
     pub channels: &'a Channels,
     pub locked_notes: &'a LockedNotes,
     pub utxos: &'a Utxos,
     pub tx_hash: &'a TxHash,
-    pub withdraw_sigs: &'a ChannelMultiSigProof,
+    pub transfer_sigs: &'a ChannelMultiSigProof,
 }
 
-pub struct WithdrawExecutionContext {
+pub struct ChannelTransferExecutionContext {
     pub channels: Channels,
+    pub utxos: Utxos,
     pub tx_hash: TxHash,
 }
 
-impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
+impl Operation<ChannelTransferValidationContext<'_>> for ChannelTransferOp {
     type ExecutionContext<'a>
-        = WithdrawExecutionContext
+        = ChannelTransferExecutionContext
     where
         Self: 'a;
     type Error = Error;
 
-    fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
+    fn validate(&self, ctx: &ChannelTransferValidationContext<'_>) -> Result<(), Self::Error> {
+        // Check that the outputs are valid
+        self.outputs.validate()?;
+
         // Check that the channel exist
         let channel =
             ctx.channels
@@ -64,8 +69,15 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
             ctx.utxos,
         )?;
 
+        // Check the balance is preserved
+        let input_amount = self.inputs.amount(ctx.utxos)?;
+        let output_amount = self.outputs.amount()?;
+        if input_amount != output_amount {
+            return Err(Error::UnbalancedTransfer);
+        }
+
         // Check there is enough signatures
-        let signatures = ctx.withdraw_sigs.signatures();
+        let signatures = ctx.transfer_sigs.signatures();
         if signatures.len() != channel.transfer_threshold as usize {
             return Err(Error::ThresholdUnmet {
                 channel_id: self.channel_id,
@@ -91,12 +103,20 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         &self,
         mut ctx: Self::ExecutionContext<'_>,
     ) -> Result<(Self::ExecutionContext<'_>, Vec<TxEvent>), Self::Error> {
-        // Release the inputs from the channel. The notes keep their NoteId,
-        // value and ZkPublicKey and stay in the ledger as regular notes.
+        // Remove the inputs from the ledger and from the channel.
+        ctx.utxos = self.inputs.execute(ctx.utxos)?;
         for note_id in self.inputs.iter() {
             ctx.channels = ctx
                 .channels
                 .unregister_channel_note(note_id, &self.channel_id)?;
+        }
+
+        // Add the outputs to the ledger and register them as channel notes.
+        ctx.utxos = self.outputs.execute(ctx.utxos, self);
+        for utxo in self.outputs.utxos(self) {
+            ctx.channels = ctx
+                .channels
+                .register_channel_note(&utxo.id(), &self.channel_id)?;
         }
 
         Ok((ctx, Vec::new()))

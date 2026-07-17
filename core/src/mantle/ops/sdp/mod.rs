@@ -21,6 +21,8 @@ pub type SDPActiveOp = crate::sdp::ActiveMessage;
 pub enum SdpError {
     #[error("Note: {0:?} isn't in the ledger")]
     InexistingNote(NoteId),
+    #[error("Note {0:?} is a channel note and cannot be used as service collateral")]
+    ChannelNote(NoteId),
     #[error("Invalid SDP declare ZkSignature")]
     InvalidZkSignature,
     #[error("Invalid SDP declare EDDSA signature")]

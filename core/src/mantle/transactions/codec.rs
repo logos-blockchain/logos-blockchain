@@ -66,10 +66,18 @@ pub fn predict_signed_mantle_tx_size(tx: &MantleTx, context: &MantleTxGasContext
 
             // ChannelMultiSigProof
             Op::ChannelWithdraw(operation) => {
-                let channel_withdraw_threshold = context.withdraw_threshold(&operation.channel_id).expect(
+                let channel_transfer_threshold = context.transfer_threshold(&operation.channel_id).expect(
                     "Operation should have been verified before reaching this point, so the channel must exist in the context."
                 );
-                calculate_channel_multi_sig_proof_byte_size(channel_withdraw_threshold)
+                calculate_channel_multi_sig_proof_byte_size(channel_transfer_threshold)
+            }
+
+            // ChannelMultiSigProof
+            Op::ChannelTransfer(operation) => {
+                let channel_transfer_threshold = context.transfer_threshold(&operation.channel_id).expect(
+                    "Operation should have been verified before reaching this point, so the channel must exist in the context."
+                );
+                calculate_channel_multi_sig_proof_byte_size(channel_transfer_threshold)
             }
 
             // ZkSigProof = ZkSignature = Groth16
@@ -237,7 +245,7 @@ mod tests {
                 posting_timeframe: 1.into(),
                 posting_timeout: 2.into(),
                 configuration_threshold: 3,
-                withdraw_threshold: 4,
+                transfer_threshold: 4,
             }),
         ]));
 
@@ -446,7 +454,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
-            withdraw_threshold: 0,
+            transfer_threshold: 0,
         };
 
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelConfig(config_op)]));
@@ -609,7 +617,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
-            withdraw_threshold: 0,
+            transfer_threshold: 0,
         };
 
         let blend_proof = ActivityProof {
@@ -710,7 +718,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
-            withdraw_threshold: 0,
+            transfer_threshold: 0,
         };
 
         let locked_note_sk = ZkKey::from(BigUint::from(1u64));
@@ -813,18 +821,14 @@ mod tests {
 
     #[test]
     fn test_encode_decode_channel_withdraw_tx() {
-        let pk1 = ZkPublicKey::from(BigUint::from(100u64));
-        let pk2 = ZkPublicKey::from(BigUint::from(200u64));
-
-        let note1 = Note::new(1000, pk1);
-        let note2 = Note::new(2000, pk2);
-
         let signing_key = Ed25519Key::from_bytes(&[21u8; 32]);
         let mantle_tx = MantleTx(Ops::new_unchecked(vec![Op::ChannelWithdraw(
             ChannelWithdrawOp {
                 channel_id: ChannelId::from([0xAB; 32]),
-                outputs: Outputs::new([note1, note2]),
-                withdraw_nonce: 0,
+                inputs: Inputs::new([
+                    NoteId(BigUint::from(100u64).into()),
+                    NoteId(BigUint::from(200u64).into()),
+                ]),
             },
         )]));
         let tx_hash = mantle_tx.hash();
@@ -901,7 +905,7 @@ mod tests {
                 posting_timeframe: 0.into(),
                 posting_timeout: 0.into(),
                 configuration_threshold: 0,
-                withdraw_threshold: 0,
+                transfer_threshold: 0,
             });
             u8::MAX as usize + 1
         ];
@@ -973,7 +977,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 0,
-            withdraw_threshold: 0,
+            transfer_threshold: 0,
         }
         .encode();
 

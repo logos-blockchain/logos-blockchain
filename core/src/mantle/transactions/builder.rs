@@ -29,8 +29,8 @@ pub enum TxBuilderError {
     InvalidOutputsBounds { source: BoundedError },
     #[error("Gas computation overflow: {0}")]
     GasOverflow(#[from] GasOverflow),
-    #[error("Missing withdrawal threshold for channel {channel_id:?}")]
-    MissingWithdrawThreshold { channel_id: ChannelId },
+    #[error("Missing transfer threshold for channel {channel_id:?}")]
+    MissingTransferThreshold { channel_id: ChannelId },
     #[error("Funded transaction has negative net balance: {net_balance}")]
     NegativeNetBalance { net_balance: i128 },
 }
@@ -238,15 +238,18 @@ impl MantleTxBuilder {
         context: &MantleTxContext,
     ) -> Result<GasCost, TxBuilderError> {
         for op in self.mantle_tx.ops() {
-            if let Op::ChannelWithdraw(operation) = op
+            let channel_id = match op {
+                Op::ChannelWithdraw(operation) => Some(operation.channel_id),
+                Op::ChannelTransfer(operation) => Some(operation.channel_id),
+                _ => None,
+            };
+            if let Some(channel_id) = channel_id
                 && context
                     .gas_context
-                    .withdraw_threshold(&operation.channel_id)
+                    .transfer_threshold(&channel_id)
                     .is_none()
             {
-                return Err(TxBuilderError::MissingWithdrawThreshold {
-                    channel_id: operation.channel_id,
-                });
+                return Err(TxBuilderError::MissingTransferThreshold { channel_id });
             }
         }
 
@@ -424,14 +427,9 @@ mod tests {
     #[test]
     fn withdraw_op() {
         // Build an operation
-        let withdraw_note = Note {
-            value: 5,
-            pk: ZkPublicKey::zero(),
-        };
         let op = ChannelWithdrawOp {
             channel_id: [0; 32].into(),
-            outputs: Outputs::new([withdraw_note]),
-            withdraw_nonce: 0,
+            inputs: Inputs::new([NoteId(Fr::ZERO)]),
         };
 
         // Init a tx builder
@@ -463,11 +461,7 @@ mod tests {
 
         let withdraw_op = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([Note {
-                value: 5,
-                pk: ZkPublicKey::zero(),
-            }]),
-            withdraw_nonce: 0,
+            inputs: Inputs::new([NoteId(Fr::ZERO)]),
         };
 
         let builder = MantleTxBuilder::new()
@@ -487,7 +481,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(TxBuilderError::MissingWithdrawThreshold {
+            Err(TxBuilderError::MissingTransferThreshold {
                 channel_id: missing_channel_id
             }) if missing_channel_id == channel_id
         ));
@@ -577,10 +571,6 @@ mod tests {
             ),
             leader_reward_amount: 30,
         };
-        let withdraw_note = Note {
-            value: 5,
-            pk: ZkPublicKey::zero(),
-        };
         let builder = MantleTxBuilder::new()
             .push_op(Op::ChannelInscribe(InscriptionOp {
                 channel_id,
@@ -597,8 +587,7 @@ mod tests {
             .unwrap()
             .push_op(Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: Outputs::new([withdraw_note]),
-                withdraw_nonce: 0,
+                inputs: Inputs::new([NoteId(Fr::ZERO)]),
             }))
             .unwrap()
             .push_op(Op::LeaderClaim(LeaderClaimOp {

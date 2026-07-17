@@ -19,7 +19,7 @@ use crate::{
         nom::{NomDecode as _, NomEncode as _},
         ops::{
             Op, OpProof,
-            channel::{ChannelId, ChannelKeyIndex, withdraw::ChannelWithdrawOp},
+            channel::{ChannelId, ChannelKeyIndex},
             transfer::TransferOp,
         },
         transactions::{
@@ -99,7 +99,7 @@ pub struct MantleTxContext {
 
 #[derive(Debug, Clone, Default)]
 pub struct MantleTxGasContext {
-    withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+    transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     gas_prices: GasPrices,
 }
@@ -132,20 +132,20 @@ impl Default for GasPrices {
 impl MantleTxGasContext {
     #[must_use]
     pub const fn new(
-        withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+        transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         configuration_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
         gas_prices: GasPrices,
     ) -> Self {
         Self {
-            withdraw_thresholds,
+            transfer_thresholds,
             configuration_thresholds,
             gas_prices,
         }
     }
 
     #[must_use]
-    pub fn withdraw_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
-        self.withdraw_thresholds.get(channel_id).copied()
+    pub fn transfer_threshold(&self, channel_id: &ChannelId) -> Option<ChannelKeyIndex> {
+        self.transfer_thresholds.get(channel_id).copied()
     }
 
     #[must_use]
@@ -155,17 +155,17 @@ impl MantleTxGasContext {
 
     #[must_use]
     pub fn from_channels(value: &Channels, base_prices: GasPrices) -> Self {
-        let withdraw_thresholds = value
+        let transfer_thresholds = value
             .channels
             .iter()
-            .map(|(channel_id, channel)| (*channel_id, channel.withdraw_threshold))
+            .map(|(channel_id, channel)| (*channel_id, channel.transfer_threshold))
             .collect();
         let configuration_thresholds = value
             .channels
             .iter()
             .map(|(channel_id, channel)| (*channel_id, channel.configuration_threshold))
             .collect();
-        Self::new(withdraw_thresholds, configuration_thresholds, base_prices)
+        Self::new(transfer_thresholds, configuration_thresholds, base_prices)
     }
 
     #[must_use]
@@ -274,7 +274,10 @@ fn contextual_op_execution_gas<Constants: GasConstants>(
             .configuration_threshold(&operation.channel)
             .unwrap_or(0),
         Op::ChannelWithdraw(operation) => context
-            .withdraw_threshold(&operation.channel_id)
+            .transfer_threshold(&operation.channel_id)
+            .unwrap_or(0),
+        Op::ChannelTransfer(operation) => context
+            .transfer_threshold(&operation.channel_id)
             .unwrap_or(0),
         _ => return Ok(op.execution_gas::<Constants>()),
     };
@@ -391,7 +394,7 @@ pub enum VerificationError {
 }
 
 pub trait OperationVerificationHelper {
-    fn get_channel_withdraw_threshold(
+    fn get_channel_transfer_threshold(
         &self,
         channel_id: &ChannelId,
     ) -> Result<ChannelKeyIndex, VerificationError>;
@@ -500,17 +503,25 @@ impl SignedMantleTx {
             .zip(self.ops_proofs.iter())
             .enumerate()
         {
-            #[expect(
-                clippy::single_match_else,
-                reason = "Clearer and follows the pattern of verify_ops_proofs."
-            )]
             match (op, proof) {
                 (
                     Op::ChannelWithdraw(channel_withdraw_op),
                     OpProof::ChannelMultiSigProof(proof),
                 ) => {
-                    verify_channel_withdraw(
-                        channel_withdraw_op,
+                    verify_channel_multi_sig(
+                        &channel_withdraw_op.channel_id,
+                        proof,
+                        &tx_hash_bytes,
+                        operation_verification_helper,
+                        idx,
+                    )?;
+                }
+                (
+                    Op::ChannelTransfer(channel_transfer_op),
+                    OpProof::ChannelMultiSigProof(proof),
+                ) => {
+                    verify_channel_multi_sig(
+                        &channel_transfer_op.channel_id,
                         proof,
                         &tx_hash_bytes,
                         operation_verification_helper,
@@ -533,23 +544,22 @@ impl SignedMantleTx {
     }
 }
 
-fn verify_channel_withdraw(
-    operation: &ChannelWithdrawOp,
+fn verify_channel_multi_sig(
+    channel_id: &ChannelId,
     proof: &ChannelMultiSigProof,
     tx_hash_bytes: &Bytes,
     helper: &impl OperationVerificationHelper,
     op_index: usize,
 ) -> Result<(), VerificationError> {
-    let channel_id = &operation.channel_id;
-    let withdraw_threshold = helper.get_channel_withdraw_threshold(channel_id)?;
+    let transfer_threshold = helper.get_channel_transfer_threshold(channel_id)?;
 
     let signatures = proof.signatures();
     let signatures_len = signatures.len();
-    if signatures_len < withdraw_threshold as usize {
+    if signatures_len < transfer_threshold as usize {
         return Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
             op_index,
             actual: signatures_len,
-            required: withdraw_threshold,
+            required: transfer_threshold,
         });
     }
 
@@ -680,9 +690,10 @@ fn signed_op_execution_gas<Constants: GasConstants>(
     // already have replaced the channel threshold. The validated proof length
     // preserves the threshold that was actually checked.
     let signature_count = match (op, proof) {
-        (Op::ChannelConfig(_) | Op::ChannelWithdraw(_), OpProof::ChannelMultiSigProof(proof)) => {
-            proof.signatures().len()
-        }
+        (
+            Op::ChannelConfig(_) | Op::ChannelWithdraw(_) | Op::ChannelTransfer(_),
+            OpProof::ChannelMultiSigProof(proof),
+        ) => proof.signatures().len(),
         _ => return Ok(op.execution_gas::<Constants>()),
     };
     let multiplier = Value::try_from(signature_count)
@@ -744,16 +755,18 @@ impl<'de> Deserialize<'de> for SignedMantleTx {
 
 #[cfg(test)]
 mod tests {
-    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey, ZkPublicKey};
-    use num_bigint::BigUint;
+    use lb_key_management_system_keys::keys::{Ed25519Key, ZkKey};
 
     use super::*;
     use crate::{
         mantle::{
-            Note, NoteId,
+            NoteId,
             gas::MainnetGasConstants,
-            ledger::{Inputs, Outputs},
-            ops::channel::{config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp},
+            ledger::Inputs,
+            ops::channel::{
+                config::ChannelConfigOp, deposit::DepositOp, inscribe::InscriptionOp,
+                withdraw::ChannelWithdrawOp,
+            },
         },
         proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
     };
@@ -789,7 +802,7 @@ mod tests {
     }
 
     impl OperationVerificationHelper for TestOperationVerificationHelper {
-        fn get_channel_withdraw_threshold(
+        fn get_channel_transfer_threshold(
             &self,
             channel_id: &ChannelId,
         ) -> Result<ChannelKeyIndex, VerificationError> {
@@ -835,15 +848,9 @@ mod tests {
     }
 
     fn create_withdraw_tx(channel_id: ChannelId, signing_keys: &[&Ed25519Key]) -> SignedMantleTx {
-        let withdraw_note = Note {
-            value: 5,
-            pk: ZkPublicKey::from(Fr::from(BigUint::from(0u32))),
-        };
-
         let mantle_tx = create_test_mantle_tx(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([withdraw_note]),
-            withdraw_nonce: 0,
+            inputs: Inputs::new([NoteId(Fr::from(0u64))]),
         })]);
 
         let tx_hash = mantle_tx.hash();
@@ -859,7 +866,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
-            withdraw_threshold: 1,
+            transfer_threshold: 1,
         }
     }
 
@@ -874,11 +881,7 @@ mod tests {
     fn create_withdraw_op(channel_id: ChannelId) -> ChannelWithdrawOp {
         ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([Note {
-                value: 5,
-                pk: ZkPublicKey::from(Fr::from(BigUint::from(0u32))),
-            }]),
-            withdraw_nonce: 0,
+            inputs: Inputs::new([NoteId(Fr::from(0u64))]),
         }
     }
 
@@ -897,9 +900,9 @@ mod tests {
         ]);
 
         let config_threshold = 3;
-        let withdraw_threshold = 2;
+        let transfer_threshold = 2;
         let context = MantleTxGasContext::new(
-            [(withdraw_channel, withdraw_threshold)].into(),
+            [(withdraw_channel, transfer_threshold)].into(),
             [(config_channel, config_threshold)].into(),
             GasPrices::new(1, 0),
         );
@@ -910,7 +913,7 @@ mod tests {
 
         let expected_config_gas = u64::from(config_threshold) * 56;
         let expected_deposit_gas = 590;
-        let expected_withdraw_gas = u64::from(withdraw_threshold) * 56;
+        let expected_withdraw_gas = u64::from(transfer_threshold) * 56;
         let expected_total_gas = expected_config_gas + expected_deposit_gas + expected_withdraw_gas;
 
         assert_eq!(gas.into_inner(), expected_total_gas);

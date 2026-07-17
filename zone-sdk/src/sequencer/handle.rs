@@ -139,7 +139,7 @@ where
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
-        withdraw_threshold: u16,
+        transfer_threshold: u16,
     ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
         self.sequencer
             .do_channel_config(
@@ -147,14 +147,14 @@ where
                 posting_timeframe,
                 posting_timeout,
                 configuration_threshold,
-                withdraw_threshold,
+                transfer_threshold,
             )
             .await
     }
 
     /// Publish an atomic inscription+withdraw bundle.
     ///
-    /// Reads the current on-chain `withdraw_nonce` and this sequencer's
+    /// Reads this sequencer's
     /// accredited-key index from cached channel state (kept fresh by the
     /// drive loop). Selects the inscription's `parent_msg` from the current
     /// canonical tip, builds the bundled `MantleTx` (funding it from the
@@ -168,7 +168,7 @@ where
     /// contract). After the first `Ready`, builds from cached channel state
     /// even mid-life reconnect and queues locally; the post fires once the
     /// stream resumes and our turn is current. Returns [`Error::Network`] if
-    /// the channel's `withdraw_threshold > 1` (which would require multi-sig
+    /// the channel's `transfer_threshold > 1` (which would require multi-sig
     /// orchestration this API doesn't support).
     pub async fn publish_atomic_withdraw(
         &mut self,

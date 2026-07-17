@@ -20,6 +20,9 @@ use lb_core::{
         ledger::Operation as _,
         ops::{
             channel::{
+                channel_transfer::{
+                    ChannelTransferExecutionContext, ChannelTransferValidationContext,
+                },
                 deposit::{DepositExecutionContext, DepositValidationContext},
                 withdraw::{WithdrawExecutionContext, WithdrawValidationContext},
             },
@@ -604,26 +607,27 @@ impl LedgerState {
                     })
                     .map_err(mantle::Error::Channel)?;
 
-                    // Execute the SetKeys
+                    // Execute the Deposit
                     let (result, events) = op
                         .execute(DepositExecutionContext {
                             channels: channels.clone(),
-                            locked_notes: locked_notes.clone(),
                             utxos: utxos.clone(),
                             tx_hash,
                         })
                         .map_err(mantle::Error::Channel)?;
                     self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
-                    self.cryptarchia_ledger = self.cryptarchia_ledger.update_utxos(result.utxos);
                     tx_events.extend(events);
                 }
                 (Op::ChannelWithdraw(op), OpProof::ChannelMultiSigProof(sigs)) => {
                     let channels = self.mantle_ledger.channels();
+                    let locked_notes = self.mantle_ledger.locked_notes();
                     let utxos = self.cryptarchia_ledger.latest_utxos();
 
                     // Validate the Withdraw
                     op.validate(&WithdrawValidationContext {
                         channels,
+                        locked_notes,
+                        utxos,
                         tx_hash: &tx_hash,
                         withdraw_sigs: sigs,
                     })
@@ -632,6 +636,31 @@ impl LedgerState {
                     // Execute the Withdraw
                     let (result, events) = op
                         .execute(WithdrawExecutionContext {
+                            channels: channels.clone(),
+                            tx_hash,
+                        })
+                        .map_err(mantle::Error::Channel)?;
+                    self.mantle_ledger = self.mantle_ledger.update_channels(result.channels);
+                    tx_events.extend(events);
+                }
+                (Op::ChannelTransfer(op), OpProof::ChannelMultiSigProof(sigs)) => {
+                    let channels = self.mantle_ledger.channels();
+                    let locked_notes = self.mantle_ledger.locked_notes();
+                    let utxos = self.cryptarchia_ledger.latest_utxos();
+
+                    // Validate the Channel Transfer
+                    op.validate(&ChannelTransferValidationContext {
+                        channels,
+                        locked_notes,
+                        utxos,
+                        tx_hash: &tx_hash,
+                        transfer_sigs: sigs,
+                    })
+                    .map_err(mantle::Error::Channel)?;
+
+                    // Execute the Channel Transfer
+                    let (result, events) = op
+                        .execute(ChannelTransferExecutionContext {
                             channels: channels.clone(),
                             utxos: utxos.clone(),
                             tx_hash,
@@ -712,6 +741,7 @@ impl LedgerState {
                     (self.cryptarchia_ledger, transfer_balance, events) =
                         self.cryptarchia_ledger.try_apply_transfer::<_, Constants>(
                             self.mantle_ledger.locked_notes(),
+                            self.mantle_ledger.channels(),
                             op,
                             sig,
                             tx_hash,
@@ -1050,7 +1080,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
-            withdraw_threshold: 1,
+            transfer_threshold: 1,
         };
 
         let config_tx = MantleTx([Op::ChannelConfig(config_op.clone())].into());
@@ -1127,16 +1157,14 @@ mod tests {
         let result =
             ledger_state.try_apply_tx::<HeaderId, MainnetGasConstants>(&test_config, tx.clone());
         let (new_state, balance, events) = result.unwrap();
-        assert_eq!(
+        // The deposited note is now owned by the channel but stays in the ledger.
+        assert!(
             new_state
                 .mantle_ledger()
                 .channels()
-                .channels
-                .get(&channel_id)
-                .unwrap()
-                .balance,
-            utxo.note.value,
+                .is_channel_note(&utxo.id())
         );
+        assert!(new_state.latest_utxos().contains(&utxo.id()));
         assert_eq!(balance, Balance::from(0));
 
         assert_eq!(events.len(), 1);
@@ -1199,30 +1227,19 @@ mod tests {
             .unwrap()
             .0;
 
-        assert_eq!(
+        assert!(
             ledger_state
                 .mantle_ledger
                 .channels()
-                .channels
-                .get(&channel_id)
-                .expect("channel_created")
-                .balance,
-            utxo.note.value
+                .is_channel_note(&utxo.id())
         );
 
-        // Withdraw some funds from the channel
-        let recipient_sk = ZkKey::from(BigUint::from(99u8));
-        let recipient_pk = recipient_sk.to_public_key();
-        let withdraw_note = Note {
-            value: 500,
-            pk: recipient_pk,
-        };
+        // Withdraw the channel note, releasing it back to a regular note
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([withdraw_note]),
-            withdraw_nonce: 0,
+            inputs: Inputs::new([utxo.id()]),
         };
-        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
+        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let withdraw_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1244,23 +1261,14 @@ mod tests {
 
         let (new_state, tx_balance, events) = result.unwrap();
         assert_eq!(tx_balance, 0);
-        let channel_balance = new_state
-            .mantle_ledger()
-            .channels()
-            .channels
-            .get(&channel_id)
-            .unwrap()
-            .balance;
-        assert_eq!(channel_balance, utxo.note.value - withdraw_note.value);
-        let withdraw_utxo = withdraw
-            .outputs
-            .utxos(&withdraw)
-            .next()
-            .expect("withdraw should have at least one utxo")
-            .id();
-        assert!(new_state.latest_utxos().contains(&withdraw_utxo));
-        // `SdpNoteUnlocked` event is not emitted immediately because the note will
-        // be unlocked after `SNAPSHOT_FINALIZATION_DELAY` epochs.
+        // The note is released from the channel and remains spendable in the ledger.
+        assert!(
+            !new_state
+                .mantle_ledger()
+                .channels()
+                .is_channel_note(&utxo.id())
+        );
+        assert!(new_state.latest_utxos().contains(&utxo.id()));
         assert!(events.is_empty());
     }
 
@@ -1294,28 +1302,21 @@ mod tests {
             )
             .unwrap()
             .0;
-        let channel_balance_after_deposit = ledger_state
-            .mantle_ledger()
-            .channels()
-            .channels
-            .get(&channel_id)
-            .unwrap()
-            .balance;
+        // The deposit made the note a channel note
+        assert!(
+            ledger_state
+                .mantle_ledger()
+                .channels()
+                .is_channel_note(&utxo.id())
+        );
 
-        // Try to withdraw some funds from the channel, but with an invalid proof
-        let recipient_sk = ZkKey::from(BigUint::from(99u8));
-        let recipient_pk = recipient_sk.to_public_key();
-        let withdraw_note = Note {
-            value: 500,
-            pk: recipient_pk,
-        };
+        // Try to withdraw the channel note, but with an invalid proof
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([withdraw_note]),
-            withdraw_nonce: 0,
+            inputs: Inputs::new([utxo.id()]),
         };
         let wrong_key = Ed25519Key::from_bytes(&[42; 32]);
-        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw.clone())].into());
+        let withdraw_tx = MantleTx([Op::ChannelWithdraw(withdraw)].into());
         let withdraw_tx_hash = withdraw_tx.hash();
         let invalid_proof = ChannelMultiSigProof::try_new(
             [IndexedSignature::new(
@@ -1345,25 +1346,13 @@ mod tests {
             )
         );
 
-        let channel_balance_after_withdraw = ledger_state
-            .mantle_ledger()
-            .channels()
-            .channels
-            .get(&channel_id)
-            .unwrap()
-            .balance;
-        assert_eq!(channel_balance_after_deposit, utxo.note.value);
-        assert_eq!(
-            channel_balance_after_deposit,
-            channel_balance_after_withdraw
+        // The rejected withdraw left the note owned by the channel
+        assert!(
+            ledger_state
+                .mantle_ledger()
+                .channels()
+                .is_channel_note(&utxo.id())
         );
-        let withdraw_utxo = withdraw
-            .outputs
-            .utxos(&withdraw)
-            .next()
-            .expect("withdraw should have at least one utxo")
-            .id();
-        assert!(!ledger_state.latest_utxos().contains(&withdraw_utxo));
     }
 
     #[test]
@@ -1519,7 +1508,7 @@ mod tests {
             posting_timeframe: 0.into(),
             posting_timeout: 0.into(),
             configuration_threshold: 1,
-            withdraw_threshold: 1,
+            transfer_threshold: 1,
         };
 
         let inscribe_op3 = InscriptionOp {

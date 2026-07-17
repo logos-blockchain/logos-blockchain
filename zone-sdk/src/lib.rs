@@ -67,7 +67,7 @@ pub use lb_common_http_client::{CommonHttpClient, Slot};
 pub use lb_core::mantle::ops::channel::Ed25519PublicKey;
 use lb_core::mantle::{
     Value,
-    ledger::{Inputs, Outputs},
+    ledger::Inputs,
     ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
 };
 
@@ -106,8 +106,8 @@ pub struct Deposit {
 /// An withdrawal from a zone channel, included/finalized in Bedrock
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Withdraw {
-    /// Amount of the withdrawal
-    pub outputs: Outputs,
+    /// The channel notes released by the withdrawal
+    pub inputs: Inputs,
 }
 
 impl Deposit {

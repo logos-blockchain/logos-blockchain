@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZero, path::PathBuf, time::Duration};
+use std::{num::NonZero, path::PathBuf, time::Duration};
 
 use futures::StreamExt as _;
 use lb_common_http_client::ProcessedBlockEvent;
@@ -6,24 +6,17 @@ use lb_core::{
     events::{Event, Events, TxEvent, TxEventPayload},
     header::HeaderId,
     mantle::{
-        GenesisTx as _, Note, NoteId, OpProof, Transaction as _, TxHash,
+        GenesisTx as _, NoteId, Transaction as _, TxHash,
         gas::GasCost,
-        ledger::{Inputs, Outputs},
-        ops::{
-            Op,
-            channel::{
-                ChannelId, MsgId, deposit::DepositOp, inscribe::InscriptionOp,
-                withdraw::ChannelWithdrawOp,
-            },
-        },
+        ledger::Inputs,
+        ops::channel::{ChannelId, deposit::DepositOp},
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
     wallet::balance::WalletBalanceResponseBody,
 };
-use lb_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
+use lb_key_management_system_service::keys::ZkPublicKey;
 use lb_node::config::RunConfig;
 use lb_testing_framework::{
     DeploymentBuilder, NodeHttpClient, TopologyConfig as TfTopologyConfig,
@@ -31,12 +24,9 @@ use lb_testing_framework::{
 };
 use lb_utils::math::NonNegativeRatio;
 use logos_blockchain_tests::{
-    common::{
-        manual_cluster::{
-            ManualNodeLayout, api_url, genesis_wallet_utxos, get_wallet_balance,
-            start_local_manual_cluster_with_layout, wait_for_nodes_height,
-        },
-        wallet::funded_signed_tx,
+    common::manual_cluster::{
+        ManualNodeLayout, api_url, get_wallet_balance, start_local_manual_cluster_with_layout,
+        wait_for_nodes_height,
     },
     cucumber::defaults::E2E_ARTIFACTS_DIR,
 };
@@ -61,7 +51,6 @@ const FEE_NOTE_AMOUNT: u64 = 50_000;
 /// 5. Verify the block containing the deposit tx exposes a matching `Deposit`
 ///    event via the `/cryptarchia/blocks/:id/events` endpoint.
 /// 6. Verify the funding key's wallet balance decreases.
-/// 7. Verify the channel balance increases.
 #[tokio::test]
 #[serial]
 async fn channel_deposit() {
@@ -110,8 +99,12 @@ async fn channel_deposit() {
         .genesis_tx()
         .genesis_inscription()
         .channel_id;
-    let channel_balance_before = get_channel_balance(&validator.client, channel_id).await;
-    println!("Channel balance before deposit: {channel_balance_before}");
+    // TODO: assert the channel balance again once channel notes are tracked. A
+    //  channel's balance is now the sum of its channel notes rather than a
+    //  field on `ChannelState`, so the `channel/{id}` API no longer reports it.
+    // let channel_balance_before = get_channel_balance(&validator.client,
+    // channel_id).await; println!("Channel balance before deposit:
+    // {channel_balance_before}");
 
     // Subscribe before submitting so we can locate the block that includes the
     // deposit tx and then query its events via the HTTP API.
@@ -199,12 +192,16 @@ async fn channel_deposit() {
         "wallet balance should decrease by deposit plus fee: before={balance_before}, after={balance_after}, deposit_amount={deposit_amount}",
     );
 
-    let channel_balance_after = get_channel_balance(&validator.client, channel_id).await;
-    assert_eq!(
-        channel_balance_after,
-        channel_balance_before + deposit_amount,
-        "channel balance should increase after deposit: before={channel_balance_before}, after={channel_balance_after}, deposit_amount={deposit_amount}",
-    );
+    // TODO: assert the channel balance again once channel notes are tracked.
+    //  The deposit is still covered above by the wallet balance drop and the
+    //  `Deposit` event assertions.
+    // let channel_balance_after = get_channel_balance(&validator.client,
+    // channel_id).await; assert_eq!(
+    //     channel_balance_after,
+    //     channel_balance_before + deposit_amount,
+    //     "channel balance should increase after deposit:
+    // before={channel_balance_before}, after={channel_balance_after},
+    // deposit_amount={deposit_amount}", );
 }
 
 /// End-to-end test for the channel withdraw wallet path:
@@ -215,6 +212,13 @@ async fn channel_deposit() {
 /// 4. Submit a signed channel withdraw transaction.
 /// 5. Verify the recipient wallet balance increases.
 /// 6. Verify the channel balance decreases.
+// TODO: rebuild this scenario on `CHANNEL_TRANSFER` + `CHANNEL_WITHDRAW`. A
+//  withdraw now only releases an existing channel note to the key it already
+//  carries, so withdrawing part of a deposit first requires transferring a
+//  channel note to split it. The channel balance assertions also need a source
+//  other than `ChannelState`, which no longer carries a balance.
+//  `cfg(any())` disables the test without deleting it.
+#[cfg(any())]
 #[tokio::test]
 #[serial]
 async fn channel_withdraw_updates_wallet_balance() {
@@ -412,6 +416,10 @@ fn channel_test_config(mut config: RunConfig) -> RunConfig {
     config
 }
 
+#[expect(
+    dead_code,
+    reason = "Used by `channel_withdraw_updates_wallet_balance`, restore when wallet tracks channel notes."
+)]
 async fn submit_channel_deposit(
     node: &NodeHttpClient,
     channel_id: ChannelId,
@@ -459,6 +467,10 @@ async fn submit_channel_deposit(
     (deposit_op, deposit_tx_hash)
 }
 
+#[expect(
+    dead_code,
+    reason = "Used by `channel_withdraw_updates_wallet_balance`, restore when wallet tracks channel notes."
+)]
 async fn wait_for_tx_inclusion(
     block_stream: &mut (impl futures::Stream<Item = ProcessedBlockEvent> + Unpin),
     tx_hash: TxHash,
@@ -509,6 +521,10 @@ async fn get_wallet_note(node: &NodeHttpClient, pk: ZkPublicKey, min_value: u64)
         .expect("should find a note with sufficient balance for deposit")
 }
 
+#[expect(
+    dead_code,
+    reason = "Used by `channel_withdraw_updates_wallet_balance`, restore when wallet tracks channel notes"
+)]
 async fn wait_for_wallet_balance(
     node: &NodeHttpClient,
     pk: ZkPublicKey,
@@ -530,6 +546,10 @@ async fn wait_for_wallet_balance(
     panic!("timed out waiting for wallet balance {expected}, last balance was {last_balance}");
 }
 
+#[expect(
+    dead_code,
+    reason = "Used by `channel_withdraw_updates_wallet_balance`, restore when wallet tracks channel notes"
+)]
 async fn wait_for_wallet_balance_at_most(
     node: &NodeHttpClient,
     pk: ZkPublicKey,
@@ -574,6 +594,10 @@ async fn fetch_block_events(node: &NodeHttpClient, block_id: HeaderId) -> Events
         .expect("block events response should be valid JSON")
 }
 
+#[expect(
+    dead_code,
+    reason = "Restored with the channel balance assertions once channel notes are tracked."
+)]
 async fn get_channel_balance(node: &NodeHttpClient, channel_id: ChannelId) -> u64 {
     let url = api_url(node, &format!("channel/{channel_id}"));
 

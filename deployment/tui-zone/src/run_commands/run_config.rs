@@ -41,7 +41,7 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
         authorized_keys_for_paths(&args.node_key.key_path, &args.authorized_key_paths);
     validate_config_thresholds(
         args.configuration_threshold,
-        args.withdraw_threshold,
+        args.transfer_threshold,
         authorized_keys.len(),
     )?;
 
@@ -57,7 +57,7 @@ pub(crate) async fn run_config(args: ConfigArgs) -> RunResult<()> {
             args.posting_timeframe.into(),
             args.posting_timeout.into(),
             args.configuration_threshold,
-            args.withdraw_threshold,
+            args.transfer_threshold,
         )
         .await?;
     let tx_hash = signed_tx.hash();
@@ -87,7 +87,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         authorized_keys_for_paths(&args.node_key.key_path, &args.authorized_key_paths);
     validate_config_thresholds(
         args.configuration_threshold,
-        args.withdraw_threshold,
+        args.transfer_threshold,
         authorized_keys.len(),
     )?;
     let channel_id = resolve_channel_id(&args.node_key)?;
@@ -101,7 +101,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
         args.posting_timeframe,
         args.posting_timeout,
         args.configuration_threshold,
-        args.withdraw_threshold,
+        args.transfer_threshold,
     )?;
     let msg_id = config_op.id();
     let tx = lb_core::mantle::MantleTx([Op::ChannelConfig(config_op)].into());
@@ -119,7 +119,7 @@ pub(crate) async fn run_config_prepare(args: ConfigPrepareArgs) -> RunResult<()>
             .map(|key| hex::encode(key.to_bytes()))
             .collect(),
         configuration_threshold: args.configuration_threshold,
-        withdraw_threshold: args.withdraw_threshold,
+        transfer_threshold: args.transfer_threshold,
         posting_timeframe: args.posting_timeframe,
         posting_timeout: args.posting_timeout,
         authorized_signers: channel_state
@@ -310,18 +310,18 @@ pub(crate) async fn run_config_submit(args: ConfigSubmitArgs) -> RunResult<()> {
 
 fn validate_config_thresholds(
     configuration_threshold: u16,
-    withdraw_threshold: u16,
+    transfer_threshold: u16,
     authorized_key_count: usize,
 ) -> RunResult<()> {
-    if withdraw_threshold == 0 {
-        return Err("withdraw_threshold must be greater than 0".into());
+    if transfer_threshold == 0 {
+        return Err("transfer_threshold must be greater than 0".into());
     }
     if configuration_threshold == 0 {
         return Err("configuration_threshold must be greater than 0".into());
     }
-    if withdraw_threshold as usize > authorized_key_count {
+    if transfer_threshold as usize > authorized_key_count {
         return Err(format!(
-            "withdraw_threshold {withdraw_threshold} exceeds authorized key count {authorized_key_count}"
+            "transfer_threshold {transfer_threshold} exceeds authorized key count {authorized_key_count}"
         )
         .into());
     }
@@ -355,7 +355,7 @@ fn build_config_op(
     posting_timeframe: u32,
     posting_timeout: u32,
     configuration_threshold: u16,
-    withdraw_threshold: u16,
+    transfer_threshold: u16,
 ) -> RunResult<ChannelConfigOp> {
     Ok(ChannelConfigOp {
         channel: channel_id,
@@ -363,7 +363,7 @@ fn build_config_op(
         posting_timeframe: posting_timeframe.into(),
         posting_timeout: posting_timeout.into(),
         configuration_threshold,
-        withdraw_threshold,
+        transfer_threshold,
     })
 }
 

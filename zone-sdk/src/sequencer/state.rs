@@ -484,7 +484,7 @@ impl TxState {
     ///
     /// Bundle-aware: atomic inscription+withdraw bundles are returned as
     /// [`PendingTx::AtomicWithdraw`] so the caller can re-prepare them with
-    /// fresh `parent_msg` + `withdraw_nonce`; plain inscriptions are returned
+    /// a fresh `parent_msg`; plain inscriptions are returned
     /// as [`PendingTx::Inscription`].
     pub fn shed_off_branch_pending(&mut self, tip: HeaderId) -> Vec<PendingTx> {
         if self.pending.is_empty() {

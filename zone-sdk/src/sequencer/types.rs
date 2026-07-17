@@ -63,7 +63,7 @@ impl PublishResult {
 
 /// One withdraw to bundle atomically with an inscription.
 ///
-/// The SDK fills `channel_id` and `withdraw_nonce` from internal state.
+/// The SDK fills `channel_id` from internal state.
 /// The caller only specifies the outputs (recipients + amounts).
 #[derive(Debug, Clone)]
 pub struct WithdrawArg {
@@ -80,8 +80,8 @@ pub struct WithdrawArg {
 /// - [`ChannelUpdateTx::AtomicWithdraw`] →
 ///   [`SequencerHandle::publish_atomic_withdraw`](super::SequencerHandle::publish_atomic_withdraw)
 ///   with `info.inscription.payload` and `WithdrawArg`s reconstructed from
-///   `info.withdraws[i].op.outputs`. The SDK fills fresh `parent_msg` and
-///   current `withdraw_nonce` internally on each publish.
+///   `info.withdraws[i].op.inputs`. The SDK fills a fresh `parent_msg`
+///   internally on each publish.
 /// - [`ChannelUpdateTx::Custom`] → the `prepare_tx` + `submit_signed_tx` flow:
 ///   the SDK cannot demystify the tx, so it hands back the whole
 ///   [`SignedMantleTx`] and the caller's own logic decides how to parse and
@@ -399,7 +399,7 @@ pub struct WithdrawInfo {
     /// `tx_hash`; for standalone withdraws surfaced via
     /// [`FinalizedOp::Withdraw`] this is the source tx.
     pub tx_hash: TxHash,
-    /// The withdraw op (`channel_id`, outputs, `withdraw_nonce`).
+    /// The withdraw op (`channel_id`, inputs).
     pub op: ChannelWithdrawOp,
 }
 
