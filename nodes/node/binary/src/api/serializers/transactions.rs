@@ -14,60 +14,17 @@ pub struct ApiTransactionSerializer {
 }
 
 #[derive(Serialize)]
-#[serde(remote = "SignedMantleTx")]
-pub struct ApiSignedTransactionSerializer<State: VerificationState> {
-    #[serde(
-        getter = "SignedMantleTx::mantle_tx",
-        with = "ApiTransactionSerializer"
-    )]
-    pub(crate) mantle_tx: MantleTx,
-    #[serde(getter = "SignedMantleTx::ops_proofs")]
-    pub(crate) ops_proofs: OpsProofs,
-    #[serde(skip)]
-    state: State,
+pub struct ApiSignedTransaction<'tx> {
+    #[serde(with = "ApiTransactionSerializer")]
+    mantle_tx: &'tx MantleTx,
+    ops_proofs: &'tx OpsProofs,
 }
 
-#[derive(Serialize)]
-pub struct ApiSignedTransactionRef<'a, State: VerificationState>(
-    #[serde(with = "ApiSignedTransactionSerializer")] &'a SignedMantleTx<State>,
-);
-
-impl<'a, State: VerificationState> From<&'a SignedMantleTx<State>>
-    for ApiSignedTransactionRef<'a, State>
-{
-    fn from(value: &'a SignedMantleTx<State>) -> Self {
-        Self(value)
-    }
-}
-
-pub mod signed_api_transaction_vec {
-    use lb_core::mantle::{SignedMantleTx, transactions::states::VerificationState};
-    use serde::ser::SerializeSeq as _;
-
-    use crate::api::serializers::transactions::ApiSignedTransactionRef;
-
-    pub fn serialize<State: VerificationState, Serializer>(
-        value: &Vec<SignedMantleTx<State>>,
-        serializer: Serializer,
-    ) -> Result<Serializer::Ok, Serializer::Error>
-    where
-        Serializer: serde::Serializer,
-    {
-        let mut sequence = serializer.serialize_seq(Some(value.len()))?;
-        for transaction in value {
-            let signed_api_transaction = ApiSignedTransactionRef(transaction);
-            sequence.serialize_element(&signed_api_transaction)?;
+impl<'tx, State: VerificationState> From<&'tx SignedMantleTx<State>> for ApiSignedTransaction<'tx> {
+    fn from(value: &'tx SignedMantleTx<State>) -> Self {
+        Self {
+            mantle_tx: value.mantle_tx(),
+            ops_proofs: value.ops_proofs(),
         }
-        sequence.end()
     }
-}
-
-pub mod adapters {
-    use lb_core::mantle::{SignedMantleTx, transactions::states::VerificationState};
-    use serde::Serialize;
-
-    #[derive(Serialize)]
-    pub struct ApiTransactionsRefAdapter<'a, State: VerificationState>(
-        #[serde(with = "super::signed_api_transaction_vec")] pub &'a Vec<SignedMantleTx<State>>,
-    );
 }

@@ -83,8 +83,8 @@ use crate::{
         queries::{BlockRangeQuery, BlocksStreamRequest},
         responses::{self, overwatch::get_relay_or_500},
         serializers::{
-            blocks::{ApiBlock, ApiProcessedBlockEvent},
-            transactions::ApiSignedTransactionRef,
+            blocks::{ApiBlock, ApiBlockOwned, ApiProcessedBlockEventOwned},
+            transactions::ApiSignedTransaction,
         },
     },
 };
@@ -200,7 +200,7 @@ async fn fetch_blocks_stream_chunk<StorageBackend, RuntimeServiceId>(
     descending: bool,
     blocks_limit: NonZeroUsize,
     immutable_only: bool,
-) -> Result<Vec<ApiProcessedBlockEvent<Unverified>>, DynError>
+) -> Result<Vec<ApiProcessedBlockEventOwned<Unverified>>, DynError>
 where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     StorageBackend::Block: Serialize,
@@ -229,12 +229,12 @@ where
 
     Ok(chunk
         .into_iter()
-        .map(ApiProcessedBlockEvent::from)
+        .map(ApiProcessedBlockEventOwned::from)
         .collect())
 }
 
 struct BlocksStreamState<RuntimeServiceId> {
-    buffered: std::vec::IntoIter<ApiProcessedBlockEvent<Unverified>>,
+    buffered: std::vec::IntoIter<ApiProcessedBlockEventOwned<Unverified>>,
     slot_from: Slot,
     slot_to: Slot,
     descending: bool,
@@ -250,7 +250,7 @@ struct BlocksStreamState<RuntimeServiceId> {
 fn build_blocks_stream<StorageBackend, RuntimeServiceId>(
     handle: OverwatchHandle<RuntimeServiceId>,
     chain_info: lb_chain_service::CryptarchiaInfo,
-    first_chunk: Vec<ApiProcessedBlockEvent<Unverified>>,
+    first_chunk: Vec<ApiProcessedBlockEventOwned<Unverified>>,
     slot_from: Slot,
     slot_to: Slot,
     descending: bool,
@@ -258,7 +258,7 @@ fn build_blocks_stream<StorageBackend, RuntimeServiceId>(
     remaining: usize,
     chunk_size: usize,
     immutable_only: bool,
-) -> impl futures::Stream<Item = Result<ApiProcessedBlockEvent<Unverified>, DynError>>
+) -> impl futures::Stream<Item = Result<ApiProcessedBlockEventOwned<Unverified>, DynError>>
 where
     StorageBackend: lb_storage_service::backends::StorageBackend + Send + Sync + 'static,
     StorageBackend::Block: Serialize,
@@ -332,7 +332,7 @@ where
 
             let boundary_slot = next_chunk
                 .last()
-                .map(|event| event.block.header().slot())
+                .map(|event| event.block().header().slot())
                 .expect("non-empty chunk has a last element");
 
             state.next_cursor = next_blocks_stream_cursor(
@@ -1301,8 +1301,11 @@ where
 {
     let api_blocks =
         mantle::get_immutable_blocks(&handle, query.slot_from, query.slot_to).map(|blocks| {
-            let api_blocks = blocks?.into_iter().map(ApiBlock::from).collect::<Vec<_>>();
-            Ok::<Vec<ApiBlock<Unverified>>, DynError>(api_blocks)
+            let api_blocks = blocks?
+                .into_iter()
+                .map(ApiBlockOwned::from)
+                .collect::<Vec<_>>();
+            Ok::<Vec<ApiBlockOwned<Unverified>>, DynError>(api_blocks)
         });
     make_request_and_return_response!(api_blocks)
 }
@@ -1332,7 +1335,7 @@ where
     let block = HttpStorageAdapter::get_block::<SignedMantleTx<Unverified>>(relay, id).await;
     match block {
         Ok(Some(block)) => {
-            let api_block = ApiBlock::from(block);
+            let api_block = ApiBlock::from(&block);
             (StatusCode::OK, Json(api_block)).into_response()
         }
         Ok(None) => (StatusCode::NOT_FOUND,).into_response(),
@@ -1452,7 +1455,7 @@ where
 {
     let stream = mantle::get_new_blocks_stream::<_, _, ConsensusService, _>(&handle)
         .await
-        .map(|stream| stream.map(ApiProcessedBlockEvent::from));
+        .map(|stream| stream.map(ApiProcessedBlockEventOwned::from));
     match stream {
         Ok(stream) => responses::ndjson::from_stream(stream),
         Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
@@ -1518,7 +1521,7 @@ where
     .await?;
 
     if first_chunk.is_empty() {
-        let empty = futures::stream::empty::<ApiProcessedBlockEvent<Unverified>>();
+        let empty = futures::stream::empty::<ApiProcessedBlockEventOwned<Unverified>>();
         return Ok(responses::ndjson::from_stream(empty));
     }
 
@@ -1526,7 +1529,7 @@ where
     let remaining = request.blocks_limit.get().saturating_sub(consumed);
     let boundary_slot = first_chunk
         .last()
-        .map(|event| event.block.header().slot())
+        .map(|event| event.block().header().slot())
         .expect("non-empty chunk has a last element");
 
     let next_cursor =
@@ -1578,7 +1581,7 @@ where
     match transactions.as_slice() {
         [] => (StatusCode::NOT_FOUND,).into_response(),
         [transaction] => {
-            let api_transaction = ApiSignedTransactionRef::from(transaction);
+            let api_transaction = ApiSignedTransaction::from(transaction);
             (StatusCode::OK, Json(api_transaction)).into_response()
         }
         _ => {

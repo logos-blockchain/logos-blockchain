@@ -247,7 +247,7 @@ impl<Tx> Block<Tx> {
     }
 
     #[must_use]
-    pub fn transactions_vec(&self) -> &Vec<Tx> {
+    pub fn transactions_ref(&self) -> &Vec<Tx> {
         self.transactions.as_ref()
     }
 
