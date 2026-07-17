@@ -396,7 +396,7 @@ impl Cryptarchia {
                 parent,
                 slot,
                 header.leader_proof(),
-                block.transactions(),
+                block.transactions_iter(),
             )
             .map_err(|err| match err {
                 lb_ledger::LedgerError::ParentNotFound(parent) => Error::ParentMissing {
@@ -1085,7 +1085,7 @@ where
     #[instrument(
         level = "debug",
         skip(cryptarchia, block, relays, new_block_subscription_sender, lib_broadcaster),
-        fields(block_id = %block.header().id(), tx_count = block.transactions().count(), current_slot = ?current_slot)
+        fields(block_id = %block.header().id(), tx_count = block.transactions_iter().count(), current_slot = ?current_slot)
     )]
     async fn process_block(
         cryptarchia: &mut Cryptarchia,
@@ -1104,7 +1104,7 @@ where
             candidate.try_apply_block(&block, current_slot)?;
         let new_lib = candidate.lib();
 
-        let tx_count = block.transactions().count();
+        let tx_count = block.transactions_iter().count();
 
         let immutable_blocks = Self::immutable_blocks_index(
             &pruned_blocks,

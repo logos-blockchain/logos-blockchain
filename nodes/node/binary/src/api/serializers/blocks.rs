@@ -34,7 +34,7 @@ impl<'block, State: VerificationState> From<&'block Block<SignedMantleTx<State>>
 {
     fn from(value: &'block Block<SignedMantleTx<State>>) -> Self {
         let transactions = value
-            .transactions_ref()
+            .transactions()
             .iter()
             .map(ApiSignedTransaction::from)
             .collect();

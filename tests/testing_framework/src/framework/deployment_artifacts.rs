@@ -89,7 +89,7 @@ fn deployment_settings(
         topology.config().blend_core_nodes,
     )?;
     let transfer_op = genesis_block
-        .transactions()
+        .transactions_iter()
         .next()
         .expect("Genesis block should be valid")
         .genesis_transfer()

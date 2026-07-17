@@ -109,7 +109,7 @@ where
             .ok_or(TxWorkloadError::MissingReferenceNode)?;
         let utxo_map = wallet_utxo_map(
             genesis_block
-                .transactions()
+                .transactions_iter()
                 .next()
                 .expect("Genesis block should contain a genesis tx"),
         );

@@ -116,7 +116,7 @@ impl WalletBlock {
             epoch,
             voucher_cm: *block.header().leader_proof().voucher_cm(),
             header_ops: header_events.iter().map(Into::into).collect(),
-            txs: transform_txs(block.transactions(), tx_events).collect(),
+            txs: transform_txs(block.transactions_iter(), tx_events).collect(),
         }
     }
 

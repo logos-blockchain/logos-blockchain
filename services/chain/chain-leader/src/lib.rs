@@ -665,7 +665,7 @@ where
         info!(
             "proposed block {:?} with {} transactions ({} removed)",
             block.header().id(),
-            block.transactions().len(),
+            block.transactions_iter().len(),
             invalid_tx_hashes.len()
         );
 

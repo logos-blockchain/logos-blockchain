@@ -70,7 +70,7 @@ impl ServiceState for CryptarchiaConsensusState {
             StartingState::Genesis { genesis_block } => {
                 let lib_id = genesis_block.header().id();
                 let genesis_tx = genesis_block
-                    .transactions()
+                    .transactions_iter()
                     .next()
                     .expect("Genesis block should be valid");
                 let (ledger, _events) = LedgerState::from_genesis_tx(

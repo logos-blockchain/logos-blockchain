@@ -86,7 +86,7 @@ pub fn subscribe_to_new_blocks_sync(
                                 .await;
                         if let Ok(Some(block)) = res {
                             let txs_with_id: Vec<TxWithId> = block
-                                .transactions()
+                                .transactions_iter()
                                 .map(|tx| TxWithId {
                                     id: tx.hash(),
                                     tx: tx.clone(),

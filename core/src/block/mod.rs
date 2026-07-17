@@ -242,13 +242,13 @@ impl<Tx> Block<Tx> {
     }
 
     #[must_use]
-    pub fn transactions(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
+    pub fn transactions_iter(&self) -> impl ExactSizeIterator<Item = &Tx> + '_ {
         self.transactions.as_slice().iter()
     }
 
     #[must_use]
-    pub fn transactions_ref(&self) -> &Vec<Tx> {
-        self.transactions.as_ref()
+    pub const fn transactions(&self) -> &BlockTransactions<Tx> {
+        &self.transactions
     }
 
     #[must_use]
