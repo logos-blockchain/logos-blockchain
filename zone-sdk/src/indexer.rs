@@ -122,7 +122,7 @@ where
 mod tests {
 
     use lb_core::mantle::{
-        NoteId,
+        NoteId, TxHash,
         ledger::Inputs,
         ops::channel::{MsgId, deposit::Metadata, inscribe::Inscription},
     };
@@ -301,6 +301,8 @@ mod tests {
 
     fn deposit_msg(inputs: Inputs, amount: u64, metadata: Metadata) -> ZoneMessage {
         ZoneMessage::Deposit(Deposit {
+            tx_hash: TxHash::default(),
+            op_id: [0u8; 32],
             inputs,
             amount,
             metadata,

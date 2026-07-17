@@ -303,6 +303,8 @@ fn op_to_zone_message(
             let op_id = deposit.op_id();
             if let Some(&amount) = deposit_amounts.get(&(tx_hash, op_id)) {
                 Some(ZoneMessage::Deposit(Deposit {
+                    tx_hash,
+                    op_id,
                     inputs: deposit.inputs.clone(),
                     amount,
                     metadata: deposit.metadata.clone(),
