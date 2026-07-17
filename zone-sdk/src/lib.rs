@@ -115,6 +115,10 @@ pub struct Deposit {
 /// An withdrawal from a zone channel, included/finalized in Bedrock
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Withdraw {
+    /// The transaction hash containing this withdraw op.
+    pub tx_hash: TxHash,
+    /// The `op_id` of the withdraw op: its stable identity within the tx.
+    pub op_id: Hash,
     /// The channel notes released by the withdrawal
     pub inputs: Inputs,
 }
