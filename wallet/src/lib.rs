@@ -18,7 +18,7 @@ use lb_core::{
         AuthenticatedMantleTx, GasConstants, NoteId, TxHash, Utxo, Value,
         ops::{
             Op, OpId as _,
-            channel::channel_transfer::ChannelTransferOp,
+            channel::{channel_transfer::ChannelTransferOp, withdraw::ChannelWithdrawOp},
             leader_claim::{VoucherCm, VoucherNullifier},
             transfer::TransferOp,
         },
@@ -98,6 +98,8 @@ pub enum WalletOp {
     /// Drop the input channel notes from the wallet and insert the output
     /// channel notes owned by known keys.
     ChannelTransfer(ChannelTransferOp),
+    /// Unmark the input channel notes, so they become spendable.
+    ChannelWithdraw(ChannelWithdrawOp),
 }
 
 impl WalletBlock {
@@ -129,7 +131,7 @@ impl WalletBlock {
                 WalletOp::ChannelDeposit(inputs) => inputs.clone(),
                 WalletOp::ChannelTransfer(op) => op.inputs.iter().copied().collect::<Vec<_>>(),
                 WalletOp::Lock(note_id) => vec![*note_id],
-                WalletOp::LeaderClaim(_) => Vec::new(),
+                WalletOp::ChannelWithdraw(_) | WalletOp::LeaderClaim(_) => Vec::new(),
             })
             .collect()
     }
@@ -391,6 +393,13 @@ impl WalletState {
                             }
                         }
                     }
+                    WalletOp::ChannelWithdraw(op) => {
+                        // Drop the channel-note marker so they're spendable again.
+                        // They still stay in `utxos`.
+                        for input_id in op.inputs.iter() {
+                            channel_notes.remove_mut(input_id);
+                        }
+                    }
                     WalletOp::Lock(note_id) => {
                         if utxos.contains_key(note_id) {
                             locked_notes.insert_mut(*note_id);
@@ -566,6 +575,7 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
             deposit.inputs.iter().copied().collect(),
         )),
         Op::ChannelTransfer(op) => Some(WalletOp::ChannelTransfer(op.clone())),
+        Op::ChannelWithdraw(op) => Some(WalletOp::ChannelWithdraw(op.clone())),
         Op::SDPDeclare(declaration) => Some(WalletOp::Lock(declaration.locked_note_id)),
         Op::LeaderClaim(_) => match event.expect("event for LeaderClaim op must exist") {
             TxEventPayload::LeaderRewardClaimed { utxo, .. } => Some(WalletOp::LeaderClaim(utxo)),
@@ -576,12 +586,9 @@ fn transform_op(op: &Op, event: Option<TxEventPayload>) -> Option<WalletOp> {
         // `Op::SDPWithdraw` is ignored here — the note will be unlocked
         // after the delay and the corresponding event will be handled by
         // [`HeaderOp::from`].
-        // TODO: `Op::ChannelWithdraw` should release channel notes back to spendable.
-        Op::ChannelInscribe(_)
-        | Op::ChannelConfig(_)
-        | Op::ChannelWithdraw(_)
-        | Op::SDPWithdraw(_)
-        | Op::SDPActive(_) => None,
+        Op::ChannelInscribe(_) | Op::ChannelConfig(_) | Op::SDPWithdraw(_) | Op::SDPActive(_) => {
+            None
+        }
     }
 }
 
@@ -2010,5 +2017,91 @@ mod tests {
         // Stranger's new note is not tracked.
         assert!(!state.utxos.contains_key(&stranger_output_id));
         assert!(!state.channel_notes.contains(&stranger_output_id));
+    }
+
+    /// A `ChannelWithdraw` unmarks channel notes so the wallet can spend
+    /// them again.
+    #[test]
+    fn test_channel_withdraw_releases_note() {
+        let alice = pk(1);
+        let channel_id = ChannelId::from([1; 32]);
+        let genesis = HeaderId::from([0; 32]);
+
+        // Seed Alice with a 100 NMO note and deposit it into a channel.
+        let alice_utxo = Utxo::new(tx_hash(0), 0, Note::new(100, alice));
+        let genesis_ledger = LedgerState::from_utxos([alice_utxo], &ledger_config());
+        let (v_cm_1, _) = voucher(1, 0);
+        let (v_cm_2, _) = voucher(1, 1);
+        let mut wallet = Wallet::<_, TestVoucherId>::from_lib_ledger_state(
+            [(alice, 1)],
+            Vouchers::default(),
+            genesis,
+            &genesis_ledger,
+        );
+        let deposit_block = WalletBlock {
+            id: HeaderId::from([1; 32]),
+            parent: genesis,
+            epoch: 1.into(),
+            voucher_cm: v_cm_1,
+            header_ops: vec![],
+            txs: vec![WalletTx {
+                ops: vec![WalletOp::ChannelDeposit(vec![alice_utxo.id()])],
+            }],
+        };
+        wallet.apply_block(&deposit_block).unwrap();
+
+        // Sanity: after deposit the note is channel-marked, so balance is 0.
+        let state = wallet.wallet_state_at(deposit_block.id).unwrap();
+        assert!(state.channel_notes.contains(&alice_utxo.id()));
+        assert_eq!(state.balance(alice).unwrap().balance, 0);
+
+        // Withdraw releases the channel note back to spendable.
+        let withdraw_op = ChannelWithdrawOp {
+            channel_id,
+            inputs: Inputs::new([alice_utxo.id()]),
+        };
+        let withdraw_block = WalletBlock {
+            id: HeaderId::from([2; 32]),
+            parent: deposit_block.id,
+            epoch: 1.into(),
+            voucher_cm: v_cm_2,
+            header_ops: vec![],
+            txs: vec![WalletTx {
+                ops: vec![WalletOp::ChannelWithdraw(withdraw_op)],
+            }],
+        };
+        wallet.apply_block(&withdraw_block).unwrap();
+
+        let state = wallet.wallet_state_at(withdraw_block.id).unwrap();
+        assert!(state.utxos.contains_key(&alice_utxo.id()));
+        assert!(!state.channel_notes.contains(&alice_utxo.id()));
+        assert!(
+            state
+                .pk_index
+                .get(&alice)
+                .is_some_and(|set| set.contains(&alice_utxo.id()))
+        );
+        assert_eq!(state.balance(alice).unwrap().balance, 100);
+
+        // `fund_tx` can now use the released note.
+        let context = MantleTxContext {
+            gas_context: MantleTxGasContext::from_channels(
+                &Channels::default(),
+                GasPrices::new(1, 1),
+            ),
+            leader_reward_amount: 0,
+        };
+        let err = state
+            .fund_tx::<Gas>(
+                &MantleTxBuilder::new(),
+                alice,
+                [alice],
+                &context,
+                &HashSet::new(),
+                0,
+            )
+            .unwrap_err();
+        // The error detail says that the withdrawn note is now spendable.
+        assert_eq!(err, WalletError::InsufficientFunds { available: 100 });
     }
 }
