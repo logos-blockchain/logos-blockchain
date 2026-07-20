@@ -9,6 +9,7 @@ use lb_core::{
     events::TxEvent,
     mantle::{
         GenesisTx, NoteId, TxHash, Utxo, Value,
+        channel::Channels,
         gas::{Gas, GasConstants, GasCost, GasPrice},
         ledger::Operation as _,
         ops::transfer::{TransferOp, TransferValidationContext},
@@ -461,6 +462,7 @@ impl LedgerState {
     pub fn try_apply_transfer<Id, Constants: GasConstants>(
         mut self,
         locked_notes: &LockedNotes,
+        channels: &Channels,
         transfer_op: &TransferOp,
         transfer_sig: &ZkSignature,
         tx_hash: TxHash,
@@ -469,6 +471,7 @@ impl LedgerState {
         transfer_op
             .validate(&TransferValidationContext {
                 locked_notes,
+                channels,
                 utxos: &self.utxos,
                 tx_hash: &tx_hash,
                 transfer_sig,
@@ -1628,6 +1631,7 @@ pub mod tests {
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
+            &Channels::new(),
             &transfer_op,
             &transfer_sig,
             tx.hash(),
@@ -1661,6 +1665,7 @@ pub mod tests {
         let (new_state, balance, events) = ledger_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
+                &Channels::new(),
                 &transfer_op,
                 &transfer_sig,
                 tx.hash(),
@@ -1699,6 +1704,7 @@ pub mod tests {
         let (final_state, final_balance, events) = new_state
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
+                &Channels::new(),
                 &transfer_op,
                 &transfer_sig,
                 tx.hash(),
@@ -1757,6 +1763,7 @@ pub mod tests {
                 .clone()
                 .try_apply_transfer::<(), MainnetGasConstants>(
                     &locked_notes,
+                    &Channels::new(),
                     &transfer_op,
                     &transfer_sig,
                     tx.hash(),
@@ -1786,6 +1793,7 @@ pub mod tests {
             .clone()
             .try_apply_transfer::<(), MainnetGasConstants>(
                 &locked_notes,
+                &Channels::new(),
                 &transfer_op,
                 &transfer_sig,
                 tx.hash(),
@@ -1800,6 +1808,7 @@ pub mod tests {
             ledger_state
                 .try_apply_transfer::<(), MainnetGasConstants>(
                     &locked_notes,
+                    &Channels::new(),
                     &transfer_op,
                     &transfer_sig,
                     tx.hash()
@@ -1829,6 +1838,7 @@ pub mod tests {
             AuthenticatedMantleTx::total_gas_cost::<MainnetGasConstants>(&tx, GasPrices::new(0, 0));
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
+            &Channels::new(),
             &transfer_op,
             &transfer_sig,
             tx.hash(),
@@ -1861,6 +1871,7 @@ pub mod tests {
 
         let result = ledger_state.try_apply_transfer::<(), MainnetGasConstants>(
             &locked_notes,
+            &Channels::new(),
             &transfer_op,
             &transfer_sig,
             tx.hash(),

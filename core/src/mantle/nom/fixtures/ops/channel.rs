@@ -9,6 +9,7 @@ use crate::{
             Op,
             channel::{
                 ChannelId, MsgId,
+                channel_transfer::ChannelTransferOp,
                 config::ChannelConfigOp,
                 deposit::{DepositOp, Metadata},
                 inscribe::InscriptionOp,
@@ -29,7 +30,7 @@ nom_wire_fixtures!(
         posting_timeframe: SlotTimeframe::from(0u32),
         posting_timeout: SlotTimeout::from(0u32),
         configuration_threshold: 0u16,
-        withdraw_threshold: 0u16,
+        transfer_threshold: 0u16,
     } => "000000000000000000000000000000000000000000000000000000000000000001000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
 );
 nom_wire_fixtures!(
@@ -53,9 +54,16 @@ nom_wire_fixtures!(
     ChannelWithdrawOp,
     Self {
         channel_id: ChannelId::from([0u8; 32]),
+        inputs: Inputs::empty(),
+    } => "000000000000000000000000000000000000000000000000000000000000000000",
+);
+nom_wire_fixtures!(
+    ChannelTransferOp,
+    Self {
+        channel_id: ChannelId::from([0u8; 32]),
+        inputs: Inputs::empty(),
         outputs: Outputs::empty(),
-        withdraw_nonce: 0u32,
-    } => "00000000000000000000000000000000000000000000000000000000000000000000000000",
+    } => "00000000000000000000000000000000000000000000000000000000000000000000",
 );
 
 // We just check that the enum discriminant tag is encoded correctly, so a

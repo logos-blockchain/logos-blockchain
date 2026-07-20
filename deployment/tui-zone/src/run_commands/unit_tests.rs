@@ -7,8 +7,8 @@ mod tests {
     };
 
     use lb_core::mantle::{
-        MantleTx, Note, Op, SignedMantleTx, Transaction as _, Utxo, Value,
-        ledger::{Inputs, Outputs},
+        MantleTx, Note, NoteId, Op, SignedMantleTx, Transaction as _, Utxo, Value,
+        ledger::Inputs,
         nom::NomEncode as _,
         ops::channel::{
             ChannelId, MsgId,
@@ -23,8 +23,9 @@ mod tests {
     use crate::{
         cli::{WithdrawCombineArgs, WithdrawSignArgs},
         run_commands::{
-            ZONE_FILE_TRANSFER_VERSION, ZONE_WITHDRAW_INTENT, ZONE_WITHDRAW_SIGNATURE,
-            run_withdraw::{ZONE_WALLET_FUNDS_EXPORT, run_withdraw_combine, run_withdraw_sign},
+            ZONE_FILE_TRANSFER_VERSION, ZONE_WALLET_FUNDS_EXPORT, ZONE_WITHDRAW_INTENT,
+            ZONE_WITHDRAW_SIGNATURE,
+            run_withdraw::{run_withdraw_combine, run_withdraw_sign},
             types::{
                 AuthorizedSigner, ExportedUtxo, SignedWithdrawFile, WalletFundsExport,
                 WithdrawFileEntry, WithdrawIntent, WithdrawSignatureFile,
@@ -224,8 +225,7 @@ mod tests {
         let recipient = test_zk_key().to_public_key();
         let withdraw = ChannelWithdrawOp {
             channel_id,
-            outputs: Outputs::new([Note::new(500, recipient)]),
-            withdraw_nonce: 0,
+            inputs: Inputs::new([NoteId::from(Fr::from(500u64))]),
         };
         let inscribe = InscriptionOp {
             channel_id,
@@ -305,8 +305,7 @@ mod tests {
         let tx = MantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id: ChannelId::from([9; 32]),
-                outputs: Outputs::new([Note::new(1, test_zk_key().to_public_key())]),
-                withdraw_nonce: 0,
+                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
             })])
             .unwrap(),
         );
@@ -352,8 +351,7 @@ mod tests {
         let tx = MantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: Outputs::new([Note::new(1, test_zk_key().to_public_key())]),
-                withdraw_nonce: 0,
+                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
             })])
             .unwrap(),
         );
@@ -427,8 +425,7 @@ mod tests {
         let tx = MantleTx(
             Ops::try_from(vec![Op::ChannelWithdraw(ChannelWithdrawOp {
                 channel_id,
-                outputs: Outputs::new([Note::new(1, test_zk_key().to_public_key())]),
-                withdraw_nonce: 0,
+                inputs: Inputs::new([NoteId::from(Fr::from(1u64))]),
             })])
             .unwrap(),
         );

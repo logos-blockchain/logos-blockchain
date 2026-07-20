@@ -154,8 +154,8 @@ pub struct ConfigIntent {
     pub new_authorized_keys: Vec<String>,
     /// New configuration threshold.
     pub configuration_threshold: u16,
-    /// New withdrawal threshold.
-    pub withdraw_threshold: u16,
+    /// New transfer threshold, gating transfers and withdrawals.
+    pub transfer_threshold: u16,
     /// New posting timeframe in slots.
     pub posting_timeframe: u32,
     /// New posting timeout in slots.

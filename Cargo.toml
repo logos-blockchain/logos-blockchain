@@ -200,7 +200,7 @@ chrono                             = { default-features = false, version = "0.4"
 cipher                             = { default-features = false, version = "0.4" }
 clap                               = { default-features = false, version = "4" }
 color-eyre                         = { default-features = false, version = "0.6.0" }
-console-subscriber                 = { default-features = false, version = "0.4" }
+console-subscriber                 = { default-features = false, version = "0.5" }
 const-hex                          = { default-features = false, version = "1" }
 const-str                          = { default-features = false, version = "0.4.3" }
 cucumber                           = { default-features = false, version = "=0.22.0" }

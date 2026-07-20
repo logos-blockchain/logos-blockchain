@@ -168,8 +168,7 @@ fn finalized_goal_matches(goal: &CommandGoal, finalized: &[FinalizedTx]) -> bool
                     tx.ops.iter().any(|op| {
                         matches!(op, FinalizedOp::Withdraw(withdraw)
                             if withdraw.op.channel_id == expected.channel_id
-                                && withdraw.op.outputs == expected.outputs
-                                && withdraw.op.withdraw_nonce == expected.withdraw_nonce)
+                                && withdraw.op.inputs == expected.inputs)
                     })
                 })
         }
