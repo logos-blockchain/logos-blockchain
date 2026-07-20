@@ -555,7 +555,7 @@ fn verify_channel_multi_sig(
 
     let signatures = proof.signatures();
     let signatures_len = signatures.len();
-    if signatures_len < transfer_threshold as usize {
+    if signatures_len != transfer_threshold as usize {
         return Err(VerificationError::ChannelMultiSigProofNotEnoughSignatures {
             op_index,
             actual: signatures_len,

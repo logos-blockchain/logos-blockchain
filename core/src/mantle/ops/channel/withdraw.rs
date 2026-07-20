@@ -76,7 +76,10 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
 
         // Check the signatures
         for sig in signatures {
-            if channel.accredited_keys[sig.channel_key_index as usize]
+            if channel
+                .accredited_keys
+                .get(sig.channel_key_index as usize)
+                .ok_or(Error::InvalidSignature)?
                 .verify(ctx.tx_hash.as_signing_bytes().as_ref(), &sig.signature)
                 .is_err()
             {
