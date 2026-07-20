@@ -88,6 +88,7 @@ impl LedgerState {
         let (sdp, events) = sdp::SdpLedger::from_genesis(
             &config.sdp_config,
             utxo_tree,
+            &channels,
             epoch_state,
             tx.sdp_declarations(),
         )?;
@@ -225,6 +226,7 @@ impl LedgerState {
             .sdp
             .try_apply_sdp_declaration(
                 utxo_tree,
+                &self.channels,
                 sdp_declare_op,
                 sdp_declare_zk_sig,
                 sdp_declare_ed_sig,

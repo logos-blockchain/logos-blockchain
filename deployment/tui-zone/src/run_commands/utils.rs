@@ -177,39 +177,39 @@ pub async fn query_channel_state(
     }
 }
 
-/// Print the channel's current balance.
-pub fn print_channel_balance(label: &str, channel_id: &ChannelId, state: Option<&ChannelState>) {
-    match state {
-        Some(state) => println!(
-            "{} {label}: channel_id={} balance={}",
-            timestamp(),
-            hex::encode(channel_id.as_ref()),
-            state.balance,
-        ),
-        None => println!(
-            "{} {label}: channel_id={} balance=unknown channel_state=missing",
-            timestamp(),
-            hex::encode(channel_id.as_ref())
-        ),
-    }
-}
+// TODO: support channel note tracking in the TUI. A channel's balance is now
+//  the sum of its channel notes rather than a field on `ChannelState`.
+// /// Print the channel's current balance.
+// pub fn print_channel_balance(label: &str, channel_id: &ChannelId, state:
+// Option<&ChannelState>) {     match state {
+//         Some(state) => println!(
+//             "{} {label}: channel_id={} balance={}",
+//             timestamp(),
+//             hex::encode(channel_id.as_ref()),
+//             state.balance,
+//         ),
+//         None => println!(
+//             "{} {label}: channel_id={} balance=unknown
+// channel_state=missing",             timestamp(),
+//             hex::encode(channel_id.as_ref())
+//         ),
+//     }
+// }
 
-/// Print the channel's current balance and configuration state.
+/// Print the channel's current configuration state.
 pub fn print_channel_state(label: &str, channel_id: &ChannelId, state: Option<&ChannelState>) {
     match state {
         Some(state) => println!(
-            "{} {label}: channel_id={} balance={} withdrawal_nonce={} accredited_keys={} configuration_threshold={} withdraw_threshold={} tip_message={}",
+            "{} {label}: channel_id={} accredited_keys={} configuration_threshold={} transfer_threshold={} tip_message={}",
             timestamp(),
             hex::encode(channel_id.as_ref()),
-            state.balance,
-            state.withdrawal_nonce,
             state.accredited_keys.len(),
             state.configuration_threshold,
-            state.withdraw_threshold,
+            state.transfer_threshold,
             hex::encode(state.tip_message.as_ref())
         ),
         None => println!(
-            "{} {label}: channel_id={} balance=unknown channel_state=missing",
+            "{} {label}: channel_id={} channel_state=missing",
             timestamp(),
             hex::encode(channel_id.as_ref())
         ),

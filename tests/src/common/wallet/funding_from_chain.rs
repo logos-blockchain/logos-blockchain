@@ -41,9 +41,10 @@ pub enum WalletFundingSourceFromChainError<FetchError> {
 ///
 /// The op fee is paid from the funding wallet (synced from chain), whose
 /// trailing transfer op gets its own proof. The op proof is built via
-/// `op_proof` from the funded transaction hash. `withdraw_thresholds` is
-/// needed by the gas-size predictor for `ChannelWithdraw` ops. Returns the
-/// signed transaction and its fee at genesis gas prices.
+/// `op_proof` from the funded transaction hash. `transfer_thresholds` is
+/// needed by the gas-size predictor for `ChannelWithdraw` and
+/// `ChannelTransfer` ops. Returns the signed transaction and its fee at
+/// genesis gas prices.
 #[expect(
     clippy::implicit_hasher,
     reason = "The thresholds map is forwarded to MantleTxGasContext, which requires the default hasher."
@@ -52,7 +53,7 @@ pub async fn funded_signed_tx(
     node: &NodeHttpClient,
     genesis_utxos: &[Utxo],
     funding_account: &WalletAccount,
-    withdraw_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
+    transfer_thresholds: HashMap<ChannelId, ChannelKeyIndex>,
     op: Op,
     op_proof: impl FnOnce(TxHash) -> OpProof,
 ) -> (SignedMantleTx, u64) {
@@ -63,7 +64,7 @@ pub async fn funded_signed_tx(
 
     let tx_context = MantleTxContext {
         gas_context: MantleTxGasContext::new(
-            withdraw_thresholds,
+            transfer_thresholds,
             HashMap::new(),
             GasPrices::default(),
         ),

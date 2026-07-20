@@ -151,18 +151,18 @@ impl ScannerAccounting {
                         self.remove_spent_note(note_id);
                     }
                 }
-                Op::ChannelWithdraw(withdraw) => {
-                    for utxo in withdraw.outputs.utxos(withdraw) {
-                        self.add_owned_output(utxo);
-                    }
-                }
                 Op::SDPDeclare(declaration) => {
                     self.lock_note(declaration.locked_note_id);
                 }
                 Op::SDPWithdraw(withdrawal) => {
                     self.unlock_note(withdrawal.locked_note_id);
                 }
-                Op::ChannelConfig(_)
+                // `ChannelWithdraw` and `ChannelTransfer` only move notes in and
+                // out of a channel's ownership, which the wallet doesn't track.
+                // TODO: observe released notes once channel notes are tracked.
+                Op::ChannelWithdraw(_)
+                | Op::ChannelTransfer(_)
+                | Op::ChannelConfig(_)
                 | Op::ChannelInscribe(_)
                 | Op::SDPActive(_)
                 | Op::LeaderClaim(_) => {}
@@ -212,7 +212,8 @@ mod tests {
             ledger::{Inputs, Outputs},
             ops::{
                 Op,
-                channel::{ChannelId, deposit::DepositOp, withdraw::ChannelWithdrawOp},
+                channel::{ChannelId, deposit::DepositOp},
+                transfer::TransferOp,
             },
         },
         proofs::leader_proof::Groth16LeaderProof,
@@ -250,14 +251,15 @@ mod tests {
         }
     }
 
-    fn withdraw_tx(outputs: [Note; 2]) -> SignedMantleTx {
+    /// A transaction creating `outputs`. A channel withdraw no longer creates
+    /// notes, so a transfer is what the accounting observes owned outputs from.
+    fn transfer_tx(outputs: [Note; 2]) -> SignedMantleTx {
         SignedMantleTx::new_unverified(
             MantleTx(
-                [Op::ChannelWithdraw(ChannelWithdrawOp {
-                    channel_id: ChannelId::from([0; 32]),
-                    outputs: Outputs::new(outputs),
-                    withdraw_nonce: 0,
-                })]
+                [Op::Transfer(TransferOp::new(
+                    Inputs::empty(),
+                    Outputs::new(outputs),
+                ))]
                 .into(),
             ),
             Vec::new(),
@@ -281,7 +283,7 @@ mod tests {
 
     #[test]
     fn accounting_records_tx_hashes() {
-        let tx = withdraw_tx([Note::new(10, pk(1)), Note::new(20, pk(2))]);
+        let tx = transfer_tx([Note::new(10, pk(1)), Note::new(20, pk(2))]);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[])
                 .expect("accounting should build");
@@ -296,7 +298,7 @@ mod tests {
 
     #[test]
     fn accounting_adds_wallet_owned_outputs() {
-        let tx = withdraw_tx([Note::new(10, pk(1)), Note::new(20, pk(2))]);
+        let tx = transfer_tx([Note::new(10, pk(1)), Note::new(20, pk(2))]);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[])
                 .expect("accounting should build");
@@ -309,8 +311,8 @@ mod tests {
 
     #[test]
     fn accounting_keeps_outputs_across_multiple_batches() {
-        let first_tx = withdraw_tx([Note::new(10, pk(1)), Note::new(20, pk(2))]);
-        let second_tx = withdraw_tx([Note::new(30, pk(1)), Note::new(40, pk(2))]);
+        let first_tx = transfer_tx([Note::new(10, pk(1)), Note::new(20, pk(2))]);
+        let second_tx = transfer_tx([Note::new(30, pk(1)), Note::new(40, pk(2))]);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[])
                 .expect("accounting should build");
@@ -350,7 +352,7 @@ mod tests {
 
     #[test]
     fn accounting_ignores_unknown_outputs() {
-        let tx = withdraw_tx([Note::new(10, pk(9)), Note::new(20, pk(8))]);
+        let tx = transfer_tx([Note::new(10, pk(9)), Note::new(20, pk(8))]);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[])
                 .expect("accounting should build");
@@ -391,7 +393,7 @@ mod tests {
 
     #[test]
     fn publishing_updates_tracked_wallets() {
-        let tx = withdraw_tx([Note::new(10, pk(1)), Note::new(20, pk(2))]);
+        let tx = transfer_tx([Note::new(10, pk(1)), Note::new(20, pk(2))]);
         let mut accounting =
             ScannerAccounting::new(vec![TrackedWalletKeys::new("alice", [pk(1)])], &[])
                 .expect("accounting should build");

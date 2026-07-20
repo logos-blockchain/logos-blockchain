@@ -100,7 +100,7 @@ impl SequencerClient {
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
-        withdraw_threshold: u16,
+        transfer_threshold: u16,
     ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
         let (response_tx, response_rx) = oneshot::channel();
         self.send(ActorRequest::ChannelConfig {
@@ -108,7 +108,7 @@ impl SequencerClient {
             posting_timeframe,
             posting_timeout,
             configuration_threshold,
-            withdraw_threshold,
+            transfer_threshold,
             response_tx,
         })?;
         Self::recv(response_rx).await?

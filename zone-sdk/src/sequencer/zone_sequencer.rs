@@ -13,12 +13,7 @@ use lb_core::{
     mantle::{
         MantleTx, Op, SignedMantleTx, Transaction as _,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        ops::channel::{
-            ChannelId, MsgId,
-            config::Keys,
-            inscribe::{Inscription, InscriptionOp},
-            withdraw::ChannelWithdrawOp,
-        },
+        ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
         transactions::{Ops, TxHash},
     },
 };
@@ -34,13 +29,13 @@ use super::{
     slot_clock::SlotClock,
     state::{BlockChannelTx, TxState},
     tx_builder::{
-        build_atomic_withdraw_ops_proofs, create_channel_config_tx, create_inscribe_tx,
-        find_own_key_index, fund_ops, prepare_tx as build_prepare_tx, sign_tx as build_sign_tx,
+        create_channel_config_tx, create_inscribe_tx, prepare_tx as build_prepare_tx,
+        sign_tx as build_sign_tx,
     },
     types::{
-        AtomicWithdrawInfo, Error, Event, InscriptionInfo, PendingTx, PublishResult,
-        SequencerChannelView, SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource,
-        TxStatus, TxStatusUpdate, WithdrawArg, WithdrawInfo,
+        Error, Event, InscriptionInfo, PendingTx, PublishResult, SequencerChannelView,
+        SequencerCheckpoint, SequencerConfig, TurnNotification, TxSource, TxStatus, TxStatusUpdate,
+        WithdrawArg,
     },
 };
 use crate::{adapter, adapter::BoxStream};
@@ -160,7 +155,7 @@ pub(super) enum ActorRequest {
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
-        withdraw_threshold: u16,
+        transfer_threshold: u16,
         response_tx:
             oneshot::Sender<Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error>>,
     },
@@ -496,7 +491,7 @@ where
                 posting_timeframe,
                 posting_timeout,
                 configuration_threshold,
-                withdraw_threshold,
+                transfer_threshold,
                 response_tx,
             } => {
                 drop(
@@ -506,7 +501,7 @@ where
                             posting_timeframe,
                             posting_timeout,
                             configuration_threshold,
-                            withdraw_threshold,
+                            transfer_threshold,
                         )
                         .await,
                     ),
@@ -649,114 +644,136 @@ where
         ))
     }
 
+    // TODO: rebuild the atomic withdraw flow on CHANNEL_TRANSFER +
+    // CHANNEL_WITHDRAW.  A channel withdraw now only releases an existing
+    // channel note to the key it  already carries, so paying a recipient first
+    // requires transferring a channel  note to that key, which needs the
+    // sequencer to track the channel's notes.
+    #[expect(
+        clippy::unused_async,
+        clippy::needless_pass_by_ref_mut,
+        reason = "Signature kept for the flow that will replace this stub."
+    )]
     pub(super) async fn do_publish_atomic_withdraw(
         &mut self,
-        inscribe: Inscription,
-        withdraws: Vec<WithdrawArg>,
+        _inscribe: Inscription,
+        _withdraws: Vec<WithdrawArg>,
     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
-        self.ensure_ready()?;
-        self.ensure_fundable()?;
-
-        if withdraws.is_empty() {
-            return Err(Error::Network(
-                "publish_atomic_withdraw requires at least one withdraw".into(),
-            ));
-        }
-
-        // Use the cached channel state kept fresh by the drive loop — see
-        // `ensure_connected` for the staleness gate.
-        let channel_state = self.channel_state.as_ref().ok_or_else(|| {
-            Error::Network(format!(
-                "publish_atomic_withdraw requires channel state for {:?}",
-                self.channel_id
-            ))
-        })?;
-        if channel_state.withdraw_threshold > 1 {
-            return Err(Error::Network(format!(
-                "publish_atomic_withdraw requires withdraw_threshold == 1, got {}",
-                channel_state.withdraw_threshold
-            )));
-        }
-        let own_key_index = find_own_key_index(channel_state, &self.signing_key)?;
-        let mut next_nonce = channel_state.withdrawal_nonce;
-
-        let parent = self.compute_publish_parent();
-
-        let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
-        let mut withdraw_ops = Vec::with_capacity(withdraws.len());
-        for arg in withdraws {
-            let op = ChannelWithdrawOp {
-                channel_id: self.channel_id,
-                outputs: arg.outputs,
-                withdraw_nonce: next_nonce,
-            };
-            withdraw_ops.push(op.clone());
-            ops.push(Op::ChannelWithdraw(op));
-            next_nonce = next_nonce
-                .checked_add(1)
-                .ok_or_else(|| Error::Network("withdraw nonce overflow".into()))?;
-        }
-
-        let inscription_op = InscriptionOp {
-            channel_id: self.channel_id,
-            inscription: inscribe.clone(),
-            parent,
-            signer: self.signing_key.public_key(),
-        };
-        let msg_id = inscription_op.id();
-        ops.push(Op::ChannelInscribe(inscription_op));
-
-        let (tx, transfer_proof) = fund_ops(&self.node, self.config.funding.as_ref(), ops).await?;
-        let own_sig = build_sign_tx(tx.hash(), &self.signing_key);
-        let ops_proofs =
-            build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig, transfer_proof.as_ref())?;
-        let signed_tx = SignedMantleTx::new(tx, ops_proofs)
-            .map_err(|e| Error::Network(format!("signed tx assembly failed: {e:?}")))?;
-
-        let tx_hash = signed_tx.mantle_tx.hash();
-        let withdraw_infos: Vec<WithdrawInfo> = withdraw_ops
-            .into_iter()
-            .map(|op| WithdrawInfo { tx_hash, op })
-            .collect();
-
-        // Safe to unwrap — `ensure_ready` checks state.
-        let state = self.state.as_mut().unwrap();
-        state.submit_atomic_withdraw(
-            signed_tx.clone(),
-            parent,
-            msg_id,
-            inscribe.clone(),
-            withdraw_infos.clone(),
-        );
-        self.last_msg_id = msg_id;
-        self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
-
-        if self.can_publish_inscription_now() {
-            self.queue_publish_post(tx_hash, signed_tx);
-        }
-
-        self.publish_channel_view();
-
-        let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
-            reason: "checkpoint unavailable",
-        })?;
-
-        Ok((
-            PublishResult {
-                tx: PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
-                    tx_hash,
-                    inscription: InscriptionInfo {
-                        tx_hash,
-                        parent_msg: parent,
-                        this_msg: msg_id,
-                        payload: inscribe,
-                    },
-                    withdraws: withdraw_infos,
-                }),
-            },
-            checkpoint,
+        Err(Error::Network(
+            "atomic withdraw is unsupported until channel notes are tracked".into(),
         ))
     }
+
+    //     pub(super) async fn do_publish_atomic_withdraw(
+    //         &mut self,
+    //         inscribe: Inscription,
+    //         withdraws: Vec<WithdrawArg>,
+    //     ) -> Result<(PublishResult, SequencerCheckpoint), Error> {
+    //         self.ensure_ready()?;
+    //         self.ensure_fundable()?;
+    //
+    //         if withdraws.is_empty() {
+    //             return Err(Error::Network(
+    //                 "publish_atomic_withdraw requires at least one
+    // withdraw".into(),             ));
+    //         }
+    //
+    //         // Use the cached channel state kept fresh by the drive loop — see
+    //         // `ensure_connected` for the staleness gate.
+    //         let channel_state = self.channel_state.as_ref().ok_or_else(|| {
+    //             Error::Network(format!(
+    //                 "publish_atomic_withdraw requires channel state for {:?}",
+    //                 self.channel_id
+    //             ))
+    //         })?;
+    //         if channel_state.transfer_threshold > 1 {
+    //             return Err(Error::Network(format!(
+    //                 "publish_atomic_withdraw requires withdraw_threshold == 1,
+    // got {}",                 channel_state.transfer_threshold
+    //             )));
+    //         }
+    //         let own_key_index = find_own_key_index(channel_state,
+    // &self.signing_key)?;         let mut next_nonce =
+    // channel_state.withdrawal_nonce;
+    //
+    //         let parent = self.compute_publish_parent();
+    //
+    //         let mut ops: Vec<Op> = Vec::with_capacity(withdraws.len() + 1);
+    //         let mut withdraw_ops = Vec::with_capacity(withdraws.len());
+    //         for arg in withdraws {
+    //             let op = ChannelWithdrawOp {
+    //                 channel_id: self.channel_id,
+    //                 outputs: arg.outputs,
+    //                 withdraw_nonce: next_nonce,
+    //             };
+    //             withdraw_ops.push(op.clone());
+    //             ops.push(Op::ChannelWithdraw(op));
+    //             next_nonce = next_nonce
+    //                 .checked_add(1)
+    //                 .ok_or_else(|| Error::Network("withdraw nonce
+    // overflow".into()))?;         }
+    //
+    //         let inscription_op = InscriptionOp {
+    //             channel_id: self.channel_id,
+    //             inscription: inscribe.clone(),
+    //             parent,
+    //             signer: self.signing_key.public_key(),
+    //         };
+    //         let msg_id = inscription_op.id();
+    //         ops.push(Op::ChannelInscribe(inscription_op));
+    //
+    //         let (tx, transfer_proof) = fund_ops(&self.node,
+    // self.config.funding.as_ref(), ops).await?;         let own_sig =
+    // build_sign_tx(tx.hash(), &self.signing_key);         let ops_proofs =
+    //             build_atomic_withdraw_ops_proofs(&tx, own_key_index, own_sig,
+    // transfer_proof.as_ref())?;         let signed_tx =
+    // SignedMantleTx::new(tx, ops_proofs)             .map_err(|e|
+    // Error::Network(format!("signed tx assembly failed: {e:?}")))?;
+    //
+    //         let tx_hash = signed_tx.mantle_tx.hash();
+    //         let withdraw_infos: Vec<WithdrawInfo> = withdraw_ops
+    //             .into_iter()
+    //             .map(|op| WithdrawInfo { tx_hash, op })
+    //             .collect();
+    //
+    //         // Safe to unwrap — `ensure_ready` checks state.
+    //         let state = self.state.as_mut().unwrap();
+    //         state.submit_atomic_withdraw(
+    //             signed_tx.clone(),
+    //             parent,
+    //             msg_id,
+    //             inscribe.clone(),
+    //             withdraw_infos.clone(),
+    //         );
+    //         self.last_msg_id = msg_id;
+    //         self.queue_tx_status(tx_hash, TxStatus::AcceptedLocally);
+    //
+    //         if self.can_publish_inscription_now() {
+    //             self.queue_publish_post(tx_hash, signed_tx);
+    //         }
+    //
+    //         self.publish_channel_view();
+    //
+    //         let checkpoint = self.publish_checkpoint().ok_or(Error::Unavailable {
+    //             reason: "checkpoint unavailable",
+    //         })?;
+    //
+    //         Ok((
+    //             PublishResult {
+    //                 tx: PendingTx::AtomicWithdraw(AtomicWithdrawInfo {
+    //                     tx_hash,
+    //                     inscription: InscriptionInfo {
+    //                         tx_hash,
+    //                         parent_msg: parent,
+    //                         this_msg: msg_id,
+    //                         payload: inscribe,
+    //                     },
+    //                     withdraws: withdraw_infos,
+    //                 }),
+    //             },
+    //             checkpoint,
+    //         ))
+    //     }
 
     pub(super) async fn do_channel_config(
         &mut self,
@@ -764,7 +781,7 @@ where
         posting_timeframe: SlotTimeframe,
         posting_timeout: SlotTimeout,
         configuration_threshold: u16,
-        withdraw_threshold: u16,
+        transfer_threshold: u16,
     ) -> Result<(PublishResult, SequencerCheckpoint, SignedMantleTx), Error> {
         self.ensure_ready()?;
         self.ensure_fundable()?;
@@ -791,7 +808,7 @@ where
             posting_timeframe,
             posting_timeout,
             configuration_threshold,
-            withdraw_threshold,
+            transfer_threshold,
         )
         .await?;
         let tx_hash = signed_tx.mantle_tx.hash();
