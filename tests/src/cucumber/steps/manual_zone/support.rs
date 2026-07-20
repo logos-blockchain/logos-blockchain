@@ -13,23 +13,20 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_common_http_client::{CommonHttpClient, Slot};
-use lb_core::{
-    mantle::{
-        MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
-        gas::GasCost,
-        ledger::{Inputs, Outputs, OutputsError},
-        ops::{
-            channel::{
-                ChannelId, MsgId,
-                deposit::{DepositOp, Metadata},
-                inscribe::{Inscription, InscriptionOp},
-                withdraw::ChannelWithdrawOp,
-            },
-            transfer::TransferOp,
+use lb_core::mantle::{
+    MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
+    gas::GasCost,
+    ledger::{Inputs, Outputs, OutputsError},
+    ops::{
+        channel::{
+            ChannelId, MsgId,
+            deposit::{DepositOp, Metadata},
+            inscribe::{Inscription, InscriptionOp},
+            withdraw::ChannelWithdrawOp,
         },
-        transactions::builder::MantleTxBuilder,
+        transfer::TransferOp,
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    transactions::builder::MantleTxBuilder,
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
@@ -1193,7 +1190,7 @@ pub async fn wait_for_withdraw(
         timeout_duration,
         || ZoneTestError::WithdrawTimeout,
         |message| match message {
-            ZoneMessage::Withdraw(withdraw) if withdraw.outputs == expected.outputs => Some(()),
+            ZoneMessage::Withdraw(withdraw) if withdraw.inputs == expected.inputs => Some(()),
             _ => None,
         },
     )
@@ -1237,7 +1234,7 @@ pub async fn wait_for_finalized_withdraw_via_sequencer_and_collect_mempool_pendi
         events,
         duration,
         ZoneTestError::WithdrawTimeout,
-        |op| matches!(op, FinalizedOp::Withdraw(w) if w.op.outputs == expected.outputs),
+        |op| matches!(op, FinalizedOp::Withdraw(w) if w.op.inputs == expected.inputs),
     )
     .await
 }
@@ -1751,70 +1748,87 @@ fn build_atomic_deposit_op(
 
 /// Submits a channel withdraw signed by the active zone sequencer and publishes
 /// the withdraw inscription as part of the same SDK flow.
+///
+/// TODO: rebuild on `CHANNEL_TRANSFER` + `CHANNEL_WITHDRAW`. A withdraw now
+///  only releases an existing channel note to the key it already carries, so
+///  paying a recipient an arbitrary amount first requires transferring a
+///  channel note to their key. That needs channel note tracking.
 pub async fn submit_zone_withdraw(
-    client: &SequencerClient,
-    channel_id: ChannelId,
-    funding_public_key: ZkPublicKey,
-    amount: Value,
-    inscription_data: Inscription,
+    _client: &SequencerClient,
+    _channel_id: ChannelId,
+    _funding_public_key: ZkPublicKey,
+    _amount: Value,
+    _inscription_data: Inscription,
 ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
-    let withdraw = ChannelWithdrawOp {
-        channel_id,
-        outputs: Outputs::new([Note::new(amount, funding_public_key)]),
-        withdraw_nonce: 0,
-    };
-
-    let (tx, msg_id, inscription_sig) = client
-        .prepare_tx(
-            [Op::ChannelWithdraw(withdraw.clone())].into(),
-            inscription_data,
-        )
-        .await
-        .map_err(|error| ZoneTestError::SubmitWithdraw {
-            message: error.to_string(),
-        })?;
-
-    let withdraw_sig =
-        client
-            .sign_tx(&tx)
-            .await
-            .map_err(|error| ZoneTestError::SubmitWithdraw {
-                message: error.to_string(),
-            })?;
-
-    let withdraw_proof =
-        match ChannelMultiSigProof::try_new([IndexedSignature::new(0, withdraw_sig)].into()) {
-            Ok(proof) => proof,
-            Err(error) => {
-                return Err(ZoneTestError::SubmitWithdraw {
-                    message: error.to_string(),
-                });
-            }
-        };
-
-    let signed_tx = SignedMantleTx::new(
-        tx,
-        vec![
-            OpProof::ChannelMultiSigProof(withdraw_proof),
-            OpProof::Ed25519Sig(inscription_sig),
-        ],
-    )
-    .map_err(|error| ZoneTestError::SubmitWithdraw {
-        message: error.to_string(),
-    })?;
-
-    let (result, _cp) = client
-        .submit_signed_tx(signed_tx, msg_id)
-        .await
-        .map_err(|error| ZoneTestError::SubmitWithdraw {
-            message: error.to_string(),
-        })?;
-
-    Ok(ZoneWithdrawSubmission {
-        withdraw,
-        publish: result,
+    Err(ZoneTestError::SubmitWithdraw {
+        message: "zone withdraw is unsupported until channel notes are tracked".to_owned(),
     })
 }
+
+// pub async fn submit_zone_withdraw(
+//     client: &SequencerClient,
+//     channel_id: ChannelId,
+//     funding_public_key: ZkPublicKey,
+//     amount: Value,
+//     inscription_data: Inscription,
+// ) -> Result<ZoneWithdrawSubmission, ZoneTestError> {
+//     let withdraw = ChannelWithdrawOp {
+//         channel_id,
+//         outputs: Outputs::new([Note::new(amount, funding_public_key)]),
+//         withdraw_nonce: 0,
+//     };
+//
+//     let (tx, msg_id, inscription_sig) = client
+//         .prepare_tx(
+//             [Op::ChannelWithdraw(withdraw.clone())].into(),
+//             inscription_data,
+//         )
+//         .await
+//         .map_err(|error| ZoneTestError::SubmitWithdraw {
+//             message: error.to_string(),
+//         })?;
+//
+//     let withdraw_sig =
+//         client
+//             .sign_tx(&tx)
+//             .await
+//             .map_err(|error| ZoneTestError::SubmitWithdraw {
+//                 message: error.to_string(),
+//             })?;
+//
+//     let withdraw_proof =
+//         match ChannelMultiSigProof::try_new([IndexedSignature::new(0,
+// withdraw_sig)].into()) {             Ok(proof) => proof,
+//             Err(error) => {
+//                 return Err(ZoneTestError::SubmitWithdraw {
+//                     message: error.to_string(),
+//                 });
+//             }
+//         };
+//
+//     let signed_tx = SignedMantleTx::new(
+//         tx,
+//         vec![
+//             OpProof::ChannelMultiSigProof(withdraw_proof),
+//             OpProof::Ed25519Sig(inscription_sig),
+//         ],
+//     )
+//     .map_err(|error| ZoneTestError::SubmitWithdraw {
+//         message: error.to_string(),
+//     })?;
+//
+//     let (result, _cp) = client
+//         .submit_signed_tx(signed_tx, msg_id)
+//         .await
+//         .map_err(|error| ZoneTestError::SubmitWithdraw {
+//             message: error.to_string(),
+//         })?;
+//
+//     Ok(ZoneWithdrawSubmission {
+//         withdraw,
+//         publish: result,
+//     })
+// }
 
 /// Result of publishing an atomic inscription+withdraw bundle. Carries every
 /// withdraw op produced by the SDK (one per `WithdrawArg`, in submission

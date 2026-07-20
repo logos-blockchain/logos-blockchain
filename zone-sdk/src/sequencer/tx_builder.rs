@@ -104,6 +104,11 @@ pub(super) fn attach_transfer_proof(
 /// the same tx hash with the same key), the inscription op carries an
 /// `Ed25519Sig` proof and the fee transfer — when the transaction was funded
 /// — carries the wallet's proof.
+/// TODO: enable it back when wallet tracks channel notes
+#[expect(
+    dead_code,
+    reason = "Belongs to the atomic withdraw flow; restored with `do_publish_atomic_withdraw`."
+)]
 pub(super) fn build_atomic_withdraw_ops_proofs(
     tx: &MantleTx,
     own_key_index: ChannelKeyIndex,
@@ -141,6 +146,11 @@ pub(super) fn build_atomic_withdraw_ops_proofs(
 /// Find the position of the SDK's public key in the channel's `accredited_keys`
 /// list. Returns an error if our key is not on the accredited list (we can't
 /// sign for this channel).
+/// TODO: reactivate when channel notes are tracked by the wallet
+#[expect(
+    dead_code,
+    reason = "Belongs to the atomic withdraw flow; restored with `do_publish_atomic_withdraw`."
+)]
 pub(super) fn find_own_key_index(
     channel_state: &ChannelState,
     signing_key: &Ed25519Key,
@@ -207,7 +217,7 @@ pub(super) async fn create_channel_config_tx<Node>(
     posting_timeframe: SlotTimeframe,
     posting_timeout: SlotTimeout,
     configuration_threshold: u16,
-    withdraw_threshold: u16,
+    transfer_threshold: u16,
 ) -> Result<SignedMantleTx, Error>
 where
     Node: adapter::Node + Sync,
@@ -218,7 +228,7 @@ where
         posting_timeframe,
         posting_timeout,
         configuration_threshold,
-        withdraw_threshold,
+        transfer_threshold,
     };
 
     let (config_tx, transfer_proof) =

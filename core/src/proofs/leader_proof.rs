@@ -86,6 +86,28 @@ impl Groth16LeaderProof {
     pub const fn proof(&self) -> &lb_pol::PoLProof {
         &self.proof
     }
+
+    /// Construct a proof directly from its parts.
+    ///
+    /// Test-only: the resulting proof is not necessarily valid; it is used to
+    /// build deterministic reference test vectors with distinct per-field
+    /// values (so a field-transposition bug in another implementation cannot be
+    /// masked by shared values).
+    #[cfg(test)]
+    #[must_use]
+    pub const fn from_parts(
+        proof: lb_pol::PoLProof,
+        entropy_contribution: Fr,
+        leader_key: Ed25519PublicKey,
+        voucher_cm: VoucherCm,
+    ) -> Self {
+        Self {
+            proof,
+            entropy_contribution,
+            leader_key,
+            voucher_cm,
+        }
+    }
 }
 
 pub trait LeaderProof {

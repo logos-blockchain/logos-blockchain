@@ -139,15 +139,14 @@ impl WalletChainState {
                     &mut changes.observed_spends,
                 );
             }
-            Op::ChannelWithdraw(withdraw) => {
-                self.apply_owned_outputs(
-                    withdraw.outputs.utxos(withdraw),
-                    &mut changes.observed_outputs,
-                );
-            }
             Op::SDPDeclare(declaration) => self.lock_note(declaration.locked_note_id),
             Op::SDPWithdraw(withdrawal) => self.unlock_note(withdrawal.locked_note_id),
-            Op::ChannelConfig(_)
+            // `ChannelWithdraw` and `ChannelTransfer` only move notes in and out
+            // of a channel's ownership, which the wallet doesn't track.
+            // TODO: observe released notes once channel notes are tracked.
+            Op::ChannelWithdraw(_)
+            | Op::ChannelTransfer(_)
+            | Op::ChannelConfig(_)
             | Op::ChannelInscribe(_)
             | Op::SDPActive(_)
             | Op::LeaderClaim(_) => {}
