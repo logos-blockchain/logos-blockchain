@@ -306,7 +306,7 @@ impl LedgerState {
         self.cryptarchia_ledger
             .update_fee_window(window_index, total_fee_burned);
 
-        // Then compute the number of block rewards
+        // Then compute the amount of block rewards
 
         // compute A_t'
         let sum_fees = self.cryptarchia_ledger.get_summed_fees();
