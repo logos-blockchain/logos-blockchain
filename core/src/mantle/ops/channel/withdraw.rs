@@ -46,15 +46,8 @@ impl Operation<WithdrawValidationContext<'_>> for ChannelWithdrawOp {
         Self: 'a;
     type Error = Error;
 
-    // TODO: In the following PR, we need to make ChannelWithdrawOp::validate safer.
-    //   Currently, it accesses key by index using [i], which can panic. But it
-    // doesn't actually   panic in the current codebase due to calling
-    // `helper.get_key_from_channel_at_index` (which   uses `get(i).ok_or(...)`
-    // internally).   If we're dropping the duplicate `verify_channel_withdraw`
-    // in the following PR, we also need   to change [i] to something safer in
-    // the `ChannelWithdrawOp::validate`.
     fn validate(&self, ctx: &WithdrawValidationContext<'_>) -> Result<(), Self::Error> {
-        // Check that the channel exist
+        // Check that the channel exists
         let channel =
             ctx.channels
                 .channels
