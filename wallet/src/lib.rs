@@ -386,8 +386,7 @@ impl WalletState {
                             channel_notes.remove_mut(input_id);
                         }
                         for utxo in op.outputs.utxos(op) {
-                            if known_keys.contains_key(&utxo.note.pk) {
-                                insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index);
+                            if insert_utxo_if_owned(utxo, known_keys, &mut utxos, &mut pk_index) {
                                 channel_notes.insert_mut(utxo.id());
                             }
                         }
@@ -472,14 +471,16 @@ impl WalletState {
     }
 }
 
+/// Insert `utxo` into `utxos`/`pk_index` if the wallet owns its key.
+/// Returns whether the insertion happened.
 fn insert_utxo_if_owned<KeyId>(
     utxo: Utxo,
     known_keys: &HashMap<ZkPublicKey, KeyId>,
     utxos: &mut rpds::HashTrieMapSync<NoteId, Utxo>,
     pk_index: &mut rpds::HashTrieMapSync<ZkPublicKey, rpds::HashTrieSetSync<NoteId>>,
-) {
+) -> bool {
     if !known_keys.contains_key(&utxo.note.pk) {
-        return;
+        return false;
     }
 
     let note_id = utxo.id();
@@ -491,6 +492,7 @@ fn insert_utxo_if_owned<KeyId>(
         .unwrap_or_else(rpds::HashTrieSetSync::new_sync)
         .insert(note_id);
     pk_index.insert_mut(utxo.note.pk, note_set);
+    true
 }
 
 fn transform_txs<'t, Tx>(
