@@ -8,8 +8,7 @@ use lb_core::{
     crypto::{ZkDigest, ZkHasher},
     events::TxEvent,
     mantle::{
-        GenesisTx, NoteId, TxHash, Utxo, Value,
-        channel::Channels,
+        GenesisTx, NoteId, Utxo, Value,
         gas::{Gas, GasConstants, GasCost, GasPrice},
         ledger::Operation as _,
         ops::transfer::TransferOp,

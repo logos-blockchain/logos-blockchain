@@ -686,7 +686,7 @@ impl SignedMantleTx<Preverified> {
                 verify_channel_multi_sig(
                     &channel_withdraw_op.channel_id,
                     channel_withdraw_proof,
-                    &tx_hash_bytes,
+                    tx_hash_bytes,
                     helper,
                     op_index,
                 )?;
@@ -708,7 +708,7 @@ impl SignedMantleTx<Preverified> {
                 verify_channel_multi_sig(
                     &channel_transfer_op.channel_id,
                     channel_transfer_proof,
-                    &tx_hash_bytes,
+                    tx_hash_bytes,
                     helper,
                     op_index,
                 )?;

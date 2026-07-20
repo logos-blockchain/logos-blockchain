@@ -21,13 +21,10 @@ use lb_core::{
         ledger::Operation as _,
         ops::{
             channel::{
-                channel_transfer::{
-                    ChannelTransferExecutionContext, ChannelTransferValidationContext,
-                },
-                deposit::{DepositExecutionContext, DepositValidationContext},
-                withdraw::{WithdrawExecutionContext, WithdrawValidationContext},
+                channel_transfer::ChannelTransferExecutionContext,
+                deposit::DepositExecutionContext, withdraw::WithdrawExecutionContext,
             },
-            leader_claim::{LeaderClaimExecutionContext, LeaderClaimValidationContext},
+            leader_claim::LeaderClaimExecutionContext,
         },
         transactions::{GasPrices, MantleTxContext, MantleTxGasContext},
     },
@@ -531,6 +528,10 @@ impl LedgerState {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "This will be refactored in an upcoming PR."
+    )]
     fn try_apply_op<Id, Constants: GasConstants>(
         mut self,
         op: &Op,

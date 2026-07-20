@@ -9,7 +9,7 @@ use lb_core::{
     block::BlockNumber,
     events::{HeaderEvent, TxEvent},
     mantle::{
-        NoteId, OpProof, TxHash, Utxo, Value,
+        NoteId, OpProof, Utxo, Value,
         channel::Channels,
         ledger::Operation,
         ops::sdp::{
@@ -432,14 +432,9 @@ impl SdpLedger {
         Ok((self, events))
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "The declaration is validated against several independent pieces of ledger state."
-    )]
     pub fn try_apply_sdp_declaration(
         mut self,
         utxo_tree: &UtxoTree,
-        // channels: &Channels,
         op: &SDPDeclareOp,
         config: &Config,
     ) -> Result<(Self, Vec<TxEvent>), Error> {

@@ -13,12 +13,7 @@ use lb_core::{
     mantle::{
         MantleTx, Op, SignedMantleTx, Transaction as _,
         channel::{ChannelState, SlotTimeframe, SlotTimeout},
-        ops::channel::{
-            ChannelId, MsgId,
-            config::Keys,
-            inscribe::{Inscription, InscriptionOp},
-            withdraw::ChannelWithdrawOp,
-        },
+        ops::channel::{ChannelId, MsgId, config::Keys, inscribe::Inscription},
         transactions::{Ops, TxHash, states::Unverified},
     },
 };

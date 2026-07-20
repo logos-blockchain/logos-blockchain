@@ -13,23 +13,20 @@ use std::{
 
 use futures::StreamExt as _;
 use lb_common_http_client::{CommonHttpClient, Slot};
-use lb_core::{
-    mantle::{
-        MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
-        gas::GasCost,
-        ledger::{Inputs, Outputs, OutputsError},
-        ops::{
-            channel::{
-                ChannelId, MsgId,
-                deposit::{DepositOp, Metadata},
-                inscribe::{Inscription, InscriptionOp},
-                withdraw::ChannelWithdrawOp,
-            },
-            transfer::TransferOp,
+use lb_core::mantle::{
+    MantleTx, Note, Op, OpProof, Transaction as _, Utxo, Value,
+    gas::GasCost,
+    ledger::{Inputs, Outputs, OutputsError},
+    ops::{
+        channel::{
+            ChannelId, MsgId,
+            deposit::{DepositOp, Metadata},
+            inscribe::{Inscription, InscriptionOp},
+            withdraw::ChannelWithdrawOp,
         },
-        transactions::{builder::MantleTxBuilder, states::Unverified},
+        transfer::TransferOp,
     },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
+    transactions::{builder::MantleTxBuilder, states::Unverified},
 };
 use lb_http_api_common::bodies::{
     channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
